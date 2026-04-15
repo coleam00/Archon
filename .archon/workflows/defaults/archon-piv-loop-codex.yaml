@@ -984,13 +984,15 @@ nodes:
   # PHASE 5: FINALIZE — Push, create PR, generate summary
   # ═══════════════════════════════════════════════════════════════
 
-  - id: finalize
+  - id: compose-finalize
     depends_on: [fix-feedback, implement-setup]
     context: fresh
     prompt: |
-      # PIV Loop — Finalize
+      # PIV Loop — Compose Finalize
 
-      The implementation has been approved. Push changes and create a PR.
+      The implementation has been approved. Prepare deterministic PR artifacts.
+      Do not run `gh pr create`, `gh pr edit`, or `gh pr ready` in this step.
+      A downstream script will push and apply the PR after these artifacts exist.
 
       **Plan file** (the exact one `create-plan` wrote and `implement` worked on —
       use THIS as the source of truth for PR title and body. Do NOT search the repo
@@ -1008,15 +1010,10 @@ nodes:
 
       ---
 
-      ## Step 1: Push Changes
+      ## Step 1: Gather Summary Inputs
 
       ```bash
-      git push -u origin HEAD 2>&1 || true
-      ```
-
-      ## Step 2: Generate Summary
-
-      ```bash
+      git branch --show-current
       git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
       git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
       ```
@@ -1028,34 +1025,55 @@ nodes:
       Read progress tracking from `$ARTIFACTS_DIR/progress.txt` for task completion
       context.
 
-      ## Step 3: Create PR (if not already created)
+      ## Step 2: Check for a PR Template
 
-      ```bash
-      gh pr view HEAD --json url 2>/dev/null || echo "NO_PR"
+      Read `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`,
+      or `docs/PULL_REQUEST_TEMPLATE.md` if present. Use the template structure if found.
+
+      ## Step 3: Write PR Artifacts
+
+      Write these files exactly:
+
+      1. `$ARTIFACTS_DIR/commit-message.txt`
+      2. `$ARTIFACTS_DIR/pr-title.txt`
+      3. `$ARTIFACTS_DIR/pr-body.md`
+      4. `$ARTIFACTS_DIR/pr-request.json`
+      5. `$ARTIFACTS_DIR/pr-summary.md`
+
+      Requirements:
+      - `commit-message.txt`: complete git commit message for any remaining uncommitted changes
+      - `pr-title.txt`: one-line draft PR title from the exact `PLAN_FILE`
+      - `pr-body.md`: complete PR body summarizing the implementation
+      - `pr-request.json`: exact JSON
+
+      ```json
+      {
+        "draft": true,
+        "ready": false
+      }
       ```
 
-      If no PR exists:
+      - `pr-summary.md`: final summary template using these placeholders literally:
+        - `__PR_URL__`
+        - `__PR_NUMBER__`
+        - `__PR_STATE__`
+        - `__PR_BRANCH__`
+        - `__PR_BASE__`
+        - `__PR_TITLE__`
 
-      ```bash
-      cat .github/pull_request_template.md 2>/dev/null || echo "NO_TEMPLATE"
-      ```
+      Recommended summary structure:
 
-      Create with `gh pr create --draft --base $BASE_BRANCH`:
-      - Title from the plan's feature name
-      - Body summarizing the implementation
-      - Use a HEREDOC for the body
-
-      ## Step 4: Output Summary
-
-      ```
+      ```markdown
       ===============================================================
       PIV LOOP — COMPLETE
       ===============================================================
 
-      Feature: {from plan}
+      Feature: {from exact PLAN_FILE}
       Plan: {plan file path}
-      Branch: {branch name}
-      PR: {url}
+      Branch: __PR_BRANCH__
+      PR: __PR_URL__
+      State: __PR_STATE__
+      Title: __PR_TITLE__
 
       -- Tasks Completed -----------------------------------------------
       {list from progress tracking}
@@ -1070,3 +1088,10 @@ nodes:
       All checks passed.
       ===============================================================
       ```
+
+      Do not leave any of these files missing.
+
+  - id: finalize
+    script: github-pr
+    runtime: bun
+    depends_on: [compose-finalize]

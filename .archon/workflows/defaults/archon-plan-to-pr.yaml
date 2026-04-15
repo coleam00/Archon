@@ -57,10 +57,15 @@ nodes:
   # PHASE 5: FINALIZE PR
   # ═══════════════════════════════════════════════════════════════════
 
-  - id: finalize-pr
-    command: archon-finalize-pr
+  - id: compose-finalize-pr
+    command: archon-compose-finalize-pr
     depends_on: [validate]
     context: fresh
+
+  - id: finalize-pr
+    script: github-pr
+    runtime: bun
+    depends_on: [compose-finalize-pr]
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 6: CODE REVIEW

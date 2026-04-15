@@ -10,7 +10,12 @@ nodes:
     command: archon-implement
     model: claude-opus-4-6[1m]
 
-  - id: create-pr
-    command: archon-create-pr
+  - id: compose-pr
+    command: archon-compose-pr
     depends_on: [implement]
     context: fresh
+
+  - id: create-pr
+    script: github-pr
+    runtime: bun
+    depends_on: [compose-pr]
