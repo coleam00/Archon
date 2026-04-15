@@ -2,7 +2,7 @@
 title: Codex-First Workflow Surface Strategy
 status: draft
 created: 2026-04-13
-updated: 2026-04-13
+updated: 2026-04-15
 ---
 
 # Design Doc: Codex-First Workflow Surface Strategy
@@ -22,6 +22,9 @@ This document is not an implementation PRD. It defines:
 
 This document is the design and policy anchor for follow-on implementation PRDs
 and plans.
+
+Current follow-on plan artifact for the interactive human-gate runtime surface:
+- `docs/plans/human-gate-runtime-cli-durability_plan.md`
 
 ## 2. Problem Statement
 
