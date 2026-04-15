@@ -1336,6 +1336,39 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('(unknown)');
       });
+
+      test('should show latest paused output when present', async () => {
+        const startedAt = new Date();
+        mockListWorkflowRuns.mockResolvedValueOnce([
+          {
+            id: 'run-paused',
+            workflow_name: 'archon-piv-loop-codex',
+            conversation_id: 'conv-1',
+            parent_conversation_id: null,
+            codebase_id: null,
+            status: 'paused',
+            user_message: 'help',
+            metadata: {
+              approval: {
+                nodeId: 'explore',
+                message: 'Answer the questions above.',
+                lastOutput: '## Questions\n1. Scope?\n2. Validation?',
+              },
+            },
+            started_at: startedAt,
+            completed_at: null,
+            last_activity_at: null,
+            working_path: '/workspace/worktrees/paused-run',
+          },
+        ]);
+
+        const result = await handleCommand(baseConversation, '/workflow status');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Latest output');
+        expect(result.message).toContain('## Questions');
+        expect(result.message).toContain('1. Scope?');
+      });
     });
 
     describe('/workflow resume', () => {

@@ -25,6 +25,7 @@ import type {
   WorkflowLoadError,
   WorkflowDefinition,
 } from '@archon/workflows/schemas/workflow';
+import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import {
   approveWorkflow,
@@ -660,10 +661,16 @@ async function handleWorkflowCommand(
 
         let msg = `**Active Workflows (${String(activeRuns.length)})**\n\n`;
         for (const run of activeRuns) {
+          const approval = isApprovalContext(run.metadata?.approval)
+            ? run.metadata.approval
+            : undefined;
           msg += `**\`${run.workflow_name}\`** (${run.status})\n`;
           msg += `  ID: ${run.id}\n`;
           msg += `  Path: ${run.working_path ?? '(unknown)'}\n`;
           msg += `  Started: ${new Date(run.started_at).toISOString()}\n\n`;
+          if (run.status === 'paused' && approval?.lastOutput) {
+            msg += `  Latest output:\n${approval.lastOutput.trim()}\n\n`;
+          }
         }
 
         const hasRunning = activeRuns.some(r => r.status === 'running');

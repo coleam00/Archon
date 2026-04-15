@@ -118,6 +118,22 @@ interface BundledScriptExecution {
 
 /** Default DAG node retry for TRANSIENT errors */
 const DEFAULT_NODE_MAX_RETRIES = 2;
+const MAX_APPROVAL_LAST_OUTPUT_CHARS = 8000;
+const APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX = '\n\n[truncated]';
+
+function toApprovalLastOutput(output: string | undefined): string | undefined {
+  if (typeof output !== 'string') return undefined;
+  const normalized = output.trim();
+  if (normalized.length === 0) return undefined;
+  if (normalized.length <= MAX_APPROVAL_LAST_OUTPUT_CHARS) {
+    return normalized;
+  }
+  const keepLength = Math.max(
+    0,
+    MAX_APPROVAL_LAST_OUTPUT_CHARS - APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX.length
+  );
+  return normalized.slice(0, keepLength) + APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX;
+}
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
 async function buildBundledScriptExecution(
@@ -2354,6 +2370,7 @@ async function executeLoopNode(
     // completion signal. The user reviews the AI's output and provides feedback or approval.
     // On approval, the AI will emit the signal in the next iteration, exiting above.
     if (loop.interactive && loop.gate_message) {
+      const approvalLastOutput = toApprovalLastOutput(lastIterationOutput);
       const gateMsg =
         `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${loop.gate_message}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
@@ -2388,6 +2405,7 @@ async function executeLoopNode(
       await deps.store.pauseWorkflowRun(workflowRun.id, {
         nodeId: node.id,
         message: loop.gate_message,
+        ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
         type: 'interactive_loop',
         iteration: i,
         sessionId: currentSessionId,
@@ -2397,6 +2415,7 @@ async function executeLoopNode(
         runId: workflowRun.id,
         nodeId: node.id,
         message: loop.gate_message,
+        ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
@@ -2446,6 +2465,7 @@ async function executeApprovalNode(
   issueContext?: string
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  let approvalLastOutput: string | undefined;
 
   // Detect rejection resume — check metadata for rejection_reason set by reject handlers
   const rawApproval = workflowRun.metadata?.approval;
@@ -2546,6 +2566,7 @@ async function executeApprovalNode(
     if (output.state === 'failed') {
       return output;
     }
+    approvalLastOutput = toApprovalLastOutput(output.output);
     // Fall through to re-pause at the approval gate
   }
 
@@ -2561,7 +2582,10 @@ async function executeApprovalNode(
       workflow_run_id: workflowRun.id,
       event_type: 'approval_requested',
       step_name: node.id,
-      data: { message: node.approval.message },
+      data: {
+        message: node.approval.message,
+        ...(approvalLastOutput ? { last_output: approvalLastOutput } : {}),
+      },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -2572,6 +2596,7 @@ async function executeApprovalNode(
 
   await deps.store.pauseWorkflowRun(workflowRun.id, {
     message: node.approval.message,
+    ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
     nodeId: node.id,
     type: 'approval',
     captureResponse: node.approval.capture_response,
@@ -2584,6 +2609,7 @@ async function executeApprovalNode(
     runId: workflowRun.id,
     nodeId: node.id,
     message: node.approval.message,
+    ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
   });
 
   // Return completed — the between-layer status check will see 'paused' and break.

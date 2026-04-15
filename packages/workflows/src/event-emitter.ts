@@ -133,6 +133,7 @@ interface ApprovalPendingEvent {
   runId: string;
   nodeId: string;
   message: string;
+  lastOutput?: string;
 }
 
 interface WorkflowCancelledEvent {

@@ -23,7 +23,11 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  isApprovalContext,
+  type ApprovalContext,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
   rejectWorkflow,
@@ -721,6 +725,19 @@ function formatDuration(ms: number): string {
   return `${String(mins)}m${String(remSecs)}s`;
 }
 
+function getApprovalContext(run: WorkflowRun): ApprovalContext | undefined {
+  const approval = run.metadata?.approval;
+  return isApprovalContext(approval) ? approval : undefined;
+}
+
+function indentBlock(text: string, indent = '    '): string {
+  return text
+    .trimEnd()
+    .split('\n')
+    .map(line => `${indent}${line}`)
+    .join('\n');
+}
+
 interface NodeSummary {
   nodeId: string;
   state: 'running' | 'completed' | 'failed' | 'skipped';
@@ -827,11 +844,16 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
   console.log(`\nActive workflows (${String(runs.length)}):\n`);
   for (const run of runs) {
     const age = formatAge(run.started_at);
+    const approval = getApprovalContext(run);
     console.log(`  ID:     ${run.id}`);
     console.log(`  Name:   ${run.workflow_name}`);
     console.log(`  Path:   ${run.working_path ?? '(none)'}`);
     console.log(`  Status: ${run.status}`);
     console.log(`  Age:    ${age}`);
+    if (run.status === 'paused' && approval?.lastOutput) {
+      console.log('  Latest output:');
+      console.log(indentBlock(approval.lastOutput));
+    }
 
     if (verbose) {
       let events: WorkflowEventRow[];

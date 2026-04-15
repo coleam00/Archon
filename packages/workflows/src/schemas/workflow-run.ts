@@ -111,6 +111,8 @@ export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 export interface ApprovalContext {
   nodeId: string;
   message: string;
+  /** Bounded copy of the latest assistant output shown immediately before pausing. */
+  lastOutput?: string;
   /** Distinguishes approval-gate pauses from interactive-loop pauses. */
   type?: 'approval' | 'interactive_loop';
   /** Current loop iteration when paused (interactive loops only). */

@@ -1056,6 +1056,33 @@ describe('workflowStatusCommand', () => {
     expect(calls.some(c => c.includes('running'))).toBe(true);
   });
 
+  it('should show latest paused output when present', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'run-paused',
+        workflow_name: 'archon-piv-loop-codex',
+        working_path: '/path/to/worktree',
+        status: 'paused',
+        started_at: new Date(Date.now() - 60 * 1000),
+        metadata: {
+          approval: {
+            nodeId: 'explore',
+            message: 'Answer the questions above.',
+            lastOutput: '## Questions\n1. Scope?\n2. Validation?',
+          },
+        },
+      },
+    ]);
+
+    await workflowStatusCommand();
+
+    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(calls.some(c => c.includes('Latest output:'))).toBe(true);
+    expect(calls.some(c => c.includes('## Questions'))).toBe(true);
+    expect(calls.some(c => c.includes('1. Scope?'))).toBe(true);
+  });
+
   it('should output JSON when json=true', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([]);

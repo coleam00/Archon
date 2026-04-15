@@ -3745,6 +3745,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         nodeId: 'refine',
         iteration: 1,
         message: 'Review the plan and provide feedback.',
+        lastOutput: 'Here is the plan. Please review.',
       });
     });
 
@@ -4621,6 +4622,63 @@ describe('executeDagWorkflow -- approval node', () => {
       store.pauseWorkflowRun as Mock<(id: string, ctx: Record<string, unknown>) => Promise<void>>
     ).mock.calls;
     expect(pauseCalls.length).toBe(1);
+    expect(pauseCalls[0][1]).toMatchObject({
+      lastOutput: 'Fixed based on feedback',
+    });
+  });
+
+  it('interactive loop bounds large lastOutput before pausing', async () => {
+    const largeOutput = 'A'.repeat(9000);
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: largeOutput };
+      yield { type: 'result', sessionId: 'loop-session-large' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'interactive-loop-large-output',
+        nodes: [
+          {
+            id: 'refine',
+            loop: {
+              prompt: 'Refine the plan.',
+              until: 'APPROVED',
+              max_iterations: 10,
+              interactive: true,
+              gate_message: 'Review the plan and provide feedback.',
+            },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const pauseCalls = (
+      mockDeps.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    const approvalContext = pauseCalls[0][1] as Record<string, unknown>;
+    expect(typeof approvalContext.lastOutput).toBe('string');
+    const lastOutput = approvalContext.lastOutput as string;
+    expect(lastOutput.length).toBeLessThanOrEqual(8000);
+    expect(lastOutput.endsWith('[truncated]')).toBe(true);
   });
 
   it('on_reject cancels when max_attempts exhausted', async () => {
