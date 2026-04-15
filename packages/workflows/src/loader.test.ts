@@ -260,6 +260,52 @@ nodes:
       expect(workflows[0].webSearchMode).toBe('live');
       expect(workflows[0].additionalDirectories).toEqual(['/repo/a']);
     });
+
+    it('should parse modelReasoningEffort on command nodes', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `name: node-codex-reasoning
+description: Node-level codex reasoning is parsed
+provider: codex
+model: gpt-5.2-codex
+nodes:
+  - id: test
+    command: test
+    modelReasoningEffort: xhigh
+`;
+      await writeFile(join(workflowDir, 'node-options.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const workflows = result.workflows.map(ws => ws.workflow);
+
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].nodes).toHaveLength(1);
+      expect(workflows[0].nodes[0].modelReasoningEffort).toBe('xhigh');
+    });
+
+    it('should reject invalid node-level modelReasoningEffort values', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `name: invalid-node-codex-reasoning
+description: Invalid node-level codex reasoning fails parsing
+provider: codex
+model: gpt-5.2-codex
+nodes:
+  - id: test
+    command: test
+    modelReasoningEffort: turbo
+`;
+      await writeFile(join(workflowDir, 'invalid-node-options.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].errorType).toBe('validation_error');
+      expect(result.errors[0].error).toContain('modelReasoningEffort');
+    });
   });
 
   describe('discoverWorkflows', () => {
@@ -1678,6 +1724,44 @@ nodes:
         expect(wf.nodes[0].loop.progress_file).toBeUndefined();
         expect(wf.nodes[0].loop.stuck_after_no_progress_iterations).toBeUndefined();
       }
+    });
+
+    it('should warn and ignore modelReasoningEffort on loop nodes', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-node-reasoning.yaml'),
+        `
+name: loop-node-reasoning
+description: Loop nodes ignore node-level codex reasoning
+provider: codex
+model: gpt-5.2-codex
+nodes:
+  - id: my-loop
+    modelReasoningEffort: high
+    loop:
+      prompt: "Iterate."
+      until: DONE
+      max_iterations: 3
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const wf = result.workflows[0].workflow;
+      expect(wf.nodes).toHaveLength(1);
+      expect(isLoopNode(wf.nodes[0])).toBe(true);
+      if (isLoopNode(wf.nodes[0])) {
+        expect('modelReasoningEffort' in wf.nodes[0]).toBe(false);
+      }
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'my-loop', fields: ['modelReasoningEffort'] }),
+        'loop_node_ai_fields_ignored'
+      );
     });
 
     it('should reject loop node missing loop.prompt', async () => {
