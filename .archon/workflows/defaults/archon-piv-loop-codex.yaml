@@ -29,6 +29,7 @@ description: |
   Input: A description of what to build, a path to an existing plan, or a GitHub issue number.
 
 provider: codex
+modelReasoningEffort: xhigh
 interactive: true
 
 nodes:
