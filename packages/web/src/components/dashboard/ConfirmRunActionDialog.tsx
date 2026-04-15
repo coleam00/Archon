@@ -20,8 +20,11 @@ interface Props {
   description: ReactNode;
   /** Confirm-button label (e.g. "Abandon", "Delete"). */
   confirmLabel: string;
-  /** Invoked when the user confirms. Errors should be handled by the caller. */
-  onConfirm: () => void | Promise<void>;
+  /** Invoked when the user confirms. The current callsites are all
+   *  fire-and-forget wrappers around React Query mutations whose error
+   *  handling lives at the page level (`runAction` in `DashboardPage.tsx`).
+   *  Widen to `Promise<void>` only if a caller needs to await the action. */
+  onConfirm: () => void;
 }
 
 /**
@@ -57,11 +60,11 @@ export function ConfirmRunActionDialog({
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={(): void => {
-              // Fire-and-forget — caller's onConfirm typically returns a
-              // promise managed by a parent-level runAction helper that
-              // already surfaces errors. We do NOT catch here; swallowing
-              // would hide failures the parent is positioned to display.
-              void onConfirm();
+              // Caller's onConfirm is fire-and-forget over a parent-level
+              // runAction helper that surfaces errors via component state.
+              // We do NOT catch here; swallowing would hide failures the
+              // parent is positioned to display.
+              onConfirm();
             }}
           >
             {confirmLabel}

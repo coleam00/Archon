@@ -12,9 +12,9 @@ const tabs = [
 ] as const;
 
 export function TopNav(): React.ReactElement {
-  // Read counts.running from the dashboard endpoint — single query gives us
-  // the count without paging through rows. limit=1 keeps the response payload
-  // small; we only consume `counts.running`.
+  // We only need `counts.running` — a server-side aggregate independent of
+  // the `runs` array. `limit: 1` minimises the `runs` payload that the API
+  // returns alongside the counts (we discard it).
   const { data: dashboardRuns } = useQuery({
     queryKey: ['dashboardRuns', { status: 'running', forCount: true }],
     queryFn: () => listDashboardRuns({ status: 'running', limit: 1 }),
@@ -59,7 +59,7 @@ export function TopNav(): React.ReactElement {
           {to === '/dashboard' && runningCount > 0 && (
             <span
               className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
-              aria-label={`${String(runningCount)} workflows running`}
+              aria-label={`${runningCount} workflows running`}
             >
               {runningCount}
             </span>
