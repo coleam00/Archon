@@ -573,6 +573,10 @@ Error example:
   - fallback snapshot behavior for legacy runs
   - whether token enforcement is optional or required per command version
   - error code shape for stale/missing token mismatches
+  - when an expected gate token is supplied for a legacy paused run without
+    token/version metadata, approve/reject return a defined compatibility error
+    such as `LEGACY_GATE_TOKEN_UNAVAILABLE` rather than silently accepting the
+    token
 - Exit Criteria:
   - implementation can proceed without inventing compatibility behavior mid-flight
 
@@ -657,8 +661,17 @@ Error example:
   - interactive-loop snapshot
   - legacy paused run fallback mapping
   - token/version presence on new runs
+- Exact verify commands to add during implementation and freeze:
+  - `bun test packages/workflows/src/dag-executor.test.ts -t "interactive loop gate pause metadata includes gate identity"`
+  - `bun test packages/workflows/src/dag-executor.test.ts -t "approval node pause metadata includes gate identity"`
+  - `bun test packages/workflows/src/executor.test.ts -t "executeWorkflow returns structured paused result for paused runs"`
+  - `bun test packages/core/src/operations/workflow-operations.test.ts -t "legacy paused run without gate token maps to compatibility snapshot"`
+  - `bun test packages/core/src/operations/workflow-operations.test.ts -t "approveWorkflow rejects expected gate token for legacy paused run"`
+  - `bun test packages/core/src/operations/workflow-operations.test.ts -t "rejectWorkflow rejects expected gate token for legacy paused run"`
 - Exit Criteria:
   - snapshot foundation is covered before surface expansion
+  - phase-1 runtime contract tests are pinned to exact test homes and verify
+    commands before CLI surface work begins
 
 ## Phase 2 — CLI JSON And Durable Read-Back
 
@@ -782,6 +795,9 @@ Commands to Run:
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json returns post-resume paused outcome with humanGate"`
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json returns post-resume outcome or cancellation envelope"`
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json rejects stale expected gate token"`
+  - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json rejects stale expected gate token"`
+  - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json rejects expected gate token for legacy paused run"`
+  - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json rejects expected gate token for legacy paused run"`
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json returns decision-recorded launch-failed envelope when resume launch fails"`
   - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow show --json maps legacy paused run without gate token into compatibility snapshot"`
 
@@ -790,6 +806,9 @@ Exit Criteria:
 - paused gate is recoverable by run ID after the original pause moment
 - returned gate message matches the workflow reality
 - stale token mismatch is reproducible and explicit
+- stale token rejection is proven on both approve and reject command paths
+- legacy paused runs reject supplied expected gate tokens with the defined
+  compatibility error
 - the structured partial-success envelope is proven when auto-resume launch
   fails after the decision is recorded
 - legacy paused runs without token/version still map to the defined
@@ -803,7 +822,8 @@ Evidence:
   - paused run read-back
   - approve -> paused-again outcome
   - reject -> resumed or cancelled outcome
-  - stale-token rejection
+  - stale-token rejection on approve and reject
+  - legacy paused-run expected-token compatibility rejection
   - decision-recorded -> resume-launch-failed partial-success outcome
   - legacy paused-run compatibility mapping
 
@@ -813,6 +833,9 @@ Verify Commands:
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json returns post-resume paused outcome with humanGate"`
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json returns post-resume outcome or cancellation envelope"`
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json rejects stale expected gate token"`
+- `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json rejects stale expected gate token"`
+- `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json rejects expected gate token for legacy paused run"`
+- `bun test packages/cli/src/commands/workflow.test.ts -t "workflow reject --json rejects expected gate token for legacy paused run"`
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow approve --json returns decision-recorded launch-failed envelope when resume launch fails"`
 - `bun test packages/cli/src/commands/workflow.test.ts -t "workflow show --json maps legacy paused run without gate token into compatibility snapshot"`
 
@@ -833,6 +856,9 @@ Commands to Run:
   - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "GET /api/workflows/runs/:runId preserves raw paused run read-back"`
   - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "GET /api/workflows/runs/:runId remains raw-only in v1 while additive gate metadata is preserved"`
   - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "approve route rejects stale expected gate token"`
+  - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route rejects stale expected gate token"`
+  - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "approve route rejects expected gate token for legacy paused run"`
+  - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route rejects expected gate token for legacy paused run"`
   - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route preserves compatibility when no expected gate token is supplied"`
 
 Exit Criteria:
@@ -840,6 +866,9 @@ Exit Criteria:
 - web/API path still works, or compatibility behavior is explicit and tested
 - the v1 API boundary is proven: raw run read-back stays raw-only, while
   approve/reject routes match CLI stale-gate semantics
+- stale-token rejection is proven on both approve and reject API mutation paths
+- legacy paused runs reject supplied expected gate tokens with the defined
+  compatibility error on both approve and reject API mutation paths
 
 E2E Mode: automated
 
@@ -849,7 +878,9 @@ Evidence:
   - existing raw run retrieval
   - explicit proof that normalized `HumanGateSnapshot` stays a CLI contract in
     v1 rather than silently reshaping the raw run route
-  - stale-token validation on mutation routes
+  - stale-token validation on approve and reject mutation routes
+  - legacy expected-token compatibility rejection on approve and reject mutation
+    routes
   - no-regression compatibility for callers that omit token checks
 
 Verify Commands:
@@ -857,6 +888,9 @@ Verify Commands:
 - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "GET /api/workflows/runs/:runId preserves raw paused run read-back"`
 - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "GET /api/workflows/runs/:runId remains raw-only in v1 while additive gate metadata is preserved"`
 - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "approve route rejects stale expected gate token"`
+- `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route rejects stale expected gate token"`
+- `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "approve route rejects expected gate token for legacy paused run"`
+- `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route rejects expected gate token for legacy paused run"`
 - `bun test packages/server/src/routes/api.workflow-runs.test.ts -t "reject route preserves compatibility when no expected gate token is supplied"`
 
 # Acceptance Criteria
@@ -870,6 +904,7 @@ Verify Commands:
 - The "decision recorded, resume launch failed" branch is explicitly verified
   and recoverable.
 - Legacy paused runs have explicit compatibility behavior.
+- Legacy paused runs have explicit expected-token behavior.
 - Existing human-readable CLI output remains usable.
 - API/server duplication risk is handled explicitly rather than ignored.
 
@@ -1040,3 +1075,28 @@ Reason:
   - added repo-browser preflight section
   - corrected server test-file references
   - clarified doc-surface ownership for this planning slice
+
+## Cycle 5
+
+- Status: post-preflight review tightening
+- Trigger:
+  - refreshed peer review after repo-browser preflight updates
+- Reviewer warning addressed:
+  - stale-gate rejection proof was explicit on approve but not on reject
+- Revisions applied:
+  - added symmetric CLI stale-token reject verify command
+  - added symmetric API stale-token reject verify command
+  - tightened Phase 99 exit criteria and evidence language to require both
+    approve and reject stale-gate proof
+
+## Cycle 6
+
+- Status: warning-level contract tightening
+- Trigger:
+  - post-review warning cleanup for later implementation readiness
+- Revisions applied:
+  - froze legacy expected-token behavior for paused runs without token/version
+    metadata
+  - added exact Phase 1 foundation-test homes and verify commands
+  - added CLI and API verify commands for legacy expected-token rejection on
+    approve and reject

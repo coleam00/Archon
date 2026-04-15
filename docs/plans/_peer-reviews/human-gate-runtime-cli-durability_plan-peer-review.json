@@ -1,8 +1,8 @@
 {
   "schema_version": "peer-review-v1",
-  "review_id": "peer-review-c80e960c966f",
+  "review_id": "peer-review-cff0cbfaf533",
   "plan_path": "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md",
-  "plan_sha256": "051d2a3bd36412ef311e89e19411dc4b6553c9ded3feb2d1a6f4cc5fd44577d8",
+  "plan_sha256": "0fa61714b302a6b49dadbe9cff06fa1dd3837bbd523c211be372ffd7560baa96",
   "mode": "workflow-plan-gate",
   "sidecar_dir": "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/_peer-reviews",
   "engine": "GPT",
@@ -27,90 +27,55 @@
       "returncode": 0
     }
   ],
-  "review_round": 4,
+  "review_round": 5,
   "max_rounds": 3,
-  "prior_review_id": "peer-review-200db9802bf7",
+  "prior_review_id": "peer-review-c80e960c966f",
   "caller_disposition_summary": "",
   "addressed_issues": [],
   "deferred_issues": [],
   "recheck_requests": [],
   "model": "codex",
-  "verdict": "Sound-with-issues",
+  "verdict": "Sound",
   "stance": null,
-  "issues_count": 1,
-  "ran_at": "2026-04-15T10:07:32.919747+00:00",
-  "raw_review_excerpt": "The current artifact is internally coherent and substantially freeze-ready. It resolves the earlier placeholder-command and ambiguous-semantics issues, but one material verification gap remains: stale-gate rejection is specified for both approve and reject paths, while the frozen end-gate verify commands only prove stale-token rejection on approve.\n\nIssues:\n- 1. [WARN] Reject stale-gate behavior is specified but not end-gate-proven symmetrically",
+  "issues_count": 0,
+  "ran_at": "2026-04-15T10:10:41.012845+00:00",
+  "raw_review_excerpt": "Current-artifact-first review passes on the requested focus. The plan now explicitly requires stale-token rejection symmetry on both approve and reject paths for both CLI and API, and it carries matching Phase 99 verify commands, exit criteria, evidence expectations, and prior-round closure notes. Coverage is slice-only: I reviewed the supplied plan text and prior-round claim packet, not the full campaign or directly inspected repo files.",
   "error": null,
-  "closure_verification": "The carried content fixes from earlier rounds are present in the current artifact. The remaining unproven item is the artifact's own repo-browser preflight claim, which was not independently revalidated here.",
+  "closure_verification": "The carried prior-round concern about reject-path symmetry is resolved in the current artifact.",
   "prior_round_closure": [
     {
-      "title": "P99 verify commands replaced placeholders with exact commands",
+      "title": "Symmetric stale-token rejection proof",
       "severity": "WARN",
-      "caller_claim": "Cycle 1 said the plan now freezes exact P99 CLI and API verify commands.",
+      "caller_claim": "The plan was updated to add symmetric CLI and API reject-path stale-token verify commands and to tighten exit/evidence language so both approve and reject are explicitly proven.",
       "verification_status": "resolved",
-      "verification_notes": "Current artifact includes explicit `bun test ... -t` commands in both P99-T1 and P99-T2."
-    },
-    {
-      "title": "Approve/reject JSON semantics clarified under auto-resume",
-      "severity": "WARN",
-      "caller_claim": "Cycle 1 said approve/reject JSON semantics were made explicit.",
-      "verification_status": "resolved",
-      "verification_notes": "Current artifact now freezes Decision E and provides concrete approve/reject JSON examples, including post-resume and partial-success behavior."
-    },
-    {
-      "title": "API gap wording narrowed to raw-readback-vs-canonical-snapshot",
-      "severity": "WARN",
-      "caller_claim": "Cycle 1 said the plan no longer overstates API absence.",
-      "verification_status": "resolved",
-      "verification_notes": "The artifact now explicitly says `GET /api/workflows/runs/:runId` already exists and frames the v1 gap as lack of canonical `HumanGateSnapshot` semantics."
-    },
-    {
-      "title": "Partial-success resume-launch-failed branch explicitly verified",
-      "severity": "WARN",
-      "caller_claim": "Cycle 2 said the partial-success branch was given explicit verify hooks.",
-      "verification_status": "resolved",
-      "verification_notes": "Current artifact includes a concrete JSON example plus a dedicated CLI verify command and exit-criteria mention in P99-T1."
-    },
-    {
-      "title": "Legacy paused-run compatibility has an explicit end-gate verify hook",
-      "severity": "WARN",
-      "caller_claim": "Cycle 2 said legacy compatibility now has frozen verification.",
-      "verification_status": "resolved",
-      "verification_notes": "Current artifact includes legacy compatibility in P1 foundation tests and a dedicated `workflow show --json` compatibility verify command in P99-T1."
-    },
-    {
-      "title": "Repo-browser preflight rechecked runtime anchors and test homes",
-      "severity": "NOTE",
-      "caller_claim": "Cycle 4 said the cited runtime anchors and server test-file references were verified against repo reality.",
-      "verification_status": "not-proven",
-      "verification_notes": "The current artifact records those assertions in the Repo Browser Preflight section, but this review did not independently inspect the repo files."
+      "verification_notes": "Verified in the current artifact: CLI P99-T1 includes both approve and reject stale-token test commands; API P99-T2 includes both approve and reject stale-token test commands; both exit-criteria sections require proof on both paths; Cycle 5 records the same revision."
     }
   ],
   "rerun_recommendation": "stop",
   "review": {
     "mode": "workflow-plan-gate",
-    "summary": "The current artifact is internally coherent and substantially freeze-ready. It resolves the earlier placeholder-command and ambiguous-semantics issues, but one material verification gap remains: stale-gate rejection is specified for both approve and reject paths, while the frozen end-gate verify commands only prove stale-token rejection on approve.",
+    "summary": "Current-artifact-first review passes on the requested focus. The plan now explicitly requires stale-token rejection symmetry on both approve and reject paths for both CLI and API, and it carries matching Phase 99 verify commands, exit criteria, evidence expectations, and prior-round closure notes. Coverage is slice-only: I reviewed the supplied plan text and prior-round claim packet, not the full campaign or directly inspected repo files.",
     "rubric_cards": [
       {
-        "title": "Claim anchoring",
-        "anchor": "artifact",
-        "claim": "Most load-bearing claims are anchored in the current plan artifact, especially the verified-current-state, contract-freeze, P99 verify-command, and acceptance-criteria sections.",
-        "evidence": "The review used the supplied plan text as the primary source. No cited repo files were independently re-inspected in this review.",
-        "disposition": "partial"
-      },
-      {
-        "title": "Disposition matrix",
-        "anchor": "disposition-matrix",
-        "claim": "Artifact evidence is strong, conversation evidence is limited to the prior-round packet, and campaign evidence is only slice-level.",
-        "evidence": "See matrix and coverage fields below.",
+        "title": "Claim Anchoring",
+        "anchor": "P99-T1, P99-T2, Cycle 5",
+        "claim": "The artifact now freezes symmetric stale-token rejection proof for approve and reject.",
+        "evidence": "P99-T1 adds both CLI verify commands for approve and reject stale-token rejection; P99-T2 adds both API verify commands; both exit-criteria blocks require proof on both paths; Cycle 5 states those additions explicitly.",
         "disposition": "present"
       },
       {
-        "title": "Coverage scope",
-        "anchor": "coverage",
-        "claim": "This review covered the current artifact plus prior-round claims embedded in the prompt, not the full campaign or independently inspected repo state.",
-        "evidence": "No full thread transcript, no campaign artifacts, and no live repo-file recheck were available under the stated constraints.",
-        "disposition": "partial"
+        "title": "Disposition Matrix",
+        "anchor": "artifact/conversation/campaign",
+        "claim": "Artifact evidence is strong for the focused slice; conversation evidence is limited to the prior-round packet; campaign coverage is not full-thread.",
+        "evidence": "Current plan text contains the operative requirements and closure notes; no broader thread or campaign artifacts were inspected in this review.",
+        "disposition": "artifact-present, conversation-partial, campaign-slice-only"
+      },
+      {
+        "title": "Coverage Scope",
+        "anchor": "review scope",
+        "claim": "This review covers the current plan artifact and the supplied prior-round claims only.",
+        "evidence": "No repo-file inspection, shell verification, or full campaign transcript review was performed.",
+        "disposition": "slice-only"
       }
     ],
     "disposition_matrix": {
@@ -126,146 +91,92 @@
       ],
       "cells": [
         [
-          "phase structure; frozen contract decisions; explicit P99 verify commands; acceptance criteria",
-          "reject stale-token proof symmetry; repo-grounding claims not independently rechecked",
+          "symmetric stale-token proof is explicit in current artifact",
+          "repo/code anchors not independently re-verified in this review",
           "none"
         ],
         [
-          "prior-round claims packet used for closure checks",
-          "no separate thread transcript beyond the prompt packet",
-          "full conversation history"
+          "prior-round claim packet used only for closure check",
+          "no broader thread transcript was reviewed",
+          "none"
         ],
         [
-          "none",
-          "current artifact plus prior-round slice only",
-          "full campaign artifacts and logs"
+          "current plan slice was assessed",
+          "coverage is slice-only rather than full-campaign",
+          "full campaign/repo pass not assessed"
         ]
       ]
     },
     "conversation_evidence": {
       "used": true,
       "sources": [
-        "Prior-round context embedded in the prompt (Cycles 1-4 claims)"
+        "Prior-round context in the user prompt (review round 5/3, prior review id peer-review-c80e960c966f)"
       ],
-      "summary": "Used only to verify whether carried issues are addressed by the current artifact text.",
+      "summary": "Used only as claims to verify. Closure status was determined against the current artifact text, not the caller narrative.",
       "gaps": [
-        "No full thread transcript",
-        "No independent prior-round tool outputs or repo-inspection evidence"
+        "No full thread transcript was provided.",
+        "No campaign-side artifacts beyond the supplied plan text were reviewed."
       ]
     },
     "campaign_coverage": {
       "scope": "slice-only",
       "covered": [
-        "Current plan artifact supplied via stdin",
-        "Prior-round claims packet included in the prompt"
+        "Current artifact: /Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md",
+        "Prior-round claim packet in the prompt"
       ],
       "missing": [
-        "Direct inspection of cited repo files",
         "Full campaign/thread history",
-        "Independent validation of exact test-home and runtime-anchor claims"
+        "Direct inspection of cited repo files and test files"
       ],
       "gaps": [
-        "Do not treat this as full-campaign review",
-        "Repo-browser preflight assertions were not independently revalidated here"
+        "This review cannot certify end-to-end repo alignment beyond what the current artifact states."
       ]
     },
-    "issues": [
-      {
-        "title": "Reject stale-gate behavior is specified but not end-gate-proven symmetrically",
-        "details": "The artifact freezes stale-gate semantics across approve/reject paths in P2-T3, P3-T1, and the acceptance criteria, but the frozen P99 verify commands only prove stale-token rejection for `approve`. `reject` is only covered for the no-token compatibility case. That leaves one load-bearing safety behavior specified but not explicitly end-gate-verified.",
-        "suggested_fix": "Add exact CLI and API verify commands for stale-token rejection on `reject`, or explicitly narrow v1 stale-token enforcement proof to approve-only if that is the actual intended boundary.",
-        "severity": "WARN"
-      }
-    ],
+    "issues": [],
     "verification_gaps": [
-      "Cited runtime-anchor and test-home claims inside the Repo Browser Preflight section were not independently re-inspected in this review.",
-      "Exact `bun test ... -t` names are assessed as frozen artifact intent, not as currently existing passing tests.",
-      "No direct repo inspection was performed for `packages/workflows/src/*`, `packages/cli/src/commands/workflow.ts`, or server test files under the imposed constraints."
+      "Direct inspection of the cited runtime and test files was not performed in this review, so repo-reality confirmation remains outside the assessed slice."
     ],
-    "recommended_fixes": [
-      "Add symmetric reject stale-token verify commands at the CLI and API end-gates.",
-      "If no further artifact revision is planned, record explicitly that repo-grounding still needs a lightweight pre-implementation recheck of the cited files/test homes."
-    ],
+    "recommended_fixes": [],
     "evidence_sources": [
-      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md (supplied via stdin)",
-      "Prior-round context block in the prompt"
+      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 2 / P2-T3 Add stale-gate guard",
+      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T1 Verify Commands",
+      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T1 Exit Criteria",
+      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T2 Verify Commands",
+      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Phase 99 / P99-T2 Exit Criteria",
+      "/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/human-gate-runtime-cli-durability_plan.md :: Peer Review Loop Log / Cycle 5"
     ],
     "error": null,
     "prior_round_closure": [
       {
-        "title": "P99 verify commands replaced placeholders with exact commands",
+        "title": "Symmetric stale-token rejection proof",
         "severity": "WARN",
-        "caller_claim": "Cycle 1 said the plan now freezes exact P99 CLI and API verify commands.",
+        "caller_claim": "The plan was updated to add symmetric CLI and API reject-path stale-token verify commands and to tighten exit/evidence language so both approve and reject are explicitly proven.",
         "verification_status": "resolved",
-        "verification_notes": "Current artifact includes explicit `bun test ... -t` commands in both P99-T1 and P99-T2."
-      },
-      {
-        "title": "Approve/reject JSON semantics clarified under auto-resume",
-        "severity": "WARN",
-        "caller_claim": "Cycle 1 said approve/reject JSON semantics were made explicit.",
-        "verification_status": "resolved",
-        "verification_notes": "Current artifact now freezes Decision E and provides concrete approve/reject JSON examples, including post-resume and partial-success behavior."
-      },
-      {
-        "title": "API gap wording narrowed to raw-readback-vs-canonical-snapshot",
-        "severity": "WARN",
-        "caller_claim": "Cycle 1 said the plan no longer overstates API absence.",
-        "verification_status": "resolved",
-        "verification_notes": "The artifact now explicitly says `GET /api/workflows/runs/:runId` already exists and frames the v1 gap as lack of canonical `HumanGateSnapshot` semantics."
-      },
-      {
-        "title": "Partial-success resume-launch-failed branch explicitly verified",
-        "severity": "WARN",
-        "caller_claim": "Cycle 2 said the partial-success branch was given explicit verify hooks.",
-        "verification_status": "resolved",
-        "verification_notes": "Current artifact includes a concrete JSON example plus a dedicated CLI verify command and exit-criteria mention in P99-T1."
-      },
-      {
-        "title": "Legacy paused-run compatibility has an explicit end-gate verify hook",
-        "severity": "WARN",
-        "caller_claim": "Cycle 2 said legacy compatibility now has frozen verification.",
-        "verification_status": "resolved",
-        "verification_notes": "Current artifact includes legacy compatibility in P1 foundation tests and a dedicated `workflow show --json` compatibility verify command in P99-T1."
-      },
-      {
-        "title": "Repo-browser preflight rechecked runtime anchors and test homes",
-        "severity": "NOTE",
-        "caller_claim": "Cycle 4 said the cited runtime anchors and server test-file references were verified against repo reality.",
-        "verification_status": "not-proven",
-        "verification_notes": "The current artifact records those assertions in the Repo Browser Preflight section, but this review did not independently inspect the repo files."
+        "verification_notes": "Verified in the current artifact: CLI P99-T1 includes both approve and reject stale-token test commands; API P99-T2 includes both approve and reject stale-token test commands; both exit-criteria sections require proof on both paths; Cycle 5 records the same revision."
       }
     ],
-    "closure_verification": "The carried content fixes from earlier rounds are present in the current artifact. The remaining unproven item is the artifact's own repo-browser preflight claim, which was not independently revalidated here.",
+    "closure_verification": "The carried prior-round concern about reject-path symmetry is resolved in the current artifact.",
     "rerun_recommendation": "stop",
-    "verdict": "Sound-with-issues",
+    "verdict": "Sound",
     "workflow_compliance": [
-      "The artifact has clear phase structure, exit criteria, acceptance criteria, risks, rollout order, and a defined E2E gate.",
-      "It explicitly freezes the v1 CLI/API boundary instead of leaving parity semantics implicit.",
-      "It now includes exact frozen P99 verify commands rather than placeholders.",
-      "One material verify-command gap remains for reject stale-token rejection."
+      "The plan is freeze-ready on the requested focus because it now states explicit verify commands, exit criteria, and evidence for symmetric stale-token rejection on approve and reject.",
+      "Exit criteria and verify commands are materially aligned with the stated acceptance criteria for the stale-gate safety requirement."
     ],
     "technical_reality": [
-      "The artifact consistently frames persisted pause metadata as the canonical runtime source and live SSE/chat surfaces as non-canonical observability layers.",
-      "The artifact explicitly keeps `GET /api/workflows/runs/:runId` as a raw run-plus-events surface in v1 while making CLI the canonical normalized snapshot surface.",
-      "The artifact defines explicit structured handling for 'decision recorded, resume launch failed' rather than treating it as silent success or generic failure.",
-      "Repo-grounding assertions in the preflight section remain artifact-asserted rather than independently rechecked in this review."
+      "Within the current artifact, stale-gate protection is defined as optional-token validation in v1 and is required to fail clearly when used.",
+      "The plan now treats approve and reject symmetrically at both CLI and API surfaces for stale-token rejection proof."
     ],
     "assumptions_to_verify": [
-      "Current repo reality still matches the stated server test home `packages/server/src/routes/api.workflow-runs.test.ts`.",
-      "Approve and reject paths can share the same expected-gate-token validation semantics without hidden divergence.",
-      "Existing workflow-run metadata is sufficient to carry gate token/version without requiring deeper persistence changes.",
-      "JSON mode can fully suppress stdout chatter while preserving operator-usable diagnostics off stdout."
+      "The cited CLI and server test files still exist and remain the correct test homes at implementation time.",
+      "Current approve/reject routes and CLI paths can accept an expected-gate-token style parameter without conflicting with existing command contracts."
     ],
     "verification_sufficiency": [
-      "Sufficient to judge the current artifact's internal workflow-plan structure and prior-round closure against the supplied text.",
-      "Insufficient to independently confirm repo anchors, command availability, and exact test-home reality because no repo files were re-inspected.",
-      "Insufficient for full-campaign conclusions because the review covered only the current artifact and prior-round packet."
+      "Sufficient to judge the current plan artifact on the requested focus.",
+      "Not sufficient to certify full repo-code alignment or full-campaign closure because this review did not inspect repo files directly."
     ],
     "downstream_risks": [
-      "Reject-path stale-token handling could ship without explicit regression coverage.",
-      "Implementation could start from a stale file/test map if the preflight assertions drifted after the artifact was written.",
-      "CLI/API gate semantics could still drift if stale-token validation is not exercised symmetrically across both mutation actions."
+      "If repo reality has drifted since the artifact's own preflight, the frozen verify commands may need mechanical adjustment even though the plan logic is sound."
     ],
-    "freeze_recommendation": "Safe to freeze. Carry the remaining WARN/NOTE items as explicit follow-ups or implementation-time checks."
+    "freeze_recommendation": "Safe to freeze. No blocker-level issues were identified."
   }
 }
