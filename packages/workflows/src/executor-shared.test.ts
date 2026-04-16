@@ -169,7 +169,7 @@ describe('substituteWorkflowVariables', () => {
 
   it('does not treat context variables as prefixes of longer identifiers', () => {
     const { prompt, contextSubstituted } = substituteWorkflowVariables(
-      'Context: $CONTEXT. File: $CONTEXT_FILE. External path: $EXTERNAL_CONTEXT_PATH',
+      'Context: $CONTEXT. File: $CONTEXT_FILE. External path: $EXTERNAL_CONTEXT_PATH. IssueId: $ISSUE_CONTEXT_ID',
       'run-1',
       'msg',
       '/tmp',
@@ -178,9 +178,37 @@ describe('substituteWorkflowVariables', () => {
       'context-data'
     );
     expect(prompt).toBe(
-      'Context: context-data. File: $CONTEXT_FILE. External path: $EXTERNAL_CONTEXT_PATH'
+      'Context: context-data. File: $CONTEXT_FILE. External path: $EXTERNAL_CONTEXT_PATH. IssueId: $ISSUE_CONTEXT_ID'
     );
     expect(contextSubstituted).toBe(true);
+  });
+
+  it('does not substitute $ISSUE_CONTEXT when followed by identifier characters', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Issue: $ISSUE_CONTEXT. ID: $ISSUE_CONTEXT_ID. Type: $ISSUE_CONTEXT_TYPE',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      'context-data'
+    );
+    expect(prompt).toBe('Issue: context-data. ID: $ISSUE_CONTEXT_ID. Type: $ISSUE_CONTEXT_TYPE');
+  });
+
+  it('does not set contextSubstituted when only suffix-extended context vars are present', () => {
+    const { prompt, contextSubstituted } = substituteWorkflowVariables(
+      'Path: $CONTEXT_FILE',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      'context-data'
+    );
+    // $CONTEXT_FILE is not a context variable — should be left untouched
+    expect(prompt).toBe('Path: $CONTEXT_FILE');
+    expect(contextSubstituted).toBe(false);
   });
 
   it('clears context variables when issueContext is undefined', () => {
