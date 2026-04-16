@@ -12,7 +12,7 @@ mock.module('./connection', () => ({
 }));
 
 // Module-level variable to control mock config assistant per test
-let mockConfigAssistant = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+let mockConfigAssistant: string = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
 
 // Mock config-loader to control assistant type in tests without filesystem dependency
 mock.module('../config/config-loader', () => ({
@@ -59,7 +59,7 @@ describe('conversations', () => {
       } else {
         process.env.DEFAULT_AI_ASSISTANT = originalDefaultAiAssistant;
       }
-      mockConfigAssistant = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+      // No need to reset mockConfigAssistant here — beforeEach resets it to 'claude' before each test
     });
 
     const existingConversation: Conversation = {
@@ -142,9 +142,12 @@ describe('conversations', () => {
     });
 
     test('uses DEFAULT_AI_ASSISTANT env var when set', async () => {
-      // Set env var for this test (afterEach will restore original)
+      // Set env var (afterEach will restore). The env var itself is not read by the mock —
+      // the mock's loadConfig() returns `mockConfigAssistant` directly. We set both to
+      // document the contract: loadConfig() must honour DEFAULT_AI_ASSISTANT as highest priority.
+      // That contract is tested in config-loader.test.ts; here we only test that
+      // getOrCreateConversation() uses whatever loadConfig() returns.
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
-      // Simulate loadConfig() honoring the env var override
       mockConfigAssistant = 'codex';
 
       const newConversation: Conversation = {
@@ -189,7 +192,7 @@ describe('conversations', () => {
       );
     });
 
-    test('falls back to claude when codebase not found', async () => {
+    test('uses config default assistant when codebase not found', async () => {
       const newConversation: Conversation = {
         ...existingConversation,
         id: 'conv-new',
