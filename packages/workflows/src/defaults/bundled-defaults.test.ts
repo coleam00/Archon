@@ -45,17 +45,21 @@ describe('bundled-defaults', () => {
     });
 
     it('bundled content matches on-disk file content (defense against generator corruption)', () => {
+      // Bundled content is LF-normalized by the generator so it stays identical
+      // regardless of the checkout's line-ending policy. Match that here.
+      const readLF = (path: string): string => readFileSync(path, 'utf-8').replace(/\r\n/g, '\n');
+
       for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
-        const diskContent = readFileSync(join(COMMANDS_DIR, `${name}.md`), 'utf-8');
+        const diskContent = readLF(join(COMMANDS_DIR, `${name}.md`));
         expect(content).toBe(diskContent);
       }
       for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
         // Workflows may be .yaml or .yml — prefer .yaml, fall back.
         let diskContent: string;
         try {
-          diskContent = readFileSync(join(WORKFLOWS_DIR, `${name}.yaml`), 'utf-8');
+          diskContent = readLF(join(WORKFLOWS_DIR, `${name}.yaml`));
         } catch {
-          diskContent = readFileSync(join(WORKFLOWS_DIR, `${name}.yml`), 'utf-8');
+          diskContent = readLF(join(WORKFLOWS_DIR, `${name}.yml`));
         }
         expect(content).toBe(diskContent);
       }
