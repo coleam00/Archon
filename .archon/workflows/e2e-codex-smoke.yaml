@@ -22,3 +22,19 @@ nodes:
       additionalProperties: false
     idle_timeout: 30000
     depends_on: [simple]
+
+  # Assert both nodes returned output
+  - id: assert
+    bash: |
+      simple_out="$simple.output"
+      structured_out="$structured.output"
+      if [ -z "$simple_out" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      if [ -z "$structured_out" ]; then
+        echo "FAIL: structured node returned empty output"
+        exit 1
+      fi
+      echo "PASS: simple=$simple_out structured=$structured_out"
+    depends_on: [simple, structured]

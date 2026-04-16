@@ -28,8 +28,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run deterministic workflow
-        run: |
-          bun run cli workflow run e2e-deterministic --no-worktree "smoke test"
+        run: bun run cli workflow run e2e-deterministic --no-worktree "smoke test"
 
   # ─── Tier 2a: Claude provider ──────────────────────────────────────────
   e2e-claude:
@@ -55,8 +54,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_BIN_PATH: ~/.local/bin/claude
-        run: |
-          bun run cli workflow run e2e-claude-smoke --no-worktree "smoke test"
+        run: bun run cli workflow run e2e-claude-smoke --no-worktree "smoke test"
 
   # ─── Tier 2b: Codex provider ───────────────────────────────────────────
   e2e-codex:
@@ -85,8 +83,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          bun run cli workflow run e2e-codex-smoke --no-worktree "smoke test"
+        run: bun run cli workflow run e2e-codex-smoke --no-worktree "smoke test"
 
   # ─── Tier 3: Mixed providers ───────────────────────────────────────────
   e2e-mixed:
@@ -123,5 +120,4 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CLAUDE_BIN_PATH: ~/.local/bin/claude
-        run: |
-          bun run cli workflow run e2e-mixed-providers --no-worktree "smoke test"
+        run: bun run cli workflow run e2e-mixed-providers --no-worktree "smoke test"

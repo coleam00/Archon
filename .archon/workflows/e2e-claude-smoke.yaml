@@ -14,7 +14,13 @@ nodes:
     allowed_tools: []
     idle_timeout: 30000
 
-  # 2. Bash node — verifies $nodeId.output substitution from AI node
-  - id: verify-output
-    bash: "echo 'simple=$simple.output'"
+  # 2. Assert non-empty output — fails CI if Claude returned nothing
+  - id: assert
+    bash: |
+      output="$simple.output"
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      echo "PASS: simple=$output"
     depends_on: [simple]

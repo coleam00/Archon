@@ -21,7 +21,18 @@ nodes:
     model: gpt-5.1-codex-mini
     idle_timeout: 30000
 
-  # 3. Bash node verifies both outputs — cross-provider ref
-  - id: verify
-    bash: "echo 'claude=$claude-node.output codex=$codex-node.output'"
+  # 3. Assert both providers returned output
+  - id: assert
+    bash: |
+      claude_out="$claude-node.output"
+      codex_out="$codex-node.output"
+      if [ -z "$claude_out" ]; then
+        echo "FAIL: claude-node returned empty output"
+        exit 1
+      fi
+      if [ -z "$codex_out" ]; then
+        echo "FAIL: codex-node returned empty output"
+        exit 1
+      fi
+      echo "PASS: claude=$claude_out codex=$codex_out"
     depends_on: [claude-node, codex-node]
