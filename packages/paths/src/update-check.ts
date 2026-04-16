@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { getArchonHome } from './archon-paths';
 import { createLogger } from './logger';
 
@@ -30,7 +30,6 @@ function getCachePath(): string {
 function readCache(): UpdateCheckCache | null {
   const cachePath = getCachePath();
   try {
-    if (!existsSync(cachePath)) return null;
     const raw = readFileSync(cachePath, 'utf-8');
     const data = JSON.parse(raw) as UpdateCheckCache;
     if (!data.latestVersion || !data.releaseUrl || typeof data.checkedAt !== 'number') {
