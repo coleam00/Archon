@@ -293,7 +293,10 @@ async function dispatchOrchestratorWorkflow(
         workflow,
         userMessage,
         conversation.id,
-        codebase.id
+        codebase.id,
+        undefined, // issueContext
+        undefined, // isolationContext
+        conversation.id // parentConversationId — enables resume after approval gate
       );
     } else {
       await dispatchBackgroundWorkflow(

@@ -1,0 +1,1216 @@
+name: archon-gsd
+description: |
+  Use when: User wants rigorous spec-driven development inspired by GSD (Get Shit Done).
+  Triggers: "gsd", "rigorous dev", "spec driven", "gsd workflow", "get shit done",
+            "structured development with verification", "full rigor".
+  Does: Parallel research (4 agents) -> requirements extraction -> interactive discussion ->
+        plan with AI checker (revision loop) -> execution with progress tracking ->
+        goal-backward verification + code review -> human UAT -> PR creation.
+  NOT for: Quick fixes, simple one-off tasks, PR reviews, bug triage.
+           Use for substantial features that benefit from structured planning and verification.
+
+  Inspired by GSD (Get Shit Done). Takes a feature description, PRD, or GitHub issue and runs
+  a full spec-driven pipeline with human approval gates at key decision points:
+  1. RESEARCH: 4 parallel agents explore stack, features, architecture, and pitfalls
+  2. REQUIREMENTS: Structured extraction with unique IDs, tiered priority
+  3. DISCUSS: Interactive session to lock decisions into CONTEXT document
+  4. PLAN: Detailed task plan + AI plan-checker revision loop (8 dimensions, max 3 cycles)
+  5. EXECUTE: Ralph-style fresh-context implementation with per-task validation
+  6. VERIFY: Goal-backward verification + code review (parallel)
+  7. UAT: Human acceptance testing with iterative fix loop
+  8. FINALIZE: Push, create PR, summary
+
+provider: claude
+interactive: true
+
+nodes:
+  # =================================================================
+  # PHASE 1: PARALLEL RESEARCH
+  # Four agents explore the codebase from different angles simultaneously.
+  # Each writes findings to $ARTIFACTS_DIR/research/ for persistence.
+  # =================================================================
+
+  - id: research-stack
+    model: sonnet
+    context: fresh
+    prompt: |
+      # GSD Research Agent: Stack & Technology
+
+      You are one of four parallel research agents. Your focus: **technology stack,
+      dependencies, and development environment**.
+
+      **User's request**: $ARGUMENTS
+
+      ## Your Mission
+
+      Explore the codebase and produce a focused research report on:
+
+      1. **Language & Runtime** -- What language(s), runtime version, build tools?
+      2. **Package Manager & Dependencies** -- What key deps are installed? Versions?
+      3. **Framework & Libraries** -- Web framework, ORM, test framework, etc.
+      4. **Dev Environment** -- How to run, test, lint, build? What scripts exist?
+      5. **CI/CD** -- Any CI config? What does the pipeline look like?
+      6. **Relevance to Request** -- How does the stack constrain or enable what the user wants?
+
+      ## How to Research
+
+      1. Read CLAUDE.md (or README.md) for project overview
+      2. Read package.json / Cargo.toml / pyproject.toml / go.mod (whatever applies)
+      3. Check for config files: tsconfig, eslint, prettier, docker, CI configs
+      4. Note exact versions of critical dependencies
+
+      ## Output
+
+      Write your findings to `$ARTIFACTS_DIR/research/stack.md`:
+
+      ```bash
+      mkdir -p "$ARTIFACTS_DIR/research"
+      ```
+
+      Format as a structured markdown document with the sections above.
+      Include exact file paths and version numbers. Be specific, not generic.
+
+      Also output a brief summary (5-10 lines) to stdout for the synthesis agent.
+
+  - id: research-features
+    model: sonnet
+    context: fresh
+    prompt: |
+      # GSD Research Agent: Features & Existing Functionality
+
+      You are one of four parallel research agents. Your focus: **existing features,
+      functionality, and how they relate to the user's request**.
+
+      **User's request**: $ARGUMENTS
+
+      ## Your Mission
+
+      Explore the codebase and produce a focused research report on:
+
+      1. **Existing Features** -- What does the application currently do?
+      2. **Related Functionality** -- What existing code is closest to what the user wants?
+      3. **Data Model** -- What data structures, DB tables, API endpoints already exist?
+      4. **UI Components** -- What UI exists? Pages, components, patterns?
+      5. **Extension Points** -- Where can existing code be extended rather than replaced?
+      6. **Gaps** -- What's missing that the user's request requires?
+
+      ## How to Research
+
+      1. Read CLAUDE.md for architecture overview
+      2. Search for code related to the user's request (grep for keywords)
+      3. Read the most relevant files thoroughly -- note exact function names, types, exports
+      4. Check for existing tests that cover related functionality
+      5. Map out the data flow for the closest existing feature
+
+      ## Output
+
+      Write your findings to `$ARTIFACTS_DIR/research/features.md`:
+
+      ```bash
+      mkdir -p "$ARTIFACTS_DIR/research"
+      ```
+
+      Format with exact file:line references. For each existing feature found, note:
+      - Where it lives (file paths)
+      - What it does (brief description)
+      - How it could be reused or extended for the new request
+
+      Also output a brief summary (5-10 lines) to stdout for the synthesis agent.
+
+  - id: research-architecture
+    model: sonnet
+    context: fresh
+    prompt: |
+      # GSD Research Agent: Architecture & Patterns
+
+      You are one of four parallel research agents. Your focus: **code architecture,
+      design patterns, and structural conventions**.
+
+      **User's request**: $ARGUMENTS
+
+      ## Your Mission
+
+      Explore the codebase and produce a focused research report on:
+
+      1. **Project Structure** -- Directory layout, module organization, package boundaries
+      2. **Design Patterns** -- What patterns are used? (DI, MVC, repository, etc.)
+      3. **Coding Conventions** -- Naming, file organization, import patterns, error handling
+      4. **Interfaces & Abstractions** -- Key interfaces, type patterns, extension points
+      5. **Data Flow** -- How does data move through the system? Request lifecycle?
+      6. **Architectural Constraints** -- What rules must new code follow?
+
+      ## How to Research
+
+      1. Read CLAUDE.md for explicit architecture rules
+      2. Study the directory structure (`ls` key directories)
+      3. Read 2-3 representative files to understand patterns
+      4. Look for interfaces/types that define contracts
+      5. Check for dependency injection patterns, service registration, etc.
+
+      ## Output
+
+      Write your findings to `$ARTIFACTS_DIR/research/architecture.md`:
+
+      ```bash
+      mkdir -p "$ARTIFACTS_DIR/research"
+      ```
+
+      Include a "Patterns to Follow" section with concrete code snippets from the codebase
+      that new code should mirror. Note anti-patterns to avoid.
+
+      Also output a brief summary (5-10 lines) to stdout for the synthesis agent.
+
+  - id: research-pitfalls
+    model: sonnet
+    context: fresh
+    prompt: |
+      # GSD Research Agent: Pitfalls & Risks
+
+      You are one of four parallel research agents. Your focus: **potential problems,
+      risks, gotchas, and things that could go wrong**.
+
+      **User's request**: $ARGUMENTS
+
+      ## Your Mission
+
+      Explore the codebase and produce a focused research report on:
+
+      1. **Known Issues** -- Check git log for recent bug fixes in related areas
+      2. **Technical Debt** -- Any TODO/FIXME/HACK comments in relevant code?
+      3. **Fragile Areas** -- Code with complex logic, many dependencies, or poor test coverage
+      4. **Breaking Change Risk** -- What existing functionality could break?
+      5. **Performance Concerns** -- Any hot paths, N+1 queries, large data sets?
+      6. **Security Considerations** -- Auth, input validation, data exposure risks
+      7. **Testing Gaps** -- Areas with no tests that the change would touch
+
+      ## How to Research
+
+      1. `git log --oneline -30` for recent changes and bug fixes
+      2. `grep -r "TODO\|FIXME\|HACK\|XXX"` in relevant directories
+      3. Look for complex functions (long, deeply nested, many parameters)
+      4. Check test coverage -- which files have test files, which don't?
+      5. Review error handling patterns in the areas that would change
+
+      ## Output
+
+      Write your findings to `$ARTIFACTS_DIR/research/pitfalls.md`:
+
+      ```bash
+      mkdir -p "$ARTIFACTS_DIR/research"
+      ```
+
+      Rank pitfalls by severity (CRITICAL / HIGH / MEDIUM / LOW).
+      For each, suggest a specific mitigation strategy.
+
+      Also output a brief summary (5-10 lines) to stdout for the synthesis agent.
+
+  # =================================================================
+  # RESEARCH SYNTHESIS
+  # Combines all four research reports into a unified summary.
+  # =================================================================
+
+  - id: synthesize-research
+    model: sonnet
+    depends_on: [research-stack, research-features, research-architecture, research-pitfalls]
+    context: fresh
+    prompt: |
+      # GSD Research Synthesis
+
+      Four research agents explored the codebase in parallel. Synthesize their findings
+      into a unified research summary.
+
+      ## Research Outputs
+
+      **Stack Research**: $research-stack.output
+      **Features Research**: $research-features.output
+      **Architecture Research**: $research-architecture.output
+      **Pitfalls Research**: $research-pitfalls.output
+
+      ## Your Task
+
+      1. Read all four detailed reports from `$ARTIFACTS_DIR/research/`:
+         - `$ARTIFACTS_DIR/research/stack.md`
+         - `$ARTIFACTS_DIR/research/features.md`
+         - `$ARTIFACTS_DIR/research/architecture.md`
+         - `$ARTIFACTS_DIR/research/pitfalls.md`
+
+      2. Synthesize into `$ARTIFACTS_DIR/research/SUMMARY.md` with these sections:
+
+         ```markdown
+         # Research Summary
+
+         ## User's Request
+         {Restated understanding of what the user wants}
+
+         ## Key Findings
+         - {Most important discovery from each research area}
+
+         ## What Already Exists
+         - {Existing code that can be extended -- file paths}
+
+         ## Recommended Approach
+         - {High-level approach based on all research}
+         - {Prefer extending existing code over creating new}
+
+         ## Critical Risks
+         - {Top 3-5 risks with mitigations}
+
+         ## Open Questions
+         - {Questions that need user input before planning}
+         ```
+
+      3. Output the full summary to stdout so downstream nodes can access it.
+
+  # =================================================================
+  # PHASE 2: REQUIREMENTS
+  # Extract structured requirements from the user's request + research.
+  # =================================================================
+
+  - id: requirements
+    model: sonnet
+    depends_on: [synthesize-research]
+    context: fresh
+    prompt: |
+      # GSD Requirements Extraction
+
+      Extract structured requirements from the user's request and research findings.
+
+      **User's request**: $ARGUMENTS
+      **Research summary**: $synthesize-research.output
+
+      ## Your Task
+
+      1. Read the full research summary from `$ARTIFACTS_DIR/research/SUMMARY.md`
+      2. Read any referenced research files for detail
+
+      3. Write `$ARTIFACTS_DIR/requirements.md` with this structure:
+
+         ```markdown
+         # Requirements
+
+         ## Overview
+         {One paragraph summary of what we're building and why}
+
+         ## V1 Requirements (Must Have)
+         | ID | Requirement | Source | Acceptance Criteria |
+         |----|------------|--------|---------------------|
+         | REQ-01 | {requirement} | {user request / research finding} | {testable criterion} |
+         | REQ-02 | ... | ... | ... |
+
+         ## V2 Requirements (Future)
+         | ID | Requirement | Rationale for Deferral |
+         |----|------------|----------------------|
+         | REQ-F01 | {requirement} | {why not in v1} |
+
+         ## Out of Scope
+         - {Explicitly excluded items and why}
+
+         ## Constraints
+         - {Technical constraints from stack research}
+         - {Architectural constraints from architecture research}
+         - {Risk constraints from pitfalls research}
+
+         ## Success Criteria
+         - [ ] {Specific, testable criterion mapped to REQ-XX}
+         - [ ] All validation passes
+         - [ ] No regressions in existing tests
+         ```
+
+      4. Present the requirements to the user. Ask them to review:
+         - Are the V1 requirements correct and complete?
+         - Should anything move between V1 / V2 / Out of Scope?
+         - Are the acceptance criteria testable?
+         - Any missing constraints?
+
+  # =================================================================
+  # GATE: Requirements Approval
+  # =================================================================
+
+  - id: requirements-gate
+    approval:
+      message: |
+        Review the requirements above.
+        - Are the V1 requirements correct and complete?
+        - Should anything move between tiers?
+        - Approve to proceed to discussion phase, or provide feedback to revise.
+      capture_response: true
+    depends_on: [requirements]
+
+  # =================================================================
+  # PHASE 3: DISCUSS — Lock Decisions
+  # Interactive session where user and AI discuss approach and lock
+  # key decisions into a CONTEXT document.
+  # =================================================================
+
+  - id: discuss
+    depends_on: [requirements-gate]
+    loop:
+      prompt: |
+        # GSD Discussion Phase
+
+        You are in an interactive discussion to lock down key decisions before planning.
+        Your goal: resolve all ambiguity and record decisions in a CONTEXT document.
+
+        **User's request**: $ARGUMENTS
+        **User's requirements feedback**: $requirements-gate.output
+        **User's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## If this is the FIRST iteration (no user input yet):
+
+        1. Read the requirements: `$ARTIFACTS_DIR/requirements.md`
+        2. Read the research summary: `$ARTIFACTS_DIR/research/SUMMARY.md`
+        3. If the user provided feedback at the requirements gate, incorporate it:
+           update `$ARTIFACTS_DIR/requirements.md` with any changes.
+
+        4. Create `$ARTIFACTS_DIR/context.md` with this initial structure:
+
+           ```markdown
+           # Context & Decisions
+
+           ## Locked Decisions
+           {None yet -- decisions will be recorded as the discussion progresses}
+
+           ## Open Questions
+           - {Question 1 from research summary}
+           - {Question 2}
+
+           ## Deferred Ideas
+           {Ideas acknowledged but explicitly deferred to future work}
+           ```
+
+        5. Present the open questions and key architectural decisions that need resolution.
+           For each decision, present options with concrete tradeoffs (not just "option A vs B"
+           but what each means for the codebase with file:line references).
+
+        ## If the user has provided input (subsequent iterations):
+
+        1. Read `$ARTIFACTS_DIR/context.md` and `$ARTIFACTS_DIR/requirements.md`
+        2. Process the user's input:
+           - If they made a decision -> Record it under "Locked Decisions" with rationale
+           - If they asked a question -> Research the answer with evidence from the codebase
+           - If they deferred something -> Move it to "Deferred Ideas"
+           - If they changed requirements -> Update `$ARTIFACTS_DIR/requirements.md`
+
+        3. Update `$ARTIFACTS_DIR/context.md` with new decisions.
+
+        4. Present remaining open questions, or if all questions are resolved:
+
+           ```
+           ## All Decisions Locked
+
+           Locked decisions:
+           - D-01: {decision} -- {rationale}
+           - D-02: {decision} -- {rationale}
+
+           Open questions: None remaining.
+
+           Say "ready" to proceed to the planning phase.
+           ```
+
+        **CRITICAL**: NEVER output <promise>CONTEXT_LOCKED</promise> unless the user's
+        LATEST message contains an EXPLICIT phrase like "ready", "proceed", "let's plan",
+        or "go ahead". Questions, feedback, and decisions are NOT approval signals.
+
+      until: CONTEXT_LOCKED
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Answer the questions above, make decisions, ask for more exploration,
+        or say "ready" when all decisions are locked and you want to proceed to planning.
+
+  # =================================================================
+  # PHASE 4a: PLAN — Create Detailed Plan
+  # Creates a GSD-style task plan with verification criteria.
+  # =================================================================
+
+  - id: create-plan
+    model: sonnet
+    depends_on: [discuss]
+    context: fresh
+    prompt: |
+      # GSD Plan Creation
+
+      Create a detailed implementation plan from the locked requirements and decisions.
+      This plan will be verified by a plan-checker agent and then executed by an
+      implementation agent with NO prior context -- it must be completely self-contained.
+
+      **User's request**: $ARGUMENTS
+
+      ## Step 1: Load All Context
+
+      Read these files (they contain all decisions from prior phases):
+      - `$ARTIFACTS_DIR/requirements.md` -- what to build
+      - `$ARTIFACTS_DIR/context.md` -- locked decisions
+      - `$ARTIFACTS_DIR/research/SUMMARY.md` -- research findings
+      - `$ARTIFACTS_DIR/research/architecture.md` -- patterns to follow
+      - `$ARTIFACTS_DIR/research/pitfalls.md` -- risks to mitigate
+
+      Also read CLAUDE.md for project conventions.
+
+      ## Step 2: Read Every File You'll Reference
+
+      Before writing the plan, read EVERY file you plan to reference:
+      - Files that will be modified
+      - Pattern files to follow
+      - Test files for test patterns
+      - Config files that affect the work
+
+      Verify: file paths exist, function names are correct, patterns match reality.
+
+      ## Step 3: Write the Plan
+
+      Write to `$ARTIFACTS_DIR/plan.md` using this structure:
+
+      ```markdown
+      # Implementation Plan
+
+      ## Overview
+      {What we're building, why, and key decisions from CONTEXT}
+
+      ## Requirements Coverage
+      | REQ ID | Requirement | Covered By Task(s) |
+      |--------|------------|-------------------|
+      | REQ-01 | {text} | Task 1, Task 3 |
+
+      ## Task List
+
+      ### Task 1: {ACTION VERB} {specific target}
+      **Type**: auto
+      **Files**: {files to create or modify}
+      **Read First**: {files to read for context/patterns}
+      **Action**: {Concrete, specific implementation steps -- no vague language.
+                   Include exact function signatures, type definitions, import paths.}
+      **Verify**: {Specific command to verify this task works}
+      **Acceptance Criteria**:
+      - {grep-verifiable or test-verifiable condition}
+      **Requirements**: REQ-01, REQ-03
+
+      ### Task 2: ...
+
+      ## Wave Grouping
+      | Wave | Tasks | Rationale |
+      |------|-------|-----------|
+      | 1 | Task 1, Task 2 | {No dependencies between them} |
+      | 2 | Task 3 | {Depends on Task 1 output} |
+
+      ## Testing Strategy
+      | Test File | Test Cases | Validates |
+      |-----------|-----------|-----------|
+      | {path} | {cases} | REQ-XX |
+
+      ## Validation Commands
+      1. Type check: {command}
+      2. Lint: {command}
+      3. Tests: {command}
+      4. Full validation: {command}
+
+      ## Risks & Mitigations
+      | Risk | Impact | Mitigation | From |
+      |------|--------|------------|------|
+      | {risk} | HIGH/MED/LOW | {strategy} | pitfalls research |
+      ```
+
+      ## Plan Quality Rules
+
+      - Every V1 requirement MUST be covered by at least one task
+      - Every task MUST have a Verify command and Acceptance Criteria
+      - No vague actions: "align X with Y", "update as needed", "ensure consistency" are BANNED
+      - Every file path MUST be verified by reading the file
+      - Tasks should be ordered by dependency (wave grouping)
+      - Each task must be completable in a single agent session
+
+      ## Step 4: Source Coverage Audit
+
+      After writing the plan, verify coverage:
+      - Every REQ-XX from requirements.md has a covering task
+      - Every locked decision from context.md is reflected in the plan
+      - Every critical risk from pitfalls has a mitigation in the plan
+
+      If ANY item is uncovered, add tasks to cover it. Do NOT proceed with gaps.
+
+      ## Step 5: Output
+
+      Output the plan summary: task count, wave count, requirements coverage percentage.
+
+  # =================================================================
+  # PHASE 4b: PLAN CHECKER — Verify and Revise
+  # AI-driven plan verification loop inspired by GSD's 8-dimension checker.
+  # Each iteration: check the plan, if issues found revise it, re-check.
+  # Max 3 check-revise cycles. Signals completion when plan passes.
+  # =================================================================
+
+  - id: check-and-revise
+    depends_on: [create-plan]
+    loop:
+      prompt: |
+        # GSD Plan Checker & Reviser
+
+        You are a plan quality gatekeeper. Your job: verify the plan against 8 dimensions,
+        revise if issues are found, and signal completion only when the plan passes.
+
+        **User's request**: $ARGUMENTS
+
+        ## Step 1: Load State
+
+        Read the plan and check history:
+        - `$ARTIFACTS_DIR/plan.md` -- the current plan
+        - `$ARTIFACTS_DIR/requirements.md` -- requirements to verify against
+        - `$ARTIFACTS_DIR/context.md` -- locked decisions to verify against
+        - `$ARTIFACTS_DIR/plan-check.md` -- previous check results (may not exist yet)
+        - Read CLAUDE.md for project conventions
+
+        ## Step 2: Check Against 8 Dimensions
+
+        Evaluate the plan on each dimension. For each, assign PASS or FAIL with evidence:
+
+        ### Dimension 1: Requirement Coverage
+        Every V1 REQ-XX has at least one task covering it. No orphan requirements.
+
+        ### Dimension 2: Task Completeness
+        Every task has: Files, Read First, Action, Verify, Acceptance Criteria.
+        No empty or placeholder fields.
+
+        ### Dimension 3: Task Specificity
+        No vague actions. Ban: "align", "ensure", "update as needed", "make consistent",
+        "refactor", "clean up" without concrete steps. Every action must specify WHAT to
+        write/change with enough detail for an agent with zero context.
+
+        ### Dimension 4: Dependency Ordering
+        Tasks are sequenced correctly. No task references output from a later task.
+        Wave grouping respects dependencies.
+
+        ### Dimension 5: File Scope
+        No excessive overlap between tasks modifying the same file.
+        If multiple tasks touch one file, the ordering is clear and non-conflicting.
+
+        ### Dimension 6: Context Fit
+        Each task is completable in a single agent session. No mega-tasks that
+        would require splitting. Estimated complexity is reasonable.
+
+        ### Dimension 7: Gap Detection
+        No missing implementation steps. The plan, executed in order, produces a
+        working feature. Look for: missing imports, missing type definitions,
+        missing test setup, missing config changes.
+
+        ### Dimension 8: Verification Coverage
+        Every task has a concrete Verify command. The testing strategy covers
+        all requirements. Acceptance criteria are grep-verifiable or test-verifiable.
+
+        ## Step 3: Write Check Results
+
+        Write results to `$ARTIFACTS_DIR/plan-check.md`:
+
+        ```markdown
+        # Plan Check - Iteration {N}
+
+        ## Results
+        | Dimension | Status | Evidence |
+        |-----------|--------|----------|
+        | Requirement Coverage | PASS/FAIL | {detail} |
+        | ... | ... | ... |
+
+        ## Issues Found
+        - severity: blocker/warning
+          dimension: {N}
+          description: {what's wrong}
+          task: {which task}
+          fix_hint: {how to fix}
+
+        ## Verdict: PASSED / ISSUES FOUND
+        ```
+
+        ## Step 4: Act on Results
+
+        **If all 8 dimensions PASS:**
+        - Write "## VERIFICATION PASSED" to plan-check.md
+        - Output: "Plan verified across all 8 dimensions."
+        - Signal: <promise>PLAN_VERIFIED</promise>
+
+        **If any dimension FAILS:**
+        - Read the plan file
+        - For each issue, apply the fix directly to `$ARTIFACTS_DIR/plan.md`
+        - Log what was changed
+        - Do NOT signal completion -- the next iteration will re-check
+
+        **Stall detection:** If the issue count is not decreasing compared to
+        the previous check (read from plan-check.md), note this in the output.
+        After 3 cycles without improvement, signal <promise>PLAN_VERIFIED</promise>
+        anyway with a warning about remaining issues.
+
+      until: PLAN_VERIFIED
+      max_iterations: 6
+      fresh_context: true
+
+  # =================================================================
+  # GATE: Plan Approval
+  # Human reviews the verified plan before execution begins.
+  # =================================================================
+
+  - id: plan-gate
+    approval:
+      message: |
+        The plan has been verified by the AI plan-checker.
+        Review the plan at $ARTIFACTS_DIR/plan.md and the check results at $ARTIFACTS_DIR/plan-check.md.
+        Approve to begin execution, or provide feedback to revise.
+      capture_response: true
+    depends_on: [check-and-revise]
+
+  # =================================================================
+  # PHASE 5a: EXECUTE — Setup
+  # Incorporate any human feedback from the plan gate, prepare environment.
+  # =================================================================
+
+  - id: execute-setup
+    depends_on: [plan-gate]
+    bash: |
+      set -e
+
+      # Read plan
+      PLAN_FILE="$ARTIFACTS_DIR/plan.md"
+      if [ ! -f "$PLAN_FILE" ]; then
+        echo "ERROR: No plan file found at $PLAN_FILE"
+        exit 1
+      fi
+
+      # Install dependencies if needed
+      if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+        echo "Installing dependencies..."
+        bun install --frozen-lockfile 2>&1 | tail -3
+      elif [ -f "package-lock.json" ]; then
+        npm ci 2>&1 | tail -3
+      elif [ -f "yarn.lock" ]; then
+        yarn install --frozen-lockfile 2>&1 | tail -3
+      elif [ -f "pnpm-lock.yaml" ]; then
+        pnpm install --frozen-lockfile 2>&1 | tail -3
+      fi
+
+      # Initialize progress tracking
+      if [ ! -f "$ARTIFACTS_DIR/progress.txt" ]; then
+        echo "# GSD Execution Progress" > "$ARTIFACTS_DIR/progress.txt"
+        echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ARTIFACTS_DIR/progress.txt"
+        echo "---" >> "$ARTIFACTS_DIR/progress.txt"
+      fi
+
+      echo "BRANCH=$(git branch --show-current)"
+      echo "GIT_ROOT=$(git rev-parse --show-toplevel)"
+      echo "PLAN_FILE=$PLAN_FILE"
+
+      echo "=== PLAN_START ==="
+      cat "$PLAN_FILE"
+      echo ""
+      echo "=== PLAN_END ==="
+
+      TASK_COUNT=$(grep -c "^### Task [0-9]" "$PLAN_FILE" || true)
+      echo "TASK_COUNT=${TASK_COUNT:-0}"
+
+      # Show human feedback if any
+      echo "=== HUMAN_FEEDBACK ==="
+      echo "$PLAN_GATE_OUTPUT"
+      echo "=== END_FEEDBACK ==="
+
+  # =================================================================
+  # PHASE 5b: EXECUTE — Task-by-Task Loop (Ralph Pattern)
+  # Fresh context each iteration. Reads plan from disk. One task per
+  # iteration. Validates before committing. Tracks progress.
+  # =================================================================
+
+  - id: execute
+    depends_on: [execute-setup]
+    idle_timeout: 600000
+    model: claude-opus-4-6[1m]
+    loop:
+      prompt: |
+        # GSD Execution Agent
+
+        You are an autonomous coding agent in a FRESH session -- no memory of previous
+        iterations. Your job: read the plan, implement ONE task, validate, commit, track.
+
+        **Golden Rule**: If validation fails, fix it before committing. Never commit broken code.
+
+        ---
+
+        ## Phase 0: CONTEXT -- Load State
+
+        Setup context:
+        $execute-setup.output
+
+        **User's original request**: $ARGUMENTS
+
+        ---
+
+        ### 0.1 Read Current State (from disk -- not from context above)
+
+        The context above is a snapshot from before the loop started. Previous iterations
+        may have changed things. **You MUST re-read from disk:**
+
+        1. Read the plan file at `$ARTIFACTS_DIR/plan.md`
+        2. Read progress tracking at `$ARTIFACTS_DIR/progress.txt`
+        3. Read CLAUDE.md for project conventions
+        4. Read `$ARTIFACTS_DIR/context.md` for locked decisions
+        5. Check git state: `git log --oneline -10` and `git status`
+
+        ### 0.2 Determine What's Done
+
+        Cross-reference:
+        - Tasks marked COMPLETED in progress.txt
+        - Git commits from previous iterations
+        - Files that already exist / have been modified
+
+        ---
+
+        ## Phase 1: SELECT -- Pick Next Task
+
+        From the plan, identify tasks by `### Task N:` headers.
+        Find the first task NOT marked COMPLETED in progress.txt.
+
+        **If ALL tasks are complete** -> Skip to Phase 5 (Completion).
+
+        Announce:
+        ```
+        -- Task Selected ------------------------------------------------
+        Task: {N} -- {task title}
+        Action: {CREATE / UPDATE}
+        File: {file path}
+        -----------------------------------------------------------------
+        ```
+
+        ---
+
+        ## Phase 2: IMPLEMENT -- Execute the Task
+
+        1. Read every file listed in "Read First"
+        2. Read the file you're about to change (if it exists)
+        3. Make changes following the plan EXACTLY
+        4. Follow patterns from the plan's "Patterns to Follow" section
+        5. Type-check after each file change if applicable
+
+        ---
+
+        ## Phase 3: VALIDATE -- Verify the Task
+
+        Run the task's specific Verify command from the plan.
+        Then run the project's general validation:
+
+        ```bash
+        # Task-specific verify first, then general validation
+        bun run type-check 2>&1 || true
+        bun run lint 2>&1 || true
+        bun run test 2>&1 || true
+        ```
+
+        If validation fails: diagnose, fix, re-run (up to 3 attempts).
+        If unfixable after 3 attempts: note in progress tracking, do NOT commit broken code.
+
+        ---
+
+        ## Phase 4: COMMIT -- Save Changes
+
+        ```bash
+        git add -A
+        git diff --cached --stat
+        git commit -m "$(cat <<'COMMITEOF'
+        {type}({scope}): {task description}
+
+        GSD Task {N}: {brief details}
+        Requirements: {REQ-XX IDs covered}
+        COMMITEOF
+        )"
+        ```
+
+        Update progress tracking in `$ARTIFACTS_DIR/progress.txt`:
+        ```
+        ## Task {N}: {title} -- COMPLETED
+        Date: {ISO date}
+        Files: {list of files changed}
+        Commit: {short hash}
+        Verify: {PASS/FAIL}
+        ---
+        ```
+
+        ---
+
+        ## Phase 5: COMPLETE -- Check All Tasks
+
+        If ALL tasks are done:
+        1. Run full validation suite
+        2. Push: `git push -u origin HEAD`
+        3. Write final status to progress.txt
+        4. Signal: <promise>ALL_TASKS_COMPLETE</promise>
+
+        If tasks remain: report status and end normally. The loop starts a fresh iteration.
+
+      until: ALL_TASKS_COMPLETE
+      max_iterations: 20
+      fresh_context: true
+
+  # =================================================================
+  # PHASE 6a: VERIFY -- Goal-Backward Verification
+  # Verifies the implementation achieves the GOAL, not just that tasks
+  # were completed. This is GSD's key insight: verify from the goal
+  # backward, not from the task list forward.
+  # =================================================================
+
+  - id: verify-goals
+    model: sonnet
+    depends_on: [execute]
+    context: fresh
+    prompt: |
+      # GSD Goal-Backward Verification
+
+      You are a verification agent. Your job is NOT to check if tasks were completed --
+      it's to verify that the GOAL was achieved. Work backward from the requirements,
+      not forward from the task list.
+
+      **User's original request**: $ARGUMENTS
+
+      ## Step 1: Load Context
+
+      Read these files:
+      - `$ARTIFACTS_DIR/requirements.md` -- what we set out to build
+      - `$ARTIFACTS_DIR/context.md` -- decisions that constrain the solution
+      - `$ARTIFACTS_DIR/plan.md` -- what was planned
+      - `$ARTIFACTS_DIR/progress.txt` -- what was executed
+      - CLAUDE.md for project conventions
+
+      ## Step 2: Three-Level Artifact Verification
+
+      For EACH file that was created or modified (from progress.txt):
+
+      ### Level 1: EXISTS
+      Does the file exist? `test -f {path}`
+
+      ### Level 2: SUBSTANTIVE
+      Is it a real implementation, not a stub?
+      - Read the file
+      - Check: minimum meaningful content, expected patterns present
+      - No placeholder TODOs, no empty function bodies, no "implement me" comments
+
+      ### Level 3: WIRED
+      Is it connected to the rest of the system?
+      - Is it imported by other code? `grep -r "import.*{name}" --include="*.ts"`
+      - Is it registered/configured where needed?
+      - Can the feature be reached by a user action?
+
+      Produce a status matrix:
+      ```
+      | File | Exists | Substantive | Wired | Status |
+      |------|--------|-------------|-------|--------|
+      | {path} | YES/NO | YES/NO | YES/NO | VERIFIED / ORPHANED / STUB / MISSING |
+      ```
+
+      ## Step 3: Requirement Verification
+
+      For EACH V1 requirement in requirements.md:
+      - Is it satisfied by the implementation? (Read the actual code, don't trust progress.txt)
+      - Can you prove it with a specific test or grep?
+
+      ## Step 4: Behavioral Verification
+
+      Run the full test suite:
+      ```bash
+      bun run validate 2>&1 || (bun run type-check && bun run lint && bun run test)
+      ```
+
+      ## Step 5: Write Verification Report
+
+      Write to `$ARTIFACTS_DIR/verification.md`:
+
+      ```markdown
+      # Verification Report
+
+      ## Goal Achievement
+      | Requirement | Status | Evidence |
+      |-------------|--------|----------|
+      | REQ-01 | VERIFIED / PARTIAL / MISSING | {proof} |
+
+      ## Artifact Matrix
+      {The status matrix from Step 2}
+
+      ## Behavioral Tests
+      - Test suite: PASS / FAIL
+      - Type check: PASS / FAIL
+      - Lint: PASS / FAIL
+
+      ## Gaps Found
+      {List any gaps, or "No gaps found"}
+
+      ## Verdict: PASSED / GAPS_FOUND
+      ```
+
+      Output the full verification report to stdout.
+
+  # =================================================================
+  # PHASE 6b: CODE REVIEW (parallel with goal verification)
+  # =================================================================
+
+  - id: code-review
+    model: sonnet
+    depends_on: [execute]
+    context: fresh
+    prompt: |
+      # GSD Code Review
+
+      Review all code changes for quality, security, and convention compliance.
+
+      **User's original request**: $ARGUMENTS
+
+      ## Step 1: Gather Changes
+
+      ```bash
+      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      ```
+
+      Read CLAUDE.md for project conventions.
+      Read `$ARTIFACTS_DIR/plan.md` for intent context.
+
+      ## Step 2: Review Each Changed File
+
+      For each file in the diff:
+
+      1. **Convention Compliance** -- Does it follow patterns from CLAUDE.md?
+      2. **Type Safety** -- Proper types? No unnecessary `any`? Correct interfaces?
+      3. **Error Handling** -- Errors caught and handled? No silent swallowing?
+      4. **Security** -- Input validation? No injection risks? Auth checks present?
+      5. **Testing** -- New code has tests? Tests are meaningful (not just coverage)?
+      6. **Performance** -- No N+1 queries? No unnecessary work? Efficient algorithms?
+      7. **Naming** -- Clear, consistent naming following project conventions?
+
+      ## Step 3: Fix Critical Issues
+
+      If you find CRITICAL or HIGH severity issues:
+      - Fix them directly (edit the files)
+      - Run validation after fixes
+      - Commit fixes:
+        ```bash
+        git add -A && git commit -m "fix: address code review findings" 2>/dev/null || true
+        ```
+
+      ## Step 4: Write Review Report
+
+      Write to `$ARTIFACTS_DIR/review.md`:
+
+      ```markdown
+      # Code Review Report
+
+      ## Summary
+      - Files reviewed: {count}
+      - Issues found: {count by severity}
+      - Issues fixed: {count}
+
+      ## Findings
+      | Severity | File | Issue | Status |
+      |----------|------|-------|--------|
+      | CRITICAL | {path:line} | {description} | FIXED / REMAINING |
+      | HIGH | ... | ... | ... |
+      | MEDIUM | ... | ... | ... |
+
+      ## Convention Compliance
+      {Assessment of CLAUDE.md adherence}
+
+      ## Recommendation
+      {READY / NEEDS_FIXES with specific remaining items}
+      ```
+
+      Output the full review report to stdout.
+
+  # =================================================================
+  # GATE: User Acceptance Testing (UAT)
+  # Human reviews verification + code review results and tests manually.
+  # =================================================================
+
+  - id: uat-gate
+    approval:
+      message: |
+        Goal verification and code review are complete.
+        Review the reports at:
+        - $ARTIFACTS_DIR/verification.md (goal-backward verification)
+        - $ARTIFACTS_DIR/review.md (code review)
+
+        Test the implementation yourself. Approve if satisfied, or describe issues to fix.
+      capture_response: true
+    depends_on: [verify-goals, code-review]
+
+  # =================================================================
+  # PHASE 7: UAT FIX LOOP
+  # Address human feedback from UAT. Iterates until human approves.
+  # =================================================================
+
+  - id: fix-uat
+    depends_on: [uat-gate]
+    loop:
+      prompt: |
+        # GSD UAT Fix Loop
+
+        The human has tested the implementation and provided feedback.
+
+        **Human's feedback**: $LOOP_USER_INPUT
+        **UAT gate response**: $uat-gate.output
+
+        ---
+
+        ## Step 1: Read Context
+
+        - Read `$ARTIFACTS_DIR/plan.md` for original intent
+        - Read `$ARTIFACTS_DIR/requirements.md` for acceptance criteria
+        - Read CLAUDE.md for conventions
+
+        ## Step 2: Process Feedback
+
+        **If there is no user feedback yet** (first iteration):
+        - Read `$ARTIFACTS_DIR/verification.md` and `$ARTIFACTS_DIR/review.md`
+        - Present a summary of the verification and review results
+        - If the UAT gate response contains specific feedback, treat it as the first round
+        - If the gate response is just "approved" or similar, signal completion:
+          <promise>UAT_PASSED</promise>
+        - Otherwise, address the feedback and report what was fixed
+
+        **If the user EXPLICITLY approved** ("approved", "looks good", "ship it"):
+        - Output: "UAT passed. Proceeding to finalize."
+        - Signal: <promise>UAT_PASSED</promise>
+
+        **If the user provided specific issues:**
+        1. Read the relevant files
+        2. Fix each issue
+        3. Run validation:
+           ```bash
+           bun run validate 2>&1 || (bun run type-check && bun run lint && bun run test)
+           ```
+        4. Commit fixes:
+           ```bash
+           git add -A && git commit -m "$(cat <<'EOF'
+           fix: address UAT feedback
+
+           Changes:
+           - {fix 1}
+           - {fix 2}
+           EOF
+           )" 2>/dev/null || true
+           ```
+
+        **CRITICAL**: NEVER emit <promise>UAT_PASSED</promise> unless the user's
+        latest message EXPLICITLY approves. Bug reports and feedback are NOT approval.
+
+        ## Step 3: Report
+
+        ```
+        ## UAT Feedback Addressed
+
+        Changes made:
+        - {fix 1}
+        - {fix 2}
+
+        Validation: {PASS / FAIL}
+
+        Test again and approve, or provide more feedback.
+        ```
+      until: UAT_PASSED
+      max_iterations: 10
+      interactive: true
+      gate_message: |
+        Test the fixes. Approve if satisfied, or describe remaining issues.
+
+  # =================================================================
+  # PHASE 8: FINALIZE — Push, PR, Summary
+  # =================================================================
+
+  - id: finalize
+    model: sonnet
+    depends_on: [fix-uat]
+    context: fresh
+    prompt: |
+      # GSD Finalize
+
+      The implementation has passed UAT. Push changes and create a PR.
+
+      **User's original request**: $ARGUMENTS
+
+      ## Step 1: Final Validation
+
+      ```bash
+      bun run validate 2>&1 || (bun run type-check && bun run lint && bun run test && bun run format:check)
+      ```
+
+      ## Step 2: Push
+
+      ```bash
+      git push -u origin HEAD 2>&1 || true
+      ```
+
+      ## Step 3: Gather Summary Data
+
+      ```bash
+      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      ```
+
+      Read these for the PR body:
+      - `$ARTIFACTS_DIR/requirements.md`
+      - `$ARTIFACTS_DIR/plan.md`
+      - `$ARTIFACTS_DIR/verification.md`
+      - `$ARTIFACTS_DIR/review.md`
+      - `$ARTIFACTS_DIR/progress.txt`
+
+      ## Step 4: Create PR
+
+      ```bash
+      gh pr view HEAD --json url 2>/dev/null || echo "NO_PR"
+      ```
+
+      If no PR exists, check for a PR template:
+      ```bash
+      cat .github/pull_request_template.md 2>/dev/null || echo "NO_TEMPLATE"
+      ```
+
+      Create the PR with `gh pr create --draft --base $BASE_BRANCH`.
+      The body should include:
+      - Summary of what was built
+      - Requirements coverage table
+      - Verification results
+      - Key decisions from context.md
+      - Files changed summary
+
+      Use a HEREDOC for the body.
+
+      ## Step 5: Output Final Report
+
+      ```
+      ===============================================================
+      GSD WORKFLOW -- COMPLETE
+      ===============================================================
+
+      Feature: {from plan}
+      Branch: {branch name}
+      PR: {url}
+
+      -- Requirements Coverage ------------------------------------------
+      {table from verification.md}
+
+      -- Tasks Completed ------------------------------------------------
+      {from progress.txt}
+
+      -- Commits ---------------------------------------------------------
+      {git log output}
+
+      -- Files Changed ---------------------------------------------------
+      {git diff --stat output}
+
+      -- Verification ----------------------------------------------------
+      Goal verification: {PASSED/GAPS}
+      Code review: {READY/NEEDS_FIXES}
+      UAT: PASSED
+
+      -- Artifacts -------------------------------------------------------
+      Research: $ARTIFACTS_DIR/research/
+      Requirements: $ARTIFACTS_DIR/requirements.md
+      Context: $ARTIFACTS_DIR/context.md
+      Plan: $ARTIFACTS_DIR/plan.md
+      Plan Check: $ARTIFACTS_DIR/plan-check.md
+      Progress: $ARTIFACTS_DIR/progress.txt
+      Verification: $ARTIFACTS_DIR/verification.md
+      Code Review: $ARTIFACTS_DIR/review.md
+      ===============================================================
+      ```

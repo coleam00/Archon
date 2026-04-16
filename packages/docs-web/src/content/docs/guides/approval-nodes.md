@@ -55,9 +55,10 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
    the approval node and transitions the run to resumable. Natural-language
-   messages (recommended) and the CLI auto-resume immediately. The explicit
-   `/workflow approve` command records the approval; send a follow-up message
-   to resume.
+   messages (recommended), the CLI, and the Web UI all auto-resume immediately.
+   The explicit `/workflow approve` slash command records the approval and also
+   auto-resumes on the Web UI; on other platforms it requires a follow-up
+   message to trigger resume.
 5. **Reject**: The user rejects.
    - **Without `on_reject`**: The workflow is cancelled immediately.
    - **With `on_reject`**: The executor runs the `on_reject.prompt` via AI (with
@@ -227,3 +228,7 @@ PR #871). When approved, the run transitions through `failed` status briefly so
 that `findResumableRun` picks it up — this avoids duplicating resume logic. The
 `metadata.approval_response` field distinguishes approved-then-resumed from
 genuinely-failed runs.
+
+Interactive loop gates follow a different path: the run stays `paused`, the
+approve endpoint auto-dispatches to the orchestrator, and the natural-language
+resume path (`getPausedWorkflowRun`) handles the transition.

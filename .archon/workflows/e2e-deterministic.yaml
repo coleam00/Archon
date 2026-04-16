@@ -1,0 +1,56 @@
+# E2E smoke test — deterministic nodes (no AI, no API calls)
+# Verifies: bash nodes, script nodes (bun + uv), $nodeId.output substitution,
+#           when conditions, trigger_rule join semantics
+name: e2e-deterministic
+description: "Pure DAG engine test. Exercises bash, script (bun/uv), conditions, and trigger rules with zero API calls."
+
+nodes:
+  # Layer 0 — parallel deterministic nodes
+  - id: bash-echo
+    bash: "echo '{\"status\":\"ok\",\"value\":42}'"
+
+  - id: script-bun
+    script: echo-args
+    runtime: bun
+    timeout: 30000
+
+  - id: script-python
+    script: echo-args
+    runtime: uv
+    timeout: 30000
+
+  # Layer 1 — test $nodeId.output substitution from bash
+  - id: bash-read-output
+    bash: "echo 'upstream-status: $bash-echo.output'"
+    depends_on: [bash-echo]
+
+  # Layer 1 — conditional branches (only one should run)
+  - id: branch-true
+    bash: "echo 'branch-true-ran'"
+    depends_on: [bash-echo]
+    when: "$bash-echo.output.status == 'ok'"
+
+  - id: branch-false
+    bash: "echo 'branch-false-ran'"
+    depends_on: [bash-echo]
+    when: "$bash-echo.output.status == 'fail'"
+
+  # Layer 2 — trigger_rule merge (one_success: branch-false will be skipped)
+  - id: merge-node
+    bash: "echo 'merge-ok: true=$branch-true.output false=$branch-false.output'"
+    depends_on: [branch-true, branch-false]
+    trigger_rule: one_success
+
+  # Layer 3 — final verification: collect all outputs
+  - id: verify-all
+    bash: |
+      echo '=== E2E Deterministic Results ==='
+      echo 'bash-echo: $bash-echo.output'
+      echo 'script-bun: $script-bun.output'
+      echo 'script-python: $script-python.output'
+      echo 'bash-read-output: $bash-read-output.output'
+      echo 'branch-true: $branch-true.output'
+      echo 'merge-node: $merge-node.output'
+      echo '=== ALL PASSED ==='
+    depends_on: [bash-read-output, script-bun, script-python, merge-node]
+    trigger_rule: all_success

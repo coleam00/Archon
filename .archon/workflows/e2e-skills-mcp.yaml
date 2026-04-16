@@ -1,0 +1,52 @@
+# E2E smoke test — Claude advanced features (skills, MCP, effort, systemPrompt)
+# Verifies: skills injection, MCP server loading, effort control, custom system prompt
+name: e2e-skills-mcp
+description: "Tests Claude-specific advanced features: skills injection, MCP server, effort control, and systemPrompt."
+provider: claude
+model: haiku
+
+nodes:
+  # 1. Skills injection — verifies AgentDefinition wrapping
+  - id: skill-test
+    prompt: "Confirm your skill loading status. If the E2E test skill is loaded, follow its instructions."
+    skills:
+      - e2e-test-skill
+    allowed_tools: [Read]
+    idle_timeout: 60000
+
+  # 2. MCP server — verifies MCP config loading and tool availability
+  - id: mcp-test
+    prompt: "You have a filesystem MCP server available. Use it to list the contents of /tmp. Report what you find briefly."
+    mcp: .archon/test-fixtures/mcp/e2e-filesystem.json
+    idle_timeout: 60000
+    depends_on: [skill-test]
+
+  # 3. Effort control — verifies effort passes through to SDK
+  - id: effort-test
+    prompt: "Say 'effort-ok' and nothing else."
+    effort: low
+    allowed_tools: []
+    idle_timeout: 60000
+    depends_on: [skill-test]
+
+  # 4. Custom system prompt — verifies systemPrompt injection
+  - id: system-prompt-test
+    prompt: "What is your role? Answer in 5 words or fewer."
+    systemPrompt: "You are a smoke test validator. Always start your response with 'VALIDATOR:'"
+    allowed_tools: []
+    idle_timeout: 60000
+    depends_on: [skill-test]
+
+  # 5. Context shared — verifies session continuity
+  - id: context-shared-setup
+    prompt: "Remember the secret code: ORANGE-42. Say 'stored' and nothing else."
+    allowed_tools: []
+    idle_timeout: 60000
+    depends_on: [skill-test]
+
+  - id: context-shared-verify
+    prompt: "What was the secret code I told you to remember? Say just the code, nothing else."
+    context: shared
+    allowed_tools: []
+    idle_timeout: 60000
+    depends_on: [context-shared-setup]

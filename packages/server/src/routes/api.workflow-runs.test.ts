@@ -1251,6 +1251,136 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       data: { node_output: '', approval_decision: 'approved' },
     });
   });
+
+  test('transitions standard approval run to failed status with cleared rejection metadata', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_PAUSED_RUN);
+    const { app } = makeApp();
+    await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-paused-1', {
+      status: 'failed',
+      metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/workflows/runs/:runId/approve — interactive_loop branch
+// ---------------------------------------------------------------------------
+
+const MOCK_LOOP_RUN: MockWorkflowRun = {
+  ...MOCK_RUNNING_RUN,
+  id: 'run-loop-1',
+  status: 'paused',
+  conversation_id: 'worker-conv-uuid',
+  parent_conversation_id: 'parent-conv-uuid',
+  metadata: {
+    approval: {
+      type: 'interactive_loop',
+      nodeId: 'loop-gate',
+      message: 'Please provide feedback',
+    },
+  },
+};
+
+describe('POST /api/workflows/runs/:runId/approve — interactive_loop branch', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockUpdateWorkflowRun.mockReset();
+    mockCreateWorkflowEvent.mockReset();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
+  });
+
+  test('keeps run status paused and stores loop_user_input in metadata', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_LOOP_RUN);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-parent-abc',
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-loop-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'Looks great, continue' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    // Must NOT call node_completed — executor writes that on actual loop exit
+    const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls.find(
+      (c: unknown[]) => (c[0] as Record<string, unknown>).event_type === 'node_completed'
+    );
+    expect(nodeCompletedCall).toBeUndefined();
+    // Status must stay paused — not transition to 'failed'
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-loop-1', {
+      metadata: { loop_user_input: 'Looks great, continue' },
+    });
+    const callArg = mockUpdateWorkflowRun.mock.calls[0][1] as Record<string, unknown>;
+    expect(callArg).not.toHaveProperty('status');
+    // Message must indicate auto-resuming
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.message).toContain('resuming');
+    expect(body.message).not.toContain('Send a message');
+  });
+
+  test('dispatches to parent conversation when parent_conversation_id is set', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_LOOP_RUN);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-parent-abc',
+    });
+    const { app } = makeApp();
+    await app.request('/api/workflows/runs/run-loop-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'proceed' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    // Allow fire-and-forget microtask to flush
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-parent-abc',
+      'proceed',
+      expect.anything()
+    );
+  });
+
+  test('falls back to conversation_id when parent_conversation_id is null', async () => {
+    const runNullParent = {
+      ...MOCK_LOOP_RUN,
+      parent_conversation_id: null,
+      conversation_id: 'worker-conv-uuid',
+    };
+    mockGetWorkflowRun.mockResolvedValueOnce(runNullParent);
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'worker-conv-uuid',
+      platform_conversation_id: 'web-worker-abc',
+    });
+    const { app } = makeApp();
+    await app.request('/api/workflows/runs/run-loop-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'go' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(mockGetConversationById).toHaveBeenCalledWith('worker-conv-uuid');
+  });
+
+  test('returns 500 when parent conversation cannot be resolved', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_LOOP_RUN);
+    mockGetConversationById.mockResolvedValueOnce(null);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-loop-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'proceed' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('could not auto-resume');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

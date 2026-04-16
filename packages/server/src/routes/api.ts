@@ -1874,26 +1874,52 @@ export function registerApiRoutes(
           step_name: approval.nodeId,
           data: { node_output: nodeOutput, approval_decision: 'approved' },
         });
+        await workflowEventDb.createWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: 'approval_received',
+          step_name: approval.nodeId,
+          data: { decision: 'approved', comment },
+        });
+        // Transition to 'failed' so findResumableRunByParentConversation picks it up.
+        // Clear any prior rejection state.
+        await workflowDb.updateWorkflowRun(runId, {
+          status: 'failed',
+          metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
+        });
+        return c.json({
+          success: true,
+          message: `Workflow approved: ${run.workflow_name}.`,
+        });
       }
-      await workflowEventDb.createWorkflowEvent({
-        workflow_run_id: runId,
-        event_type: 'approval_received',
-        step_name: approval.nodeId,
-        data: { decision: 'approved', comment },
-      });
-      // For interactive loops, store user input; for standard approvals, mark as approved
-      // and clear any rejection state.
-      const metadataUpdate =
-        approval.type === 'interactive_loop'
-          ? { loop_user_input: comment }
-          : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
+      // Interactive loop path: store user input, keep status 'paused' so getPausedWorkflowRun
+      // finds it, then auto-dispatch to orchestrator to resume without requiring a manual message.
       await workflowDb.updateWorkflowRun(runId, {
-        status: 'failed',
-        metadata: metadataUpdate,
+        metadata: { loop_user_input: comment },
+      });
+      // Auto-resume: inject the approval as a message into the parent conversation.
+      // The orchestrator's natural-language approval path writes approval_received and
+      // dispatches the resumed workflow.
+      const parentConvDbId = run.parent_conversation_id ?? run.conversation_id;
+      const parentConv = await conversationDb.getConversationById(parentConvDbId);
+      if (!parentConv?.platform_conversation_id) {
+        // Can't auto-dispatch — surface the failure so the user can resume manually.
+        getLog().error(
+          { runId, parentConvDbId, workflowName: run.workflow_name },
+          'api.workflow_run_approve_interactive_loop_no_parent_conv'
+        );
+        return apiError(
+          c,
+          500,
+          'Workflow approved but could not auto-resume: parent conversation not found. ' +
+            'Send a message to continue the workflow.'
+        );
+      }
+      void dispatchToOrchestrator(parentConv.platform_conversation_id, comment).catch(err => {
+        getLog().error({ err, runId }, 'api.workflow_run_approve_interactive_loop_dispatch_failed');
       });
       return c.json({
         success: true,
-        message: `Workflow approved: ${run.workflow_name}. Send a message to continue the workflow.`,
+        message: `Workflow approved and resuming: ${run.workflow_name}.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
