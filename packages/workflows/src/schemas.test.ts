@@ -6,6 +6,7 @@ import {
   isTriggerRule,
   TRIGGER_RULES,
   SCRIPT_NODE_AI_FIELDS,
+  LOOP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
 } from './schemas';
@@ -658,6 +659,39 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
     ];
     for (const field of expectedFields) {
       expect(SCRIPT_NODE_AI_FIELDS).toContain(field);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LOOP_NODE_AI_FIELDS constant
+// ---------------------------------------------------------------------------
+
+describe('LOOP_NODE_AI_FIELDS', () => {
+  test('excludes model and provider (loop nodes support them)', () => {
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('model');
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('provider');
+  });
+
+  test('contains all other AI-specific fields from BASH_NODE_AI_FIELDS', () => {
+    const expectedFields = [
+      'context',
+      'output_format',
+      'allowed_tools',
+      'denied_tools',
+      'hooks',
+      'mcp',
+      'skills',
+      'effort',
+      'thinking',
+      'maxBudgetUsd',
+      'systemPrompt',
+      'fallbackModel',
+      'betas',
+      'sandbox',
+    ];
+    for (const field of expectedFields) {
+      expect(LOOP_NODE_AI_FIELDS).toContain(field);
     }
   });
 });
