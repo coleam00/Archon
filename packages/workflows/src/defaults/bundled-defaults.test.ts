@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'bun:test';
+import { readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
 import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults';
+
+// Resolve the on-disk defaults directories relative to this test file so the
+// tests work regardless of cwd. From packages/workflows/src/defaults go up
+// four levels to the repo root, then into .archon/.
+const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
+const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
+const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -12,54 +21,51 @@ describe('bundled-defaults', () => {
     });
   });
 
+  describe('bundle completeness', () => {
+    // These assertions are the canary for bundle drift: if someone adds a
+    // default file without regenerating bundled-defaults.generated.ts, the
+    // bundle would be missing in compiled binaries (see #979 context). The
+    // generator is `scripts/generate-bundled-defaults.ts`, and
+    // `bun run check:bundled` verifies the generated file is up to date.
+
+    it('BUNDLED_COMMANDS contains every .md file in .archon/commands/defaults/', () => {
+      const onDisk = readdirSync(COMMANDS_DIR)
+        .filter(f => f.endsWith('.md'))
+        .map(f => f.slice(0, -'.md'.length))
+        .sort();
+      expect(Object.keys(BUNDLED_COMMANDS).sort()).toEqual(onDisk);
+    });
+
+    it('BUNDLED_WORKFLOWS contains every .yaml/.yml file in .archon/workflows/defaults/', () => {
+      const onDisk = readdirSync(WORKFLOWS_DIR)
+        .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+        .map(f => f.replace(/\.ya?ml$/, ''))
+        .sort();
+      expect(Object.keys(BUNDLED_WORKFLOWS).sort()).toEqual(onDisk);
+    });
+
+    it('bundled content matches on-disk file content (defense against generator corruption)', () => {
+      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
+        const diskContent = readFileSync(join(COMMANDS_DIR, `${name}.md`), 'utf-8');
+        expect(content).toBe(diskContent);
+      }
+      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+        // Workflows may be .yaml or .yml — prefer .yaml, fall back.
+        let diskContent: string;
+        try {
+          diskContent = readFileSync(join(WORKFLOWS_DIR, `${name}.yaml`), 'utf-8');
+        } catch {
+          diskContent = readFileSync(join(WORKFLOWS_DIR, `${name}.yml`), 'utf-8');
+        }
+        expect(content).toBe(diskContent);
+      }
+    });
+  });
+
   describe('BUNDLED_COMMANDS', () => {
-    it('should have all expected default commands', () => {
-      const expectedCommands = [
-        'archon-assist',
-        'archon-code-review-agent',
-        'archon-comment-quality-agent',
-        'archon-create-pr',
-        'archon-docs-impact-agent',
-        'archon-error-handling-agent',
-        'archon-implement-issue',
-        'archon-implement-review-fixes',
-        'archon-implement',
-        'archon-investigate-issue',
-        'archon-pr-review-scope',
-        'archon-ralph-prd',
-        'archon-resolve-merge-conflicts',
-        'archon-sync-pr-with-main',
-        'archon-synthesize-review',
-        'archon-test-coverage-agent',
-        'archon-validate-pr-code-review-feature',
-        'archon-validate-pr-code-review-main',
-        'archon-validate-pr-e2e-feature',
-        'archon-validate-pr-e2e-main',
-        'archon-validate-pr-report',
-      ];
-
-      for (const cmd of expectedCommands) {
-        expect(BUNDLED_COMMANDS).toHaveProperty(cmd);
-      }
-
-      expect(Object.keys(BUNDLED_COMMANDS)).toHaveLength(21);
-    });
-
-    it('should have non-empty content for all commands', () => {
-      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
-        expect(content).toBeDefined();
-        expect(typeof content).toBe('string');
-        expect(content.length).toBeGreaterThan(0);
-        // Commands should have meaningful content (at least some markdown)
+    it('every command has meaningful content (>50 chars)', () => {
+      for (const content of Object.values(BUNDLED_COMMANDS)) {
         expect(content.length).toBeGreaterThan(50);
-      }
-    });
-
-    it('should have markdown content format', () => {
-      // Commands are markdown files, should have typical markdown patterns
-      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
-        // Should contain some text (not just whitespace)
-        expect(content.trim().length).toBeGreaterThan(0);
       }
     });
 
@@ -76,36 +82,8 @@ describe('bundled-defaults', () => {
   });
 
   describe('BUNDLED_WORKFLOWS', () => {
-    it('should have all expected default workflows', () => {
-      const expectedWorkflows = [
-        'archon-assist',
-        'archon-comprehensive-pr-review',
-        'archon-create-issue',
-        'archon-feature-development',
-        'archon-fix-github-issue',
-        'archon-resolve-conflicts',
-        'archon-smart-pr-review',
-        'archon-validate-pr',
-        'archon-remotion-generate',
-        'archon-interactive-prd',
-        'archon-piv-loop',
-        'archon-adversarial-dev',
-        'archon-workflow-builder',
-      ];
-
-      for (const wf of expectedWorkflows) {
-        expect(BUNDLED_WORKFLOWS).toHaveProperty(wf);
-      }
-
-      expect(Object.keys(BUNDLED_WORKFLOWS)).toHaveLength(13);
-    });
-
-    it('should have non-empty content for all workflows', () => {
-      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        expect(content).toBeDefined();
-        expect(typeof content).toBe('string');
-        expect(content.length).toBeGreaterThan(0);
-        // Workflows should have meaningful YAML content
+    it('every workflow has meaningful content (>50 chars)', () => {
+      for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content.length).toBeGreaterThan(50);
       }
     });
@@ -120,15 +98,10 @@ describe('bundled-defaults', () => {
     });
 
     it('should have valid YAML structure', () => {
-      // Workflows are YAML files, should parse without error
-      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        // Should contain 'name:' as all workflows require a name field
+      for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content).toContain('name:');
-        // Should contain 'description:' as all workflows require description
         expect(content).toContain('description:');
-        // Should contain nodes: (with optional loop: inside nodes)
-        const hasNodes = content.includes('nodes:');
-        expect(hasNodes).toBe(true);
+        expect(content.includes('nodes:')).toBe(true);
       }
     });
   });
