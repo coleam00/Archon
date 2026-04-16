@@ -52,7 +52,7 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const bot = adapter.getBot();
       expect(bot).toBeDefined();
-      expect(bot.telegram).toBeDefined();
+      expect(bot.api).toBeDefined();
     });
   });
 
@@ -64,9 +64,8 @@ describe('TelegramAdapter', () => {
       adapter = new TelegramAdapter('fake-token-for-testing');
       mockSendMessage = mock(() => Promise.resolve());
       // Override bot's sendMessage
-      (
-        adapter.getBot().telegram as unknown as { sendMessage: Mock<() => Promise<void>> }
-      ).sendMessage = mockSendMessage;
+      (adapter.getBot().api as unknown as { sendMessage: Mock<() => Promise<void>> }).sendMessage =
+        mockSendMessage;
     });
 
     test('should send with MarkdownV2 parse_mode', async () => {
@@ -172,7 +171,7 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const ctx = {
         chat: { id: 12345 },
-      } as unknown as import('telegraf').Context;
+      } as unknown as import('grammy').Context;
 
       expect(adapter.getConversationId(ctx)).toBe('12345');
     });
@@ -181,7 +180,7 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const ctx = {
         chat: { id: -987654321 },
-      } as unknown as import('telegraf').Context;
+      } as unknown as import('grammy').Context;
 
       expect(adapter.getConversationId(ctx)).toBe('-987654321');
     });
@@ -190,7 +189,7 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const ctx = {
         chat: { id: -1001234567890 },
-      } as unknown as import('telegraf').Context;
+      } as unknown as import('grammy').Context;
 
       expect(adapter.getConversationId(ctx)).toBe('-1001234567890');
     });
@@ -199,7 +198,7 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const ctx = {
         chat: undefined,
-      } as unknown as import('telegraf').Context;
+      } as unknown as import('grammy').Context;
 
       expect(() => adapter.getConversationId(ctx)).toThrow('No chat in context');
     });
@@ -208,7 +207,7 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const ctx = {
         chat: null,
-      } as unknown as import('telegraf').Context;
+      } as unknown as import('grammy').Context;
 
       expect(() => adapter.getConversationId(ctx)).toThrow('No chat in context');
     });
@@ -235,6 +234,16 @@ describe('TelegramAdapter', () => {
     });
   });
 
+  describe('stop()', () => {
+    test('should call bot.stop()', () => {
+      const adapter = new TelegramAdapter('fake-token-for-testing');
+      const mockStop = mock(() => undefined);
+      (adapter.getBot() as unknown as { stop: typeof mockStop }).stop = mockStop;
+      adapter.stop();
+      expect(mockStop).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('start()', () => {
     beforeEach(() => {
       mockLogger.warn.mockClear();
@@ -243,14 +252,20 @@ describe('TelegramAdapter', () => {
 
     test('should retry on 409 and succeed on second attempt', async () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
-      const mockLaunch = mock<() => Promise<void>>()
+      // grammY's start() resolves when bot stops, not when started — onStart fires on startup
+      const mockStart = mock<
+        (opts?: { drop_pending_updates?: boolean; onStart?: () => void }) => Promise<void>
+      >()
         .mockRejectedValueOnce(new Error('409: Conflict: terminated by other getUpdates request'))
-        .mockResolvedValueOnce(undefined);
-      (adapter.getBot() as unknown as { launch: typeof mockLaunch }).launch = mockLaunch;
+        .mockImplementationOnce(opts => {
+          opts?.onStart?.();
+          return new Promise(() => {});
+        });
+      (adapter.getBot() as unknown as { start: typeof mockStart }).start = mockStart;
 
       await adapter.start({ retryDelayMs: 0 });
 
-      expect(mockLaunch).toHaveBeenCalledTimes(2);
+      expect(mockStart).toHaveBeenCalledTimes(2);
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ attempt: 1, maxAttempts: 3 }),
         'telegram.start_conflict_retrying'
@@ -260,41 +275,48 @@ describe('TelegramAdapter', () => {
 
     test('should throw immediately on non-409 error', async () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
-      const mockLaunch = mock<() => Promise<void>>().mockRejectedValueOnce(
-        new Error('401: Unauthorized')
-      );
-      (adapter.getBot() as unknown as { launch: typeof mockLaunch }).launch = mockLaunch;
+      const mockStart = mock<
+        (opts?: { drop_pending_updates?: boolean; onStart?: () => void }) => Promise<void>
+      >().mockRejectedValueOnce(new Error('401: Unauthorized'));
+      (adapter.getBot() as unknown as { start: typeof mockStart }).start = mockStart;
 
       await expect(adapter.start({ retryDelayMs: 0 })).rejects.toThrow('401: Unauthorized');
-      expect(mockLaunch).toHaveBeenCalledTimes(1);
+      expect(mockStart).toHaveBeenCalledTimes(1);
     });
 
     test('should retry twice on 409 and succeed on third attempt', async () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const conflictError = new Error('409: Conflict: terminated by other getUpdates request');
-      const mockLaunch = mock<() => Promise<void>>()
+      const mockStart = mock<
+        (opts?: { drop_pending_updates?: boolean; onStart?: () => void }) => Promise<void>
+      >()
         .mockRejectedValueOnce(conflictError)
         .mockRejectedValueOnce(conflictError)
-        .mockResolvedValueOnce(undefined);
-      (adapter.getBot() as unknown as { launch: typeof mockLaunch }).launch = mockLaunch;
+        .mockImplementationOnce(opts => {
+          opts?.onStart?.();
+          return new Promise(() => {});
+        });
+      (adapter.getBot() as unknown as { start: typeof mockStart }).start = mockStart;
 
       await adapter.start({ retryDelayMs: 0 });
 
-      expect(mockLaunch).toHaveBeenCalledTimes(3);
+      expect(mockStart).toHaveBeenCalledTimes(3);
       expect(mockLogger.warn).toHaveBeenCalledTimes(2);
     });
 
     test('should throw after exhausting all 409 retry attempts', async () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const conflictError = new Error('409: Conflict: terminated by other getUpdates request');
-      const mockLaunch = mock<() => Promise<void>>()
+      const mockStart = mock<
+        (opts?: { drop_pending_updates?: boolean; onStart?: () => void }) => Promise<void>
+      >()
         .mockRejectedValueOnce(conflictError)
         .mockRejectedValueOnce(conflictError)
         .mockRejectedValueOnce(conflictError);
-      (adapter.getBot() as unknown as { launch: typeof mockLaunch }).launch = mockLaunch;
+      (adapter.getBot() as unknown as { start: typeof mockStart }).start = mockStart;
 
       await expect(adapter.start({ retryDelayMs: 0 })).rejects.toThrow('409');
-      expect(mockLaunch).toHaveBeenCalledTimes(3);
+      expect(mockStart).toHaveBeenCalledTimes(3);
     });
   });
 });
