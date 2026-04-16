@@ -12,7 +12,7 @@ mock.module('./connection', () => ({
 }));
 
 // Module-level variable to control mock config assistant per test
-let mockConfigAssistant: string = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+let mockConfigAssistant = 'claude';
 
 // Mock config-loader to control assistant type in tests without filesystem dependency
 mock.module('../config/config-loader', () => ({
@@ -142,11 +142,8 @@ describe('conversations', () => {
     });
 
     test('uses DEFAULT_AI_ASSISTANT env var when set', async () => {
-      // Set env var (afterEach will restore). The env var itself is not read by the mock —
-      // the mock's loadConfig() returns `mockConfigAssistant` directly. We set both to
-      // document the contract: loadConfig() must honour DEFAULT_AI_ASSISTANT as highest priority.
-      // That contract is tested in config-loader.test.ts; here we only test that
-      // getOrCreateConversation() uses whatever loadConfig() returns.
+      // The mock returns mockConfigAssistant directly (env var contract tested in config-loader.test.ts).
+      // Set both so the test documents that loadConfig() honours DEFAULT_AI_ASSISTANT.
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
       mockConfigAssistant = 'codex';
 
