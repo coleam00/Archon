@@ -1020,7 +1020,10 @@ describe('workflowRunCommand', () => {
       'Dispatching workflow: **assist**',
       expect.objectContaining({
         category: 'workflow_dispatch_status',
-        workflowDispatch: expect.objectContaining({ workflowName: 'assist' }),
+        workflowDispatch: expect.objectContaining({
+          workflowName: 'assist',
+          workerConversationId: expect.stringMatching(/^cli-/),
+        }),
       })
     );
   });
@@ -1135,6 +1138,85 @@ describe('workflowRunCommand', () => {
       expect.objectContaining({ err: expect.any(Error) }),
       'cli_message_persist_failed'
     );
+  });
+
+  it('does not throw and continues to executeWorkflow when dispatch sendMessage fails', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const messagesDb = await import('@archon/core/db/messages');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-1',
+    });
+    // First addMessage (user message persist) succeeds, second (dispatch) fails
+    (messagesDb.addMessage as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(undefined) // user message persist succeeds
+      .mockRejectedValueOnce(new Error('DB gone')); // dispatch fails (caught inside CLIAdapter)
+
+    // Should not throw — dispatch failure must not block workflow execution
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true })
+    ).resolves.toBeUndefined();
+
+    // executeWorkflow was still called despite dispatch failure
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send result card when workflow is paused even with summary', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const messagesDb = await import('@archon/core/db/messages');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-paused',
+      paused: true,
+      summary: 'Steps completed so far.',
+    });
+    (messagesDb.addMessage as ReturnType<typeof mock>).mockClear();
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true });
+
+      // Paused guard fires before summary check — no result card despite having a summary
+      const resultCalls = (messagesDb.addMessage as ReturnType<typeof mock>).mock.calls.filter(
+        (args: unknown[]) => {
+          const meta = args[3] as Record<string, unknown> | undefined;
+          return meta?.category === 'workflow_result';
+        }
+      );
+      expect(resultCalls).toHaveLength(0);
+
+      // Confirm paused message was printed
+      expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow paused — waiting for approval.');
+    } finally {
+      consoleSpy.mockRestore();
+    }
   });
 });
 

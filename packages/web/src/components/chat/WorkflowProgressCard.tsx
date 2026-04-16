@@ -30,7 +30,7 @@ export function WorkflowProgressCard({
     queryKey: ['workflowRunByWorker', workerConversationId],
     queryFn: () => getWorkflowRunByWorker(workerConversationId),
     refetchInterval: (query): number | false => {
-      const status = query.state.data?.run.status;
+      const status = query.state.data?.run?.status;
       if (status === 'completed' || status === 'failed' || status === 'cancelled') return false;
       return 3000;
     },
