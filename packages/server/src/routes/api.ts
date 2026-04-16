@@ -1894,7 +1894,6 @@ export function registerApiRoutes(
       // Interactive loop path: store user input, keep status 'paused' so getPausedWorkflowRun
       // finds it, then auto-dispatch to orchestrator to resume without requiring a manual message.
       await workflowDb.updateWorkflowRun(runId, {
-        // No status change — keep 'paused' so the natural-language approval path finds it
         metadata: { loop_user_input: comment },
       });
       // Auto-resume: inject the approval as a message into the parent conversation.
