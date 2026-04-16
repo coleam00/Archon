@@ -16,7 +16,8 @@
   "dependencies": {
     "dotenv": "^17",
     "pino": "^9",
-    "pino-pretty": "^13"
+    "pino-pretty": "^13",
+    "posthog-node": "^5.29.2"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

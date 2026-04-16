@@ -315,6 +315,23 @@ Full documentation is available at **[archon.diy](https://archon.diy)**.
 | [Architecture](https://archon.diy/reference/architecture/) | System design and internals |
 | [Troubleshooting](https://archon.diy/reference/troubleshooting/) | Common issues and fixes |
 
+## Telemetry
+
+Archon sends a single anonymous event — `workflow_invoked` — each time a workflow starts, so maintainers can see which workflows get real usage and prioritize accordingly. **No PII, ever.**
+
+**What's collected:** the workflow name, the workflow description (both authored by you in YAML), the platform that triggered it (`cli`, `web`, `slack`, etc.), the Archon version, and a random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
+
+**What's *not* collected:** your code, prompts, messages, git remotes, file paths, usernames, tokens, AI output, workflow node details — none of it.
+
+**Opt out:** set any of these in your environment:
+
+```bash
+ARCHON_TELEMETRY_DISABLED=1
+DO_NOT_TRACK=1        # de facto standard honored by Astro, Bun, Prisma, Nuxt, etc.
+```
+
+Self-host PostHog or use a different project by setting `POSTHOG_API_KEY` and `POSTHOG_HOST`.
+
 ## Contributing
 
 Contributions welcome! See the open [issues](https://github.com/coleam00/Archon/issues) for things to work on.
