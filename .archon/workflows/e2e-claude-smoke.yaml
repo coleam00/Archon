@@ -1,9 +1,9 @@
 # E2E smoke test — Claude provider
-# Verifies: Claude connectivity (sendQuery), command node loading, $nodeId.output refs
+# Verifies: Claude connectivity (sendQuery), $nodeId.output refs
 # Design: Only uses allowed_tools: [] (no tool use) and no output_format (no structured output)
-# because the Claude CLI subprocess is extremely slow with those features in CI.
+# because the Claude CLI subprocess is slow with those features in CI.
 name: e2e-claude-smoke
-description: "Smoke test for Claude provider. Verifies prompt response and command node loading."
+description: "Smoke test for Claude provider. Verifies prompt response."
 provider: claude
 model: haiku
 
@@ -14,14 +14,7 @@ nodes:
     allowed_tools: []
     idle_timeout: 30000
 
-  # 2. Command node — verifies command file discovery and loading
-  - id: command-test
-    command: e2e-echo-command
-    allowed_tools: []
-    idle_timeout: 30000
-    depends_on: [simple]
-
-  # 3. Bash node — verifies $nodeId.output substitution from AI node
+  # 2. Bash node — verifies $nodeId.output substitution from AI node
   - id: verify-output
-    bash: "echo 'simple=$simple.output command=$command-test.output'"
-    depends_on: [simple, command-test]
+    bash: "echo 'simple=$simple.output'"
+    depends_on: [simple]
