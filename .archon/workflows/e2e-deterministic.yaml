@@ -7,7 +7,7 @@ description: "Pure DAG engine test. Exercises bash, script (bun/uv), conditions,
 nodes:
   # Layer 0 — parallel deterministic nodes
   - id: bash-echo
-    bash: "echo 'DELIBERATE FAILURE' && exit 1"
+    bash: "echo '{\"status\":\"ok\",\"value\":42}'"
 
   - id: script-bun
     script: echo-args
