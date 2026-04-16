@@ -17,6 +17,8 @@ export default tseslint.config(
       'worktrees/**',
       '.claude/worktrees/**',
       '.claude/skills/**',
+      'scripts/**', // Build scripts (not in tsconfig project scope)
+      '**/*.generated.ts', // Auto-generated source files (content inlined via JSON.stringify)
       '**/*.js',
       '*.mjs',
       '**/*.test.ts',
