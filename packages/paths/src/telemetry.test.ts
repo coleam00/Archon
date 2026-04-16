@@ -8,6 +8,7 @@ import {
   captureWorkflowInvoked,
   shutdownTelemetry,
   resetTelemetryForTests,
+  getOrCreateTelemetryId,
 } from './telemetry';
 
 const ENV_VARS = [
@@ -133,30 +134,18 @@ describe('telemetry ID persistence', () => {
   });
 
   test('an existing telemetry-id file is preserved (not overwritten)', async () => {
-    // Simulate a prior run by writing a UUID, then enable the capture path so
-    // lazy init exercises the id-read. We redirect POSTHOG_HOST to a
-    // guaranteed-unreachable loopback port so the client's flush fails
-    // silently (swallowed by our error hook) instead of leaking a test event
-    // to production PostHog.
     const { writeFileSync, mkdirSync } = await import('fs');
     const existingId = '11111111-1111-4111-8111-111111111111';
     mkdirSync(tmpHome, { recursive: true });
     writeFileSync(join(tmpHome, 'telemetry-id'), existingId, 'utf8');
 
-    delete process.env.ARCHON_TELEMETRY_DISABLED;
-    process.env.POSTHOG_HOST = 'http://127.0.0.1:1';
     resetTelemetryForTests();
 
-    captureWorkflowInvoked({ workflowName: 'w' });
+    // Direct, synchronous call — no network, no fire-and-forget, no timer.
+    const resolved = getOrCreateTelemetryId();
 
-    // Give the async capture a moment to run its file read.
-    await new Promise(resolve => setTimeout(resolve, 20));
-
+    expect(resolved).toBe(existingId);
     const stored = readFileSync(join(tmpHome, 'telemetry-id'), 'utf8').trim();
     expect(stored).toBe(existingId);
-
-    // Clean up any in-flight client (silentFetch masks the unreachable host
-    // as a 200, so shutdown completes immediately).
-    await shutdownTelemetry();
   });
 });

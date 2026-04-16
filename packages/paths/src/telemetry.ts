@@ -79,8 +79,12 @@ export function isTelemetryDisabled(): boolean {
  * If the file can't be read or written (permissions, disk full), a fresh UUID
  * is returned for this session — telemetry still works, just not correlated
  * across runs.
+ *
+ * Exported so tests can exercise the id-resolution invariants directly
+ * without spinning up the PostHog client.
+ * @internal
  */
-function getOrCreateTelemetryId(): string {
+export function getOrCreateTelemetryId(): string {
   const idPath = join(getArchonHome(), 'telemetry-id');
   try {
     if (existsSync(idPath)) {
