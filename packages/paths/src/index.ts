@@ -43,3 +43,7 @@ export {
   parseLatestRelease,
 } from './update-check';
 export type { UpdateCheckResult } from './update-check';
+
+// Anonymous telemetry
+export { captureWorkflowInvoked, shutdownTelemetry, isTelemetryDisabled } from './telemetry';
+export type { WorkflowInvokedProperties } from './telemetry';

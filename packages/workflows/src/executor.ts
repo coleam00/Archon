@@ -6,7 +6,7 @@ import { join } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
-import { createLogger } from '@archon/paths';
+import { createLogger, captureWorkflowInvoked, BUNDLED_VERSION } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
@@ -620,6 +620,16 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       conversationId: conversationDbId,
+    });
+
+    // Fire-and-forget anonymous usage telemetry. No PII: only workflow name +
+    // description (authored by the user in their YAML) + platform + version.
+    // Opt out via ARCHON_TELEMETRY_DISABLED=1 or DO_NOT_TRACK=1.
+    captureWorkflowInvoked({
+      workflowName: workflow.name,
+      workflowDescription: workflow.description,
+      platform: platform.getPlatformType(),
+      archonVersion: BUNDLED_VERSION,
     });
     deps.store
       .createWorkflowEvent({

@@ -80,6 +80,7 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
+  shutdownTelemetry,
 } from '@archon/paths';
 import * as git from '@archon/git';
 
@@ -573,6 +574,9 @@ async function main(): Promise<number> {
     }
     return 1;
   } finally {
+    // Flush queued telemetry events before the CLI process exits.
+    // Short-lived CLI commands lose buffered events if shutdown() is skipped.
+    await shutdownTelemetry();
     // Always close database connection
     await closeDb();
   }
