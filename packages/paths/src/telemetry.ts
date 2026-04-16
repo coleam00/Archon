@@ -21,6 +21,23 @@ import type { PostHog } from 'posthog-node';
 import { getArchonHome } from './archon-paths';
 import { createLogger } from './logger';
 
+// Minimal shape of posthog-node's `fetch` option — copied from @posthog/core
+// (a transitive dep) to avoid pulling it in as a direct dependency.
+interface PostHogFetchOptions {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH';
+  mode?: 'no-cors';
+  credentials?: 'omit';
+  headers: Record<string, string>;
+  body?: string | Blob;
+  signal?: AbortSignal;
+}
+interface PostHogFetchResponse {
+  status: number;
+  text: () => Promise<string>;
+  json: () => Promise<unknown>;
+  headers?: { get(name: string): string | null };
+}
+
 /**
  * Embedded write-only PostHog project key. Safe to ship in source: `phc_*`
  * keys can only write events, never read data. Override with POSTHOG_API_KEY
@@ -103,6 +120,40 @@ async function getClient(): Promise<PostHog | null> {
   return clientInit;
 }
 
+/**
+ * Fetch wrapper that masks all failures as 200 responses. The PostHog SDK's
+ * internal `logFlushError` writes to stderr via `console.error` on any network
+ * or HTTP error, bypassing logger configuration (see `@posthog/core`
+ * `posthog-core-stateless.mjs` `logFlushError`). For a fire-and-forget
+ * telemetry path we want zero user-visible noise when PostHog is unreachable
+ * (offline, firewalled, DNS broken, rate-limited), so we intercept failures
+ * before the SDK sees them. The original error is still recorded at debug
+ * level.
+ */
+const FAKE_OK_RESPONSE: PostHogFetchResponse = {
+  status: 200,
+  text: () => Promise.resolve('{"status":"ok"}'),
+  json: () => Promise.resolve({ status: 'ok' }),
+  headers: { get: () => null },
+};
+
+async function silentFetch(
+  url: string,
+  options: PostHogFetchOptions
+): Promise<PostHogFetchResponse> {
+  try {
+    const res = await fetch(url, options as RequestInit);
+    if (res.status < 200 || res.status >= 400) {
+      getLog().debug({ status: res.status }, 'telemetry.http_non_2xx_suppressed');
+      return FAKE_OK_RESPONSE;
+    }
+    return res;
+  } catch (error) {
+    getLog().debug({ err: error as Error }, 'telemetry.fetch_failed_suppressed');
+    return FAKE_OK_RESPONSE;
+  }
+}
+
 async function initClient(): Promise<PostHog | null> {
   if (isTelemetryDisabled()) return null;
   try {
@@ -112,8 +163,11 @@ async function initClient(): Promise<PostHog | null> {
       flushAt: 20,
       flushInterval: 10000,
       disableGeoip: true,
+      fetch: silentFetch,
     });
-    // Swallow PostHog errors — network issues must never surface to the user.
+    // Defensive: also hook the client-level error channel in case a future
+    // posthog-node version routes errors there instead of (or in addition to)
+    // the internal console.error path.
     client.on('error', (err: Error) => {
       getLog().debug({ err }, 'telemetry.client_error');
     });

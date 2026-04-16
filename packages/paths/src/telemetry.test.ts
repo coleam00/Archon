@@ -133,8 +133,6 @@ describe('telemetry ID persistence', () => {
   });
 
   test('an existing telemetry-id file is preserved (not overwritten)', async () => {
-    // Longer timeout: the bogus-host fallback below triggers posthog-node's
-    // shutdown-flush retry loop, which can take ~5–10s to give up.
     // Simulate a prior run by writing a UUID, then enable the capture path so
     // lazy init exercises the id-read. We redirect POSTHOG_HOST to a
     // guaranteed-unreachable loopback port so the client's flush fails
@@ -157,7 +155,8 @@ describe('telemetry ID persistence', () => {
     const stored = readFileSync(join(tmpHome, 'telemetry-id'), 'utf8').trim();
     expect(stored).toBe(existingId);
 
-    // Clean up any in-flight client (swallows the unreachable-host error).
+    // Clean up any in-flight client (silentFetch masks the unreachable host
+    // as a 200, so shutdown completes immediately).
     await shutdownTelemetry();
-  }, 20000);
+  });
 });
