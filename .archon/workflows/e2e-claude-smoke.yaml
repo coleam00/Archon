@@ -17,6 +17,7 @@ nodes:
   # 2. Command node — verifies command file discovery and loading
   - id: command-test
     command: e2e-echo-command
+    allowed_tools: []
     idle_timeout: 30000
     depends_on: [simple]
 
