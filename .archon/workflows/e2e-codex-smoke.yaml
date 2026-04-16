@@ -8,7 +8,7 @@ model: gpt-5.1-codex-mini
 nodes:
   - id: simple
     prompt: "What is 2+2? Answer with just the number, nothing else."
-    idle_timeout: 60000
+    idle_timeout: 30000
 
   - id: structured
     prompt: "Classify this input as 'math' or 'text': '2+2=4'. Return JSON only."
@@ -20,5 +20,5 @@ nodes:
           enum: ["math", "text"]
       required: ["category"]
       additionalProperties: false
-    idle_timeout: 60000
+    idle_timeout: 30000
     depends_on: [simple]
