@@ -1,0 +1,111 @@
+import { useEffect, useState, type ReactElement } from 'react';
+import { Link } from 'react-router';
+import { LiveDot } from './LiveDot';
+import { OriginBadge } from './OriginBadge';
+import type { Run } from '../primitives/run';
+import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
+import { statusLabel, statusTextClass } from '../lib/run-status';
+
+interface RunDetailHeaderProps {
+  run: Run;
+  projectName: string;
+  projectId: string;
+}
+
+function useLiveElapsed(run: Run): string {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (run.status !== 'running') return;
+    const handle = setInterval(() => {
+      tick(n => n + 1);
+    }, 1000);
+    return (): void => {
+      clearInterval(handle);
+    };
+  }, [run.status]);
+  return formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
+}
+
+export function RunDetailHeader({
+  run,
+  projectName,
+  projectId,
+}: RunDetailHeaderProps): ReactElement {
+  const elapsed = useLiveElapsed(run);
+  const isPaused = run.status === 'paused';
+  const isRunning = run.status === 'running';
+
+  const copyRunId = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(run.id);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return (
+    <header className="sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-surface px-6 py-3">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 font-mono text-[12px]">
+        <Link
+          to={`/console/p/${projectId}`}
+          className="text-text-tertiary transition-colors hover:text-text-primary"
+        >
+          {projectName}
+        </Link>
+        <span aria-hidden className="text-text-tertiary">
+          /
+        </span>
+        <button
+          type="button"
+          onClick={() => void copyRunId()}
+          className="flex items-center gap-1 text-text-primary transition-colors hover:text-accent-bright"
+          title="Copy full run id"
+        >
+          {shortRunId(run.id)}
+          <span aria-hidden className="font-mono text-[10px] opacity-60">
+            ⧉
+          </span>
+        </button>
+      </div>
+
+      <div className="mx-1 h-4 w-px bg-border" aria-hidden />
+
+      {/* Status pill */}
+      <div className="flex items-center gap-2">
+        {isRunning ? (
+          <LiveDot />
+        ) : isPaused ? (
+          <span aria-hidden className="h-2.5 w-2.5 animate-pulse rounded-full bg-warning" />
+        ) : (
+          <span
+            aria-hidden
+            className={`h-2 w-2 rounded-full ${
+              run.status === 'failed'
+                ? 'bg-error'
+                : run.status === 'completed'
+                  ? 'bg-success'
+                  : 'bg-text-tertiary'
+            }`}
+          />
+        )}
+        <span
+          className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
+        >
+          {statusLabel[run.status]}
+        </span>
+      </div>
+
+      {/* Workflow name */}
+      <span className="text-sm font-medium text-text-primary">{run.workflow}</span>
+
+      {/* Origin */}
+      <OriginBadge origin={run.origin} />
+
+      {/* Elapsed — right-aligned */}
+      <div className="ml-auto flex items-center gap-3">
+        <span className="font-mono text-[12px] tabular-nums text-text-tertiary">{elapsed}</span>
+      </div>
+    </header>
+  );
+}
