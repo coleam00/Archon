@@ -1099,6 +1099,11 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+
+    // Verify parentConversationId is passed so resume-after-approval works
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    // param 11 (index 10) is parentConversationId — should be conversation.id
+    expect(callArgs[10]).toBe('conv-1');
   });
 
   test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {
