@@ -242,7 +242,8 @@ export async function loadCommandPrompt(
 // ─── Variable Substitution ───────────────────────────────────────────────────
 
 /** Pattern string for context variables - used to create fresh regex instances */
-export const CONTEXT_VAR_PATTERN_STR = '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)';
+export const CONTEXT_VAR_PATTERN_STR =
+  '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
 
 /**
  * Substitute workflow variables in a prompt.

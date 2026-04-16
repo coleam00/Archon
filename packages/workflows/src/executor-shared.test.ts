@@ -167,6 +167,22 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Issue: context-data. External: context-data');
   });
 
+  it('does not treat context variables as prefixes of longer identifiers', () => {
+    const { prompt, contextSubstituted } = substituteWorkflowVariables(
+      'Context: $CONTEXT. File: $CONTEXT_FILE. External path: $EXTERNAL_CONTEXT_PATH',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      'context-data'
+    );
+    expect(prompt).toBe(
+      'Context: context-data. File: $CONTEXT_FILE. External path: $EXTERNAL_CONTEXT_PATH'
+    );
+    expect(contextSubstituted).toBe(true);
+  });
+
   it('clears context variables when issueContext is undefined', () => {
     const { prompt, contextSubstituted } = substituteWorkflowVariables(
       'Context: $CONTEXT here',
