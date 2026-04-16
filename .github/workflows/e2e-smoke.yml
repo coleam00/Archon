@@ -2,7 +2,7 @@ name: E2E Smoke Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, feat/e2e-smoke-tests]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
