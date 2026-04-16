@@ -79,7 +79,10 @@ async function collectFiles(dir: string, extensions: readonly string[]): Promise
       );
     }
     seen.add(name);
-    const content = await readFile(join(dir, entry), 'utf-8');
+    const raw = await readFile(join(dir, entry), 'utf-8');
+    // Normalize to LF so output is identical regardless of the checkout's
+    // line-ending policy (e.g. Windows `core.autocrlf=true` yields CRLF).
+    const content = raw.replace(/\r\n/g, '\n');
     if (!content.trim()) {
       throw new Error(`Bundled default "${entry}" in ${dir} is empty.`);
     }
@@ -144,7 +147,10 @@ async function main(): Promise<void> {
   if (CHECK_ONLY) {
     let existing = '';
     try {
-      existing = await readFile(OUTPUT_PATH, 'utf-8');
+      const raw = await readFile(OUTPUT_PATH, 'utf-8');
+      // Same LF normalization as collectFiles — the .ts itself may be
+      // checked out with CRLF line endings on Windows.
+      existing = raw.replace(/\r\n/g, '\n');
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') throw err;
