@@ -30,14 +30,14 @@ export function WorkflowProgressCard({
     queryKey: ['workflowRunByWorker', workerConversationId],
     queryFn: () => getWorkflowRunByWorker(workerConversationId),
     refetchInterval: (query): number | false => {
-      const status = query.state.data?.run.status;
+      const status = query.state.data?.run?.status;
       if (status === 'completed' || status === 'failed' || status === 'cancelled') return false;
       return 3000;
     },
   });
 
-  const runId = runData?.run.id;
-  const restStatus = runData?.run.status;
+  const runId = runData?.run?.id;
+  const restStatus = runData?.run?.status;
 
   // Live SSE state from Zustand store
   const liveState = useWorkflowStore(state => (runId ? state.workflows.get(runId) : undefined));

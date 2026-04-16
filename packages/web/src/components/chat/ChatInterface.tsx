@@ -236,7 +236,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
     const latestId = ids[ids.length - 1];
     void getWorkflowRunByWorker(latestId)
       .then(result => {
-        if (!result) return;
+        if (!result?.run) return;
         const run = result.run;
         hydrateWorkflow({
           runId: run.id,
