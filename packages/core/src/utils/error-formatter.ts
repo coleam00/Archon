@@ -19,13 +19,42 @@ export function classifyAndFormatError(error: Error): string {
     return '⚠️ AI rate limit reached. Please wait a moment and try again.';
   }
 
-  // AI/SDK errors - authentication
+  // Claude-specific auth errors — OAuth token refresh failures
+  // These come from Claude Code subprocess stderr or SDK result subtypes.
+  // Recovery: `/login` in-session or `claude logout && claude login` in terminal.
+  if (
+    message.includes('refresh token') ||
+    message.includes('could not be refreshed') ||
+    message.includes('log out and sign in') ||
+    message.includes('OAuth token has expired') ||
+    message.includes('sign-in has expired')
+  ) {
+    return '⚠️ Claude authentication expired. Run `/login` inside Claude Code or `claude logout && claude login` in your terminal.';
+  }
+
+  // Claude-specific auth errors — general (subprocess crash with auth classification)
+  if (message.startsWith('Claude Code auth error:')) {
+    return '⚠️ Claude authentication error. Run `/login` inside Claude Code or check your API key configuration.';
+  }
+
+  // Codex-specific auth errors — 401 retry exhaustion
+  // Codex surfaces auth failures as "exceeded retry limit, last status: 401 Unauthorized"
+  // Recovery: `codex login` in terminal.
+  if (
+    message.includes('Codex query failed:') &&
+    (message.includes('401') || message.includes('Unauthorized'))
+  ) {
+    return '⚠️ Codex authentication error. Run `codex login` in your terminal to re-authenticate.';
+  }
+
+  // General AI/SDK authentication errors
   if (
     message.includes('API key') ||
-    message.includes('authentication') ||
+    message.includes('authentication_error') ||
+    message.includes('authentication error') ||
     message.includes('401')
   ) {
-    return '⚠️ AI service authentication error. Please check configuration.';
+    return '⚠️ AI service authentication error. Please check your API key or credentials.';
   }
 
   // Network errors - timeout
