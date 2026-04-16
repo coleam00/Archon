@@ -2711,16 +2711,34 @@ export async function executeDagWorkflow(
   }
 
   if (anyFailed) {
+    if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
     const failedNodes = [...nodeOutputs.entries()]
       .filter(([, o]) => o.state === 'failed')
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
       .join('; ');
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `\u26a0\ufe0f Some DAG nodes failed: ${failedNodes}\nSuccessful nodes completed normally.`,
-      { workflowId: workflowRun.id }
-    );
+    const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
+    await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
+      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+    });
+    await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    });
+    const emitterForFail = getWorkflowEventEmitter();
+    emitterForFail.emit({
+      type: 'workflow_failed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      error: failMsg,
+    });
+    emitterForFail.unregisterRun(workflowRun.id);
+    await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
+      workflowId: workflowRun.id,
+    });
+    // DO NOT throw — outer executor.ts catch would duplicate workflow_failed events
+    return;
   }
 
   // Check if status was changed externally (e.g. cancelled) before marking complete.
