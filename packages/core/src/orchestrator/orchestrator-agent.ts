@@ -960,10 +960,11 @@ async function handleStreamMode(
       }
       if (msg.isError) {
         getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
-        await platform.sendMessage(
-          conversationId,
-          '⚠️ AI error. Check your credentials or use /reset.'
-        );
+        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
+        if (newSessionId) {
+          await tryPersistSessionId(session.id, newSessionId);
+        }
         return;
       }
       if (!commandDetected && platform.sendStructuredEvent) {
@@ -1082,10 +1083,11 @@ async function handleBatchMode(
       }
       if (msg.isError) {
         getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
-        await platform.sendMessage(
-          conversationId,
-          '⚠️ AI error. Check your credentials or use /reset.'
-        );
+        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
+        if (newSessionId) {
+          await tryPersistSessionId(session.id, newSessionId);
+        }
         return;
       }
     }
