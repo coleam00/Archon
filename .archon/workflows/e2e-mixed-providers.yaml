@@ -18,7 +18,7 @@ nodes:
   - id: codex-node
     prompt: "Say 'codex-ok' and nothing else."
     provider: codex
-    model: gpt-5.1-codex-mini
+    model: gpt-5.2
     idle_timeout: 30000
 
   # 3. Assert both providers returned output
