@@ -5,20 +5,27 @@ description: "Tests Claude and Codex providers in the same workflow with cross-p
 
 # Default provider is claude
 provider: claude
+model: haiku
 
 nodes:
   # 1. Claude node — default provider
   - id: claude-node
     prompt: "Say 'claude-ok' and nothing else."
+    allowed_tools: []
+    idle_timeout: 60000
 
   # 2. Codex node — provider override
   - id: codex-node
     prompt: "Say 'codex-ok' and nothing else."
     provider: codex
+    model: gpt-5.1-codex-mini
+    idle_timeout: 60000
 
   # 3. Claude node reads Codex output — cross-provider ref
   - id: claude-reads-codex
     prompt: "The codex node said: '$codex-node.output'. Confirm you received it by saying 'cross-provider-ok'. Say nothing else."
+    allowed_tools: []
+    idle_timeout: 60000
     depends_on: [codex-node]
 
   # 4. Bash node verifies both outputs

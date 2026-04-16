@@ -1,13 +1,19 @@
 # E2E smoke test — Claude provider
-# Verifies: provider selection, sendQuery, structured output, tool use
+# Verifies: provider selection, sendQuery, structured output, tool use,
+#           command node, workflow-level model, node-level model override
 name: e2e-claude-smoke
-description: "E2E smoke test for Claude provider. Runs a simple prompt + structured output node."
+description: "E2E smoke test for Claude provider. Tests prompt, structured output, tool use, command node, and model overrides."
 provider: claude
+model: haiku
 
 nodes:
+  # 1. Simple prompt — verifies basic sendQuery
   - id: simple
     prompt: "What is 2+2? Answer with just the number, nothing else."
+    allowed_tools: []
+    idle_timeout: 60000
 
+  # 2. Structured output — verifies output_format translation
   - id: structured
     prompt: "Classify this input as 'math' or 'text': '2+2=4'"
     output_format:
@@ -16,8 +22,26 @@ nodes:
         category:
           type: string
           enum: ["math", "text"]
+      required: ["category"]
+      additionalProperties: false
+    allowed_tools: []
+    idle_timeout: 60000
     depends_on: [simple]
 
+  # 3. Tool use — verifies agent can use tools
   - id: tool-use
-    prompt: "Read the file packages/providers/package.json and tell me the package name. Answer with just the name."
+    prompt: "Read the file package.json and tell me the 'name' field value. Answer with just the name, nothing else."
+    allowed_tools: [Read]
+    idle_timeout: 60000
     depends_on: [simple]
+
+  # 4. Command node — verifies command file loading
+  - id: command-test
+    command: e2e-echo-command
+    idle_timeout: 60000
+    depends_on: [simple]
+
+  # 5. Bash node reads structured output field
+  - id: verify-structured
+    bash: "echo 'category=$structured.output.category'"
+    depends_on: [structured]
