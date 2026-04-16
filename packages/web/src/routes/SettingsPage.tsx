@@ -11,6 +11,7 @@ import {
   listCodebases,
   listProviders,
   addCodebase,
+  getCodebaseInput,
   deleteCodebase,
   updateAssistantConfig,
   getCodebaseEnvVars,
@@ -258,7 +259,7 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
 
 function ProjectsSection(): React.ReactElement {
   const queryClient = useQueryClient();
-  const [addPath, setAddPath] = useState('');
+  const [addValue, setAddValue] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [expandedEnvVars, setExpandedEnvVars] = useState<string | null>(null);
 
@@ -268,10 +269,10 @@ function ProjectsSection(): React.ReactElement {
   });
 
   const addMutation = useMutation({
-    mutationFn: ({ path }: { path: string }) => addCodebase({ path }),
+    mutationFn: (value: string) => addCodebase(getCodebaseInput(value)),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['codebases'] });
-      setAddPath('');
+      setAddValue('');
       setShowAdd(false);
     },
   });
@@ -285,8 +286,8 @@ function ProjectsSection(): React.ReactElement {
 
   function handleAddSubmit(e: React.FormEvent): void {
     e.preventDefault();
-    if (addPath.trim()) {
-      addMutation.mutate({ path: addPath.trim() });
+    if (addValue.trim()) {
+      addMutation.mutate(addValue.trim());
     }
   }
 
@@ -339,11 +340,11 @@ function ProjectsSection(): React.ReactElement {
         {showAdd ? (
           <form onSubmit={handleAddSubmit} className="mt-3 flex gap-2">
             <Input
-              value={addPath}
+              value={addValue}
               onChange={e => {
-                setAddPath(e.target.value);
+                setAddValue(e.target.value);
               }}
-              placeholder="/path/to/repository"
+              placeholder="GitHub URL or local path"
               className="flex-1"
             />
             <Button type="submit" size="sm" disabled={addMutation.isPending}>
@@ -355,7 +356,7 @@ function ProjectsSection(): React.ReactElement {
               size="sm"
               onClick={() => {
                 setShowAdd(false);
-                setAddPath('');
+                setAddValue('');
               }}
             >
               Cancel
