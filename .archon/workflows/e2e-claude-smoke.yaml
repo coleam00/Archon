@@ -1,6 +1,7 @@
 # E2E smoke test — Claude provider
 # Verifies: provider selection, sendQuery, structured output, tool use,
 #           command node, workflow-level model, node-level model override
+# NOTE: Nodes run sequentially to avoid concurrent Claude CLI subprocess issues in CI
 name: e2e-claude-smoke
 description: "E2E smoke test for Claude provider. Tests prompt, structured output, tool use, command node, and model overrides."
 provider: claude
@@ -11,7 +12,7 @@ nodes:
   - id: simple
     prompt: "What is 2+2? Answer with just the number, nothing else."
     allowed_tools: []
-    idle_timeout: 60000
+    idle_timeout: 120000
 
   # 2. Structured output — verifies output_format translation
   - id: structured
@@ -25,21 +26,21 @@ nodes:
       required: ["category"]
       additionalProperties: false
     allowed_tools: []
-    idle_timeout: 60000
+    idle_timeout: 120000
     depends_on: [simple]
 
   # 3. Tool use — verifies agent can use tools
   - id: tool-use
     prompt: "Read the file package.json and tell me the 'name' field value. Answer with just the name, nothing else."
     allowed_tools: [Read]
-    idle_timeout: 60000
-    depends_on: [simple]
+    idle_timeout: 120000
+    depends_on: [structured]
 
   # 4. Command node — verifies command file loading
   - id: command-test
     command: e2e-echo-command
-    idle_timeout: 60000
-    depends_on: [simple]
+    idle_timeout: 120000
+    depends_on: [tool-use]
 
   # 5. Bash node reads structured output field
   - id: verify-structured

@@ -103,6 +103,7 @@ jobs:
       - name: Run Codex smoke test
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           bun run cli workflow run e2e-codex-smoke --no-worktree "smoke test"
 
@@ -139,6 +140,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CLAUDE_BIN_PATH: ~/.local/bin/claude
         run: |
           bun run cli workflow run e2e-mixed-providers --no-worktree "smoke test"

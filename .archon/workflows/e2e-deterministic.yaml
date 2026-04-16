@@ -15,7 +15,7 @@ nodes:
     timeout: 30000
 
   - id: script-python
-    script: echo-args
+    script: echo-py
     runtime: uv
     timeout: 30000
 
