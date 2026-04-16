@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { readdirSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults';
 
@@ -9,16 +9,6 @@ import { isBinaryBuild, BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-de
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
 const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
-
-function listNames(dir: string, extensions: readonly string[]): string[] {
-  return readdirSync(dir)
-    .filter(f => extensions.some(ext => f.endsWith(ext)))
-    .map(f => {
-      const ext = extensions.find(e => f.endsWith(e))!;
-      return f.slice(0, -ext.length);
-    })
-    .sort();
-}
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -34,28 +24,47 @@ describe('bundled-defaults', () => {
   describe('bundle completeness', () => {
     // These assertions are the canary for bundle drift: if someone adds a
     // default file without regenerating bundled-defaults.generated.ts, the
-    // bundle is missing in compiled binaries (see #979 context). The generator
-    // is `scripts/generate-bundled-defaults.ts`, and `bun run check:bundled`
-    // verifies the generated file is up to date in CI.
+    // bundle would be missing in compiled binaries (see #979 context). The
+    // generator is `scripts/generate-bundled-defaults.ts`, and
+    // `bun run check:bundled` verifies the generated file is up to date.
 
     it('BUNDLED_COMMANDS contains every .md file in .archon/commands/defaults/', () => {
-      const onDisk = listNames(COMMANDS_DIR, ['.md']);
-      const bundled = Object.keys(BUNDLED_COMMANDS).sort();
-      expect(bundled).toEqual(onDisk);
+      const onDisk = readdirSync(COMMANDS_DIR)
+        .filter(f => f.endsWith('.md'))
+        .map(f => f.slice(0, -'.md'.length))
+        .sort();
+      expect(Object.keys(BUNDLED_COMMANDS).sort()).toEqual(onDisk);
     });
 
     it('BUNDLED_WORKFLOWS contains every .yaml/.yml file in .archon/workflows/defaults/', () => {
-      const onDisk = listNames(WORKFLOWS_DIR, ['.yaml', '.yml']);
-      const bundled = Object.keys(BUNDLED_WORKFLOWS).sort();
-      expect(bundled).toEqual(onDisk);
+      const onDisk = readdirSync(WORKFLOWS_DIR)
+        .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+        .map(f => f.replace(/\.ya?ml$/, ''))
+        .sort();
+      expect(Object.keys(BUNDLED_WORKFLOWS).sort()).toEqual(onDisk);
+    });
+
+    it('bundled content matches on-disk file content (defense against generator corruption)', () => {
+      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
+        const diskContent = readFileSync(join(COMMANDS_DIR, `${name}.md`), 'utf-8');
+        expect(content).toBe(diskContent);
+      }
+      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+        // Workflows may be .yaml or .yml — prefer .yaml, fall back.
+        let diskContent: string;
+        try {
+          diskContent = readFileSync(join(WORKFLOWS_DIR, `${name}.yaml`), 'utf-8');
+        } catch {
+          diskContent = readFileSync(join(WORKFLOWS_DIR, `${name}.yml`), 'utf-8');
+        }
+        expect(content).toBe(diskContent);
+      }
     });
   });
 
   describe('BUNDLED_COMMANDS', () => {
-    it('should have non-empty content for all commands', () => {
-      for (const [, content] of Object.entries(BUNDLED_COMMANDS)) {
-        expect(content).toBeDefined();
-        expect(typeof content).toBe('string');
+    it('every command has meaningful content (>50 chars)', () => {
+      for (const content of Object.values(BUNDLED_COMMANDS)) {
         expect(content.length).toBeGreaterThan(50);
       }
     });
@@ -73,10 +82,8 @@ describe('bundled-defaults', () => {
   });
 
   describe('BUNDLED_WORKFLOWS', () => {
-    it('should have non-empty content for all workflows', () => {
-      for (const [, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        expect(content).toBeDefined();
-        expect(typeof content).toBe('string');
+    it('every workflow has meaningful content (>50 chars)', () => {
+      for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content.length).toBeGreaterThan(50);
       }
     });
@@ -91,7 +98,7 @@ describe('bundled-defaults', () => {
     });
 
     it('should have valid YAML structure', () => {
-      for (const [, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+      for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content).toContain('name:');
         expect(content).toContain('description:');
         expect(content.includes('nodes:')).toBe(true);

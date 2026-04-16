@@ -35,7 +35,7 @@ export { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults.generate
  * so tests can use `spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(...)`
  * without resorting to `mock.module('@archon/paths', ...)` — which is
  * process-global and irreversible in Bun and would pollute other test files.
- * See `.claude/rules/dx-quirks.md` and `loader.test.ts` for context.
+ * See `loader.test.ts` for context.
  */
 export function isBinaryBuild(): boolean {
   return BUNDLED_IS_BINARY;

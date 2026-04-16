@@ -9,18 +9,20 @@
  *   - bundle drift (hand-maintained import list in bundled-defaults.ts)
  *   - SDK blocker #2 (type: 'text' import attributes are Bun-specific)
  *
- * Determinism: filenames are sorted before emission so CI can `git diff
- * --exit-code` on the output to catch unregenerated changes.
+ * Determinism: filenames are sorted before emission so `bun run check:bundled`
+ * (which regenerates into memory and compares to the committed file) catches
+ * unregenerated changes. Wired into `bun run validate` and CI.
  *
  * Usage:
- *   bun run scripts/generate-bundled-defaults.ts
+ *   bun run scripts/generate-bundled-defaults.ts           # write
+ *   bun run scripts/generate-bundled-defaults.ts --check   # verify (exit 2 if stale)
  *
  * Exit codes:
  *   0  file generated (and unchanged, if --check)
- *   1  unexpected error (unreadable source, invalid filename, etc.)
+ *   1  unexpected error (missing dir, unreadable source, invalid filename, etc.)
  *   2  --check was passed and the file would change
  */
-import { readFile, readdir, writeFile } from 'fs/promises';
+import { access, readFile, readdir, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
@@ -33,24 +35,50 @@ const OUTPUT_PATH = join(
 
 const CHECK_ONLY = process.argv.includes('--check');
 
-async function collectFiles(
-  dir: string,
-  extensions: readonly string[]
-): Promise<Array<{ name: string; content: string }>> {
-  const entries = await readdir(dir);
-  const matched = entries.filter(entry => extensions.some(ext => entry.endsWith(ext))).sort();
+interface BundledFile {
+  name: string;
+  content: string;
+}
 
-  const files: Array<{ name: string; content: string }> = [];
-  for (const entry of matched) {
-    const ext = extensions.find(e => entry.endsWith(e));
-    if (!ext) continue;
+async function ensureDir(dir: string, label: string): Promise<void> {
+  try {
+    await access(dir);
+  } catch {
+    throw new Error(
+      `${label} directory not found: ${dir}\n` +
+        `Run this script from the repo root (cwd was ${process.cwd()}), ` +
+        'or verify the .archon/ tree exists.'
+    );
+  }
+}
+
+async function collectFiles(dir: string, extensions: readonly string[]): Promise<BundledFile[]> {
+  const entries = await readdir(dir);
+  const matched = entries
+    .map(entry => {
+      const ext = extensions.find(e => entry.endsWith(e));
+      return ext ? { entry, ext } : undefined;
+    })
+    .filter((m): m is { entry: string; ext: string } => m !== undefined)
+    .sort((a, b) => a.entry.localeCompare(b.entry));
+
+  const files: BundledFile[] = [];
+  const seen = new Set<string>();
+  for (const { entry, ext } of matched) {
     const name = entry.slice(0, -ext.length);
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
       throw new Error(
         `Bundled default has invalid filename "${entry}" in ${dir}. ` +
-          `Names must be kebab-case (lowercase letters, digits, hyphens).`
+          'Names must be kebab-case (lowercase letters, digits, hyphens).'
       );
     }
+    if (seen.has(name)) {
+      throw new Error(
+        `Bundled default name collision: "${name}" appears with multiple extensions in ${dir}. ` +
+          'Keep a single file per name (remove either the .yaml or .yml variant).'
+      );
+    }
+    seen.add(name);
     const content = await readFile(join(dir, entry), 'utf-8');
     if (!content.trim()) {
       throw new Error(`Bundled default "${entry}" in ${dir} is empty.`);
@@ -60,33 +88,25 @@ async function collectFiles(
   return files;
 }
 
-function renderRecord(
-  comment: string,
-  typeAlias: string,
-  exportName: string,
-  files: Array<{ name: string; content: string }>
-): string {
+function renderRecord(comment: string, exportName: string, files: BundledFile[]): string {
   const entries = files
     .map(f => `  ${JSON.stringify(f.name)}: ${JSON.stringify(f.content)},`)
     .join('\n');
   return [
     `// ${comment} (${files.length} total)`,
-    `export const ${exportName}: ${typeAlias} = {`,
+    `export const ${exportName}: Record<string, string> = {`,
     entries,
-    `};`,
+    '};',
   ].join('\n');
 }
 
-function renderFile(
-  commands: Array<{ name: string; content: string }>,
-  workflows: Array<{ name: string; content: string }>
-): string {
+function renderFile(commands: BundledFile[], workflows: BundledFile[]): string {
   const header = [
     '/**',
     ' * AUTO-GENERATED — DO NOT EDIT.',
     ' *',
-    ' * Regenerate with: bun run scripts/generate-bundled-defaults.ts',
-    ' * CI verifies this file is up-to-date via `bun run check:bundled`.',
+    ' * Regenerate with: bun run generate:bundled',
+    ' * Verify up-to-date:  bun run check:bundled',
     ' *',
     ' * Source of truth:',
     ' *   .archon/commands/defaults/*.md',
@@ -97,30 +117,23 @@ function renderFile(
     " * `import X from '...' with { type: 'text' }` which is Bun-specific.",
     ' */',
     '',
-    '/* eslint-disable */',
-    '',
   ].join('\n');
 
   return [
     header,
-    renderRecord(
-      'Bundled default commands',
-      'Record<string, string>',
-      'BUNDLED_COMMANDS',
-      commands
-    ),
+    renderRecord('Bundled default commands', 'BUNDLED_COMMANDS', commands),
     '',
-    renderRecord(
-      'Bundled default workflows',
-      'Record<string, string>',
-      'BUNDLED_WORKFLOWS',
-      workflows
-    ),
+    renderRecord('Bundled default workflows', 'BUNDLED_WORKFLOWS', workflows),
     '',
   ].join('\n');
 }
 
 async function main(): Promise<void> {
+  await Promise.all([
+    ensureDir(COMMANDS_DIR, 'Commands defaults'),
+    ensureDir(WORKFLOWS_DIR, 'Workflows defaults'),
+  ]);
+
   const [commands, workflows] = await Promise.all([
     collectFiles(COMMANDS_DIR, ['.md']),
     collectFiles(WORKFLOWS_DIR, ['.yaml', '.yml']),
@@ -137,10 +150,7 @@ async function main(): Promise<void> {
       if (err.code !== 'ENOENT') throw err;
     }
     if (existing !== contents) {
-      console.error(
-        `bundled-defaults.generated.ts is stale.\n` +
-          `Run: bun run scripts/generate-bundled-defaults.ts`
-      );
+      console.error('bundled-defaults.generated.ts is stale.\n' + 'Run: bun run generate:bundled');
       process.exit(2);
     }
     console.log(
@@ -155,7 +165,8 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch(err => {
-  console.error(err);
+main().catch((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.error(msg);
   process.exit(1);
 });

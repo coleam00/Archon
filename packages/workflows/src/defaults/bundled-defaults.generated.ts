@@ -1,8 +1,8 @@
 /**
  * AUTO-GENERATED — DO NOT EDIT.
  *
- * Regenerate with: bun run scripts/generate-bundled-defaults.ts
- * CI verifies this file is up-to-date via `bun run check:bundled`.
+ * Regenerate with: bun run generate:bundled
+ * Verify up-to-date:  bun run check:bundled
  *
  * Source of truth:
  *   .archon/commands/defaults/*.md
@@ -12,8 +12,6 @@
  * module loads in both Bun and Node. Previous versions used
  * `import X from '...' with { type: 'text' }` which is Bun-specific.
  */
-
-/* eslint-disable */
 
 // Bundled default commands (36 total)
 export const BUNDLED_COMMANDS: Record<string, string> = {

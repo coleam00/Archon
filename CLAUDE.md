@@ -150,7 +150,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs type-check, lint, format check, and tests. All four must pass for CI to succeed.
+This runs `check:bundled`, type-check, lint, format check, and tests. All five must pass for CI to succeed.
 
 ### ESLint Guidelines
 
@@ -710,10 +710,11 @@ async function createSession(conversationId: string, codebaseId: string) {
 
 **Defaults:**
 - Bundled in `.archon/commands/defaults/` and `.archon/workflows/defaults/`
-- Binary builds: Embedded at compile time (no filesystem access needed)
+- Binary builds: Embedded at compile time (no filesystem access needed) via `packages/workflows/src/defaults/bundled-defaults.generated.ts`
 - Source builds: Loaded from filesystem at runtime
 - Merged with repo-specific commands/workflows (repo overrides defaults by name)
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
+- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and will fail loudly if the generated file is stale.
 
 **Global workflows** (user-level, applies to every project):
 - Path: `~/.archon/.archon/workflows/` (or `$ARCHON_HOME/.archon/workflows/`)

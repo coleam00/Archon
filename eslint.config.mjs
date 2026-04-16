@@ -17,7 +17,6 @@ export default tseslint.config(
       'worktrees/**',
       '.claude/worktrees/**',
       '.claude/skills/**',
-      'scripts/**', // Build scripts (not in tsconfig project scope)
       '**/*.generated.ts', // Auto-generated source files (content inlined via JSON.stringify)
       '**/*.js',
       '*.mjs',
@@ -43,7 +42,7 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}'],
+    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts'],
     languageOptions: {
       parserOptions: {
         projectService: true,
