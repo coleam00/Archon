@@ -133,22 +133,22 @@ describe('telemetry ID persistence', () => {
   });
 
   test('an existing telemetry-id file is preserved (not overwritten)', async () => {
-    // Simulate a prior run by writing a UUID and enabling telemetry so the
-    // lazy init would read it. We still keep capture disabled network-wise
-    // via a bogus POSTHOG_API_KEY so the PostHog client never actually dials
-    // out — but we re-enable the telemetry path so getTelemetryId runs.
+    // Longer timeout: the bogus-host fallback below triggers posthog-node's
+    // shutdown-flush retry loop, which can take ~5–10s to give up.
+    // Simulate a prior run by writing a UUID, then enable the capture path so
+    // lazy init exercises the id-read. We redirect POSTHOG_HOST to a
+    // guaranteed-unreachable loopback port so the client's flush fails
+    // silently (swallowed by our error hook) instead of leaking a test event
+    // to production PostHog.
     const { writeFileSync, mkdirSync } = await import('fs');
     const existingId = '11111111-1111-4111-8111-111111111111';
     mkdirSync(tmpHome, { recursive: true });
     writeFileSync(join(tmpHome, 'telemetry-id'), existingId, 'utf8');
 
     delete process.env.ARCHON_TELEMETRY_DISABLED;
+    process.env.POSTHOG_HOST = 'http://127.0.0.1:1';
     resetTelemetryForTests();
 
-    // Force capture path to run: disable via empty POSTHOG_API_KEY? No — that
-    // early-returns. Instead we leave the embedded key; capture() fires
-    // fire-and-forget but only the telemetry-id read matters for this assertion.
-    // The assertion is simply that the file content is unchanged afterwards.
     captureWorkflowInvoked({ workflowName: 'w' });
 
     // Give the async capture a moment to run its file read.
@@ -157,7 +157,7 @@ describe('telemetry ID persistence', () => {
     const stored = readFileSync(join(tmpHome, 'telemetry-id'), 'utf8').trim();
     expect(stored).toBe(existingId);
 
-    // Clean up any in-flight client
+    // Clean up any in-flight client (swallows the unreachable-host error).
     await shutdownTelemetry();
-  });
+  }, 20000);
 });
