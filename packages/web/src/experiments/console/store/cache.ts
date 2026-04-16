@@ -1,0 +1,131 @@
+/**
+ * Reactive server-state cache. Map of keyed entities + subscription primitive.
+ *
+ * Contract:
+ * - UI never writes directly — it calls skill verbs; server pushes truth back
+ *   via SSE (M4) or refetch on miss.
+ * - `useEntity(key, loader)` subscribes to a key. First subscriber triggers
+ *   the loader; subsequent subscribers read from cache.
+ * - `patch` and `set` are for the SSE dispatcher and skill-layer optimistic
+ *   updates only.
+ *
+ * Deliberately minimal: ~100 LOC. No React Query, no Zustand.
+ */
+
+import { useEffect, useRef, useState } from 'react';
+
+type Listener = () => void;
+
+const cache = new Map<string, unknown>();
+const listeners = new Map<string, Set<Listener>>();
+const errors = new Map<string, Error>();
+const inflight = new Map<string, Promise<unknown>>();
+
+function notify(key: string): void {
+  const subs = listeners.get(key);
+  if (subs === undefined) return;
+  for (const l of subs) l();
+}
+
+export function get(key: string): unknown {
+  return cache.get(key);
+}
+
+export function set(key: string, value: unknown): void {
+  cache.set(key, value);
+  errors.delete(key);
+  notify(key);
+}
+
+export function patch(key: string, updater: (prev: unknown) => unknown): void {
+  const next = updater(cache.get(key));
+  cache.set(key, next);
+  notify(key);
+}
+
+export function invalidate(keyPrefix: string): void {
+  for (const key of [...cache.keys()]) {
+    if (key === keyPrefix || key.startsWith(`${keyPrefix}:`)) {
+      cache.delete(key);
+      notify(key);
+    }
+  }
+}
+
+export function keysStartingWith(prefix: string): string[] {
+  const out: string[] = [];
+  for (const k of cache.keys()) {
+    if (k.startsWith(prefix)) out.push(k);
+  }
+  return out;
+}
+
+export interface EntityView<T> {
+  data: T | undefined;
+  error: Error | undefined;
+  loading: boolean;
+  refetch: () => void;
+}
+
+/**
+ * Subscribe to a keyed entity. On first subscribe (or after `refetch`),
+ * invokes `loader`. Updates propagate to all subscribers via `notify`.
+ */
+export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<T> {
+  // Stable loader ref so we don't re-run just because the caller inlined a new closure.
+  const loaderRef = useRef(loader);
+  loaderRef.current = loader;
+
+  const [, rerender] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+
+    let subs = listeners.get(key);
+    if (subs === undefined) {
+      subs = new Set();
+      listeners.set(key, subs);
+    }
+    const listener: Listener = () => {
+      if (active) rerender(n => n + 1);
+    };
+    subs.add(listener);
+
+    // If not cached and no load in flight, trigger one.
+    if (!cache.has(key) && !inflight.has(key)) {
+      const p = loaderRef
+        .current()
+        .then(v => {
+          cache.set(key, v);
+          errors.delete(key);
+          notify(key);
+        })
+        .catch((e: unknown) => {
+          const err = e instanceof Error ? e : new Error(String(e));
+          errors.set(key, err);
+          notify(key);
+        })
+        .finally(() => {
+          inflight.delete(key);
+        });
+      inflight.set(key, p);
+    }
+
+    return (): void => {
+      active = false;
+      subs.delete(listener);
+      if (subs.size === 0) listeners.delete(key);
+    };
+  }, [key]);
+
+  return {
+    data: cache.get(key) as T | undefined,
+    error: errors.get(key),
+    loading: !cache.has(key) && inflight.has(key),
+    refetch: (): void => {
+      cache.delete(key);
+      errors.delete(key);
+      notify(key);
+    },
+  };
+}

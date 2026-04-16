@@ -1,0 +1,82 @@
+/*
+ * Console spike — warm palette.
+ *
+ * Scoped to `.console-root` so the production app's cool/blue theme is untouched.
+ * Same token *structure* as packages/web/src/index.css (surface, accent,
+ * success, warning, error, text) but shifted hues:
+ *   - surfaces: cool blue-grey → warm espresso
+ *   - text:     cool grey → warm ivory
+ *   - accent:   cold blue → rose/magenta (logo-inspired)
+ *   - success:  pure green → warmer teal-green (logo-inspired)
+ *   - warning:  amber → peach
+ *   - error:    fire red → warm rose-red
+ *
+ * Tailwind v4's @theme inline in index.css maps --color-* vars to
+ * their --base vars. Overriding the base vars here cascades through the
+ * whole Tailwind color system without needing to redefine @theme.
+ */
+
+.console-root {
+  /* Surfaces — espresso / candlelit */
+  --surface: oklch(0.155 0.012 40);
+  --surface-inset: oklch(0.11 0.009 40);
+  --surface-elevated: oklch(0.195 0.014 40);
+  --surface-hover: oklch(0.225 0.016 40);
+  --surface-variant: oklch(0.21 0.014 40);
+  --surface-bright: oklch(0.28 0.018 40);
+
+  /* Borders — warm charcoal */
+  --border: oklch(0.28 0.014 40);
+  --border-bright: oklch(0.36 0.020 40);
+  --outline-variant: oklch(0.40 0.022 40);
+
+  /* Text — warm ivory / parchment */
+  --text-primary: oklch(0.945 0.010 70);
+  --text-secondary: oklch(0.70 0.022 60);
+  --text-tertiary: oklch(0.50 0.022 55);
+
+  /* Accent — tangerine / candlelit gold. Warm and inviting, NOT destructive. */
+  --accent-bright: oklch(0.74 0.17 45);
+  --accent: oklch(0.28 0.10 45);
+  --accent-hover: oklch(0.66 0.19 45);
+  --accent-muted: oklch(0.32 0.11 45);
+
+  /* Status — visually separated from accent.
+     - `running` is a calm ocean blue (active/in-progress; distinct from the
+        warm accent and from positive-green).
+     - `success` is a teal-green reserved for positive moments: Approve
+        buttons, affirmative checks, "completed OK" markers.
+     - `warning` is amber-wheat. `error` is a warm rose-red. */
+  --running: oklch(0.70 0.15 225); /* ocean blue — active/in-progress */
+  --success: oklch(0.70 0.15 165); /* teal-green — Approve / positive */
+  --warning: oklch(0.78 0.13 80);
+  --error: oklch(0.64 0.21 18);
+
+  /* shadcn-compatible overrides so Radix primitives and design-system
+     classes that reference these variables also pick up the warm palette. */
+  --background: oklch(0.13 0.010 40);
+  --foreground: var(--text-primary);
+  --card: var(--surface);
+  --card-foreground: var(--text-primary);
+  --popover: var(--surface-elevated);
+  --popover-foreground: var(--text-primary);
+  --primary: var(--accent-bright);
+  --primary-foreground: oklch(0.98 0.005 60);
+  --secondary: var(--surface-elevated);
+  --secondary-foreground: var(--text-primary);
+  --muted: var(--surface-elevated);
+  --muted-foreground: var(--text-secondary);
+  --destructive: var(--error);
+  --input: var(--border);
+  --ring: var(--accent-bright);
+}
+
+/* Override the global `* { @apply border-border ... }` rule's effect inside
+   the console so bare borders pick up our warm border color. Tailwind handles
+   this automatically via the cascade, but this fallback guards against the
+   production @layer base ruleset. */
+.console-root *,
+.console-root *::before,
+.console-root *::after {
+  border-color: var(--border);
+}
