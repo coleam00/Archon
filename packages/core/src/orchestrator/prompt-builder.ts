@@ -37,6 +37,34 @@ export function formatWorkflowSection(workflows: readonly WorkflowDefinition[]):
   return section;
 }
 
+/** WorkflowResult type for prompt context injection */
+export interface WorkflowResultContext {
+  workflowName: string;
+  runId: string;
+  summary: string;
+}
+
+/**
+ * Format recent workflow results for injection into the orchestrator prompt.
+ * Returns empty string when there are no results; buildFullPrompt checks for
+ * a non-empty string before including the section in the prompt.
+ */
+export function formatWorkflowContextSection(results: readonly WorkflowResultContext[]): string {
+  if (results.length === 0) return '';
+
+  let section = '## Recent Workflow Results\n\n';
+  section +=
+    'The following workflows recently ran in this conversation. ' +
+    'Use this context to answer follow-up questions.\n\n';
+
+  for (const r of results) {
+    section += `**${r.workflowName}** (run: ${r.runId})\n`;
+    section += r.summary + '\n\n';
+  }
+
+  return section.trimEnd();
+}
+
 /**
  * Build the routing rules section of the prompt.
  */

@@ -3,6 +3,7 @@ import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { MessageRow } from './messages';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockGetDatabaseType = mock(() => 'postgresql' as const);
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({
@@ -10,9 +11,22 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDialect: () => mockPostgresDialect,
+  getDatabaseType: mockGetDatabaseType,
 }));
 
-import { addMessage, listMessages } from './messages';
+// Mock @archon/paths to avoid lazy logger initialization issues in tests
+mock.module('@archon/paths', () => ({
+  createLogger: mock(() => ({
+    fatal: mock(() => undefined),
+    error: mock(() => undefined),
+    warn: mock(() => undefined),
+    info: mock(() => undefined),
+    debug: mock(() => undefined),
+    trace: mock(() => undefined),
+  })),
+}));
+
+import { addMessage, listMessages, getRecentWorkflowResultMessages } from './messages';
 
 describe('messages', () => {
   beforeEach(() => {
@@ -119,6 +133,78 @@ describe('messages', () => {
       await listMessages('conv-456', 50);
 
       expect(mockQuery).toHaveBeenCalledWith(expect.any(String), ['conv-456', 50]);
+    });
+  });
+
+  describe('getRecentWorkflowResultMessages', () => {
+    beforeEach(() => {
+      mockGetDatabaseType.mockClear();
+    });
+
+    test('uses PostgreSQL JSON extraction syntax when dbType is postgresql', async () => {
+      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getRecentWorkflowResultMessages('conv-1');
+
+      const sql = mockQuery.mock.calls[0]?.[0] as string;
+      expect(sql).toContain("metadata->>'workflowResult'");
+      expect(sql).not.toContain('json_extract');
+    });
+
+    test('uses SQLite JSON extraction syntax when dbType is sqlite', async () => {
+      mockGetDatabaseType.mockReturnValueOnce('sqlite');
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getRecentWorkflowResultMessages('conv-1');
+
+      const sql = mockQuery.mock.calls[0]?.[0] as string;
+      expect(sql).toContain("json_extract(metadata, '$.workflowResult')");
+      expect(sql).not.toContain("->>'" + 'workflowResult');
+    });
+
+    test('passes correct parameters: conversationId and limit', async () => {
+      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getRecentWorkflowResultMessages('conv-42', 5);
+
+      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), ['conv-42', 5]);
+    });
+
+    test('default limit is 3', async () => {
+      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await getRecentWorkflowResultMessages('conv-1');
+
+      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), ['conv-1', 3]);
+    });
+
+    test('returns empty array on query error (non-throwing contract)', async () => {
+      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockQuery.mockRejectedValueOnce(new Error('connection refused'));
+
+      const result = await getRecentWorkflowResultMessages('conv-1');
+
+      expect(result).toEqual([]);
+    });
+
+    test('returns rows from successful query', async () => {
+      const row: MessageRow = {
+        id: 'msg-1',
+        conversation_id: 'conv-1',
+        role: 'assistant',
+        content: 'Workflow summary here.',
+        metadata: '{"workflowResult":{"workflowName":"plan","runId":"run-1"}}',
+        created_at: '2026-01-01T00:00:00Z',
+      };
+      mockGetDatabaseType.mockReturnValueOnce('postgresql');
+      mockQuery.mockResolvedValueOnce(createQueryResult([row]));
+
+      const result = await getRecentWorkflowResultMessages('conv-1');
+
+      expect(result).toEqual([row]);
     });
   });
 });
