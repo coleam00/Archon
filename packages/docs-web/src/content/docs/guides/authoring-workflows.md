@@ -978,7 +978,7 @@ When the workflow reaches `review-gate`, it pauses and notifies you. Approve or 
 
 - **Natural language** (recommended): Just type your response in the conversation — the system detects the paused workflow and auto-resumes
 - **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>`
-- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` (records approval; send a follow-up message to resume)
+- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` (auto-resumes on Web UI; on other platforms, send a follow-up message after approving)
 - **Web UI**: Click the Approve/Reject buttons on the dashboard card
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
 

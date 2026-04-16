@@ -1902,9 +1902,22 @@ export function registerApiRoutes(
       // dispatches the resumed workflow.
       const parentConvDbId = run.parent_conversation_id ?? run.conversation_id;
       const parentConv = await conversationDb.getConversationById(parentConvDbId);
-      if (parentConv?.platform_conversation_id) {
-        void dispatchToOrchestrator(parentConv.platform_conversation_id, comment);
+      if (!parentConv?.platform_conversation_id) {
+        // Can't auto-dispatch — surface the failure so the user can resume manually.
+        getLog().error(
+          { runId, parentConvDbId, workflowName: run.workflow_name },
+          'api.workflow_run_approve_interactive_loop_no_parent_conv'
+        );
+        return apiError(
+          c,
+          500,
+          'Workflow approved but could not auto-resume: parent conversation not found. ' +
+            'Send a message to continue the workflow.'
+        );
       }
+      void dispatchToOrchestrator(parentConv.platform_conversation_id, comment).catch(err => {
+        getLog().error({ err, runId }, 'api.workflow_run_approve_interactive_loop_dispatch_failed');
+      });
       return c.json({
         success: true,
         message: `Workflow approved and resuming: ${run.workflow_name}.`,

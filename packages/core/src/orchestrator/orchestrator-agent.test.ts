@@ -1102,7 +1102,8 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     // Verify parentConversationId is passed so resume-after-approval works
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    // param 11 (index 10) is parentConversationId — should be conversation.id
+    // executeWorkflow is called with 11 positional args; index 10 is parentConversationId
+    expect(callArgs).toHaveLength(11);
     expect(callArgs[10]).toBe('conv-1');
   });
 
