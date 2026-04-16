@@ -291,10 +291,10 @@ export type DagNode =
   | ScriptNode;
 
 // ---------------------------------------------------------------------------
-// AI-specific fields that are meaningless on bash/loop nodes
+// AI-specific fields that are meaningless on non-AI nodes
 // ---------------------------------------------------------------------------
 
-/** AI-specific fields that are meaningless on bash/loop nodes — exported for loader warnings */
+/** AI-specific fields that are meaningless on bash nodes — exported for loader warnings */
 export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'provider',
   'model',
@@ -316,6 +316,15 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
 export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
+
+/**
+ * AI-specific fields that are unsupported on loop nodes.
+ * `model` and `provider` are excluded because the DAG executor resolves and
+ * forwards them to each iteration's AI call (see dag-executor.ts:2602-2648).
+ */
+export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
+  f => f !== 'model' && f !== 'provider'
+);
 
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode

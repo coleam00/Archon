@@ -1282,6 +1282,82 @@ nodes:
       expect(node.provider).toBeUndefined();
       expect(node.model).toBeUndefined();
     });
+
+    it('should NOT warn about model/provider on loop nodes (they are supported)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-model.yaml'),
+        `
+name: loop-model
+description: Loop with model override
+nodes:
+  - id: iterate
+    loop:
+      prompt: "Do something"
+      until: "COMPLETE"
+      max_iterations: 3
+    provider: claude
+    model: claude-opus-4-6
+`
+      );
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const node = result.workflows[0].workflow.nodes[0];
+      expect(isLoopNode(node)).toBe(true);
+
+      // model and provider should NOT trigger a warning
+      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const aiFieldWarnings = warnCalls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(0);
+    });
+
+    it('should warn about unsupported AI fields on loop nodes (not model/provider)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-unsupported.yaml'),
+        `
+name: loop-unsupported
+description: Loop with unsupported AI fields
+nodes:
+  - id: iterate
+    loop:
+      prompt: "Do something"
+      until: "COMPLETE"
+      max_iterations: 3
+    model: claude-opus-4-6
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+`
+      );
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      // Should warn about output_format but NOT about model
+      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const aiFieldWarnings = warnCalls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(1);
+      const warnedFields = (aiFieldWarnings[0][0] as { fields: string[] }).fields;
+      expect(warnedFields).toContain('output_format');
+      expect(warnedFields).not.toContain('model');
+      expect(warnedFields).not.toContain('provider');
+    });
   });
 
   describe('DAG output ref validation', () => {
