@@ -11,6 +11,23 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
+// Module-level variable to control mock config assistant per test
+let mockConfigAssistant = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+
+// Mock config-loader to control assistant type in tests without filesystem dependency
+mock.module('../config/config-loader', () => ({
+  loadConfig: async () => ({
+    assistant: mockConfigAssistant,
+    assistants: { claude: {}, codex: {} },
+    botName: 'Archon',
+    streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
+    paths: { workspaces: '/tmp', worktrees: '/tmp' },
+    concurrency: { maxConversations: 10 },
+    commands: { folder: undefined, autoLoad: true },
+    defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
+  }),
+}));
+
 import {
   getOrCreateConversation,
   updateConversation,
@@ -31,6 +48,8 @@ describe('conversations', () => {
       // Save and clear env var to ensure test isolation
       originalDefaultAiAssistant = process.env.DEFAULT_AI_ASSISTANT;
       delete process.env.DEFAULT_AI_ASSISTANT;
+      // Reset mock config to default
+      mockConfigAssistant = 'claude';
     });
 
     afterEach(() => {
@@ -40,6 +59,7 @@ describe('conversations', () => {
       } else {
         process.env.DEFAULT_AI_ASSISTANT = originalDefaultAiAssistant;
       }
+      mockConfigAssistant = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
     });
 
     const existingConversation: Conversation = {
@@ -124,6 +144,8 @@ describe('conversations', () => {
     test('uses DEFAULT_AI_ASSISTANT env var when set', async () => {
       // Set env var for this test (afterEach will restore original)
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
+      // Simulate loadConfig() honoring the env var override
+      mockConfigAssistant = 'codex';
 
       const newConversation: Conversation = {
         ...existingConversation,
@@ -141,6 +163,29 @@ describe('conversations', () => {
         2,
         'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd) VALUES ($1, $2, $3, $4, $5) RETURNING *',
         ['telegram', 'chat-789', 'codex', null, null]
+      );
+    });
+
+    test('uses saved global config defaultAssistant when no env var', async () => {
+      // Simulate global config having defaultAssistant=codex (set via Settings page)
+      mockConfigAssistant = 'codex';
+
+      const newConversation: Conversation = {
+        ...existingConversation,
+        id: 'conv-new',
+        ai_assistant_type: 'codex',
+      };
+
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([newConversation]));
+
+      const result = await getOrCreateConversation('telegram', 'chat-new');
+
+      expect(result).toEqual(newConversation);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        ['telegram', 'chat-new', 'codex', null, null]
       );
     });
 
