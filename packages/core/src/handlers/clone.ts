@@ -282,7 +282,8 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   getLog().debug({ path: targetPath }, 'safe_directory_added');
 
   // Detect the actual branch checked out after clone (may differ from 'main' for repos with
-  // a non-default HEAD). Non-fatal: falls back to DB schema default if detection fails.
+  // a non-default HEAD). Non-fatal: if detection fails, NULL is stored and syncWorkspace
+  // auto-detects the branch at runtime (pre-existing behavior).
   let detectedBranch: string | undefined;
   try {
     const { stdout } = await execFileAsync(
@@ -294,8 +295,9 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
     if (branch && branch !== 'HEAD') {
       detectedBranch = branch;
     }
-  } catch {
-    // Non-fatal — leave undefined so DB default applies
+  } catch (err) {
+    // Non-fatal — store NULL so syncWorkspace falls back to auto-detection
+    getLog().debug({ path: targetPath, err }, 'clone.branch_detect_failed');
   }
 
   const result = await registerRepoAtPath(

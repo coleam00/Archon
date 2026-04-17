@@ -126,6 +126,17 @@ mock.module('../utils/worktree-sync', () => ({
   syncArchonToWorktree: mockSyncArchonToWorktree,
 }));
 
+// Git workspace sync mock
+const mockSyncWorkspace = mock(() => Promise.resolve({ fetched: true, reset: false }));
+const mockToRepoPath = mock((p: string) => p);
+const mockToBranchName = mock((b: string) => b);
+
+mock.module('@archon/git', () => ({
+  syncWorkspace: mockSyncWorkspace,
+  toRepoPath: mockToRepoPath,
+  toBranchName: mockToBranchName,
+}));
+
 // Orchestrator (isolation & dispatch) mocks
 const mockValidateAndResolveIsolation = mock(() =>
   Promise.resolve({ status: 'existing', cwd: '/workspace/project', env: null })
@@ -279,6 +290,9 @@ function clearAllMocks(): void {
   mockExecuteWorkflow.mockClear();
   mockFindWorkflow.mockClear();
   mockSyncArchonToWorktree.mockClear();
+  mockSyncWorkspace.mockClear();
+  mockToRepoPath.mockClear();
+  mockToBranchName.mockClear();
   mockValidateAndResolveIsolation.mockClear();
   mockDispatchBackgroundWorkflow.mockClear();
   mockBuildOrchestratorPrompt.mockClear();
@@ -648,6 +662,58 @@ describe('orchestrator-agent handleMessage', () => {
       await handleMessage(platform, 'chat-456', 'hello');
 
       expect(mockTouchConversation).toHaveBeenCalledWith('conv-123');
+    });
+  });
+
+  // ─── syncWorkspace branch forwarding ──────────────────────────────────
+
+  describe('syncWorkspace branch forwarding', () => {
+    test('passes configured default_branch to syncWorkspace when set', async () => {
+      const codbaseWithBranch: Codebase = {
+        ...mockCodebase,
+        default_branch: 'develop',
+        default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+      };
+      mockGetOrCreateConversation.mockResolvedValue({
+        ...mockConversationWithProject,
+        codebase_id: 'codebase-789',
+      });
+      mockGetCodebase.mockResolvedValue(codbaseWithBranch);
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      await handleMessage(platform, 'chat-456', 'help');
+
+      expect(mockSyncWorkspace).toHaveBeenCalledWith(
+        expect.any(String),
+        'develop',
+        expect.any(Object)
+      );
+    });
+
+    test('passes undefined branch to syncWorkspace when default_branch is null', async () => {
+      const codebaseNoBranch: Codebase = {
+        ...mockCodebase,
+        default_branch: null,
+        default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+      };
+      mockGetOrCreateConversation.mockResolvedValue({
+        ...mockConversationWithProject,
+        codebase_id: 'codebase-789',
+      });
+      mockGetCodebase.mockResolvedValue(codebaseNoBranch);
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      await handleMessage(platform, 'chat-456', 'help');
+
+      expect(mockSyncWorkspace).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.any(Object)
+      );
     });
   });
 

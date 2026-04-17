@@ -79,6 +79,23 @@ describe('codebases', () => {
       );
     });
 
+    test('creates codebase with explicit default_branch', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockCodebase, default_branch: 'develop' }])
+      );
+
+      await createCodebase({
+        name: 'test-project',
+        default_cwd: '/workspace/test-project',
+        default_branch: 'develop',
+      });
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        ['test-project', null, '/workspace/test-project', 'develop', 'claude']
+      );
+    });
+
     test('defaults ai_assistant_type to claude', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
 
@@ -297,6 +314,7 @@ describe('codebases', () => {
             id: 'cb-123',
             name: 'test-repo',
             default_cwd: '/workspace/test-repo',
+            default_branch: null,
             ai_assistant_type: 'claude',
             repository_url: null,
             commands: {},

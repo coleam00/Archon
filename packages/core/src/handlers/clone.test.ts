@@ -131,6 +131,7 @@ function makeCodebase(
     name: string;
     repository_url: string | null;
     default_cwd: string;
+    default_branch: string | null;
     ai_assistant_type: string;
   }> = {}
 ): object {
@@ -139,6 +140,7 @@ function makeCodebase(
     name: 'owner/repo',
     repository_url: 'https://github.com/owner/repo',
     default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+    default_branch: null,
     ai_assistant_type: 'claude',
     commands: {},
     created_at: new Date(),
@@ -298,6 +300,70 @@ describe('cloneRepository', () => {
         args => args[0] === 'git' && args[1]?.[0] === 'clone'
       );
       expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+    });
+  });
+
+  // ── Branch detection after clone ──────────────────────────────────────
+  describe('branch detection after clone', () => {
+    test('stores detected branch in createCodebase call', async () => {
+      spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === '-C' && args[2] === 'rev-parse') {
+          return Promise.resolve({ stdout: 'master\n', stderr: '' });
+        }
+        return Promise.resolve({ stdout: '', stderr: '' });
+      });
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { default_branch?: string };
+      expect(createArg.default_branch).toBe('master');
+    });
+
+    test('stores undefined (null in DB) when HEAD is detached', async () => {
+      spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === '-C' && args[2] === 'rev-parse') {
+          return Promise.resolve({ stdout: 'HEAD\n', stderr: '' });
+        }
+        return Promise.resolve({ stdout: '', stderr: '' });
+      });
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { default_branch?: string };
+      expect(createArg.default_branch).toBeUndefined();
+    });
+
+    test('does not throw and stores undefined when rev-parse fails', async () => {
+      spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === '-C' && args[2] === 'rev-parse') {
+          return Promise.reject(new Error('not a git repo'));
+        }
+        return Promise.resolve({ stdout: '', stderr: '' });
+      });
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      const result = await cloneRepository('https://github.com/owner/repo');
+      expect(result).toBeDefined();
+
+      const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { default_branch?: string };
+      expect(createArg.default_branch).toBeUndefined();
+    });
+
+    test('stores undefined when rev-parse returns empty string', async () => {
+      spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
+        if (args[0] === '-C' && args[2] === 'rev-parse') {
+          return Promise.resolve({ stdout: '', stderr: '' });
+        }
+        return Promise.resolve({ stdout: '', stderr: '' });
+      });
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { default_branch?: string };
+      expect(createArg.default_branch).toBeUndefined();
     });
   });
 
