@@ -2303,7 +2303,7 @@ async function executeWorkflowNode(
     void (async (): Promise<void> => {
       try {
         const parentStatus = await deps.store.getWorkflowRunStatus(parentWorkflowRun.id);
-        if (parentStatus !== 'running') {
+        if (parentStatus !== 'running' && parentStatus !== 'paused') {
           clearInterval(parentCancelPoll);
           getLog().info(
             { parentRunId: parentWorkflowRun.id, parentStatus, childRunId: childRun.id },
