@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code and Codex as AI assistants for Archon.
+description: Configure Claude Code, Codex, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. Both can be configured if desired.
+You must configure **at least one** AI assistant. All three can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -226,6 +226,103 @@ If you want Codex to be the default AI assistant for new conversations without c
 ```ini
 DEFAULT_AI_ASSISTANT=codex
 ```
+
+## Pi (Community Provider)
+
+**One adapter, ~20 LLM backends.** Pi (`@mariozechner/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and more under a single `provider: pi` entry.
+
+Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
+
+### Install
+
+Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
+
+### Authenticate
+
+Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
+
+**OAuth subscriptions (run `pi /login` locally):**
+- Anthropic Claude Pro/Max
+- OpenAI ChatGPT Plus/Pro
+- GitHub Copilot
+- Google Gemini CLI
+- Google Antigravity
+
+**API keys (env vars):**
+
+| Pi provider id | Env var |
+|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `openai` | `OPENAI_API_KEY` |
+| `google` | `GEMINI_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `mistral` | `MISTRAL_API_KEY` |
+| `cerebras` | `CEREBRAS_API_KEY` |
+| `xai` | `XAI_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `huggingface` | `HUGGINGFACE_API_KEY` |
+
+Additional Pi backends exist (Azure, Bedrock, Vertex, etc.) — file an issue if you need them wired.
+
+### Model reference format
+
+Pi models use a `<pi-provider-id>/<model-id>` format:
+
+```yaml
+assistants:
+  pi:
+    model: anthropic/claude-haiku-4-5       # via Anthropic
+    # model: google/gemini-2.5-pro           # via Google
+    # model: groq/llama-3.3-70b-versatile   # via Groq
+    # model: openrouter/qwen/qwen3-coder    # via OpenRouter (nested slashes allowed)
+```
+
+### Usage in workflows
+
+```yaml
+name: my-workflow
+provider: pi
+model: anthropic/claude-haiku-4-5
+
+nodes:
+  - id: fast-node
+    provider: pi
+    model: groq/llama-3.3-70b-versatile   # per-node override — switches backends
+    prompt: "..."
+    effort: low
+    allowed_tools: [read, grep]            # Pi's built-in tools: read, bash, edit, write, grep, find, ls
+
+  - id: careful-node
+    provider: pi
+    model: anthropic/claude-opus-4-5
+    prompt: "..."
+    effort: high
+    skills: [archon-dev]                   # Archon name refs work — see Pi capabilities below
+```
+
+### Pi capabilities
+
+| Feature | Support | YAML field |
+|---|---|---|
+| Session resume | ✅ | automatic (Archon persists `sessionId`) |
+| Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
+| Thinking level | ✅ | `effort: low\|medium\|high\|max` (max → xhigh) |
+| Skills | ✅ | `skills: [name]` (searches `.agents/skills`, `.claude/skills`, user-global) |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
+| MCP servers | ❌ | Pi rejects MCP by design |
+| Claude-SDK hooks | ❌ | Claude-specific format |
+| Structured output | ❌ | uneven across Pi backends; v2 follow-up |
+| Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
+| Fallback model | ❌ | not native in Pi |
+| Sandbox | ❌ | not native in Pi |
+
+Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
 
 ## How Assistant Selection Works
 
