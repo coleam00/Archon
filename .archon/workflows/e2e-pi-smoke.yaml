@@ -1,0 +1,29 @@
+# E2E smoke test — Pi community provider
+# Verifies: Pi connectivity (sendQuery), $nodeId.output refs, async-queue bridge
+# Design: mirrors e2e-claude-smoke.yaml. No tool use (Pi's built-in coding
+#   tools would slow CI), no structured output (Pi v1 declares
+#   structuredOutput: false, so output_format would just emit a warning).
+# Auth: picks up either ANTHROPIC_API_KEY env var (CI) or your local
+#   `pi /login` OAuth credentials from ~/.pi/agent/auth.json.
+name: e2e-pi-smoke
+description: 'Smoke test for Pi community provider. Verifies prompt response via sendQuery.'
+provider: pi
+model: anthropic/claude-haiku-4-5
+
+nodes:
+  # 1. Simple prompt — verifies Pi harness starts, AsyncQueue bridge yields
+  #    assistant chunks, and agent_end produces a result chunk.
+  - id: simple
+    prompt: 'What is 2+2? Answer with just the number, nothing else.'
+    idle_timeout: 30000
+
+  # 2. Assert non-empty output — fails CI if Pi returned nothing
+  - id: assert
+    bash: |
+      output="$simple.output"
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      echo "PASS: simple=$output"
+    depends_on: [simple]
