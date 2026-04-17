@@ -286,12 +286,23 @@ describe('registry', () => {
       expect(piEntries).toHaveLength(1);
     });
 
-    test('declares all capabilities as false in v1', () => {
+    test('declares v2 capabilities (thinkingControl, effortControl, toolRestrictions supported)', () => {
       registerPiProvider();
       const caps = getProviderCapabilities('pi');
-      for (const flag of Object.values(caps)) {
-        expect(flag).toBe(false);
-      }
+      // Flipped true in v2 — covered by options-translator
+      expect(caps.thinkingControl).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      // Still false (out of v2 scope)
+      expect(caps.sessionResume).toBe(false);
+      expect(caps.mcp).toBe(false);
+      expect(caps.hooks).toBe(false);
+      expect(caps.skills).toBe(false);
+      expect(caps.structuredOutput).toBe(false);
+      expect(caps.envInjection).toBe(false);
+      expect(caps.costControl).toBe(false);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
     });
 
     test('isModelCompatible accepts provider/model refs, rejects aliases', () => {

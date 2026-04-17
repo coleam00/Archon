@@ -1,5 +1,15 @@
 import { DefaultResourceLoader } from '@mariozechner/pi-coding-agent';
 
+export interface NoopResourceLoaderOptions {
+  /**
+   * Override Pi's system prompt entirely. When omitted, Pi uses its default.
+   * Forwarded to `DefaultResourceLoader({ systemPrompt })` — the no* flags
+   * below still suppress all discovery of `AGENTS.md` / `CLAUDE.md` context
+   * files that would otherwise augment or replace the prompt.
+   */
+  systemPrompt?: string;
+}
+
 /**
  * Build a Pi ResourceLoader that performs no filesystem discovery. Archon is
  * the source of truth for extensions, skills, prompts, themes, and context
@@ -11,8 +21,14 @@ import { DefaultResourceLoader } from '@mariozechner/pi-coding-agent';
  * interface's `getExtensions()` returns a `LoadExtensionsResult` requiring a
  * real `ExtensionRuntime`, which we can't meaningfully stub. DefaultResourceLoader
  * honors the flags and returns empty-but-valid results.
+ *
+ * A caller-supplied `systemPrompt` is still applied (it's set on the loader
+ * directly, not via filesystem discovery).
  */
-export function createNoopResourceLoader(cwd: string): DefaultResourceLoader {
+export function createNoopResourceLoader(
+  cwd: string,
+  options: NoopResourceLoaderOptions = {}
+): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     noExtensions: true,
@@ -20,5 +36,6 @@ export function createNoopResourceLoader(cwd: string): DefaultResourceLoader {
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
+    ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
   });
 }

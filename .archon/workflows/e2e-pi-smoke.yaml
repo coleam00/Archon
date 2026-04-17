@@ -1,8 +1,10 @@
 # E2E smoke test — Pi community provider
-# Verifies: Pi connectivity (sendQuery), $nodeId.output refs, async-queue bridge
-# Design: mirrors e2e-claude-smoke.yaml. No tool use (Pi's built-in coding
-#   tools would slow CI), no structured output (Pi v1 declares
-#   structuredOutput: false, so output_format would just emit a warning).
+# Verifies: Pi connectivity, $nodeId.output refs, async-queue bridge,
+#   and v2 wiring (thinkingLevel, allowed_tools).
+# Design: mirrors e2e-claude-smoke.yaml structure. The `allowed_tools: []`
+#   idiom disables Pi's built-in read/bash/edit/write so the smoke stays
+#   fast (no tool-use round-trips). `thinking: minimal` exercises the
+#   thinkingLevel translation path.
 # Auth: picks up either ANTHROPIC_API_KEY env var (CI) or your local
 #   `pi /login` OAuth credentials from ~/.pi/agent/auth.json.
 name: e2e-pi-smoke
@@ -12,9 +14,13 @@ model: anthropic/claude-haiku-4-5
 
 nodes:
   # 1. Simple prompt — verifies Pi harness starts, AsyncQueue bridge yields
-  #    assistant chunks, and agent_end produces a result chunk.
+  #    assistant chunks, and agent_end produces a result chunk. v2 wiring:
+  #    allowed_tools: [] disables all Pi tools (LLM-only); effort: low is
+  #    translated to Pi's thinkingLevel by options-translator.ts.
   - id: simple
     prompt: 'What is 2+2? Answer with just the number, nothing else.'
+    allowed_tools: []
+    effort: low
     idle_timeout: 30000
 
   # 2. Assert non-empty output — fails CI if Pi returned nothing

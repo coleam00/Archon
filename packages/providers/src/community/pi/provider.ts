@@ -19,6 +19,7 @@ import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig } from './config';
 import { bridgeSession } from './event-bridge';
 import { parsePiModelRef } from './model-ref';
+import { resolvePiThinkingLevel, resolvePiTools } from './options-translator';
 import { createNoopResourceLoader } from './resource-loader';
 
 /**
@@ -152,15 +153,51 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 4. Build no-fs primitives. These keep the server quiescent w.r.t. the
+    // 4. Translate Archon nodeConfig to Pi SDK options. All three translations
+    //    below correspond to capability flags declared `true` in
+    //    PI_CAPABILITIES; nodeConfig fields that don't map cleanly still
+    //    trigger a dag-executor warning upstream.
+    const nodeConfig = requestOptions?.nodeConfig;
+
+    //    4a. thinkingLevel: covers `thinking`/`effort` nodeConfig fields.
+    const { level: thinkingLevel, warning: thinkingWarning } = resolvePiThinkingLevel(nodeConfig);
+    if (thinkingWarning) {
+      yield { type: 'system', content: `⚠️ ${thinkingWarning}` };
+    }
+
+    //    4b. tools: covers allowed_tools / denied_tools. `undefined` leaves Pi
+    //        defaults; an explicit empty array means "no tools" (valid idiom
+    //        matching e2e-claude-smoke's `allowed_tools: []`).
+    const { tools: filteredTools, unknownTools } = resolvePiTools(cwd, nodeConfig);
+    if (unknownTools.length > 0) {
+      yield {
+        type: 'system',
+        content: `⚠️ Pi ignored unknown tool names: ${unknownTools.join(', ')}. Pi's built-in tools: read, bash, edit, write, grep, find, ls.`,
+      };
+    }
+
+    //    4c. systemPrompt: request-level (AgentRequestOptions) wins over
+    //        node-level; either overrides Pi's default.
+    const systemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
+
+    // 5. Build no-fs primitives. These keep the server quiescent w.r.t. the
     //    ~/.pi/ directory and make concurrent sendQuery calls race-free.
     const sessionManager = SessionManager.inMemory(cwd);
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const settingsManager = SettingsManager.inMemory();
-    const resourceLoader = createNoopResourceLoader(cwd);
+    const resourceLoader = createNoopResourceLoader(cwd, {
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    });
 
     getLog().info(
-      { piProvider: parsed.provider, modelId: parsed.modelId, cwd },
+      {
+        piProvider: parsed.provider,
+        modelId: parsed.modelId,
+        cwd,
+        thinkingLevel,
+        toolCount: filteredTools?.length,
+        hasSystemPrompt: systemPrompt !== undefined,
+      },
       'pi.session_started'
     );
 
@@ -172,6 +209,8 @@ export class PiProvider implements IAgentProvider {
       sessionManager,
       settingsManager,
       resourceLoader,
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(filteredTools !== undefined ? { tools: filteredTools } : {}),
     });
 
     if (modelFallbackMessage) {
