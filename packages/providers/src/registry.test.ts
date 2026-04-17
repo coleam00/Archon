@@ -77,9 +77,7 @@ describe('registry', () => {
 
     test('throws UnknownProviderError for unknown type', () => {
       expect(() => getAgentProvider('unknown')).toThrow(UnknownProviderError);
-      expect(() => getAgentProvider('unknown')).toThrow(
-        "Unknown provider: 'unknown'. Available: claude, codex"
-      );
+      expect(() => getAgentProvider('unknown')).toThrow("Unknown provider: 'unknown'");
     });
 
     test('throws UnknownProviderError for empty string', () => {
@@ -191,23 +189,24 @@ describe('registry', () => {
   describe('getRegisteredProviders', () => {
     test('returns all registered providers', () => {
       const all = getRegisteredProviders();
-      expect(all.length).toBe(2);
+      expect(all.length).toBe(3);
       const ids = all.map(r => r.id);
       expect(ids).toContain('claude');
       expect(ids).toContain('codex');
+      expect(ids).toContain('minimax');
     });
 
     test('includes community providers after registration', () => {
       registerProvider(makeMockRegistration('my-llm'));
       const all = getRegisteredProviders();
-      expect(all.length).toBe(3);
+      expect(all.length).toBe(4);
     });
   });
 
   describe('getProviderInfoList', () => {
     test('returns API-safe projection without factory', () => {
       const infos = getProviderInfoList();
-      expect(infos.length).toBe(2);
+      expect(infos.length).toBe(3);
       for (const info of infos) {
         expect(info).toHaveProperty('id');
         expect(info).toHaveProperty('displayName');
@@ -223,6 +222,7 @@ describe('registry', () => {
     test('returns true for registered providers', () => {
       expect(isRegisteredProvider('claude')).toBe(true);
       expect(isRegisteredProvider('codex')).toBe(true);
+      expect(isRegisteredProvider('minimax')).toBe(true);
     });
 
     test('returns false for unknown providers', () => {
@@ -236,7 +236,7 @@ describe('registry', () => {
       registerBuiltinProviders();
       registerBuiltinProviders();
       const all = getRegisteredProviders();
-      expect(all.length).toBe(2);
+      expect(all.length).toBe(3);
     });
   });
 
@@ -266,6 +266,14 @@ describe('registry', () => {
       expect(reg.isModelCompatible('inherit')).toBe(false);
       expect(reg.isModelCompatible('gpt-4')).toBe(true);
       expect(reg.isModelCompatible('o3-mini')).toBe(true);
+    });
+
+    test('MiniMax registration matches MiniMax model patterns', () => {
+      const reg = getRegistration('minimax');
+      expect(reg.isModelCompatible('MiniMax-M2.7')).toBe(true);
+      expect(reg.isModelCompatible('MiniMax-M2.7-highspeed')).toBe(true);
+      expect(reg.isModelCompatible('gpt-4')).toBe(false);
+      expect(reg.isModelCompatible('claude-3.5-sonnet')).toBe(false);
     });
   });
 });

@@ -35,10 +35,12 @@ export { UnknownProviderError } from './errors';
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
+export { MiniMaxProvider } from './minimax/provider';
 
 // Config parsers
 export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
+export { parseMiniMaxConfig, type MiniMaxProviderDefaults } from './minimax/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';

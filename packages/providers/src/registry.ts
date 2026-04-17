@@ -15,8 +15,10 @@ import type {
 } from './types';
 import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
+import { MiniMaxProvider } from './minimax/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
+import { MINIMAX_CAPABILITIES } from './minimax/capabilities';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
 
@@ -128,6 +130,14 @@ export function registerBuiltinProviders(): void {
           !claudeAliases.includes(model) && !model.startsWith('claude-') && model !== 'inherit'
         );
       },
+      builtIn: true,
+    },
+    {
+      id: 'minimax',
+      displayName: 'MiniMax',
+      factory: () => new MiniMaxProvider(),
+      capabilities: MINIMAX_CAPABILITIES,
+      isModelCompatible: (model: string): boolean => model.startsWith('MiniMax-'),
       builtIn: true,
     },
   ];

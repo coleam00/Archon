@@ -12,11 +12,13 @@
     "./codex/provider": "./src/codex/provider.ts",
     "./codex/config": "./src/codex/config.ts",
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",
+    "./minimax/provider": "./src/minimax/provider.ts",
+    "./minimax/config": "./src/minimax/config.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts"
   },
   "scripts": {
-    "test": "bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts",
+    "test": "bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts && bun test src/minimax/provider.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {

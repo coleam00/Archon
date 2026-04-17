@@ -27,6 +27,13 @@ export interface CodexProviderDefaults {
   codexBinaryPath?: string;
 }
 
+export interface MiniMaxProviderDefaults {
+  [key: string]: unknown;
+  model?: string;
+  /** Override the default base URL (https://api.minimax.io/v1). */
+  baseURL?: string;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
