@@ -1,5 +1,8 @@
 worktree:
   baseBranch: dev
+  # Copy local .env into isolated worktrees so Scout MCP sees SCOUT_API_KEY when cwd is ~/.archon/workspaces/...
+  copyFiles:
+    - .env
 
 docs:
   path: packages/docs-web/src/content/docs
