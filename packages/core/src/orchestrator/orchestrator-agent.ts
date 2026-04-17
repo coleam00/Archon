@@ -27,7 +27,7 @@ import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { syncWorkspace, toRepoPath } from '@archon/git';
+import { syncWorkspace, toRepoPath, toBranchName } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow } from '@archon/workflows/router';
@@ -410,7 +410,10 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
           const isManagedClone = codebase.default_cwd
             .replace(/\\/g, '/')
             .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
-          syncResult = await syncWorkspace(toRepoPath(codebase.default_cwd), undefined, {
+          const configuredBranch = codebase.default_branch
+            ? toBranchName(codebase.default_branch)
+            : undefined;
+          syncResult = await syncWorkspace(toRepoPath(codebase.default_cwd), configuredBranch, {
             resetAfterFetch: isManagedClone,
           });
           getLog().debug(

@@ -215,6 +215,7 @@ const mockCodebase: Codebase = {
   name: 'test-project',
   repository_url: 'https://github.com/user/repo',
   default_cwd: '/workspace/test-project',
+  default_branch: 'main',
   ai_assistant_type: 'claude',
   commands: {},
   created_at: new Date(),
