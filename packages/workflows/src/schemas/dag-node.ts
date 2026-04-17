@@ -156,6 +156,7 @@ export type CommandNode = z.infer<typeof commandNodeSchema> & {
   approval?: never;
   cancel?: never;
   script?: never;
+  workflow?: never;
 };
 
 export const promptNodeSchema = dagNodeBaseSchema.extend({
@@ -170,6 +171,7 @@ export type PromptNode = z.infer<typeof promptNodeSchema> & {
   approval?: never;
   cancel?: never;
   script?: never;
+  workflow?: never;
 };
 
 /**
@@ -189,6 +191,7 @@ export type BashNode = z.infer<typeof bashNodeSchema> & {
   approval?: never;
   cancel?: never;
   script?: never;
+  workflow?: never;
 };
 
 /**
@@ -211,6 +214,7 @@ export type ScriptNode = z.infer<typeof scriptNodeSchema> & {
   loop?: never;
   approval?: never;
   cancel?: never;
+  workflow?: never;
 };
 
 /**
@@ -230,6 +234,7 @@ export type LoopNode = z.infer<typeof loopNodeSchema> & {
   approval?: never;
   cancel?: never;
   script?: never;
+  workflow?: never;
 };
 
 /** Schema for the `on_reject` sub-object on approval nodes. */
@@ -260,6 +265,7 @@ export type ApprovalNode = z.infer<typeof approvalNodeSchema> & {
   loop?: never;
   cancel?: never;
   script?: never;
+  workflow?: never;
 };
 
 /**
@@ -278,9 +284,31 @@ export type CancelNode = z.infer<typeof cancelNodeSchema> & {
   loop?: never;
   approval?: never;
   script?: never;
+  workflow?: never;
 };
 
-/** A single node in a DAG workflow. command, prompt, bash, loop, approval, cancel, and script are mutually exclusive. */
+/**
+ * Workflow node schema — invokes a named child workflow as a node.
+ * The child workflow runs synchronously; its terminal output becomes this node's $nodeId.output.
+ * AI-specific base fields are present in the type but ignored at runtime.
+ */
+export const workflowNodeSchema = dagNodeBaseSchema.extend({
+  workflow: z.string().min(1, "'workflow' must be a non-empty workflow name"),
+  input: z.string().optional(),
+});
+
+/** DAG node that invokes a named child workflow synchronously */
+export type WorkflowNode = z.infer<typeof workflowNodeSchema> & {
+  command?: never;
+  prompt?: never;
+  bash?: never;
+  loop?: never;
+  approval?: never;
+  cancel?: never;
+  script?: never;
+};
+
+/** A single node in a DAG workflow. command, prompt, bash, loop, approval, cancel, script, and workflow are mutually exclusive. */
 export type DagNode =
   | CommandNode
   | PromptNode
@@ -288,7 +316,8 @@ export type DagNode =
   | LoopNode
   | ApprovalNode
   | CancelNode
-  | ScriptNode;
+  | ScriptNode
+  | WorkflowNode;
 
 // ---------------------------------------------------------------------------
 // AI-specific fields that are meaningless on non-AI nodes
@@ -316,6 +345,9 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
 export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
+
+/** AI-specific fields that are meaningless on workflow nodes — same as bash nodes */
+export const WORKFLOW_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
 
 /**
  * AI-specific fields that are unsupported on loop nodes.
@@ -363,6 +395,9 @@ export const dagNodeSchema = dagNodeBaseSchema
     deps: z.array(z.string().min(1, 'each dep must be a non-empty string')).optional(),
     // Bash/Script shared
     timeout: z.number().optional(),
+    // Workflow-only
+    workflow: z.string().optional(),
+    input: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     const id = data.id.trim();
@@ -384,6 +419,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     const hasApproval = data.approval !== undefined;
     const hasCancel = typeof data.cancel === 'string' && data.cancel.trim().length > 0;
     const hasScript = typeof data.script === 'string' && data.script.trim().length > 0;
+    const hasWorkflow = typeof data.workflow === 'string' && data.workflow.trim().length > 0;
 
     const modeCount = [
       hasCommand,
@@ -393,13 +429,14 @@ export const dagNodeSchema = dagNodeBaseSchema
       hasApproval,
       hasCancel,
       hasScript,
+      hasWorkflow,
     ].filter(Boolean).length;
 
     if (modeCount > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', and 'script' are mutually exclusive",
+          "'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', 'script', and 'workflow' are mutually exclusive",
       });
       return z.NEVER;
     }
@@ -428,10 +465,18 @@ export const dagNodeSchema = dagNodeBaseSchema
         });
         return z.NEVER;
       }
+      if (typeof data.workflow === 'string') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'workflow name cannot be empty',
+          path: ['workflow'],
+        });
+        return z.NEVER;
+      }
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "must have either 'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', or 'script'",
+          "must have either 'command', 'prompt', 'bash', 'loop', 'approval', 'cancel', 'script', or 'workflow'",
       });
       return z.NEVER;
     }
@@ -496,7 +541,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     }
 
     // Provider/model compatibility (AI nodes only)
-    if (!hasBash && !hasLoop && !hasScript && data.provider && data.model) {
+    if (!hasBash && !hasLoop && !hasScript && !hasWorkflow && data.provider && data.model) {
       try {
         if (!isModelCompatible(data.provider, data.model)) {
           ctx.addIssue({
@@ -584,6 +629,14 @@ export const dagNodeSchema = dagNodeBaseSchema
     if (data.cancel !== undefined && data.cancel.trim().length > 0) {
       return { ...base, ...shared, cancel: data.cancel.trim() } as CancelNode;
     }
+    if (data.workflow !== undefined && data.workflow.trim().length > 0) {
+      return {
+        ...base,
+        ...shared,
+        workflow: data.workflow.trim(),
+        ...(data.input !== undefined ? { input: data.input } : {}),
+      } as WorkflowNode;
+    }
     // loop — guaranteed by superRefine to be defined at this point
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
     return { ...base, loop: data.loop } as LoopNode;
@@ -617,6 +670,11 @@ export function isCancelNode(node: DagNode): node is CancelNode {
 /** Type guard: check if a DAG node is a script node */
 export function isScriptNode(node: DagNode): node is ScriptNode {
   return 'script' in node && typeof node.script === 'string';
+}
+
+/** Type guard: check if a DAG node is a workflow (child workflow invocation) node */
+export function isWorkflowNode(node: DagNode): node is WorkflowNode {
+  return 'workflow' in node && typeof node.workflow === 'string';
 }
 
 /** Type guard: validates a value is a known TriggerRule */

@@ -5,9 +5,11 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { resolve } from 'path';
+import { resolve, join } from 'path';
+import { mkdir } from 'fs/promises';
 import { execFileAsync } from '@archon/git';
 import { discoverScripts } from './script-discovery';
+import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import type {
   IWorkflowPlatform,
   WorkflowMessageMetadata,
@@ -29,9 +31,12 @@ import type {
   PromptNode,
   LoopNode,
   ScriptNode,
+  WorkflowNode,
+  WorkflowDefinition,
   NodeOutput,
   TriggerRule,
   WorkflowRun,
+  WorkflowRunStatus,
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
@@ -42,6 +47,7 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
+  isWorkflowNode,
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
@@ -2103,6 +2109,308 @@ async function executeApprovalNode(
 }
 
 /**
+ * Execute a workflow: node — invokes a named child workflow synchronously.
+ * The child workflow gets its own WorkflowRun record. Its terminal output
+ * becomes this node's $nodeId.output for downstream substitution.
+ */
+async function executeWorkflowNode(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  parentWorkflowRun: WorkflowRun,
+  node: WorkflowNode,
+  artifactsDir: string,
+  logDir: string,
+  baseBranch: string,
+  docsDir: string,
+  nodeOutputs: Map<string, NodeOutput>,
+  config: WorkflowConfig,
+  configuredCommandFolder: string | undefined,
+  issueContext: string | undefined
+): Promise<NodeOutput> {
+  const nodeStartTime = Date.now();
+  const nodeContext: SendMessageContext = { workflowId: parentWorkflowRun.id, nodeName: node.id };
+  const emitter = getWorkflowEventEmitter();
+
+  getLog().info({ nodeId: node.id, childWorkflow: node.workflow }, 'dag.workflow_node_started');
+  await logNodeStart(logDir, parentWorkflowRun.id, node.id, `workflow:${node.workflow}`);
+
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: parentWorkflowRun.id,
+      event_type: 'node_started',
+      step_name: node.id,
+      data: { child_workflow: node.workflow },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: parentWorkflowRun.id, eventType: 'node_started' },
+        'workflow_event_persist_failed'
+      );
+    });
+
+  emitter.emit({
+    type: 'node_started',
+    runId: parentWorkflowRun.id,
+    nodeId: node.id,
+    nodeName: `workflow:${node.workflow}`,
+  });
+
+  // Substitute variables in the optional input field
+  let childUserMessage = parentWorkflowRun.user_message;
+  if (node.input !== undefined && node.input.trim().length > 0) {
+    try {
+      const substituted = buildPromptWithContext(
+        node.input,
+        parentWorkflowRun.id,
+        parentWorkflowRun.user_message,
+        artifactsDir,
+        baseBranch,
+        docsDir,
+        issueContext,
+        `dag workflow node '${node.id}' input`
+      );
+      childUserMessage = substituteNodeOutputRefs(substituted, nodeOutputs);
+    } catch (error) {
+      const err = error as Error;
+      const errMsg = `Node '${node.id}': failed to substitute 'input' field: ${err.message}`;
+      getLog().error(
+        { nodeId: node.id, error: err.message },
+        'dag.workflow_node_input_substitution_failed'
+      );
+      await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+      return { state: 'failed', output: '', error: errMsg };
+    }
+  }
+
+  // Discover and load the child workflow by name
+  let childWorkflow: WorkflowDefinition | undefined;
+  try {
+    const result = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
+    childWorkflow = result.workflows.find(ws => ws.workflow.name === node.workflow)?.workflow;
+  } catch (error) {
+    const err = error as Error;
+    const errMsg = `Node '${node.id}': failed to discover workflow '${node.workflow}': ${err.message}`;
+    getLog().error(
+      { err, nodeId: node.id, childWorkflow: node.workflow },
+      'dag.workflow_node_discovery_failed'
+    );
+    await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+    return { state: 'failed', output: '', error: errMsg };
+  }
+
+  if (!childWorkflow) {
+    const errMsg = `Node '${node.id}': child workflow '${node.workflow}' not found`;
+    getLog().error(
+      { nodeId: node.id, childWorkflow: node.workflow },
+      'dag.workflow_node_not_found'
+    );
+    await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+    return { state: 'failed', output: '', error: errMsg };
+  }
+
+  // Resolve child provider and model from the child workflow's own config
+  let childProvider: string;
+  if (childWorkflow.provider) {
+    childProvider = childWorkflow.provider;
+  } else if (childWorkflow.model) {
+    childProvider = inferProviderFromModel(childWorkflow.model, config.assistant);
+  } else {
+    childProvider = config.assistant;
+  }
+  const childAssistantDefaults = config.assistants[childProvider];
+  const childModel = childWorkflow.model ?? (childAssistantDefaults?.model as string | undefined);
+
+  if (!isModelCompatible(childProvider, childModel)) {
+    const errMsg = `Node '${node.id}': child workflow '${node.workflow}' uses incompatible model "${childModel ?? 'default'}" with provider "${childProvider}"`;
+    await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+    return { state: 'failed', output: '', error: errMsg };
+  }
+
+  // Create child WorkflowRun record
+  let childRun: WorkflowRun;
+  try {
+    childRun = await deps.store.createWorkflowRun({
+      workflow_name: childWorkflow.name,
+      conversation_id: parentWorkflowRun.conversation_id,
+      ...(parentWorkflowRun.codebase_id ? { codebase_id: parentWorkflowRun.codebase_id } : {}),
+      user_message: childUserMessage,
+      working_path: cwd,
+    });
+  } catch (error) {
+    const err = error as Error;
+    const errMsg = `Node '${node.id}': failed to create child run for '${node.workflow}': ${err.message}`;
+    getLog().error(
+      { err, nodeId: node.id, childWorkflow: node.workflow },
+      'dag.workflow_node_run_create_failed'
+    );
+    await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+    return { state: 'failed', output: '', error: errMsg };
+  }
+
+  // Set child run to running
+  try {
+    await deps.store.updateWorkflowRun(childRun.id, { status: 'running' });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, childRunId: childRun.id }, 'dag.workflow_node_run_set_running_failed');
+    await deps.store.updateWorkflowRun(childRun.id, { status: 'cancelled' }).catch((_e: Error) => {
+      getLog().warn({ childRunId: childRun.id }, 'dag.workflow_node_cancel_cleanup_failed');
+    });
+    const errMsg = `Node '${node.id}': failed to start child run for '${node.workflow}'`;
+    await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+    return { state: 'failed', output: '', error: errMsg };
+  }
+
+  // Map child run events to the parent's conversation for SSE propagation
+  emitter.registerRun(childRun.id, conversationId);
+
+  // Set up a child-specific artifacts subdirectory
+  const childArtifactsDir = join(artifactsDir, `child-${node.id}-${childRun.id}`);
+  try {
+    await mkdir(childArtifactsDir, { recursive: true });
+  } catch (mkdirErr) {
+    getLog().warn(
+      { err: mkdirErr as Error, childArtifactsDir },
+      'dag.workflow_node_artifacts_dir_failed'
+    );
+    // Non-fatal — child workflow can still run without its artifacts directory pre-created
+  }
+
+  // Child workflow-level SDK options (effort, thinking, etc.)
+  const childWorkflowLevelOptions: WorkflowLevelOptions = {
+    effort: childWorkflow.effort,
+    thinking: childWorkflow.thinking,
+    fallbackModel: childWorkflow.fallbackModel,
+    betas: childWorkflow.betas,
+    sandbox: childWorkflow.sandbox,
+  };
+
+  await safeSendMessage(
+    platform,
+    conversationId,
+    `↳ Running child workflow \`${childWorkflow.name}\` (node \`${node.id}\`)`,
+    nodeContext
+  );
+
+  // Execute the child DAG — it handles its own DB updates (fail/complete)
+  let childTerminalOutput: string | undefined;
+  try {
+    childTerminalOutput = await executeDagWorkflow(
+      deps,
+      platform,
+      conversationId,
+      cwd,
+      { ...childWorkflow, ...childWorkflowLevelOptions },
+      childRun,
+      childProvider,
+      childModel,
+      childArtifactsDir,
+      logDir,
+      baseBranch,
+      docsDir,
+      config,
+      configuredCommandFolder,
+      issueContext
+      // no priorCompletedNodes — child runs are always fresh
+    );
+  } catch (error) {
+    const err = error as Error;
+    const errMsg = `Node '${node.id}': child workflow '${node.workflow}' threw unexpectedly: ${err.message}`;
+    getLog().error(
+      { err, nodeId: node.id, childRunId: childRun.id },
+      'dag.workflow_node_child_threw'
+    );
+    await deps.store.failWorkflowRun(childRun.id, err.message).catch((_e: Error) => {
+      getLog().warn({ childRunId: childRun.id }, 'dag.workflow_node_fail_cleanup_failed');
+    });
+    emitter.unregisterRun(childRun.id);
+    await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+    return { state: 'failed', output: '', error: errMsg };
+  }
+
+  // Check final status from DB to determine success vs failure
+  let childFinalStatus: WorkflowRunStatus | null = null;
+  try {
+    childFinalStatus = await deps.store.getWorkflowRunStatus(childRun.id);
+  } catch (error) {
+    getLog().error(
+      { err: error as Error, childRunId: childRun.id },
+      'dag.workflow_node_status_check_failed'
+    );
+  }
+
+  const duration = Date.now() - nodeStartTime;
+
+  if (childFinalStatus === 'completed') {
+    const output = childTerminalOutput ?? '';
+    getLog().info(
+      { nodeId: node.id, childRunId: childRun.id, durationMs: duration },
+      'dag.workflow_node_completed'
+    );
+    await logNodeComplete(logDir, parentWorkflowRun.id, node.id, `workflow:${node.workflow}`, {
+      durationMs: duration,
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentWorkflowRun.id,
+        event_type: 'node_completed',
+        step_name: node.id,
+        data: {
+          duration_ms: duration,
+          node_output: output,
+          child_run_id: childRun.id,
+          child_workflow: node.workflow,
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentWorkflowRun.id, eventType: 'node_completed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    emitter.emit({
+      type: 'node_completed',
+      runId: parentWorkflowRun.id,
+      nodeId: node.id,
+      nodeName: `workflow:${node.workflow}`,
+      duration,
+    });
+    return { state: 'completed', output };
+  }
+
+  // Child failed, was cancelled, or status is unknown
+  const errMsg = `Node '${node.id}': child workflow '${node.workflow}' did not complete (status: ${childFinalStatus ?? 'unknown'})`;
+  getLog().error(
+    { nodeId: node.id, childRunId: childRun.id, childStatus: childFinalStatus },
+    'dag.workflow_node_child_failed'
+  );
+  await logNodeError(logDir, parentWorkflowRun.id, node.id, errMsg);
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: parentWorkflowRun.id,
+      event_type: 'node_failed',
+      step_name: node.id,
+      data: { error: errMsg, child_run_id: childRun.id, child_workflow: node.workflow },
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: parentWorkflowRun.id, eventType: 'node_failed' },
+        'workflow_event_persist_failed'
+      );
+    });
+  emitter.emit({
+    type: 'node_failed',
+    runId: parentWorkflowRun.id,
+    nodeId: node.id,
+    nodeName: `workflow:${node.workflow}`,
+    error: errMsg,
+  });
+  return { state: 'failed', output: '', error: errMsg };
+}
+
+/**
  * Execute a complete DAG workflow.
  * Called from executeWorkflow() in executor.ts.
  */
@@ -2495,6 +2803,27 @@ export async function executeDagWorkflow(
                 nodeOutputs,
                 issueContext,
                 config.envVars
+              );
+              return { nodeId: node.id, output };
+            }
+
+            // 3f. Workflow node dispatch — invokes a named child workflow synchronously
+            if (isWorkflowNode(node)) {
+              const output = await executeWorkflowNode(
+                deps,
+                platform,
+                conversationId,
+                cwd,
+                workflowRun,
+                node,
+                artifactsDir,
+                logDir,
+                baseBranch,
+                docsDir,
+                nodeOutputs,
+                config,
+                configuredCommandFolder,
+                issueContext
               );
               return { nodeId: node.id, output };
             }
