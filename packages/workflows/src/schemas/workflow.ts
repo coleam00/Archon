@@ -54,6 +54,8 @@ export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
  */
 export const workflowDefinitionSchema = workflowBaseSchema.extend({
   nodes: z.array(dagNodeSchema),
+  loop_until: z.string().min(1).optional(),
+  max_iterations: z.number().int().min(1).optional(),
 });
 
 /** Workflow definition with fully typed nodes (DagNode[]) derived from the schema. */

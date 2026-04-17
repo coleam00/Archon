@@ -5385,3 +5385,346 @@ describe('executeDagWorkflow -- script nodes', () => {
     execSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// executeDagWorkflow -- loop_until / max_iterations
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- loop_until and max_iterations', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-loop-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'pass output' };
+      yield { type: 'result', sessionId: 'loop-session' };
+    });
+
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('no loop_until: completes in exactly one pass', async () => {
+    const store = createMockStore();
+    const completeSpy = spyOn(store, 'completeWorkflowRun');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('loop-run-1', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      { name: 'loop-test', nodes: [{ id: 'step', prompt: 'do work' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    completeSpy.mockRestore();
+  });
+
+  it('loop_until condition met on first pass: runs once and completes', async () => {
+    const store = createMockStore();
+    const completeSpy = spyOn(store, 'completeWorkflowRun');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('loop-run-2', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: "$step.output == 'pass output'",
+        max_iterations: 5,
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    completeSpy.mockRestore();
+  });
+
+  it('loop_until never met: runs exactly max_iterations passes then completes', async () => {
+    const store = createMockStore();
+    const completeSpy = spyOn(store, 'completeWorkflowRun');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('loop-run-3', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: "$step.output == 'done'",
+        max_iterations: 3,
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(3);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    completeSpy.mockRestore();
+  });
+
+  it('loop_until met on iteration N: stops early, does not run remaining iterations', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      callCount++;
+      const content = callCount >= 3 ? 'done' : 'not yet';
+      yield { type: 'assistant', content };
+      yield { type: 'result', sessionId: 'loop-session' };
+    });
+
+    const store = createMockStore();
+    const completeSpy = spyOn(store, 'completeWorkflowRun');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('loop-run-4', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: "$step.output == 'done'",
+        max_iterations: 10,
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(3);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    completeSpy.mockRestore();
+  });
+
+  it('loop_until with max_iterations: sends warning message when cap is reached', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const sendSpy = platform.sendMessage as ReturnType<typeof mock>;
+    const workflowRun = makeWorkflowRun('loop-run-5', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: "$step.output == 'done'",
+        max_iterations: 2,
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const allMessages: string[] = sendSpy.mock.calls.map((call: unknown[]) => call[1] as string);
+    expect(allMessages.some(m => m.includes('max iterations'))).toBe(true);
+  });
+
+  it('loop_until unparseable expression: stops after first pass (fail-closed)', async () => {
+    const store = createMockStore();
+    const completeSpy = spyOn(store, 'completeWorkflowRun');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const sendSpy = platform.sendMessage as ReturnType<typeof mock>;
+    const workflowRun = makeWorkflowRun('loop-run-6', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: 'this is not valid syntax',
+        max_iterations: 5,
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    const allMessages: string[] = sendSpy.mock.calls.map((c: unknown[]) => c[1] as string);
+    expect(allMessages.some(m => m.includes('loop_until'))).toBe(true);
+    completeSpy.mockRestore();
+  });
+
+  it('loop_until: each incomplete pass sends a progress message', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const sendSpy = platform.sendMessage as ReturnType<typeof mock>;
+    const workflowRun = makeWorkflowRun('loop-run-7', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: "$step.output == 'done'",
+        max_iterations: 2,
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const allMessages: string[] = sendSpy.mock.calls.map((c: unknown[]) => c[1] as string);
+    const progressMsg = allMessages.find(m => m.includes('Iteration') && m.includes('re-running'));
+    expect(progressMsg).toBeDefined();
+  });
+
+  it('failed pass aborts loop: does not continue iterating after node failure', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      throw new Error('AI provider error');
+    });
+
+    const store = createMockStore();
+    const failSpy = spyOn(store, 'failWorkflowRun');
+    const completeSpy = spyOn(store, 'completeWorkflowRun');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('loop-run-8', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: "$step.output == 'done'",
+        max_iterations: 5,
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(failSpy).toHaveBeenCalledTimes(1);
+    expect(completeSpy).toHaveBeenCalledTimes(0);
+    failSpy.mockRestore();
+    completeSpy.mockRestore();
+  });
+
+  it('max_iterations defaults to 1 when loop_until set but max_iterations omitted', async () => {
+    const store = createMockStore();
+    const completeSpy = spyOn(store, 'completeWorkflowRun');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('loop-run-9', { workflow_name: 'loop-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-loop',
+      testDir,
+      {
+        name: 'loop-test',
+        nodes: [{ id: 'step', prompt: 'do work' }],
+        loop_until: "$step.output == 'done'",
+        // max_iterations omitted → defaults to 1
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    completeSpy.mockRestore();
+  });
+});
