@@ -91,13 +91,14 @@ describe('bundled-defaults', () => {
         'archon-piv-loop',
         'archon-adversarial-dev',
         'archon-workflow-builder',
+        'archon-slack-feature-to-review-app',
       ];
 
       for (const wf of expectedWorkflows) {
         expect(BUNDLED_WORKFLOWS).toHaveProperty(wf);
       }
 
-      expect(Object.keys(BUNDLED_WORKFLOWS)).toHaveLength(13);
+      expect(Object.keys(BUNDLED_WORKFLOWS)).toHaveLength(14);
     });
 
     it('should have non-empty content for all workflows', () => {
