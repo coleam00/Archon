@@ -2294,6 +2294,41 @@ async function executeWorkflowNode(
     nodeContext
   );
 
+  // Propagate parent cancellation into the child run via a poll + AbortController.
+  // When the parent run leaves 'running', we mark the child 'cancelled' in the DB
+  // so that the child's own skipIfStatusChanged guard picks it up at the next layer
+  // boundary, and we signal the controller so the pre-layer check exits immediately.
+  const parentCancelController = new AbortController();
+  const parentCancelPoll = setInterval(() => {
+    void (async (): Promise<void> => {
+      try {
+        const parentStatus = await deps.store.getWorkflowRunStatus(parentWorkflowRun.id);
+        if (parentStatus !== 'running') {
+          clearInterval(parentCancelPoll);
+          getLog().info(
+            { parentRunId: parentWorkflowRun.id, parentStatus, childRunId: childRun.id },
+            'dag.workflow_node_parent_cancelled'
+          );
+          await deps.store
+            .updateWorkflowRun(childRun.id, { status: 'cancelled' })
+            .catch((e: Error) => {
+              getLog().warn(
+                { err: e, childRunId: childRun.id },
+                'dag.workflow_node_cancel_child_failed'
+              );
+            });
+          emitter.unregisterRun(childRun.id);
+          parentCancelController.abort();
+        }
+      } catch (e) {
+        getLog().warn(
+          { err: e as Error, parentRunId: parentWorkflowRun.id },
+          'dag.workflow_node_parent_status_poll_failed'
+        );
+      }
+    })();
+  }, 5000);
+
   // Execute the child DAG — it handles its own DB updates (fail/complete)
   let childTerminalOutput: string | undefined;
   try {
@@ -2312,8 +2347,9 @@ async function executeWorkflowNode(
       docsDir,
       config,
       configuredCommandFolder,
-      issueContext
-      // no priorCompletedNodes — child runs are always fresh
+      issueContext,
+      undefined, // no priorCompletedNodes — child runs are always fresh
+      parentCancelController.signal
     );
   } catch (error) {
     const err = error as Error;
@@ -2328,6 +2364,8 @@ async function executeWorkflowNode(
     emitter.unregisterRun(childRun.id);
     await safeSendMessage(platform, conversationId, errMsg, nodeContext);
     return { state: 'failed', output: '', error: errMsg };
+  } finally {
+    clearInterval(parentCancelPoll);
   }
 
   // Check final status from DB to determine success vs failure
@@ -2435,7 +2473,8 @@ export async function executeDagWorkflow(
   config: WorkflowConfig,
   configuredCommandFolder?: string,
   issueContext?: string,
-  priorCompletedNodes?: Map<string, string>
+  priorCompletedNodes?: Map<string, string>,
+  parentAbort?: AbortSignal
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2466,7 +2505,13 @@ export async function executeDagWorkflow(
   );
 
   // Helper: bail out if the run was transitioned externally (cancelled, deleted, etc.)
+  // Also returns true immediately when the parent has signalled abort — no DB round-trip needed.
   async function skipIfStatusChanged(logEvent: string): Promise<boolean> {
+    if (parentAbort?.aborted) {
+      getLog().info({ workflowRunId: workflowRun.id }, logEvent);
+      getWorkflowEventEmitter().unregisterRun(workflowRun.id);
+      return true;
+    }
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
     if (status === null || status !== 'running') {
       getLog().info({ workflowRunId: workflowRun.id, status: status ?? 'deleted' }, logEvent);
@@ -2505,6 +2550,12 @@ export async function executeDagWorkflow(
     }
 
     for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
+      // Fast path: parent aborted us before this layer started
+      if (parentAbort?.aborted) {
+        getWorkflowEventEmitter().unregisterRun(workflowRun.id);
+        return finalTerminalOutput;
+      }
+
       const layer = layers[layerIdx];
       const isParallelLayer = layer.length > 1;
 

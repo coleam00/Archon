@@ -6048,3 +6048,126 @@ describe('executeDagWorkflow -- workflow nodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// executeDagWorkflow -- parentAbort cancellation propagation
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- parentAbort cancellation propagation', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-parentabort-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('exits before any layers run when parentAbort is already aborted', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const run = makeWorkflowRun('run-preabort', { workflow_name: 'preabort-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-cancel',
+      testDir,
+      { name: 'preabort-test', nodes: [{ id: 'step', bash: 'echo never-runs' }] },
+      run,
+      'claude',
+      undefined, // workflowModel
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined, // configuredCommandFolder
+      undefined, // issueContext
+      undefined, // priorCompletedNodes
+      AbortSignal.abort() // parentAbort — already aborted, pre-layer check fires immediately
+    );
+
+    // No workflow events were created: the pre-layer guard returned before any node ran
+    expect((store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    // Neither complete nor fail: external canceller owns the DB update
+    expect((store.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    expect((store.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it('skips layer 2 when parentAbort fires during layer 1 bash execution', async () => {
+    // Two bash layers (step2 depends on step1) so there are two pre-layer checks.
+    // We abort the controller the moment step1's node_started event is persisted — that
+    // happens inside executeBashNode before the bash command runs.  Layer 2's pre-layer
+    // check then sees the signal as aborted and returns early.
+    const controller = new AbortController();
+    const store = createMockStore();
+    let createEventCallCount = 0;
+    (store.createWorkflowEvent as Mock<() => Promise<void>>).mockImplementation(async () => {
+      createEventCallCount++;
+      if (createEventCallCount === 1) {
+        // First event is step1's node_started — abort here so the signal is set before layer 2
+        controller.abort();
+      }
+    });
+    // DB status always 'running' so DB-based skipIfStatusChanged would NOT fire on its own
+    (store.getWorkflowRunStatus as Mock<() => Promise<WorkflowRunStatus>>).mockResolvedValue(
+      'running'
+    );
+
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const run = makeWorkflowRun('run-midsignal', { workflow_name: 'midsignal-test' });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-cancel',
+      testDir,
+      {
+        name: 'midsignal-test',
+        nodes: [
+          { id: 'step1', bash: 'echo layer1' },
+          { id: 'step2', bash: 'echo layer2', depends_on: ['step1'] },
+        ],
+      },
+      run,
+      'claude',
+      undefined, // workflowModel
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined, // configuredCommandFolder
+      undefined, // issueContext
+      undefined, // priorCompletedNodes
+      controller.signal // parentAbort
+    );
+
+    // step1's node_started event fired (count >= 1)
+    // step2's node_started event must NOT have fired (signal was aborted before layer 2)
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const step2StartedCall = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { step_name?: string; event_type?: string })?.event_type === 'node_started' &&
+        (call[0] as { step_name?: string; event_type?: string })?.step_name === 'step2'
+    );
+    expect(step2StartedCall).toBeUndefined();
+    // Neither complete nor fail: we exited early via the abort signal
+    expect((store.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    expect((store.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+});
