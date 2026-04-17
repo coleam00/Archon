@@ -5699,6 +5699,8 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
 
     expect(failSpy).toHaveBeenCalledTimes(1);
     expect(completeSpy).toHaveBeenCalledTimes(0);
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+
     failSpy.mockRestore();
     completeSpy.mockRestore();
   });
