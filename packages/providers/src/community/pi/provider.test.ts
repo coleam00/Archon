@@ -735,11 +735,51 @@ describe('PiProvider', () => {
     expect(caps.thinkingControl).toBe(true);
     expect(caps.effortControl).toBe(true);
     expect(caps.toolRestrictions).toBe(true);
+    expect(caps.skills).toBe(true);
     // Still false:
     expect(caps.mcp).toBe(false);
     expect(caps.hooks).toBe(false);
-    expect(caps.skills).toBe(false);
     expect(caps.structuredOutput).toBe(false);
     expect(caps.sessionResume).toBe(false);
+  });
+
+  test('nodeConfig.skills with unknown name yields system warning, does not abort', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const { chunks, error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp/nonexistent-cwd', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { skills: ['definitely-does-not-exist'] },
+      })
+    );
+    expect(error).toBeUndefined();
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('definitely-does-not-exist'))).toBe(true);
+
+    // DefaultResourceLoader instantiated without additionalSkillPaths (all missing)
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.additionalSkillPaths).toBeUndefined();
+  });
+
+  test('nodeConfig.skills absent → no additionalSkillPaths option passed', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect('additionalSkillPaths' in (loaderArgs ?? {})).toBe(false);
   });
 });

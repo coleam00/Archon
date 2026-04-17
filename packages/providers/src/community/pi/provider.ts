@@ -19,7 +19,7 @@ import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig } from './config';
 import { bridgeSession } from './event-bridge';
 import { parsePiModelRef } from './model-ref';
-import { resolvePiThinkingLevel, resolvePiTools } from './options-translator';
+import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
 import { createNoopResourceLoader } from './resource-loader';
 
 /**
@@ -180,6 +180,19 @@ export class PiProvider implements IAgentProvider {
     //        node-level; either overrides Pi's default.
     const systemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
 
+    //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
+    //        Resolve each name against .agents/skills and .claude/skills (project
+    //        + user-global). Resolved paths go through Pi's additionalSkillPaths;
+    //        Pi's buildSystemPrompt appends their agentskills.io XML block to
+    //        the system prompt automatically, so the model sees them.
+    const { paths: skillPaths, missing: missingSkills } = resolvePiSkills(cwd, nodeConfig?.skills);
+    if (missingSkills.length > 0) {
+      yield {
+        type: 'system',
+        content: `⚠️ Pi could not resolve skill names: ${missingSkills.join(', ')}. Searched .agents/skills and .claude/skills (project + user-global). Each must be a directory containing SKILL.md.`,
+      };
+    }
+
     // 5. Build no-fs primitives. These keep the server quiescent w.r.t. the
     //    ~/.pi/ directory and make concurrent sendQuery calls race-free.
     const sessionManager = SessionManager.inMemory(cwd);
@@ -187,6 +200,7 @@ export class PiProvider implements IAgentProvider {
     const settingsManager = SettingsManager.inMemory();
     const resourceLoader = createNoopResourceLoader(cwd, {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     });
 
     getLog().info(
@@ -197,6 +211,8 @@ export class PiProvider implements IAgentProvider {
         thinkingLevel,
         toolCount: filteredTools?.length,
         hasSystemPrompt: systemPrompt !== undefined,
+        skillCount: skillPaths.length,
+        missingSkillCount: missingSkills.length,
       },
       'pi.session_started'
     );

@@ -13,7 +13,7 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   sessionResume: false,
   mcp: false,
   hooks: false,
-  skills: false,
+  skills: true,
   toolRestrictions: true,
   structuredOutput: false,
   envInjection: false,

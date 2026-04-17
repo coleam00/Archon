@@ -8,6 +8,17 @@ export interface NoopResourceLoaderOptions {
    * files that would otherwise augment or replace the prompt.
    */
   systemPrompt?: string;
+
+  /**
+   * Absolute paths to specific skill directories (each containing a SKILL.md)
+   * that Pi should load in addition to its default discovery. Works even with
+   * `noSkills: true` — Pi's loader merges additional paths regardless, per
+   * its internal logic in `DefaultResourceLoader.updateSkillsFromPaths`.
+   *
+   * Used by the Pi provider to thread Archon's name-based `skills:` node
+   * config through to Pi after resolution — see `resolvePiSkills`.
+   */
+  additionalSkillPaths?: string[];
 }
 
 /**
@@ -37,5 +48,8 @@ export function createNoopResourceLoader(
     noThemes: true,
     noContextFiles: true,
     ...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+    ...(options.additionalSkillPaths && options.additionalSkillPaths.length > 0
+      ? { additionalSkillPaths: options.additionalSkillPaths }
+      : {}),
   });
 }
