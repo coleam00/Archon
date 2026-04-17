@@ -150,7 +150,9 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('# Using SQLite (default)');
       expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=true');
       expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
-      expect(content).toContain('PORT=3000');
+      // PORT is intentionally commented out — server and Vite both default to 3090 when unset (#1152).
+      expect(content).toContain('# PORT=3090');
+      expect(content).not.toMatch(/^PORT=/m);
       expect(content).not.toContain('DATABASE_URL=');
     });
 

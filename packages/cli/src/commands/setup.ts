@@ -1290,8 +1290,12 @@ export function generateEnvContent(config: SetupConfig): string {
   }
 
   // Server
+  // PORT is intentionally omitted: both the Hono server (packages/core/src/utils/port-allocation.ts)
+  // and the Vite dev proxy (packages/web/vite.config.ts) default to 3090 when unset, which keeps
+  // them in sync. Writing a fixed PORT here risked a mismatch if ~/.archon/.env leaks a PORT that
+  // the Vite proxy (which only reads repo-local .env) never sees — see #1152.
   lines.push('# Server');
-  lines.push('PORT=3000');
+  lines.push('# PORT=3090  # Default: 3090. Uncomment to override.');
   lines.push('');
 
   // Concurrency
@@ -1769,7 +1773,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   // Additional options note
   note(
     'Other settings you can customize in ~/.archon/.env:\n' +
-      '  - PORT (default: 3000)\n' +
+      '  - PORT (default: 3090)\n' +
       '  - MAX_CONCURRENT_CONVERSATIONS (default: 10)\n' +
       '  - *_STREAMING_MODE (stream | batch per platform)\n\n' +
       'These defaults work well for most users.',
