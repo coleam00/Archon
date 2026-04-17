@@ -118,12 +118,11 @@ export class PiProvider implements IAgentProvider {
     //    the file directly (api_key entries) is picked up transparently.
     //
     //    Per-request env vars override the file via setRuntimeApiKey — this
-    //    mirrors Claude's `{...subprocessEnv, ...requestOptions.env}` pattern
-    //    at packages/providers/src/claude/provider.ts:889-890 and ensures
-    //    codebase-scoped env vars (from .archon/config.yaml `env:`) win over
-    //    the user's global Pi login.
+    //    mirrors Claude's process-env + request-env merge pattern and
+    //    ensures codebase-scoped env vars (from .archon/config.yaml `env:`)
+    //    win over the user's global Pi login.
     //
-    //    Pi's internal resolution order (auth-storage.ts:424-485):
+    //    Pi's internal resolution order:
     //      1. runtime override  (our setRuntimeApiKey below)
     //      2. auth.json api_key entry
     //      3. auth.json oauth entry  (auto-refreshes expired tokens)
@@ -200,8 +199,8 @@ export class PiProvider implements IAgentProvider {
     //    returns a SessionManager bound to either a new session (no resume
     //    id) or an existing session (resume id matches a file); if the id
     //    was provided but not found, it falls through to a new session and
-    //    the caller surfaces a resume_failed warning (matches Codex pattern
-    //    at packages/providers/src/codex/provider.ts:553-558).
+    //    the caller surfaces a resume_failed warning (matches the Codex
+    //    provider's fallback pattern for the same condition).
     const { sessionManager, resumeFailed } = await resolvePiSession(cwd, resumeSessionId);
     if (resumeFailed) {
       yield {
