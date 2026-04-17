@@ -1,0 +1,97 @@
+name: archon-compose-plan-implement-qa
+description: |
+  Use when: Building a feature with an explicit plan→implement→QA→PR cycle that can
+            automatically retry implementation if validation fails.
+  Triggers: "plan implement qa", "compose plan implement", "build with qa retry",
+            "plan then implement with qa loop".
+
+  Flow:
+    1. plan             — delegates to archon-compose-planner via 'workflow:' node (runs once)
+    2. implement-and-qa — implement the plan, validate, retry up to 3x if QA fails (loop: node)
+    3. create-pr        — create PR after QA passes
+
+  This workflow demonstrates 'workflow:' node composition:
+  - 'workflow:' nodes spawn a named child workflow as an isolated subprocess with its own
+    run record, artifact directory, and node graph.
+  - The child's terminal output is captured and available as $nodeId.output downstream.
+  - The 'input:' field passes a substituted string as the child's user message ($ARGUMENTS).
+  - Using a 'loop:' node for phases 2 (not top-level loop_until) means the plan runs
+    exactly once — only implement+validate retries on QA failure.
+
+  NOT for: Quick bug fixes (use archon-fix-github-issue). Requires a working validation
+           command (e.g. `bun run validate`, `npm test`, `make check`).
+
+provider: claude
+
+nodes:
+  # ─── Phase 1: Plan ───────────────────────────────────────────────────────
+  #
+  # 'workflow:' node — runs archon-compose-planner as a full child workflow run.
+  #
+  # How it works:
+  #   - 'input:' is substituted with $ARGUMENTS and forwarded as the child's user message
+  #   - archon-compose-planner analyzes the codebase and outputs a structured plan
+  #   - When the child run completes, its terminal output is available as $plan.output here
+  #   - The child run gets its own artifact subdirectory: $ARTIFACTS_DIR/child-plan-<runId>/
+  #
+  - id: plan
+    workflow: archon-compose-planner
+    input: "$ARGUMENTS"
+
+  # ─── Phase 2: Implement + QA retry ───────────────────────────────────────
+  #
+  # A 'loop:' node wraps implement+validate so ONLY this phase retries on failure.
+  # Choosing loop: (not loop_until at workflow level) is intentional: it means the 'plan'
+  # node above runs exactly once even if implementation needs multiple retries.
+  #
+  # $plan.output carries the plan text from Phase 1 into every loop iteration.
+  #
+  - id: implement-and-qa
+    depends_on: [plan]
+    model: claude-opus-4-6[1m]
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        ## Task
+
+        $ARGUMENTS
+
+        ## Implementation Plan
+
+        $plan.output
+
+        ## Instructions
+
+        Implement the plan step by step, then verify all checks pass.
+
+        1. Read the plan and relevant source files before making any changes
+        2. Implement each change in order, committing as you go:
+           `git add -p && git commit -m "feat: <description>"`
+        3. After all changes, run the project's validation suite:
+           `bun run validate`  (or `npm test`, `make check`, etc. — use what this project has)
+        4. Fix any type errors, lint failures, or test failures found
+        5. Re-run validation to confirm all checks pass
+        6. When ALL checks pass — output the completion signal: <promise>QA_PASS</promise>
+        7. If you cannot resolve all failures in this iteration:
+           - Summarize what still fails and why
+           - Output: <promise>QA_FAIL</promise>
+           (the next iteration will pick up from here with fresh context)
+      until: QA_PASS
+      max_iterations: 3
+      fresh_context: true
+
+  # ─── Phase 3: Create PR ───────────────────────────────────────────────────
+  #
+  # Runs once after QA passes. Uses the archon-create-pr command.
+  #
+  # To delegate PR creation to a child workflow instead, replace this node with:
+  #   - id: create-pr
+  #     workflow: my-pr-workflow
+  #     input: "PR for: $ARGUMENTS\nImplementation summary: $implement-and-qa.output"
+  #     depends_on: [implement-and-qa]
+  #     context: fresh
+  #
+  - id: create-pr
+    command: archon-create-pr
+    depends_on: [implement-and-qa]
+    context: fresh
