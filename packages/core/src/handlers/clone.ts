@@ -126,7 +126,7 @@ async function registerRepoAtPath(
     name,
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
-    default_branch: defaultBranch ?? undefined,
+    default_branch: defaultBranch,
     ai_assistant_type: suggestedAssistant,
   });
 
