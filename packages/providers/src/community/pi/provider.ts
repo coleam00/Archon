@@ -69,12 +69,6 @@ function lookupPiModel(provider: string, modelId: string): Model<Api> | undefine
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) with in-memory auth/session/settings, so the server never
  * touches `~/.pi/` and concurrent calls don't collide.
- *
- * v1 capabilities are all false (see `capabilities.ts`): sessionResume,
- * thinkingControl, skills, mcp, etc. map to Pi features but require
- * intentional wiring before they can be declared. Under-declaring is
- * honest; the dag-executor emits warnings for any nodeConfig field not
- * supported.
  */
 export class PiProvider implements IAgentProvider {
   async *sendQuery(
