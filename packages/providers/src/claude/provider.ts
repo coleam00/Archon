@@ -450,6 +450,19 @@ async function applyNodeConfig(
     getLog().info({ skills, agentId }, 'claude.skills_agent_created');
   }
 
+  // agents → inline AgentDefinition pass-through.
+  // Runs AFTER skills: so user-defined agents win on ID collision with
+  // the internal 'dag-node-skills' wrapper.
+  // options.agent is intentionally left alone — inline agents are sub-agents
+  // invokable via the Task tool, not the primary agent for the query.
+  if (nodeConfig.agents) {
+    options.agents = {
+      ...(options.agents ?? {}),
+      ...(nodeConfig.agents as NonNullable<Options['agents']>),
+    };
+    getLog().info({ agentIds: Object.keys(nodeConfig.agents) }, 'claude.inline_agents_registered');
+  }
+
   // effort
   if (nodeConfig.effort !== undefined) {
     options.effort = nodeConfig.effort as Options['effort'];

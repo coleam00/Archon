@@ -5,6 +5,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   mcp: true,
   hooks: true,
   skills: true,
+  agents: true,
   toolRestrictions: true,
   structuredOutput: true,
   envInjection: true,

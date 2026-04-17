@@ -14,6 +14,7 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   mcp: false,
   hooks: false,
   skills: true,
+  agents: false,
   toolRestrictions: true,
   structuredOutput: false,
   envInjection: true,

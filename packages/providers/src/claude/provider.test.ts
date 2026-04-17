@@ -97,6 +97,7 @@ describe('ClaudeProvider', () => {
         mcp: true,
         hooks: true,
         skills: true,
+        agents: true,
         toolRestrictions: true,
         structuredOutput: true,
         envInjection: true,
@@ -1164,5 +1165,85 @@ describe('sendQuery decomposition behaviors', () => {
       expect.objectContaining({ sessionId: 'sid-err', errorSubtype: 'max_turns' }),
       'claude.result_is_error'
     );
+  });
+
+  describe('inline agents (nodeConfig.agents)', () => {
+    test('passes inline agents map through to SDK options.agents', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      const agents = {
+        'brief-gen': {
+          description: 'Summarises issues',
+          prompt: 'Be concise.',
+          model: 'haiku',
+          tools: ['Bash', 'Read'],
+        },
+      };
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: { agents },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.agents).toMatchObject(agents);
+    });
+
+    test('does not set options.agent when only inline agents are present', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: {
+          agents: {
+            'sub-a': { description: 'd', prompt: 'p' },
+          },
+        },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      // agent (singular) is set by skills wrapper; inline-only must leave it unset
+      expect(callArgs.options.agent).toBeUndefined();
+    });
+
+    test('merges inline agents with skills wrapper; user wins on ID collision', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: {
+          skills: ['my-skill'],
+          agents: {
+            // Intentionally collides with the internal 'dag-node-skills' wrapper ID
+            'dag-node-skills': {
+              description: 'user override',
+              prompt: 'user-defined prompt',
+            },
+            'extra-sub': { description: 'd', prompt: 'p' },
+          },
+        },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      const outAgents = callArgs.options.agents as Record<
+        string,
+        { description: string; prompt: string }
+      >;
+      // Both entries present
+      expect(Object.keys(outAgents).sort()).toEqual(['dag-node-skills', 'extra-sub']);
+      // User's definition wins the collision
+      expect(outAgents['dag-node-skills'].description).toBe('user override');
+      expect(outAgents['dag-node-skills'].prompt).toBe('user-defined prompt');
+    });
   });
 });

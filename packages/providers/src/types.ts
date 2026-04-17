@@ -123,6 +123,23 @@ export interface NodeConfig {
   mcp?: string;
   hooks?: unknown;
   skills?: string[];
+  /**
+   * Inline sub-agent definitions (keyed by kebab-case agent ID).
+   * Shape mirrors Claude Agent SDK's AgentDefinition, kept structural so this
+   * contract module stays SDK-dep-free.
+   */
+  agents?: Record<
+    string,
+    {
+      description: string;
+      prompt: string;
+      model?: string;
+      tools?: string[];
+      disallowedTools?: string[];
+      skills?: string[];
+      maxTurns?: number;
+    }
+  >;
   allowed_tools?: string[];
   denied_tools?: string[];
   effort?: string;
@@ -158,6 +175,8 @@ export interface ProviderCapabilities {
   mcp: boolean;
   hooks: boolean;
   skills: boolean;
+  /** Whether the provider supports inline sub-agent definitions (Claude SDK's options.agents). */
+  agents: boolean;
   toolRestrictions: boolean;
   structuredOutput: boolean;
   envInjection: boolean;
