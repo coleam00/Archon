@@ -41,10 +41,12 @@ import {
   isRegisteredProvider,
   getRegisteredProviders,
   registerBuiltinProviders,
+  registerPiProvider,
 } from '@archon/providers';
 
 function getRegisteredProviderNames(): string[] {
   registerBuiltinProviders();
+  registerPiProvider();
   return getRegisteredProviders().map(p => p.id);
 }
 
@@ -56,6 +58,7 @@ function mergeAssistantDefaults(
     ...base,
     claude: { ...(base.claude ?? {}) },
     codex: { ...(base.codex ?? {}) },
+    pi: { ...(base.pi ?? {}) },
   };
 
   if (!overrides) return merged;
@@ -233,6 +236,7 @@ function getDefaults(): MergedConfig {
   const registeredAssistants: AssistantDefaults = {
     claude: {},
     codex: {},
+    pi: {},
   };
   for (const provider of getRegisteredProviders()) {
     if (!(provider.id in registeredAssistants)) {
@@ -446,6 +450,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
   registerBuiltinProviders();
+  registerPiProvider();
 
   // 1. Start with defaults
   let config = getDefaults();

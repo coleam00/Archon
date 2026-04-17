@@ -31,6 +31,16 @@ export interface CodexProviderDefaults {
   codexBinaryPath?: string;
 }
 
+/**
+ * Community provider defaults for Pi (@mariozechner/pi-coding-agent).
+ * v1 minimal shape; extend as capabilities are wired in.
+ */
+export interface PiProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref in '<pi-provider-id>/<model-id>' format, e.g. 'google/gemini-2.5-pro' */
+  model?: string;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 

@@ -16,26 +16,36 @@
 import type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
+  PiProviderDefaults,
   ProviderDefaultsMap,
 } from '@archon/providers/types';
 
-export type { ClaudeProviderDefaults, CodexProviderDefaults, ProviderDefaultsMap };
+export type {
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  PiProviderDefaults,
+  ProviderDefaultsMap,
+};
 
 /**
  * Intersection type: generic ProviderDefaultsMap (any string key) with typed built-in entries.
  * Built-in keys are typed so parseClaudeConfig/parseCodexConfig get type safety without casts.
  * Community providers use the generic [string] index. This is intentional — removing the
  * built-in intersection would force `as` casts everywhere built-in config is accessed.
+ * Pi is typed here (not just via the generic index) so parsePiConfig gets the same
+ * defense-in-depth as the built-ins, even while `builtIn: false`.
  */
 export type AssistantDefaultsConfig = ProviderDefaultsMap & {
   claude?: ClaudeProviderDefaults;
   codex?: CodexProviderDefaults;
+  pi?: PiProviderDefaults;
 };
 
 /** Required variant — built-ins always present after config merge (registerBuiltinProviders guarantees it). */
 export type AssistantDefaults = ProviderDefaultsMap & {
   claude: ClaudeProviderDefaults;
   codex: CodexProviderDefaults;
+  pi: PiProviderDefaults;
 };
 
 export interface GlobalConfig {

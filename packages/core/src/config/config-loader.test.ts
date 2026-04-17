@@ -224,7 +224,7 @@ concurrency:
       const config = await loadConfig();
 
       expect(config.assistant).toBe('claude');
-      expect(config.assistants).toEqual({ claude: {}, codex: {} });
+      expect(config.assistants).toEqual({ claude: {}, codex: {}, pi: {} });
       expect(config.streaming.telegram).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
     });
