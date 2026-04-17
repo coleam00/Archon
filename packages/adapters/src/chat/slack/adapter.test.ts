@@ -26,6 +26,7 @@ mock.module('@archon/paths', () => ({
 // Create mock functions
 const mockPostMessage = mock(() => Promise.resolve(undefined));
 const mockReplies = mock(() => Promise.resolve({ messages: [] }));
+const mockReactionsAdd = mock(() => Promise.resolve({ ok: true }));
 const mockEvent = mock(() => {});
 const mockStart = mock(() => Promise.resolve(undefined));
 const mockStop = mock(() => Promise.resolve(undefined));
@@ -37,6 +38,9 @@ const mockApp = {
     },
     conversations: {
       replies: mockReplies,
+    },
+    reactions: {
+      add: mockReactionsAdd,
     },
   },
   event: mockEvent,
@@ -430,6 +434,58 @@ describe('SlackAdapter', () => {
       expect(first.blocks).toHaveLength(1);
       expect(second.blocks).toHaveLength(2);
       expect((second.blocks[1] as { type: string }).type).toBe('actions');
+    });
+  });
+
+  describe('acknowledgeReceipt', () => {
+    const event: SlackMessageEvent = {
+      text: 'hello',
+      user: 'U123',
+      channel: 'C456',
+      ts: '1234567890.000001',
+    };
+
+    beforeEach(() => {
+      mockReactionsAdd.mockClear();
+    });
+
+    test('posts :eyes: reaction on the incoming message', async () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      await adapter.acknowledgeReceipt(event);
+
+      expect(mockReactionsAdd).toHaveBeenCalledTimes(1);
+      const args = (mockReactionsAdd as Mock<typeof mockReactionsAdd>).mock.calls[0][0] as {
+        channel: string;
+        timestamp: string;
+        name: string;
+      };
+      expect(args.channel).toBe('C456');
+      expect(args.timestamp).toBe('1234567890.000001');
+      expect(args.name).toBe('eyes');
+    });
+
+    test('does not throw when reactions:write scope is missing', async () => {
+      // Simulate Slack's `missing_scope` error shape.
+      const scopeError = Object.assign(new Error('missing_scope'), {
+        data: { error: 'missing_scope', needed: 'reactions:write' },
+      });
+      mockReactionsAdd.mockImplementationOnce(() => Promise.reject(scopeError));
+
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      // If this rejected, the test runner would surface it — proving graceful handling.
+      await adapter.acknowledgeReceipt(event);
+      expect(mockReactionsAdd).toHaveBeenCalledTimes(1);
+    });
+
+    test('silently skips when message already has the reaction', async () => {
+      const alreadyReacted = Object.assign(new Error('already_reacted'), {
+        data: { error: 'already_reacted' },
+      });
+      mockReactionsAdd.mockImplementationOnce(() => Promise.reject(alreadyReacted));
+
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      await adapter.acknowledgeReceipt(event);
+      expect(mockReactionsAdd).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -1030,7 +1030,7 @@ async function collectSlackConfig(): Promise<SlackConfig> {
       '   - Settings -> Socket Mode -> Enable\n' +
       '   - Generate an App-Level Token (xapp-...)\n' +
       '3. Add Bot Token Scopes (OAuth & Permissions):\n' +
-      '   - app_mentions:read, chat:write, channels:history\n' +
+      '   - app_mentions:read, chat:write, reactions:write, channels:history\n' +
       '   - channels:join, im:history, im:write, im:read\n' +
       '4. Subscribe to Bot Events (Event Subscriptions):\n' +
       '   - app_mention, message.im\n' +

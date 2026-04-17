@@ -55,6 +55,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
 3. Add these scopes to bot token scopes:
    - `app_mentions:read` -- Receive @mention events
    - `chat:write` -- Send messages
+   - `reactions:write` -- Post :eyes: receipt reaction on incoming messages (optional; bot works without it)
    - `channels:history` -- Read messages in public channels (for thread context)
    - `channels:join` -- Allow bot to join public channels
    - `groups:history` -- Read messages in private channels (optional)
