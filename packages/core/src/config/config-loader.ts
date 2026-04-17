@@ -45,13 +45,12 @@ import {
 } from '@archon/providers';
 
 /**
- * Ensure the registry is populated, then return the provider IDs.
- * Idempotent by virtue of `registerBuiltinProviders` / `registerCommunityProviders`
- * both being idempotent, so safe to call from anywhere.
+ * Pure read of registered provider IDs. Registration is guaranteed by
+ * `loadConfig()`'s bootstrap call before any consumer can observe the
+ * registry, so this helper must NOT trigger side-effecting registration
+ * itself — that hid the ordering coupling and surprised readers.
  */
 function getRegisteredProviderNames(): string[] {
-  registerBuiltinProviders();
-  registerCommunityProviders();
   return getRegisteredProviders().map(p => p.id);
 }
 
@@ -81,17 +80,41 @@ function mergeAssistantDefaults(
   return merged;
 }
 
+/**
+ * Per-provider allowlist of fields safe to expose to web clients.
+ *
+ * **Allowlist (not denylist) by design.** Any field not listed here is
+ * dropped on its way out. New sensitive fields on a provider default
+ * config (binary paths, credentials, absolute filesystem paths, etc.)
+ * are hidden by default — you have to opt in to expose them.
+ *
+ * Unknown provider IDs (community providers not listed below) fall back
+ * to the generic empty allowlist: the web UI sees the provider exists,
+ * but none of its defaults. Providers whose defaults are safe to surface
+ * register their fields here.
+ */
+const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
+  claude: ['model'],
+  codex: ['model', 'modelReasoningEffort', 'webSearchMode'],
+  // community providers — list each field we're confident is safe to
+  // show in the web UI. Unknown providers fall through with no fields.
+  pi: ['model'],
+};
+
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
   const safeAssistants: SafeConfig['assistants'] = {};
 
   for (const [providerId, providerDefaults] of Object.entries(assistants)) {
     if (!providerDefaults || typeof providerDefaults !== 'object') continue;
-    const safeDefaults: Record<string, unknown> = { ...providerDefaults };
 
-    // Server-internal or local-path settings should never be exposed to the web UI.
-    delete safeDefaults.additionalDirectories;
-    delete safeDefaults.settingSources;
-    delete safeDefaults.codexBinaryPath;
+    const allowed = SAFE_ASSISTANT_FIELDS[providerId] ?? [];
+    const safeDefaults: Record<string, unknown> = {};
+    for (const field of allowed) {
+      const value = (providerDefaults as Record<string, unknown>)[field];
+      if (value !== undefined) {
+        safeDefaults[field] = value;
+      }
+    }
 
     safeAssistants[providerId] = safeDefaults;
   }

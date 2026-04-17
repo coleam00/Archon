@@ -47,6 +47,14 @@ describe('AsyncQueue', () => {
     if (!r1.done) expect(r1.value).toBe(10);
     if (!r2.done) expect(r2.value).toBe(20);
   });
+
+  test('second iterator call throws (single-consumer invariant)', () => {
+    const q = new AsyncQueue<number>();
+    // First call establishes the consumer; the iterator itself is created
+    // but iteration only starts on `.next()`. Pi's bridge uses this pattern.
+    q[Symbol.asyncIterator]();
+    expect(() => q[Symbol.asyncIterator]()).toThrow(/single-consumer/);
+  });
 });
 
 // ─── serializeToolResult ───────────────────────────────────────────────────

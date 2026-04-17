@@ -16,7 +16,7 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   skills: true,
   toolRestrictions: true,
   structuredOutput: false,
-  envInjection: false,
+  envInjection: true,
   costControl: false,
   effortControl: true,
   thinkingControl: true,

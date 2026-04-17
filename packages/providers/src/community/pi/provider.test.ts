@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -17,7 +18,11 @@ mock.module('@archon/paths', () => ({
 // `listener` variable plus `mockPrompt` that replays a scripted event
 // sequence synchronously.
 
-type FakeEvent = Record<string, unknown>;
+// Typed against Pi's actual event union so tests fail at compile time when
+// Pi renames a field (e.g. `assistantMessageEvent` → `amEvent`) rather than
+// silently passing while production drifts. Using `as AgentSessionEvent` at
+// the call site covers the cases where we construct partial message objects.
+type FakeEvent = AgentSessionEvent;
 let capturedListener: ((event: FakeEvent) => void) | undefined;
 
 const scriptedEvents: FakeEvent[] = [];
@@ -822,6 +827,7 @@ describe('PiProvider', () => {
     expect(caps.toolRestrictions).toBe(true);
     expect(caps.skills).toBe(true);
     expect(caps.sessionResume).toBe(true);
+    expect(caps.envInjection).toBe(true);
     // Still false:
     expect(caps.mcp).toBe(false);
     expect(caps.hooks).toBe(false);
@@ -866,5 +872,105 @@ describe('PiProvider', () => {
       | Record<string, unknown>
       | undefined;
     expect('additionalSkillPaths' in (loaderArgs ?? {})).toBe(false);
+  });
+
+  // ─── Error + lifecycle paths (review: "zero test coverage") ─────────
+
+  test('session.prompt rejection surfaces as thrown error to consumer', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const promptError = new Error('pi backend exploded');
+    mockPrompt.mockImplementationOnce(async () => {
+      throw promptError;
+    });
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+    expect(error?.message).toBe('pi backend exploded');
+    // dispose still happens on error path
+    expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('pre-aborted signal triggers session.abort before any yielding', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    const controller = new AbortController();
+    controller.abort();
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        abortSignal: controller.signal,
+      })
+    );
+    expect(mockAbort).toHaveBeenCalled();
+  });
+
+  test('abort signal mid-stream calls session.abort', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const controller = new AbortController();
+    // Drive the listener with one chunk, then abort, then agent_end.
+    mockPrompt.mockImplementationOnce(async () => {
+      capturedListener?.({
+        type: 'message_update',
+        message: { role: 'assistant' } as never,
+        assistantMessageEvent: {
+          type: 'text_delta',
+          contentIndex: 0,
+          delta: 'partial',
+          partial: { role: 'assistant' } as never,
+        },
+      });
+      controller.abort();
+      capturedListener?.({
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          } as never,
+        ],
+      });
+    });
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        abortSignal: controller.signal,
+      })
+    );
+    expect(mockAbort).toHaveBeenCalled();
+  });
+
+  test('modelFallbackMessage yields a system chunk before the agent runs', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    mockCreateAgentSession.mockImplementationOnce(async () => ({
+      session: mockSession,
+      extensionsResult: { extensions: [], errors: [], runtime: {} },
+      modelFallbackMessage: 'Requested sonnet-5 not available, using haiku.',
+    }));
+    resetScript(scriptedAgentEnd());
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('sonnet-5 not available'))).toBe(true);
   });
 });

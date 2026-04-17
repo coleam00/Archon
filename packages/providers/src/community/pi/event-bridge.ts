@@ -1,7 +1,14 @@
+import { createLogger } from '@archon/paths';
 import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 import type { AssistantMessage, Usage } from '@mariozechner/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('provider.pi.event-bridge');
+  return cachedLog;
+}
 
 /**
  * Single-producer / single-consumer async queue. Bridges Pi's callback-based
@@ -9,13 +16,20 @@ import type { MessageChunk, TokenUsage } from '../../types';
  *
  * Design:
  *  - producers call `push(item)` from any synchronous context
- *  - the consumer awaits `for await (const item of queue)`
+ *  - the consumer awaits `for await (const item of queue)` ONCE
  *  - sentinel items (in this bridge: `__done` / `__error`) are pushed by the
  *    caller; the queue itself does not know about them
+ *
+ * Single-consumer is a hard invariant — a second iterator would race with
+ * the first over both the buffer and the waiters list, silently dropping
+ * items. The constructor enforces this: the first `Symbol.asyncIterator`
+ * call sets `consumed=true`; subsequent calls throw so the mistake surfaces
+ * loudly during development rather than being debugged after the fact.
  */
 export class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly buffer: T[] = [];
   private readonly waiters: ((item: T) => void)[] = [];
+  private consumed = false;
 
   push(item: T): void {
     const waiter = this.waiters.shift();
@@ -23,7 +37,19 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     else this.buffer.push(item);
   }
 
-  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    if (this.consumed) {
+      // Throw synchronously at the call site (not lazily on first .next())
+      // so the stack trace points at the offending second-consumer caller.
+      throw new Error(
+        'AsyncQueue: a single queue can only be iterated once (single-consumer invariant). Create a new queue for each consumer.'
+      );
+    }
+    this.consumed = true;
+    return this.iterate();
+  }
+
+  private async *iterate(): AsyncGenerator<T> {
     while (true) {
       const next = this.buffer.shift();
       if (next !== undefined) {
@@ -180,17 +206,22 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
  *  - forward `abortSignal` to `session.abort()` fire-and-forget
  *  - always `dispose()` the session to avoid listener accumulation
  */
+/**
+ * Internal queue payload for `bridgeSession`. Exported at module scope
+ * (not inside the generator) so unit tests can exercise each variant
+ * independently without reaching into the generator's closure.
+ */
+export type BridgeQueueItem =
+  | { kind: 'chunk'; chunk: MessageChunk }
+  | { kind: 'done' }
+  | { kind: 'error'; error: Error };
+
 export async function* bridgeSession(
   session: AgentSession,
   prompt: string,
   abortSignal?: AbortSignal
 ): AsyncGenerator<MessageChunk> {
-  type QueueItem =
-    | { kind: 'chunk'; chunk: MessageChunk }
-    | { kind: 'done' }
-    | { kind: 'error'; error: Error };
-
-  const queue = new AsyncQueue<QueueItem>();
+  const queue = new AsyncQueue<BridgeQueueItem>();
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
@@ -203,8 +234,11 @@ export async function* bridgeSession(
   });
 
   const onAbort = (): void => {
-    void session.abort().catch(() => {
-      /* abort is best-effort — failures are recoverable via dispose */
+    void session.abort().catch((err: unknown) => {
+      // Abort is best-effort — failures are recoverable via the dispose()
+      // call in the `finally` below. But log at debug so a regression in
+      // Pi's abort path doesn't silently disappear.
+      getLog().debug({ err }, 'pi.event-bridge.abort_failed');
     });
   };
   if (abortSignal) {
@@ -246,8 +280,10 @@ export async function* bridgeSession(
     }
     try {
       session.dispose();
-    } catch {
-      /* dispose is defensive — session may already be torn down */
+    } catch (err: unknown) {
+      // Dispose is defensive — session may already be torn down. Log at
+      // debug so SDK regressions surface without polluting normal output.
+      getLog().debug({ err }, 'pi.event-bridge.dispose_failed');
     }
     // Ensure the prompt promise settles so callers see no dangling work.
     await promptPromise.catch(() => {

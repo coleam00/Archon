@@ -303,7 +303,7 @@ describe('registry', () => {
       expect(piEntries).toHaveLength(1);
     });
 
-    test('declares v2 capabilities (thinking, effort, tools, skills, sessionResume supported)', () => {
+    test('declares v2 capabilities (thinking, effort, tools, skills, sessionResume, envInjection supported)', () => {
       registerPiProvider();
       const caps = getProviderCapabilities('pi');
       // Flipped true in v2
@@ -312,11 +312,11 @@ describe('registry', () => {
       expect(caps.toolRestrictions).toBe(true);
       expect(caps.skills).toBe(true);
       expect(caps.sessionResume).toBe(true);
+      expect(caps.envInjection).toBe(true);
       // Still false (out of v2 scope)
       expect(caps.mcp).toBe(false);
       expect(caps.hooks).toBe(false);
       expect(caps.structuredOutput).toBe(false);
-      expect(caps.envInjection).toBe(false);
       expect(caps.costControl).toBe(false);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);

@@ -29,8 +29,8 @@ import { resolvePiSession } from './session-resolver';
  * scope — Archon is a server-side platform and doesn't drive interactive
  * login. Extend only when a provider is actually exercised.
  *
- * Cross-reference:
- *   /tmp/pi-research/pi-mono/packages/ai/src/env-api-keys.ts
+ * Cross-reference (authoritative mapping maintained upstream in Pi):
+ *   https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/env-api-keys.ts
  */
 const PI_PROVIDER_ENV_VARS: Record<string, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
@@ -48,6 +48,20 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
   return cachedLog;
+}
+
+/**
+ * Typed wrapper around Pi's `getModel` for a runtime-string provider/model
+ * pair. Pi's getModel signature constrains `TModelId` to
+ * `keyof MODELS[TProvider]`, which isn't knowable from a runtime string —
+ * the cast through `unknown` is the only way to bypass it. Isolating that
+ * escape hatch behind one searchable name keeps it auditable.
+ */
+function lookupPiModel(provider: string, modelId: string): Model<Api> | undefined {
+  return (getModel as unknown as (p: string, m: string) => Model<Api> | undefined)(
+    provider,
+    modelId
+  );
 }
 
 /**
@@ -87,15 +101,9 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 2. Look up the Model via Pi's static catalog. getModel() returns
-    //    undefined (cast as Model) when not found; we guard explicitly.
-    //    Cast through `unknown` because getModel's generics constrain
-    //    TModelId to `keyof MODELS[TProvider]`, which we don't have at
-    //    compile time from a runtime string.
-    const model = (getModel as unknown as (p: string, m: string) => Model<Api> | undefined)(
-      parsed.provider,
-      parsed.modelId
-    );
+    // 2. Look up the Model via Pi's static catalog. `lookupPiModel` returns
+    //    undefined when not found; we guard explicitly below.
+    const model = lookupPiModel(parsed.provider, parsed.modelId);
     if (!model) {
       throw new Error(
         `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
