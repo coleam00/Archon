@@ -1,0 +1,488 @@
+name: archon-scout-perf-roadmap
+description: |
+  Use when: Optimizing app performance using Scout APM.
+  Does:
+  1. Scout MCP — top 10 slow + high-traffic HTTP routes
+  2. Parallel analysis (10 nodes) — profile each route in the codebase + traces
+  3. Consolidated optimization plan
+  4. Interactive plan review until user approves
+  5. Implement via plan pipeline (draft PR)
+  6. Multi-agent code review + self-fix
+  7. Mark PR ready when review satisfied
+
+  Requires: SCOUT_API_KEY (self-hosted Docker MCP) or Scout endpoints export; Docker for scout-mcp-local.
+  Input: Optional app name/id after workflow message; e.g. "My App Name" or leave default.
+
+  NOT for: Performance work without Scout (use archon-assist) or non-HTTP routes only.
+
+provider: claude
+model: sonnet
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1 — Scout discovery
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: discover-routes
+    command: scout-discover-routes
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-00
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 0 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-00.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 0, write to `$ARTIFACTS_DIR/profile-00.md` a single line `SKIPPED: no route at index 0` and stop.
+      2. Otherwise take the route object at index 0. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-00.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-01
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 1 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-01.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 1, write to `$ARTIFACTS_DIR/profile-01.md` a single line `SKIPPED: no route at index 1` and stop.
+      2. Otherwise take the route object at index 1. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-01.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-02
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 2 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-02.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 2, write to `$ARTIFACTS_DIR/profile-02.md` a single line `SKIPPED: no route at index 2` and stop.
+      2. Otherwise take the route object at index 2. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-02.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-03
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 3 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-03.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 3, write to `$ARTIFACTS_DIR/profile-03.md` a single line `SKIPPED: no route at index 3` and stop.
+      2. Otherwise take the route object at index 3. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-03.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-04
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 4 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-04.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 4, write to `$ARTIFACTS_DIR/profile-04.md` a single line `SKIPPED: no route at index 4` and stop.
+      2. Otherwise take the route object at index 4. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-04.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-05
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 5 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-05.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 5, write to `$ARTIFACTS_DIR/profile-05.md` a single line `SKIPPED: no route at index 5` and stop.
+      2. Otherwise take the route object at index 5. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-05.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-06
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 6 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-06.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 6, write to `$ARTIFACTS_DIR/profile-06.md` a single line `SKIPPED: no route at index 6` and stop.
+      2. Otherwise take the route object at index 6. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-06.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-07
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 7 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-07.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 7, write to `$ARTIFACTS_DIR/profile-07.md` a single line `SKIPPED: no route at index 7` and stop.
+      2. Otherwise take the route object at index 7. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-07.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-08
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 8 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-08.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 8, write to `$ARTIFACTS_DIR/profile-08.md` a single line `SKIPPED: no route at index 8` and stop.
+      2. Otherwise take the route object at index 8. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-08.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  - id: profile-09
+    prompt: |
+      You are **one of ten parallel profilers** for the Scout performance roadmap.
+
+      **Assigned index**: 9 (0-based). **Profile file**: `$ARTIFACTS_DIR/profile-09.md`
+
+      ## Steps
+
+      1. Read `$ARTIFACTS_DIR/routes.json`. If there is **no** element at index 9, write to `$ARTIFACTS_DIR/profile-09.md` a single line `SKIPPED: no route at index 9` and stop.
+      2. Otherwise take the route object at index 9. Map it to this codebase (routers, handlers, middleware, DB).
+      3. Use **Scout MCP** when available: `get_endpoint_metrics`, `get_app_endpoint_traces`, `get_app_insights` for this app/endpoint to explain **where** time is spent (N+1, slow queries, external I/O, etc.).
+      4. Read CLAUDE.md and search the codebase for the implementation path.
+      5. Write **`$ARTIFACTS_DIR/profile-09.md`** with:
+         - Route identity (method + path)
+         - Scout metrics summary
+         - Code path (files + symbols)
+         - Root causes of slowness
+         - Concrete optimization ideas (caching, batching, indexes, async, etc.)
+
+      Keep stdout to a short summary line for logs.
+    depends_on: [discover-routes]
+    context: fresh
+    mcp: .archon/mcp/scout-apm.json
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2 — Single plan from profiles
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: consolidate-plan
+    command: scout-consolidate-perf-plan
+    depends_on: [profile-00, profile-01, profile-02, profile-03, profile-04, profile-05, profile-06, profile-07, profile-08, profile-09]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3 — Interactive plan review (human edits)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: refine-plan
+    depends_on: [consolidate-plan]
+    loop:
+      prompt: |
+        # Scout perf roadmap — Plan review
+
+        The consolidated plan lives at `$ARTIFACTS_DIR/plan.md`.
+
+        **User's latest message**: $LOOP_USER_INPUT
+
+        ---
+
+        ## If the first iteration (no user input yet):
+
+        1. Read `$ARTIFACTS_DIR/plan.md` and `$ARTIFACTS_DIR/routes-summary.md`.
+        2. Present a clear summary: goals, tasks, risks, and what will change.
+        3. Ask for feedback (scope, ordering, risk tradeoffs).
+
+        **Do not** emit `<promise>PLAN_APPROVED</promise>` on the first iteration.
+
+        ## If the user gave feedback:
+
+        1. Edit `$ARTIFACTS_DIR/plan.md` to incorporate changes (tasks, scope, exclusions).
+        2. Show what changed.
+        3. Ask for more feedback or approval.
+
+        ## If the user gave **explicit approval** (e.g. "approved", "looks good", "implement", "ship it"):
+
+        Output: "Plan approved. Proceeding to implementation setup."
+        Then emit: `<promise>PLAN_APPROVED</promise>`
+
+        **CRITICAL**: Never emit `PLAN_APPROVED` unless the latest user message clearly approves. Questions are not approval.
+      until: PLAN_APPROVED
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Review the plan. Request changes, or say "approved" to implement (draft PR next).
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4 — Plan execution pipeline (same as plan-to-pr)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan-setup
+    command: archon-plan-setup
+    depends_on: [refine-plan]
+    context: fresh
+
+  - id: confirm-plan
+    command: archon-confirm-plan
+    depends_on: [plan-setup]
+    context: fresh
+
+  - id: implement-tasks
+    command: archon-implement-tasks
+    depends_on: [confirm-plan]
+    context: fresh
+    model: claude-opus-4-6[1m]
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement-tasks]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5 — Draft PR (not ready for review yet)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-draft-pr
+    prompt: |
+      Create a **draft** pull request for the current branch (Scout perf optimizations).
+
+      1. Ensure all changes are committed; push `git push -u origin HEAD`.
+      2. Read `$ARTIFACTS_DIR/plan.md` and `$ARTIFACTS_DIR/routes-summary.md` for context.
+      3. If a PR already exists: `gh pr list --head $(git branch --show-current)` — report URL and skip creation.
+      4. Else use the repo PR template if present; fill every section.
+      5. Create with: `gh pr create --draft --base $BASE_BRANCH` — title like `perf: Scout hot-route optimizations`.
+      6. Save `gh pr view --json number,url` to `$ARTIFACTS_DIR/.pr-url` if helpful.
+
+      Summarize PR URL and draft status.
+    depends_on: [validate]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6 — Code review (same pattern as archon-fix-github-issue)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: review-scope
+    command: archon-pr-review-scope
+    depends_on: [create-draft-pr]
+    context: fresh
+
+  - id: review-classify
+    prompt: |
+      You are a PR review classifier for a Scout performance PR.
+
+      ## PR scope
+      $review-scope.output
+
+      Rules:
+      - **Code review**: ALWAYS run (`true`).
+      - **Error handling**: run if diff touches try/catch, async error paths, or new failure modes.
+      - **Test coverage**: run if diff touches non-test source.
+      - **Comment quality**: run if diff changes comments/docstrings meaningfully.
+      - **Docs impact**: run if public APIs, env vars, or user-facing behavior docs change.
+
+      Provide brief reasoning.
+    depends_on: [review-scope]
+    model: haiku
+    allowed_tools: []
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        run_code_review:
+          type: string
+          enum: ["true", "false"]
+        run_error_handling:
+          type: string
+          enum: ["true", "false"]
+        run_test_coverage:
+          type: string
+          enum: ["true", "false"]
+        run_comment_quality:
+          type: string
+          enum: ["true", "false"]
+        run_docs_impact:
+          type: string
+          enum: ["true", "false"]
+        reasoning:
+          type: string
+      required:
+        - run_code_review
+        - run_error_handling
+        - run_test_coverage
+        - run_comment_quality
+        - run_docs_impact
+        - reasoning
+
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [review-classify]
+    context: fresh
+
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_error_handling == 'true'"
+    context: fresh
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_test_coverage == 'true'"
+    context: fresh
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_comment_quality == 'true'"
+    context: fresh
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_docs_impact == 'true'"
+    context: fresh
+
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    trigger_rule: one_success
+    context: fresh
+
+  - id: self-fix
+    command: archon-self-fix-all
+    depends_on: [synthesize]
+    context: fresh
+
+  - id: simplify
+    command: archon-simplify-changes
+    depends_on: [self-fix]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 7 — Mark PR ready (review concerns addressed)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: mark-pr-ready
+    prompt: |
+      Scout perf workflow — finalize the PR.
+
+      1. Run validation: `bun run validate` or the repo's full check from CLAUDE.md.
+      2. Push any fixes: `git push origin HEAD`.
+      3. **Mark the PR ready for review** (exit draft): `gh pr ready` (or `gh pr ready <number>` if needed).
+      4. Post a short comment on the PR summarizing: Scout routes targeted, key changes, validation status.
+
+      If `gh pr ready` is not appropriate (already ready, or permission), report current PR state from `gh pr view`.
+
+      Output:
+      - PR URL
+      - Draft vs open (ready) state
+      - Next steps for the human (optional)
+    depends_on: [simplify]
+    context: fresh
