@@ -113,6 +113,14 @@ export interface MessageMetadata {
   segment?: 'new' | 'auto';
   workflowDispatch?: { workerConversationId: string; workflowName: string };
   workflowResult?: { workflowName: string; runId: string };
+  /**
+   * When set, the message is an interactive-loop gate prompt. Adapters that
+   * support rich input (e.g. Slack Block Kit) may render approve / request-
+   * changes controls bound to this run + node. Adapters without rich input
+   * MUST send the plain text body unchanged; the underlying text already
+   * includes the /workflow approve fallback instructions.
+   */
+  interactiveGate?: { runId: string; nodeId: string };
 }
 
 export interface IPlatformAdapter {

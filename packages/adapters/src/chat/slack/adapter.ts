@@ -10,6 +10,40 @@ import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
 import type { SlackMessageEvent } from './types';
 
+/**
+ * Gate action-id + modal callback-id encoding. runId and nodeId are packed
+ * with a non-colliding separator so the Slack callback can recover them
+ * without depending on out-of-band state. Separator `|` is safe: workflow
+ * runIds are UUIDs and node ids are YAML keys (no pipes).
+ */
+const GATE_SEP = '|';
+const GATE_ACTION_APPROVE = 'gate_approve';
+const GATE_ACTION_REQUEST_CHANGES = 'gate_request_changes';
+const GATE_MODAL_CALLBACK = 'gate_changes_modal';
+
+function encodeGateActionId(prefix: string, runId: string, nodeId: string): string {
+  return `${prefix}${GATE_SEP}${runId}${GATE_SEP}${nodeId}`;
+}
+
+function decodeGateActionId(
+  actionId: string | undefined
+): { runId: string; nodeId: string } | null {
+  if (!actionId) return null;
+  const parts = actionId.split(GATE_SEP);
+  if (parts.length !== 3) return null;
+  const [, runId, nodeId] = parts;
+  if (!runId || !nodeId) return null;
+  return { runId, nodeId };
+}
+
+/**
+ * Block type used for Slack message blocks. We don't import @slack/types
+ * directly — the adapter package only declares @slack/bolt, and the exact
+ * block shape is validated at runtime by Slack's API. An opaque record keeps
+ * the compile boundary narrow while still allowing typed construction.
+ */
+type SlackBlock = Record<string, unknown>;
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -49,12 +83,13 @@ export class SlackAdapter implements IPlatformAdapter {
    * Send a message to a Slack channel/thread
    * Uses markdown block for proper formatting of AI responses
    * Automatically splits messages longer than 12000 characters
+   *
+   * When `metadata.interactiveGate` is set, the final chunk is followed by
+   * an Approve / Request changes action block. All other adapters ignore the
+   * field, so the text body already includes the `/workflow approve` fallback
+   * and remains complete on every platform.
    */
-  async sendMessage(
-    channelId: string,
-    message: string,
-    _metadata?: MessageMetadata
-  ): Promise<void> {
+  async sendMessage(channelId: string, message: string, metadata?: MessageMetadata): Promise<void> {
     getLog().debug({ channelId, messageLength: message.length }, 'slack.send_message');
 
     // Parse channelId - may include thread_ts as "channel:thread_ts"
@@ -62,45 +97,61 @@ export class SlackAdapter implements IPlatformAdapter {
       ? channelId.split(':')
       : [channelId, undefined];
 
+    const gate = metadata?.interactiveGate;
+
     if (message.length <= MAX_MARKDOWN_BLOCK_LENGTH) {
-      // Use markdown block for proper formatting
-      await this.sendWithMarkdownBlock(channel, message, threadTs);
+      await this.sendWithMarkdownBlock(channel, message, threadTs, gate);
     } else {
-      // Long message: split by paragraphs
       getLog().debug({ messageLength: message.length }, 'slack.message_splitting');
       const chunks = splitIntoParagraphChunks(message, MAX_MARKDOWN_BLOCK_LENGTH - 500);
 
-      for (const chunk of chunks) {
-        await this.sendWithMarkdownBlock(channel, chunk, threadTs);
+      // Attach gate buttons only to the LAST chunk so a long gate prompt still
+      // ends with a single actionable row.
+      for (let i = 0; i < chunks.length; i++) {
+        const isLast = i === chunks.length - 1;
+        await this.sendWithMarkdownBlock(channel, chunks[i], threadTs, isLast ? gate : undefined);
       }
     }
   }
 
   /**
-   * Send a message using Slack's markdown block for proper formatting
-   * Falls back to plain text if block fails
+   * Send a message using Slack's markdown block for proper formatting.
+   * Falls back to plain text if block fails.
+   *
+   * When `gate` is provided, append an Actions block with Approve / Request
+   * changes buttons whose action_ids carry the runId + nodeId. This lets the
+   * user resolve interactive-loop gates with one click instead of typing
+   * `/workflow approve <uuid>`.
    */
   private async sendWithMarkdownBlock(
     channel: string,
     message: string,
-    threadTs?: string
+    threadTs?: string,
+    gate?: { runId: string; nodeId: string }
   ): Promise<void> {
+    const blocks: SlackBlock[] = [{ type: 'markdown', text: message }];
+    if (gate) {
+      blocks.push(this.buildGateActionsBlock(gate));
+    }
     try {
+      // Cast through `unknown`: SlackBlock is an opaque record by design
+      // (see type definition). Slack's runtime validates the exact shape, and
+      // the pre-refactor markdown block was already being cast implicitly.
       await this.app.client.chat.postMessage({
         channel,
         thread_ts: threadTs,
-        blocks: [
-          {
-            type: 'markdown',
-            text: message,
-          },
-        ],
+        blocks,
         // Fallback text for notifications/accessibility
         text: message.substring(0, 150) + (message.length > 150 ? '...' : ''),
-      });
-      getLog().debug({ messageLength: message.length }, 'slack.markdown_block_sent');
+      } as unknown as Parameters<typeof this.app.client.chat.postMessage>[0]);
+      getLog().debug(
+        { messageLength: message.length, gate: Boolean(gate) },
+        'slack.markdown_block_sent'
+      );
     } catch (error) {
-      // Fallback to plain text
+      // Fallback to plain text. Gate buttons are sacrificed in this fallback
+      // path; the message body still contains the `/workflow approve ...`
+      // instructions so the user retains a way to resolve the gate.
       const err = error as Error;
       getLog().warn({ err, channel, threadTs }, 'slack.markdown_block_failed');
       await this.app.client.chat.postMessage({
@@ -109,6 +160,33 @@ export class SlackAdapter implements IPlatformAdapter {
         text: message,
       });
     }
+  }
+
+  /**
+   * Build the Actions block with Approve (primary) and Request changes
+   * (neutral) buttons. Action ids pack the workflow run + node so the click
+   * callback can resolve the target without consulting DB state.
+   */
+  private buildGateActionsBlock(gate: { runId: string; nodeId: string }): SlackBlock {
+    return {
+      type: 'actions',
+      block_id: encodeGateActionId('gate_block', gate.runId, gate.nodeId),
+      elements: [
+        {
+          type: 'button',
+          action_id: encodeGateActionId(GATE_ACTION_APPROVE, gate.runId, gate.nodeId),
+          style: 'primary',
+          text: { type: 'plain_text', text: 'Approve', emoji: true },
+          value: 'approve',
+        },
+        {
+          type: 'button',
+          action_id: encodeGateActionId(GATE_ACTION_REQUEST_CHANGES, gate.runId, gate.nodeId),
+          text: { type: 'plain_text', text: 'Request changes', emoji: true },
+          value: 'request_changes',
+        },
+      ],
+    };
   }
 
   /**
@@ -242,6 +320,8 @@ export class SlackAdapter implements IPlatformAdapter {
    * Start the bot (connects via Socket Mode)
    */
   async start(): Promise<void> {
+    this.registerGateHandlers();
+
     // Register app_mention event handler (when bot is @mentioned)
     this.app.event('app_mention', async ({ event }) => {
       // Authorization check
@@ -310,5 +390,272 @@ export class SlackAdapter implements IPlatformAdapter {
   stop(): void {
     void this.app.stop();
     getLog().info('slack.bot_stopped');
+  }
+
+  /**
+   * Register Bolt handlers for gate buttons + the "Request changes" modal.
+   *
+   * Behavior:
+   * - Approve click → synthesize a message event with text "approved" in the
+   *   gate's thread; the natural-language approval path in handleMessage
+   *   resumes the paused workflow run.
+   * - Request changes click → open a modal; text entered on submit is
+   *   synthesized as a thread message (treated as feedback by the loop).
+   *
+   * Action IDs are matched with the `gate_approve`/`gate_request_changes`
+   * prefixes (exact action_ids are per-run and per-node). We register pattern
+   * matchers so every live gate uses the same handler without per-run
+   * subscriptions.
+   */
+  private registerGateHandlers(): void {
+    // Approve button.
+    this.app.action(
+      { type: 'block_actions', action_id: new RegExp(`^${GATE_ACTION_APPROVE}\\|`) },
+      async ({ ack, body, action, client }) => {
+        await ack();
+        await this.handleGateClick({
+          body,
+          action,
+          client,
+          verb: 'approve',
+        });
+      }
+    );
+
+    // Request changes button — opens a modal to collect feedback text.
+    this.app.action(
+      { type: 'block_actions', action_id: new RegExp(`^${GATE_ACTION_REQUEST_CHANGES}\\|`) },
+      async ({ ack, body, action, client }) => {
+        await ack();
+        await this.handleRequestChangesClick({ body, action, client });
+      }
+    );
+
+    // Modal submission — feedback text is synthesized as a thread message.
+    this.app.view(GATE_MODAL_CALLBACK, async ({ ack, view, body }) => {
+      await ack();
+      await this.handleGateModalSubmit({ view, body });
+    });
+  }
+
+  /**
+   * Handle Approve click: synthesize an "approved" message in the original
+   * thread so the natural-language resume path fires.
+   */
+  private async handleGateClick(params: {
+    body: unknown;
+    action: unknown;
+    // Typed as `unknown` because Bolt's client union is verbose; we only
+    // call two well-known methods on it. Actual runtime value is a WebClient.
+    client: unknown;
+    verb: 'approve';
+  }): Promise<void> {
+    const { body, action, client } = params;
+    const ctx = this.extractClickContext(body, action);
+    const ids = decodeGateActionId((action as { action_id?: string }).action_id);
+    if (!ctx) {
+      getLog().warn({ ids }, 'slack.gate_click_missing_context');
+      return;
+    }
+    getLog().info(
+      { runId: ids?.runId, nodeId: ids?.nodeId, userId: ctx.userId },
+      'slack.gate_approve_clicked'
+    );
+
+    // Best-effort: replace the actions row with a status context so the
+    // buttons can't be clicked twice. Failure here is non-fatal.
+    const webClient = client as {
+      chat: { update: (args: Record<string, unknown>) => Promise<unknown> };
+    };
+    try {
+      await webClient.chat.update({
+        channel: ctx.channel,
+        ts: ctx.messageTs,
+        text: `Approved by <@${ctx.userId}>`,
+        blocks: [
+          {
+            type: 'context',
+            elements: [
+              {
+                type: 'mrkdwn',
+                text: `:white_check_mark: Approved by <@${ctx.userId}>`,
+              },
+            ],
+          },
+        ],
+      });
+    } catch (error) {
+      getLog().warn({ err: error }, 'slack.gate_update_message_failed');
+    }
+
+    await this.dispatchSyntheticMessage({
+      channel: ctx.channel,
+      threadTs: ctx.threadTs,
+      userId: ctx.userId,
+      text: 'approved',
+    });
+  }
+
+  /**
+   * Handle Request changes click: open a modal with a multiline textarea.
+   * channel + thread + user are packed into `private_metadata` so the modal
+   * submission handler can post a synthetic reply in the correct thread.
+   */
+  private async handleRequestChangesClick(params: {
+    body: unknown;
+    action: unknown;
+    // See handleGateClick for rationale.
+    client: unknown;
+  }): Promise<void> {
+    const { body, action, client } = params;
+    const ctx = this.extractClickContext(body, action);
+    const triggerId = this.extractTriggerId(body);
+    const ids = decodeGateActionId((action as { action_id?: string }).action_id);
+    if (!ctx || !triggerId) {
+      getLog().warn({ ids }, 'slack.gate_changes_click_missing_context');
+      return;
+    }
+    getLog().info(
+      { runId: ids?.runId, nodeId: ids?.nodeId, userId: ctx.userId },
+      'slack.gate_request_changes_clicked'
+    );
+
+    const privateMetadata = JSON.stringify({
+      channel: ctx.channel,
+      threadTs: ctx.threadTs,
+      userId: ctx.userId,
+    });
+
+    const webClient = client as {
+      views: { open: (args: Record<string, unknown>) => Promise<unknown> };
+    };
+    try {
+      await webClient.views.open({
+        trigger_id: triggerId,
+        view: {
+          type: 'modal',
+          callback_id: GATE_MODAL_CALLBACK,
+          private_metadata: privateMetadata,
+          title: { type: 'plain_text', text: 'Request changes' },
+          submit: { type: 'plain_text', text: 'Send' },
+          close: { type: 'plain_text', text: 'Cancel' },
+          blocks: [
+            {
+              type: 'input',
+              block_id: 'feedback_block',
+              label: {
+                type: 'plain_text',
+                text: 'What should change?',
+              },
+              element: {
+                type: 'plain_text_input',
+                action_id: 'feedback_input',
+                multiline: true,
+                placeholder: {
+                  type: 'plain_text',
+                  text: 'e.g., drop the telemetry task, reorder DB migration first, tighten scope to auth only',
+                },
+              },
+            },
+          ],
+        },
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'slack.gate_modal_open_failed');
+    }
+  }
+
+  /**
+   * Handle modal submission: post the user's feedback text as a synthetic
+   * thread message so the workflow's interactive loop receives it.
+   */
+  private async handleGateModalSubmit(params: { view: unknown; body: unknown }): Promise<void> {
+    const { view, body } = params;
+    const v = view as {
+      private_metadata?: string;
+      state?: { values?: Record<string, Record<string, { value?: string }>> };
+    };
+
+    let meta: { channel?: string; threadTs?: string; userId?: string } = {};
+    try {
+      meta = v.private_metadata ? (JSON.parse(v.private_metadata) as typeof meta) : {};
+    } catch {
+      getLog().warn('slack.gate_modal_bad_private_metadata');
+      return;
+    }
+    const feedback = v.state?.values?.feedback_block?.feedback_input?.value?.trim();
+    if (!meta.channel || !meta.threadTs || !feedback) {
+      getLog().warn('slack.gate_modal_missing_fields');
+      return;
+    }
+
+    // Prefer user id from body (authoritative) over private_metadata.
+    const userId = (body as { user?: { id?: string } }).user?.id ?? meta.userId ?? 'unknown';
+
+    await this.dispatchSyntheticMessage({
+      channel: meta.channel,
+      threadTs: meta.threadTs,
+      userId,
+      text: feedback,
+    });
+  }
+
+  /**
+   * Extract channel, message ts, thread, and user from a block_actions body.
+   * Returns null if any required field is missing (shouldn't happen in
+   * practice; a defensive nullcheck keeps the handler resilient to future
+   * Bolt payload changes).
+   */
+  private extractClickContext(
+    body: unknown,
+    _action: unknown
+  ): { channel: string; messageTs: string; threadTs: string; userId: string } | null {
+    const b = body as {
+      channel?: { id?: string };
+      message?: { ts?: string; thread_ts?: string };
+      container?: { thread_ts?: string };
+      user?: { id?: string };
+    };
+    const channel = b.channel?.id;
+    const messageTs = b.message?.ts;
+    const threadTs = b.message?.thread_ts ?? b.container?.thread_ts ?? messageTs;
+    const userId = b.user?.id;
+    if (!channel || !messageTs || !threadTs || !userId) return null;
+    return { channel, messageTs, threadTs, userId };
+  }
+
+  private extractTriggerId(body: unknown): string | undefined {
+    return (body as { trigger_id?: string }).trigger_id;
+  }
+
+  /**
+   * Invoke the registered message handler with a synthetic event so button
+   * clicks and modal submissions reuse the normal handleMessage pipeline
+   * (including conversation-lock serialization and isolation context).
+   */
+  private async dispatchSyntheticMessage(params: {
+    channel: string;
+    threadTs: string;
+    userId: string;
+    text: string;
+  }): Promise<void> {
+    if (!this.messageHandler) {
+      getLog().warn('slack.gate_synthetic_no_handler');
+      return;
+    }
+    const event: SlackMessageEvent = {
+      text: params.text,
+      user: params.userId,
+      channel: params.channel,
+      // `ts` of a synthetic reply: reuse thread_ts; the orchestrator does not
+      // persist this field, and no Slack API call depends on it.
+      ts: params.threadTs,
+      thread_ts: params.threadTs,
+    };
+    try {
+      await this.messageHandler(event);
+    } catch (error) {
+      getLog().error({ err: error }, 'slack.gate_synthetic_dispatch_failed');
+    }
   }
 }

@@ -3404,6 +3404,21 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         iteration: 1,
         message: 'Review the plan and provide feedback.',
       });
+
+      // Gate-send should carry interactiveGate metadata so adapters like Slack
+      // can render approve/request-changes UI instead of asking users to type
+      // `/workflow approve <uuid>`.
+      const sendMessageMock = platform.sendMessage as Mock<
+        (id: string, msg: string, meta?: Record<string, unknown>) => Promise<void>
+      >;
+      const gateSendCall = sendMessageMock.mock.calls.find(call => {
+        const body = call[1];
+        return typeof body === 'string' && body.includes('Input required');
+      });
+      expect(gateSendCall).toBeDefined();
+      expect(gateSendCall?.[2]).toMatchObject({
+        interactiveGate: { runId: 'dag-test-run-id', nodeId: 'refine' },
+      });
     });
 
     it('interactive loop first iteration always gates even if AI emits signal', async () => {

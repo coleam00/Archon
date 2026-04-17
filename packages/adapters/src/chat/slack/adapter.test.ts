@@ -366,4 +366,70 @@ describe('SlackAdapter', () => {
       );
     });
   });
+
+  describe('interactive-loop gate rendering', () => {
+    let adapter: SlackAdapter;
+
+    beforeEach(() => {
+      adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      mockPostMessage.mockClear();
+    });
+
+    test('renders Approve + Request changes buttons when interactiveGate is set', async () => {
+      await adapter.sendMessage('C123:1234.5678', 'Review the plan summary.', {
+        interactiveGate: { runId: 'run-abc', nodeId: 'refine-plan' },
+      });
+
+      expect(mockPostMessage).toHaveBeenCalledTimes(1);
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+      };
+      expect(call.blocks).toHaveLength(2);
+      const actionsBlock = call.blocks[1] as {
+        type: string;
+        block_id: string;
+        elements: Array<{ action_id: string; style?: string; text: { text: string } }>;
+      };
+      expect(actionsBlock.type).toBe('actions');
+      expect(actionsBlock.block_id).toBe('gate_block|run-abc|refine-plan');
+      expect(actionsBlock.elements).toHaveLength(2);
+      expect(actionsBlock.elements[0].action_id).toBe('gate_approve|run-abc|refine-plan');
+      expect(actionsBlock.elements[0].style).toBe('primary');
+      expect(actionsBlock.elements[0].text.text).toBe('Approve');
+      expect(actionsBlock.elements[1].action_id).toBe('gate_request_changes|run-abc|refine-plan');
+      expect(actionsBlock.elements[1].text.text).toBe('Request changes');
+    });
+
+    test('omits gate buttons when no interactiveGate metadata is present', async () => {
+      await adapter.sendMessage('C123:1234.5678', 'plain message');
+
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+      };
+      expect(call.blocks).toHaveLength(1);
+      expect((call.blocks[0] as { type: string }).type).toBe('markdown');
+    });
+
+    test('attaches buttons only to the final chunk of a long message', async () => {
+      const paragraph1 = 'a'.repeat(10000);
+      const paragraph2 = 'b'.repeat(10000);
+      const message = `${paragraph1}\n\n${paragraph2}`;
+
+      await adapter.sendMessage('C123', message, {
+        interactiveGate: { runId: 'run-1', nodeId: 'gate-n' },
+      });
+
+      expect(mockPostMessage).toHaveBeenCalledTimes(2);
+      const first = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+      };
+      const second = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[1][0] as {
+        blocks: unknown[];
+      };
+      // First chunk has only markdown; second chunk has markdown + actions.
+      expect(first.blocks).toHaveLength(1);
+      expect(second.blocks).toHaveLength(2);
+      expect((second.blocks[1] as { type: string }).type).toBe('actions');
+    });
+  });
 });

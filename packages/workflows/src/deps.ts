@@ -47,6 +47,8 @@ export interface WorkflowMessageMetadata {
   segment?: 'new' | 'auto';
   workflowDispatch?: { workerConversationId: string; workflowName: string };
   workflowResult?: { workflowName: string; runId: string };
+  /** Mirror of MessageMetadata.interactiveGate — see packages/core/src/types/index.ts. */
+  interactiveGate?: { runId: string; nodeId: string };
 }
 
 // ---------------------------------------------------------------------------
