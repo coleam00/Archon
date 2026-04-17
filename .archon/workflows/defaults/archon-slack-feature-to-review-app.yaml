@@ -83,14 +83,65 @@ nodes:
     depends_on: [announce-spec-approved]
     context: fresh
 
+  - id: refine-plan
+    depends_on: [create-plan]
+    model: sonnet
+    loop:
+      prompt: |
+        # Feature-to-review-app — Plan review
+
+        The implementation plan lives at `$ARTIFACTS_DIR/plan.md`.
+
+        **User's latest reply**: $LOOP_USER_INPUT
+
+        ---
+
+        ## If this is the first iteration ($LOOP_USER_INPUT is empty):
+
+        1. Read `$ARTIFACTS_DIR/plan.md`.
+        2. Post a condensed in-thread summary (NOT the full file): goal,
+           ordered task list (one line each), files that will change, risks
+           or tradeoffs worth flagging, and anything you explicitly left
+           out of scope.
+        3. End with: "Reply `approved` to implement, or tell me what to
+           change (scope, ordering, tasks to add/drop)."
+
+        **Do not** emit `<promise>PLAN_APPROVED</promise>` on the first
+        iteration.
+
+        ## If the user gave feedback:
+
+        1. Edit `$ARTIFACTS_DIR/plan.md` directly to incorporate the
+           changes (add/remove/modify tasks, tighten scope, adjust
+           ordering, etc.).
+        2. Post a short "Changes made" summary of what you edited.
+        3. Ask for more feedback or approval.
+
+        ## If the user's latest reply EXPLICITLY approves
+        (contains "approved", "looks good", "ship it", "go"):
+
+        Output: "Plan approved. Setting up the implementation worktree."
+        Then emit: `<promise>PLAN_APPROVED</promise>`
+
+        **CRITICAL**: Never emit `<promise>PLAN_APPROVED</promise>` unless
+        the user's LATEST message explicitly approves. Questions, feedback,
+        and change requests are NOT approval. If the user rejects outright
+        (e.g. "no", "cancel", "stop"), acknowledge and wait for further
+        instructions — do NOT emit the approval signal.
+      until: PLAN_APPROVED
+      max_iterations: 5
+      interactive: true
+      gate_message: |
+        Review the plan summary. Request changes, or reply "approved" to start implementation.
+
   - id: plan-setup
     command: archon-plan-setup
-    depends_on: [create-plan]
+    depends_on: [refine-plan]
     context: fresh
 
   - id: announce-plan-ready
     depends_on: [plan-setup]
-    bash: 'echo "🏗️  Plan ready. Implementing in a fresh worktree..."'
+    bash: 'echo "🏗️  Plan approved. Implementing in a fresh worktree..."'
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE C — IMPLEMENT + VALIDATE
