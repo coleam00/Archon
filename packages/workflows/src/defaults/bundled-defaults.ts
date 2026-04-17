@@ -53,6 +53,7 @@ import archonInteractivePrdWf from '../../../../.archon/workflows/defaults/archo
 import archonPivLoopWf from '../../../../.archon/workflows/defaults/archon-piv-loop.yaml' with { type: 'text' };
 import archonAdversarialDevWf from '../../../../.archon/workflows/defaults/archon-adversarial-dev.yaml' with { type: 'text' };
 import archonWorkflowBuilderWf from '../../../../.archon/workflows/defaults/archon-workflow-builder.yaml' with { type: 'text' };
+import archonSlackFeatureToReviewAppWf from '../../../../.archon/workflows/defaults/archon-slack-feature-to-review-app.yaml' with { type: 'text' };
 
 // =============================================================================
 // Exports
@@ -102,6 +103,7 @@ export const BUNDLED_WORKFLOWS: Record<string, string> = {
   'archon-piv-loop': archonPivLoopWf,
   'archon-adversarial-dev': archonAdversarialDevWf,
   'archon-workflow-builder': archonWorkflowBuilderWf,
+  'archon-slack-feature-to-review-app': archonSlackFeatureToReviewAppWf,
 };
 
 /**
