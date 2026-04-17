@@ -1,0 +1,354 @@
+name: archon-slack-feature-to-review-app
+description: |
+  Use when: User on Slack/chat asks @archie to build, add, or implement a
+  feature end-to-end and wants a working review app at the end. Matches
+  phrases like "build X", "add feature Y", "implement Z", "ship a feature
+  that...".
+  Input: Feature description in natural language.
+  Output: PR ready for review + review-app URL posted back to the thread.
+  NOT for: Spec/PRD only (use archon-interactive-prd), code-only changes
+  without a spec (use archon-idea-to-pr), or bug fixes
+  (use archon-fix-github-issue).
+
+provider: claude
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE A — SPEC CREATION (bounded 3-iteration revision loop)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: spec
+    model: sonnet
+    loop:
+      prompt: |
+        # Feature request → spec
+
+        You are turning a Slack-submitted feature request into a focused
+        implementation spec, through iterative dialogue.
+
+        **Original request**: $ARGUMENTS
+        **User's latest reply**: $LOOP_USER_INPUT
+
+        ---
+
+        ## If this is the first iteration ($LOOP_USER_INPUT is empty):
+
+        1. Restate your understanding of the request in 1-2 sentences.
+        2. Explore the codebase briefly (CLAUDE.md, directory structure,
+           files obviously related to the feature).
+        3. Ask a tight set of 3-5 clarifying questions focused on DECISIONS
+           (scope boundaries, which existing code to extend, test
+           expectations, explicit out-of-scope items).
+        4. End with: "Answer the questions and I'll draft a spec."
+        5. Do NOT emit the approval signal yet.
+
+        ## If the user has replied:
+
+        1. Process their answers.
+        2. If you now have enough to draft a spec, write it to
+           `.claude/archon/specs/<kebab-slug>.spec.md` with these sections:
+           - Problem
+           - Proposed change (which files, functions, interfaces)
+           - Out of scope
+           - Acceptance criteria (specific, testable bullets)
+           - Testing plan
+        3. Present a condensed summary of the spec in-thread (not the full
+           file), end with: "Reply `approved` to implement, or tell me what
+           to change."
+        4. If the user's latest reply EXPLICITLY approves (contains
+           "approved", "looks good", "ship it", "go"), emit
+           <promise>SPEC_APPROVED</promise> and stop. Otherwise, revise the
+           spec file based on their feedback and re-summarize.
+
+        **CRITICAL**: Never emit <promise>SPEC_APPROVED</promise> unless the
+        user's LATEST message explicitly approves. Questions, feedback, and
+        change requests are NOT approval.
+      until: SPEC_APPROVED
+      max_iterations: 3
+      interactive: true
+      gate_message: |
+        Answer the questions above, or reply "approved" once the spec looks right.
+
+  - id: announce-spec-approved
+    depends_on: [spec]
+    bash: 'echo "🧠 Spec approved. Creating implementation plan..."'
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE B — PLAN
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-plan
+    command: archon-create-plan
+    depends_on: [announce-spec-approved]
+    context: fresh
+
+  - id: plan-setup
+    command: archon-plan-setup
+    depends_on: [create-plan]
+    context: fresh
+
+  - id: announce-plan-ready
+    depends_on: [plan-setup]
+    bash: 'echo "🏗️  Plan ready. Implementing in a fresh worktree..."'
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE C — IMPLEMENT + VALIDATE
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement-tasks
+    command: archon-implement-tasks
+    depends_on: [announce-plan-ready]
+    context: fresh
+    model: claude-opus-4-6[1m]
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement-tasks]
+    context: fresh
+
+  - id: announce-validated
+    depends_on: [validate]
+    bash: 'echo "✅ Implementation passed local validation. Opening PR..."'
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE D — PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: finalize-pr
+    command: archon-finalize-pr
+    depends_on: [announce-validated]
+    context: fresh
+
+  - id: announce-pr-open
+    depends_on: [finalize-pr]
+    bash: 'echo "🔍 PR opened. Running code review (round 1 of 2)..."'
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE E — CODE REVIEW: ROUND 1
+  # (five parallel agents → synthesize → conditional fix)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: review-scope-1
+    command: archon-pr-review-scope
+    depends_on: [announce-pr-open]
+    context: fresh
+
+  - id: sync-1
+    command: archon-sync-pr-with-main
+    depends_on: [review-scope-1]
+    context: fresh
+
+  - id: code-review-1
+    command: archon-code-review-agent
+    depends_on: [sync-1]
+    context: fresh
+
+  - id: error-handling-1
+    command: archon-error-handling-agent
+    depends_on: [sync-1]
+    context: fresh
+
+  - id: test-coverage-1
+    command: archon-test-coverage-agent
+    depends_on: [sync-1]
+    context: fresh
+
+  - id: comment-quality-1
+    command: archon-comment-quality-agent
+    depends_on: [sync-1]
+    context: fresh
+
+  - id: docs-impact-1
+    command: archon-docs-impact-agent
+    depends_on: [sync-1]
+    context: fresh
+
+  - id: synthesize-1
+    command: archon-synthesize-review
+    depends_on:
+      - code-review-1
+      - error-handling-1
+      - test-coverage-1
+      - comment-quality-1
+      - docs-impact-1
+    trigger_rule: none_failed_min_one_success
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        blocking_findings_count:
+          type: number
+        summary:
+          type: string
+      required: [blocking_findings_count]
+
+  - id: announce-round-1-result
+    depends_on: [synthesize-1]
+    bash: |
+      count="$synthesize-1.output.blocking_findings_count"
+      if [ "$count" = "0" ]; then
+        echo "✅ Review round 1 clean. Waiting on CI..."
+      else
+        echo "🔧 Review round 1 found $count blocking issue(s). Applying fixes..."
+      fi
+
+  - id: implement-fixes-1
+    command: archon-implement-review-fixes
+    depends_on: [announce-round-1-result]
+    context: fresh
+    when: '$synthesize-1.output.blocking_findings_count > 0'
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE E — CODE REVIEW: ROUND 2 (only if round 1 had findings)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: announce-round-2-start
+    depends_on: [implement-fixes-1]
+    bash: 'echo "🔍 Re-reviewing after fixes..."'
+    when: '$synthesize-1.output.blocking_findings_count > 0'
+
+  - id: review-scope-2
+    command: archon-pr-review-scope
+    depends_on: [announce-round-2-start]
+    context: fresh
+    when: '$synthesize-1.output.blocking_findings_count > 0'
+
+  - id: code-review-2
+    command: archon-code-review-agent
+    depends_on: [review-scope-2]
+    context: fresh
+
+  - id: error-handling-2
+    command: archon-error-handling-agent
+    depends_on: [review-scope-2]
+    context: fresh
+
+  - id: test-coverage-2
+    command: archon-test-coverage-agent
+    depends_on: [review-scope-2]
+    context: fresh
+
+  - id: comment-quality-2
+    command: archon-comment-quality-agent
+    depends_on: [review-scope-2]
+    context: fresh
+
+  - id: docs-impact-2
+    command: archon-docs-impact-agent
+    depends_on: [review-scope-2]
+    context: fresh
+
+  - id: synthesize-2
+    command: archon-synthesize-review
+    depends_on:
+      - code-review-2
+      - error-handling-2
+      - test-coverage-2
+      - comment-quality-2
+      - docs-impact-2
+    trigger_rule: none_failed_min_one_success
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        blocking_findings_count:
+          type: number
+        summary:
+          type: string
+      required: [blocking_findings_count]
+
+  - id: review-gate
+    depends_on: [synthesize-1, synthesize-2]
+    trigger_rule: none_failed_min_one_success
+    bash: |
+      r1="$synthesize-1.output.blocking_findings_count"
+      r2="$synthesize-2.output.blocking_findings_count"
+      if [ "$r1" = "0" ]; then
+        echo "✅ Review clean (round 1). Waiting on CI..."
+        exit 0
+      fi
+      if [ -n "$r2" ] && [ "$r2" = "0" ]; then
+        echo "✅ Review clean (round 2). Waiting on CI..."
+        exit 0
+      fi
+      echo "⛔ Code review did not converge after 2 rounds."
+      echo "Round 1 summary: $synthesize-1.output.summary"
+      echo "Round 2 summary: $synthesize-2.output.summary"
+      echo "PR is open; stopping before CI and review-app deploy."
+      exit 1
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE F — WAIT FOR CI
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: extract-pr-number
+    depends_on: [review-gate]
+    bash: |
+      set -e
+      number=$(gh pr view --json number --jq '.number')
+      if [ -z "$number" ] || [ "$number" = "null" ]; then
+        echo "ERROR: could not resolve PR number for current branch" >&2
+        exit 1
+      fi
+      printf '%s\n' "$number"
+
+  - id: ci-wait
+    depends_on: [extract-pr-number]
+    timeout: 3900000
+    bash: |
+      set -e
+      bun .archon/scripts/ci-wait.js "$extract-pr-number.output" 3600000
+
+  - id: announce-ci-pass
+    depends_on: [ci-wait]
+    bash: 'echo "🚀 CI green. Deploying review app..."'
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE G — DISPATCH REVIEW-APP DEPLOY
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: deploy-review-app
+    depends_on: [announce-ci-pass]
+    bash: |
+      set -e
+      branch=$(gh pr view --json headRefName --jq '.headRefName')
+      bun .archon/scripts/dispatch-review-app.js deploy-to-review-app.yml "$branch"
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE H — FETCH REVIEW-APP URL FROM PR COMMENTS
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-review-url
+    depends_on: [deploy-review-app]
+    timeout: 1000000
+    bash: |
+      set -e
+      bun .archon/scripts/fetch-review-app-url.js \
+        "$extract-pr-number.output" \
+        'https://[^[:space:])]+\.review\.instrumentl\.com[^[:space:])]*' \
+        900000 20000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE I — FINAL POST
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: announce-done
+    depends_on: [fetch-review-url]
+    model: haiku
+    prompt: |
+      Output ONLY the final status message below, with placeholders filled.
+      No preamble, no code fences, no commentary.
+
+      First, resolve the PR URL:
+      `gh pr view --json url --jq .url`
+
+      The review-app URL is: $fetch-review-url.output
+
+      Message format:
+
+      🎉 Done!
+      • PR: <pr-url>
+      • Review app: $fetch-review-url.output
+
+      Open the review app to try it out; review the PR when you're ready to merge.
