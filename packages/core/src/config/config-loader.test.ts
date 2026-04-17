@@ -224,7 +224,11 @@ concurrency:
       const config = await loadConfig();
 
       expect(config.assistant).toBe('claude');
-      expect(config.assistants).toEqual({ claude: {}, codex: {} });
+      // Built-ins always present; community providers (like `pi`) are
+      // seeded dynamically from the registry — check the built-ins
+      // explicitly rather than asserting an exhaustive shape.
+      expect(config.assistants.claude).toEqual({});
+      expect(config.assistants.codex).toEqual({});
       expect(config.streaming.telegram).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
     });

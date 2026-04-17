@@ -17,6 +17,7 @@ import { ClaudeProvider } from './claude/provider';
 import { CodexProvider } from './codex/provider';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
+import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
 
@@ -138,6 +139,30 @@ export function registerBuiltinProviders(): void {
       getLog().debug({ provider: entry.id }, 'builtin_provider.registered');
     }
   }
+}
+
+/**
+ * Register all bundled community providers in one call.
+ *
+ * Process entrypoints (server, CLI, config-loader) call this once after
+ * `registerBuiltinProviders()`. Adding a new community provider means:
+ *   1. Drop the implementation under `packages/providers/src/community/<id>/`.
+ *   2. Export a `register<Name>Provider()` function from it.
+ *   3. Import + call it here.
+ *
+ * That's the entire cross-cutting change outside the provider's own
+ * directory. No entrypoint edits, no config-type edits — just add a line
+ * to this function. That's the Phase 2 contract (#1195): community
+ * providers are a localized addition.
+ *
+ * Each `register*Provider` is itself idempotent, so calling this
+ * aggregator multiple times (e.g. from both CLI and config-loader paths)
+ * is safe. Errors during registration are not caught here — a broken
+ * community provider should fail loud at bootstrap, not silently
+ * disappear.
+ */
+export function registerCommunityProviders(): void {
+  registerPiProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

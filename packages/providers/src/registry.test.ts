@@ -8,8 +8,10 @@ import {
   getProviderInfoList,
   isRegisteredProvider,
   registerBuiltinProviders,
+  registerCommunityProviders,
   clearRegistry,
 } from './registry';
+import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -266,6 +268,85 @@ describe('registry', () => {
       expect(reg.isModelCompatible('inherit')).toBe(false);
       expect(reg.isModelCompatible('gpt-4')).toBe(true);
       expect(reg.isModelCompatible('o3-mini')).toBe(true);
+    });
+  });
+
+  describe('registerCommunityProviders (aggregator)', () => {
+    test('registers all bundled community providers', () => {
+      registerCommunityProviders();
+      // Pi is currently the only community provider bundled. When more are
+      // added, they should appear here automatically.
+      expect(isRegisteredProvider('pi')).toBe(true);
+    });
+
+    test('is idempotent', () => {
+      registerCommunityProviders();
+      expect(() => registerCommunityProviders()).not.toThrow();
+      const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
+      expect(piCount).toBe(1);
+    });
+  });
+
+  describe('registerPiProvider (community provider)', () => {
+    test('registers pi with builtIn: false', () => {
+      registerPiProvider();
+      const reg = getRegistration('pi');
+      expect(reg.id).toBe('pi');
+      expect(reg.displayName).toBe('Pi (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerPiProvider();
+      expect(() => registerPiProvider()).not.toThrow();
+      const piEntries = getRegisteredProviders().filter(p => p.id === 'pi');
+      expect(piEntries).toHaveLength(1);
+    });
+
+    test('declares v2 capabilities (thinking, effort, tools, skills, sessionResume, envInjection supported)', () => {
+      registerPiProvider();
+      const caps = getProviderCapabilities('pi');
+      // Flipped true in v2
+      expect(caps.thinkingControl).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.skills).toBe(true);
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      // Still false (out of v2 scope)
+      expect(caps.mcp).toBe(false);
+      expect(caps.hooks).toBe(false);
+      expect(caps.structuredOutput).toBe(false);
+      expect(caps.costControl).toBe(false);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('isModelCompatible accepts provider/model refs, rejects aliases', () => {
+      registerPiProvider();
+      const reg = getRegistration('pi');
+      expect(reg.isModelCompatible('google/gemini-2.5-pro')).toBe(true);
+      expect(reg.isModelCompatible('anthropic/claude-opus-4-5')).toBe(true);
+      expect(reg.isModelCompatible('openrouter/qwen/qwen3-coder')).toBe(true);
+      expect(reg.isModelCompatible('sonnet')).toBe(false);
+      expect(reg.isModelCompatible('claude-3.5-sonnet')).toBe(false);
+      expect(reg.isModelCompatible('')).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerPiProvider();
+      const info = getProviderInfoList().find(p => p.id === 'pi');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins', () => {
+      // beforeEach already called registerBuiltinProviders + clearRegistry reset
+      registerPiProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'pi']);
     });
   });
 });

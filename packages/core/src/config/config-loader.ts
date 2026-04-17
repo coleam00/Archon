@@ -41,10 +41,16 @@ import {
   isRegisteredProvider,
   getRegisteredProviders,
   registerBuiltinProviders,
+  registerCommunityProviders,
 } from '@archon/providers';
 
+/**
+ * Pure read of registered provider IDs. Registration is guaranteed by
+ * `loadConfig()`'s bootstrap call before any consumer can observe the
+ * registry, so this helper must NOT trigger side-effecting registration
+ * itself — that hid the ordering coupling and surprised readers.
+ */
 function getRegisteredProviderNames(): string[] {
-  registerBuiltinProviders();
   return getRegisteredProviders().map(p => p.id);
 }
 
@@ -52,11 +58,14 @@ function mergeAssistantDefaults(
   base: AssistantDefaults,
   overrides?: AssistantDefaultsConfig
 ): AssistantDefaults {
-  const merged: AssistantDefaults = {
-    ...base,
-    claude: { ...(base.claude ?? {}) },
-    codex: { ...(base.codex ?? {}) },
-  };
+  // Deep-copy every provider slot present in base. No per-provider listing —
+  // adding a new community provider must not require editing this function.
+  const merged: AssistantDefaults = { ...base };
+  for (const [providerId, providerDefaults] of Object.entries(base)) {
+    if (providerDefaults && typeof providerDefaults === 'object') {
+      merged[providerId] = { ...providerDefaults };
+    }
+  }
 
   if (!overrides) return merged;
 
@@ -71,17 +80,41 @@ function mergeAssistantDefaults(
   return merged;
 }
 
+/**
+ * Per-provider allowlist of fields safe to expose to web clients.
+ *
+ * **Allowlist (not denylist) by design.** Any field not listed here is
+ * dropped on its way out. New sensitive fields on a provider default
+ * config (binary paths, credentials, absolute filesystem paths, etc.)
+ * are hidden by default — you have to opt in to expose them.
+ *
+ * Unknown provider IDs (community providers not listed below) fall back
+ * to the generic empty allowlist: the web UI sees the provider exists,
+ * but none of its defaults. Providers whose defaults are safe to surface
+ * register their fields here.
+ */
+const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
+  claude: ['model'],
+  codex: ['model', 'modelReasoningEffort', 'webSearchMode'],
+  // community providers — list each field we're confident is safe to
+  // show in the web UI. Unknown providers fall through with no fields.
+  pi: ['model'],
+};
+
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
   const safeAssistants: SafeConfig['assistants'] = {};
 
   for (const [providerId, providerDefaults] of Object.entries(assistants)) {
     if (!providerDefaults || typeof providerDefaults !== 'object') continue;
-    const safeDefaults: Record<string, unknown> = { ...providerDefaults };
 
-    // Server-internal or local-path settings should never be exposed to the web UI.
-    delete safeDefaults.additionalDirectories;
-    delete safeDefaults.settingSources;
-    delete safeDefaults.codexBinaryPath;
+    const allowed = SAFE_ASSISTANT_FIELDS[providerId] ?? [];
+    const safeDefaults: Record<string, unknown> = {};
+    for (const field of allowed) {
+      const value = (providerDefaults as Record<string, unknown>)[field];
+      if (value !== undefined) {
+        safeDefaults[field] = value;
+      }
+    }
 
     safeAssistants[providerId] = safeDefaults;
   }
@@ -228,13 +261,15 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  * Get default configuration
  */
 function getDefaults(): MergedConfig {
-  // Initialize assistant defaults from registered providers rather than hardcoding.
-  // Built-in providers always exist (registerBuiltinProviders called before loadConfig).
-  const registeredAssistants: AssistantDefaults = {
-    claude: {},
-    codex: {},
-  };
-  for (const provider of getRegisteredProviders()) {
+  // Seed one empty entry per registered provider — built-in OR community.
+  // No per-provider listing here: adding a new provider must not require
+  // editing this function. `registerBuiltinProviders()` + any community
+  // registrations run at process bootstrap (see `packages/providers/src/
+  // registry.ts#registerCommunityProviders`), so by the time this runs the
+  // registry is populated.
+  const providers = getRegisteredProviders();
+  const registeredAssistants: AssistantDefaults = { claude: {}, codex: {} };
+  for (const provider of providers) {
     if (!(provider.id in registeredAssistants)) {
       registeredAssistants[provider.id] = {};
     }
@@ -242,7 +277,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+    assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
     assistants: registeredAssistants,
     streaming: {
       telegram: 'stream',
@@ -446,6 +481,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
   registerBuiltinProviders();
+  registerCommunityProviders();
 
   // 1. Start with defaults
   let config = getDefaults();

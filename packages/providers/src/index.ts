@@ -26,6 +26,7 @@ export {
   getProviderInfoList,
   isRegisteredProvider,
   registerBuiltinProviders,
+  registerCommunityProviders,
   clearRegistry,
 } from './registry';
 
@@ -44,3 +45,11 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 export { resetCodexSingleton } from './codex/provider';
 export { resolveCodexBinaryPath, fileExists as codexFileExists } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
+
+// Community providers
+export {
+  PiProvider,
+  parsePiConfig,
+  registerPiProvider,
+  type PiProviderDefaults,
+} from './community/pi';

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pi community provider (`@mariozechner/pi-coding-agent`).** First community provider under the Phase 2 registry (`builtIn: false`). One adapter exposes ~20 LLM backends (Anthropic, OpenAI, Google, Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and more) via a `<pi-provider-id>/<model-id>` model format. Reads credentials from `~/.pi/agent/auth.json` (populated by running `pi /login` for OAuth subscriptions like Claude Pro/Max, ChatGPT Plus, GitHub Copilot) AND from env vars (env vars take priority per-request). Per-node workflow options supported: `effort`/`thinking` → Pi `thinkingLevel`; `allowed_tools`/`denied_tools` → filter Pi's 7 built-in coding tools; `skills` → resolved against `.agents/skills`, `.claude/skills` (project + user-global); `systemPrompt`; codebase env vars; session resume via `sessionId` round-trip. Unsupported fields (MCP, hooks, structured output, cost limits, fallback model, sandbox) trigger an explicit dag-executor warning rather than silently dropping. Use in workflow YAML: `provider: pi` + `model: anthropic/claude-haiku-4-5`. (#1270)
+- **`registerCommunityProviders()` aggregator** in `@archon/providers`. Process entrypoints (CLI, server, config-loader) now call one function to register every bundled community provider. Adding a new community provider is a single-line edit to this aggregator rather than touching each entrypoint — makes the Phase 2 "community providers are a localized addition" promise real.
+- **`contributing/adding-a-community-provider.md` guide** — contributor-facing walkthrough of the Phase 2 registry pattern using Pi as the reference implementation.
+
 ### Fixed
 
 - **Server startup no longer marks actively-running workflows as failed.** The `failOrphanedRuns()` call has been removed from `packages/server/src/index.ts` to match the CLI precedent (`packages/cli/src/cli.ts:256-258`). Per the new CLAUDE.md principle "No Autonomous Lifecycle Mutation Across Process Boundaries", a stuck `running` row is now transitioned explicitly by the user: via the per-row Cancel/Abandon buttons on the dashboard workflow card, or `archon workflow abandon <run-id>` from the CLI. (`archon workflow cleanup` is a separate command that deletes OLD terminal runs for disk hygiene — it does not handle stuck `running` rows.) Closes #1216.
