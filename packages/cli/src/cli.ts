@@ -44,9 +44,9 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
 // DATABASE_URL is no longer required - SQLite will be used as default
 
 // Bootstrap provider registry before any provider lookups
-import { registerBuiltinProviders, registerPiProvider } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 registerBuiltinProviders();
-registerPiProvider();
+registerCommunityProviders();
 
 // Import commands after dotenv is loaded
 import { versionCommand } from './commands/version';

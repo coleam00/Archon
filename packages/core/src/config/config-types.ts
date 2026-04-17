@@ -28,24 +28,35 @@ export type {
 };
 
 /**
- * Intersection type: generic ProviderDefaultsMap (any string key) with typed built-in entries.
- * Built-in keys are typed so parseClaudeConfig/parseCodexConfig get type safety without casts.
- * Community providers use the generic [string] index. This is intentional — removing the
- * built-in intersection would force `as` casts everywhere built-in config is accessed.
- * Pi is typed here (not just via the generic index) so parsePiConfig gets the same
- * defense-in-depth as the built-ins, even while `builtIn: false`.
+ * Intersection type: generic `ProviderDefaultsMap` (any string key) with
+ * typed built-in entries.
+ *
+ * The built-in entries exist ONLY to give call sites like
+ * `config.assistants.claude.model` IDE autocomplete without `as` casts.
+ * They do NOT provide parser safety (each provider's `parseXxxConfig`
+ * already takes `Record<string, unknown>` and defends itself).
+ *
+ * Community providers should NOT be added here — they live behind the
+ * generic `[string]` index. Adding a new community provider must not
+ * require a core-package type change; that's the whole point of Phase 2.
  */
 export type AssistantDefaultsConfig = ProviderDefaultsMap & {
   claude?: ClaudeProviderDefaults;
   codex?: CodexProviderDefaults;
-  pi?: PiProviderDefaults;
 };
 
-/** Required variant — built-ins always present after config merge (registerBuiltinProviders guarantees it). */
+/**
+ * Required variant — built-ins are always present after `loadConfig`.
+ *
+ * `getDefaults()` seeds every registered provider (built-in + community)
+ * with `{}`, so community providers appear in the map too — just typed as
+ * `ProviderDefaults` via the generic index rather than a specific shape.
+ * `registerBuiltinProviders()` is called before `loadConfig()` at every
+ * process entrypoint, so claude/codex are guaranteed present.
+ */
 export type AssistantDefaults = ProviderDefaultsMap & {
   claude: ClaudeProviderDefaults;
   codex: CodexProviderDefaults;
-  pi: PiProviderDefaults;
 };
 
 export interface GlobalConfig {

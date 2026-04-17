@@ -41,12 +41,17 @@ import {
   isRegisteredProvider,
   getRegisteredProviders,
   registerBuiltinProviders,
-  registerPiProvider,
+  registerCommunityProviders,
 } from '@archon/providers';
 
+/**
+ * Ensure the registry is populated, then return the provider IDs.
+ * Idempotent by virtue of `registerBuiltinProviders` / `registerCommunityProviders`
+ * both being idempotent, so safe to call from anywhere.
+ */
 function getRegisteredProviderNames(): string[] {
   registerBuiltinProviders();
-  registerPiProvider();
+  registerCommunityProviders();
   return getRegisteredProviders().map(p => p.id);
 }
 
@@ -54,12 +59,14 @@ function mergeAssistantDefaults(
   base: AssistantDefaults,
   overrides?: AssistantDefaultsConfig
 ): AssistantDefaults {
-  const merged: AssistantDefaults = {
-    ...base,
-    claude: { ...(base.claude ?? {}) },
-    codex: { ...(base.codex ?? {}) },
-    pi: { ...(base.pi ?? {}) },
-  };
+  // Deep-copy every provider slot present in base. No per-provider listing —
+  // adding a new community provider must not require editing this function.
+  const merged: AssistantDefaults = { ...base };
+  for (const [providerId, providerDefaults] of Object.entries(base)) {
+    if (providerDefaults && typeof providerDefaults === 'object') {
+      merged[providerId] = { ...providerDefaults };
+    }
+  }
 
   if (!overrides) return merged;
 
@@ -231,14 +238,15 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  * Get default configuration
  */
 function getDefaults(): MergedConfig {
-  // Initialize assistant defaults from registered providers rather than hardcoding.
-  // Built-in providers always exist (registerBuiltinProviders called before loadConfig).
-  const registeredAssistants: AssistantDefaults = {
-    claude: {},
-    codex: {},
-    pi: {},
-  };
-  for (const provider of getRegisteredProviders()) {
+  // Seed one empty entry per registered provider — built-in OR community.
+  // No per-provider listing here: adding a new provider must not require
+  // editing this function. `registerBuiltinProviders()` + any community
+  // registrations run at process bootstrap (see `packages/providers/src/
+  // registry.ts#registerCommunityProviders`), so by the time this runs the
+  // registry is populated.
+  const providers = getRegisteredProviders();
+  const registeredAssistants: AssistantDefaults = { claude: {}, codex: {} };
+  for (const provider of providers) {
     if (!(provider.id in registeredAssistants)) {
       registeredAssistants[provider.id] = {};
     }
@@ -246,7 +254,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+    assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
     assistants: registeredAssistants,
     streaming: {
       telegram: 'stream',
@@ -450,7 +458,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
   registerBuiltinProviders();
-  registerPiProvider();
+  registerCommunityProviders();
 
   // 1. Start with defaults
   let config = getDefaults();

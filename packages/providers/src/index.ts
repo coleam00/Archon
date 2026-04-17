@@ -26,6 +26,7 @@ export {
   getProviderInfoList,
   isRegisteredProvider,
   registerBuiltinProviders,
+  registerCommunityProviders,
   clearRegistry,
 } from './registry';
 

@@ -8,6 +8,7 @@ import {
   getProviderInfoList,
   isRegisteredProvider,
   registerBuiltinProviders,
+  registerCommunityProviders,
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
@@ -267,6 +268,22 @@ describe('registry', () => {
       expect(reg.isModelCompatible('inherit')).toBe(false);
       expect(reg.isModelCompatible('gpt-4')).toBe(true);
       expect(reg.isModelCompatible('o3-mini')).toBe(true);
+    });
+  });
+
+  describe('registerCommunityProviders (aggregator)', () => {
+    test('registers all bundled community providers', () => {
+      registerCommunityProviders();
+      // Pi is currently the only community provider bundled. When more are
+      // added, they should appear here automatically.
+      expect(isRegisteredProvider('pi')).toBe(true);
+    });
+
+    test('is idempotent', () => {
+      registerCommunityProviders();
+      expect(() => registerCommunityProviders()).not.toThrow();
+      const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
+      expect(piCount).toBe(1);
     });
   });
 
