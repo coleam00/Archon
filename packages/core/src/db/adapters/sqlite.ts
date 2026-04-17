@@ -215,6 +215,20 @@ export class SqliteAdapter implements IDatabase {
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_session_columns_failed');
     }
+
+    // Codebases columns
+    try {
+      const codebaseCols = this.db.prepare("PRAGMA table_info('remote_agent_codebases')").all() as {
+        name: string;
+      }[];
+      const codebaseColNames = new Set(codebaseCols.map(c => c.name));
+
+      if (!codebaseColNames.has('default_branch')) {
+        this.db.run('ALTER TABLE remote_agent_codebases ADD COLUMN default_branch TEXT');
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
+    }
   }
 
   /**

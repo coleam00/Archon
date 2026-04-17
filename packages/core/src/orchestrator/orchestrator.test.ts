@@ -5,6 +5,7 @@ import { makeTestWorkflow, makeTestWorkflowList } from '@archon/workflows/test-u
 import type { Conversation, Codebase, Session } from '../types';
 import { ConversationNotFoundError } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { BranchName } from '@archon/git';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
@@ -127,7 +128,15 @@ mock.module('../utils/worktree-sync', () => ({
 }));
 
 // Git workspace sync mock
-const mockSyncWorkspace = mock(() => Promise.resolve({ fetched: true, reset: false }));
+const mockSyncWorkspace = mock(() =>
+  Promise.resolve({
+    branch: 'main' as BranchName,
+    synced: true,
+    previousHead: 'abc12345',
+    newHead: 'abc12345',
+    updated: false,
+  })
+);
 const mockToRepoPath = mock((p: string) => p);
 const mockToBranchName = mock((b: string) => b);
 
