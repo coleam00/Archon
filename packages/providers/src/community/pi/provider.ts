@@ -2,7 +2,6 @@ import { createLogger } from '@archon/paths';
 import {
   AuthStorage,
   ModelRegistry,
-  SessionManager,
   SettingsManager,
   createAgentSession,
 } from '@mariozechner/pi-coding-agent';
@@ -21,6 +20,7 @@ import { bridgeSession } from './event-bridge';
 import { parsePiModelRef } from './model-ref';
 import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
 import { createNoopResourceLoader } from './resource-loader';
+import { resolvePiSession } from './session-resolver';
 
 /**
  * Map Pi provider id → env var name used by pi-ai's getEnvApiKey().
@@ -69,12 +69,6 @@ export class PiProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
-    // v1: resumeSessionId ignored (sessionResume: false). Logging the
-    // attempt surfaces confusion if Archon sends one for a Pi run.
-    if (resumeSessionId) {
-      getLog().debug({ sessionId: resumeSessionId }, 'pi.resume_ignored');
-    }
-
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const piConfig = parsePiConfig(assistantConfig);
 
@@ -193,9 +187,24 @@ export class PiProvider implements IAgentProvider {
       };
     }
 
-    // 5. Build no-fs primitives. These keep the server quiescent w.r.t. the
-    //    ~/.pi/ directory and make concurrent sendQuery calls race-free.
-    const sessionManager = SessionManager.inMemory(cwd);
+    // 5. Session management. Pi stores each session as a JSONL file under
+    //    ~/.pi/agent/sessions/<encoded-cwd>/<uuid>.jsonl. `resolvePiSession`
+    //    returns a SessionManager bound to either a new session (no resume
+    //    id) or an existing session (resume id matches a file); if the id
+    //    was provided but not found, it falls through to a new session and
+    //    the caller surfaces a resume_failed warning (matches Codex pattern
+    //    at packages/providers/src/codex/provider.ts:553-558).
+    const { sessionManager, resumeFailed } = await resolvePiSession(cwd, resumeSessionId);
+    if (resumeFailed) {
+      yield {
+        type: 'system',
+        content: '⚠️ Could not resume Pi session. Starting fresh conversation.',
+      };
+    }
+
+    // ModelRegistry + settings stay in-memory — only sessions persist, to
+    // match Claude/Codex. Resource loader still suppresses filesystem
+    // discovery except for explicitly-passed skill paths.
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const settingsManager = SettingsManager.inMemory();
     const resourceLoader = createNoopResourceLoader(cwd, {
@@ -213,6 +222,7 @@ export class PiProvider implements IAgentProvider {
         hasSystemPrompt: systemPrompt !== undefined,
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
+        resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'pi.session_started'
     );

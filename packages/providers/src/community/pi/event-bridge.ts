@@ -228,7 +228,16 @@ export async function* bridgeSession(
     for await (const item of queue) {
       if (item.kind === 'done') return;
       if (item.kind === 'error') throw item.error;
-      yield item.chunk;
+      // Annotate the terminal result chunk with Pi's session UUID so Archon's
+      // orchestrator can pass it back as `resumeSessionId` on the next call.
+      // Pi's session.sessionId is always a UUID (even for in-memory); we emit
+      // it unconditionally and let the caller decide whether resume is
+      // meaningful (capability-gated at the registry level).
+      if (item.chunk.type === 'result' && session.sessionId) {
+        yield { ...item.chunk, sessionId: session.sessionId };
+      } else {
+        yield item.chunk;
+      }
     }
   } finally {
     unsubscribe();

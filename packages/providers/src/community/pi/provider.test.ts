@@ -39,6 +39,7 @@ const mockSession = {
   abort: mockAbort,
   dispose: mockDispose,
   isStreaming: false,
+  sessionId: 'mock-session-uuid',
 };
 
 const mockCreateAgentSession = mock(async () => ({
@@ -69,7 +70,16 @@ const mockAuthCreate = mock(() => ({
   getApiKey: mockGetApiKey,
 }));
 const mockModelRegistryInMemory = mock(() => ({}));
-const mockSessionManagerInMemory = mock(() => ({}));
+
+// SessionManager mocks. Each returns a tagged session-manager stub so tests
+// can assert whether resume resolved to an existing session or fell through
+// to a fresh one.
+const mockSessionCreate = mock((_cwd: string) => ({ __smKind: 'created' }));
+const mockSessionOpen = mock((_path: string) => ({ __smKind: 'opened' }));
+const mockSessionList = mock(
+  async (_cwd: string) => [] as { id: string; path: string; cwd: string }[]
+);
+
 const mockSettingsManagerInMemory = mock(() => ({}));
 const MockDefaultResourceLoader = mock(function (_opts: unknown) {
   // constructor stub — no methods exercised in tests
@@ -89,7 +99,11 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
   ModelRegistry: { inMemory: mockModelRegistryInMemory },
-  SessionManager: { inMemory: mockSessionManagerInMemory },
+  SessionManager: {
+    create: mockSessionCreate,
+    open: mockSessionOpen,
+    list: mockSessionList,
+  },
   SettingsManager: { inMemory: mockSettingsManagerInMemory },
   DefaultResourceLoader: MockDefaultResourceLoader,
   createReadTool: mockCreateReadTool,
@@ -155,6 +169,10 @@ describe('PiProvider', () => {
     mockCreateGrepTool.mockClear();
     mockCreateFindTool.mockClear();
     mockCreateLsTool.mockClear();
+    mockSessionCreate.mockClear();
+    mockSessionOpen.mockClear();
+    mockSessionList.mockClear();
+    mockSessionList.mockImplementation(async () => []);
     capturedListener = undefined;
     scriptedEvents.length = 0;
     fileCreds = {};
@@ -434,8 +452,9 @@ describe('PiProvider', () => {
     expect(chunks[2]).toMatchObject({ type: 'result' });
   });
 
-  test('logs and ignores resumeSessionId (sessionResume: false in v1)', async () => {
+  test('resumeSessionId not found → fresh session + system warning', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
+    mockSessionList.mockImplementationOnce(async () => []);
     resetScript([
       {
         type: 'agent_end',
@@ -457,16 +476,82 @@ describe('PiProvider', () => {
       },
     ]);
 
-    const { error } = await consume(
-      new PiProvider().sendQuery('hi', '/tmp', 'some-session-id', {
+    const { chunks, error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', 'nonexistent-id', {
         model: 'google/gemini-2.5-pro',
       })
     );
     expect(error).toBeUndefined();
-    // No way to assert logger.debug was called without exposing the mock;
-    // the key assertion is that resumeSessionId does NOT throw and
-    // completion proceeds normally.
-    expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+    // Resume attempted: list() called; no match → create() called (fresh session)
+    expect(mockSessionList).toHaveBeenCalled();
+    expect(mockSessionCreate).toHaveBeenCalledWith('/tmp');
+    expect(mockSessionOpen).not.toHaveBeenCalled();
+    // Resume failure surfaces as a system warning
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(true);
+  });
+
+  test('resumeSessionId matches existing session → open by path, no warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    mockSessionList.mockImplementationOnce(async () => [
+      { id: 'existing-id', path: '/sessions/existing-id.jsonl', cwd: '/tmp' },
+    ]);
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    const { chunks, error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', 'existing-id', {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+    expect(error).toBeUndefined();
+    expect(mockSessionOpen).toHaveBeenCalledWith('/sessions/existing-id.jsonl');
+    expect(mockSessionCreate).not.toHaveBeenCalled();
+    // No resume_failed warning
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(false);
+  });
+
+  test('result chunk carries Pi sessionId (for Archon to store and reuse)', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    const resultChunk = chunks.find(
+      (c): c is { type: 'result'; sessionId?: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
+    );
+    expect(resultChunk).toBeDefined();
+    expect(resultChunk?.sessionId).toBe('mock-session-uuid');
   });
 
   test('disposes session after completion', async () => {
@@ -736,11 +821,11 @@ describe('PiProvider', () => {
     expect(caps.effortControl).toBe(true);
     expect(caps.toolRestrictions).toBe(true);
     expect(caps.skills).toBe(true);
+    expect(caps.sessionResume).toBe(true);
     // Still false:
     expect(caps.mcp).toBe(false);
     expect(caps.hooks).toBe(false);
     expect(caps.structuredOutput).toBe(false);
-    expect(caps.sessionResume).toBe(false);
   });
 
   test('nodeConfig.skills with unknown name yields system warning, does not abort', async () => {
