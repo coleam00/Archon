@@ -342,4 +342,142 @@ describe('evaluateCondition', () => {
     expect(res.result).toBe(true);
     expect(res.parsed).toBe(true);
   });
+
+  // --- Unquoted RHS literals ---
+
+  it('unquoted numeric RHS == 0: true when output is "0"', () => {
+    const res = evaluateCondition('$test.output == 0', new Map([['test', makeOutput('0')]]));
+    expect(res).toEqual({ result: true, parsed: true });
+  });
+
+  it('unquoted numeric RHS == 0: false when output is non-zero', () => {
+    expect(
+      evaluateCondition('$test.output == 0', new Map([['test', makeOutput('1')]])).result
+    ).toBe(false);
+  });
+
+  it('unquoted numeric RHS > 0: numeric greater-than comparison', () => {
+    expect(evaluateCondition('$test.output > 0', new Map([['test', makeOutput('1')]])).result).toBe(
+      true
+    );
+    expect(evaluateCondition('$test.output > 0', new Map([['test', makeOutput('0')]])).result).toBe(
+      false
+    );
+  });
+
+  it('unquoted negative numeric RHS: $n.output == -1', () => {
+    const res = evaluateCondition('$n.output == -1', new Map([['n', makeOutput('-1')]]));
+    expect(res).toEqual({ result: true, parsed: true });
+  });
+
+  it('unquoted decimal RHS: $n.output >= 0.5', () => {
+    expect(evaluateCondition('$n.output >= 0.5', new Map([['n', makeOutput('0.9')]])).result).toBe(
+      true
+    );
+    expect(evaluateCondition('$n.output >= 0.5', new Map([['n', makeOutput('0.3')]])).result).toBe(
+      false
+    );
+  });
+
+  it('unquoted boolean RHS true: matches string "true"', () => {
+    const res = evaluateCondition('$n.output == true', new Map([['n', makeOutput('true')]]));
+    expect(res).toEqual({ result: true, parsed: true });
+  });
+
+  it('unquoted boolean RHS false: matches string "false"', () => {
+    const res = evaluateCondition('$n.output == false', new Map([['n', makeOutput('false')]]));
+    expect(res).toEqual({ result: true, parsed: true });
+  });
+
+  it('unquoted boolean RHS != false: true when output differs', () => {
+    expect(
+      evaluateCondition('$n.output != false', new Map([['n', makeOutput('true')]])).result
+    ).toBe(true);
+  });
+
+  it('unquoted RHS: invalid literal (not a number or boolean) does not match — fail-closed', () => {
+    // "hello" is not a valid unquoted token; regex won't match
+    const res = evaluateCondition('$n.output == hello', new Map([['n', makeOutput('hello')]]));
+    expect(res.result).toBe(false);
+    expect(res.parsed).toBe(false);
+  });
+
+  // --- Shorthand path ($nodeId.field instead of $nodeId.output.field) ---
+
+  it('shorthand path: $test.exit_code == 0 accesses JSON field exit_code', () => {
+    const output = JSON.stringify({ exit_code: 0 });
+    const res = evaluateCondition('$test.exit_code == 0', new Map([['test', makeOutput(output)]]));
+    expect(res).toEqual({ result: true, parsed: true });
+  });
+
+  it('shorthand path: $test.exit_code == 1 is false when exit_code is 0', () => {
+    const output = JSON.stringify({ exit_code: 0 });
+    expect(
+      evaluateCondition('$test.exit_code == 1', new Map([['test', makeOutput(output)]])).result
+    ).toBe(false);
+  });
+
+  it('shorthand path: works with quoted string RHS', () => {
+    const output = JSON.stringify({ status: 'active' });
+    const res = evaluateCondition(
+      "$node.status == 'active'",
+      new Map([['node', makeOutput(output)]])
+    );
+    expect(res).toEqual({ result: true, parsed: true });
+  });
+
+  it('shorthand path: works with boolean field from JSON', () => {
+    const output = JSON.stringify({ passed: true });
+    const res = evaluateCondition('$node.passed == true', new Map([['node', makeOutput(output)]]));
+    expect(res).toEqual({ result: true, parsed: true });
+  });
+
+  it('shorthand path: works with numeric comparison', () => {
+    const output = JSON.stringify({ score: 95 });
+    expect(
+      evaluateCondition('$node.score > 80', new Map([['node', makeOutput(output)]])).result
+    ).toBe(true);
+    expect(
+      evaluateCondition('$node.score < 80', new Map([['node', makeOutput(output)]])).result
+    ).toBe(false);
+  });
+
+  it('shorthand path: fail-closed when JSON parse fails', () => {
+    const res = evaluateCondition(
+      '$node.exit_code == 0',
+      new Map([['node', makeOutput('not-json')]])
+    );
+    expect(res.result).toBe(false);
+    // parsed is true; the expression was valid — the output just couldn't be resolved
+    expect(res.parsed).toBe(true);
+  });
+
+  it('shorthand path with nested sub-segment ($node.a.b) is invalid — fail-closed', () => {
+    const res = evaluateCondition(
+      '$node.a.b == 0',
+      new Map([['node', makeOutput(JSON.stringify({ a: { b: 0 } }))]])
+    );
+    expect(res.result).toBe(false);
+    expect(res.parsed).toBe(false);
+  });
+
+  it('shorthand path: compound expression with unquoted RHS', () => {
+    const outputA = JSON.stringify({ exit_code: 0 });
+    const outputB = JSON.stringify({ passed: true });
+    const outputs = new Map([
+      ['a', makeOutput(outputA)],
+      ['b', makeOutput(outputB)],
+    ]);
+    expect(evaluateCondition('$a.exit_code == 0 && $b.passed == true', outputs).result).toBe(true);
+    expect(evaluateCondition('$a.exit_code == 1 && $b.passed == true', outputs).result).toBe(false);
+  });
+
+  it('shorthand path: equivalent to $nodeId.output.field for same JSON key', () => {
+    const output = JSON.stringify({ exit_code: 0 });
+    const outputs = new Map([['t', makeOutput(output)]]);
+    // Both forms should give the same result
+    expect(evaluateCondition('$t.exit_code == 0', outputs).result).toBe(
+      evaluateCondition("$t.output.exit_code == '0'", outputs).result
+    );
+  });
 });
