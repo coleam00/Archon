@@ -404,6 +404,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         const content = slackAdapter.stripBotMention(event.text);
         if (!content) return; // Message was only a mention with no content
 
+        // Immediate receipt ack (:eyes:). Fire-and-forget — we don't want to
+        // delay thread-history fetch or orchestration on a reaction round-trip.
+        void slackAdapter.acknowledgeReceipt(event);
+
         // Check for thread context
         let threadContext: string | undefined;
         let parentConversationId: string | undefined;

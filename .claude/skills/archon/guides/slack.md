@@ -10,7 +10,7 @@ Follow the step-by-step instructions in **[docs/slack-setup.md](../../../../../d
 
 1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) (from scratch)
 2. Enable **Socket Mode** — generates an App-Level Token (`xapp-...`) for `SLACK_APP_TOKEN`
-3. Add **Bot Token Scopes**: `app_mentions:read`, `chat:write`, `channels:history`, `channels:join`, `im:history`, `im:write`, `im:read`
+3. Add **Bot Token Scopes**: `app_mentions:read`, `chat:write`, `reactions:write`, `channels:history`, `channels:join`, `im:history`, `im:write`, `im:read`
 4. Subscribe to **Bot Events**: `app_mention`, `message.im`
 5. **Install to Workspace** — generates a Bot User OAuth Token (`xoxb-...`) for `SLACK_BOT_TOKEN`
 6. Invite the bot to your channel: `/invite @YourBotName`

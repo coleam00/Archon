@@ -317,6 +317,38 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Post an :eyes: reaction to the incoming message so the user knows the
+   * bot received the request immediately — before thread-history fetch,
+   * orchestration, lock acquisition, or first LLM token.
+   *
+   * Intentionally silent on failure:
+   * - `reactions:write` scope is optional; missing-scope workspaces still
+   *   get a working bot, just without the visual receipt.
+   * - We never want a reaction error to block message processing.
+   */
+  async acknowledgeReceipt(event: SlackMessageEvent): Promise<void> {
+    try {
+      await this.app.client.reactions.add({
+        channel: event.channel,
+        timestamp: event.ts,
+        name: 'eyes',
+      });
+      getLog().debug({ channel: event.channel, ts: event.ts }, 'slack.receipt_ack_sent');
+    } catch (error) {
+      const err = error as Error & { data?: { error?: string } };
+      // `already_reacted` just means we're re-processing; not worth a warn.
+      if (err.data?.error === 'already_reacted') {
+        getLog().debug({ channel: event.channel }, 'slack.receipt_ack_already_reacted');
+        return;
+      }
+      getLog().warn(
+        { err, slackError: err.data?.error, channel: event.channel },
+        'slack.receipt_ack_failed'
+      );
+    }
+  }
+
+  /**
    * Start the bot (connects via Socket Mode)
    */
   async start(): Promise<void> {
