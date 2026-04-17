@@ -1869,10 +1869,13 @@ async function executeLoopNode(
         `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${loop.gate_message}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
         `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
-      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
-        workflowId: workflowRun.id,
-        nodeName: node.id,
-      });
+      const gateSent = await safeSendMessage(
+        platform,
+        conversationId,
+        gateMsg,
+        { workflowId: workflowRun.id, nodeName: node.id },
+        { interactiveGate: { runId: workflowRun.id, nodeId: node.id } }
+      );
       if (!gateSent) {
         // Gate message failed to deliver — do not pause; fail the node so the user
         // sees a clear error rather than a silently orphaned paused run.
