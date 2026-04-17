@@ -108,28 +108,49 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 3. Seed AuthStorage per-request from options.env (codebase env vars)
-    //    + process.env. Mirrors Claude's `{...subprocessEnv, ...requestOptions.env}`
-    //    merge at packages/providers/src/claude/provider.ts:889-890.
+    // 3. Build AuthStorage. `AuthStorage.create()` reads ~/.pi/agent/auth.json
+    //    (or $PI_CODING_AGENT_DIR/auth.json), so any credential the user has
+    //    populated via `pi` → `/login` (OAuth subscriptions: Claude Pro/Max,
+    //    ChatGPT Plus, GitHub Copilot, Gemini CLI, Antigravity) or by editing
+    //    the file directly (api_key entries) is picked up transparently.
+    //
+    //    Per-request env vars override the file via setRuntimeApiKey — this
+    //    mirrors Claude's `{...subprocessEnv, ...requestOptions.env}` pattern
+    //    at packages/providers/src/claude/provider.ts:889-890 and ensures
+    //    codebase-scoped env vars (from .archon/config.yaml `env:`) win over
+    //    the user's global Pi login.
+    //
+    //    Pi's internal resolution order (auth-storage.ts:424-485):
+    //      1. runtime override  (our setRuntimeApiKey below)
+    //      2. auth.json api_key entry
+    //      3. auth.json oauth entry  (auto-refreshes expired tokens)
+    //      4. env var fallback  (Pi's getEnvApiKey, e.g. ANTHROPIC_API_KEY)
+    //
+    //    OAuth refresh note: Pi refreshes expired access tokens against the
+    //    provider's OAuth server and rewrites ~/.pi/agent/auth.json under a
+    //    file lock (same mechanism pi CLI uses — safe for concurrent access).
+    const authStorage = AuthStorage.create();
+
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
-    if (!envVarName) {
+    const envOverride = envVarName
+      ? (requestOptions?.env?.[envVarName] ?? process.env[envVarName])
+      : undefined;
+    if (envOverride) {
+      authStorage.setRuntimeApiKey(parsed.provider, envOverride);
+    }
+
+    // Fail-fast: resolve creds synchronously before spinning up a session.
+    // Matches Claude's auth-error fast-fail pattern (no retry on auth failures).
+    const resolvedKey = await authStorage.getApiKey(parsed.provider);
+    if (!resolvedKey) {
+      const envHint = envVarName
+        ? `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
+        : `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`;
+      const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
       throw new Error(
-        `Pi auth: provider '${parsed.provider}' is not yet supported by the Archon Pi adapter. ` +
-          'Supported: ' +
-          Object.keys(PI_PROVIDER_ENV_VARS).join(', ') +
-          '. File an issue if you need another Pi provider enabled.'
+        `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
       );
     }
-    const apiKey = requestOptions?.env?.[envVarName] ?? process.env[envVarName];
-    if (!apiKey) {
-      throw new Error(
-        `Pi auth: missing API key for provider '${parsed.provider}'. ` +
-          `Set ${envVarName} in the environment or in the codebase env vars (.archon/config.yaml env: section).`
-      );
-    }
-    const authStorage = AuthStorage.inMemory({
-      [parsed.provider]: { type: 'api_key', key: apiKey },
-    });
 
     // 4. Build no-fs primitives. These keep the server quiescent w.r.t. the
     //    ~/.pi/ directory and make concurrent sendQuery calls race-free.

@@ -47,7 +47,27 @@ const mockCreateAgentSession = mock(async () => ({
   modelFallbackMessage: undefined,
 }));
 
-const mockAuthInMemory = mock((_data: Record<string, unknown>) => ({}));
+// Per-test state backing the AuthStorage mock. `fileCreds` emulates what's
+// in ~/.pi/agent/auth.json; `runtimeOverrides` emulates env-var passthrough
+// via setRuntimeApiKey. Tests mutate these via helpers.
+let fileCreds: Record<string, { type: 'api_key' | 'oauth'; key?: string }> = {};
+let runtimeOverrides: Record<string, string> = {};
+
+const mockSetRuntimeApiKey = mock((providerId: string, key: string) => {
+  runtimeOverrides[providerId] = key;
+});
+const mockGetApiKey = mock(async (providerId: string): Promise<string | undefined> => {
+  // Mirror Pi's resolution: runtime → file api_key → file oauth → env var
+  if (runtimeOverrides[providerId]) return runtimeOverrides[providerId];
+  const cred = fileCreds[providerId];
+  if (cred?.type === 'api_key') return cred.key;
+  if (cred?.type === 'oauth') return 'oauth-access-token-stub';
+  return undefined;
+});
+const mockAuthCreate = mock(() => ({
+  setRuntimeApiKey: mockSetRuntimeApiKey,
+  getApiKey: mockGetApiKey,
+}));
 const mockModelRegistryInMemory = mock(() => ({}));
 const mockSessionManagerInMemory = mock(() => ({}));
 const mockSettingsManagerInMemory = mock(() => ({}));
@@ -57,7 +77,7 @@ const MockDefaultResourceLoader = mock(function (_opts: unknown) {
 
 mock.module('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
-  AuthStorage: { inMemory: mockAuthInMemory },
+  AuthStorage: { create: mockAuthCreate },
   ModelRegistry: { inMemory: mockModelRegistryInMemory },
   SessionManager: { inMemory: mockSessionManagerInMemory },
   SettingsManager: { inMemory: mockSettingsManagerInMemory },
@@ -107,8 +127,13 @@ describe('PiProvider', () => {
     mockSubscribe.mockClear();
     mockCreateAgentSession.mockClear();
     mockGetModel.mockClear();
+    mockAuthCreate.mockClear();
+    mockSetRuntimeApiKey.mockClear();
+    mockGetApiKey.mockClear();
     capturedListener = undefined;
     scriptedEvents.length = 0;
+    fileCreds = {};
+    runtimeOverrides = {};
     delete process.env.GEMINI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
   });
@@ -137,25 +162,63 @@ describe('PiProvider', () => {
     expect(error?.message).toContain('Invalid Pi model ref');
   });
 
-  test('throws when Pi provider id is unknown to adapter', async () => {
-    process.env.FAKE_KEY = 'x';
+  test('throws when Pi provider id is unknown AND no creds available', async () => {
+    // No env var, no auth.json entry → fail-fast with hint about env-var table
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'unknownprovider/some-model',
       })
     );
-    expect(error?.message).toContain("provider 'unknownprovider' is not yet supported");
+    expect(error?.message).toContain("no credentials for provider 'unknownprovider'");
+    expect(error?.message).toContain("not in the Archon adapter's env-var table");
   });
 
-  test('throws when env var API key is missing', async () => {
-    // GEMINI_API_KEY not set (beforeEach deletes it)
+  test('throws when env var missing AND auth.json has no entry', async () => {
+    // GEMINI_API_KEY not set (beforeEach deletes it), fileCreds empty
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(error?.message).toContain('missing API key');
+    expect(error?.message).toContain('no credentials for provider');
     expect(error?.message).toContain('GEMINI_API_KEY');
+    expect(error?.message).toContain('/login');
+  });
+
+  test('uses OAuth credential from ~/.pi/agent/auth.json when no env var set', async () => {
+    // Simulate user running `pi /login` → auth.json has OAuth entry
+    fileCreds.anthropic = { type: 'oauth' };
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+      })
+    );
+    expect(error).toBeUndefined();
+    // Runtime override NOT set — no env var present — so Pi's getApiKey
+    // resolves through the OAuth code path.
+    expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
+    expect(mockGetApiKey).toHaveBeenCalledWith('anthropic');
   });
 
   test('throws when getModel returns undefined', async () => {
@@ -173,7 +236,7 @@ describe('PiProvider', () => {
     expect(error?.message).toContain('Pi model not found');
   });
 
-  test('seeds API key from request env (codebase env vars) over process.env', async () => {
+  test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
     process.env.GEMINI_API_KEY = 'from-process-env';
     resetScript([
       {
@@ -203,8 +266,43 @@ describe('PiProvider', () => {
       })
     );
 
-    const [seededData] = mockAuthInMemory.mock.calls[0] as [Record<string, unknown>];
-    expect(seededData.google).toEqual({ type: 'api_key', key: 'from-request-env' });
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('google', 'from-request-env');
+    // Runtime override is priority #1 in Pi's resolution chain, so getApiKey
+    // returns 'from-request-env' (via our mock's runtimeOverrides map).
+    expect(runtimeOverrides.google).toBe('from-request-env');
+  });
+
+  test('env var overrides auth.json api_key entry', async () => {
+    // Both present: env var wins (mirrors Pi's resolution priority)
+    fileCreds.anthropic = { type: 'api_key', key: 'from-auth-json' };
+    process.env.ANTHROPIC_API_KEY = 'from-env';
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/claude-haiku-4-5',
+      })
+    );
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'from-env');
   });
 
   test('yields assistant chunks from text_delta events', async () => {
