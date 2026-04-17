@@ -9,8 +9,8 @@ export interface ResolvedSession {
   /**
    * True when a resumeSessionId was provided but no matching session file
    * was found — caller should surface a system warning before the new
-   * session starts (mirrors Codex's resume_thread_failed fallback at
-   * packages/providers/src/codex/provider.ts:553-558).
+   * session starts. Mirrors the `resume_thread_failed` fallback pattern
+   * the Codex provider uses.
    */
   resumeFailed: boolean;
 }
