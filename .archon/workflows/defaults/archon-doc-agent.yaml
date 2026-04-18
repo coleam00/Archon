@@ -24,7 +24,13 @@ nodes:
   - id: scope
     bash: |
       set -euo pipefail
-      ARG="$ARGUMENTS"
+      # Capture $ARGUMENTS via a single-quoted heredoc so any shell metacharacters
+      # in the substituted value are treated as literal text (no command injection).
+      ARG=$(cat <<'ARCHON_DOC_AGENT_ARG_EOF'
+      $ARGUMENTS
+      ARCHON_DOC_AGENT_ARG_EOF
+      )
+      ARG="${ARG%$'\n'}"
       MODE="diff"
       REF="$BASE_BRANCH"
 
