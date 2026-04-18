@@ -5,9 +5,9 @@ import type { ProviderCapabilities } from '../../types';
  * wired-up behavior, not potential support. The dag-executor uses these to
  * warn users when a workflow node specifies a feature the provider ignores.
  *
- * Roadmap (v3+): 
+ * Roadmap (v3+):
  * The pi maintainer has expressed some opposition to supporting structured
- * output, (https://github.com/badlogic/pi-mono/issues/1086) so that is 
+ * output, (https://github.com/badlogic/pi-mono/issues/1086) so that is
  * unlikely to be added apart from an extension.
  *
  * Similarly, hooks, fallbackModel, and sandbox can be implemented with
