@@ -1,0 +1,342 @@
+name: archon-doc-agent
+description: |
+  Use when: User wants to audit stale comments and undocumented exported symbols,
+  have the AI fix them in source, and generate/update Markdown docs under /docs.
+  Triggers: "audit docs", "fix stale comments", "document the code", "doc agent",
+            "generate docs", "documentation sweep", "find undocumented".
+  Invocations:
+    - archon workflow run archon-doc-agent               -> audit files changed vs $BASE_BRANCH (default)
+    - archon workflow run archon-doc-agent HEAD~20       -> audit last N commits (any git ref)
+    - archon workflow run archon-doc-agent all           -> full repo scan
+  Does: Scopes files -> heuristic scan (TODO/FIXME + export surface) -> AI audit
+        classifies findings -> edits source to add JSDoc/docstrings and fix stale
+        comments -> scaffolds/updates /docs Markdown -> writes summary report.
+  NOT for: Greenfield doc-site generation (VitePress/Docusaurus), AST-based API
+           reference generation, or translating existing docs.
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ───────────────────────────────────────────────────────────────────
+  # 1. SCOPE — determine which files to audit
+  # ───────────────────────────────────────────────────────────────────
+  - id: scope
+    bash: |
+      set -euo pipefail
+      ARG="$ARGUMENTS"
+      MODE="diff"
+      REF="$BASE_BRANCH"
+
+      if [ "$ARG" = "all" ]; then
+        MODE="all"
+      elif [ -n "$ARG" ] && [ "$ARG" != "diff" ]; then
+        MODE="ref"
+        REF="$ARG"
+      fi
+
+      SCOPE_FILE="$ARTIFACTS_DIR/scope.txt"
+      : > "$SCOPE_FILE"
+
+      if [ "$MODE" = "all" ]; then
+        git ls-files > "$ARTIFACTS_DIR/_all.txt"
+        RAW_SOURCE="$ARTIFACTS_DIR/_all.txt"
+      else
+        # Try local ref first, then origin/<ref>
+        if git rev-parse --verify "$REF" >/dev/null 2>&1; then
+          git diff --name-only --diff-filter=AMR "$REF"...HEAD > "$ARTIFACTS_DIR/_diff.txt" || true
+        elif git rev-parse --verify "origin/$REF" >/dev/null 2>&1; then
+          git diff --name-only --diff-filter=AMR "origin/$REF"...HEAD > "$ARTIFACTS_DIR/_diff.txt" || true
+        else
+          echo "ERROR: could not resolve ref '$REF' (tried local and origin/)" >&2
+          exit 1
+        fi
+        RAW_SOURCE="$ARTIFACTS_DIR/_diff.txt"
+      fi
+
+      # Filter to source file extensions we know how to reason about
+      grep -E '\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|c|cc|cpp|h|hpp|cs|swift|scala)$' "$RAW_SOURCE" \
+        | grep -Ev '(^|/)(node_modules|dist|build|\.next|\.turbo|target|vendor|__pycache__|\.venv)/' \
+        > "$SCOPE_FILE" || true
+
+      COUNT=$(wc -l < "$SCOPE_FILE" | tr -d ' ')
+      echo "mode=$MODE ref=$REF files=$COUNT"
+      echo "---"
+      head -50 "$SCOPE_FILE" || true
+      if [ "$COUNT" -gt 50 ]; then
+        echo "... ($((COUNT - 50)) more)"
+      fi
+    timeout: 30000
+
+  # ───────────────────────────────────────────────────────────────────
+  # 2. HEURISTIC SCAN — cheap grep-level candidates (no AI)
+  # ───────────────────────────────────────────────────────────────────
+  - id: heuristic_scan
+    depends_on: [scope]
+    bash: |
+      set -euo pipefail
+      SCOPE_FILE="$ARTIFACTS_DIR/scope.txt"
+      TODOS_FILE="$ARTIFACTS_DIR/todos.txt"
+      EXPORTS_FILE="$ARTIFACTS_DIR/exports.txt"
+      : > "$TODOS_FILE"
+      : > "$EXPORTS_FILE"
+
+      if [ ! -s "$SCOPE_FILE" ]; then
+        echo "scope is empty — nothing to scan"
+        echo "todos=0 export_surface_hits=0"
+        exit 0
+      fi
+
+      # TODO/FIXME/XXX/HACK markers with file:line:context
+      while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        grep -nE '\b(TODO|FIXME|XXX|HACK)\b' "$f" 2>/dev/null | sed "s|^|$f:|" >> "$TODOS_FILE" || true
+      done < "$SCOPE_FILE"
+
+      # Cheap export-surface scan — flags lines that LOOK like exported declarations.
+      # The AI will verify each and check whether a doc comment is present.
+      while IFS= read -r f; do
+        [ -f "$f" ] || continue
+        case "$f" in
+          *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs)
+            grep -nE '^(export[[:space:]]+(async[[:space:]]+)?(function|class|interface|type|const|enum))' "$f" 2>/dev/null \
+              | sed "s|^|$f:|" >> "$EXPORTS_FILE" || true
+            ;;
+          *.py)
+            grep -nE '^(def|class|async def) [A-Za-z_]' "$f" 2>/dev/null \
+              | sed "s|^|$f:|" >> "$EXPORTS_FILE" || true
+            ;;
+          *.go)
+            grep -nE '^func [A-Z]|^type [A-Z]' "$f" 2>/dev/null \
+              | sed "s|^|$f:|" >> "$EXPORTS_FILE" || true
+            ;;
+          *.rs)
+            grep -nE '^pub (fn|struct|enum|trait|type|const|mod) ' "$f" 2>/dev/null \
+              | sed "s|^|$f:|" >> "$EXPORTS_FILE" || true
+            ;;
+        esac
+      done < "$SCOPE_FILE"
+
+      TODO_COUNT=$(wc -l < "$TODOS_FILE" | tr -d ' ')
+      EXPORT_COUNT=$(wc -l < "$EXPORTS_FILE" | tr -d ' ')
+      echo "todos=$TODO_COUNT export_surface_hits=$EXPORT_COUNT"
+      echo "--- TODOS (first 30) ---"
+      head -30 "$TODOS_FILE" || true
+      echo "--- EXPORTS (first 30) ---"
+      head -30 "$EXPORTS_FILE" || true
+    timeout: 60000
+
+  # ───────────────────────────────────────────────────────────────────
+  # 3. AUDIT — AI classifies candidates and writes findings.json
+  # ───────────────────────────────────────────────────────────────────
+  - id: audit
+    depends_on: [heuristic_scan]
+    context: fresh
+    denied_tools: [Write, Edit]
+    prompt: |
+      You are a documentation auditor. Your job is to classify documentation
+      problems and write a structured findings report. You MUST NOT modify
+      source files in this step — analysis only.
+
+      ## Inputs
+
+      Scope summary: $scope.output
+      Heuristic scan summary: $heuristic_scan.output
+
+      Full inputs on disk:
+      - $ARTIFACTS_DIR/scope.txt       — list of files in audit scope
+      - $ARTIFACTS_DIR/todos.txt       — TODO/FIXME/XXX/HACK markers
+      - $ARTIFACTS_DIR/exports.txt     — candidate exported symbols per file
+
+      ## Method
+
+      1. Read `$ARTIFACTS_DIR/scope.txt`. If empty, write an empty findings file
+         (see Output) and stop.
+      2. For each file in scope (cap at ~25 files for a single pass — prioritize
+         files with the most heuristic hits):
+         a. Read the file.
+         b. Identify **undocumented exports**: public/exported symbols that lack
+            an adjacent doc comment in the language's native style (JSDoc for
+            JS/TS, docstring for Python, doc comment for Go, `///` for Rust,
+            etc.). Ignore trivial re-exports and type aliases that are self-
+            documenting (e.g., `export type UserId = string`).
+         c. Identify **stale comments**: comments whose content contradicts or
+            no longer matches the adjacent code. Classify each as:
+              - `stale`              : comment describes behavior the code no longer has
+              - `outdated_example`   : example in a comment references removed/renamed API
+              - `contradictory`      : comment asserts something the code contradicts
+              - `orphan_ref`         : comment references a symbol that isn't in the file
+              - `todo`               : a TODO/FIXME worth surfacing (don't auto-fix)
+         d. When uncertain, mark the finding with `"uncertain": true` and
+            explain briefly — the human will review these.
+      3. Do NOT flag internal (non-exported) helpers for missing docs.
+      4. Do NOT invent fixes for things you haven't verified.
+
+      ## Output
+
+      Write a single JSON file to `$ARTIFACTS_DIR/findings.json` with this shape:
+
+      ```json
+      {
+        "mode": "diff" | "all" | "ref",
+        "files_audited": <int>,
+        "findings": [
+          {
+            "file": "relative/path.ts",
+            "line": <int>,
+            "kind": "undocumented_export" | "stale" | "outdated_example"
+                  | "contradictory" | "orphan_ref" | "todo",
+            "severity": "low" | "medium" | "high",
+            "symbol": "<identifier if applicable>",
+            "current": "<verbatim snippet or comment>",
+            "suggested_fix": "<short description of the intended change>",
+            "uncertain": <bool>,
+            "note": "<brief reasoning if uncertain>"
+          }
+        ]
+      }
+      ```
+
+      After writing the file, reply with one paragraph summarizing: files
+      audited, total findings by kind, and how many were marked uncertain.
+
+  # ───────────────────────────────────────────────────────────────────
+  # 4. FIX SOURCE — apply edits to source files
+  # ───────────────────────────────────────────────────────────────────
+  - id: fix_source
+    depends_on: [audit]
+    context: fresh
+    prompt: |
+      You are fixing documentation in source files based on the audit.
+
+      ## Inputs
+
+      - Audit summary: $audit.output
+      - Findings on disk: $ARTIFACTS_DIR/findings.json
+
+      ## Rules
+
+      1. Read `$ARTIFACTS_DIR/findings.json`. If it has no findings (or the
+         file does not exist), write "no-ops" to
+         `$ARTIFACTS_DIR/fix-source-log.md` and stop.
+      2. For each finding, apply ONLY the described change:
+         - `undocumented_export`: add a doc comment above the symbol using the
+           language's native style. Keep it brief (1–3 lines), describe what
+           the symbol does and its key parameters/return — no prose essays.
+         - `stale`, `outdated_example`, `contradictory`, `orphan_ref`: update
+           or remove the comment so it matches the current code. If you cannot
+           confidently fix it, leave the comment and record it as "skipped" in
+           the log (see below).
+         - `todo`: do NOT auto-resolve. Leave it for the human.
+         - Any finding with `"uncertain": true`: do NOT edit. Record it as
+           "skipped-uncertain" in the log.
+      3. Do NOT modify behavior. Doc comments and comment text only.
+      4. Do NOT reformat unrelated code. No drive-by cleanups.
+      5. Do NOT create new files and do NOT edit files outside the scope list
+         at `$ARTIFACTS_DIR/scope.txt`.
+      6. Do NOT commit. Leave changes uncommitted so the human can review the
+         diff before staging.
+
+      ## Output
+
+      Append a log to `$ARTIFACTS_DIR/fix-source-log.md` with, per finding:
+        - file:line
+        - kind
+        - action: "applied" | "skipped" | "skipped-uncertain" | "no-fix-possible"
+        - 1-line reason if skipped
+
+      Then reply with a one-paragraph summary: N applied, N skipped, files touched.
+
+  # ───────────────────────────────────────────────────────────────────
+  # 5. GENERATE DOCS — scaffold & update /docs (idempotent)
+  # ───────────────────────────────────────────────────────────────────
+  - id: generate_docs
+    depends_on: [fix_source]
+    context: fresh
+    prompt: |
+      You are maintaining the project's Markdown documentation under `docs/`.
+      This runs AFTER source-level fixes, so the code now reflects what the
+      docs should describe.
+
+      ## Inputs
+
+      - Findings: $ARTIFACTS_DIR/findings.json
+      - Source-fix log: $ARTIFACTS_DIR/fix-source-log.md
+      - Scope: $ARTIFACTS_DIR/scope.txt
+
+      ## Method
+
+      1. Check whether `docs/` exists at the repo root. If not, create it.
+      2. Ensure these three files exist; create them if missing:
+         - `docs/index.md`          — project overview (purpose, quick start, links)
+         - `docs/architecture.md`   — high-level structure: packages/modules, how
+                                      they fit together, key data flows
+         - `docs/api.md`            — public API surface: exported functions,
+                                      classes, types — grouped by module
+         Do NOT create or modify `README.md` or `CHANGELOG.md` at the repo root
+         (those belong to the project, not this workflow).
+      3. **First run** (a file was just created): populate it by reading the
+         codebase as needed. Keep content grounded — only claim what you can
+         verify in the code. Do NOT invent features.
+      4. **Subsequent runs** (file already has content): update sections that
+         the audit touched. Preserve existing structure and prose. Add new
+         entries for newly documented exports; correct entries for symbols
+         whose comments were revised. Do NOT rewrite the whole file.
+      5. Keep entries concise. Cross-link with relative Markdown paths.
+      6. Do NOT invent architecture. If you cannot determine something with
+         confidence, write a one-line "TODO: describe X" stub the human can
+         fill in, and record it in the report.
+
+      ## Output
+
+      Reply with a bulleted list of files you created or updated in `docs/`,
+      with a one-line description of the change for each.
+
+  # ───────────────────────────────────────────────────────────────────
+  # 6. REPORT — summary to artifacts for human review
+  # ───────────────────────────────────────────────────────────────────
+  - id: report
+    depends_on: [generate_docs]
+    context: fresh
+    allowed_tools: [Read, Write, Bash]
+    prompt: |
+      Produce the final run report.
+
+      ## Inputs
+
+      - Scope summary:       $scope.output
+      - Heuristic summary:   $heuristic_scan.output
+      - Audit summary:       $audit.output
+      - Fix-source summary:  $fix_source.output
+      - Docs summary:        $generate_docs.output
+      - Full artifacts at:   $ARTIFACTS_DIR/
+
+      ## Method
+
+      1. Read `$ARTIFACTS_DIR/findings.json` and `$ARTIFACTS_DIR/fix-source-log.md`.
+      2. Run `git diff --stat` to capture what actually changed in the worktree.
+      3. Run `git diff --stat -- docs/` to isolate doc changes.
+
+      ## Output
+
+      Write `$ARTIFACTS_DIR/report.md` with these sections:
+
+      ### Summary
+      One paragraph: mode (diff/ref/all), files audited, findings by kind,
+      edits applied, docs touched.
+
+      ### Source edits
+      Table of files edited with line counts from `git diff --stat`.
+
+      ### Docs changes
+      Bulleted list of docs files created/updated.
+
+      ### Flagged for human review
+      Any finding marked `uncertain: true` or skipped during fix-source.
+      Include file:line and the reason — these need a human call.
+
+      ### How to review
+      Short note: `git diff` shows source edits; `git diff -- docs/` shows doc
+      changes. Commit (or revert) per your preference.
+
+      After writing the report, reply with its path and a one-line summary.
