@@ -140,15 +140,7 @@ ${JSON.stringify(schema, null, 2)}`;
 /**
  * Pi community provider — wraps `@mariozechner/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
- * (no reuse) with in-memory auth/session/settings, so the server never
- * touches `~/.pi/` and concurrent calls don't collide.
- *
- * Capabilities (see `capabilities.ts` for the canonical list): Pi declares
- * `sessionResume`, `skills`, `toolRestrictions`, `structuredOutput`,
- * `envInjection`, `effortControl`, and `thinkingControl`. Features Pi does
- * not currently support through Archon (`mcp`, `hooks`, `agents`,
- * `costControl`, `fallbackModel`, `sandbox`) stay off; the dag-executor
- * surfaces a warning for any unsupported nodeConfig field.
+ * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
   async *sendQuery(
@@ -174,7 +166,6 @@ export class PiProvider implements IAgentProvider {
     // destructured PascalCase bindings trip eslint's naming-convention rule.
     const [
       piCodingAgent,
-      piAi,
       { bridgeSession },
       { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools },
       { createNoopResourceLoader },
@@ -182,7 +173,6 @@ export class PiProvider implements IAgentProvider {
       { createArchonUIBridge, createArchonUIContext },
     ] = await Promise.all([
       import('@mariozechner/pi-coding-agent'),
-      import('@mariozechner/pi-ai'),
       import('./event-bridge'),
       import('./options-translator'),
       import('./resource-loader'),
@@ -227,10 +217,12 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 2. Look up the Model via Pi's static catalog. `lookupPiModel` returns
+    const authStorage = piCodingAgent.AuthStorage.create();
+    const modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
+    // 2. Look up the Model via Pi's Registry. `lookupPiModel` returns
     //    undefined when not found; we guard explicitly below.
     // Cast to the runtime-string-friendly shape — see `lookupPiModel`'s docblock.
-    const model = lookupPiModel(piAi.getModel as GetModelFn, parsed.provider, parsed.modelId);
+    const model = lookupPiModel(modelRegistry.find as GetModelFn, parsed.provider, parsed.modelId);
     if (!model) {
       throw new Error(
         `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
@@ -258,7 +250,6 @@ export class PiProvider implements IAgentProvider {
     //    OAuth refresh note: Pi refreshes expired access tokens against the
     //    provider's OAuth server and rewrites ~/.pi/agent/auth.json under a
     //    file lock (same mechanism pi CLI uses — safe for concurrent access).
-    const authStorage = piCodingAgent.AuthStorage.create();
 
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const envOverride = envVarName
@@ -268,16 +259,22 @@ export class PiProvider implements IAgentProvider {
       authStorage.setRuntimeApiKey(parsed.provider, envOverride);
     }
 
-    // Fail-fast: resolve creds synchronously before spinning up a session.
-    // Matches Claude's auth-error fast-fail pattern (no retry on auth failures).
     const resolvedKey = await authStorage.getApiKey(parsed.provider);
     if (!resolvedKey) {
-      const envHint = envVarName
-        ? `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
-        : `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`;
+      if (envVarName) {
+        const envHint = `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`;
+        const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
+        throw new Error(
+          `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+        );
+      }
+
+      const envHint = `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`;
       const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
-      throw new Error(
-        `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+      // No credentials for unmapped providers is not necessarily a problem, e.g., local models.
+      getLog().info(
+        { piProvider: parsed.provider },
+        `No Pi credentials found for provider. ${envHint} ${loginHint}`
       );
     }
 
@@ -343,13 +340,12 @@ export class PiProvider implements IAgentProvider {
       };
     }
 
-    // ModelRegistry + settings stay in-memory — only sessions persist, to
-    // match Claude/Codex. Resource loader still suppresses filesystem
-    // discovery by default, except for explicitly-passed skill paths and —
+    // Settings stay in-memory — only sessions persist, to match Claude/Codex.
+    // Resource loader still suppresses filesystem and —
     // when piConfig.enableExtensions is true — Pi's community extension
     // ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/ and
     // packages installed via `pi install npm:<pkg>`).
-    const modelRegistry = piCodingAgent.ModelRegistry.inMemory(authStorage);
+    // discovery except for explicitly-passed skill paths.
     const settingsManager = piCodingAgent.SettingsManager.inMemory();
     // Default ON: extensions (community packages like @plannotator/pi-extension
     // or your own local ones) are a core reason users run Pi. Opt out with

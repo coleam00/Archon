@@ -81,7 +81,14 @@ const mockAuthCreate = mock(() => ({
   setRuntimeApiKey: mockSetRuntimeApiKey,
   getApiKey: mockGetApiKey,
 }));
-const mockModelRegistryInMemory = mock(() => ({}));
+
+const mockModelRegistryFind = mock((provider: string, modelId: string) => {
+  if (provider === 'nonexistent') return undefined;
+  return { id: modelId, provider, name: `${provider}/${modelId}` };
+});
+const mockModelRegistryCreate = mock(() => ({
+  find: mockModelRegistryFind,
+}));
 
 // SessionManager mocks. Each returns a tagged session-manager stub so tests
 // can assert whether resume resolved to an existing session or fell through
@@ -115,7 +122,7 @@ const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 mock.module('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
-  ModelRegistry: { inMemory: mockModelRegistryInMemory },
+  ModelRegistry: { create: mockModelRegistryCreate },
   SessionManager: {
     create: mockSessionCreate,
     open: mockSessionOpen,
@@ -130,16 +137,6 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
   createGrepTool: mockCreateGrepTool,
   createFindTool: mockCreateFindTool,
   createLsTool: mockCreateLsTool,
-}));
-
-// getModel is imported from pi-ai. Return a fake model for known refs and
-// undefined for unknown refs so the provider's not-found branch is testable.
-const mockGetModel = mock((provider: string, modelId: string) => {
-  if (provider === 'nonexistent') return undefined;
-  return { id: modelId, provider, name: `${provider}/${modelId}` };
-});
-mock.module('@mariozechner/pi-ai', () => ({
-  getModel: mockGetModel,
 }));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.
@@ -169,6 +166,12 @@ function resetScript(events: FakeEvent[]): void {
 
 describe('PiProvider', () => {
   beforeEach(() => {
+    mockLogger.fatal.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.trace.mockClear();
     mockPrompt.mockClear();
     mockAbort.mockClear();
     mockDispose.mockClear();
@@ -177,8 +180,9 @@ describe('PiProvider', () => {
     mockSetFlagValue.mockClear();
     mockResourceLoaderReload.mockClear();
     mockCreateAgentSession.mockClear();
-    mockGetModel.mockClear();
     mockAuthCreate.mockClear();
+    mockModelRegistryCreate.mockClear();
+    mockModelRegistryFind.mockClear();
     mockSetRuntimeApiKey.mockClear();
     mockGetApiKey.mockClear();
     MockDefaultResourceLoader.mockClear();
@@ -236,15 +240,21 @@ describe('PiProvider', () => {
     expect(error?.message).toContain('Invalid Pi model ref');
   });
 
-  test('throws when Pi provider id is unknown AND no creds available', async () => {
-    // No env var, no auth.json entry → fail-fast with hint about env-var table
+  test('logs credential hint when Pi provider id is unknown AND no creds available', async () => {
+    // No env var, no auth.json entry → log hint, but continue, to support custom providers that don't use credentials or that use non-Pi means of providing credentials.
+    resetScript(scriptedAgentEnd());
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'unknownprovider/some-model',
       })
     );
-    expect(error?.message).toContain("no credentials for provider 'unknownprovider'");
-    expect(error?.message).toContain("not in the Archon adapter's env-var table");
+
+    expect(error).toBeUndefined();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { piProvider: 'unknownprovider' },
+      expect.stringContaining("not in the Archon adapter's env-var table")
+    );
+    expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
   });
 
   test('throws when env var missing AND auth.json has no entry', async () => {
@@ -295,13 +305,13 @@ describe('PiProvider', () => {
     expect(mockGetApiKey).toHaveBeenCalledWith('anthropic');
   });
 
-  test('throws when getModel returns undefined', async () => {
+  test('throws when ModelRegistry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
-    // 'nonexistent' is handled in mockGetModel to return undefined, but
-    // the adapter rejects unknown providers before getModel. To exercise
+    // 'nonexistent' is handled in mockModelRegistryFind to return undefined, but
+    // the adapter rejects unknown providers. To exercise
     // the not-found branch, use a known provider but unknown modelId by
-    // temporarily swapping mockGetModel to always return undefined.
-    mockGetModel.mockImplementationOnce(() => undefined);
+    // temporarily swapping mockModelRegistryFind to always return undefined.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/unknown-model-id',
