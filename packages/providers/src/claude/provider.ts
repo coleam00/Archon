@@ -740,6 +740,7 @@ async function* streamClaudeMessages(
         total_cost_usd?: number;
         stop_reason?: string | null;
         num_turns?: number;
+        errors?: string[];
         model_usage?: Record<
           string,
           {
@@ -751,9 +752,15 @@ async function* streamClaudeMessages(
         >;
       };
       const tokens = normalizeClaudeUsage(resultMsg.usage);
+      const sdkErrors = Array.isArray(resultMsg.errors) ? resultMsg.errors : undefined;
       if (resultMsg.is_error) {
         getLog().error(
-          { sessionId: resultMsg.session_id, errorSubtype: resultMsg.subtype },
+          {
+            sessionId: resultMsg.session_id,
+            errorSubtype: resultMsg.subtype,
+            stopReason: resultMsg.stop_reason,
+            errors: sdkErrors,
+          },
           'claude.result_is_error'
         );
       }
@@ -765,6 +772,7 @@ async function* streamClaudeMessages(
           ? { structuredOutput: resultMsg.structured_output }
           : {}),
         ...(resultMsg.is_error ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
+        ...(resultMsg.is_error && sdkErrors?.length ? { errors: sdkErrors } : {}),
         ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
         ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
         ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
