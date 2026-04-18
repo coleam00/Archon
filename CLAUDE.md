@@ -1,24 +1,28 @@
-## Project Overview
+# Project Overview
 
 **Remote Agentic Coding Platform**: Control AI coding assistants (Claude Code SDK, Codex SDK) remotely from Slack, Telegram, and GitHub. Built with **Bun + TypeScript + SQLite/PostgreSQL**, single-developer tool for AI-assisted development practitioners. Architecture prioritizes simplicity, flexibility, and user control.
 
 ## Core Principles
 
-**Single-Developer Tool**
+### Single-Developer Tool
+
 - No multi-tenant complexity
 
-**Platform Agnostic**
+### Platform Agnostic
+
 - Unified conversation interface across Slack/Telegram/GitHub/cli/web
 - Platform adapters implement `IPlatformAdapter`
 - Stream/batch AI responses in real-time to all platforms
 
-**Type Safety (CRITICAL)**
+### Type Safety (CRITICAL)
+
 - Strict TypeScript configuration enforced
 - All functions must have complete type annotations
 - No `any` types without explicit justification
 - Interfaces for all major abstractions
 
-**Zod Schema Conventions**
+### Zod Schema Conventions
+
 - Schema naming: camelCase, descriptive suffix (e.g., `workflowRunSchema`, `errorSchema`)
 - Type derivation: always use `z.infer<typeof schema>` — never write parallel hand-crafted interfaces
 - Import `z` from `@hono/zod-openapi` (not from `zod` directly)
@@ -29,7 +33,8 @@
 - `TRIGGER_RULES` and `WORKFLOW_HOOK_EVENTS` are derived from schema `.options` — never duplicate as a plain array (exception: `@archon/web` must define a local constant since `api.generated.d.ts` is type-only and cannot export runtime values)
 - `loader.ts` uses `dagNodeSchema.safeParse()` for node validation; graph-level checks (cycles, deps, `$nodeId.output` refs) remain as imperative code in `validateDagStructure()`
 
-**Git Workflow and Releases**
+### Git Workflow and Releases
+
 - `main` is the release branch. Never commit directly to `main`.
 - `dev` is the working branch. All feature work branches off `dev` and merges back into `dev`.
 - To release, use the `/release` skill. It compares `dev` to `main`, generates changelog entries, bumps the version, and creates a PR to merge `dev` into `main`.
@@ -37,7 +42,8 @@
 - Changelog lives in `CHANGELOG.md` and follows Keep a Changelog format.
 - Version is the single `version` field in the root `package.json`.
 
-**Git as First-Class Citizen**
+### Git as First-Class Citizen
+
 - Let git handle what git does best (conflicts, uncommitted changes, branch management)
 - Surface git errors to users for actionable issues (conflicts, uncommitted changes)
 - Handle expected failure cases gracefully (missing directories during cleanup)
@@ -51,44 +57,52 @@
 
 These are implementation constraints, not slogans. Apply them by default.
 
-**KISS — Keep It Simple, Stupid**
+### KISS — Keep It Simple, Stupid
+
 - Prefer straightforward control flow over clever meta-programming
 - Prefer explicit branches and typed interfaces over hidden dynamic behavior
 - Keep error paths obvious and localized
 
-**YAGNI — You Aren't Gonna Need It**
+### YAGNI — You Aren't Gonna Need It
+
 - Do not add config keys, interface methods, feature flags, or workflow branches without a concrete accepted use case
 - Do not introduce speculative abstractions without at least one current caller
 - Keep unsupported paths explicit (error out) rather than adding partial fake support
 
-**DRY + Rule of Three**
+### DRY + Rule of Three
+
 - Duplicate small, local logic when it preserves clarity
 - Extract shared utilities only after the same pattern appears at least three times and has stabilized
 - When extracting, preserve module boundaries and avoid hidden coupling
 
-**SRP + ISP — Single Responsibility + Interface Segregation**
+### SRP + ISP — Single Responsibility + Interface Segregation
+
 - Keep each module and package focused on one concern
 - Extend behavior by implementing existing narrow interfaces (`IPlatformAdapter`, `IAgentProvider`, `IDatabase`, `IWorkflowStore`) whenever possible
 - Avoid fat interfaces and "god modules" that mix policy, transport, and storage
 - Do not add unrelated methods to an existing interface — define a new one
 
-**Fail Fast + Explicit Errors** — Silent fallback in agent runtimes can create unsafe or costly behavior
+### Fail Fast + Explicit Errors — Silent fallback in agent runtimes can create unsafe or costly behavior
+
 - Prefer throwing early with a clear error for unsupported or unsafe states — never silently swallow errors
 - Never silently broaden permissions or capabilities
 - Document fallback behavior with a comment when a fallback is intentional and safe; otherwise throw
 
-**No Autonomous Lifecycle Mutation Across Process Boundaries**
+### No Autonomous Lifecycle Mutation Across Process Boundaries
+
 - When a process cannot reliably distinguish "actively running elsewhere" from "orphaned by a crash" — typically because the work was started by a different process or input source (CLI, adapter, webhook, web UI, cron) — it must not autonomously mark that work as failed/cancelled/abandoned based on a timer or staleness guess.
 - Surface the ambiguous state to the user and provide a one-click action.
 - Heuristics for *recoverable* operations (retry backoff, subprocess timeouts, hygiene cleanup of terminal-status data) remain appropriate; the rule is about destructive mutation of *non-terminal* state owned by an unknowable other party.
 - Reference: #1216 and the CLI orphan-cleanup precedent at `packages/cli/src/cli.ts:256-258`.
 
-**Determinism + Reproducibility**
+### Determinism + Reproducibility
+
 - Prefer reproducible commands and locked dependency behavior in CI-sensitive paths
 - Keep tests deterministic — no flaky timing or network dependence without guardrails
 - Ensure local validation commands (`bun run validate`) map directly to CI expectations
 
-**Reversibility + Rollback-First Thinking**
+### Reversibility + Rollback-First Thinking
+
 - Keep changes easy to revert: small scope, clear blast radius
 - For risky changes, define the rollback path before merging
 - Avoid mixed mega-patches that block safe rollback
@@ -120,7 +134,7 @@ docker-compose --profile with-db up -d postgres
 # Set DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent in .env
 ```
 
-### Testing
+### Verification Commands
 
 ```bash
 bun run test                # Run all tests (per-package, isolated processes)
@@ -156,20 +170,23 @@ This runs `check:bundled`, type-check, lint, format check, and tests. All five m
 
 **Zero-tolerance policy**: CI enforces `--max-warnings 0`. No warnings allowed.
 
-**When to use inline disable comments** (`// eslint-disable-next-line`):
+#### When to use inline disable comments (`// eslint-disable-next-line`)
+
 - **Almost never** - fix the issue instead
 - Only acceptable when:
   1. External SDK types are incorrect (document which SDK and why)
   2. Intentional type assertion after validation (must include comment explaining the validation)
 
-**Never acceptable:**
+#### Never acceptable
+
 - Disabling `no-explicit-any` without justification
 - Disabling rules to "make CI pass"
 - Bulk disabling at file level (`/* eslint-disable */`)
 
 ### Database
 
-**Auto-Detection (SQLite is the default — zero setup):**
+#### Auto-Detection (SQLite is the default — zero setup)
+
 - **Without `DATABASE_URL`**: Uses SQLite at `~/.archon/archon.db` (auto-initialized, recommended for most users)
 - **With `DATABASE_URL` set**: Uses PostgreSQL (optional, for cloud/advanced deployments)
 
@@ -261,7 +278,7 @@ bun run cli version
 
 **Monorepo Layout (Bun Workspaces):**
 
-```
+```text
 packages/
 ├── cli/                      # @archon/cli - Command-line interface
 │   └── src/
@@ -281,9 +298,11 @@ packages/
 │       ├── config/           # YAML config loading
 │       ├── db/               # Database connection, queries
 │       ├── handlers/         # Command handler (slash commands)
+│       ├── operations/       # Shared business logic (workflow-operations, isolation-operations, workflow-dispatch)
 │       ├── orchestrator/     # AI conversation management
 │       ├── services/         # Background services (cleanup)
 │       ├── state/            # Session state machine
+│       ├── test/             # Shared test mocks and setup
 │       ├── types/            # TypeScript types and interfaces
 │       ├── utils/            # Shared utilities
 │       ├── workflows/        # Store adapter (createWorkflowStore) bridging core DB → IWorkflowStore
@@ -350,7 +369,7 @@ packages/
         └── App.tsx           # Router + layout
 ```
 
-**Import Patterns:**
+### Import Patterns
 
 **IMPORTANT**: Always use typed imports - never use generic `import *` for the main package.
 
@@ -384,7 +403,8 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Database Schema
 
-**8 Tables (all prefixed with `remote_agent_`):**
+#### 8 Tables (all prefixed with `remote_agent_`)
+
 1. **`codebases`** - Repository metadata and commands (JSONB)
 2. **`conversations`** - Track platform conversations with titles and soft-delete support
 3. **`sessions`** - Track AI SDK sessions with resume capability
@@ -394,12 +414,14 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 7. **`messages`** - Conversation message history with tool call metadata (JSONB)
 8. **`codebase_env_vars`** - Per-project env vars injected into project-scoped execution surfaces (Claude, Codex, bash/script nodes, and direct chat when codebase-scoped), managed via Web UI or `env:` in config
 
-**Key Patterns:**
+#### Key Patterns
+
 - Conversation ID format: Platform-specific (`thread_ts`, `chat_id`, `user/repo#123`)
 - One active session per conversation
 - Codebase commands stored in filesystem, paths in `codebases.commands` JSONB
 
-**Session Transitions:**
+#### Session Transitions
+
 - Sessions are immutable - transitions create new linked sessions
 - Each transition has explicit `TransitionTrigger` reason (first-message, plan-to-execute, reset-requested, etc.)
 - Audit trail: `parent_session_id` links to previous session, `transition_reason` records why
@@ -407,19 +429,21 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Architecture Layers
 
-**Package Split:**
+#### Package Split
+
 - **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
 - **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
 - **@archon/providers**: AI agent providers (Claude, Codex) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally.
 - **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
 - **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @archon/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
 - **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
-- **@archon/core**: Business logic, database, orchestration (depends on @archon/providers for AI; provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
+- **@archon/core**: Business logic, database, orchestration (depends on @archon/providers for AI; provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`; `operations/` holds shared workflow/isolation business logic extracted from orchestrator and CLI)
 - **@archon/adapters**: Platform adapters for Slack, Telegram, GitHub, Discord (depends on @archon/core)
 - **@archon/server**: OpenAPIHono HTTP server (Zod + OpenAPI spec generation via `@hono/zod-openapi`), Web adapter (SSE), API routes, Web UI static serving (depends on @archon/adapters)
 - **@archon/web**: React frontend (Vite + Tailwind v4 + shadcn/ui + Zustand), SSE streaming to server. `WorkflowRunStatus`, `WorkflowDefinition`, and `DagNode` are all derived from `src/lib/api.generated.d.ts` (generated from the OpenAPI spec via `bun generate:types`; never import from `@archon/workflows`)
 
-**1. Platform Adapters**
+#### 1. Platform Adapters
+
 - Implement `IPlatformAdapter` interface
 - Handle platform-specific message formats
 - **Web** (`packages/server/src/adapters/web/`): Server-Sent Events (SSE) streaming, conversation ID = user-provided string
@@ -428,7 +452,8 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - **GitHub** (`packages/adapters/src/forge/github/`): Webhooks + GitHub CLI, conversation ID = `owner/repo#number`
 - **Discord** (`packages/adapters/src/community/chat/discord/`): discord.js WebSocket, conversation ID = channel ID
 
-**Adapter Authorization Pattern:**
+#### Adapter Authorization Pattern
+
 - Auth checks happen INSIDE adapters (encapsulation, consistency)
 - Auth utilities co-located with each adapter (e.g., `packages/adapters/src/chat/slack/auth.ts`)
 - Parse whitelist from env var in constructor (e.g., `TELEGRAM_ALLOWED_USER_IDS`)
@@ -437,20 +462,23 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - Log unauthorized attempts with masked user IDs for privacy
 - Adapters expose `onMessage(handler)` callback; errors handled by caller
 
-**2. Command Handler** (`packages/core/src/handlers/`)
+#### 2. Command Handler (`packages/core/src/handlers/`)
+
 - Process slash commands (deterministic, no AI)
 - The orchestrator treats only these top-level commands as deterministic: `/help`, `/status`, `/reset`, `/workflow`, `/register-project`, `/update-project`, `/remove-project`, `/commands`, `/init`, `/worktree`
 - `/workflow` handles subcommands like `list`, `run`, `status`, `cancel`, `resume`, `abandon`, `approve`, `reject`
 - Update database, perform operations, return responses
 
-**3. Orchestrator** (`packages/core/src/orchestrator/`)
+#### 3. Orchestrator (`packages/core/src/orchestrator/`)
+
 - Manage AI conversations
 - Load conversation + codebase context from database
 - Variable substitution: `$1`, `$2`, `$3`, `$ARGUMENTS`
 - Session management: Create new or resume existing
 - Stream AI responses to platform
 
-**4. AI Agent Providers** (`packages/providers/src/`)
+#### 4. AI Agent Providers (`packages/providers/src/`)
+
 - Implement `IAgentProvider` interface
 - **ClaudeProvider**: `@anthropic-ai/claude-agent-sdk`
 - **CodexProvider**: `@openai/codex-sdk`
@@ -458,12 +486,12 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 
 ### Configuration
 
-**Environment Variables:**
+#### Environment Variables
 
 see .env.example
 see .archon/config.yaml setup as needed
 
-**Assistant Defaults:**
+#### Assistant Defaults
 
 The system supports configuring default models and options per assistant in `.archon/config.yaml`:
 
@@ -491,12 +519,14 @@ assistants:
 #   path: docs  # Optional: default is docs/
 ```
 
-**Configuration Priority:**
+#### Configuration Priority
+
 1. Workflow-level options (in YAML `model`, `modelReasoningEffort`, etc.)
 2. Config file defaults (`.archon/config.yaml` `assistants.*`)
 3. SDK defaults
 
-**Model Validation:**
+#### Model Validation
+
 - Workflows are validated at load time for provider/model compatibility
 - Claude models: `sonnet`, `opus`, `haiku`, `claude-*`, `inherit`
 - Codex models: Any model except Claude-specific aliases
@@ -529,21 +559,24 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 # Note: SSE streaming is available at /api/stream/<conversationId>
 ```
 
-**Port Allocation:**
+#### Port Allocation
+
 - Worktrees: Automatic unique port (3190-4089 range, hash-based on path)
 - Main repo: Default 3090
 - Override: `PORT=4000 bun dev` (works in both contexts)
 - Same worktree always gets same port (deterministic)
 
-**Important:**
+### Important Note
+
 - Use the web API routes for manual validation (avoid running multiple platform adapters)
 - Database is shared (same conversations/codebases available)
 - Kill the server when done: `pkill -f "bun.*dev"` or use the specific port
 
 ### Archon Directory Structure
 
-**User-level (`~/.archon/`):**
-```
+### User-level (`~/.archon/`)
+
+```text
 ~/.archon/
 ├── workspaces/owner/repo/        # Project-centric layout
 │   ├── source/                   # Cloned repo or symlink → local path
@@ -560,7 +593,8 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 ```
 
 **Repo-level (`.archon/` in any repository):**
-```
+
+```text
 .archon/
 ├── commands/       # Custom commands
 ├── workflows/      # Workflow definitions (YAML files)
@@ -575,7 +609,8 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 
 ### When Creating New Features
 
-**Quick reference:**
+#### Quick reference
+
 - **Platform Adapters**: Implement `IPlatformAdapter`, handle auth, polling/webhooks
 - **AI Providers**: Implement `IAgentProvider`, session management, streaming
 - **Slash Commands**: Add to command-handler.ts, update database, no AI
@@ -611,18 +646,21 @@ query({ prompt, options: options as any });  // Avoid 'as any'
 
 This ensures type compatibility with SDK updates and eliminates `as any` casts.
 
-### Testing
+### Testing Guidelines
 
 **Unit Tests:**
+
 - Test pure functions (variable substitution, command parsing)
 - Mock external dependencies (database, AI SDKs, platform APIs)
 
 **Integration Tests:**
+
 - Test database operations with test database
 - Test end-to-end flows (mock platforms/AI but use real orchestrator)
 - Clean up test data after each test
 
-**Mock isolation rules (IMPORTANT):**
+#### Mock isolation rules (IMPORTANT)
+
 - Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it
 - Do NOT add `afterAll(() => mock.restore())` for `mock.module()` cleanup — it has no effect
 - Use `spyOn()` for internal modules that other test files import directly (e.g., `spyOn(git, 'checkout')`) — `spy.mockRestore()` DOES work for spies
@@ -660,7 +698,8 @@ async function createSession(conversationId: string, codebaseId: string) {
 }
 ```
 
-**Event naming rules:**
+#### Event naming rules
+
 - Format: `{domain}.{action}_{state}` — e.g. `workflow.step_started`, `isolation.create_failed`
 - Avoid generic events like `processing` or `handling`
 - Always pair `_started` with `_completed` or `_failed`
@@ -668,16 +707,20 @@ async function createSession(conversationId: string, codebaseId: string) {
 
 **Log Levels:** `fatal` > `error` > `warn` > `info` (default) > `debug` > `trace`
 
-**Verbosity:**
+#### Verbosity
+
 - CLI: `archon --quiet` (errors only) — suppresses Pino logs and workflow progress output
 - CLI: `archon --verbose` (debug) — enables debug Pino logs and tool-level workflow progress events
 - Server: `LOG_LEVEL=debug bun run start`
 
-**Never log:** API keys or tokens (mask: `token.slice(0, 8) + '...'`), user message content, PII.
+#### Data Privacy
+
+- **Never log:** API keys or tokens (mask: `token.slice(0, 8) + '...'`), user message content, PII.
 
 ### Command System
 
-**Variable Substitution:**
+#### Variable Substitution
+
 - `$1`, `$2`, `$3` - Positional arguments
 - `$ARGUMENTS` - All arguments as single string
 - `$ARTIFACTS_DIR` - External artifacts directory for the current workflow run (pre-created by executor)
@@ -687,28 +730,31 @@ async function createSession(conversationId: string, codebaseId: string) {
 - `$LOOP_USER_INPUT` - User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations.
 - `$REJECTION_REASON` - Reviewer feedback provided via `/workflow reject <id> <reason>` at an approval gate. Only populated in `on_reject` prompts; empty string elsewhere.
 
-**Command Types:**
+### Command Types
 
-1. **Codebase Commands** (per-repo):
-   - Stored in `.archon/commands/` (plain text/markdown)
-   - Discovered from the repository `.archon/commands/` directory
-   - Surfaced via `GET /api/commands` for the workflow builder and invoked by workflow `command:` nodes
+#### Codebase Commands (per-repo)
 
-2. **Workflows** (YAML-based):
-   - Stored in `.archon/workflows/` (searched recursively)
-   - Multi-step AI execution chains, discovered at runtime
-   - **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently. Node types: `command:` (named command file), `prompt:` (inline prompt), `bash:` (shell script, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured), `loop:` (iterative AI prompt until completion signal), `approval:` (human gate; pauses until user approves or rejects; `capture_response: true` stores the user's comment as `$<node-id>.output` for downstream nodes, default false), `script:` (inline TypeScript/Python or named script from `.archon/scripts/`, runs via `bun` or `uv`, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured, supports `deps:` for dependency installation and `timeout:` in ms, requires `runtime: bun` or `runtime: uv`) . Supports `when:` conditions, `trigger_rule` join semantics, `$nodeId.output` substitution, `output_format` for structured JSON output (Claude and Codex), `allowed_tools`/`denied_tools` for per-node tool restrictions (Claude only), `hooks` for per-node SDK hook callbacks (Claude only), `mcp` for per-node MCP server config files (Claude only, env vars expanded at execution time), and `skills` for per-node skill preloading via AgentDefinition wrapping (Claude only), and `effort`/`thinking`/`maxBudgetUsd`/`systemPrompt`/`fallbackModel`/`betas`/`sandbox` for Claude SDK advanced options (Claude only, also settable at workflow level)
-   - Provider inherited from `.archon/config.yaml` unless explicitly set; per-node `provider` and `model` overrides supported
-   - Model and options can be set per workflow or inherited from config defaults
-   - `interactive: true` at the workflow level forces foreground execution on web (required for approval-gate workflows in the web UI)
-   - Model validation ensures provider/model compatibility at load time
-   - Commands: `/workflow list`, `/workflow reload`, `/workflow status`, `/workflow cancel`, `/workflow resume <id>` (re-runs failed workflow, skipping completed nodes), `/workflow abandon <id>`, `/workflow cleanup [days]` (CLI only — deletes old run records)
-   - Resilient loading: One broken YAML doesn't abort discovery; errors shown in `/workflow list`
-   - `resolveWorkflowName()` (in `router.ts`) resolves workflow names via a 4-tier fallback — exact, case-insensitive, suffix (`-name`), substring — with ambiguity detection; used by both the CLI and all chat platforms
-   - Router fallback: if no `/invoke-workflow` is produced, falls back to `archon-assist` (with "Routing unclear" notice); raw AI response returned only when `archon-assist` is unavailable
-   - Claude routing calls use `tools: []` to prevent tool use at the API level; Codex tool bypass is detected and triggers the same fallback
+- Stored in `.archon/commands/` (plain text/markdown)
+- Discovered from the repository `.archon/commands/` directory
+- Surfaced via `GET /api/commands` for the workflow builder and invoked by workflow `command:` nodes
 
-**Defaults:**
+#### Workflows (YAML-based)
+
+- Stored in `.archon/workflows/` (searched recursively)
+- Multi-step AI execution chains, discovered at runtime
+- **`nodes:` (DAG format)**: Nodes with explicit `depends_on` edges; independent nodes in the same topological layer run concurrently. Node types: `command:` (named command file), `prompt:` (inline prompt), `bash:` (shell script, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured), `loop:` (iterative AI prompt until completion signal), `approval:` (human gate; pauses until user approves or rejects; `capture_response: true` stores the user's comment as `$<node-id>.output` for downstream nodes, default false), `script:` (inline TypeScript/Python or named script from `.archon/scripts/`, runs via `bun` or `uv`, stdout captured as `$nodeId.output`, no AI, receives managed per-project env vars in its subprocess environment when configured, supports `deps:` for dependency installation and `timeout:` in ms, requires `runtime: bun` or `runtime: uv`) . Supports `when:` conditions, `trigger_rule` join semantics, `$nodeId.output` substitution, `output_format` for structured JSON output (Claude and Codex), `allowed_tools`/`denied_tools` for per-node tool restrictions (Claude only), `hooks` for per-node SDK hook callbacks (Claude only), `mcp` for per-node MCP server config files (Claude only, env vars expanded at execution time), and `skills` for per-node skill preloading via AgentDefinition wrapping (Claude only), and `effort`/`thinking`/`maxBudgetUsd`/`systemPrompt`/`fallbackModel`/`betas`/`sandbox` for Claude SDK advanced options (Claude only, also settable at workflow level)
+- Provider inherited from `.archon/config.yaml` unless explicitly set; per-node `provider` and `model` overrides supported
+- Model and options can be set per workflow or inherited from config defaults
+- `interactive: true` at the workflow level forces foreground execution on web (required for approval-gate workflows in the web UI)
+- Model validation ensures provider/model compatibility at load time
+- Commands: `/workflow list`, `/workflow reload`, `/workflow status`, `/workflow cancel`, `/workflow resume <id>` (re-runs failed workflow, skipping completed nodes), `/workflow abandon <id>`, `/workflow cleanup [days]` (CLI only — deletes old run records)
+- Resilient loading: One broken YAML doesn't abort discovery; errors shown in `/workflow list`
+- `resolveWorkflowName()` (in `router.ts`) resolves workflow names via a 4-tier fallback — exact, case-insensitive, suffix (`-name`), substring — with ambiguity detection; used by both the CLI and all chat platforms
+- Router fallback: if no `/invoke-workflow` is produced, falls back to `archon-assist` (with "Routing unclear" notice); raw AI response returned only when `archon-assist` is unavailable
+- Claude routing calls use `tools: []` to prevent tool use at the API level; Codex tool bypass is detected and triggers the same fallback
+
+#### Defaults
+
 - Bundled in `.archon/commands/defaults/` and `.archon/workflows/defaults/`
 - Binary builds: Embedded at compile time (no filesystem access needed) via `packages/workflows/src/defaults/bundled-defaults.generated.ts`
 - Source builds: Loaded from filesystem at runtime
@@ -716,14 +762,16 @@ async function createSession(conversationId: string, codebaseId: string) {
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
 - **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and will fail loudly if the generated file is stale.
 
-**Global workflows** (user-level, applies to every project):
+#### Global workflows (user-level, applies to every project)
+
 - Path: `~/.archon/.archon/workflows/` (or `$ARCHON_HOME/.archon/workflows/`)
 - Load priority: bundled < global < repo-specific (repo overrides global by filename)
 - See the docs site at `packages/docs-web/` for details
 
 ### Error Handling
 
-**Database Errors:**
+#### Database Errors
+
 ```typescript
 // INSERT operations
 try {
@@ -743,7 +791,8 @@ try {
 }
 ```
 
-**Git Operation Errors (don't fail silently):**
+#### Git Operation Errors (don't fail silently)
+
 ```typescript
 // When isolation environment creation fails:
 try {
@@ -760,21 +809,24 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 
 ### API Endpoints
 
-**Web UI REST API** (`packages/server/src/routes/api.ts`):
+### Web UI REST API (`packages/server/src/routes/api.ts`)
 
-**Workflow Management:**
+#### Workflow Management
+
 - `GET /api/workflows` - List available workflows; optional `?cwd=`; returns `{ workflows: [...], errors?: [...] }`
 - `POST /api/workflows/validate` - Validate a workflow definition in-memory (no save); body: `{ definition: object }`; returns `{ valid: boolean, errors?: string[] }`
 - `GET /api/workflows/:name` - Fetch a single workflow by name; optional `?cwd=` query param; returns `{ workflow, filename, source: 'project' | 'bundled' }`
 - `PUT /api/workflows/:name` - Save (create or update) a workflow YAML; body: `{ definition: object }`; validates before writing; requires `?cwd=` or registered codebase
 - `DELETE /api/workflows/:name` - Delete a user-defined workflow; bundled defaults cannot be deleted
 
-**Workflow Run Lifecycle:**
+#### Workflow Run Lifecycle
+
 - `POST /api/workflows/runs/{runId}/resume` - Mark a failed run as ready for auto-resume on next invocation
 - `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled)
 - `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
 
-**Codebases:**
+#### Codebases
+
 - `GET /api/codebases` / `GET /api/codebases/:id` - List / fetch codebases
 - `POST /api/codebases` - Register a codebase (clone or local path)
 - `DELETE /api/codebases/:id` - Delete a codebase and clean up resources
@@ -782,33 +834,41 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `PUT /api/codebases/:id/env` / `DELETE /api/codebases/:id/env/:key` - Upsert / delete a single codebase env var
 - `GET /api/codebases/:id/environments` - List tracked isolation environments for a codebase
 
-**Artifact Files:**
+#### Artifact Files
+
 - `GET /api/artifacts/:runId/*` - Serve a workflow artifact file by run ID and relative path; returns `text/markdown` for `.md` files, `text/plain` otherwise; 400 on path traversal (`..`), 404 if run or file not found
 
-**Command Listing:**
+#### Command Listing
+
 - `GET /api/commands` - List available command names (bundled + project-defined); optional `?cwd=`; returns `{ commands: [{ name, source: 'bundled' | 'project' }] }`
 
-**Providers:**
+#### Providers
+
 - `GET /api/providers` - List registered AI providers; returns `{ providers: [{ id, displayName, capabilities, builtIn }] }`
 
-**System:**
+#### System
+
 - `GET /api/health` - Health check with adapter/system status
 - `GET /api/update-check` - Check for available updates; returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`; skips GitHub API call for non-binary builds
 
-**OpenAPI Spec:**
+#### OpenAPI Spec
+
 - `GET /api/openapi.json` - Generated OpenAPI 3.0 spec for all Zod-validated routes
 
-**Webhooks:**
+#### Webhooks
+
 - `POST /webhooks/github` - GitHub webhook events
 - Signature verification required (HMAC SHA-256)
 - Return 200 immediately, process async
 
-**Security:**
+### Security
+
 - Verify webhook signatures (GitHub: `X-Hub-Signature-256`)
 - Use `c.req.text()` for raw webhook body (signature verification)
 - Never log or expose tokens in responses
 
-**@Mention Detection:**
+### @Mention Detection
+
 - Parse `@archon` in issue/PR **comments only** (not descriptions)
 - Events: `issue_comment` only
-- Note: Descriptions often contain example commands or documentation - these are NOT command invocations (see #96)
+- Note: Descriptions often contain example commands or documentation — these are NOT command invocations (see #96)

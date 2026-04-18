@@ -48,7 +48,10 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         '/api': {
-          target: `http://localhost:${apiPort}`,
+          // Use 127.0.0.1 instead of localhost: Node.js 17+ resolves localhost to
+          // ::1 (IPv6) by default, but Bun listens on 0.0.0.0 (IPv4 only), causing
+          // ECONNREFUSED when Vite proxies API requests.
+          target: `http://127.0.0.1:${apiPort}`,
           changeOrigin: true,
         },
       },

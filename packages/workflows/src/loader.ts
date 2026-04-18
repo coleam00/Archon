@@ -22,11 +22,13 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+import { parse as yamlParse } from 'yaml';
+
 /**
- * Parse YAML using Bun's native YAML parser
+ * Parse YAML content
  */
 function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+  return yamlParse(content);
 }
 
 /**

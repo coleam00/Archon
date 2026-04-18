@@ -129,11 +129,13 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
+
 /**
- * Parse YAML using Bun's native YAML parser
+ * Parse YAML content
  */
 function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+  return yamlParse(content);
 }
 
 // Cache for loaded configs
@@ -556,7 +558,7 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
     }
 
     // Serialize to YAML and write
-    const yaml = Bun.YAML.stringify(merged);
+    const yaml = yamlStringify(merged);
     await mkdir(dirname(configPath), { recursive: true });
     await writeConfigFile(configPath, yaml);
 
