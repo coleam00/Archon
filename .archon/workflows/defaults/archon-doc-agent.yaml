@@ -1,7 +1,8 @@
 name: archon-doc-agent
 description: |
   Use when: User wants to audit stale comments and undocumented exported symbols,
-  have the AI fix them in source, and generate/update Markdown docs under /docs.
+  have the AI fix them in source, and generate/update Markdown docs under the
+  configured docs directory ($DOCS_DIR, defaults to docs/).
   Triggers: "audit docs", "fix stale comments", "document the code", "doc agent",
             "generate docs", "documentation sweep", "find undocumented".
   Invocations:
@@ -10,7 +11,7 @@ description: |
     - archon workflow run archon-doc-agent all           -> full repo scan
   Does: Scopes files -> heuristic scan (TODO/FIXME + export surface) -> AI audit
         classifies findings -> edits source to add JSDoc/docstrings and fix stale
-        comments -> scaffolds/updates /docs Markdown -> writes summary report.
+        comments -> scaffolds/updates Markdown in $DOCS_DIR -> writes summary report.
   NOT for: Greenfield doc-site generation (VitePress/Docusaurus), AST-based API
            reference generation, or translating existing docs.
 
@@ -260,9 +261,11 @@ nodes:
     depends_on: [fix_source]
     context: fresh
     prompt: |
-      You are maintaining the project's Markdown documentation under `docs/`.
-      This runs AFTER source-level fixes, so the code now reflects what the
-      docs should describe.
+      You are maintaining the project's Markdown documentation under the
+      configured docs directory: `$DOCS_DIR` (defaults to `docs/` if the user
+      has not set `docs.path` in `.archon/config.yaml`). This runs AFTER
+      source-level fixes, so the code now reflects what the docs should
+      describe.
 
       ## Inputs
 
@@ -272,13 +275,13 @@ nodes:
 
       ## Method
 
-      1. Check whether `docs/` exists at the repo root. If not, create it.
+      1. Check whether `$DOCS_DIR` exists at the repo root. If not, create it.
       2. Ensure these three files exist; create them if missing:
-         - `docs/index.md`          — project overview (purpose, quick start, links)
-         - `docs/architecture.md`   — high-level structure: packages/modules, how
-                                      they fit together, key data flows
-         - `docs/api.md`            — public API surface: exported functions,
-                                      classes, types — grouped by module
+         - `$DOCS_DIR/index.md`          — project overview (purpose, quick start, links)
+         - `$DOCS_DIR/architecture.md`   — high-level structure: packages/modules,
+                                           how they fit together, key data flows
+         - `$DOCS_DIR/api.md`            — public API surface: exported functions,
+                                           classes, types — grouped by module
          Do NOT create or modify `README.md` or `CHANGELOG.md` at the repo root
          (those belong to the project, not this workflow).
       3. **First run** (a file was just created): populate it by reading the
@@ -295,8 +298,8 @@ nodes:
 
       ## Output
 
-      Reply with a bulleted list of files you created or updated in `docs/`,
-      with a one-line description of the change for each.
+      Reply with a bulleted list of files you created or updated under
+      `$DOCS_DIR`, with a one-line description of the change for each.
 
   # ───────────────────────────────────────────────────────────────────
   # 6. REPORT — summary to artifacts for human review
@@ -321,7 +324,7 @@ nodes:
 
       1. Read `$ARTIFACTS_DIR/findings.json` and `$ARTIFACTS_DIR/fix-source-log.md`.
       2. Run `git diff --stat` to capture what actually changed in the worktree.
-      3. Run `git diff --stat -- docs/` to isolate doc changes.
+      3. Run `git diff --stat -- $DOCS_DIR` to isolate doc changes.
 
       ## Output
 
@@ -342,7 +345,7 @@ nodes:
       Include file:line and the reason — these need a human call.
 
       ### How to review
-      Short note: `git diff` shows source edits; `git diff -- docs/` shows doc
-      changes. Commit (or revert) per your preference.
+      Short note: `git diff` shows source edits; `git diff -- $DOCS_DIR` shows
+      doc changes. Commit (or revert) per your preference.
 
       After writing the report, reply with its path and a one-line summary.
