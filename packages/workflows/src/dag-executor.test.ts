@@ -5489,8 +5489,9 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
     completeSpy.mockRestore();
   });
 
-  it('loop_until never met: runs exactly max_iterations passes then completes', async () => {
+  it('loop_until never met: runs exactly max_iterations passes then fails the run', async () => {
     const store = createMockStore();
+    const updateSpy = spyOn(store, 'updateWorkflowRun');
     const completeSpy = spyOn(store, 'completeWorkflowRun');
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -5518,8 +5519,16 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
     );
 
     expect(mockSendQueryDag.mock.calls.length).toBe(3);
-    expect(completeSpy).toHaveBeenCalledTimes(1);
+    expect(completeSpy).toHaveBeenCalledTimes(0);
+    const failCall = (
+      updateSpy.mock.calls as Array<
+        [string, { status?: string; metadata?: Record<string, unknown> }]
+      >
+    ).find(([, upd]) => upd.status === 'failed');
+    expect(failCall).toBeDefined();
+    expect(failCall![1].metadata).toMatchObject({ loop_until_max_iterations_exceeded: true });
     completeSpy.mockRestore();
+    updateSpy.mockRestore();
   });
 
   it('loop_until met on iteration N: stops early, does not run remaining iterations', async () => {
@@ -5597,6 +5606,7 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
 
   it('loop_until unparseable expression: stops after first pass (fail-closed)', async () => {
     const store = createMockStore();
+    const updateSpy = spyOn(store, 'updateWorkflowRun');
     const completeSpy = spyOn(store, 'completeWorkflowRun');
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -5625,10 +5635,18 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
     );
 
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
-    expect(completeSpy).toHaveBeenCalledTimes(1);
+    expect(completeSpy).toHaveBeenCalledTimes(0);
     const allMessages: string[] = sendSpy.mock.calls.map((c: unknown[]) => c[1] as string);
     expect(allMessages.some(m => m.includes('loop_until'))).toBe(true);
+    const failCall = (
+      updateSpy.mock.calls as Array<
+        [string, { status?: string; metadata?: Record<string, unknown> }]
+      >
+    ).find(([, upd]) => upd.status === 'failed');
+    expect(failCall).toBeDefined();
+    expect(failCall![1].metadata).toMatchObject({ loop_until_parse_error: true });
     completeSpy.mockRestore();
+    updateSpy.mockRestore();
   });
 
   it('loop_until: each incomplete pass sends a progress message', async () => {
@@ -5705,8 +5723,9 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
     completeSpy.mockRestore();
   });
 
-  it('max_iterations defaults to 1 when loop_until set but max_iterations omitted', async () => {
+  it('max_iterations defaults to 10 when loop_until set but max_iterations omitted', async () => {
     const store = createMockStore();
+    const updateSpy = spyOn(store, 'updateWorkflowRun');
     const completeSpy = spyOn(store, 'completeWorkflowRun');
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -5721,7 +5740,7 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
         name: 'loop-test',
         nodes: [{ id: 'step', prompt: 'do work' }],
         loop_until: "$step.output == 'done'",
-        // max_iterations omitted → defaults to 1
+        // max_iterations omitted → defaults to 10
       },
       workflowRun,
       'claude',
@@ -5733,9 +5752,17 @@ describe('executeDagWorkflow -- loop_until and max_iterations', () => {
       minimalConfig
     );
 
-    expect(mockSendQueryDag.mock.calls.length).toBe(1);
-    expect(completeSpy).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag.mock.calls.length).toBe(10);
+    expect(completeSpy).toHaveBeenCalledTimes(0);
+    const failCall = (
+      updateSpy.mock.calls as Array<
+        [string, { status?: string; metadata?: Record<string, unknown> }]
+      >
+    ).find(([, upd]) => upd.status === 'failed');
+    expect(failCall).toBeDefined();
+    expect(failCall![1].metadata).toMatchObject({ loop_until_max_iterations_exceeded: true });
     completeSpy.mockRestore();
+    updateSpy.mockRestore();
   });
 });
 

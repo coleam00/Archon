@@ -2127,8 +2127,10 @@ async function executeWorkflowNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   configuredCommandFolder: string | undefined,
-  issueContext: string | undefined
-): Promise<NodeOutput> {
+  issueContext: string | undefined,
+  invocationChain: string[],
+  preDiscoveredWorkflows?: WorkflowDefinition[]
+): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: parentWorkflowRun.id, nodeName: node.id };
   const emitter = getWorkflowEventEmitter();
@@ -2184,20 +2186,48 @@ async function executeWorkflowNode(
     }
   }
 
-  // Discover and load the child workflow by name
-  let childWorkflow: WorkflowDefinition | undefined;
-  try {
-    const result = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
-    childWorkflow = result.workflows.find(ws => ws.workflow.name === node.workflow)?.workflow;
-  } catch (error) {
-    const err = error as Error;
-    const errMsg = `Node '${node.id}': failed to discover workflow '${node.workflow}': ${err.message}`;
-    getLog().error(
-      { err, nodeId: node.id, childWorkflow: node.workflow },
-      'dag.workflow_node_discovery_failed'
-    );
+  // Guard against workflow cycles and excessive nesting depth.
+  if (invocationChain.includes(node.workflow) || invocationChain.length >= 8) {
+    const reason = invocationChain.includes(node.workflow)
+      ? `cycle detected: '${node.workflow}' is already in the invocation chain [${invocationChain.join(' → ')}]`
+      : `max nesting depth (8) exceeded: [${invocationChain.join(' → ')}]`;
+    const errMsg = `Node '${node.id}': ${reason}`;
+    getLog().error({ nodeId: node.id, invocationChain }, 'dag.workflow_node_cycle_detected');
     await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentWorkflowRun.id,
+        event_type: 'node_failed',
+        step_name: node.id,
+        data: { error: errMsg },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentWorkflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
     return { state: 'failed', output: '', error: errMsg };
+  }
+
+  // Discover and load the child workflow by name (use pre-discovered cache when available)
+  let childWorkflow: WorkflowDefinition | undefined;
+  if (preDiscoveredWorkflows !== undefined) {
+    childWorkflow = preDiscoveredWorkflows.find(w => w.name === node.workflow);
+  } else {
+    try {
+      const result = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
+      childWorkflow = result.workflows.find(ws => ws.workflow.name === node.workflow)?.workflow;
+    } catch (error) {
+      const err = error as Error;
+      const errMsg = `Node '${node.id}': failed to discover workflow '${node.workflow}': ${err.message}`;
+      getLog().error(
+        { err, nodeId: node.id, childWorkflow: node.workflow },
+        'dag.workflow_node_discovery_failed'
+      );
+      await safeSendMessage(platform, conversationId, errMsg, nodeContext);
+      return { state: 'failed', output: '', error: errMsg };
+    }
   }
 
   if (!childWorkflow) {
@@ -2278,15 +2308,6 @@ async function executeWorkflowNode(
     // Non-fatal — child workflow can still run without its artifacts directory pre-created
   }
 
-  // Child workflow-level SDK options (effort, thinking, etc.)
-  const childWorkflowLevelOptions: WorkflowLevelOptions = {
-    effort: childWorkflow.effort,
-    thinking: childWorkflow.thinking,
-    fallbackModel: childWorkflow.fallbackModel,
-    betas: childWorkflow.betas,
-    sandbox: childWorkflow.sandbox,
-  };
-
   await safeSendMessage(
     platform,
     conversationId,
@@ -2337,7 +2358,7 @@ async function executeWorkflowNode(
       platform,
       conversationId,
       cwd,
-      { ...childWorkflow, ...childWorkflowLevelOptions },
+      childWorkflow,
       childRun,
       childProvider,
       childModel,
@@ -2349,7 +2370,8 @@ async function executeWorkflowNode(
       configuredCommandFolder,
       issueContext,
       undefined, // no priorCompletedNodes — child runs are always fresh
-      parentCancelController.signal
+      parentCancelController.signal,
+      [...invocationChain, node.workflow]
     );
   } catch (error) {
     const err = error as Error;
@@ -2383,6 +2405,17 @@ async function executeWorkflowNode(
 
   if (childFinalStatus === 'completed') {
     const output = childTerminalOutput ?? '';
+
+    // Propagate child run's accumulated cost into the parent's cost aggregation.
+    let childCostUsd: number | undefined;
+    try {
+      const childRunRecord = await deps.store.getWorkflowRun(childRun.id);
+      const rawCost = childRunRecord?.metadata?.total_cost_usd;
+      childCostUsd = typeof rawCost === 'number' ? rawCost : undefined;
+    } catch (err) {
+      getLog().warn({ err, childRunId: childRun.id }, 'dag.workflow_node_cost_fetch_failed');
+    }
+
     getLog().info(
       { nodeId: node.id, childRunId: childRun.id, durationMs: duration },
       'dag.workflow_node_completed'
@@ -2415,7 +2448,11 @@ async function executeWorkflowNode(
       nodeName: `workflow:${node.workflow}`,
       duration,
     });
-    return { state: 'completed', output };
+    return {
+      state: 'completed',
+      output,
+      ...(childCostUsd !== undefined ? { costUsd: childCostUsd } : {}),
+    };
   }
 
   // Child failed, was cancelled, or status is unknown
@@ -2474,7 +2511,8 @@ export async function executeDagWorkflow(
   configuredCommandFolder?: string,
   issueContext?: string,
   priorCompletedNodes?: Map<string, string>,
-  parentAbort?: AbortSignal
+  parentAbort?: AbortSignal,
+  invocationChain?: string[]
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2488,9 +2526,10 @@ export async function executeDagWorkflow(
 
   // When loop_until is defined, run the full DAG up to max_iterations times.
   // Each pass uses a fresh nodeOutputs scope; the loop stops when the condition
-  // evaluates to true (or the cap is reached).
+  // evaluates to true (or the cap is reached). Defaults to 10 iterations when
+  // loop_until is set but max_iterations is omitted.
   const maxIterations =
-    workflow.loop_until !== undefined ? Math.max(1, workflow.max_iterations ?? 1) : 1;
+    workflow.loop_until !== undefined ? Math.max(1, workflow.max_iterations ?? 10) : 1;
 
   getLog().info(
     {
@@ -2521,10 +2560,30 @@ export async function executeDagWorkflow(
     return false;
   }
 
+  // Resolve invocation chain — seed with this workflow's name when called from the top level.
+  const chain = invocationChain ?? [workflow.name];
+
+  // Pre-discover child workflows once for the lifetime of this run to avoid repeated disk I/O.
+  let preDiscoveredWorkflows: WorkflowDefinition[] | undefined;
+  if (workflow.nodes.some(isWorkflowNode)) {
+    try {
+      const discovered = await discoverWorkflowsWithConfig(cwd, deps.loadConfig);
+      preDiscoveredWorkflows = discovered.workflows.map(ws => ws.workflow);
+    } catch (err) {
+      getLog().warn({ err }, 'dag.workflow_prediscovery_failed');
+      // Non-fatal — executeWorkflowNode falls back to per-node discovery
+    }
+  }
+
   // Accumulated final state — set on the last successful pass.
   let finalTerminalOutput: string | undefined;
   let finalNodeCounts = { completed: 0, failed: 0, skipped: 0, total: workflow.nodes.length };
   let finalTotalCostUsd = 0;
+  // Set to a non-null message when the loop exits due to a failure condition
+  // (parse error or max-iterations exhaustion) so the post-loop path can fail
+  // the run instead of completing it.
+  let loopFailureMsg: string | null = null;
+  let loopFailureMeta: Record<string, unknown> = {};
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Fresh execution scope per iteration.
@@ -2874,7 +2933,9 @@ export async function executeDagWorkflow(
                 nodeOutputs,
                 config,
                 configuredCommandFolder,
-                issueContext
+                issueContext,
+                chain,
+                preDiscoveredWorkflows
               );
               return { nodeId: node.id, output };
             }
@@ -3163,14 +3224,14 @@ export async function executeDagWorkflow(
     if (workflow.loop_until !== undefined) {
       const { result, parsed } = evaluateCondition(workflow.loop_until, nodeOutputs);
       if (!parsed) {
-        // Unparseable expression: warn and stop (fail-closed — treat as condition satisfied).
+        // Unparseable expression: fail-closed — mark as failed so consumers can detect the error.
         getLog().warn({ expr: workflow.loop_until, iteration }, 'dag.loop_until_parse_failed');
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `⚠️ \`loop_until\` expression could not be parsed — stopping after iteration ${String(iteration + 1)}. Check syntax: \`$nodeId.output == 'VALUE'\`.`,
-          { workflowId: workflowRun.id }
-        );
+        const parseErrMsg = `Workflow '${workflow.name}': \`loop_until\` expression could not be parsed after iteration ${String(iteration + 1)}. Check syntax: \`$nodeId.output == 'VALUE'\`.`;
+        await safeSendMessage(platform, conversationId, `⚠️ ${parseErrMsg}`, {
+          workflowId: workflowRun.id,
+        });
+        loopFailureMsg = parseErrMsg;
+        loopFailureMeta = { loop_until_parse_error: true, loop_until_expr: workflow.loop_until };
         break;
       }
       if (result) {
@@ -3189,18 +3250,49 @@ export async function executeDagWorkflow(
         );
         continue;
       }
-      // Reached max_iterations with condition still false.
+      // Reached max_iterations with condition still false — fail the run.
       getLog().warn({ maxIterations }, 'dag.loop_max_iterations_reached');
+      const maxIterErrMsg = `Workflow '${workflow.name}': \`loop_until\` condition was never satisfied after ${String(maxIterations)} iterations.`;
       await safeSendMessage(
         platform,
         conversationId,
         `⚠️ Reached max iterations (${String(maxIterations)}) — \`loop_until\` condition was never satisfied.`,
         { workflowId: workflowRun.id }
       );
+      loopFailureMsg = maxIterErrMsg;
+      loopFailureMeta = { loop_until_max_iterations_exceeded: true, max_iterations: maxIterations };
     }
 
     break; // no loop_until defined, or condition satisfied / max reached
   } // end iteration loop
+
+  // If the loop exited due to a parse error or max-iterations exhaustion, fail the run.
+  if (loopFailureMsg !== null) {
+    if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    await deps.store
+      .updateWorkflowRun(workflowRun.id, {
+        status: 'failed',
+        metadata: { error: loopFailureMsg, ...loopFailureMeta },
+      })
+      .catch((dbErr: Error) => {
+        getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+      });
+    await logWorkflowError(logDir, workflowRun.id, loopFailureMsg).catch((logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    });
+    const emitterForFail = getWorkflowEventEmitter();
+    emitterForFail.emit({
+      type: 'workflow_failed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      error: loopFailureMsg,
+    });
+    emitterForFail.unregisterRun(workflowRun.id);
+    return;
+  }
 
   // Update DB and emit completion
   try {
