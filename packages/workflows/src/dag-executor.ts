@@ -764,6 +764,25 @@ async function executeNodeInternal(
             `Node '${node.id}' exceeded cost cap${cap !== undefined ? ` of $${cap.toFixed(2)}` : ''}.`
           );
         }
+        // Fail loudly on any other SDK error result. Previously we broke out of
+        // the stream silently, producing empty/partial output without signaling
+        // failure — which let failed iterations masquerade as successes (#1208).
+        if (msg.isError) {
+          const subtype = msg.errorSubtype ?? 'unknown';
+          const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+          getLog().error(
+            {
+              nodeId: node.id,
+              errorSubtype: subtype,
+              errors: msg.errors,
+              sessionId: msg.sessionId,
+              stopReason: msg.stopReason,
+              durationMs: Date.now() - nodeStartTime,
+            },
+            'dag.node_sdk_error_result'
+          );
+          throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
+        }
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
         // Forward provider warnings (⚠️) and MCP connection failures to the user.
@@ -1625,6 +1644,28 @@ async function executeLoopNode(
           if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) {
             loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
+          }
+          // Fail the iteration loudly on SDK error results. Previously we broke
+          // silently, producing empty output and continuing to the next iteration —
+          // which made `error_during_execution` on resumed interactive loops look
+          // like a "5-second crash" that kept burning iterations (#1208).
+          if (msg.isError) {
+            const subtype = msg.errorSubtype ?? 'unknown';
+            const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+            getLog().error(
+              {
+                nodeId: node.id,
+                iteration: i,
+                errorSubtype: subtype,
+                errors: msg.errors,
+                sessionId: msg.sessionId,
+                stopReason: msg.stopReason,
+              },
+              'loop_node.iteration_sdk_error'
+            );
+            throw new Error(
+              `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
+            );
           }
           break; // Result is the "I'm done" signal — don't wait for subprocess to exit
         } else if (msg.type === 'tool' && msg.toolName) {

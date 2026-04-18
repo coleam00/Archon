@@ -72,6 +72,8 @@ export type MessageChunk =
       structuredOutput?: unknown;
       isError?: boolean;
       errorSubtype?: string;
+      /** SDK-provided error detail strings. Populated when isError is true. */
+      errors?: string[];
       cost?: number;
       stopReason?: string;
       numTurns?: number;

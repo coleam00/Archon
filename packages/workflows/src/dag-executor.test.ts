@@ -3594,6 +3594,70 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(sessionArg).toBe('loop-session-1');
     });
 
+    it('loop iteration fails loudly when SDK returns error_during_execution', async () => {
+      // Regression test for #1208: previously the loop silently broke on isError
+      // results and kept iterating with empty output, producing "5-second crashes"
+      // that masqueraded as successful iterations.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          errors: ['Subprocess crashed mid-turn'],
+          sessionId: 'bad-session',
+        };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-iteration-err',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'Do the work. Say DONE.',
+                until: 'DONE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Should fail after one iteration rather than burning through max_iterations
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      // The loop_iteration_failed event should carry the subtype and SDK errors detail
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const iterFailedEvents = eventCalls.filter(
+        (call: unknown[]) =>
+          (call[0] as Record<string, unknown>).event_type === 'loop_iteration_failed'
+      );
+      expect(iterFailedEvents.length).toBeGreaterThan(0);
+      const failedData = (iterFailedEvents[0][0] as Record<string, unknown>).data as Record<
+        string,
+        unknown
+      >;
+      expect(failedData.error).toContain('error_during_execution');
+      expect(failedData.error).toContain('Subprocess crashed mid-turn');
+    });
+
     it('non-interactive loop is unaffected (no pause)', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Still working...' };
@@ -4615,6 +4679,58 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const capMessage = messages.find(m => m.includes('$2.50'));
     expect(capMessage).toBeDefined();
+  });
+
+  it('fails node when SDK returns error_during_execution result', async () => {
+    // Regression test for #1208: previously we only failed on error_max_budget_usd
+    // and silently broke on all other isError subtypes, letting failed nodes
+    // masquerade as successes with empty output.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        errors: ['Tool call failed: permission denied'],
+        sessionId: 'sid-err',
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'err-exec-test',
+        nodes: [{ id: 'step1', command: 'my-cmd' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The node_failed event should carry the subtype and SDK errors detail
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents.length).toBeGreaterThan(0);
+    const failedData = (nodeFailedEvents[0][0] as Record<string, unknown>).data as Record<
+      string,
+      unknown
+    >;
+    expect(failedData.error).toContain('error_during_execution');
+    expect(failedData.error).toContain('permission denied');
   });
 
   it('forwards workflow-level effort to node when no per-node override', async () => {
