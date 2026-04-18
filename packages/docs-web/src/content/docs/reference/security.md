@@ -139,8 +139,13 @@ Archon's own env sources (`~/.archon/.env`, dev `.env`) are loaded after the CWD
 - `.archon/config.yaml` `env:` section (per-repo, checked into version control)
 - Web UI: Settings → Projects → Env Vars (per-codebase, stored in Archon DB)
 
-**CORS:**
-- API routes use `WEB_UI_ORIGIN` to restrict CORS. The default is `*` (allow all), which is appropriate for local single-developer use. Set a specific origin when exposing the server publicly.
+**Network binding and CORS:**
+
+- The server binds to `127.0.0.1` (loopback) by default. LAN access requires setting `HOST=0.0.0.0` explicitly — only do this behind a reverse proxy (see Caddy `--profile cloud` / `--profile auth`) or a firewall, because Archon has no in-app auth. Docker Compose sets `HOST=0.0.0.0` inside the container automatically; port forwarding on the host still needs explicit mapping.
+- API routes accept requests only from origins in the allowlist. The default allowlist is *any loopback origin* (localhost / 127.0.0.1 / ::1 on any port) — this matches the dev setup (Vite on 5173 talking to the server on 3090) without config.
+- Override via `ALLOWED_ORIGINS` (comma-separated list) when exposing publicly, or `ALLOWED_ORIGINS=*` to disable origin filtering (use only behind a trusted proxy).
+- The legacy `WEB_UI_ORIGIN` env var (single value, same semantics as `ALLOWED_ORIGINS=<value>`) is still accepted for backward compatibility.
+- Mutating requests (POST/PUT/PATCH/DELETE) whose `Origin` header is set to a non-allowlisted value are rejected with HTTP 403. Requests with no `Origin` header pass through — the 127.0.0.1 bind covers that case.
 
 **Docker deployments:**
 - `CLAUDE_USE_GLOBAL_AUTH=true` does not work in Docker (no local `claude` CLI). Provide `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.

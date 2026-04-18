@@ -268,7 +268,9 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `WEB_UI_ORIGIN` | CORS origin for API routes (restrict when exposing publicly) | `*` (allow all) |
+| `HOST` | Server bind address. `0.0.0.0` to expose on LAN (requires reverse proxy — see Security). | `127.0.0.1` |
+| `ALLOWED_ORIGINS` | Comma-separated browser origin allowlist for `/api/*`. Set to `*` to disable filtering. | any loopback origin |
+| `WEB_UI_ORIGIN` | Legacy single-value form of `ALLOWED_ORIGINS`; still accepted but superseded. | -- |
 | `WEB_UI_DEV` | When set, skip serving static frontend (Vite dev server used instead) | -- |
 
 ### Worktree Management

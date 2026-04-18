@@ -576,7 +576,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     app.get('*', serveStatic({ root: webDistPath, path: 'index.html' }));
   }
 
-  const hostname = process.env.HOST || '0.0.0.0';
+  // Bind to loopback by default. Archon currently has no in-app auth, so binding
+  // to non-loopback interfaces exposes the API (AI spend, repo access, workflow
+  // execution) to anyone on the network. Docker, LAN access, and cloud deployments
+  // must opt in explicitly via HOST env var.
+  const hostname = process.env.HOST || '127.0.0.1';
   const server = Bun.serve({
     fetch: app.fetch,
     hostname,
@@ -584,6 +588,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
   });
   getLog().info({ port: server.port, hostname }, 'server_listening');
+  if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '::1') {
+    getLog().warn(
+      { hostname },
+      'server.non_loopback_bind — Archon has no in-app auth; ensure a reverse proxy or firewall is in front'
+    );
+  }
 
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;

@@ -5,6 +5,7 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
+import { getAllowlist, matchOrigin, MUTATING_METHODS } from '../security/origin';
 import type { WebAdapter } from '../adapters/web';
 import { rm, readFile, writeFile, unlink, mkdir } from 'fs/promises';
 import { readFileSync } from 'fs';
@@ -875,9 +876,34 @@ export function registerApiRoutes(
     });
   }
 
-  // CORS for Web UI — allow-all is fine for a single-developer tool.
-  // Override with WEB_UI_ORIGIN env var to restrict if exposing publicly.
-  app.use('/api/*', cors({ origin: process.env.WEB_UI_ORIGIN || '*' }));
+  // Origin gate for Web UI.
+  // The server binds to 127.0.0.1 by default (see packages/server/src/index.ts),
+  // which keeps non-browser traffic local. This adds a browser-side CSRF layer:
+  // only origins in the allowlist can talk to /api/*. Default allowlist = any
+  // loopback origin on any port. Override via ALLOWED_ORIGINS (comma-separated)
+  // or the legacy WEB_UI_ORIGIN single-value env var. Set either to "*" to
+  // restore the old allow-all behaviour when sitting behind a trusted proxy.
+  const originAllowlist = getAllowlist();
+  app.use(
+    '/api/*',
+    cors({
+      origin: origin => (matchOrigin(origin, originAllowlist) ? origin || '*' : null),
+      credentials: false,
+    })
+  );
+  // Defense in depth: CORS blocks cross-origin *preflight* responses, but a
+  // simple-form POST without preflight still reaches the handler. Reject
+  // mutating methods whose Origin header is set to a non-allowlisted value.
+  // Requests with no Origin header (curl, same-origin GET→POST on some browsers)
+  // pass through — the 127.0.0.1 bind covers those.
+  app.use('/api/*', async (c, next) => {
+    if (!MUTATING_METHODS.has(c.req.method)) return next();
+    const origin = c.req.header('origin');
+    if (origin && !matchOrigin(origin, originAllowlist)) {
+      return c.json({ error: 'Forbidden: origin not allowed' }, 403);
+    }
+    return next();
+  });
 
   // Shared lock/dispatch/error handling for message and workflow endpoints
   /** Maximum allowed upload size per file (10 MB) */

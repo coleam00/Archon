@@ -35,6 +35,10 @@ services:
     env_file: .env
     environment:
       ARCHON_DOCKER: "true"
+      # Bind to 0.0.0.0 inside the container so Docker port forwarding works.
+      # The server defaults to 127.0.0.1 for security; containers need all-interfaces
+      # binding because port mapping can't reach the container's loopback.
+      HOST: "0.0.0.0"
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     volumes:
