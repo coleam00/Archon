@@ -228,7 +228,7 @@ describe('CLI env isolation', () => {
     expect(process.env.DATABASE_URL).toBeUndefined();
   });
 
-  it('should allow ~/.archon/.env to override Bun-auto-loaded vars via override:true', async () => {
+  it('should allow $ARCHON_HOME/.env to override Bun-auto-loaded vars via override:true', async () => {
     const { config } = await import('dotenv');
     const { resolve } = await import('path');
     const { existsSync } = await import('fs');
@@ -240,7 +240,7 @@ describe('CLI env isolation', () => {
     const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
     if (existsSync(globalEnvPath)) {
       const result = config({ path: globalEnvPath, override: true });
-      // If ~/.archon/.env exists and has DATABASE_URL, it should override
+      // If the global Archon env file exists and has DATABASE_URL, it should override
       expect(result.error).toBeUndefined();
     }
 
