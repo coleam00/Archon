@@ -902,10 +902,11 @@ describe('PiProvider', () => {
     expect(caps.skills).toBe(true);
     expect(caps.sessionResume).toBe(true);
     expect(caps.envInjection).toBe(true);
+    // Best-effort structured output via prompt engineering (not SDK-enforced).
+    expect(caps.structuredOutput).toBe(true);
     // Still false:
     expect(caps.mcp).toBe(false);
     expect(caps.hooks).toBe(false);
-    expect(caps.structuredOutput).toBe(false);
   });
 
   test('nodeConfig.skills with unknown name yields system warning, does not abort', async () => {
@@ -1046,5 +1047,141 @@ describe('PiProvider', () => {
         typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
     );
     expect(systemChunks.some(c => c.content.includes('sonnet-5 not available'))).toBe(true);
+  });
+
+  // ─── structured output (best-effort JSON via prompt engineering) ──────
+
+  // Script an assistant text_delta followed by agent_end so the bridge has
+  // buffered content to parse when outputFormat is set.
+  function scriptedAssistantThenEnd(text: string): FakeEvent[] {
+    return [
+      {
+        type: 'message_update',
+        message: { role: 'assistant' } as never,
+        assistantMessageEvent: {
+          type: 'text_delta',
+          contentIndex: 0,
+          delta: text,
+          partial: { role: 'assistant' } as never,
+        },
+      },
+      ...scriptedAgentEnd(),
+    ];
+  }
+
+  test('outputFormat: schema is appended to prompt as JSON instruction', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('Summarize this bug.', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: {
+          type: 'json_schema',
+          schema: { type: 'object', properties: { area: { type: 'string' } } },
+        },
+      })
+    );
+
+    // Prompt should now contain the original instruction + the schema hint.
+    expect(mockPrompt).toHaveBeenCalled();
+    const [sentPrompt] = mockPrompt.mock.calls[0] as [string];
+    expect(sentPrompt).toContain('Summarize this bug.');
+    expect(sentPrompt).toContain('Respond with ONLY a JSON object');
+    expect(sentPrompt).toContain('"area"');
+  });
+
+  test('outputFormat: absent → prompt passed through unchanged', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('do a thing', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    const [sentPrompt] = mockPrompt.mock.calls[0] as [string];
+    expect(sentPrompt).toBe('do a thing');
+    expect(sentPrompt).not.toContain('JSON');
+  });
+
+  test('outputFormat: result chunk carries parsed structuredOutput on clean JSON', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAssistantThenEnd('{"area":"web","confidence":0.9}'));
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('classify', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: {
+          type: 'json_schema',
+          schema: { type: 'object' },
+        },
+      })
+    );
+
+    const result = chunks.find(
+      (c): c is { type: 'result'; structuredOutput?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
+    );
+    expect(result).toBeDefined();
+    expect(result?.structuredOutput).toEqual({ area: 'web', confidence: 0.9 });
+  });
+
+  test('outputFormat: fenced JSON (```json ... ```) still parses', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAssistantThenEnd('```json\n{"ok":true}\n```'));
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('x', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: { type: 'json_schema', schema: {} },
+      })
+    );
+
+    const result = chunks.find(
+      (c): c is { type: 'result'; structuredOutput?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
+    );
+    expect(result?.structuredOutput).toEqual({ ok: true });
+  });
+
+  test('outputFormat: prose-wrapped JSON → no structuredOutput, degrades cleanly', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAssistantThenEnd('Here is the JSON:\n{"ok":true}\nHope this helps!'));
+
+    const { chunks, error } = await consume(
+      new PiProvider().sendQuery('x', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        outputFormat: { type: 'json_schema', schema: {} },
+      })
+    );
+
+    // No crash — downstream degradation is the executor's job via its
+    // existing dag.structured_output_missing warning path.
+    expect(error).toBeUndefined();
+    const result = chunks.find(
+      (c): c is { type: 'result'; structuredOutput?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
+    );
+    expect(result).toBeDefined();
+    expect(result?.structuredOutput).toBeUndefined();
+  });
+
+  test('no outputFormat → structuredOutput never set even if assistant emits JSON', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAssistantThenEnd('{"accidental":"json"}'));
+
+    const { chunks } = await consume(
+      new PiProvider().sendQuery('x', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    const result = chunks.find(
+      (c): c is { type: 'result'; structuredOutput?: unknown } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
+    );
+    expect(result?.structuredOutput).toBeUndefined();
   });
 });

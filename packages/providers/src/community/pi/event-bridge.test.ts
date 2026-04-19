@@ -5,6 +5,7 @@ import {
   buildResultChunk,
   mapPiEvent,
   serializeToolResult,
+  tryParseStructuredOutput,
   usageToTokens,
 } from './event-bridge';
 
@@ -365,5 +366,58 @@ describe('mapPiEvent', () => {
         reason: 'manual',
       })
     ).toEqual([]);
+  });
+});
+
+// ─── tryParseStructuredOutput ──────────────────────────────────────────────
+
+describe('tryParseStructuredOutput', () => {
+  test('parses clean JSON object', () => {
+    expect(tryParseStructuredOutput('{"name":"alpha","count":3}')).toEqual({
+      name: 'alpha',
+      count: 3,
+    });
+  });
+
+  test('parses JSON with surrounding whitespace', () => {
+    expect(tryParseStructuredOutput('  \n{"ok":true}\n  ')).toEqual({ ok: true });
+  });
+
+  test('strips ```json fences', () => {
+    const fenced = '```json\n{"area":"web","confidence":0.9}\n```';
+    expect(tryParseStructuredOutput(fenced)).toEqual({ area: 'web', confidence: 0.9 });
+  });
+
+  test('strips bare ``` fences', () => {
+    expect(tryParseStructuredOutput('```\n{"ok":1}\n```')).toEqual({ ok: 1 });
+  });
+
+  test('parses JSON arrays', () => {
+    expect(tryParseStructuredOutput('[1,2,3]')).toEqual([1, 2, 3]);
+  });
+
+  test('returns undefined on empty string', () => {
+    expect(tryParseStructuredOutput('')).toBeUndefined();
+    expect(tryParseStructuredOutput('   ')).toBeUndefined();
+  });
+
+  test('returns undefined when model wraps JSON in prose', () => {
+    // Realistic failure mode — model ignores "JSON only" instruction and adds
+    // explanatory text before/after. Caller degrades via the executor's
+    // missing-structured-output warning path.
+    const prose =
+      'Here is the JSON you requested:\n{"ok":true}\nLet me know if you need anything else.';
+    expect(tryParseStructuredOutput(prose)).toBeUndefined();
+  });
+
+  test('returns undefined on malformed JSON', () => {
+    expect(tryParseStructuredOutput('{not valid}')).toBeUndefined();
+    expect(tryParseStructuredOutput('{"unclosed":')).toBeUndefined();
+  });
+
+  test('preserves backticks inside JSON string values', () => {
+    // Fence stripper matches only at start/end; inner backticks must survive.
+    const withBackticks = '{"code":"run `npm test`"}';
+    expect(tryParseStructuredOutput(withBackticks)).toEqual({ code: 'run `npm test`' });
   });
 });
