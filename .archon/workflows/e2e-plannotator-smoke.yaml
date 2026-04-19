@@ -1,9 +1,28 @@
-# E2E smoke test — Pi provider with interactive plannotator plan mode
-# Verifies: Pi loads plannotator extension, activates plan mode via
-#   extensionFlags (equivalent to `pi --plan`), and surfaces plannotator's
-#   browser UI URL to Archon via the bound ExtensionUIContext.
+# E2E smoke test — Pi provider with plannotator plan mode, reject-revise-approve loop.
 #
-# Prerequisites (manual — not automated in CI):
+# What this proves end-to-end (validated in a real run against plannotator
+# v0.x with a human clicking through the review UI — see PR #1299):
+#   1. Pi loads plannotator via its extension runtime (reload + bindExtensions)
+#   2. `extensionFlags: { plan: true }` activates plan mode
+#      (equivalent to `pi --plan` on the CLI)
+#   3. plannotator_submit_plan tool becomes available; the agent writes and
+#      submits a plan
+#   4. plannotator emits its review URL via `ctx.ui.notify()`, which the
+#      ExtensionUIContext stub surfaces as an assistant chunk — so it lands
+#      in the user's stream AND in `$plan-and-review.output`
+#   5. When the reviewer rejects with an annotation, plannotator returns the
+#      feedback to Pi as a tool result; Pi iterates automatically, writes a
+#      revised plan, and calls plannotator_submit_plan again — the revised
+#      plan appears in the review UI with a +/- diff against the prior version
+#   6. On approval, Pi's session completes and the node finishes
+#
+# Known limitation: plannotator's tool result signals approval status but does
+# NOT return the approved plan text. So the approved plan cannot be fed to a
+# downstream node via `$plan-and-review.output` — only the review URL and Pi's
+# final assistant message end up there. Use a separate Write step or fetch the
+# plan file from plannotator's `/plan` endpoint if a downstream node needs it.
+#
+# Prerequisites (manual):
 #   1. `pi install npm:@plannotator/pi-extension`
 #   2. `.archon/config.yaml` sets:
 #        assistants:
@@ -12,53 +31,56 @@
 #            interactive: true
 #            extensionFlags:
 #              plan: true
+#   3. Export `PLANNOTATOR_REMOTE=1` in your shell before starting Archon
+#      (or set it in the codebase `env:` block in .archon/config.yaml).
+#      This is plannotator-specific: it forces plannotator's `openBrowser()`
+#      to take the "remote session" path and emit its URL via `ctx.ui.notify()`
+#      instead of spawning `xdg-open`/`start` on the Archon server host.
+#      Without it, the URL never reaches Archon's event stream.
 #
-# What this smoke test verifies:
-#   - Pi session starts cleanly with extensions loaded
-#   - extensionFlags: { plan: true } triggers plannotator's planning phase
-#     (equivalent to `pi --plan` on the CLI)
-#   - plannotator exposes the plannotator_submit_plan tool
-#   - The agent writes a plan and calls plannotator_submit_plan
-#   - Plannotator's `ctx.ui.notify()` output (the browser URL) reaches the
-#     Archon event stream as a system chunk
-#
-# Provider: Uses openai-codex/gpt-5.4-mini — cheap, fast, and backed by
-# the ChatGPT Plus OAuth in ~/.pi/agent/auth.json (no API keys needed).
-#
-# Auth: Picks up openai-codex OAuth from `pi /login` (ChatGPT Plus).
+# Provider: openai-codex/gpt-5.4-mini — cheap, ChatGPT Plus OAuth compatible
+# (gpt-5.1-codex-mini is Codex-CLI-only and fails on the Plus tier).
 name: e2e-plannotator-smoke
-description: 'Smoke test — Pi with plannotator plan mode activated via extensionFlags.'
+description: 'Smoke test — Pi with plannotator plan mode + full plan-review-implement loop.'
 provider: pi
 model: openai-codex/gpt-5.4-mini
 
 nodes:
-  - id: plan-mode-prompt
+  - id: plan-and-review
     prompt: |
       Write a short plan (3 checkbox items) for adding a dark-mode toggle to a
-      React app, then call the plannotator_submit_plan tool to submit it for
-      review. Do not start implementing — this is plan mode only.
-    # 10-minute idle gate: plannotator's `waitForDecision()` blocks the Pi
-    # session indefinitely while a human reviews the plan in the browser UI.
-    # The default (a shorter timeout) would disposer the session — and shut
-    # down plannotator's HTTP server — before the reviewer can click Approve,
-    # so bump this high enough for a comfortable review + approve cycle.
-    idle_timeout: 600000
+      React app. Then call the plannotator_submit_plan tool to submit it for
+      review.
+
+      If the reviewer rejects with feedback, revise the plan to address the
+      feedback and resubmit. Repeat until approved.
+
+      Do not start implementing — this is plan mode only.
+    # plannotator's waitForDecision() blocks the Pi session indefinitely while
+    # a human reviews. Default idle_timeout (2 min) would disposer the session
+    # and kill plannotator's HTTP server before approve. Bump high enough for
+    # a review + feedback iteration + approve cycle.
+    idle_timeout: 1800000 # 30 min
 
   - id: assert-url-emitted
     bash: |
-      output="$plan-mode-prompt.output"
+      output="$plan-and-review.output"
       if [ -z "$output" ]; then
-        echo "FAIL: plan-mode-prompt returned empty output"
+        echo "FAIL: plan-and-review returned empty output"
         exit 1
       fi
+      # All we can assert from this node's output is that plannotator's
+      # notify() URL reached the stream. The approved plan content is NOT in
+      # the tool result (plannotator returns an approval signal, not text);
+      # downstream nodes that need the plan must fetch it separately.
       if echo "$output" | grep -qE 'https?://[^[:space:]]+'; then
         url=$(echo "$output" | grep -oE 'https?://[^[:space:]]+' | head -1)
         echo "PASS: plannotator emitted review URL: $url"
         echo "$url" > "$ARTIFACTS_DIR/plannotator-url.txt"
       else
-        echo "FAIL: no URL found in plan-mode-prompt output"
+        echo "FAIL: no review URL found — plannotator's notify() never reached the stream"
         echo "---- output follows ----"
         echo "$output"
         exit 1
       fi
-    depends_on: [plan-mode-prompt]
+    depends_on: [plan-and-review]

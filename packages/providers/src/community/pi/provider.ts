@@ -326,27 +326,7 @@ export class PiProvider implements IAgentProvider {
       }
     }
 
-    // 4f. Force plannotator (and any Pi extension following its convention)
-    //     into "remote session" mode. plannotator-browser.ts only calls
-    //     `ctx.ui.notify("Remote session. Open manually: <url>")` when
-    //     `openBrowser()` returns `{ isRemote: true }`; on a local session
-    //     it silently spawns `xdg-open`/`start` instead, which opens a
-    //     browser on whatever host the Archon server happens to be running
-    //     on — invisible to workflow users and untestable from a bash
-    //     assertion node. From the workflow runner's perspective every
-    //     Archon execution IS remote: nobody is watching the server host's
-    //     desktop; the user is consuming Archon's event stream. Setting
-    //     PLANNOTATOR_REMOTE=1 here flips plannotator's heuristic so its
-    //     URL always goes through notify(), which our ExtensionUIContext
-    //     stub forwards as an assistant chunk — landing in $nodeId.output
-    //     for downstream bash/script nodes AND in the user's stream to
-    //     click. Respect an explicit operator override (PLANNOTATOR_REMOTE=0
-    //     for same-laptop setups where auto-open is fine).
-    if (interactive && process.env.PLANNOTATOR_REMOTE === undefined) {
-      process.env.PLANNOTATOR_REMOTE = '1';
-    }
-
-    // 4g. Interactive extension UI. Bind a minimal ExtensionUIContext so
+    // 4f. Interactive extension UI. Bind a minimal ExtensionUIContext so
     //     extensions see `ctx.hasUI === true` and can fire `ctx.ui.notify()`.
     //     Plannotator, for example, emits its browser URL through notify()
     //     on a remote session — without a bound UI context it silently
@@ -356,6 +336,12 @@ export class PiProvider implements IAgentProvider {
     //
     //     This call also fires `session_start` to extensions, so any flag
     //     values set above must already be in place before reaching here.
+    //
+    //     Extension-specific env vars (e.g. PLANNOTATOR_REMOTE=1 for
+    //     plannotator's remote-session notify() path) are NOT set here:
+    //     Archon is extension-agnostic. Set them via the codebase `env:`
+    //     block in .archon/config.yaml or export them in your shell before
+    //     starting the server. Each extension documents what it needs.
     const uiBridge = interactive ? createArchonUIBridge() : undefined;
     if (uiBridge) {
       const uiContext = createArchonUIContext(uiBridge);
