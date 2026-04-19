@@ -492,6 +492,9 @@ export async function updateWorkflowRun(
     values.push(JSON.stringify(updates.metadata));
     setClauses.push(`metadata = ${dialect.jsonMerge('metadata', paramIndex)}`);
   }
+  if (updates.status !== undefined) {
+    setClauses.push(`last_activity_at = ${dialect.now()}`);
+  }
 
   if (setClauses.length === 0) return;
 
@@ -602,7 +605,9 @@ export async function pauseWorkflowRun(
   try {
     const result = await pool.query(
       `UPDATE remote_agent_workflow_runs
-       SET status = 'paused', metadata = ${dialect.jsonMerge('metadata', 2)}
+       SET status = 'paused',
+           metadata = ${dialect.jsonMerge('metadata', 2)},
+           last_activity_at = ${dialect.now()}
        WHERE id = $1 AND status = 'running'`,
       [id, JSON.stringify({ approval: approvalContext })]
     );

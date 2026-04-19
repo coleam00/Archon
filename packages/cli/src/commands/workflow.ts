@@ -151,6 +151,10 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
       break;
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
+      if (event.lastOutput) {
+        process.stderr.write('Latest output:\n');
+        process.stderr.write(`${indentBlock(event.lastOutput)}\n`);
+      }
       break;
     case 'tool_started':
       if (verbose) {
