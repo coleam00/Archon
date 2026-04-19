@@ -49,34 +49,37 @@
 
 **Fork & Upstream Integration (local clone only)**
 
-This working copy is a fork of `coleam00/Archon`. Remotes are set up fork-first so local customizations survive upstream releases without merge chaos:
+This working copy is a fork of `coleam00/Archon`. Remotes are set up fork-first, and `dev` is the personalized integration branch — upstream + your improvements — not a pristine mirror:
 
 - `origin` → `https://github.com/matzls/Archon.git` (your fork, push access)
 - `upstream` → `https://github.com/coleam00/Archon.git` (Cole's repo, read-only)
-- `dev` tracks `upstream/dev` — keep it a clean mirror of upstream and never commit directly to it
+- `dev` = your personalized trunk. Diverges from `upstream/dev` by design. Daily work happens here. Absorb upstream into it deliberately (merge, not fast-forward).
 
 **Where different customizations belong:**
 
 1. **Personal config** — already outside git: `~/.archon/.env`, `~/.archon/config.yaml`, `~/.archon/archon.db`, per-target-repo `.archon/commands/` and `.archon/workflows/`. Upstream never touches these.
-2. **Broadly useful code changes** — open a PR from a feature branch on the fork to `coleam00/Archon:dev`. If merged, zero ongoing maintenance.
-3. **Personal code changes** — live on a feature branch on the fork; rebase on `upstream/dev` when pulling new releases.
+2. **Broadly useful code changes** — branch off `upstream/dev` (not off `dev`) to keep the PR clean, then open a PR to `coleam00/Archon:dev`. After merge, absorb it back via the upstream-sync flow below.
+3. **Personal code changes** — land directly on `dev`, or on a short-lived feature branch that merges into `dev`. Both live only on your fork.
 
-**Integrating upstream releases:**
+**Integrating upstream releases (absorbing upstream into your personalized dev):**
 
 ```bash
 git fetch upstream
 git checkout dev
-git merge --ff-only upstream/dev          # dev stays a clean mirror of upstream
-git checkout feature/my-branch
-git rebase dev                            # replay local commits on top of new dev
-git push --force-with-lease origin feature/my-branch
+git merge upstream/dev                    # creates a merge commit; resolve conflicts against your fork changes
+git push origin dev                       # publish the absorbed state to your fork
 ```
 
-**Contributing back upstream:**
+> `git merge --ff-only upstream/dev` will fail by design — `dev` has diverged from `upstream/dev`, and that divergence is the point.
+
+**Contributing back upstream (keeping the PR free of fork-only noise):**
 
 ```bash
-git push -u origin feature/my-branch
-gh pr create --repo coleam00/Archon --base dev --head matzls:feature/my-branch
+git fetch upstream
+git checkout -b feature/my-clean-branch upstream/dev   # branch off pristine upstream, NOT off dev
+# cherry-pick or re-implement the specific commits you want to send upstream
+git push -u origin feature/my-clean-branch
+gh pr create --repo coleam00/Archon --base dev --head matzls:feature/my-clean-branch
 ```
 
 ## Engineering Principles
