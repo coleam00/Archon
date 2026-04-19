@@ -14,12 +14,13 @@ import { parseArgs } from 'util';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
+import { resolveCliGlobalEnvPath } from './bootstrap-env';
 
-// Load ~/.archon/.env with override: true — Archon-specific config must win
+// Load $ARCHON_HOME/.env with override: true — Archon-specific config must win
 // over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
 // CWD .env keys are already gone (stripCwdEnv above), so override only
 // affects shell-inherited values, which is the intended behavior.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
+const globalEnvPath = resolve(resolveCliGlobalEnvPath());
 if (existsSync(globalEnvPath)) {
   const result = config({ path: globalEnvPath, override: true, quiet: true });
   if (result.error) {
@@ -127,7 +128,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Reduce log verbosity to warnings and errors only
   --verbose, -v              Show debug-level output
-  --json                     Output machine-readable JSON (for workflow list)
+  --json                     Output machine-readable JSON where supported
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist or archon-assist-codex by assistant)
   --no-context               Skip context injection for 'continue'
   --port <port>              Override server port for 'serve' (default: 3090)
