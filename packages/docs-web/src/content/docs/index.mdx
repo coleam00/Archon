@@ -1,66 +1,87 @@
 ---
-title: Archon
-description: AI workflow engine — package your coding workflows as YAML, run them anywhere.
+title: Archon 한국어 포크
+description: AI 코딩 워크플로 엔진 Archon을 한국어 학습, 운영, 연구용으로 재구성하는 포크입니다.
 template: splash
 hero:
-  title: Archon
+  title: Archon 한국어 포크
   image:
     file: ../../assets/logo.png
     alt: Archon Logo
-  tagline: Package your AI coding workflows as YAML. Run them anywhere — CLI, Web, Slack, Telegram, GitHub, Discord.
+  tagline: Archon을 한국어 기준으로 다시 엮습니다. 학습, 강의, 실험, 실무 적용까지 한 저장소에서 이어가는 개인 포크입니다.
   actions:
-    - text: Get Started
-      link: /getting-started/installation/
+    - text: 한글화 로드맵
+      link: /korean-fork/roadmap/
       icon: right-arrow
       variant: primary
-    - text: View on GitHub
-      link: https://github.com/coleam00/Archon
+    - text: 포크 개요
+      link: /korean-fork/
+      icon: right-arrow
+      variant: secondary
+    - text: GitHub 포크 보기
+      link: https://github.com/NewTurn2017/Archon
       icon: external
       variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Install in seconds
+## 바로 시작하기
 
 :::code-group
 
-```bash [macOS / Linux]
-curl -fsSL https://archon.diy/install | bash
+```bash [문서 사이트 개발]
+bun install
+bun run dev:docs
 ```
 
-```powershell [Windows]
-irm https://archon.diy/install.ps1 | iex
+```bash [전체 앱 개발]
+bun install
+bun run dev
 ```
 
-```bash [Homebrew]
-brew install coleam00/archon/archon
+```bash [포크 동기화]
+git fetch upstream
+git switch dev
+git merge upstream/dev
 ```
 
-```bash [Docker]
-docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
+```bash [작업 브랜치 시작]
+git switch -c ko/landing-v1
 ```
 
 :::
 
-## What is Archon?
+## 이 포크는 무엇을 하려는가?
 
-Archon is a **workflow engine for AI coding agents**. Define multi-step development workflows in YAML — code review, bug fixes, feature implementation, testing — and run them with a single command.
+원본 Archon은 **AI 코딩 에이전트를 위한 워크플로 엔진**입니다. 이 포크는 그 기반 위에 한국어 개발자를 위한 문서, 랜딩, 운영 흐름, 실험 기능을 추가하는 작업 공간입니다.
 
 <CardGrid>
-  <Card title="Repeatable" icon="document">
-    Package your best AI coding patterns as shareable YAML workflows
+  <Card title="학습" icon="document">
+    영어 원문을 따라 읽는 대신 한국어 문서와 예시로 구조를 익힙니다.
   </Card>
-  <Card title="Isolated" icon="laptop">
-    Each workflow runs in its own git worktree — no conflicts, no mess
+  <Card title="강의" icon="laptop">
+    랜딩 페이지와 설명 흐름을 한국어 교육 자료로 재구성합니다.
   </Card>
-  <Card title="Portable" icon="puzzle">
-    Run from CLI, Web UI, Slack, Telegram, GitHub, or Discord
+  <Card title="연구" icon="puzzle">
+    포크 안에서 실험용 워크플로와 기능 개선을 독립적으로 이어갑니다.
   </Card>
-  <Card title="Composable" icon="setting">
-    Chain nodes into DAGs with dependencies, loops, and conditional logic
+  <Card title="비즈니스 적용" icon="setting">
+    실제 운영에 필요한 문서, 설치 가이드, 데모 흐름을 축적합니다.
   </Card>
-  <Card title="Multi-provider" icon="rocket">
-    Works with Claude Code SDK and Codex SDK
+  <Card title="포크 친화적 배포" icon="rocket">
+    GitHub 포크와 Pages 경로를 기준으로 문서 사이트를 바로 시작할 수 있습니다.
   </Card>
 </CardGrid>
+
+## 작업 원칙
+
+- 제품 코드와 랜딩/문서는 같은 모노레포에서 함께 관리합니다.
+- 랜딩 페이지는 `packages/docs-web`에서 먼저 만듭니다.
+- 제품 기능 개선은 `packages/*`에서 별도 브랜치로 분리합니다.
+- 원본 추적은 유지하되, 한국어 정보 구조는 포크에서 독립적으로 다듬습니다.
+
+## 다음 액션
+
+1. [포크 개요](/korean-fork/)에서 구조를 확인합니다.
+2. [한글화 로드맵](/korean-fork/roadmap/)에 맞춰 첫 번역 대상을 고릅니다.
+3. 홈 페이지 이후에는 `README`, Getting Started, CLI 문서를 우선 한글화합니다.
