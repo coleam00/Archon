@@ -109,7 +109,7 @@ export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 /**
  * Claude Agent SDK AgentDefinition — inline sub-agent available via the Task tool.
  * Mirrors the SDK's AgentDefinition type (sdk.d.ts), minus mcpServers and the
- * experimental critical-reminder field (out of v1 scope).
+ * experimental critical-reminder field.
  */
 export const agentDefinitionSchema = z.object({
   description: z.string().min(1, "'description' is required"),
@@ -123,8 +123,8 @@ export const agentDefinitionSchema = z.object({
 
 export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 
-/** Kebab-case validator for inline agent IDs. */
-const AGENT_ID_REGEX = /^[a-z0-9][a-z0-9-]*$/;
+// Kebab-case: no leading/trailing/double hyphens (e.g. `brief-gen`, not `-brief`, `brief-`, `brief--gen`).
+const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 // ---------------------------------------------------------------------------
 // DagNodeBase — common fields shared by all node types

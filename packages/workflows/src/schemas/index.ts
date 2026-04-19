@@ -51,6 +51,7 @@ export {
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
+  agentDefinitionSchema,
 } from './dag-node';
 export type {
   TriggerRule,
@@ -67,6 +68,7 @@ export type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  AgentDefinition,
 } from './dag-node';
 
 // Workflow definition

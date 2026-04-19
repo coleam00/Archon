@@ -2714,6 +2714,46 @@ nodes:
     expect(wf.nodes[0].agents).toBeUndefined();
   });
 
+  it('ignores agents on script nodes (field stripped, no error)', () => {
+    const yaml = `
+name: script-agents
+description: test
+nodes:
+  - id: run
+    script: 'console.log("hi")'
+    runtime: bun
+    agents:
+      helper:
+        description: "d"
+        prompt: "p"
+`;
+    const result = parseWorkflow(yaml, 'script-agents.yaml');
+    expect(result.error).toBeNull();
+    const wf = result.workflow!;
+    expect(wf.nodes[0].agents).toBeUndefined();
+  });
+
+  it('ignores agents on loop nodes (field stripped, no error)', () => {
+    const yaml = `
+name: loop-agents
+description: test
+nodes:
+  - id: iterate
+    loop:
+      prompt: "Do the work"
+      until: "DONE"
+      max_iterations: 2
+    agents:
+      helper:
+        description: "d"
+        prompt: "p"
+`;
+    const result = parseWorkflow(yaml, 'loop-agents.yaml');
+    expect(result.error).toBeNull();
+    const wf = result.workflow!;
+    expect(wf.nodes[0].agents).toBeUndefined();
+  });
+
   it('node with no agents field is undefined', () => {
     const yaml = `
 name: no-agents

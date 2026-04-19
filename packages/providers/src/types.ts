@@ -125,8 +125,17 @@ export interface NodeConfig {
   skills?: string[];
   /**
    * Inline sub-agent definitions (keyed by kebab-case agent ID).
-   * Shape mirrors Claude Agent SDK's AgentDefinition, kept structural so this
-   * contract module stays SDK-dep-free.
+   *
+   * Intentional hand-written duplicate of `agentDefinitionSchema` (authoritative
+   * source: `@archon/workflows/schemas/dag-node`). Normally we follow the
+   * project rule "derive types from Zod via `z.infer`, never write parallel
+   * interfaces" — broken here on purpose: `@archon/providers/types` is the
+   * contract subpath consumed by `@archon/workflows`, so importing from
+   * `@archon/workflows` would create a circular dependency.
+   *
+   * Drift risk: when the schema gains a field, this shape must be updated
+   * by hand. Follow-up work: extract the agent-definition contract to a
+   * lower-tier package so `z.infer` can be used end-to-end (#1276).
    */
   agents?: Record<
     string,

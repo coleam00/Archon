@@ -406,7 +406,7 @@ export async function validateWorkflowResources(
         });
       }
 
-      if ('agents' in node && node.agents && typeof node.agents === 'object' && !caps.agents) {
+      if ('agents' in node && node.agents && !caps.agents) {
         issues.push({
           level: 'warning',
           nodeId: node.id,

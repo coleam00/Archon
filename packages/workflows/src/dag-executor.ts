@@ -285,7 +285,7 @@ async function resolveNodeProviderAndModel(
     ['hooks', 'hooks', node.hooks !== undefined],
     ['mcp', 'mcp', node.mcp !== undefined],
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
-    ['agents', 'agents', node.agents !== undefined && Object.keys(node.agents).length > 0],
+    ['agents', 'agents', node.agents !== undefined],
     ['effort', 'effortControl', (node.effort ?? workflowLevelOptions.effort) !== undefined],
     ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
@@ -316,6 +316,23 @@ async function resolveNodeProviderAndModel(
     if (!delivered) {
       getLog().error({ nodeId: node.id, workflowRunId }, 'dag.capability_warning_delivery_failed');
     }
+  }
+
+  // Surface agents + skills ID collision — user-defined 'dag-node-skills'
+  // silently overrides Archon's skills wrapper. User wins (by design) but
+  // the operator should know they've neutered the wrapper.
+  if (
+    node.agents?.['dag-node-skills'] !== undefined &&
+    node.skills !== undefined &&
+    node.skills.length > 0
+  ) {
+    getLog().warn({ nodeId: node.id }, 'dag.agents_skills_id_collision');
+    await safeSendMessage(
+      platform,
+      conversationId,
+      `Warning: Node '${node.id}' defines an agent with reserved ID 'dag-node-skills' AND uses 'skills:'. Your inline agent overrides Archon's automatic skills wrapper — the 'skills:' field will NOT take effect. Rename the agent or remove 'skills:' to fix.`,
+      { workflowId: workflowRunId, nodeName: node.id }
+    );
   }
 
   // Build universal base options

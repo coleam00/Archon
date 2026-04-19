@@ -1245,5 +1245,49 @@ describe('sendQuery decomposition behaviors', () => {
       expect(outAgents['dag-node-skills'].description).toBe('user override');
       expect(outAgents['dag-node-skills'].prompt).toBe('user-defined prompt');
     });
+
+    test('logs a warning when user-defined dag-node-skills overrides the skills wrapper', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: {
+          skills: ['my-skill'],
+          agents: {
+            'dag-node-skills': { description: 'user override', prompt: 'p' },
+          },
+        },
+      })) {
+        // consume
+      }
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeSkills: ['my-skill'] }),
+        'claude.inline_agents_override_skills_wrapper'
+      );
+    });
+
+    test('does NOT warn when inline agents do not collide with the skills wrapper', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: {
+          skills: ['my-skill'],
+          agents: {
+            'brief-gen': { description: 'd', prompt: 'p' },
+          },
+        },
+      })) {
+        // consume
+      }
+
+      const warnCalls = mockLogger.warn.mock.calls.filter(
+        (args: unknown[]) => args[1] === 'claude.inline_agents_override_skills_wrapper'
+      );
+      expect(warnCalls).toHaveLength(0);
+    });
   });
 });

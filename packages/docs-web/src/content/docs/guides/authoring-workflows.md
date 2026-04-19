@@ -430,10 +430,17 @@ nodes:
 
 Keys:
 
-- Agent IDs must be **kebab-case** (`^[a-z0-9][a-z0-9-]*$`)
+- Agent IDs must be **kebab-case** (`^[a-z0-9]+(-[a-z0-9]+)*$`)
 - Each definition requires `description` and `prompt`; `model`, `tools`, `disallowedTools`, `skills`, and `maxTurns` are optional
-- Map is merged with any SDK-level agents and with the internal `dag-node-skills` wrapper created by `skills:` — user-defined agents win on ID collision
+- Map is merged with any SDK-level agents and with the internal `dag-node-skills` wrapper created by `skills:` — user-defined agents win on ID collision (a warning is logged when this happens)
 - Claude only. Codex and community providers that don't support inline agents emit a warning and ignore the field
+
+**When to use `agents:` vs `.claude/agents/*.md` files:**
+
+- **`agents:` (inline)** — use when the sub-agent is specific to ONE workflow's needs. Keeps the workflow self-contained in a single YAML file; travels cleanly in PRs and forks.
+- **`.claude/agents/*.md` (on-disk)** — use when the sub-agent is shared across multiple workflows OR the whole project (for example, a `triage-agent` used by several maintenance workflows). On-disk agents live outside workflow YAMLs and are picked up automatically by the Claude Agent SDK.
+
+Both sources coexist — inline agents and on-disk agents are both available to `Task(subagent_type=...)` at runtime.
 
 ---
 
@@ -1157,11 +1164,11 @@ Before deploying a workflow:
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude only)
 12. **`skills:`** — preload skills into Claude nodes for domain expertise
-12b. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-13. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
-14. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
-15. **`systemPrompt`** — override the default system prompt per node (Claude only)
-16. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
-17. **Loop nodes** — use `loop:` within a DAG node for iterative execution until completion signal
-18. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
-19. **Test thoroughly** — each command, the artifact flow, and edge cases
+13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
+14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
+15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
+16. **`systemPrompt`** — override the default system prompt per node (Claude only)
+17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
+18. **Loop nodes** — use `loop:` within a DAG node for iterative execution until completion signal
+19. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
+20. **Test thoroughly** — each command, the artifact flow, and edge cases

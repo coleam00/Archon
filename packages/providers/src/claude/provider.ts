@@ -456,6 +456,19 @@ async function applyNodeConfig(
   // options.agent is intentionally left alone — inline agents are sub-agents
   // invokable via the Task tool, not the primary agent for the query.
   if (nodeConfig.agents) {
+    // Warn loudly when a user-defined agent overrides the internal
+    // 'dag-node-skills' wrapper set by the skills: block above. The
+    // merge is by design (user wins) but silent capability removal
+    // is the exact failure mode we want to avoid.
+    if (
+      Object.hasOwn(nodeConfig.agents, 'dag-node-skills') &&
+      options.agents?.['dag-node-skills'] !== undefined
+    ) {
+      getLog().warn(
+        { nodeSkills: nodeConfig.skills ?? [] },
+        'claude.inline_agents_override_skills_wrapper'
+      );
+    }
     options.agents = {
       ...(options.agents ?? {}),
       ...(nodeConfig.agents as NonNullable<Options['agents']>),
