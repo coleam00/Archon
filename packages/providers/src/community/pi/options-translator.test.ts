@@ -133,6 +133,23 @@ describe('resolvePiTools', () => {
     expect(result.tools).toHaveLength(1); // only 'read'
     expect(result.unknownTools).toEqual(['UnknownA', 'UnknownB']);
   });
+
+  test('no allow/deny with non-empty env → returns Pi default 4-tool set with env-aware bash', () => {
+    const result = resolvePiTools(cwd, undefined, { DATABASE_URL: 'postgres://x' });
+    expect(result.tools).toHaveLength(4); // read/bash/edit/write
+    expect(result.unknownTools).toEqual([]);
+  });
+
+  test('no allow/deny with empty env → still returns undefined (Pi defaults)', () => {
+    expect(resolvePiTools(cwd, undefined, {})).toEqual({ tools: undefined, unknownTools: [] });
+    expect(resolvePiTools(cwd, {}, {})).toEqual({ tools: undefined, unknownTools: [] });
+  });
+
+  test('env passthrough does not affect unknown tool reporting', () => {
+    const result = resolvePiTools(cwd, { allowed_tools: ['read', 'WebFetch'] }, { FOO: 'bar' });
+    expect(result.tools).toHaveLength(1);
+    expect(result.unknownTools).toEqual(['WebFetch']);
+  });
 });
 
 // ─── resolvePiSkills ───────────────────────────────────────────────────────

@@ -406,6 +406,16 @@ export async function validateWorkflowResources(
         });
       }
 
+      if ('agents' in node && node.agents && !caps.agents) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'agents',
+          message: `Inline agents are not supported by provider '${provider}' — this will be ignored`,
+          hint: 'Remove the agents field or switch to a provider that supports inline agents (e.g. claude)',
+        });
+      }
+
       if (!caps.toolRestrictions) {
         if (
           ('allowed_tools' in node && node.allowed_tools !== undefined) ||

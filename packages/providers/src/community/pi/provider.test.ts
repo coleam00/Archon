@@ -93,7 +93,7 @@ const MockDefaultResourceLoader = mock(function (_opts: unknown) {
 // Tool factory mocks — each returns an opaque object tagged with the tool
 // name so assertions can verify which tools the provider selected.
 const mockCreateReadTool = mock((_cwd: string) => ({ __piTool: 'read' }));
-const mockCreateBashTool = mock((_cwd: string) => ({ __piTool: 'bash' }));
+const mockCreateBashTool = mock((_cwd: string, _options?: unknown) => ({ __piTool: 'bash' }));
 const mockCreateEditTool = mock((_cwd: string) => ({ __piTool: 'edit' }));
 const mockCreateWriteTool = mock((_cwd: string) => ({ __piTool: 'write' }));
 const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
@@ -763,6 +763,80 @@ describe('PiProvider', () => {
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
     // tools key should be absent — Pi uses its default codingTools
     expect('tools' in callArgs).toBe(false);
+  });
+
+  test('requestOptions.env with no tool restrictions overrides Pi defaults with env-aware bash', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: { DATABASE_URL: 'postgres://managed' },
+      })
+    );
+
+    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
+    // Env present → we override Pi's built-in codingTools so bash sees the env.
+    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    expect(Array.isArray(tools)).toBe(true);
+    expect(tools.map(t => t.__piTool).sort()).toEqual(['bash', 'edit', 'read', 'write']);
+
+    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    expect(bashCall).toBeDefined();
+    const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
+    expect(typeof bashOptions.spawnHook).toBe('function');
+
+    // The spawnHook must merge caller env OVER Pi's inherited baseline, matching
+    // Claude's { ...subprocessEnv, ...requestOptions.env } and Codex's buildCodexEnv.
+    const merged = bashOptions.spawnHook({
+      command: 'echo',
+      cwd: '/tmp',
+      env: { PATH: '/usr/bin', DATABASE_URL: 'postgres://stale' },
+    }) as { env: Record<string, string> };
+    expect(merged.env.PATH).toBe('/usr/bin');
+    expect(merged.env.DATABASE_URL).toBe('postgres://managed');
+  });
+
+  test('requestOptions.env threads through to bash tool when allowed_tools includes bash', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { allowed_tools: ['read', 'bash'] },
+        env: { STRIPE_KEY: 'sk_test_abc' },
+      })
+    );
+
+    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    expect(bashCall).toBeDefined();
+    const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
+    const merged = bashOptions.spawnHook({
+      command: 'echo',
+      cwd: '/tmp',
+      env: { PATH: '/usr/bin' },
+    }) as { env: Record<string, string> };
+    expect(merged.env.STRIPE_KEY).toBe('sk_test_abc');
+    expect(merged.env.PATH).toBe('/usr/bin');
+  });
+
+  test('empty requestOptions.env does NOT construct a spawnHook', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        env: {},
+      })
+    );
+
+    // Every createBashTool call in this test path is either (cwd) or (cwd, undefined).
+    for (const call of mockCreateBashTool.mock.calls) {
+      expect(call[1]).toBeUndefined();
+    }
   });
 
   test('requestOptions.systemPrompt threads through to DefaultResourceLoader', async () => {

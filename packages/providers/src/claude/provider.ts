@@ -490,6 +490,32 @@ async function applyNodeConfig(
     getLog().info({ skills, agentId }, 'claude.skills_agent_created');
   }
 
+  // agents → inline AgentDefinition pass-through.
+  // Runs AFTER skills: so user-defined agents win on ID collision with
+  // the internal 'dag-node-skills' wrapper.
+  // options.agent is intentionally left alone — inline agents are sub-agents
+  // invokable via the Task tool, not the primary agent for the query.
+  if (nodeConfig.agents) {
+    // Warn loudly when a user-defined agent overrides the internal
+    // 'dag-node-skills' wrapper set by the skills: block above. The
+    // merge is by design (user wins) but silent capability removal
+    // is the exact failure mode we want to avoid.
+    if (
+      Object.hasOwn(nodeConfig.agents, 'dag-node-skills') &&
+      options.agents?.['dag-node-skills'] !== undefined
+    ) {
+      getLog().warn(
+        { nodeSkills: nodeConfig.skills ?? [] },
+        'claude.inline_agents_override_skills_wrapper'
+      );
+    }
+    options.agents = {
+      ...(options.agents ?? {}),
+      ...(nodeConfig.agents as NonNullable<Options['agents']>),
+    };
+    getLog().info({ agentIds: Object.keys(nodeConfig.agents) }, 'claude.inline_agents_registered');
+  }
+
   // effort
   if (nodeConfig.effort !== undefined) {
     options.effort = nodeConfig.effort as Options['effort'];

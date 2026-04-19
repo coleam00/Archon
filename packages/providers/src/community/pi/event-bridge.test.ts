@@ -55,6 +55,40 @@ describe('AsyncQueue', () => {
     q[Symbol.asyncIterator]();
     expect(() => q[Symbol.asyncIterator]()).toThrow(/single-consumer/);
   });
+
+  test('close() terminates pending waiter so consumer exits loop', async () => {
+    const q = new AsyncQueue<number>();
+    const iter = q[Symbol.asyncIterator]();
+    const pending = iter.next();
+    queueMicrotask(() => q.close());
+    const result = await pending;
+    expect(result.done).toBe(true);
+  });
+
+  test('close() drains buffered items before terminating', async () => {
+    const q = new AsyncQueue<number>();
+    q.push(1);
+    q.push(2);
+    q.close();
+    const received: number[] = [];
+    for await (const n of q) received.push(n);
+    expect(received).toEqual([1, 2]);
+  });
+
+  test('push after close is a no-op (does not leak past close)', async () => {
+    const q = new AsyncQueue<number>();
+    const iter = q[Symbol.asyncIterator]();
+    q.close();
+    q.push(42); // Must not resurrect the closed queue.
+    const r = await iter.next();
+    expect(r.done).toBe(true);
+  });
+
+  test('close() is idempotent', () => {
+    const q = new AsyncQueue<number>();
+    q.close();
+    expect(() => q.close()).not.toThrow();
+  });
 });
 
 // ─── serializeToolResult ───────────────────────────────────────────────────
@@ -114,9 +148,17 @@ describe('buildResultChunk', () => {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
   };
 
-  test('returns bare result chunk if no assistant message', () => {
-    expect(buildResultChunk([])).toEqual({ type: 'result' });
-    expect(buildResultChunk([{ role: 'user', content: [] }])).toEqual({ type: 'result' });
+  test('flags isError when no assistant message is present', () => {
+    // agent_end with no assistant message in the transcript is anomalous —
+    // must surface as an error so the orchestrator doesn't treat a broken
+    // session as a clean success.
+    const expected = {
+      type: 'result',
+      isError: true,
+      errorSubtype: 'missing_assistant_message',
+    };
+    expect(buildResultChunk([])).toEqual(expected);
+    expect(buildResultChunk([{ role: 'user', content: [] }])).toEqual(expected);
   });
 
   test('extracts usage from last assistant message', () => {

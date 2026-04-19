@@ -308,6 +308,7 @@ nodes:
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
 | Thinking level | ✅ | `effort: low\|medium\|high\|max` (max → xhigh) |
 | Skills | ✅ | `skills: [name]` (searches `.agents/skills`, `.claude/skills`, user-global) |
+| Inline sub-agents | ❌ | `agents:` is Claude-only; ignored with a warning on Pi |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
 | MCP servers | ❌ | Pi rejects MCP by design |
