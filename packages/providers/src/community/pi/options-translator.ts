@@ -11,6 +11,8 @@ import {
   createLsTool,
   createReadTool,
   createWriteTool,
+  type BashSpawnContext,
+  type BashSpawnHook,
 } from '@mariozechner/pi-coding-agent';
 import type { ThinkingLevel } from '@mariozechner/pi-ai';
 
@@ -113,13 +115,27 @@ export function resolvePiThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinkin
 const PI_TOOL_NAMES = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'] as const;
 export type PiToolName = (typeof PI_TOOL_NAMES)[number];
 
+/**
+ * Build a Pi `spawnHook` that merges managed env vars into every bash
+ * subprocess. Matches Claude/Codex precedence: caller-provided env keys
+ * override Pi's inherited baseline. Returns undefined when `env` is empty
+ * so bash spawns without an unnecessary hook allocation.
+ */
+function buildBashSpawnHook(env: Record<string, string> | undefined): BashSpawnHook | undefined {
+  if (!env || Object.keys(env).length === 0) return undefined;
+  return (context: BashSpawnContext): BashSpawnContext => ({
+    ...context,
+    env: { ...context.env, ...env },
+  });
+}
+
 /** Map a normalized (lowercase) Pi tool name to its Pi-internal factory. */
-function buildPiTool(name: PiToolName, cwd: string): PiTool {
+function buildPiTool(name: PiToolName, cwd: string, spawnHook: BashSpawnHook | undefined): PiTool {
   switch (name) {
     case 'read':
       return createReadTool(cwd);
     case 'bash':
-      return createBashTool(cwd);
+      return spawnHook ? createBashTool(cwd, { spawnHook }) : createBashTool(cwd);
     case 'edit':
       return createEditTool(cwd);
     case 'write':
@@ -144,24 +160,51 @@ export interface ResolvedTools {
   unknownTools: string[];
 }
 
+/** Pi's default coding-tool set (mirrors `codingTools` export: read/bash/edit/write). */
+const PI_DEFAULT_TOOL_NAMES = [
+  'read',
+  'bash',
+  'edit',
+  'write',
+] as const satisfies readonly PiToolName[];
+
 /**
  * Filter Pi's built-in tool set against Archon's `allowed_tools` /
- * `denied_tools` node config.
+ * `denied_tools` node config, with managed env injected into any bash tool.
  *
  * Semantics:
- *   - neither set → return undefined (Pi's default tools)
+ *   - neither allow/deny set, no env → return undefined (Pi's default tools)
+ *   - neither allow/deny set, env present → return Pi's default 4 tools with
+ *     an env-aware bash, so codebase env vars reach bash subprocesses
  *   - allowed_tools: [] → return [] (explicit no-tools; valid Archon idiom)
  *   - allowed_tools: [X, Y] → only X, Y (normalized to lowercase)
  *   - denied_tools subtracts from allowed_tools (or full set if allowed_tools absent)
  *   - tool names not in Pi's built-in set are silently dropped but reported
  *     via `unknownTools` so the caller can surface a warning.
+ *
+ * The `env` parameter is the caller's `requestOptions.env` merged with any
+ * relevant defaults; when non-empty, it is injected into every bash spawn via
+ * a `BashSpawnHook`, matching Claude's `options.env` and Codex's constructor
+ * `env` behavior so codebase-scoped env vars reach tool subprocesses.
  */
-export function resolvePiTools(cwd: string, nodeConfig?: NodeConfig): ResolvedTools {
+export function resolvePiTools(
+  cwd: string,
+  nodeConfig?: NodeConfig,
+  env?: Record<string, string>
+): ResolvedTools {
   const allowed = nodeConfig?.allowed_tools;
   const denied = nodeConfig?.denied_tools;
+  const spawnHook = buildBashSpawnHook(env);
 
   if (allowed === undefined && denied === undefined) {
-    return { tools: undefined, unknownTools: [] };
+    // No restrictions. Match Pi's default tool set unless env injection forces
+    // a custom bash tool (Pi's default bashTool is pre-constructed with no
+    // spawnHook and there's no way to retrofit env onto it).
+    if (!spawnHook) return { tools: undefined, unknownTools: [] };
+    return {
+      tools: PI_DEFAULT_TOOL_NAMES.map(n => buildPiTool(n, cwd, spawnHook)),
+      unknownTools: [],
+    };
   }
 
   const knownSet = new Set<PiToolName>(PI_TOOL_NAMES);
@@ -199,7 +242,7 @@ export function resolvePiTools(cwd: string, nodeConfig?: NodeConfig): ResolvedTo
   });
 
   return {
-    tools: unique.map(n => buildPiTool(n, cwd)),
+    tools: unique.map(n => buildPiTool(n, cwd, spawnHook)),
     unknownTools,
   };
 }

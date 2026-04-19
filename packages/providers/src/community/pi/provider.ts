@@ -169,7 +169,14 @@ export class PiProvider implements IAgentProvider {
     //    4b. tools: covers allowed_tools / denied_tools. `undefined` leaves Pi
     //        defaults; an explicit empty array means "no tools" (valid idiom
     //        matching e2e-claude-smoke's `allowed_tools: []`).
-    const { tools: filteredTools, unknownTools } = resolvePiTools(cwd, nodeConfig);
+    //        requestOptions.env (codebase-scoped env vars from .archon/config.yaml)
+    //        is injected into bash subprocesses via a BashSpawnHook, mirroring
+    //        Claude's options.env and Codex's constructor env.
+    const { tools: filteredTools, unknownTools } = resolvePiTools(
+      cwd,
+      nodeConfig,
+      requestOptions?.env
+    );
     if (unknownTools.length > 0) {
       yield {
         type: 'system',
