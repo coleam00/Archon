@@ -55,14 +55,46 @@ describe('resolvePiSession', () => {
     expect(mockOpen).not.toHaveBeenCalled();
   });
 
-  test('list() throws → treated as not-found, fresh session', async () => {
+  test('list() throws ENOENT → treated as not-found, fresh session', async () => {
     mockList.mockImplementationOnce(async () => {
-      throw new Error('ENOENT');
+      const err = Object.assign(new Error('no such directory'), { code: 'ENOENT' });
+      throw err;
     });
 
     const result = await resolvePiSession('/tmp/proj', 'some-id');
     expect(result.resumeFailed).toBe(true);
     expect(mockCreate).toHaveBeenCalledWith('/tmp/proj');
+  });
+
+  test('list() throws ENOTDIR → treated as not-found, fresh session', async () => {
+    mockList.mockImplementationOnce(async () => {
+      const err = Object.assign(new Error('not a directory'), { code: 'ENOTDIR' });
+      throw err;
+    });
+
+    const result = await resolvePiSession('/tmp/proj', 'some-id');
+    expect(result.resumeFailed).toBe(true);
+    expect(mockCreate).toHaveBeenCalledWith('/tmp/proj');
+  });
+
+  test('list() throws unexpected error → propagates (no silent fallback)', async () => {
+    // Permission errors, parse failures, etc. must NOT be swallowed as
+    // "no resume" — that would paper over real config/filesystem problems.
+    mockList.mockImplementationOnce(async () => {
+      const err = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      throw err;
+    });
+
+    await expect(resolvePiSession('/tmp/proj', 'some-id')).rejects.toThrow(/permission denied/);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  test('list() throws plain Error → propagates (no code = not ENOENT)', async () => {
+    mockList.mockImplementationOnce(async () => {
+      throw new Error('some other failure');
+    });
+
+    await expect(resolvePiSession('/tmp/proj', 'some-id')).rejects.toThrow(/some other failure/);
   });
 
   test('empty resumeSessionId string → fresh session (no resume attempted)', async () => {

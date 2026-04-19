@@ -51,10 +51,18 @@ export async function resolvePiSession(
         resumeFailed: false,
       };
     }
-  } catch {
-    // list() can fail if the session dir doesn't exist yet — treat as
-    // "not found" and fall through to a fresh session with a warning.
+  } catch (err: unknown) {
+    // Only swallow "session dir doesn't exist yet" — any other error
+    // (permission denied, corrupt JSONL, etc.) must propagate so failures
+    // aren't papered over as a silent "no resume, fresh session" success.
+    if (!isMissingSessionDirError(err)) throw err;
   }
 
   return { sessionManager: SessionManager.create(cwd), resumeFailed: true };
+}
+
+function isMissingSessionDirError(err: unknown): boolean {
+  if (err === null || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }

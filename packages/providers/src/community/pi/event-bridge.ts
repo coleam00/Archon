@@ -28,13 +28,30 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 export class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly buffer: T[] = [];
-  private readonly waiters: ((item: T) => void)[] = [];
+  private readonly waiters: ((result: IteratorResult<T>) => void)[] = [];
   private consumed = false;
+  private closed = false;
 
   push(item: T): void {
+    if (this.closed) return;
     const waiter = this.waiters.shift();
-    if (waiter) waiter(item);
+    if (waiter) waiter({ value: item, done: false });
     else this.buffer.push(item);
+  }
+
+  /**
+   * Terminate iteration cleanly. Drains any pending waiters with
+   * `{ done: true }` so the consumer exits the `for await` loop instead of
+   * hanging forever when the producer's finally block fires before a new
+   * item arrives (e.g. consumer abort mid-iteration).
+   */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    while (this.waiters.length > 0) {
+      const waiter = this.waiters.shift();
+      if (waiter) waiter({ value: undefined, done: true });
+    }
   }
 
   [Symbol.asyncIterator](): AsyncIterator<T> {
@@ -56,10 +73,12 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
         yield next;
         continue;
       }
-      const item = await new Promise<T>(resolve => {
+      if (this.closed) return;
+      const result = await new Promise<IteratorResult<T>>(resolve => {
         this.waiters.push(resolve);
       });
-      yield item;
+      if (result.done) return;
+      yield result.value;
     }
   }
 }
@@ -111,7 +130,12 @@ function isAssistantMessage(m: unknown): m is AssistantMessage {
 export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
   const last = [...messages].reverse().find(isAssistantMessage);
   if (!last) {
-    return { type: 'result' };
+    // agent_end fired with no assistant message in the transcript. This
+    // shouldn't happen in healthy Pi runs — surface it as a loud error
+    // rather than a silent success so orchestrators don't treat a broken
+    // session as a clean completion.
+    getLog().warn('pi.event-bridge.result_missing_assistant_message');
+    return { type: 'result', isError: true, errorSubtype: 'missing_assistant_message' };
   }
 
   const tokens = usageToTokens(last.usage);
@@ -274,6 +298,10 @@ export async function* bridgeSession(
       }
     }
   } finally {
+    // Close the queue first so any producer push() still in flight becomes
+    // a no-op and pending iterate() waiters resolve — otherwise a consumer
+    // abort mid-iteration would leak this generator on the promise forever.
+    queue.close();
     unsubscribe();
     if (abortSignal) {
       abortSignal.removeEventListener('abort', onAbort);
