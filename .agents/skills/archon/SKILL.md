@@ -145,7 +145,8 @@ Use this protocol for interactive workflows such as `archon-piv-loop-codex`.
 
 ### Launch
 
-1. Run the workflow directly with `archon workflow run ...`.
+1. Run or continue the workflow directly with `archon workflow run ...` or
+   `archon continue ...`.
 2. Capture:
    - workflow name
    - run ID
@@ -167,17 +168,27 @@ terminal state.
 
 ### Post-Transition Rule
 
-After every `archon workflow run`, `archon workflow approve`, `archon workflow reject`,
-or `archon workflow resume`:
+After every `archon workflow run`, `archon continue`, `archon workflow approve`,
+`archon workflow reject`, or `archon workflow resume`:
 
 1. check `archon workflow status --json`
-2. continue until the run is back at one of:
+2. if `workflow approve` or `workflow reject` only recorded a decision, continue
+   with explicit `archon workflow resume <run-id>`
+3. continue until the run is back at one of:
    - `paused`
    - `completed`
    - `failed`
 
-Do not stop after recording approval or rejection alone. The control loop is not
-done until the workflow either pauses again or reaches a terminal state.
+Do not stop after recording approval or rejection alone. In the CLI, those
+commands only store the decision; `workflow resume` is the long-running runner
+surface. Treat the resume process as the live workflow owner until it pauses
+again or reaches a terminal state.
+
+Attached terminal output is not authoritative. If an attached
+`archon workflow run` or `archon continue` session goes quiet before a terminal
+state, immediately poll `archon workflow status --json`. If the run is
+`paused`, relay `metadata.approval.lastOutput` or the latest run-log output in
+the current Codex conversation yourself.
 
 ### Relay Boundary
 
@@ -211,9 +222,13 @@ Important nuance:
 ### Surface Boundaries
 
 - `archon workflow run ...` is the correct direct CLI surface for interactive workflows
+- `archon continue ...` follows the same relay contract and still requires status polling
 - `archon chat ...` is single-shot orchestration, not a persistent multi-turn workflow chat
 - web foreground runs can resume from natural-language replies in the same thread
-- CLI `workflow approve` and `workflow reject` auto-resume the run
+- CLI `workflow approve` and `workflow reject` record the decision only; use
+  `archon workflow resume <run-id>` explicitly after the status check
+- the `workflow resume` process is the live runner; do not kill it while the run
+  is still active
 - `/workflow approve` is a different surface; do not assume it behaves like the CLI command
 
 ## Monitoring
@@ -228,6 +243,10 @@ Default live-monitoring cadence:
 
 - check once shortly after launch to confirm the run exists
 - if the user is actively waiting, re-check about every 30 seconds
+
+Silence in an attached CLI or PTY session is a status-check trigger, not proof
+that nothing happened. If the run has not exited and no output arrives for one
+monitoring interval, run `archon workflow status --json` before waiting longer.
 
 Rationale:
 

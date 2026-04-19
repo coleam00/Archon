@@ -62,12 +62,26 @@ archon workflow approve <run-id> "<comment>"
 ```
 
 Use for paused workflows that need human feedback. The CLI approve path records
-the response and resumes the run.
+the response only. Continue with:
+
+```bash
+archon workflow resume <run-id>
+```
+
+Treat that `workflow resume` process as the live runner until the workflow
+pauses again or reaches a terminal state.
 
 ### `archon workflow reject`
 
 ```bash
 archon workflow reject <run-id> "<reason>"
+```
+
+When the rejection keeps the workflow resumable (for example an `on_reject`
+retry path), continue with:
+
+```bash
+archon workflow resume <run-id>
 ```
 
 Use for paused workflows that need rejection or rework feedback.

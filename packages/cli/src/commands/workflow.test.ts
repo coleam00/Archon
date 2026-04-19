@@ -1263,6 +1263,8 @@ describe('workflowStatusCommand', () => {
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockSetLogLevel.mockClear();
+    mockGetLogLevel.mockClear();
   });
 
   afterEach(() => {
@@ -1333,6 +1335,17 @@ describe('workflowStatusCommand', () => {
     await workflowStatusCommand(true);
 
     expect(consoleSpy).toHaveBeenCalledWith(JSON.stringify({ runs: [] }, null, 2));
+  });
+
+  it('should suppress status logs while rendering JSON output', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([]);
+
+    await workflowStatusCommand(true);
+
+    expect(mockGetLogLevel).toHaveBeenCalledTimes(1);
+    expect(mockSetLogLevel).toHaveBeenNthCalledWith(1, 'fatal');
+    expect(mockSetLogLevel).toHaveBeenNthCalledWith(2, 'info');
   });
 
   it('should show node summaries in verbose mode', async () => {
@@ -1534,6 +1547,10 @@ describe('workflowResumeCommand', () => {
     // Printed resume message before delegating to workflowRunCommand
     expect(consoleSpy).toHaveBeenCalledWith('Resuming workflow: implement');
     expect(consoleSpy).toHaveBeenCalledWith('Path: /tmp/test-worktree');
+    expect(consoleSpy).toHaveBeenCalledWith('This CLI process now owns the live workflow run.');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "Keep it alive until the workflow pauses again or reaches a terminal state. Use another terminal to monitor with 'archon workflow status --json' if needed."
+    );
   });
 
   it('should throw when run has no working path', async () => {
@@ -1649,98 +1666,36 @@ describe('workflowApproveCommand', () => {
     );
   });
 
-  it('should pass codebase_id from run record to workflowRunCommand', async () => {
+  it('records approval and prints explicit resume instructions instead of auto-resuming', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-    const core = await import('@archon/core');
+    const conversationsDb = await import('@archon/core/db/conversations');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-approve-1',
       workflow_name: 'implement',
       status: 'paused',
       user_message: 'add auth',
-      working_path: '/tmp/test-worktree',
-      codebase_id: 'cb-existing',
-      metadata: { approval: { nodeId: 'review-node' } },
-    });
-
-    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
-      createWorkflowEvent: mock(() => Promise.resolve()),
-    });
-
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
-      errors: [],
-    });
-
-    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-existing',
-      name: 'owner/repo',
-      default_cwd: '/path/to/main-checkout',
-    });
-
-    try {
-      await workflowApproveCommand('run-approve-1');
-    } catch {
-      // downstream failure is acceptable
-    }
-
-    expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
-  });
-
-  it('should pass original platform conversation ID through to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const conversationsDb = await import('@archon/core/db/conversations');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-    const core = await import('@archon/core');
-
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-approve-conv',
-      workflow_name: 'implement',
-      status: 'paused',
-      user_message: 'add auth',
-      working_path: '/tmp/test-worktree',
+      working_path: null,
       codebase_id: 'cb-existing',
       conversation_id: 'db-uuid-original',
       metadata: { approval: { nodeId: 'review-node', message: 'Approve?' } },
     });
 
-    // Return a conversation with the original platform ID
-    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'db-uuid-original',
-      platform_type: 'cli',
-      platform_conversation_id: 'cli-original-123',
-    });
-
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
-      errors: [],
-    });
-
-    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-existing',
-      name: 'owner/repo',
-      default_cwd: '/path/to/main-checkout',
-    });
-
-    // Clear call history before our test so we can assert precisely
     (conversationsDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockClear();
 
-    try {
-      await workflowApproveCommand('run-approve-conv');
-    } catch {
-      // downstream failure is acceptable — we only need to reach getOrCreateConversation
-    }
+    await workflowApproveCommand('run-approve-1');
 
-    // Verify the original platform conversation ID was passed through
-    expect(conversationsDb.getConversationById).toHaveBeenCalledWith('db-uuid-original');
-    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith('cli', 'cli-original-123');
+    expect(consoleSpy).toHaveBeenCalledWith('Approved workflow: implement');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      'Approval recorded. Resume explicitly to continue the workflow.'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith('Next: archon workflow resume run-approve-1');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      'Important: once resumed, that CLI process owns the live workflow run. Keep it alive until the workflow pauses again or reaches a terminal state.'
+    );
+    expect(conversationsDb.getConversationById).not.toHaveBeenCalled();
+    expect(conversationsDb.getOrCreateConversation).not.toHaveBeenCalled();
   });
 });
 
@@ -1891,8 +1846,9 @@ describe('workflowRejectCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
 
-  it('updates metadata and auto-resumes when on_reject configured and under limit', async () => {
+  it('records rejection and prints explicit resume instructions when on_reject is configured', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
+    const conversationsDb = await import('@archon/core/db/conversations');
 
     const runData = {
       id: 'run-on-reject',
@@ -1913,73 +1869,25 @@ describe('workflowRejectCommand', () => {
       },
     };
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
+    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockClear();
+    (conversationsDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
 
-    try {
-      await workflowRejectCommand('run-on-reject', 'needs work');
-    } catch {
-      // downstream workflowRunCommand failure is acceptable in this unit test
-    }
+    await workflowRejectCommand('run-on-reject', 'needs work');
 
     expect(workflowDb.updateWorkflowRun).toHaveBeenCalledWith('run-on-reject', {
       status: 'failed',
       metadata: { rejection_reason: 'needs work', rejection_count: 1 },
     });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected workflow'));
-  });
-
-  it('should pass original platform conversation ID through on reject-resume', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const conversationsDb = await import('@archon/core/db/conversations');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-
-    const runData = {
-      id: 'run-reject-conv',
-      workflow_name: 'my-wf',
-      status: 'paused',
-      user_message: 'build it',
-      working_path: '/repo',
-      codebase_id: null,
-      conversation_id: 'db-uuid-reject',
-      metadata: {
-        approval: {
-          type: 'approval',
-          nodeId: 'gate',
-          message: 'Approve?',
-          onRejectPrompt: 'Fix: $REJECTION_REASON',
-          onRejectMaxAttempts: 3,
-        },
-        rejection_count: 0,
-      },
-    };
-    // rejectWorkflow reads the run twice internally (getRunOrThrow + updateWorkflowRun check)
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
-
-    // Return a conversation with the original platform ID
-    (conversationsDb.getConversationById as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'db-uuid-reject',
-      platform_type: 'cli',
-      platform_conversation_id: 'cli-reject-456',
-    });
-
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'my-wf' })],
-      errors: [],
-    });
-
-    // Clear call history before our test so we can assert precisely
-    (conversationsDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
-
-    try {
-      await workflowRejectCommand('run-reject-conv', 'needs work');
-    } catch {
-      // downstream workflowRunCommand failure is acceptable — we only need to reach getOrCreateConversation
-    }
-
-    // Verify the original platform conversation ID was passed through
-    expect(conversationsDb.getConversationById).toHaveBeenCalledWith('db-uuid-reject');
-    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith('cli', 'cli-reject-456');
+    expect(consoleSpy).toHaveBeenCalledWith('Rejected workflow: my-wf');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      'Rejection recorded. Resume explicitly to continue the workflow.'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith('Next: archon workflow resume run-on-reject');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      'Important: once resumed, that CLI process owns the live workflow run. Keep it alive until the workflow pauses again or reaches a terminal state.'
+    );
+    expect(conversationsDb.getConversationById).not.toHaveBeenCalled();
+    expect(conversationsDb.getOrCreateConversation).not.toHaveBeenCalled();
   });
 
   it('cancels when max attempts reached', async () => {
@@ -2014,7 +1922,7 @@ describe('workflowRejectCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });
 
-  it('throws when on_reject configured but working_path is null', async () => {
+  it('does not require a working path when on_reject is configured', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
 
     const runData = {
@@ -2035,13 +1943,11 @@ describe('workflowRejectCommand', () => {
         rejection_count: 0,
       },
     };
-    // First call: rejectWorkflow (operations layer), second call: CLI re-fetch
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
-      .mockResolvedValueOnce(runData)
-      .mockResolvedValueOnce(runData);
-    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(runData);
 
-    await expect(workflowRejectCommand('run-no-path', 'bad')).rejects.toThrow('no working path');
+    await workflowRejectCommand('run-no-path', 'bad');
+
+    expect(consoleSpy).toHaveBeenCalledWith('Rejected workflow: my-wf');
   });
 });
 
