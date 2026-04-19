@@ -23,5 +23,21 @@ export function parsePiConfig(raw: Record<string, unknown>): PiProviderDefaults 
     result.interactive = raw.interactive;
   }
 
+  if (
+    raw.extensionFlags &&
+    typeof raw.extensionFlags === 'object' &&
+    !Array.isArray(raw.extensionFlags)
+  ) {
+    const flags: Record<string, boolean | string> = {};
+    for (const [key, value] of Object.entries(raw.extensionFlags as Record<string, unknown>)) {
+      if (typeof value === 'boolean' || typeof value === 'string') {
+        flags[key] = value;
+      }
+    }
+    if (Object.keys(flags).length > 0) {
+      result.extensionFlags = flags;
+    }
+  }
+
   return result;
 }

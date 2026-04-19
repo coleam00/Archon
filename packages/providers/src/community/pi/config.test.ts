@@ -80,4 +80,44 @@ describe('parsePiConfig', () => {
       interactive: true,
     });
   });
+
+  test('parses extensionFlags with boolean and string values', () => {
+    expect(parsePiConfig({ extensionFlags: { plan: true, profile: 'Default' } })).toEqual({
+      extensionFlags: { plan: true, profile: 'Default' },
+    });
+  });
+
+  test('drops non-boolean/string extensionFlags values silently', () => {
+    expect(
+      parsePiConfig({
+        extensionFlags: { plan: true, bogus: 42, nested: { x: 1 }, nullish: null },
+      })
+    ).toEqual({ extensionFlags: { plan: true } });
+  });
+
+  test('drops extensionFlags when all entries are invalid', () => {
+    expect(parsePiConfig({ extensionFlags: { bogus: 42, nested: {} } })).toEqual({});
+  });
+
+  test('drops non-object extensionFlags silently', () => {
+    expect(parsePiConfig({ extensionFlags: 'plan=true' })).toEqual({});
+    expect(parsePiConfig({ extensionFlags: ['plan', 'true'] })).toEqual({});
+    expect(parsePiConfig({ extensionFlags: null })).toEqual({});
+  });
+
+  test('combines extensionFlags with other fields', () => {
+    expect(
+      parsePiConfig({
+        model: 'openai-codex/gpt-5.1-codex-mini',
+        enableExtensions: true,
+        interactive: true,
+        extensionFlags: { plan: true },
+      })
+    ).toEqual({
+      model: 'openai-codex/gpt-5.1-codex-mini',
+      enableExtensions: true,
+      interactive: true,
+      extensionFlags: { plan: true },
+    });
+  });
 });

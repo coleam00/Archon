@@ -37,28 +37,28 @@ describe('createArchonUIContext', () => {
     return { ui, chunks };
   }
 
-  test('notify("info") forwards as system chunk with info glyph', () => {
+  test('notify("info") forwards as assistant chunk with info glyph (captured in nodeOutput)', () => {
     const { ui, chunks } = mk();
     ui.notify('Remote session. Open: http://host:8080/', 'info');
     expect(chunks).toHaveLength(1);
     expect(chunks[0]).toEqual({
-      type: 'system',
-      content: 'ℹ️ Remote session. Open: http://host:8080/',
+      type: 'assistant',
+      content: '\n[pi extension ℹ️] Remote session. Open: http://host:8080/\n',
     });
   });
 
   test('notify defaults to info when type omitted', () => {
     const { ui, chunks } = mk();
     ui.notify('bare message');
-    expect(chunks[0]?.content).toBe('ℹ️ bare message');
+    expect(chunks[0]?.content).toBe('\n[pi extension ℹ️] bare message\n');
   });
 
   test('notify("warning") and notify("error") use distinct glyphs', () => {
     const { ui, chunks } = mk();
     ui.notify('soft', 'warning');
     ui.notify('hard', 'error');
-    expect(chunks[0]?.content).toBe('⚠️ soft');
-    expect(chunks[1]?.content).toBe('❌ hard');
+    expect(chunks[0]?.content).toBe('\n[pi extension ⚠️] soft\n');
+    expect(chunks[1]?.content).toBe('\n[pi extension ❌] hard\n');
   });
 
   test('select resolves to undefined (no operator to answer)', async () => {

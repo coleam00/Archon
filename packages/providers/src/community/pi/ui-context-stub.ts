@@ -89,8 +89,19 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
       return Promise.resolve(undefined);
     },
     notify(message: string, type: 'info' | 'warning' | 'error' = 'info'): void {
-      const prefix = type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️';
-      bridge.emit({ type: 'system', content: `${prefix} ${message}` });
+      // Extension notifications are user-facing by design — plannotator, for
+      // example, sends its browser review URL through here, and the user
+      // MUST see it to approve the plan. Emit as `assistant` chunks so they
+      // (a) stream to the workflow user's stdout/SSE like normal model output,
+      // (b) accumulate into `$nodeId.output` for downstream bash/script nodes
+      // to grep for URLs or parse structured data, and (c) land in the
+      // workflow JSONL log. A `system`-typed chunk would satisfy (a) only on
+      // the ⚠️/MCP-prefix forwarding path in the DAG executor and would NOT
+      // be captured in node output at all — so the URL never reaches bash.
+      // The prefix encodes the extension-notification origin + severity so
+      // readers can distinguish these from model-generated prose.
+      const icon = type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️';
+      bridge.emit({ type: 'assistant', content: `\n[pi extension ${icon}] ${message}\n` });
     },
     onTerminalInput(_handler: TerminalInputHandler): () => void {
       return noop;

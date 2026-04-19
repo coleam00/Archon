@@ -39,12 +39,17 @@ const mockSubscribe = mock((listener: (event: FakeEvent) => void) => {
 });
 
 const mockBindExtensions = mock(async (_bindings: unknown) => undefined);
+const mockSetFlagValue = mock((_name: string, _value: boolean | string) => undefined);
+const mockExtensionRunner = {
+  setFlagValue: mockSetFlagValue,
+};
 const mockSession = {
   subscribe: mockSubscribe,
   prompt: mockPrompt,
   abort: mockAbort,
   dispose: mockDispose,
   bindExtensions: mockBindExtensions,
+  extensionRunner: mockExtensionRunner,
   isStreaming: false,
   sessionId: 'mock-session-uuid',
 };
@@ -88,9 +93,14 @@ const mockSessionList = mock(
 );
 
 const mockSettingsManagerInMemory = mock(() => ({}));
-const MockDefaultResourceLoader = mock(function (_opts: unknown) {
-  // constructor stub — no methods exercised in tests
-});
+const mockResourceLoaderReload = mock(async () => undefined);
+// Return-style constructor: bun's mock() wraps the function such that the
+// `this`-binding doesn't reliably propagate to `new` call sites. Returning a
+// plain object from the constructor sidesteps this — ES semantics use the
+// returned object when a constructor explicitly returns one.
+const MockDefaultResourceLoader = mock((_opts: unknown) => ({
+  reload: mockResourceLoaderReload,
+}));
 
 // Tool factory mocks — each returns an opaque object tagged with the tool
 // name so assertions can verify which tools the provider selected.
@@ -164,6 +174,8 @@ describe('PiProvider', () => {
     mockDispose.mockClear();
     mockSubscribe.mockClear();
     mockBindExtensions.mockClear();
+    mockSetFlagValue.mockClear();
+    mockResourceLoaderReload.mockClear();
     mockCreateAgentSession.mockClear();
     mockGetModel.mockClear();
     mockAuthCreate.mockClear();
@@ -1275,7 +1287,11 @@ describe('PiProvider', () => {
     expect(mockBindExtensions).not.toHaveBeenCalled();
   });
 
-  test('interactive: false with enableExtensions does NOT bind', async () => {
+  test('enableExtensions alone (no interactive) binds empty to fire session_start', async () => {
+    // When extensions are loaded, session_start MUST fire so each extension's
+    // startup handler runs (reads flags, registers tools, etc.). We bind with
+    // no uiContext so Pi's internal noOpUIContext stays active and hasUI
+    // remains false — plannotator and other UI-gated flows still auto-approve.
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -1286,10 +1302,12 @@ describe('PiProvider', () => {
       })
     );
 
-    expect(mockBindExtensions).not.toHaveBeenCalled();
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeUndefined();
   });
 
-  test('default (no interactive flag) does NOT bind', async () => {
+  test('default (no enableExtensions) does NOT bind', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -1299,6 +1317,59 @@ describe('PiProvider', () => {
       })
     );
 
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+  });
+
+  // ─── extensionFlags pass-through ──────────────────────────────────────
+
+  test('extensionFlags sets flag values before bindExtensions fires session_start', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    // Track call order: setFlagValue must run BEFORE bindExtensions, else
+    // extensions reading flags in their session_start handler miss them.
+    const callOrder: string[] = [];
+    mockSetFlagValue.mockImplementationOnce(() => {
+      callOrder.push('setFlagValue');
+      return undefined;
+    });
+    mockSetFlagValue.mockImplementationOnce(() => {
+      callOrder.push('setFlagValue');
+      return undefined;
+    });
+    mockBindExtensions.mockImplementationOnce(async () => {
+      callOrder.push('bindExtensions');
+    });
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: {
+          enableExtensions: true,
+          interactive: true,
+          extensionFlags: { plan: true, 'plan-file': 'PLAN.md' },
+        },
+      })
+    );
+
+    expect(mockSetFlagValue).toHaveBeenCalledTimes(2);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan', true);
+    expect(mockSetFlagValue).toHaveBeenCalledWith('plan-file', 'PLAN.md');
+    expect(callOrder).toEqual(['setFlagValue', 'setFlagValue', 'bindExtensions']);
+  });
+
+  test('extensionFlags is a no-op without enableExtensions', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { extensionFlags: { plan: true } },
+      })
+    );
+
+    expect(mockSetFlagValue).not.toHaveBeenCalled();
     expect(mockBindExtensions).not.toHaveBeenCalled();
   });
 });

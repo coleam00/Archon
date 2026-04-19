@@ -262,6 +262,20 @@ export class PiProvider implements IAgentProvider {
       ...(enableExtensions ? { enableExtensions: true } : {}),
     });
 
+    // Extensions are only actually loaded during reload(). createAgentSession
+    // skips this step when the caller supplies their own resource loader (see
+    // pi-coding-agent/dist/core/sdk.js: the reload() call is gated on
+    // `!resourceLoader`). Without this call, `getExtensions()` returns the
+    // empty default and Pi never constructs an ExtensionRunner — so
+    // `session.extensionRunner` is undefined and `setFlagValue` silently
+    // no-ops. Only reload when extensions are enabled; the other resource
+    // types (skills, prompts, themes, context files) are suppressed via
+    // `no*` flags on the loader, so reloading them would do nothing useful
+    // and just wastes IO.
+    if (enableExtensions) {
+      await resourceLoader.reload();
+    }
+
     getLog().info(
       {
         piProvider: parsed.provider,
@@ -295,17 +309,62 @@ export class PiProvider implements IAgentProvider {
       yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
     }
 
-    // 4e. Interactive extension UI. Bind a minimal ExtensionUIContext so
+    // 4e. Extension flag pass-through. Pi's ExtensionRunner is already
+    //     constructed inside `createAgentSession` (via `_buildRuntime`), so
+    //     flag values can be applied before `bindExtensions` emits
+    //     `session_start`. This matters because extensions read their flags
+    //     *in* their `session_start` handler — setting flags after the event
+    //     fires is a no-op. Example: `extensionFlags: { plan: true }` is
+    //     equivalent to `pi --plan` on the CLI, which plannotator reads during
+    //     its startup handler to enter the planning phase.
+    if (enableExtensions && piConfig.extensionFlags) {
+      const runner = session.extensionRunner;
+      if (runner) {
+        for (const [name, value] of Object.entries(piConfig.extensionFlags)) {
+          runner.setFlagValue(name, value);
+        }
+      }
+    }
+
+    // 4f. Force plannotator (and any Pi extension following its convention)
+    //     into "remote session" mode. plannotator-browser.ts only calls
+    //     `ctx.ui.notify("Remote session. Open manually: <url>")` when
+    //     `openBrowser()` returns `{ isRemote: true }`; on a local session
+    //     it silently spawns `xdg-open`/`start` instead, which opens a
+    //     browser on whatever host the Archon server happens to be running
+    //     on — invisible to workflow users and untestable from a bash
+    //     assertion node. From the workflow runner's perspective every
+    //     Archon execution IS remote: nobody is watching the server host's
+    //     desktop; the user is consuming Archon's event stream. Setting
+    //     PLANNOTATOR_REMOTE=1 here flips plannotator's heuristic so its
+    //     URL always goes through notify(), which our ExtensionUIContext
+    //     stub forwards as an assistant chunk — landing in $nodeId.output
+    //     for downstream bash/script nodes AND in the user's stream to
+    //     click. Respect an explicit operator override (PLANNOTATOR_REMOTE=0
+    //     for same-laptop setups where auto-open is fine).
+    if (interactive && process.env.PLANNOTATOR_REMOTE === undefined) {
+      process.env.PLANNOTATOR_REMOTE = '1';
+    }
+
+    // 4g. Interactive extension UI. Bind a minimal ExtensionUIContext so
     //     extensions see `ctx.hasUI === true` and can fire `ctx.ui.notify()`.
     //     Plannotator, for example, emits its browser URL through notify()
     //     on a remote session — without a bound UI context it silently
     //     auto-approves every plan and never surfaces the URL. The stub
     //     forwards notifications into the same chunk stream as assistant
     //     output via `uiBridge`, wired in/out of bridgeSession's queue.
+    //
+    //     This call also fires `session_start` to extensions, so any flag
+    //     values set above must already be in place before reaching here.
     const uiBridge = interactive ? createArchonUIBridge() : undefined;
     if (uiBridge) {
       const uiContext = createArchonUIContext(uiBridge);
       await session.bindExtensions({ uiContext });
+    } else if (enableExtensions) {
+      // Extensions loaded without an interactive UI binding still need a
+      // session_start emission so flag reads happen. Pi's internal
+      // `noOpUIContext` is already set; we just need to trigger the event.
+      await session.bindExtensions({});
     }
 
     // 5. Structured output (best-effort). Pi has no SDK-level JSON schema

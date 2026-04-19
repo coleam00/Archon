@@ -67,6 +67,23 @@ export interface PiProviderDefaults {
    * @default false
    */
   interactive?: boolean;
+  /**
+   * Flag values passed through to Pi's ExtensionRunner before `session_start`
+   * fires, matching what `pi --<flag>` or `pi --<flag>=<value>` would do on
+   * the CLI. Each key is the flag name an extension registered via
+   * `pi.registerFlag(name, ...)`; the value must be a boolean or string.
+   *
+   * Concrete example: setting `{ plan: true }` activates
+   * `@plannotator/pi-extension`'s planning phase (equivalent to `pi --plan`),
+   * which surfaces the browser plan-review UI via the bound
+   * `ExtensionUIContext` so a human can approve/annotate the agent's plan.
+   *
+   * Unknown flag names are silently ignored by Pi — no extension reads them.
+   * Only meaningful when `enableExtensions: true` (the runner must exist); on
+   * a Pi session without extensions this is a no-op.
+   * @default undefined
+   */
+  extensionFlags?: Record<string, boolean | string>;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */
