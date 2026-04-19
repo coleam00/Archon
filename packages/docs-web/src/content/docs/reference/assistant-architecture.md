@@ -36,7 +36,7 @@ flowchart TD
   U["User request"] --> H["Host harness\nClaude Code or Codex"]
   H --> S["Archon host skill\noptional routing layer"]
   S --> O["Archon orchestrator conversation"]
-  O -->|"direct answer"| C["Conversation assistant client\nClaudeClient or CodexClient"]
+  O -->|"direct answer"| C["Conversation agent provider\nClaudeProvider or CodexProvider"]
   O -->|"invoke workflow"| W["Workflow executor"]
   W --> WD["Workflow default provider"]
   WD --> N["Per-node provider/model override"]

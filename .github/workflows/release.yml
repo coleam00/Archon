@@ -124,6 +124,83 @@ jobs:
             exit 1
           fi
 
+      - name: Smoke-test Claude binary-path resolver (negative case)
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        run: |
+          # With no CLAUDE_BIN_PATH and no config, running a Claude workflow must
+          # fail with a clear, user-facing error — NOT with "Module not found
+          # /Users/runner/..." which would indicate the resolver was bypassed.
+          BIN="$PWD/dist/${{ matrix.binary }}"
+          TMP_REPO=$(mktemp -d)
+          cd "$TMP_REPO"
+          git init -q
+          git -c user.email=ci@example.com -c user.name=ci commit --allow-empty -q -m init
+
+          # Run without CLAUDE_BIN_PATH set. Expect a clean resolver error.
+          # Capture both stdout and stderr; we only care that the resolver message is present.
+          set +e
+          OUTPUT=$(env -u CLAUDE_BIN_PATH "$BIN" workflow run archon-assist "hello" 2>&1)
+          EXIT_CODE=$?
+          set -e
+          echo "$OUTPUT"
+
+          if echo "$OUTPUT" | grep -qE 'Module not found.*Users/runner'; then
+            echo "::error::Resolver was bypassed — SDK hit the import.meta.url fallback (regression of #1210)"
+            exit 1
+          fi
+          if ! echo "$OUTPUT" | grep -q "Claude Code not found"; then
+            echo "::error::Expected 'Claude Code not found' error when CLAUDE_BIN_PATH is unset"
+            exit 1
+          fi
+          if ! echo "$OUTPUT" | grep -q "CLAUDE_BIN_PATH"; then
+            echo "::error::Error message does not reference CLAUDE_BIN_PATH remediation"
+            exit 1
+          fi
+          echo "::notice::Resolver error path works (exit code: $EXIT_CODE)"
+
+      - name: Smoke-test Claude subprocess spawn (positive case)
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        run: |
+          # Install Claude Code via the native installer (Anthropic's recommended
+          # default) and run a workflow with CLAUDE_BIN_PATH set. The subprocess
+          # must spawn cleanly. We do NOT require the query to succeed (no auth
+          # in CI — an auth error is fine and expected); we only fail if the SDK
+          # can't find the executable, which would indicate a resolver regression.
+          curl -fsSL https://claude.ai/install.sh | bash
+          CLI_PATH="$HOME/.local/bin/claude"
+          if [ ! -x "$CLI_PATH" ]; then
+            echo "::error::Claude Code binary not found after curl install at $CLI_PATH"
+            ls -la "$HOME/.local/bin/" || true
+            exit 1
+          fi
+          echo "Using CLAUDE_BIN_PATH=$CLI_PATH"
+
+          BIN="$PWD/dist/${{ matrix.binary }}"
+          TMP_REPO=$(mktemp -d)
+          cd "$TMP_REPO"
+          git init -q
+          git -c user.email=ci@example.com -c user.name=ci commit --allow-empty -q -m init
+
+          set +e
+          OUTPUT=$(CLAUDE_BIN_PATH="$CLI_PATH" "$BIN" workflow run archon-assist "hello" 2>&1)
+          EXIT_CODE=$?
+          set -e
+          echo "$OUTPUT"
+
+          if echo "$OUTPUT" | grep -qE 'Module not found.*(cli\.js|Users/runner)'; then
+            echo "::error::Subprocess could not find the executable (resolver regression)"
+            exit 1
+          fi
+          if echo "$OUTPUT" | grep -q "Claude Code not found"; then
+            echo "::error::Resolver failed even though CLAUDE_BIN_PATH was set to an existing file"
+            exit 1
+          fi
+          # Any of these outcomes are acceptable — they prove the subprocess spawned:
+          #   - auth error ("credit balance", "unauthorized", "authentication")
+          #   - rate-limit / API error
+          #   - successful query (if auth was injected via some other mechanism)
+          echo "::notice::Claude subprocess spawn path is healthy (exit code: $EXIT_CODE)"
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:

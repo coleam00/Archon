@@ -64,8 +64,8 @@ Provide a concise summary (under 300 words) covering:
 
 ### Architecture
 - Package dependency order and each package's responsibility
-- Key interfaces: `IPlatformAdapter`, `IAssistantClient`, `IDatabase`, `IWorkflowStore`
-- Message flow: platform adapter → orchestrator-agent → command handler OR AI client
+- Key interfaces: `IPlatformAdapter`, `IAgentProvider`, `IDatabase`, `IWorkflowStore`
+- Message flow: platform adapter → orchestrator-agent → command handler OR AI provider
 - Workflow execution: `discoverWorkflows` → router → `executeWorkflow` (steps / loop / DAG)
 
 ### Current State

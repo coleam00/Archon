@@ -13,9 +13,9 @@ import type {
   HandleMessageContext,
   Conversation,
   Codebase,
-  AssistantRequestOptions,
   AttachedFile,
 } from '../types';
+import type { SendQueryOptions } from '@archon/providers/types';
 import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -25,7 +25,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
-import { getAssistantClient } from '../clients/factory';
+import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
@@ -44,9 +44,15 @@ import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
 import { IsolationBlockedError } from '@archon/isolation';
-import { buildOrchestratorPrompt, buildProjectScopedPrompt } from './prompt-builder';
+import {
+  buildOrchestratorPrompt,
+  buildProjectScopedPrompt,
+  formatWorkflowContextSection,
+} from './prompt-builder';
+import type { WorkflowResultContext } from './prompt-builder';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
+import { getCodebaseEnvVars } from '../db/env-vars';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -473,7 +479,8 @@ function buildFullPrompt(
   message: string,
   issueContext: string | undefined,
   threadContext: string | undefined,
-  attachedFiles?: AttachedFile[]
+  attachedFiles?: AttachedFile[],
+  workflowContext?: string
 ): string {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
@@ -498,11 +505,14 @@ function buildFullPrompt(
           .join('\n')
       : '';
 
+  const workflowContextSuffix = workflowContext ? '\n\n---\n\n' + workflowContext : '';
+
   if (threadContext) {
     return (
       systemPrompt +
       '\n\n---\n\n## Thread Context (previous messages)\n\n' +
       threadContext +
+      workflowContextSuffix +
       '\n\n---\n\n## Current Request\n\n' +
       message +
       contextSuffix +
@@ -510,7 +520,14 @@ function buildFullPrompt(
     );
   }
 
-  return systemPrompt + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix;
+  return (
+    systemPrompt +
+    workflowContextSuffix +
+    '\n\n---\n\n## User Message\n\n' +
+    message +
+    contextSuffix +
+    fileSuffix
+  );
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────────────
@@ -771,6 +788,44 @@ export async function handleMessage(
       });
     }
 
+    // Build workflow context for follow-up awareness
+    let workflowContext: string | undefined;
+    try {
+      const recentResultMessages = await messageDb.getRecentWorkflowResultMessages(
+        conversation.id,
+        3
+      );
+      if (recentResultMessages.length > 0) {
+        const workflowResults: WorkflowResultContext[] = recentResultMessages.map(msg => {
+          let workflowName = 'unknown';
+          let runId = 'unknown';
+          try {
+            const parsed =
+              typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : msg.metadata;
+            const meta = parsed as {
+              workflowResult?: { workflowName?: string; runId?: string };
+            };
+            workflowName = meta.workflowResult?.workflowName ?? 'unknown';
+            runId = meta.workflowResult?.runId ?? 'unknown';
+          } catch (metaErr) {
+            // Malformed metadata — use defaults
+            getLog().warn(
+              { err: metaErr as Error, conversationId, messageId: msg.id },
+              'orchestrator.workflow_result_metadata_parse_failed'
+            );
+          }
+          return { workflowName, runId, summary: msg.content };
+        });
+        workflowContext = formatWorkflowContextSection(workflowResults);
+      }
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, conversationId },
+        'orchestrator.workflow_context_fetch_failed'
+      );
+      // Non-critical — continue without context
+    }
+
     const fullPrompt = buildFullPrompt(
       conversation,
       codebases,
@@ -778,7 +833,8 @@ export async function handleMessage(
       message,
       issueContext,
       threadContext,
-      attachedFiles
+      attachedFiles,
+      workflowContext
     );
     const cwd = getArchonWorkspacesPath();
 
@@ -791,17 +847,41 @@ export async function handleMessage(
       });
     }
 
-    // 5. Send to AI client
-    const aiClient = getAssistantClient(conversation.ai_assistant_type);
+    // 5. Send to AI provider
+    const aiClient = getAgentProvider(conversation.ai_assistant_type);
     getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
 
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
-    const requestOptions: AssistantRequestOptions = {
-      ...(conversation.ai_assistant_type === 'claude' && config.assistants.claude.settingSources
-        ? { settingSources: config.assistants.claude.settingSources }
-        : {}),
+    const providerKey = conversation.ai_assistant_type;
+    let dbEnvVars: Record<string, string> = {};
+    if (conversation.codebase_id) {
+      try {
+        dbEnvVars = await getCodebaseEnvVars(conversation.codebase_id);
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, codebaseId: conversation.codebase_id },
+          'codebase_env_vars_load_failed'
+        );
+      }
+    }
+    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars };
+
+    // Warn if provider doesn't support env injection but env vars are configured
+    if (Object.keys(effectiveEnv).length > 0) {
+      const providerCaps = getProviderCapabilities(providerKey);
+      if (!providerCaps.envInjection) {
+        getLog().warn(
+          { provider: providerKey, envVarCount: Object.keys(effectiveEnv).length },
+          'orchestrator.unsupported_env_injection'
+        );
+      }
+    }
+
+    const requestOptions: SendQueryOptions = {
+      assistantConfig: config.assistants[providerKey] ?? {},
+      env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
     };
 
     const mode = platform.getStreamingMode();
@@ -882,14 +962,14 @@ async function handleStreamMode(
   originalMessage: string,
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[],
-  aiClient: ReturnType<typeof getAssistantClient>,
+  aiClient: ReturnType<typeof getAgentProvider>,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: AssistantRequestOptions
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
@@ -931,8 +1011,19 @@ async function handleStreamMode(
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
+    } else if (msg.type === 'result') {
+      if (msg.sessionId) {
+        newSessionId = msg.sessionId;
+      }
+      if (msg.isError) {
+        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
+        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
+        if (newSessionId) {
+          await tryPersistSessionId(session.id, newSessionId);
+        }
+        return;
+      }
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
@@ -1013,14 +1104,14 @@ async function handleBatchMode(
   originalMessage: string,
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[],
-  aiClient: ReturnType<typeof getAssistantClient>,
+  aiClient: ReturnType<typeof getAgentProvider>,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
   issueContext?: string,
-  requestOptions?: AssistantRequestOptions
+  requestOptions?: SendQueryOptions
 ): Promise<void> {
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
@@ -1058,8 +1149,19 @@ async function handleBatchMode(
         allChunks.push({ type: 'tool', content: toolMessage });
         getLog().debug({ toolName: msg.toolName }, 'tool_call');
       }
-    } else if (msg.type === 'result' && msg.sessionId) {
-      newSessionId = msg.sessionId;
+    } else if (msg.type === 'result') {
+      if (msg.sessionId) {
+        newSessionId = msg.sessionId;
+      }
+      if (msg.isError) {
+        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
+        const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
+        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
+        if (newSessionId) {
+          await tryPersistSessionId(session.id, newSessionId);
+        }
+        return;
+      }
     }
 
     if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
@@ -1279,11 +1381,12 @@ async function handleRegisterProject(
     return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
   }
 
-  // Create codebase record
+  // Use config default provider instead of hardcoding 'claude'
+  const config = await loadConfig();
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: projectPath,
-    ai_assistant_type: 'claude',
+    ai_assistant_type: config.assistant,
   });
 
   getLog().info(

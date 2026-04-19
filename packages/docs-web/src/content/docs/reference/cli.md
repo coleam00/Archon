@@ -122,7 +122,6 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 | `--from <branch>`, `--from-branch <branch>` | Override base branch (start-point for worktree) |
 | `--no-worktree` | Opt out of isolation -- run directly in live checkout |
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
-| `--allow-env-keys` | Grant env-leak-gate consent during auto-registration (bypasses the gate for this codebase). Audit-logged as `env_leak_consent_granted` with `actor: 'user-cli'`. See [security.md](/reference/security/#env-leak-gate-target-repo-env-keys). |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
 
@@ -176,7 +175,7 @@ archon workflow resume <run-id>
 
 ### `workflow abandon`
 
-Discard a workflow run (marks it as failed). Use this to unblock a worktree when you don't want to resume.
+Discard a workflow run (marks it as `cancelled`). Use this to unblock a worktree when you don't want to resume — the path lock is released immediately so a new workflow can start.
 
 ```bash
 archon workflow abandon <run-id>

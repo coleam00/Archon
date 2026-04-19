@@ -286,6 +286,41 @@ docker compose exec app ls -la /.archon/workspaces
 docker compose exec app git clone https://github.com/user/repo /.archon/workspaces/test-repo
 ```
 
+## "Claude Code not found" When Running Compiled Binary
+
+**Symptom:** A workflow that uses Claude fails with:
+
+```
+Claude Code not found. Archon requires the Claude Code executable to be
+reachable at a configured path in compiled builds.
+```
+
+**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They need an explicit path to the Claude Code executable. Source/dev mode (`bun run`) auto-resolves via `node_modules` and is unaffected.
+
+**Fix:** Install Claude Code separately and point Archon at it.
+
+```bash
+# macOS / Linux / WSL — Anthropic's recommended native installer
+curl -fsSL https://claude.ai/install.sh | bash
+export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
+
+# Windows (PowerShell)
+irm https://claude.ai/install.ps1 | iex
+$env:CLAUDE_BIN_PATH = "$env:USERPROFILE\.local\bin\claude.exe"
+```
+
+For a durable setup, set the path in `~/.archon/config.yaml` instead:
+
+```yaml
+assistants:
+  claude:
+    claudeBinaryPath: /absolute/path/to/claude
+```
+
+`archon setup` auto-detects and writes `CLAUDE_BIN_PATH` for you. Docker users do not need to do anything — the image pre-sets the variable.
+
+See the [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) guide for the full install matrix.
+
 ## Workflows Hang Silently When Run Inside Claude Code
 
 **Symptom:** Workflows started from within a Claude Code session (e.g., via the Terminal tool) produce no output, or the CLI emits a warning about `CLAUDECODE=1` before the workflow hangs.
@@ -305,3 +340,40 @@ ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1 archon workflow run ...
 ```bash
 ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 ```
+
+## Worktree Belongs to a Different Clone
+
+**Symptom:** Running a workflow (especially with `--branch <name>`) from one local clone surfaces one of these errors:
+
+- `Worktree at <path> belongs to a different clone (<other-clone-path>). Remove it from that clone or use a different codebase registration.`
+- `Cannot verify worktree ownership at <path>: <reason>`
+- `Cannot adopt <path>: path contains a full git checkout, not a worktree.`
+- `Cannot adopt <path>: .git pointer is not a git-worktree reference.`
+
+**Cause:** Archon derives codebase identity from the remote URL (`owner/repo`), so two local clones of the same remote share one `codebase_id`. Worktrees are stored under a shared path (`~/.archon/workspaces/<owner>/<repo>/worktrees/`), which means a worktree created by clone A is visible on disk from clone B. The isolation system refuses to silently adopt across clones because it would operate on the wrong filesystem state.
+
+**Fix — pick one:**
+
+1. **Remove the other clone's worktree.** If you no longer need the other clone's in-progress work:
+
+   ```bash
+   # From the other clone's directory, find and remove the conflicting worktree
+   archon isolation list
+   archon complete <branch-name>          # graceful cleanup
+   # or, if no work to preserve:
+   git worktree remove <path> --force
+   ```
+
+2. **Use a different branch name** for this run so the two clones don't compete for the same worktree path:
+
+   ```bash
+   archon workflow run <name> --branch <different-name> "task"
+   ```
+
+3. **Work from a single clone.** If both local checkouts are for the same project, consolidate to one. Archon's codebase registration currently assumes one local path per remote; true multi-clone support is tracked in [#1192](https://github.com/coleam00/Archon/issues/1192).
+
+**Other variants:**
+
+- `path contains a full git checkout, not a worktree`: something non-Archon created a full git repo at the worktree path. Remove or move it.
+- `.git pointer is not a git-worktree reference`: the `.git` file at that path points somewhere unexpected (submodule, malformed). Inspect it with `cat <path>/.git` and clean up manually.
+- `Cannot verify worktree ownership`: filesystem permission or I/O error reading `<path>/.git`. Check `ls -la <path>` and file permissions on `~/.archon/workspaces`.

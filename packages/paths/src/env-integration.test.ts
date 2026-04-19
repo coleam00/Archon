@@ -20,6 +20,8 @@ const TEST_KEYS = [
   'ANTHROPIC_API_KEY',
   'CLAUDE_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
   'CLAUDE_USE_GLOBAL_AUTH',
   'DATABASE_URL',
   'LOG_LEVEL',
@@ -31,6 +33,11 @@ const TEST_KEYS = [
   'CLAUDE_CODE_ENTRYPOINT',
   'NODE_OPTIONS',
   'REDIS_URL',
+  'OPENAI_API_KEY',
+  'ELEVENLABS_API_KEY',
+  'SSH_AUTH_SOCK',
+  'HTTP_PROXY',
+  'MANAGED_SECRET',
 ];
 
 describe('env isolation integration', () => {
@@ -132,9 +139,11 @@ describe('env isolation integration', () => {
     expect(subprocessEnv.ANTHROPIC_API_KEY).toBeUndefined();
     // Archon key present
     expect(subprocessEnv.ARCHON_ONLY_KEY).toBe('trusted');
-    // Shell-inherited keys present
-    expect(subprocessEnv.PATH).toBeDefined();
-    expect(subprocessEnv.HOME).toBeDefined();
+    // Shell-inherited keys present (Windows uses "Path" casing and USERPROFILE instead of HOME)
+    const hasPath = subprocessEnv.PATH ?? subprocessEnv.Path;
+    expect(hasPath).toBeDefined();
+    const hasHome = subprocessEnv.HOME ?? subprocessEnv.USERPROFILE;
+    expect(hasHome).toBeDefined();
   });
 
   it('scenario 4: same key in both CWD and archon env — archon value wins', () => {
@@ -204,5 +213,118 @@ describe('env isolation integration', () => {
     expect(subprocessEnv.CLAUDECODE).toBeUndefined();
     expect(subprocessEnv.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
     expect(subprocessEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-keep-this');
+  });
+
+  // ── Multiple .env file variants ────────────────────────────────────────
+
+  /** Simulate Bun auto-loading a specific .env file into process.env. */
+  function simulateBunAutoLoad(filePath: string): void {
+    const parsed = config({ path: filePath, processEnv: {} });
+    if (parsed.parsed) {
+      for (const [key, value] of Object.entries(parsed.parsed)) {
+        process.env[key] = value;
+      }
+    }
+  }
+
+  it('strips keys from .env.local in addition to .env', () => {
+    // Bun auto-loads .env.local too — keys from there must also be stripped
+    writeFileSync(join(cwdDir, '.env.local'), 'OPENAI_API_KEY=sk-local-leaked\n');
+    simulateBunAutoLoad(join(cwdDir, '.env.local'));
+
+    const subprocessEnv = simulateEntryPointFlow(
+      'ANTHROPIC_API_KEY=sk-main-leaked\n',
+      'CLAUDE_USE_GLOBAL_AUTH=true\n'
+    );
+
+    expect(subprocessEnv.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(subprocessEnv.OPENAI_API_KEY).toBeUndefined();
+    expect(subprocessEnv.CLAUDE_USE_GLOBAL_AUTH).toBe('true');
+  });
+
+  it('strips keys from .env.development', () => {
+    writeFileSync(join(cwdDir, '.env.development'), 'ELEVENLABS_API_KEY=el-dev-leaked\n');
+    simulateBunAutoLoad(join(cwdDir, '.env.development'));
+
+    const subprocessEnv = simulateEntryPointFlow('', '');
+
+    expect(subprocessEnv.ELEVENLABS_API_KEY).toBeUndefined();
+  });
+
+  // ── Shell-inherited env preservation ───────────────────────────────────
+
+  it('preserves shell-inherited env that is not in CWD .env', () => {
+    // User has SSH_AUTH_SOCK and HTTP_PROXY in their shell — these must survive
+    // because they are not from the target repo's .env
+    process.env.SSH_AUTH_SOCK = '/tmp/ssh-agent.sock';
+    process.env.HTTP_PROXY = 'http://proxy.corp:8080';
+
+    const subprocessEnv = simulateEntryPointFlow('ANTHROPIC_API_KEY=sk-leaked\n', '');
+
+    // CWD key stripped
+    expect(subprocessEnv.ANTHROPIC_API_KEY).toBeUndefined();
+    // Shell-inherited env preserved (not in any CWD .env file)
+    expect(subprocessEnv.SSH_AUTH_SOCK).toBe('/tmp/ssh-agent.sock');
+    expect(subprocessEnv.HTTP_PROXY).toBe('http://proxy.corp:8080');
+  });
+
+  it('strips shell-inherited env if same key also appears in CWD .env', () => {
+    // If SSH_AUTH_SOCK is in both shell AND CWD .env, the CWD value is what
+    // Bun auto-loaded — stripping removes it. This is correct behavior:
+    // the CWD .env overwrote the shell value during auto-load.
+    process.env.SSH_AUTH_SOCK = '/tmp/ssh-agent.sock';
+
+    const subprocessEnv = simulateEntryPointFlow('SSH_AUTH_SOCK=/tmp/repo-evil-agent.sock\n', '');
+
+    // Key was in CWD .env, so it gets stripped entirely
+    expect(subprocessEnv.SSH_AUTH_SOCK).toBeUndefined();
+  });
+
+  // ── Bedrock/Vertex auth preservation ───────────────────────────────────
+
+  it('preserves CLAUDE_CODE_USE_BEDROCK and CLAUDE_CODE_USE_VERTEX', () => {
+    // These are CLAUDE_CODE_* vars but are auth-related — must survive marker strip
+    process.env.CLAUDECODE = '1';
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';
+
+    const subprocessEnv = simulateEntryPointFlow(
+      '',
+      'CLAUDE_CODE_USE_BEDROCK=1\nCLAUDE_CODE_USE_VERTEX=1\nCLAUDE_CODE_OAUTH_TOKEN=sk-token\n'
+    );
+
+    // Markers stripped
+    expect(subprocessEnv.CLAUDECODE).toBeUndefined();
+    expect(subprocessEnv.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+    // Auth vars preserved
+    expect(subprocessEnv.CLAUDE_CODE_USE_BEDROCK).toBe('1');
+    expect(subprocessEnv.CLAUDE_CODE_USE_VERTEX).toBe('1');
+    expect(subprocessEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-token');
+  });
+
+  // ── Managed execution env (simulated) ──────────────────────────────────
+
+  it('managed execution env merges on top of clean process.env', () => {
+    // After the entry point flow, the workflow executor merges managed env
+    // (from config.yaml env: + DB vars) on top of process.env.
+    // This simulates that final merge.
+    const subprocessEnv = simulateEntryPointFlow(
+      'ANTHROPIC_API_KEY=sk-leaked\nDATABASE_URL=postgres://wrong\n',
+      'CLAUDE_USE_GLOBAL_AUTH=true\n'
+    );
+
+    // Simulate managed env merge (what dag-executor does via requestOptions.env)
+    const managedEnv = { MANAGED_SECRET: 'from-db', ELEVENLABS_API_KEY: 'el-managed' };
+    const finalEnv = { ...subprocessEnv, ...managedEnv };
+
+    // CWD keys still stripped
+    expect(finalEnv.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(finalEnv.DATABASE_URL).toBeUndefined();
+    // Archon auth present
+    expect(finalEnv.CLAUDE_USE_GLOBAL_AUTH).toBe('true');
+    // Managed env present
+    expect(finalEnv.MANAGED_SECRET).toBe('from-db');
+    expect(finalEnv.ELEVENLABS_API_KEY).toBe('el-managed');
+    // OS essentials present
+    expect(finalEnv.PATH ?? finalEnv.Path).toBeDefined();
   });
 });

@@ -42,6 +42,7 @@ export {
   isWorktreePath,
   removeWorktree,
   getCanonicalRepoPath,
+  verifyWorktreeOwnership,
 } from './worktree';
 
 // Branch operations

@@ -108,7 +108,7 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `name` | Yes | string | Identifies the workflow in `archon workflow list` |
 | `description` | Yes | string | Shown in listings and used by the router |
 | `nodes` | Yes | array | DAG nodes (see Node Options below) |
-| `provider` | No | `claude` \| `codex` | AI provider for all nodes (default: `claude`) |
+| `provider` | No | string | Registered provider identifier (e.g. `claude`, `codex`). Default: `claude` |
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
 | `modelReasoningEffort` | No | string | Codex only: workflow default for `command`/`prompt` nodes (`minimal` \| `low` \| `medium` \| `high` \| `xhigh`) |
 | `webSearchMode` | No | string | Codex only: workflow-level `disabled` \| `cached` \| `live` |
@@ -128,7 +128,7 @@ All nodes share these base fields:
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
 | `when` | No | string | Condition expression; node is skipped if false |
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
-| `provider` | No | `claude` \| `codex` | Per-node provider override |
+| `provider` | No | string | Per-node provider override (any registered provider) |
 | `model` | No | string | Per-node model override |
 | `context` | No | `fresh` \| `shared` | Session context — `fresh` starts a new conversation, `shared` inherits from prior node |
 | `output_format` | No | JSON Schema | Enforce structured JSON output from this node |
@@ -279,7 +279,7 @@ defaults:
 | `Routing unclear — falling back to archon-assist-codex` | No workflow matched the input on Codex-oriented flows | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
-| `Model X is not valid for provider Y` | Provider/model mismatch | Use Claude models (`sonnet`, `opus`, `haiku`) with `provider: claude`; use other models with `provider: codex` |
+| `Model X is not valid for provider Y` | Provider/model mismatch | Each provider accepts specific models — check the provider's `isModelCompatible` rules. Claude accepts `sonnet`, `opus`, `haiku`, `claude-*`; Codex accepts other models. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
 | Workflow hangs with no output | Node idle timeout hit | Increase `idle_timeout` on the node (milliseconds) |
 

@@ -11,8 +11,9 @@ import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
+import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
-import { isClaudeModel, isModelCompatible } from './model-validation';
+import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import { classifyError } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -278,22 +279,20 @@ export async function executeWorkflow(
   // Resolve provider and model once (used by all nodes)
   // When workflow sets a model but not a provider, infer provider from the model.
   // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
-  let resolvedProvider: 'claude' | 'codex';
+  let resolvedProvider: string;
   let providerSource: string;
   if (workflow.provider) {
     resolvedProvider = workflow.provider;
     providerSource = 'workflow definition';
-  } else if (workflow.model && isClaudeModel(workflow.model)) {
-    resolvedProvider = 'claude';
-    providerSource = 'inferred from workflow model';
   } else if (workflow.model) {
-    resolvedProvider = 'codex';
+    resolvedProvider = inferProviderFromModel(workflow.model, config.assistant);
     providerSource = 'inferred from workflow model';
   } else {
     resolvedProvider = config.assistant;
     providerSource = 'config';
   }
-  const resolvedModel = workflow.model ?? config.assistants[resolvedProvider]?.model;
+  const assistantDefaults = config.assistants[resolvedProvider];
+  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
   if (!isModelCompatible(resolvedProvider, resolvedModel)) {
     throw new Error(
       `Model "${resolvedModel}" is not compatible with provider "${resolvedProvider}". ` +
@@ -318,29 +317,6 @@ export async function executeWorkflow(
   // Resume detection and concurrent-run checks
   let dagPriorCompletedNodes: Map<string, string> | undefined;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
-
-  // Check for concurrent workflow execution on the same path
-  try {
-    const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd);
-    if (activeWorkflow) {
-      const startedAt = new Date(activeWorkflow.started_at).toLocaleString();
-      await sendCriticalMessage(
-        platform,
-        conversationId,
-        `❌ **Workflow already running**: \`${activeWorkflow.workflow_name}\` has been running since ${startedAt}. Please wait for it to complete or use \`/workflow cancel\` to stop it.`
-      );
-      return { success: false, error: `Workflow already running: ${activeWorkflow.workflow_name}` };
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, conversationId }, 'db_active_workflow_check_failed');
-    await sendCriticalMessage(
-      platform,
-      conversationId,
-      '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
-    );
-    return { success: false, error: 'Database error checking for active workflow' };
-  }
 
   // Resume detection: check for prior failed run on same workflow + worktree
   {
@@ -396,8 +372,34 @@ export async function executeWorkflow(
         (resumableRun.metadata.approval as Record<string, unknown>).type === 'interactive_loop';
       if (priorNodes.size > 0 || hasInteractiveLoopState) {
         try {
+          // Capture the orphan BEFORE replacing workflowRun. The orchestrator's
+          // pre-created row was a lock-token claim on this path; once resume
+          // takes over, that claim is redundant. Without releasing it, a
+          // back-to-back resume would block on its own ghost lock until the
+          // 5-minute stale-pending window in getActiveWorkflowRunByPath.
+          const orphanPreCreated =
+            preCreatedRun && preCreatedRun.id !== resumableRun.id ? preCreatedRun : null;
+
           workflowRun = await deps.store.resumeWorkflowRun(resumableRun.id);
           dagPriorCompletedNodes = priorNodes;
+
+          if (orphanPreCreated) {
+            await deps.store
+              .updateWorkflowRun(orphanPreCreated.id, { status: 'cancelled' })
+              .catch((cleanupErr: Error) => {
+                // Best-effort: log and continue. The 5-min stale-pending
+                // window is the safety net if this fails.
+                getLog().warn(
+                  {
+                    err: cleanupErr,
+                    orphanId: orphanPreCreated.id,
+                    resumedRunId: workflowRun?.id,
+                  },
+                  'workflow.resume_orphan_cleanup_failed'
+                );
+              });
+          }
+
           getLog().info(
             {
               workflowRunId: workflowRun.id,
@@ -416,6 +418,19 @@ export async function executeWorkflow(
             { err, workflowName: workflow.name, resumableRunId: resumableRun.id },
             'workflow_resume_activate_failed'
           );
+          // Release the pre-created lock token. Without this, preCreatedRun
+          // sits as `pending` and blocks the path until the 5-min stale
+          // window — the user would see "in use by self" on retry.
+          if (preCreatedRun) {
+            await deps.store
+              .updateWorkflowRun(preCreatedRun.id, { status: 'cancelled' })
+              .catch((cleanupErr: Error) => {
+                getLog().warn(
+                  { err: cleanupErr, preCreatedRunId: preCreatedRun.id },
+                  'workflow.resume_failure_cleanup_failed'
+                );
+              });
+          }
           await sendCriticalMessage(
             platform,
             conversationId,
@@ -458,6 +473,96 @@ export async function executeWorkflow(
       );
       return { success: false, error: 'Database error creating workflow run' };
     }
+  }
+
+  // Path-lock guard: ensure no other workflow run holds this working_path.
+  //
+  // Runs after workflowRun is finalized (pre-created, resumed, or freshly
+  // created) so we always have self-ID + started_at for the deterministic
+  // older-wins tiebreaker. The query treats `pending` rows older than 5 min
+  // as orphaned, so leaks from crashed dispatches or resume orphans don't
+  // permanently block the path.
+  try {
+    const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd, {
+      id: workflowRun.id,
+      startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+    });
+    if (activeWorkflow) {
+      // The lock query found another active row that wins the older-wins
+      // tiebreaker. Mark our own row terminal so it falls out of the
+      // active set immediately — without this, our row sits as
+      // pending/running and blocks the path until the 5-min stale window
+      // (or never, if we'd already promoted it to running via resume).
+      await deps.store
+        .updateWorkflowRun(workflowRun.id, { status: 'cancelled' })
+        .catch((cleanupErr: Error) => {
+          getLog().warn(
+            { err: cleanupErr, workflowRunId: workflowRun?.id, cwd },
+            'workflow.guard_self_cancel_failed'
+          );
+        });
+
+      const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
+      const duration = formatDuration(elapsedMs);
+      const shortId = activeWorkflow.id.slice(0, 8);
+
+      // Status-aware copy. The lock query returns running, paused, and
+      // fresh-pending rows — telling the user to "wait for it to finish"
+      // is wrong for `paused` (waiting on user action via approve/reject).
+      let stateLine: string;
+      let actionLines: string;
+      if (activeWorkflow.status === 'paused') {
+        stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
+        actionLines =
+          `• Approve it: \`/workflow approve ${shortId}\`\n` +
+          `• Reject it: \`/workflow reject ${shortId}\`\n` +
+          `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
+          '• Use a different branch: `--branch <other>`';
+      } else {
+        const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
+        stateLine = `${verb} ${duration}, run \`${shortId}\``;
+        actionLines =
+          '• Wait for it to finish: `/workflow status`\n' +
+          `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
+          '• Use a different branch: `--branch <other>`';
+      }
+      await sendCriticalMessage(
+        platform,
+        conversationId,
+        `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
+          `(${stateLine}).\n${actionLines}`
+      );
+      return {
+        success: false,
+        error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
+      };
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { err, conversationId, cwd, pendingRunId: workflowRun.id },
+      'db_active_workflow_check_failed'
+    );
+    // Release the lock token. workflowRun is finalized at this point
+    // (pre-created or resumed or freshly created) and would otherwise sit
+    // as pending/running, blocking the path. For pending the 5-min stale
+    // window would clear it eventually; for a row already promoted to
+    // running (e.g., resumed), nothing would clear it without manual
+    // intervention.
+    await deps.store
+      .updateWorkflowRun(workflowRun.id, { status: 'cancelled' })
+      .catch((cleanupErr: Error) => {
+        getLog().warn(
+          { err: cleanupErr, workflowRunId: workflowRun?.id },
+          'workflow.guard_query_failure_cleanup_failed'
+        );
+      });
+    await sendCriticalMessage(
+      platform,
+      conversationId,
+      '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
+    );
+    return { success: false, error: 'Database error checking for active workflow' };
   }
 
   // Resolve external artifact and log directories
@@ -516,6 +621,7 @@ export async function executeWorkflow(
       workflowName: workflow.name,
       conversationId: conversationDbId,
     });
+
     deps.store
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,

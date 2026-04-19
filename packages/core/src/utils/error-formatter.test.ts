@@ -19,25 +19,97 @@ describe('classifyAndFormatError', () => {
     });
   });
 
-  describe('authentication errors', () => {
-    test('detects "API key" in message', () => {
-      const result = classifyAndFormatError(new Error('Invalid API key provided'));
-      expect(result).toBe('⚠️ AI service authentication error. Please check configuration.');
+  describe('Claude OAuth refresh-token errors', () => {
+    test('detects "refresh token" in message', () => {
+      const result = classifyAndFormatError(new Error('Your refresh token was already used'));
+      expect(result).toContain('Claude authentication expired');
+      expect(result).toContain('/login');
     });
 
-    test('detects "authentication" in message', () => {
-      const result = classifyAndFormatError(new Error('authentication failed'));
-      expect(result).toBe('⚠️ AI service authentication error. Please check configuration.');
+    test('detects "could not be refreshed" in message', () => {
+      const result = classifyAndFormatError(new Error('Your access token could not be refreshed'));
+      expect(result).toContain('Claude authentication expired');
+    });
+
+    test('detects "log out and sign in" in message', () => {
+      const result = classifyAndFormatError(new Error('Please log out and sign in again'));
+      expect(result).toContain('Claude authentication expired');
+    });
+
+    test('detects "OAuth token has expired" in message', () => {
+      const result = classifyAndFormatError(
+        new Error('API Error: 401 OAuth token has expired. Please run /login')
+      );
+      expect(result).toContain('Claude authentication expired');
+      expect(result).toContain('claude logout && claude login');
+    });
+
+    test('detects "sign-in has expired" in message', () => {
+      const result = classifyAndFormatError(
+        new Error('Unable to start session: sign-in has expired')
+      );
+      expect(result).toContain('Claude authentication expired');
+    });
+
+    test('handles full Claude OAuth error with refresh token race condition', () => {
+      const result = classifyAndFormatError(
+        new Error(
+          'Claude Code auth error: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.'
+        )
+      );
+      expect(result).toContain('Claude authentication expired');
+    });
+  });
+
+  describe('Claude general auth errors', () => {
+    test('detects "Claude Code auth error:" prefix for non-OAuth errors', () => {
+      const result = classifyAndFormatError(new Error('Claude Code auth error: 403 forbidden'));
+      expect(result).toContain('Claude authentication error');
+      expect(result).toContain('/login');
+    });
+  });
+
+  describe('Codex auth errors', () => {
+    test('detects Codex 401 retry exhaustion', () => {
+      const result = classifyAndFormatError(
+        new Error('Codex query failed: exceeded retry limit, last status: 401 Unauthorized')
+      );
+      expect(result).toContain('Codex authentication error');
+      expect(result).toContain('codex login');
+    });
+
+    test('detects Codex query failed with Unauthorized', () => {
+      const result = classifyAndFormatError(new Error('Codex query failed: Unauthorized'));
+      expect(result).toContain('Codex authentication error');
+      expect(result).toContain('codex login');
+    });
+  });
+
+  describe('general authentication errors', () => {
+    test('detects "API key" in message', () => {
+      const result = classifyAndFormatError(new Error('Invalid API key provided'));
+      expect(result).toContain('authentication error');
+    });
+
+    test('detects "authentication_error" in message', () => {
+      const result = classifyAndFormatError(new Error('authentication_error: invalid'));
+      expect(result).toContain('authentication error');
+    });
+
+    test('detects "authentication error" in message', () => {
+      const result = classifyAndFormatError(new Error('authentication error'));
+      expect(result).toContain('authentication error');
     });
 
     test('detects "401" in message', () => {
       const result = classifyAndFormatError(new Error('HTTP 401 Unauthorized'));
-      expect(result).toBe('⚠️ AI service authentication error. Please check configuration.');
+      expect(result).toContain('authentication error');
     });
 
-    test('detects 401 as standalone in message', () => {
-      const result = classifyAndFormatError(new Error('Status: 401'));
-      expect(result).toBe('⚠️ AI service authentication error. Please check configuration.');
+    test('does not false-positive on generic messages containing "auth"', () => {
+      // "auth" alone should NOT match — only specific patterns
+      const result = classifyAndFormatError(new Error('author name missing'));
+      expect(result).not.toContain('authentication');
     });
   });
 
@@ -232,9 +304,24 @@ describe('classifyAndFormatError', () => {
       expect(result).toBe('⚠️ AI rate limit reached. Please wait a moment and try again.');
     });
 
+    test('Claude OAuth check takes precedence over general auth check', () => {
+      // Contains both "refresh token" and "Claude Code auth error:" — OAuth branch fires first
+      const result = classifyAndFormatError(
+        new Error('Claude Code auth error: refresh token expired')
+      );
+      expect(result).toContain('Claude authentication expired');
+    });
+
+    test('Codex auth takes precedence over generic Codex error handler', () => {
+      // Contains "Codex query failed:" AND "401" — Codex auth branch fires first
+      const result = classifyAndFormatError(new Error('Codex query failed: 401 Unauthorized'));
+      expect(result).toContain('Codex authentication error');
+      expect(result).toContain('codex login');
+    });
+
     test('auth check takes precedence over short-message fallback', () => {
       const result = classifyAndFormatError(new Error('API key'));
-      expect(result).toBe('⚠️ AI service authentication error. Please check configuration.');
+      expect(result).toContain('authentication error');
     });
 
     test('Codex check is applied before generic fallback', () => {

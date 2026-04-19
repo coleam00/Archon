@@ -24,8 +24,6 @@ export {
   type IWebPlatformAdapter,
   isWebAdapter,
   type MessageMetadata,
-  type MessageChunk,
-  type IAssistantClient,
 } from './types';
 
 // =============================================================================
@@ -51,13 +49,6 @@ export * as messageDb from './db/messages';
 
 // Re-export SessionNotFoundError for error handling
 export { SessionNotFoundError } from './db/sessions';
-
-// =============================================================================
-// AI Clients
-// =============================================================================
-export { ClaudeClient } from './clients/claude';
-export { CodexClient } from './clients/codex';
-export { getAssistantClient } from './clients/factory';
 
 // =============================================================================
 // Workflows
@@ -144,15 +135,6 @@ export { toError } from './utils/error';
 
 // Credential sanitization
 export { sanitizeCredentials, sanitizeError } from './utils/credential-sanitizer';
-
-// Env leak scanner
-export {
-  EnvLeakError,
-  scanPathForSensitiveKeys,
-  formatLeakError,
-  type LeakReport,
-  type LeakErrorContext,
-} from './utils/env-leak-scanner';
 
 // GitHub GraphQL
 export { getLinkedIssueNumbers } from './utils/github-graphql';

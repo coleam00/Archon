@@ -25,6 +25,7 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^0.19.6",
     "zod": "^3.25.28"
   },

@@ -51,7 +51,7 @@ Create `~/.archon/config.yaml` for user-wide preferences:
 
 ```yaml
 # Default AI assistant
-defaultAssistant: claude # or 'codex'
+defaultAssistant: claude # must match a registered provider (e.g. claude, codex)
 
 # Assistant defaults
 assistants:
@@ -60,12 +60,18 @@ assistants:
     settingSources:   # Which CLAUDE.md files the SDK loads (default: ['project'])
       - project       # Project-level CLAUDE.md (always recommended)
       - user          # Also load ~/.claude/CLAUDE.md (global preferences)
+    # Optional: absolute path to the Claude Code executable.
+    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Accepts the native binary (~/.local/bin/claude from the curl installer)
+    # or the npm-installed cli.js. Source/dev mode auto-resolves.
+    # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.3-codex
     modelReasoningEffort: medium
     webSearchMode: disabled
     additionalDirectories:
       - /absolute/path/to/other/repo
+    # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
 
 # Streaming preferences per platform
 streaming:
@@ -83,11 +89,6 @@ paths:
 concurrency:
   maxConversations: 10
 
-# Env-leak gate bypass (last resort — weakens a security control)
-# allow_target_repo_keys: false  # Set true to skip the env-leak-gate
-                                 # globally for all codebases on this machine.
-                                 # `env_leak_gate_disabled` is logged once per
-                                 # process per source. See security.md.
 ```
 
 ## Repository Configuration
@@ -119,6 +120,8 @@ worktree:
   copyFiles:  # Optional: Additional files to copy to worktrees
     - .env.example -> .env  # Rename during copy
     - .vscode               # Copy entire directory
+  initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
+                        # `git submodule update --init --recursive`. Set false to opt out.
 
 # Documentation directory
 docs:
@@ -135,11 +138,6 @@ defaults:
 #   MY_API_KEY: value
 #   CUSTOM_ENDPOINT: https://...
 
-# Per-repo override for the env-leak-gate bypass.
-# Set to `false` to re-enable the gate for THIS repo even when the global
-# config has `allow_target_repo_keys: true`. Set to `true` to grant the
-# bypass for THIS repo only. Wins over the global flag in either direction.
-# allow_target_repo_keys: false
 ```
 
 ### Claude settingSources
@@ -168,6 +166,8 @@ This is useful when you maintain coding style or identity preferences in `~/.cla
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 
+**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories. Set `worktree.initSubmodules: false` to opt out.
+
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on remote (no silent fallback).
 2. If omitted: Auto-detects the default branch via `git remote show origin`. Works without any config for standard repos.
@@ -187,7 +187,7 @@ Environment variables override all other configuration. They are organized by ca
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Default AI assistant (`claude` or `codex`) | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Default AI assistant (must match a registered provider) | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |

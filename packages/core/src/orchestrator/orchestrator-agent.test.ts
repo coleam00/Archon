@@ -37,6 +37,17 @@ const mockExecuteWorkflow = mock(() => Promise.resolve());
 const mockHandleCommand = mock(() =>
   Promise.resolve({ success: true, message: 'ok', workflow: undefined })
 );
+const mockSendQuery = mock(async function* () {
+  yield { type: 'assistant', content: 'test response' };
+  yield { type: 'result', sessionId: 'session-1' };
+});
+const mockGetCodebaseEnvVars = mock(() => Promise.resolve({}));
+const mockLoadConfig = mock(() =>
+  Promise.resolve({
+    assistants: { claude: {}, codex: {} },
+    envVars: {},
+  })
+);
 
 const mockLogger = createMockLogger();
 
@@ -93,11 +104,17 @@ mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 
-mock.module('../clients/factory', () => ({
-  getAssistantClient: mock(() => ({
-    sendQuery: mock(async function* () {}),
+mock.module('@archon/providers', () => ({
+  getAgentProvider: mock(() => ({
+    sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
+    getCapabilities: mock(() => ({})),
   })),
+  getProviderCapabilities: mock(() => ({ envInjection: true })),
+}));
+
+mock.module('../db/env-vars', () => ({
+  getCodebaseEnvVars: mockGetCodebaseEnvVars,
 }));
 
 mock.module('../utils/error-formatter', () => ({
@@ -126,16 +143,19 @@ mock.module('../db/workflow-events', () => ({
 }));
 
 // Mock db/messages so handleMessage persistence hooks (for non-web platforms)
-// don't try to open a real DB connection. addMessage is the only function we
-// exercise in these tests.
+// don't try to open a real DB connection. addMessage is tracked so telegram
+// persistence assertions can verify calls; getRecentWorkflowResultMessages is
+// tracked for the workflow-context injection tests.
 const mockAddMessage = mock(() => Promise.resolve({} as unknown));
+const mockGetRecentWorkflowResultMessages = mock(() => Promise.resolve([]));
 mock.module('../db/messages', () => ({
   addMessage: mockAddMessage,
   listMessages: mock(() => Promise.resolve([])),
+  getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 
 mock.module('../config/config-loader', () => ({
-  loadConfig: mock(() => Promise.resolve({})),
+  loadConfig: mockLoadConfig,
 }));
 
 mock.module('../services/title-generator', () => ({
@@ -151,6 +171,9 @@ mock.module('./orchestrator', () => ({
 mock.module('./prompt-builder', () => ({
   buildOrchestratorPrompt: mock(() => 'orchestrator system prompt'),
   buildProjectScopedPrompt: mock(() => 'project scoped system prompt'),
+  formatWorkflowContextSection: mock((results: unknown[]) =>
+    results.length > 0 ? '## Recent Workflow Results\n\n...' : ''
+  ),
 }));
 
 mock.module('@archon/isolation', () => ({
@@ -190,7 +213,6 @@ function makeCodebase(name: string, id = `id-${name}`): Codebase {
     repository_url: null,
     default_cwd: `/repos/${name}`,
     ai_assistant_type: 'claude',
-    allow_env_keys: false,
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
@@ -814,7 +836,6 @@ function makeCodebaseForSync() {
     repository_url: 'https://github.com/test/repo',
     default_cwd: '/repos/test-repo',
     ai_assistant_type: 'claude',
-    allow_env_keys: false,
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
@@ -883,9 +904,19 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockToRepoPath.mockClear();
     mockGetOrCreateConversation.mockReset();
     mockGetCodebase.mockReset();
+    mockSendQuery.mockClear();
+    mockGetCodebaseEnvVars.mockReset();
+    mockLoadConfig.mockReset();
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({
+        assistants: { claude: {}, codex: {} },
+        envVars: {},
+      })
+    );
   });
 
   test('calls syncWorkspace with codebase.default_cwd when conversation has codebase_id', async () => {
@@ -964,6 +995,59 @@ describe('discoverAllWorkflows — remote sync', () => {
       'workspace.sync_failed'
     );
   });
+
+  test('passes merged repo and DB env vars to provider for codebase-scoped chat', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockGetCodebaseEnvVars.mockResolvedValueOnce({ DB_SECRET: 'db-value' });
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { claude: {}, codex: {} },
+      envVars: { FILE_SECRET: 'file-value' },
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.env).toEqual({
+      FILE_SECRET: 'file-value',
+      DB_SECRET: 'db-value',
+    });
+  });
+
+  test('does not load codebase env vars when conversation has no codebase_id', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeConversation()));
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockGetCodebaseEnvVars).not.toHaveBeenCalled();
+  });
+
+  test('falls back to config env when codebase env loading fails', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1' });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockGetCodebaseEnvVars.mockRejectedValueOnce(new Error('db unavailable'));
+    mockLoadConfig.mockResolvedValueOnce({
+      assistants: { claude: {}, codex: {} },
+      envVars: { FILE_SECRET: 'file-value' },
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ codebaseId: 'codebase-1' }),
+      'codebase_env_vars_load_failed'
+    );
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
+  });
 });
 
 // ─── Workflow dispatch routing — interactive flag ─────────────────────────────
@@ -980,7 +1064,6 @@ describe('workflow dispatch routing — interactive flag', () => {
       repository_url: null,
       default_cwd: '/repos/test-repo',
       ai_assistant_type: 'claude' as const,
-      allow_env_keys: false,
       commands: {},
       created_at: new Date(),
       updated_at: new Date(),
@@ -1081,7 +1164,6 @@ describe('natural-language approval routing', () => {
       repository_url: null,
       default_cwd: '/repos/test-repo',
       ai_assistant_type: 'claude' as const,
-      allow_env_keys: false,
       commands: {},
       created_at: new Date(),
       updated_at: new Date(),
@@ -1417,6 +1499,79 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
   });
 });
 
+// ─── handleMessage — workflow context injection ───────────────────────────────
+
+describe('handleMessage — workflow context injection', () => {
+  beforeEach(() => {
+    mockGetRecentWorkflowResultMessages.mockClear();
+    mockGetOrCreateConversation.mockReset();
+    mockListCodebases.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockLogger.warn.mockClear();
+
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
+  });
+
+  test('calls getRecentWorkflowResultMessages for the conversation', async () => {
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'What happened?');
+
+    expect(mockGetRecentWorkflowResultMessages).toHaveBeenCalledWith('conv-1', 3);
+  });
+
+  test('does not throw when getRecentWorkflowResultMessages returns empty array', async () => {
+    mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([]);
+    const platform = makePlatform();
+
+    await expect(handleMessage(platform, 'conv-1', 'Hello')).resolves.toBeUndefined();
+  });
+
+  test('handles malformed metadata JSON without throwing', async () => {
+    const badRow = {
+      id: 'msg-1',
+      conversation_id: 'conv-1',
+      role: 'assistant' as const,
+      content: 'Summary.',
+      metadata: 'not-valid-json',
+      created_at: '2026-01-01T00:00:00Z',
+    };
+    mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([badRow]);
+    const platform = makePlatform();
+
+    await expect(
+      handleMessage(platform, 'conv-1', 'What did the workflow do?')
+    ).resolves.toBeUndefined();
+  });
+
+  test('handles metadata with missing workflowResult key gracefully', async () => {
+    const rowNoWorkflowResult = {
+      id: 'msg-2',
+      conversation_id: 'conv-1',
+      role: 'assistant' as const,
+      content: 'Summary.',
+      metadata: '{"someOtherKey":"value"}',
+      created_at: '2026-01-01T00:00:00Z',
+    };
+    mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([rowNoWorkflowResult]);
+    const platform = makePlatform();
+
+    await expect(handleMessage(platform, 'conv-1', 'Follow-up')).resolves.toBeUndefined();
+  });
+
+  test('continues without workflow context when outer fetch throws', async () => {
+    mockGetRecentWorkflowResultMessages.mockRejectedValueOnce(new Error('unexpected'));
+    const platform = makePlatform();
+
+    // Non-critical path — must not block message handling
+    await expect(handleMessage(platform, 'conv-1', 'Hello')).resolves.toBeUndefined();
+  });
+});
+
 // ─── Telegram user-message persistence ────────────────────────────────────────
 
 /**
@@ -1426,11 +1581,6 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
  *   2. deterministic slash commands skip persistence (stay ephemeral)
  *   3. web conversations do NOT trigger the centralized path (web's existing
  *      PersistenceBuffer still owns the web flow)
- *
- * Assistant-message persistence hooks (inside handleStreamMode / handleBatchMode
- * and in the top-level catch) are not covered here — they require mocking
- * sendQuery to yield actual content, which is out of scope for this test batch.
- * Track as a follow-up.
  */
 function makeTelegramPlatform(): IPlatformAdapter {
   return {

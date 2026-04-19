@@ -5,19 +5,24 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { readFile, mkdtemp, writeFile, rm } from 'fs/promises';
-import { resolve, isAbsolute, join } from 'path';
-import { tmpdir } from 'os';
+import { readFile } from 'fs/promises';
+import { resolve, isAbsolute } from 'path';
 import { execFileAsync } from '@archon/git';
 import { resolveNamedScript } from './script-discovery';
 import type {
-  WorkflowAssistantOptions,
   IWorkflowPlatform,
   WorkflowMessageMetadata,
-  WorkflowTokenUsage,
   WorkflowConfig,
   WorkflowDeps,
 } from './deps';
+import type {
+  AgentRequestOptions,
+  SendQueryOptions,
+  NodeConfig,
+  ProviderCapabilities,
+  TokenUsage,
+} from '@archon/providers/types';
+import { getProviderCapabilities } from '@archon/providers';
 import type {
   DagNode,
   ApprovalNode,
@@ -29,7 +34,6 @@ import type {
   NodeOutput,
   TriggerRule,
   WorkflowRun,
-  WorkflowNodeHooks,
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
@@ -46,7 +50,7 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
-import { isClaudeModel, isModelCompatible } from './model-validation';
+import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import {
   logNodeStart,
   logNodeComplete,
@@ -76,16 +80,18 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Workflow-level execution options. Per-node `provider`/`model` overrides still take precedence. */
+/** Workflow-level execution options. Per-node overrides still take precedence via ?? */
 interface WorkflowLevelOptions {
+  // Claude-only
   effort?: EffortLevel;
   thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
-  modelReasoningEffort?: WorkflowAssistantOptions['modelReasoningEffort'];
-  webSearchMode?: WorkflowAssistantOptions['webSearchMode'];
-  additionalDirectories?: WorkflowAssistantOptions['additionalDirectories'];
+  // Codex-only (workflow YAML → overrides .archon/config.yaml assistants.codex.*)
+  modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  webSearchMode?: 'disabled' | 'cached' | 'live';
+  additionalDirectories?: string[];
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
@@ -103,17 +109,6 @@ const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
 interface SendMessageContext {
   workflowId?: string;
   nodeName?: string;
-}
-
-type WorkflowCodexExecutionOptions = Pick<
-  WorkflowAssistantOptions,
-  'modelReasoningEffort' | 'webSearchMode' | 'additionalDirectories' | 'githubCliAuthPolicy'
->;
-
-interface BundledScriptExecution {
-  cmd: string;
-  args: string[];
-  cleanup?: () => Promise<void>;
 }
 
 /** Default DAG node retry for TRANSIENT errors */
@@ -135,33 +130,6 @@ function toApprovalLastOutput(output: string | undefined): string | undefined {
   return normalized.slice(0, keepLength) + APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX;
 }
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
-
-async function buildBundledScriptExecution(
-  scriptName: string,
-  runtime: 'bun' | 'uv',
-  content: string,
-  nodeDeps: string[]
-): Promise<BundledScriptExecution> {
-  if (runtime === 'uv') {
-    const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-    return {
-      cmd: 'uv',
-      args: ['run', ...withFlags, 'python', '-c', content],
-    };
-  }
-
-  const tempDir = await mkdtemp(join(tmpdir(), `archon-bundled-script-${scriptName}-`));
-  const scriptPath = join(tempDir, `${scriptName}.ts`);
-  await writeFile(scriptPath, content, 'utf8');
-
-  return {
-    cmd: 'bun',
-    args: ['run', scriptPath],
-    cleanup: async (): Promise<void> => {
-      await rm(tempDir, { recursive: true, force: true });
-    },
-  };
-}
 
 /**
  * Get effective retry config for a DAG node.
@@ -286,204 +254,40 @@ export function substituteNodeOutputRefs(
   );
 }
 
-/** SDK-compatible hook structure returned by buildSDKHooksFromYAML */
-type SDKHooksMap = NonNullable<WorkflowAssistantOptions['hooks']>;
-
-/**
- * Convert declarative YAML hook definitions to SDK HookCallbackMatcher arrays.
- * Each YAML matcher's `response` is wrapped in `async () => response`.
- */
-export function buildSDKHooksFromYAML(nodeHooks: WorkflowNodeHooks): SDKHooksMap {
-  const sdkHooks: SDKHooksMap = {};
-
-  for (const [event, matchers] of Object.entries(nodeHooks)) {
-    if (!matchers) continue;
-    sdkHooks[event] = matchers.map(m => ({
-      ...(m.matcher ? { matcher: m.matcher } : {}),
-      hooks: [async (): Promise<unknown> => m.response],
-      ...(m.timeout ? { timeout: m.timeout } : {}),
-    }));
-  }
-
-  if (Object.keys(sdkHooks).length === 0) {
-    getLog().warn({ nodeHooksKeys: Object.keys(nodeHooks) }, 'dag.hooks_build_produced_empty_map');
-  }
-
-  return sdkHooks;
-}
-
-function resolveWorkflowCodexOptions(
-  workflowLevelOptions: WorkflowLevelOptions,
-  config: WorkflowConfig
-): WorkflowCodexExecutionOptions | undefined {
-  const modelReasoningEffort =
-    workflowLevelOptions.modelReasoningEffort ?? config.assistants.codex.modelReasoningEffort;
-  const webSearchMode = workflowLevelOptions.webSearchMode ?? config.assistants.codex.webSearchMode;
-  const additionalDirectories =
-    workflowLevelOptions.additionalDirectories ?? config.assistants.codex.additionalDirectories;
-
-  const resolved: WorkflowCodexExecutionOptions = {};
-  resolved.githubCliAuthPolicy = 'prefer-stored';
-  if (modelReasoningEffort !== undefined) resolved.modelReasoningEffort = modelReasoningEffort;
-  if (webSearchMode !== undefined) resolved.webSearchMode = webSearchMode;
-  if (additionalDirectories !== undefined) resolved.additionalDirectories = additionalDirectories;
-
-  return Object.keys(resolved).length > 0 ? resolved : undefined;
-}
-
-function resolveNodeCodexOptions(
-  node: DagNode,
-  workflowLevelOptions: WorkflowLevelOptions,
-  config: WorkflowConfig
-): WorkflowCodexExecutionOptions | undefined {
-  const resolved = resolveWorkflowCodexOptions(workflowLevelOptions, config);
-
-  if (node.modelReasoningEffort === undefined) {
-    return resolved;
-  }
-
-  return {
-    ...(resolved ?? {}),
-    modelReasoningEffort: node.modelReasoningEffort,
-  };
-}
-
-/**
- * Load MCP server config from a JSON file and expand environment variables.
- * Format: Record<string, McpServerConfig> matching the SDK's expected shape.
- * $VAR_NAME references in env/headers values are expanded from process.env.
- * Secrets are NEVER logged.
- */
-export async function loadMcpConfig(
-  mcpPath: string,
-  cwd: string
-): Promise<{ servers: Record<string, unknown>; serverNames: string[]; missingVars: string[] }> {
-  const fullPath = isAbsolute(mcpPath) ? mcpPath : resolve(cwd, mcpPath);
-
-  let raw: string;
-  try {
-    raw = await readFile(fullPath, 'utf-8');
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') {
-      throw new Error(`MCP config file not found: ${mcpPath} (resolved to ${fullPath})`);
-    }
-    throw new Error(`Failed to read MCP config file: ${mcpPath} — ${e.message}`);
-  }
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
-  } catch (parseErr) {
-    const detail = (parseErr as SyntaxError).message;
-    throw new Error(`MCP config file is not valid JSON: ${mcpPath} — ${detail}`);
-  }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`MCP config must be a JSON object (Record<string, ServerConfig>): ${mcpPath}`);
-  }
-
-  const { expanded, missingVars } = expandEnvVars(parsed);
-  const serverNames = Object.keys(expanded);
-
-  return { servers: expanded, serverNames, missingVars };
-}
-
-/**
- * Expand $VAR_NAME references in a string-valued record from process.env.
- * Undefined env vars are replaced with empty string; their names are collected in missingVars.
- * Non-string values are coerced to string with a warning.
- */
-function expandEnvVarsInRecord(
-  record: Record<string, unknown>,
-  missingVars: string[]
-): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, val] of Object.entries(record)) {
-    if (typeof val !== 'string') {
-      getLog().warn({ key, valueType: typeof val }, 'dag.mcp_env_value_coerced_to_string');
-      result[key] = String(val);
-      continue;
-    }
-    result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
-      const envVal = process.env[varName];
-      if (envVal === undefined) {
-        missingVars.push(varName);
-      }
-      return envVal ?? '';
-    });
-  }
-  return result;
-}
-
-/**
- * Expand $VAR_NAME references in 'env' and 'headers' string values from process.env.
- * Other fields (command, args, url) are left untouched.
- * Undefined env vars are replaced with empty string and collected in missingVars.
- */
-function expandEnvVars(config: Record<string, unknown>): {
-  expanded: Record<string, unknown>;
-  missingVars: string[];
-} {
-  const result: Record<string, unknown> = {};
-  const missingVars: string[] = [];
-  for (const [serverName, serverConfig] of Object.entries(config)) {
-    if (typeof serverConfig !== 'object' || serverConfig === null) {
-      getLog().warn(
-        { serverName, valueType: typeof serverConfig },
-        'dag.mcp_server_config_not_object'
-      );
-      continue;
-    }
-    const server = { ...(serverConfig as Record<string, unknown>) };
-    if (server.env && typeof server.env === 'object') {
-      server.env = expandEnvVarsInRecord(server.env as Record<string, unknown>, missingVars);
-    }
-    if (server.headers && typeof server.headers === 'object') {
-      server.headers = expandEnvVarsInRecord(
-        server.headers as Record<string, unknown>,
-        missingVars
-      );
-    }
-    result[serverName] = server;
-  }
-  return { expanded: result, missingVars };
-}
+// buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
+// loadMcpConfig moved to @archon/providers/src/claude/provider.ts
 
 /**
  * Resolve per-node provider and model.
  * Node-level overrides take precedence over workflow defaults.
+ *
+ * Provider-agnostic: builds universal base options + raw nodeConfig.
+ * The provider internally translates nodeConfig to SDK-specific options.
+ * Capability warnings inform users when features are unsupported.
  */
 async function resolveNodeProviderAndModel(
   node: DagNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   config: WorkflowConfig,
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRunId: string,
-  cwd: string,
+  _cwd: string,
   workflowLevelOptions: WorkflowLevelOptions
 ): Promise<{
-  provider: 'claude' | 'codex';
+  provider: string;
   model: string | undefined;
-  options: WorkflowAssistantOptions | undefined;
+  options: SendQueryOptions | undefined;
 }> {
-  let provider: 'claude' | 'codex';
+  const provider: string = node.provider ?? inferProviderFromModel(node.model, workflowProvider);
 
-  if (node.provider) {
-    provider = node.provider;
-  } else if (node.model && isClaudeModel(node.model)) {
-    provider = 'claude';
-  } else if (node.model) {
-    provider = 'codex';
-  } else {
-    provider = workflowProvider;
-  }
-
-  const model =
+  const providerAssistantConfig = config.assistants[provider];
+  const model: string | undefined =
     node.model ??
-    (provider === workflowProvider ? workflowModel : config.assistants[provider]?.model);
+    (provider === workflowProvider
+      ? workflowModel
+      : (providerAssistantConfig?.model as string | undefined));
 
   if (!isModelCompatible(provider, model)) {
     throw new Error(
@@ -491,226 +295,114 @@ async function resolveNodeProviderAndModel(
     );
   }
 
-  // Warn if Codex node has allowed_tools or denied_tools (unsupported per-call)
-  if (
-    provider === 'codex' &&
-    (node.allowed_tools !== undefined || node.denied_tools !== undefined)
-  ) {
-    getLog().warn({ nodeId: node.id }, 'dag_node_tool_restrictions_ignored_codex');
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' has allowed_tools/denied_tools set but uses Codex — per-node tool restrictions are not supported for Codex. Configure MCP servers globally in the Codex CLI config instead.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error({ nodeId: node.id, workflowRunId }, 'dag_node_codex_warning_delivery_failed');
+  // Get provider capabilities for capability warnings (static lookup, no instantiation)
+  const caps = getProviderCapabilities(provider);
+
+  // Capability warnings — inform users when features are unsupported
+  const capChecks: [string, keyof ProviderCapabilities, boolean][] = [
+    [
+      'allowed_tools/denied_tools',
+      'toolRestrictions',
+      node.allowed_tools !== undefined || node.denied_tools !== undefined,
+    ],
+    ['hooks', 'hooks', node.hooks !== undefined],
+    ['mcp', 'mcp', node.mcp !== undefined],
+    ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
+    ['effort', 'effortControl', (node.effort ?? workflowLevelOptions.effort) !== undefined],
+    ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
+    ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
+    [
+      'fallbackModel',
+      'fallbackModel',
+      (node.fallbackModel ?? workflowLevelOptions.fallbackModel) !== undefined,
+    ],
+    ['sandbox', 'sandbox', (node.sandbox ?? workflowLevelOptions.sandbox) !== undefined],
+    ['env', 'envInjection', (config.envVars && Object.keys(config.envVars).length > 0) === true],
+  ];
+
+  const unsupported: string[] = [];
+  for (const [field, cap, isSet] of capChecks) {
+    if (isSet && !caps[cap]) {
+      unsupported.push(field);
     }
   }
 
-  // Warn if Codex node has hooks (unsupported)
-  if (provider === 'codex' && node.hooks) {
-    getLog().warn({ nodeId: node.id }, 'dag_node_hooks_ignored_codex');
+  if (unsupported.length > 0) {
+    getLog().warn({ nodeId: node.id, provider, unsupported }, 'dag.unsupported_capabilities');
     const delivered = await safeSendMessage(
       platform,
       conversationId,
-      `Warning: Node '${node.id}' has hooks set but uses Codex provider — hooks are Claude-only and will be ignored.`,
+      `Warning: Node '${node.id}' uses ${unsupported.join(', ')} but ${provider} doesn't support ${unsupported.length === 1 ? 'it' : 'them'} — ${unsupported.length === 1 ? 'this will be' : 'these will be'} ignored.`,
       { workflowId: workflowRunId, nodeName: node.id }
     );
     if (!delivered) {
-      getLog().error({ nodeId: node.id, workflowRunId }, 'dag_node_hooks_warning_delivery_failed');
+      getLog().error({ nodeId: node.id, workflowRunId }, 'dag.capability_warning_delivery_failed');
     }
   }
 
-  // Warn if Codex node has mcp (unsupported per-call)
-  if (provider === 'codex' && node.mcp) {
-    getLog().warn({ nodeId: node.id }, 'dag.mcp_ignored_codex');
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' has mcp config but uses Codex — per-node MCP servers are not supported for Codex. Configure MCP servers globally in the Codex CLI config instead.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error({ nodeId: node.id, workflowRunId }, 'dag.mcp_warning_delivery_failed');
-    }
+  // Build universal base options
+  const baseOptions: SendQueryOptions = {};
+  if (model) baseOptions.model = model;
+  if (config.envVars && Object.keys(config.envVars).length > 0) {
+    baseOptions.env = config.envVars;
+  }
+  if (node.systemPrompt !== undefined) baseOptions.systemPrompt = node.systemPrompt;
+  if (node.maxBudgetUsd !== undefined) baseOptions.maxBudgetUsd = node.maxBudgetUsd;
+  const fb = node.fallbackModel ?? workflowLevelOptions.fallbackModel;
+  if (fb) baseOptions.fallbackModel = fb;
+  if (node.output_format) {
+    baseOptions.outputFormat = { type: 'json_schema', schema: node.output_format };
   }
 
-  // Warn if Codex node has skills (unsupported)
-  if (provider === 'codex' && node.skills) {
-    getLog().warn({ nodeId: node.id }, 'dag.skills_ignored_codex');
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' has skills set but uses Codex — per-node skills are not supported for Codex.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error({ nodeId: node.id, workflowRunId }, 'dag.skills_warning_delivery_failed');
-    }
-  }
-
-  // Warn if Codex node has Claude-only SDK options (effort, thinking, maxBudgetUsd, systemPrompt, fallbackModel, betas, sandbox)
+  // Codex-only tuning — node > workflow > config precedence.
+  // Providers that don't understand these fields ignore them.
   if (provider === 'codex') {
-    const claudeOnlyFields = [
-      ['effort', node.effort ?? workflowLevelOptions.effort],
-      ['thinking', node.thinking ?? workflowLevelOptions.thinking],
-      ['maxBudgetUsd', node.maxBudgetUsd],
-      ['systemPrompt', node.systemPrompt],
-      ['fallbackModel', node.fallbackModel ?? workflowLevelOptions.fallbackModel],
-      ['betas', node.betas ?? workflowLevelOptions.betas],
-      ['sandbox', node.sandbox ?? workflowLevelOptions.sandbox],
-    ] as const;
-    const present = claudeOnlyFields.filter(([, val]) => val !== undefined).map(([name]) => name);
-    if (present.length > 0) {
-      getLog().warn({ nodeId: node.id, fields: present }, 'dag.claude_options_ignored_codex');
-      const delivered = await safeSendMessage(
-        platform,
-        conversationId,
-        `Warning: Node '${node.id}' has Claude-only options (${present.join(', ')}) but uses Codex — these will be ignored.`,
-        { workflowId: workflowRunId, nodeName: node.id }
-      );
-      if (!delivered) {
-        getLog().error(
-          { nodeId: node.id, workflowRunId },
-          'dag.claude_options_warning_delivery_failed'
-        );
-      }
-    }
+    const codexDefaults =
+      (config.assistants.codex as {
+        modelReasoningEffort?: AgentRequestOptions['modelReasoningEffort'];
+        webSearchMode?: AgentRequestOptions['webSearchMode'];
+        additionalDirectories?: string[];
+      }) ?? {};
+    const reasoning =
+      node.modelReasoningEffort ??
+      workflowLevelOptions.modelReasoningEffort ??
+      codexDefaults.modelReasoningEffort;
+    if (reasoning !== undefined) baseOptions.modelReasoningEffort = reasoning;
+    const search =
+      node.webSearchMode ?? workflowLevelOptions.webSearchMode ?? codexDefaults.webSearchMode;
+    if (search !== undefined) baseOptions.webSearchMode = search;
+    const dirs =
+      node.additionalDirectories ??
+      workflowLevelOptions.additionalDirectories ??
+      codexDefaults.additionalDirectories;
+    if (dirs !== undefined) baseOptions.additionalDirectories = dirs;
   }
 
-  let options: WorkflowAssistantOptions | undefined;
-  if (provider === 'codex') {
-    options = {
-      ...(model ? { model } : {}),
-      ...(resolveNodeCodexOptions(node, workflowLevelOptions, config) ?? {}),
-    };
-    if (node.output_format) {
-      options.outputFormat = { type: 'json_schema', schema: node.output_format };
-    }
-    if (Object.keys(options).length === 0) {
-      options = undefined;
-    }
-  } else {
-    const claudeOptions: WorkflowAssistantOptions = { githubCliAuthPolicy: 'prefer-stored' };
-    if (model) claudeOptions.model = model;
-    // Propagate settingSources from config (controls which CLAUDE.md files the SDK loads)
-    if (config.assistants.claude.settingSources) {
-      claudeOptions.settingSources = config.assistants.claude.settingSources;
-    }
-    if (provider === 'claude' && node.output_format) {
-      claudeOptions.outputFormat = {
-        type: 'json_schema',
-        schema: node.output_format,
-      };
-    }
-    if (node.allowed_tools !== undefined) claudeOptions.tools = node.allowed_tools;
-    if (node.denied_tools !== undefined) claudeOptions.disallowedTools = node.denied_tools;
-    if (node.hooks) {
-      const builtHooks = buildSDKHooksFromYAML(node.hooks);
-      if (Object.keys(builtHooks).length > 0) claudeOptions.hooks = builtHooks;
-    }
-    // Load MCP config if specified
-    if (node.mcp) {
-      try {
-        const { servers, serverNames, missingVars } = await loadMcpConfig(node.mcp, cwd);
-        // loadMcpConfig returns Record<string, unknown> from JSON; cast to the structural
-        // union type — the SDK validates server configs at connection time
-        claudeOptions.mcpServers = servers as unknown as WorkflowAssistantOptions['mcpServers'];
-        // Auto-allow all MCP tools via wildcards
-        const mcpWildcards = serverNames.map(name => `mcp__${name}__*`);
-        claudeOptions.allowedTools = [...(claudeOptions.allowedTools ?? []), ...mcpWildcards];
-        getLog().info({ nodeId: node.id, serverNames, mcpPath: node.mcp }, 'dag.mcp_config_loaded');
-        // Warn user about missing env vars (likely secrets that will cause auth failures)
-        if (missingVars.length > 0) {
-          const uniqueVars = [...new Set(missingVars)];
-          getLog().warn({ nodeId: node.id, missingVars: uniqueVars }, 'dag.mcp_env_vars_missing');
-          const delivered = await safeSendMessage(
-            platform,
-            conversationId,
-            `Warning: Node '${node.id}' MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`,
-            { workflowId: workflowRunId, nodeName: node.id }
-          );
-          if (!delivered) {
-            getLog().error(
-              { nodeId: node.id, workflowRunId },
-              'dag.mcp_env_vars_warning_delivery_failed'
-            );
-          }
-        }
-        // Warn if Haiku model is used with MCP (tool search not supported)
-        if (model?.toLowerCase().includes('haiku')) {
-          getLog().warn({ nodeId: node.id, model }, 'dag.mcp_haiku_tool_search_unsupported');
-          const haikuDelivered = await safeSendMessage(
-            platform,
-            conversationId,
-            `Warning: Node '${node.id}' uses Haiku model with MCP servers — tool search (lazy loading for many tools) is not supported on Haiku. Consider using Sonnet or Opus.`,
-            { workflowId: workflowRunId, nodeName: node.id }
-          );
-          if (!haikuDelivered) {
-            getLog().error(
-              { nodeId: node.id, workflowRunId },
-              'dag.mcp_haiku_warning_delivery_failed'
-            );
-          }
-        }
-      } catch (mcpErr) {
-        const errMsg = (mcpErr as Error).message;
-        getLog().error(
-          { nodeId: node.id, mcpPath: node.mcp, error: errMsg },
-          'dag.mcp_config_load_failed'
-        );
-        throw new Error(`Node '${node.id}': ${errMsg}`);
-      }
-    }
-    // Wrap node in AgentDefinition when skills are specified
-    if (node.skills) {
-      const agentId = `dag-node-${node.id}`;
-      // Always include 'Skill' explicitly — SDK behavior for undefined tools is undocumented
-      const agentTools = claudeOptions.tools ? [...claudeOptions.tools, 'Skill'] : ['Skill'];
-      const agentDef: {
-        description: string;
-        prompt: string;
-        skills: string[];
-        tools: string[];
-        model?: string;
-      } = {
-        description: `DAG node '${node.id}'`,
-        prompt: `You have preloaded skills: ${node.skills.join(', ')}. Use them when relevant.`,
-        skills: node.skills,
-        tools: agentTools,
-      };
-      if (claudeOptions.model) agentDef.model = claudeOptions.model;
+  // Build raw nodeConfig — provider translates internally
+  const nodeConfig: NodeConfig = {
+    mcp: node.mcp,
+    hooks: node.hooks,
+    skills: node.skills,
+    allowed_tools: node.allowed_tools,
+    denied_tools: node.denied_tools,
+    effort: node.effort ?? workflowLevelOptions.effort,
+    thinking: node.thinking ?? workflowLevelOptions.thinking,
+    sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
+    betas: node.betas ?? workflowLevelOptions.betas,
+    output_format: node.output_format,
+    maxBudgetUsd: node.maxBudgetUsd,
+    systemPrompt: node.systemPrompt,
+    fallbackModel: fb,
+  };
 
-      claudeOptions.agents = { [agentId]: agentDef };
-      claudeOptions.agent = agentId;
-      // Ensure 'Skill' is in allowedTools for the parent session
-      if (!claudeOptions.allowedTools?.includes('Skill')) {
-        claudeOptions.allowedTools = [...(claudeOptions.allowedTools ?? []), 'Skill'];
-      }
-      getLog().info({ nodeId: node.id, skills: node.skills, agentId }, 'dag.skills_agent_created');
-    }
-    // Inject per-project env vars (config file + DB) into subprocess env
-    if (config.envVars && Object.keys(config.envVars).length > 0) {
-      claudeOptions.env = config.envVars;
-    }
+  // Pass assistantConfig from config — provider parses internally
+  const assistantConfig = config.assistants[provider] ?? {};
 
-    // Per-node overrides take precedence over workflow-level defaults; maxBudgetUsd and systemPrompt are per-node only
-    const effort = node.effort ?? workflowLevelOptions.effort;
-    if (effort !== undefined) claudeOptions.effort = effort;
-    const thinking = node.thinking ?? workflowLevelOptions.thinking;
-    if (thinking !== undefined) claudeOptions.thinking = thinking;
-    if (node.maxBudgetUsd !== undefined) claudeOptions.maxBudgetUsd = node.maxBudgetUsd;
-    if (node.systemPrompt !== undefined) claudeOptions.systemPrompt = node.systemPrompt;
-    const fallbackModel = node.fallbackModel ?? workflowLevelOptions.fallbackModel;
-    if (fallbackModel !== undefined) claudeOptions.fallbackModel = fallbackModel;
-    const betas = node.betas ?? workflowLevelOptions.betas;
-    if (betas !== undefined) claudeOptions.betas = betas;
-    const sandbox = node.sandbox ?? workflowLevelOptions.sandbox;
-    if (sandbox !== undefined) claudeOptions.sandbox = sandbox;
-
-    options = Object.keys(claudeOptions).length > 0 ? claudeOptions : undefined;
-  }
+  const options: SendQueryOptions = {
+    ...baseOptions,
+    nodeConfig,
+    assistantConfig,
+  };
 
   return { provider, model, options };
 }
@@ -811,8 +503,8 @@ async function executeNodeInternal(
   cwd: string,
   workflowRun: WorkflowRun,
   node: CommandNode | PromptNode,
-  provider: 'claude' | 'codex',
-  nodeOptions: WorkflowAssistantOptions | undefined,
+  provider: string,
+  nodeOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
@@ -914,13 +606,13 @@ async function executeNodeInternal(
   // Substitute upstream node output references
   const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
-  const aiClient = deps.getAssistantClient(provider);
+  const aiClient = deps.getAgentProvider(provider);
   const streamingMode = platform.getStreamingMode();
 
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
   let newSessionId: string | undefined;
-  let nodeTokens: WorkflowTokenUsage | undefined;
+  let nodeTokens: TokenUsage | undefined;
   let nodeCostUsd: number | undefined;
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
@@ -931,7 +623,7 @@ async function executeNodeInternal(
   const nodeAbortController = new AbortController();
   // Fork when resuming — leaves the source session untouched so retries are safe.
   const shouldForkSession = resumeSessionId !== undefined;
-  const nodeOptionsWithAbort: WorkflowAssistantOptions | undefined = {
+  const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
     ...(shouldForkSession ? { forkSession: true } : {}),
@@ -1119,13 +811,37 @@ async function executeNodeInternal(
             `Node '${node.id}' exceeded cost cap${cap !== undefined ? ` of $${cap.toFixed(2)}` : ''}.`
           );
         }
+        // Fail loudly on any other SDK error result. Previously we broke out of
+        // the stream silently, producing empty/partial output without signaling
+        // failure — which let failed iterations masquerade as successes (#1208).
+        if (msg.isError) {
+          const subtype = msg.errorSubtype ?? 'unknown';
+          const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+          getLog().error(
+            {
+              nodeId: node.id,
+              errorSubtype: subtype,
+              errors: msg.errors,
+              sessionId: msg.sessionId,
+              stopReason: msg.stopReason,
+              durationMs: Date.now() - nodeStartTime,
+            },
+            'dag.node_sdk_error_result'
+          );
+          throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
+        }
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
-        // Surface MCP connection failures to the user
-        if (msg.content.startsWith('MCP server connection failed:')) {
+        // Forward provider warnings (⚠️) and MCP connection failures to the user.
+        // Providers yield system chunks for user-actionable issues (missing env vars,
+        // Haiku+MCP, structured output failures, etc.)
+        if (
+          msg.content.startsWith('MCP server connection failed:') ||
+          msg.content.startsWith('⚠️')
+        ) {
           getLog().warn(
-            { nodeId: node.id, mcpStatus: msg.content },
-            'dag.mcp_server_connection_failed'
+            { nodeId: node.id, systemContent: msg.content },
+            'dag.provider_warning_forwarded'
           );
           const delivered = await safeSendMessage(
             platform,
@@ -1135,8 +851,8 @@ async function executeNodeInternal(
           );
           if (!delivered) {
             getLog().error(
-              { nodeId: node.id, mcpStatus: msg.content, workflowRunId: workflowRun.id },
-              'dag.mcp_connection_failure_delivery_failed'
+              { nodeId: node.id, workflowRunId: workflowRun.id },
+              'dag.provider_warning_delivery_failed'
             );
           }
         } else {
@@ -1149,8 +865,10 @@ async function executeNodeInternal(
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
     }
 
-    // When output_format is set and the SDK returned structured_output,
-    // use it instead of the concatenated assistant text (which includes prose)
+    // When output_format is set and the provider returned structured_output,
+    // use it instead of the concatenated assistant text (which includes prose).
+    // Each provider normalizes its own structured output onto the result chunk —
+    // no provider-specific branching here.
     if (nodeOptions?.outputFormat) {
       if (structuredOutput !== undefined) {
         try {
@@ -1165,26 +883,9 @@ async function executeNodeInternal(
           );
         }
         getLog().debug({ nodeId: node.id, streamingMode }, 'dag.structured_output_override');
-      } else if (provider === 'codex') {
-        // Codex returns structured output inline in agent_message text
-        // (already accumulated in nodeOutputText). Validate it is valid JSON
-        // so downstream $nodeId.output.field references can parse it.
-        try {
-          JSON.parse(nodeOutputText);
-          getLog().debug({ nodeId: node.id }, 'dag.codex_structured_output_valid_json');
-        } catch {
-          getLog().warn(
-            { nodeId: node.id, outputPreview: nodeOutputText.slice(0, 200) },
-            'dag.codex_structured_output_not_json'
-          );
-          await safeSendMessage(
-            platform,
-            conversationId,
-            `Warning: Node '${node.id}' requested output_format but Codex returned non-JSON output. Downstream conditions referencing \`$${node.id}.output.field\` may not evaluate correctly.`,
-            nodeContext
-          );
-        }
       } else {
+        // Provider did not populate structuredOutput — warn the user.
+        // If the provider detected invalid output, it already yielded a system warning.
         getLog().warn(
           { nodeId: node.id, workflowRunId: workflowRun.id },
           'dag.structured_output_missing'
@@ -1192,7 +893,7 @@ async function executeNodeInternal(
         await safeSendMessage(
           platform,
           conversationId,
-          `Warning: Node '${node.id}' requested output_format but the SDK did not return structured output. Downstream conditions may not evaluate correctly.`,
+          `Warning: Node '${node.id}' requested output_format but the provider did not return structured output. Downstream conditions may not evaluate correctly.`,
           nodeContext
         );
       }
@@ -1409,7 +1110,8 @@ async function executeBashNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
-  issueContext?: string
+  issueContext?: string,
+  envVars?: Record<string, string>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1452,13 +1154,14 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv = buildWorkflowSubprocessEnv(workflowRun, artifactsDir, baseBranch, docsDir);
+  const subprocessEnv =
+    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
 
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
       cwd,
-      env: subprocessEnv,
       timeout,
+      env: subprocessEnv,
     });
 
     // Trim trailing newline from stdout (common shell behavior)
@@ -1561,7 +1264,8 @@ async function executeScriptNode(
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
-  issueContext?: string
+  issueContext?: string,
+  envVars?: Record<string, string>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1604,12 +1308,12 @@ async function executeScriptNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv = buildWorkflowSubprocessEnv(workflowRun, artifactsDir, baseBranch, docsDir);
+  const subprocessEnv =
+    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
 
   // Build the command and args based on runtime and inline vs named
   let cmd = '';
   let args: string[] = [];
-  let cleanupBundledScript: (() => Promise<void>) | undefined;
 
   const nodeDeps = node.deps ?? [];
 
@@ -1618,7 +1322,10 @@ async function executeScriptNode(
       // Inline code execution
       if (node.runtime === 'bun') {
         cmd = 'bun';
-        args = ['-e', finalScript];
+        // --no-env-file prevents Bun from auto-loading .env from the execution
+        // cwd (the target repo). Without this, repo .env leaks into the script
+        // subprocess despite Archon's parent process cleanup.
+        args = ['--no-env-file', '-e', finalScript];
       } else {
         // uv run --with dep1 --with dep2 python -c <code>
         cmd = 'uv';
@@ -1626,11 +1333,12 @@ async function executeScriptNode(
         args = ['run', ...withFlags, 'python', '-c', finalScript];
       }
     } else {
-      // Named script — look up in repo scripts first, then Archon defaults
+      // Named script — look up in repo's .archon/scripts/ first, then fall
+      // back to Archon's bundled default scripts (BUNDLED_SCRIPTS).
       const scriptDef = await resolveNamedScript(cwd, finalScript);
 
       if (!scriptDef) {
-        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or Archon defaults`;
+        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or bundled defaults`;
         getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
         await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
         await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
@@ -1659,49 +1367,30 @@ async function executeScriptNode(
         return { state: 'failed', output: '', error: errorMsg };
       }
 
-      if ('bundled' in scriptDef && scriptDef.bundled) {
-        const bundledExecution = await buildBundledScriptExecution(
-          scriptDef.name,
-          scriptDef.runtime,
-          scriptDef.content,
-          nodeDeps
-        );
-        cmd = bundledExecution.cmd;
-        args = bundledExecution.args;
-        cleanupBundledScript = bundledExecution.cleanup;
+      // Bundled scripts live as embedded strings (no on-disk path), so invoke
+      // via `bun -e <content>` or `uv run python -c <content>` rather than by
+      // file path.
+      const isBundled = 'bundled' in scriptDef && scriptDef.bundled;
+
+      if (scriptDef.runtime === 'uv') {
+        cmd = 'uv';
+        const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
+        args = isBundled
+          ? ['run', ...withFlags, 'python', '-c', (scriptDef as { content: string }).content]
+          : ['run', ...withFlags, scriptDef.path];
       } else {
-        // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
-        if (scriptDef.runtime === 'uv') {
-          cmd = 'uv';
-          const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-          args = ['run', ...withFlags, scriptDef.path];
-        } else {
-          cmd = 'bun';
-          args = ['run', scriptDef.path];
-        }
+        cmd = 'bun';
+        args = isBundled
+          ? ['--no-env-file', '-e', (scriptDef as { content: string }).content]
+          : ['--no-env-file', 'run', scriptDef.path];
       }
     }
 
-    let stdout = '';
-    let stderr = '';
-    try {
-      const result = await execFileAsync(cmd, args, {
-        cwd,
-        env: subprocessEnv,
-        timeout,
-      });
-      stdout = result.stdout;
-      stderr = result.stderr;
-    } finally {
-      if (cleanupBundledScript) {
-        await cleanupBundledScript().catch((error: Error) => {
-          getLog().warn(
-            { err: error, nodeId: node.id, scriptName: finalScript },
-            'bundled_script_cleanup_failed'
-          );
-        });
-      }
-    }
+    const { stdout, stderr } = await execFileAsync(cmd, args, {
+      cwd,
+      timeout,
+      env: subprocessEnv,
+    });
 
     // Trim trailing newline from stdout (common shell behavior)
     const output = stdout.replace(/\n$/, '');
@@ -1788,50 +1477,58 @@ async function executeScriptNode(
 }
 
 /**
- * Build WorkflowAssistantOptions from resolved provider, model, workflow-level options, and config.
- * Caller is responsible for resolving per-node overrides before passing model.
+ * Build SendQueryOptions from resolved provider, model, and config.
+ * Uses the same nodeConfig + assistantConfig pattern as resolveNodeProviderAndModel.
  */
 function buildLoopNodeOptions(
-  provider: 'claude' | 'codex',
+  provider: string,
   model: string | undefined,
-  workflowLevelOptions: WorkflowLevelOptions,
-  config: WorkflowConfig
-): WorkflowAssistantOptions | undefined {
-  const codexOptions =
-    provider === 'codex' ? resolveWorkflowCodexOptions(workflowLevelOptions, config) : undefined;
+  config: WorkflowConfig,
+  workflowLevelOptions?: WorkflowLevelOptions
+): SendQueryOptions {
+  const options: SendQueryOptions = {};
+  if (model) options.model = model;
+  if (config.envVars && Object.keys(config.envVars).length > 0) {
+    options.env = config.envVars;
+  }
+  options.assistantConfig = config.assistants[provider] ?? {};
+  // Pass workflow-level options as nodeConfig so providers can apply them
+  if (workflowLevelOptions) {
+    options.nodeConfig = {
+      effort: workflowLevelOptions.effort,
+      thinking: workflowLevelOptions.thinking,
+      sandbox: workflowLevelOptions.sandbox,
+      betas: workflowLevelOptions.betas,
+      fallbackModel: workflowLevelOptions.fallbackModel,
+    };
+  }
 
-  const claudeOptions =
-    provider === 'claude'
-      ? {
-          githubCliAuthPolicy: 'prefer-stored' as const,
-          ...(config.assistants.claude.settingSources
-            ? { settingSources: config.assistants.claude.settingSources }
-            : {}),
-        }
-      : undefined;
-
-  if (!model && !codexOptions && !claudeOptions) return undefined;
-  return { ...(model ? { model } : {}), ...codexOptions, ...claudeOptions };
+  // Codex-only tuning — workflow > config precedence (loop nodes don't carry
+  // node-level Codex overrides; those live on per-node schemas and apply only
+  // to non-loop nodes via resolveNodeProviderAndModel).
+  if (provider === 'codex') {
+    const codexDefaults =
+      (config.assistants.codex as {
+        modelReasoningEffort?: AgentRequestOptions['modelReasoningEffort'];
+        webSearchMode?: AgentRequestOptions['webSearchMode'];
+        additionalDirectories?: string[];
+      }) ?? {};
+    const reasoning =
+      workflowLevelOptions?.modelReasoningEffort ?? codexDefaults.modelReasoningEffort;
+    if (reasoning !== undefined) options.modelReasoningEffort = reasoning;
+    const search = workflowLevelOptions?.webSearchMode ?? codexDefaults.webSearchMode;
+    if (search !== undefined) options.webSearchMode = search;
+    const dirs = workflowLevelOptions?.additionalDirectories ?? codexDefaults.additionalDirectories;
+    if (dirs !== undefined) options.additionalDirectories = dirs;
+  }
+  return options;
 }
 
-function buildWorkflowSubprocessEnv(
-  workflowRun: WorkflowRun,
-  artifactsDir: string,
-  baseBranch: string,
-  docsDir: string
-): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    WORKFLOW_ID: workflowRun.id,
-    ARTIFACTS_DIR: artifactsDir,
-    BASE_BRANCH: baseBranch,
-    DOCS_DIR: docsDir,
-    ARCHON_WORKFLOW_ID: workflowRun.id,
-    ARCHON_ARTIFACTS_DIR: artifactsDir,
-    ARCHON_BASE_BRANCH: baseBranch,
-    ARCHON_DOCS_DIR: docsDir,
-  };
-}
+// ---------------------------------------------------------------------------
+// Loop durable-progress tracking — fails a loop early when neither git HEAD
+// nor task-progress markers advance across N consecutive iterations. Prevents
+// PIV-style loops from spinning forever when the assistant is stuck.
+// ---------------------------------------------------------------------------
 
 interface LoopProgressSnapshot {
   gitHead?: string;
@@ -1918,7 +1615,6 @@ function didLoopProgressAdvance(
   ) {
     return true;
   }
-
   if (
     previous.completedTaskCount !== undefined &&
     current.completedTaskCount !== undefined &&
@@ -1926,7 +1622,6 @@ function didLoopProgressAdvance(
   ) {
     return true;
   }
-
   return false;
 }
 
@@ -1945,24 +1640,24 @@ async function executeLoopNode(
   cwd: string,
   workflowRun: WorkflowRun,
   node: LoopNode,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
   baseBranch: string,
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
-  workflowLevelOptions: WorkflowLevelOptions,
   config: WorkflowConfig,
-  issueContext?: string
+  issueContext?: string,
+  workflowLevelOptions?: WorkflowLevelOptions
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
   // Resolve AI client — fail fast with descriptive error
-  let aiClient: ReturnType<typeof deps.getAssistantClient>;
+  let aiClient: ReturnType<typeof deps.getAgentProvider>;
   try {
-    aiClient = deps.getAssistantClient(workflowProvider);
+    aiClient = deps.getAgentProvider(workflowProvider);
   } catch (error) {
     const err = error as Error;
     const errorMsg = `Invalid provider '${workflowProvider}' for loop node '${node.id}'. Check workflow YAML or .archon/config.yaml. Original: ${err.message}`;
@@ -1992,8 +1687,8 @@ async function executeLoopNode(
   const resolvedOptions = buildLoopNodeOptions(
     workflowProvider,
     workflowModel,
-    workflowLevelOptions,
-    config
+    config,
+    workflowLevelOptions
   );
 
   // Helper to log event store errors consistently
@@ -2066,7 +1761,7 @@ async function executeLoopNode(
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
-      const iterationOptions: WorkflowAssistantOptions | undefined = {
+      const iterationOptions: SendQueryOptions | undefined = {
         ...resolvedOptions,
         abortSignal: iterationAbortController.signal,
       };
@@ -2125,6 +1820,28 @@ async function executeLoopNode(
           if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) {
             loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
+          }
+          // Fail the iteration loudly on SDK error results. Previously we broke
+          // silently, producing empty output and continuing to the next iteration —
+          // which made `error_during_execution` on resumed interactive loops look
+          // like a "5-second crash" that kept burning iterations (#1208).
+          if (msg.isError) {
+            const subtype = msg.errorSubtype ?? 'unknown';
+            const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
+            getLog().error(
+              {
+                nodeId: node.id,
+                iteration: i,
+                errorSubtype: subtype,
+                errors: msg.errors,
+                sessionId: msg.sessionId,
+                stopReason: msg.stopReason,
+              },
+              'loop_node.iteration_sdk_error'
+            );
+            throw new Error(
+              `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
+            );
           }
           break; // Result is the "I'm done" signal — don't wait for subprocess to exit
         } else if (msg.type === 'tool' && msg.toolName) {
@@ -2361,6 +2078,10 @@ async function executeLoopNode(
       };
     }
 
+    // Durable-progress check — if neither git HEAD nor task-progress markers
+    // have advanced across `stuck_after_no_progress_iterations` consecutive
+    // iterations, fail the loop early with a snapshot summary. Prevents PIV
+    // loops from spinning indefinitely when the assistant is stuck.
     if (loop.stuck_after_no_progress_iterations !== undefined) {
       const currentProgressSnapshot = await captureLoopProgressSnapshot(
         cwd,
@@ -2497,7 +2218,7 @@ async function executeApprovalNode(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   cwd: string,
   artifactsDir: string,
@@ -2674,7 +2395,7 @@ export async function executeDagWorkflow(
   cwd: string,
   workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
-  workflowProvider: 'claude' | 'codex',
+  workflowProvider: string,
   workflowModel: string | undefined,
   artifactsDir: string,
   logDir: string,
@@ -2686,7 +2407,7 @@ export async function executeDagWorkflow(
   priorCompletedNodes?: Map<string, string>
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
-  const workflowLevelOptions = {
+  const workflowLevelOptions: WorkflowLevelOptions = {
     effort: workflow.effort,
     thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
@@ -2906,7 +2627,8 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
-              issueContext
+              issueContext,
+              config.envVars
             );
             return { nodeId: node.id, output };
           }
@@ -2914,21 +2636,14 @@ export async function executeDagWorkflow(
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
             // Resolve per-node provider/model overrides (same logic as other node types)
-            let loopProvider: 'claude' | 'codex';
-            if (node.provider) {
-              loopProvider = node.provider;
-            } else if (node.model && isClaudeModel(node.model)) {
-              loopProvider = 'claude';
-            } else if (node.model) {
-              loopProvider = 'codex';
-            } else {
-              loopProvider = workflowProvider;
-            }
-            const loopModel =
+            const loopProvider: string =
+              node.provider ?? inferProviderFromModel(node.model, workflowProvider);
+            const loopAssistantConfig = config.assistants[loopProvider];
+            const loopModel: string | undefined =
               node.model ??
               (loopProvider === workflowProvider
                 ? workflowModel
-                : config.assistants[loopProvider]?.model);
+                : (loopAssistantConfig?.model as string | undefined));
 
             if (!isModelCompatible(loopProvider, loopModel)) {
               return {
@@ -2955,9 +2670,9 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
-              workflowLevelOptions,
               config,
-              issueContext
+              issueContext,
+              workflowLevelOptions
             );
             return { nodeId: node.id, output };
           }
@@ -3032,7 +2747,8 @@ export async function executeDagWorkflow(
               baseBranch,
               docsDir,
               nodeOutputs,
-              issueContext
+              issueContext,
+              config.envVars
             );
             return { nodeId: node.id, output };
           }
@@ -3253,8 +2969,46 @@ export async function executeDagWorkflow(
     const failMsg =
       `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
       'Check node conditions, trigger rules, and upstream failures.';
+    // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
+    // Frontend guards with isValidNodeCounts so missing node_counts is safe.
+    await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
+      getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+    });
+    await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    });
+    const emitterForFail = getWorkflowEventEmitter();
+    emitterForFail.emit({
+      type: 'workflow_failed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      error: failMsg,
+    });
+    emitterForFail.unregisterRun(workflowRun.id);
+    await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
+      workflowId: workflowRun.id,
+    });
+    // DO NOT throw — outer executor.ts catch would duplicate workflow_failed events
+    return;
+  }
+
+  if (anyFailed) {
+    if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    const failedNodes = [...nodeOutputs.entries()]
+      .filter(([, o]) => o.state === 'failed')
+      .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
+      .join('; ');
+    const failMsg =
+      `DAG workflow '${workflow.name}' failed after partial execution. ` +
+      `Failed nodes: ${failedNodes}`;
     await deps.store
-      .failWorkflowRun(workflowRun.id, failMsg, { node_counts: nodeCounts })
+      .failWorkflowRun(workflowRun.id, failMsg, {
+        node_counts: nodeCounts,
+        failed_nodes: failedNodes,
+      })
       .catch((dbErr: Error) => {
         getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
       });
@@ -3271,72 +3025,11 @@ export async function executeDagWorkflow(
       workflowName: workflow.name,
       error: failMsg,
     });
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'workflow_failed',
-        data: { error: failMsg, node_counts: nodeCounts },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'workflow_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
     emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
       workflowId: workflowRun.id,
     });
     // DO NOT throw — outer executor.ts catch would duplicate workflow_failed events
-    return;
-  }
-
-  if (anyFailed) {
-    const failedNodes = [...nodeOutputs.entries()]
-      .filter(([, o]) => o.state === 'failed')
-      .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
-      .join('; ');
-    if (await skipIfStatusChanged('dag.skip_partial_fail_status_changed')) return;
-    const failMsg =
-      `DAG workflow '${workflow.name}' failed after partial execution. ` +
-      `Failed nodes: ${failedNodes}`;
-    await deps.store
-      .failWorkflowRun(workflowRun.id, failMsg, {
-        node_counts: nodeCounts,
-        failed_nodes: failedNodes,
-      })
-      .catch((dbErr: Error) => {
-        getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_partial_fail_failed');
-      });
-    await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
-      getLog().error(
-        { err: logErr, workflowRunId: workflowRun.id },
-        'dag.workflow_error_log_write_failed'
-      );
-    });
-    const emitterForFail = getWorkflowEventEmitter();
-    emitterForFail.emit({
-      type: 'workflow_failed',
-      runId: workflowRun.id,
-      workflowName: workflow.name,
-      error: failMsg,
-    });
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'workflow_failed',
-        data: { error: failMsg, node_counts: nodeCounts, failed_nodes: failedNodes },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'workflow_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
-    emitterForFail.unregisterRun(workflowRun.id);
-    await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
-      workflowId: workflowRun.id,
-    });
     return;
   }
 

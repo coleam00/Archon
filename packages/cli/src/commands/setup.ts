@@ -28,6 +28,7 @@ import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
+import { getRegisteredProviders } from '@archon/providers';
 
 // =============================================================================
 // Types
@@ -43,9 +44,12 @@ interface SetupConfig {
     claudeAuthType?: 'global' | 'apiKey' | 'oauthToken';
     claudeApiKey?: string;
     claudeOauthToken?: string;
+    /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
+     *  in ~/.archon/.env. Required in compiled Archon binaries; harmless in dev. */
+    claudeBinaryPath?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
-    defaultAssistant: 'claude' | 'codex';
+    defaultAssistant: string;
   };
   platforms: {
     github: boolean;
@@ -160,6 +164,85 @@ function isCommandAvailable(command: string): boolean {
 }
 
 /**
+ * Probe wrappers — exported so tests can spy on each tier independently.
+ * Direct imports of `existsSync` and `execSync` cannot be intercepted by
+ * `spyOn` (esm rebinding limitation), so we route the probes through these
+ * thin wrappers and let the test mock them in isolation.
+ */
+export function probeFileExists(path: string): boolean {
+  return existsSync(path);
+}
+
+export function probeNpmRoot(): string | null {
+  try {
+    const out = execSync('npm root -g', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+export function probeWhichClaude(): string | null {
+  try {
+    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
+    const resolved = execSync(`${checkCmd} claude`, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    // On Windows, `where` can return multiple lines — take the first.
+    const first = resolved.split(/\r?\n/)[0]?.trim();
+    return first ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Try to locate the Claude Code executable on disk.
+ *
+ * Compiled Archon binaries need an explicit path because the Claude Agent
+ * SDK's `import.meta.url` resolution is frozen to the build host's filesystem.
+ * The SDK's `pathToClaudeCodeExecutable` accepts either:
+ *   - A native compiled binary (from the curl/PowerShell/winget installers — current default)
+ *   - A JS `cli.js` (from `npm install -g @anthropic-ai/claude-code` — older path)
+ *
+ * We probe the well-known install locations in order:
+ *   1. Native installer (`~/.local/bin/claude` on macOS/Linux, `%USERPROFILE%\.local\bin\claude.exe` on Windows)
+ *   2. npm global `cli.js`
+ *   3. `which claude` / `where claude` — fallback if the user installed via Homebrew, winget, or a custom layout
+ *
+ * Returns null on total failure so the caller can prompt the user.
+ * Detection is best-effort; the caller should let users override.
+ *
+ * Exported so the probe order can be tested directly by spying on the
+ * tier wrappers above (`probeFileExists`, `probeNpmRoot`, `probeWhichClaude`).
+ */
+export function detectClaudeExecutablePath(): string | null {
+  // 1. Native installer default location (primary Anthropic-recommended path)
+  const nativePath =
+    process.platform === 'win32'
+      ? join(homedir(), '.local', 'bin', 'claude.exe')
+      : join(homedir(), '.local', 'bin', 'claude');
+  if (probeFileExists(nativePath)) return nativePath;
+
+  // 2. npm global cli.js
+  const npmRoot = probeNpmRoot();
+  if (npmRoot) {
+    const npmCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
+    if (probeFileExists(npmCliJs)) return npmCliJs;
+  }
+
+  // 3. Fallback: resolve via `which` / `where` (Homebrew, winget, custom layouts)
+  const fromPath = probeWhichClaude();
+  if (fromPath && probeFileExists(fromPath)) return fromPath;
+
+  return null;
+}
+
+/**
  * Get Node.js version if installed, or null if not
  */
 function getNodeVersion(): { major: number; minor: number; patch: number } | null {
@@ -209,7 +292,7 @@ After installation, run: claude /login`,
 Install using one of these methods:
 
   Recommended for macOS (no Node.js required):
-    brew install --cask codex
+    brew install codex
 
   Or via npm (requires Node.js 18+):
     npm install -g @openai/codex
@@ -352,6 +435,62 @@ function tryReadCodexAuth(): CodexTokens | null {
 /**
  * Collect Claude authentication method
  */
+/**
+ * Resolve the Claude Code executable path for CLAUDE_BIN_PATH.
+ * Auto-detects common install locations and falls back to prompting the user.
+ * Returns undefined if the user declines to configure (setup continues; the
+ * compiled binary will error with clear instructions on first Claude query).
+ */
+async function collectClaudeBinaryPath(): Promise<string | undefined> {
+  const detected = detectClaudeExecutablePath();
+
+  if (detected) {
+    const useDetected = await confirm({
+      message: `Found Claude Code at ${detected}. Write this to CLAUDE_BIN_PATH?`,
+      initialValue: true,
+    });
+    if (isCancel(useDetected)) {
+      cancel('Setup cancelled.');
+      process.exit(0);
+    }
+    if (useDetected) return detected;
+  }
+
+  const nativeExample =
+    process.platform === 'win32' ? '%USERPROFILE%\\.local\\bin\\claude.exe' : '~/.local/bin/claude';
+
+  note(
+    'Compiled Archon binaries need CLAUDE_BIN_PATH set to the Claude Code executable.\n' +
+      'In dev (`bun run`) this is ignored — the SDK resolves it via node_modules.\n\n' +
+      'Recommended (Anthropic default — native installer):\n' +
+      `  macOS/Linux: ${nativeExample}\n` +
+      '  Windows:     %USERPROFILE%\\.local\\bin\\claude.exe\n\n' +
+      'Alternative (npm global install):\n' +
+      '  $(npm root -g)/@anthropic-ai/claude-code/cli.js',
+    'Claude binary path'
+  );
+
+  const customPath = await text({
+    message: 'Absolute path to the Claude Code executable (leave blank to skip):',
+    placeholder: nativeExample,
+  });
+
+  if (isCancel(customPath)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  const trimmed = (customPath ?? '').trim();
+  if (!trimmed) return undefined;
+
+  if (!existsSync(trimmed)) {
+    log.warning(
+      `Path does not exist: ${trimmed}. Saving anyway — the compiled binary will error on first use until this is correct.`
+    );
+  }
+  return trimmed;
+}
+
 async function collectClaudeAuth(): Promise<{
   authType: 'global' | 'apiKey' | 'oauthToken';
   apiKey?: string;
@@ -534,7 +673,8 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
   const assistants = await multiselect({
-    message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
+    message:
+      'Which built-in AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
@@ -653,13 +793,14 @@ After upgrading, run 'archon setup' again.`,
     return {
       claude: false,
       codex: false,
-      defaultAssistant: 'claude',
+      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
     };
   }
 
   let claudeAuthType: 'global' | 'apiKey' | 'oauthToken' | undefined;
   let claudeApiKey: string | undefined;
   let claudeOauthToken: string | undefined;
+  let claudeBinaryPath: string | undefined;
   let codexTokens: CodexTokens | undefined;
 
   // Collect Claude auth if selected
@@ -668,6 +809,7 @@ After upgrading, run 'archon setup' again.`,
     claudeAuthType = claudeAuth.authType;
     claudeApiKey = claudeAuth.apiKey;
     claudeOauthToken = claudeAuth.oauthToken;
+    claudeBinaryPath = await collectClaudeBinaryPath();
   }
 
   // Collect Codex auth if selected
@@ -676,16 +818,21 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Determine default assistant
-  let defaultAssistant: 'claude' | 'codex' = 'claude';
+  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
+  // Default to first registered built-in provider rather than hardcoding 'claude'.
+  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
 
   if (hasClaude && hasCodex) {
+    const providerChoices = getRegisteredProviders()
+      .filter(p => p.builtIn)
+      .map(p => ({
+        value: p.id,
+        label: p.id === 'claude' ? `${p.displayName} (Recommended)` : p.displayName,
+      }));
+
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
-      options: [
-        { value: 'claude', label: 'Claude (Recommended)' },
-        { value: 'codex', label: 'Codex' },
-      ],
+      options: providerChoices,
     });
 
     if (isCancel(defaultChoice)) {
@@ -703,6 +850,7 @@ After upgrading, run 'archon setup' again.`,
     claudeAuthType,
     claudeApiKey,
     claudeOauthToken,
+    ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
     codex: hasCodex,
     codexTokens,
     defaultAssistant,
@@ -1063,6 +1211,9 @@ export function generateEnvContent(config: SetupConfig): string {
       lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
       lines.push(`CLAUDE_CODE_OAUTH_TOKEN=${config.ai.claudeOauthToken}`);
     }
+    if (config.ai.claudeBinaryPath) {
+      lines.push(`CLAUDE_BIN_PATH=${config.ai.claudeBinaryPath}`);
+    }
   } else {
     lines.push('# Claude not configured');
   }
@@ -1139,8 +1290,12 @@ export function generateEnvContent(config: SetupConfig): string {
   }
 
   // Server
+  // PORT is intentionally omitted: both the Hono server (packages/core/src/utils/port-allocation.ts)
+  // and the Vite dev proxy (packages/web/vite.config.ts) default to 3090 when unset, which keeps
+  // them in sync. Writing a fixed PORT here risked a mismatch if ~/.archon/.env leaks a PORT that
+  // the Vite proxy (which only reads repo-local .env) never sees — see #1152.
   lines.push('# Server');
-  lines.push('PORT=3000');
+  lines.push('# PORT=3090  # Default: 3090. Uncomment to override.');
   lines.push('');
 
   // Concurrency
@@ -1211,7 +1366,7 @@ export function copyArchonSkill(targetPath: string): void {
 function trySpawn(
   command: string,
   args: string[],
-  options: { detached: boolean; stdio: 'ignore'; shell?: boolean }
+  options: { detached: boolean; stdio: 'ignore' }
 ): boolean {
   try {
     const child: ChildProcess = spawn(command, args, options);
@@ -1246,7 +1401,6 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
     trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', 'archon setup'], {
       detached: true,
       stdio: 'ignore',
-      shell: true,
     })
   ) {
     return { success: true };
@@ -1428,7 +1582,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
-        defaultAssistant: 'claude',
+        defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
       platforms: {
         github: existing?.platforms.github ?? false,
@@ -1627,7 +1781,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   // Additional options note
   note(
     'Other settings you can customize in ~/.archon/.env:\n' +
-      '  - PORT (default: 3000)\n' +
+      '  - PORT (default: 3090)\n' +
       '  - MAX_CONCURRENT_CONVERSATIONS (default: 10)\n' +
       '  - *_STREAMING_MODE (stream | batch per platform)\n\n' +
       'These defaults work well for most users.',

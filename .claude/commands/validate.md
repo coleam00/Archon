@@ -21,7 +21,7 @@ Runs `tsc --noEmit` across all 8 packages via `bun --filter '*' type-check`.
 
 **What to look for:**
 - Missing return types (explicit return types required on all functions)
-- Incorrect interface implementations (`IPlatformAdapter`, `IAssistantClient`, etc.)
+- Incorrect interface implementations (`IPlatformAdapter`, `IAgentProvider`, etc.)
 - Import type errors (use `import type` for type-only imports)
 - Package boundary violations (e.g., `@archon/workflows` importing from `@archon/core`)
 

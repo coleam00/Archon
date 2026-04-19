@@ -182,12 +182,14 @@ function WorkflowResultCard({
   const fetchFailed = isError && !liveState;
 
   // Status-aware header title
-  const headerTitle =
-    status === 'failed'
-      ? 'Workflow failed'
-      : status === 'cancelled'
-        ? 'Workflow cancelled'
-        : 'Workflow complete';
+  let headerTitle: string;
+  if (status === 'failed') {
+    headerTitle = 'Workflow failed';
+  } else if (status === 'cancelled') {
+    headerTitle = 'Workflow cancelled';
+  } else {
+    headerTitle = 'Workflow complete';
+  }
 
   // Expand/collapse for text content
   const lines = content.split('\n');

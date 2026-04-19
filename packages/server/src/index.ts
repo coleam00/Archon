@@ -52,6 +52,12 @@ if (
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+
+// Bootstrap provider registry before any provider lookups
+registerBuiltinProviders();
+registerCommunityProviders();
+
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';
 import { TelegramAdapter, GitHubAdapter, DiscordAdapter, SlackAdapter } from '@archon/adapters';
@@ -72,10 +78,7 @@ import {
   loadConfig,
   logConfig,
   getPort,
-  createWorkflowStore,
-  scanPathForSensitiveKeys,
 } from '@archon/core';
-import * as codebaseDb from '@archon/core/db/codebases';
 import type { IPlatformAdapter } from '@archon/core';
 import { createLogger, logArchonPaths, validateAppDefaultsPaths } from '@archon/paths';
 
@@ -199,67 +202,23 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     process.exit(1);
   }
 
-  // Load configuration early so the startup env-leak scan can honor the
-  // global bypass. Without this, users who set `allow_target_repo_keys: true`
-  // would get a per-codebase warn spam on every boot even though the gate
-  // is intentionally disabled.
   const config = await loadConfig();
   logConfig(config);
-
-  // Startup env-leak scan: warn for codebases that would be blocked at next
-  // spawn by the env-leak-gate. Skipped entirely when the global bypass is
-  // active. Best-effort — failures are surfaced but never block startup.
-  if (config.allowTargetRepoKeys) {
-    getLog().info('startup_env_leak_scan_skipped — allow_target_repo_keys is true');
-  } else {
-    try {
-      const codebases = await codebaseDb.listCodebases();
-      for (const cb of codebases) {
-        if (cb.allow_env_keys) continue;
-        try {
-          const report = scanPathForSensitiveKeys(cb.default_cwd);
-          if (report.findings.length > 0) {
-            const files = report.findings.map(f => f.file);
-            const keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
-            getLog().warn(
-              {
-                codebaseId: cb.id,
-                name: cb.name,
-                path: cb.default_cwd,
-                files,
-                keys,
-              },
-              'startup_env_leak_gate_will_block'
-            );
-          }
-        } catch (scanErr) {
-          // Path may no longer exist (codebase moved/deleted on disk) —
-          // log at debug, do not abort the loop. This is the only quiet path.
-          getLog().debug(
-            { err: scanErr, codebaseId: cb.id, path: cb.default_cwd },
-            'startup_env_leak_scan_path_unavailable'
-          );
-        }
-      }
-    } catch (error) {
-      // listCodebases() failed — the entire startup safety net is silently
-      // absent. Surface at error level so operators see it.
-      getLog().error(
-        { err: error },
-        'startup_env_leak_scan_failed — startup migration warnings suppressed'
-      );
-    }
-  }
 
   // Start cleanup scheduler
   startCleanupScheduler();
 
-  // Mark workflow runs orphaned by previous process termination as failed
-  void createWorkflowStore()
-    .failOrphanedRuns()
-    .catch(err => {
-      getLog().error({ err }, 'workflow.fail_orphans_failed');
-    });
+  // Note: orphaned-run cleanup intentionally NOT called at server startup.
+  // Running it here killed parallel workflow runs from other processes
+  // (CLI, adapters) by flipping their `running` rows to `failed` mid-flight.
+  // Same lesson the CLI already learned — see packages/cli/src/cli.ts:256-258.
+  // Per CLAUDE.md "No Autonomous Lifecycle Mutation Across Process Boundaries":
+  // surface ambiguous state to users and provide a one-click action instead.
+  // Users transition a stuck `running` row via the per-row Cancel/Abandon
+  // buttons in the Web UI dashboard, or `archon workflow abandon <run-id>`.
+  // (`archon workflow cleanup` is a separate command that deletes OLD terminal
+  // rows for disk hygiene — it does not handle stuck `running` rows.)
+  // See #1216.
 
   // Log Archon paths configuration
   logArchonPaths();

@@ -14,7 +14,6 @@ import { z } from '@hono/zod-openapi';
 import { stepRetryConfigSchema } from './retry';
 import { loopNodeConfigSchema } from './loop';
 import { workflowNodeHooksSchema } from './hooks';
-import { modelReasoningEffortSchema } from './codex-options';
 import { isValidCommandName } from '../command-validation';
 import { isModelCompatible } from '../model-validation';
 
@@ -117,8 +116,7 @@ export const dagNodeBaseSchema = z.object({
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
-  modelReasoningEffort: modelReasoningEffortSchema.optional(),
+  provider: z.string().trim().min(1).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),
@@ -138,6 +136,10 @@ export const dagNodeBaseSchema = z.object({
   fallbackModel: z.string().min(1).optional(),
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
+  // Codex-only per-node overrides — flow through to options.modelReasoningEffort etc.
+  modelReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+  webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
+  additionalDirectories: z.array(z.string()).optional(),
 });
 
 export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
@@ -293,14 +295,13 @@ export type DagNode =
   | ScriptNode;
 
 // ---------------------------------------------------------------------------
-// AI-specific fields that are meaningless on bash/loop nodes
+// AI-specific fields that are meaningless on non-AI nodes
 // ---------------------------------------------------------------------------
 
-/** AI-specific fields that are meaningless on bash/loop nodes — exported for loader warnings */
+/** AI-specific fields that are meaningless on bash nodes — exported for loader warnings */
 export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'provider',
   'model',
-  'modelReasoningEffort',
   'context',
   'output_format',
   'allowed_tools',
@@ -315,10 +316,22 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'fallbackModel',
   'betas',
   'sandbox',
+  'modelReasoningEffort',
+  'webSearchMode',
+  'additionalDirectories',
 ];
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
 export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
+
+/**
+ * AI-specific fields that are unsupported on loop nodes.
+ * `model` and `provider` are excluded because the DAG executor resolves and
+ * forwards them to each iteration's AI call (see dag-executor.ts:2602-2648).
+ */
+export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
+  f => f !== 'model' && f !== 'provider'
+);
 
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
@@ -491,10 +504,18 @@ export const dagNodeSchema = dagNodeBaseSchema
 
     // Provider/model compatibility (AI nodes only)
     if (!hasBash && !hasLoop && !hasScript && data.provider && data.model) {
-      if (!isModelCompatible(data.provider, data.model)) {
+      try {
+        if (!isModelCompatible(data.provider, data.model)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
+          });
+        }
+      } catch (e) {
+        // isModelCompatible throws on unknown providers — surface as a validation issue
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
+          message: (e as Error).message,
         });
       }
     }
@@ -522,9 +543,6 @@ export const dagNodeSchema = dagNodeBaseSchema
     const aiOnly = {
       ...(data.model !== undefined ? { model: data.model } : {}),
       ...(data.provider !== undefined ? { provider: data.provider } : {}),
-      ...(data.modelReasoningEffort !== undefined
-        ? { modelReasoningEffort: data.modelReasoningEffort }
-        : {}),
       ...(data.context !== undefined ? { context: data.context } : {}),
       ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
       ...(data.allowed_tools !== undefined ? { allowed_tools: data.allowed_tools } : {}),
@@ -539,6 +557,13 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),
+      ...(data.modelReasoningEffort !== undefined
+        ? { modelReasoningEffort: data.modelReasoningEffort }
+        : {}),
+      ...(data.webSearchMode !== undefined ? { webSearchMode: data.webSearchMode } : {}),
+      ...(data.additionalDirectories !== undefined
+        ? { additionalDirectories: data.additionalDirectories }
+        : {}),
     };
 
     if (data.command !== undefined && data.command.trim().length > 0) {

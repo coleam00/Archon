@@ -16,12 +16,6 @@ import {
   parseOwnerRepo,
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
-import {
-  scanPathForSensitiveKeys,
-  EnvLeakError,
-  type LeakErrorContext,
-} from '../utils/env-leak-scanner';
-import { loadConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -46,55 +40,14 @@ export interface RegisterResult {
 async function registerRepoAtPath(
   targetPath: string,
   name: string,
-  repositoryUrl: string | null,
-  allowEnvKeys = false,
-  context: LeakErrorContext = 'register-ui'
+  repositoryUrl: string | null
 ): Promise<RegisterResult> {
-  // Scan for sensitive keys in auto-loaded .env files before registering.
-  // Two bypass paths exist (in order of precedence):
-  //   1. Per-call `allowEnvKeys=true` (Web UI checkbox or CLI --allow-env-keys)
-  //   2. Config-level `allow_target_repo_keys: true` (global YAML)
-  // When the per-call bypass is used we still emit an audit-log entry so the
-  // grant has a permanent breadcrumb (parity with the PATCH route's
-  // `env_leak_consent_granted` log).
-  if (!allowEnvKeys) {
-    const merged = await loadConfig(targetPath);
-    if (!merged.allowTargetRepoKeys) {
-      const report = scanPathForSensitiveKeys(targetPath);
-      if (report.findings.length > 0) {
-        throw new EnvLeakError(report, context);
-      }
-    }
-  } else {
-    // Per-call grant — emit audit log mirroring the PATCH route shape so the
-    // CLI/UI add-with-consent paths leave the same breadcrumbs.
-    let files: string[] = [];
-    let keys: string[] = [];
-    let scanStatus: 'ok' | 'skipped' = 'ok';
-    try {
-      const report = scanPathForSensitiveKeys(targetPath);
-      files = report.findings.map(f => f.file);
-      keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
-    } catch (scanErr) {
-      scanStatus = 'skipped';
-      getLog().warn({ err: scanErr, path: targetPath }, 'env_leak_consent_scan_skipped');
-    }
-    const actor = context === 'register-cli' ? 'user-cli' : 'user-ui';
-    getLog().warn(
-      {
-        name,
-        path: targetPath,
-        files,
-        keys,
-        scanStatus,
-        actor,
-      },
-      'env_leak_consent_granted'
-    );
-  }
-
-  // Auto-detect assistant type based on folder structure
-  let suggestedAssistant = 'claude';
+  // Auto-detect assistant type based on SDK folder conventions.
+  // Built-in providers use well-known folders (.claude/, .codex/).
+  // Falls back to first registered built-in provider if no folder detected.
+  const { getRegisteredProviders } = await import('@archon/providers');
+  const defaultProvider = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
+  let suggestedAssistant = defaultProvider;
   const codexFolder = join(targetPath, '.codex');
   const claudeFolder = join(targetPath, '.claude');
 
@@ -108,7 +61,7 @@ async function registerRepoAtPath(
       suggestedAssistant = 'claude';
       getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
     } catch {
-      getLog().debug('assistant_default_claude');
+      getLog().debug({ provider: defaultProvider }, 'assistant_default_from_registry');
     }
   }
 
@@ -173,7 +126,6 @@ async function registerRepoAtPath(
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
     ai_assistant_type: suggestedAssistant,
-    allow_env_keys: allowEnvKeys,
   });
 
   // Auto-load commands if found
@@ -242,15 +194,11 @@ function normalizeRepoUrl(rawUrl: string): {
  * Local paths (starting with /, ~, or .) are delegated to registerRepository
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
  */
-export async function cloneRepository(
-  repoUrl: string,
-  allowEnvKeys?: boolean,
-  context: LeakErrorContext = 'register-ui'
-): Promise<RegisterResult> {
+export async function cloneRepository(repoUrl: string): Promise<RegisterResult> {
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
-    return registerRepository(resolvedPath, allowEnvKeys, context);
+    return registerRepository(resolvedPath);
   }
 
   const { workingUrl, ownerName, repoName, targetPath } = normalizeRepoUrl(repoUrl);
@@ -331,13 +279,7 @@ export async function cloneRepository(
   await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
   getLog().debug({ path: targetPath }, 'safe_directory_added');
 
-  const result = await registerRepoAtPath(
-    targetPath,
-    `${ownerName}/${repoName}`,
-    workingUrl,
-    allowEnvKeys,
-    context
-  );
+  const result = await registerRepoAtPath(targetPath, `${ownerName}/${repoName}`, workingUrl);
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
 }
@@ -345,11 +287,7 @@ export async function cloneRepository(
 /**
  * Register an existing local repository in the database (no git clone).
  */
-export async function registerRepository(
-  localPath: string,
-  allowEnvKeys?: boolean,
-  context: LeakErrorContext = 'register-ui'
-): Promise<RegisterResult> {
+export async function registerRepository(localPath: string): Promise<RegisterResult> {
   // Validate path exists and is a git repo
   try {
     await execFileAsync('git', ['-C', localPath, 'rev-parse', '--git-dir']);
@@ -415,5 +353,5 @@ export async function registerRepository(
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(localPath, name, remoteUrl, allowEnvKeys, context);
+  return registerRepoAtPath(localPath, name, remoteUrl);
 }

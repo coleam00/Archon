@@ -5,8 +5,13 @@ import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks 
 import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
 import { createLogger } from '@archon/paths';
 import { isModelCompatible } from './model-validation';
-import { dagNodeSchema, BASH_NODE_AI_FIELDS, SCRIPT_NODE_AI_FIELDS } from './schemas/dag-node';
-import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/codex-options';
+import {
+  dagNodeSchema,
+  BASH_NODE_AI_FIELDS,
+  SCRIPT_NODE_AI_FIELDS,
+  LOOP_NODE_AI_FIELDS,
+} from './schemas/dag-node';
+import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
 
@@ -56,26 +61,25 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
   const node = result.data;
 
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
-  const isNonAiNode =
-    ('bash' in node && typeof node.bash === 'string') ||
-    isScriptNode(node) ||
-    isLoopNode(node) ||
-    isApprovalNode(node) ||
-    isCancelNode(node);
-  if (isNonAiNode) {
-    let nodeType: string;
-    if (isCancelNode(node)) {
-      nodeType = 'cancel';
-    } else if (isApprovalNode(node)) {
-      nodeType = 'approval';
-    } else if (isLoopNode(node)) {
-      nodeType = 'loop';
-    } else if (isScriptNode(node)) {
-      nodeType = 'script';
-    } else {
-      nodeType = 'bash';
-    }
-    const aiFields = isScriptNode(node) ? SCRIPT_NODE_AI_FIELDS : BASH_NODE_AI_FIELDS;
+  let nodeType: string | undefined;
+  let aiFields: readonly string[] | undefined;
+  if (isCancelNode(node)) {
+    nodeType = 'cancel';
+    aiFields = BASH_NODE_AI_FIELDS;
+  } else if (isApprovalNode(node)) {
+    nodeType = 'approval';
+    aiFields = BASH_NODE_AI_FIELDS;
+  } else if (isLoopNode(node)) {
+    nodeType = 'loop';
+    aiFields = LOOP_NODE_AI_FIELDS;
+  } else if (isScriptNode(node)) {
+    nodeType = 'script';
+    aiFields = SCRIPT_NODE_AI_FIELDS;
+  } else if ('bash' in node && typeof node.bash === 'string') {
+    nodeType = 'bash';
+    aiFields = BASH_NODE_AI_FIELDS;
+  }
+  if (nodeType !== undefined && aiFields !== undefined) {
     const presentAiFields = aiFields.filter(f => (raw as Record<string, unknown>)[f] !== undefined);
     if (presentAiFields.length > 0) {
       getLog().warn({ id: node.id, fields: presentAiFields }, `${nodeType}_node_ai_fields_ignored`);
@@ -271,7 +275,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     // Note: modelReasoningEffort and webSearchMode use warn-and-ignore for invalid values
     // (consistent with original behavior) rather than schema-level rejection.
     const provider =
-      raw.provider === 'claude' || raw.provider === 'codex' ? raw.provider : undefined;
+      typeof raw.provider === 'string' && raw.provider.length > 0 ? raw.provider : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
 
     // Validate model/provider compatibility at workflow level

@@ -85,29 +85,33 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
   log.info({ version, targetDir }, 'web_dist.download_started');
   console.log(`Web UI not found locally — downloading from release v${version}...`);
 
-  // Download checksums
-  const checksumsRes = await fetch(checksumsUrl).catch((err: unknown) => {
-    throw new Error(
-      `Network error fetching checksums from ${checksumsUrl}: ${(err as Error).message}`
-    );
-  });
+  // Download checksums and tarball in parallel
+  console.log(`Downloading ${tarballUrl}...`);
+  const [checksumsRes, tarballRes] = await Promise.all([
+    fetch(checksumsUrl).catch((err: unknown) => {
+      throw new Error(
+        `Network error fetching checksums from ${checksumsUrl}: ${(err as Error).message}`
+      );
+    }),
+    fetch(tarballUrl).catch((err: unknown) => {
+      throw new Error(
+        `Network error fetching tarball from ${tarballUrl}: ${(err as Error).message}`
+      );
+    }),
+  ]);
   if (!checksumsRes.ok) {
     throw new Error(
       `Failed to download checksums: ${checksumsRes.status} ${checksumsRes.statusText}`
     );
   }
-  const checksumsText = await checksumsRes.text();
-  const expectedHash = parseChecksum(checksumsText, 'archon-web.tar.gz');
-
-  // Download tarball
-  console.log(`Downloading ${tarballUrl}...`);
-  const tarballRes = await fetch(tarballUrl).catch((err: unknown) => {
-    throw new Error(`Network error fetching tarball from ${tarballUrl}: ${(err as Error).message}`);
-  });
   if (!tarballRes.ok) {
     throw new Error(`Failed to download web UI: ${tarballRes.status} ${tarballRes.statusText}`);
   }
-  const tarballBuffer = await tarballRes.arrayBuffer();
+  const [checksumsText, tarballBuffer] = await Promise.all([
+    checksumsRes.text(),
+    tarballRes.arrayBuffer(),
+  ]);
+  const expectedHash = parseChecksum(checksumsText, 'archon-web.tar.gz');
 
   // Verify checksum
   const hasher = new Bun.CryptoHasher('sha256');

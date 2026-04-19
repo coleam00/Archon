@@ -28,6 +28,7 @@ import type {
   ErrorDisplay,
   WorkflowDispatchEvent,
 } from '@/lib/types';
+import { applyOnText } from '@/lib/chat-message-reducer';
 import {
   getCachedMessages,
   setCachedMessages,
@@ -248,7 +249,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
     const latestId = ids[ids.length - 1];
     void getWorkflowRunByWorker(latestId)
       .then(result => {
-        if (!result) return;
+        if (!result?.run) return;
         const run = result.run;
         hydrateWorkflow({
           runId: run.id,
@@ -300,73 +301,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
       // First AI text received — the thinking placeholder is about to gain content,
       // so the hydration merge no longer needs the sendInFlight guard.
       setSendInFlight(false);
-      setMessages(prev => {
-        const last = prev[prev.length - 1];
-        // Workflow status messages (🚀 start, ✅ complete) should always be their own message
-        const isWorkflowStatus = /^[\u{1F680}\u{2705}]/u.test(content);
-
-        // Workflow result messages always start as a new message.
-        // Dedup: SSETransport replays buffered events on reconnect, which can
-        // arrive after the DB-fetch merge has already run — skip if a message
-        // with the same runId is already in state.
-        if (workflowResult) {
-          if (prev.some(m => m.workflowResult?.runId === workflowResult.runId)) {
-            return prev;
-          }
-          const updated =
-            last?.role === 'assistant' && last.isStreaming
-              ? [...prev.slice(0, -1), { ...last, isStreaming: false }]
-              : [...prev];
-          return [
-            ...updated,
-            {
-              id: `msg-${String(Date.now())}`,
-              role: 'assistant' as const,
-              content,
-              timestamp: Date.now(),
-              isStreaming: false,
-              toolCalls: [],
-              workflowResult,
-            },
-          ];
-        }
-
-        if (last?.role === 'assistant' && last.isStreaming) {
-          const lastIsWorkflowStatus = /^[\u{1F680}\u{2705}]/u.test(last.content);
-
-          if ((isWorkflowStatus && last.content) || (lastIsWorkflowStatus && !isWorkflowStatus)) {
-            // Close the current streaming message and start a new one when:
-            // 1. Incoming is a workflow status and current has content
-            // 2. Current is a workflow status and incoming is regular text
-            return [
-              ...prev.slice(0, -1),
-              { ...last, isStreaming: false },
-              {
-                id: `msg-${String(Date.now())}`,
-                role: 'assistant' as const,
-                content,
-                timestamp: Date.now(),
-                isStreaming: true,
-                toolCalls: [],
-              },
-            ];
-          }
-          // Append to existing streaming message (replace thinking placeholder if empty)
-          return [...prev.slice(0, -1), { ...last, content: last.content + content }];
-        }
-        // New assistant message
-        return [
-          ...prev,
-          {
-            id: `msg-${String(Date.now())}`,
-            role: 'assistant' as const,
-            content,
-            timestamp: Date.now(),
-            isStreaming: true,
-            toolCalls: [],
-          },
-        ];
-      });
+      setMessages(prev => applyOnText(prev, content, undefined, undefined, workflowResult));
     },
     []
   );
@@ -537,7 +472,14 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
               return merged;
             });
           })
-          .catch(() => {
+          .catch((err: unknown) => {
+            console.error(
+              '[Chat] Re-fetch after SSE reconnect failed — clearing stuck placeholder',
+              {
+                conversationId: conversationIdRef.current,
+                error: err instanceof Error ? err.message : err,
+              }
+            );
             // Re-fetch failed — clear stuck placeholder so user can retry
             setMessages(prev =>
               prev.map(m => (m.isStreaming && !m.content ? { ...m, isStreaming: false } : m))
