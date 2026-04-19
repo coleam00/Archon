@@ -53,34 +53,16 @@ export interface PiProviderDefaults {
    */
   enableExtensions?: boolean;
   /**
-   * Opt-in to binding a minimal `ExtensionUIContext` to each Pi session so
-   * extensions see `ctx.hasUI === true` and can surface interactive flows
-   * (e.g. `@plannotator/pi-extension`'s browser UI announces its URL via
-   * `ctx.ui.notify()`, which Archon forwards to the event stream). When false
-   * (default), Pi's internal `noOpUIContext` stays bound and hasUI is false —
-   * extensions silently auto-approve or skip UI paths.
-   *
-   * Only meaningful when `enableExtensions: true`. Network-exposed extensions
-   * (plannotator, anything spawning a server) MUST be deployed with
-   * `PLANNOTATOR_REMOTE=1` or equivalent so they bind a reachable interface;
-   * otherwise their loopback URLs are unreachable from the operator's browser.
+   * Bind an `ExtensionUIContext` so extensions see `ctx.hasUI === true` and
+   * `ctx.ui.notify()` forwards into the chunk stream. Ignored unless
+   * `enableExtensions` is true.
    * @default false
    */
   interactive?: boolean;
   /**
-   * Flag values passed through to Pi's ExtensionRunner before `session_start`
-   * fires, matching what `pi --<flag>` or `pi --<flag>=<value>` would do on
-   * the CLI. Each key is the flag name an extension registered via
-   * `pi.registerFlag(name, ...)`; the value must be a boolean or string.
-   *
-   * Concrete example: setting `{ plan: true }` activates
-   * `@plannotator/pi-extension`'s planning phase (equivalent to `pi --plan`),
-   * which surfaces the browser plan-review UI via the bound
-   * `ExtensionUIContext` so a human can approve/annotate the agent's plan.
-   *
-   * Unknown flag names are silently ignored by Pi — no extension reads them.
-   * Only meaningful when `enableExtensions: true` (the runner must exist); on
-   * a Pi session without extensions this is a no-op.
+   * Flag values passed to Pi's ExtensionRunner before `session_start`,
+   * equivalent to `pi --<name>` / `pi --<name>=<value>` on the CLI.
+   * Unknown keys are ignored. Only applied when `enableExtensions` is true.
    * @default undefined
    */
   extensionFlags?: Record<string, boolean | string>;

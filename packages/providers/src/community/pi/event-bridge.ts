@@ -267,12 +267,7 @@ export type BridgeQueueItem =
   | { kind: 'done' }
   | { kind: 'error'; error: Error };
 
-/**
- * Optional producer-side interface implemented by the Archon UI stub. When
- * passed, `bridgeSession` wires `setEmitter` so extension `ctx.ui.notify()`
- * calls show up in the same chunk stream as assistant output. Cleared in
- * `finally` so late notifications (post-abort, post-dispose) are dropped.
- */
+/** Lets the UI stub push notifications into the session's chunk queue. */
 export interface BridgeNotifier {
   setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
 }

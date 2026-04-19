@@ -8,15 +8,9 @@ import { Theme } from '@mariozechner/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 
-/**
- * Emitter used by the UI stub to push notifications into Archon's event stream.
- * `bridgeSession` wires `setEmitter` at session start and clears it in finally,
- * so notifications fired after teardown are silently dropped.
- */
+/** Pushes UI notifications into Archon's event stream. Set/cleared by bridgeSession. */
 export interface ArchonUIBridge {
-  /** Invoked by ExtensionUIContext.notify(). */
   emit(chunk: MessageChunk): void;
-  /** Wire the concrete emitter (called once from bridgeSession). */
   setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
 }
 
@@ -33,33 +27,16 @@ export function createArchonUIBridge(): ArchonUIBridge {
 }
 
 const noop = (): void => {
-  /* intentional no-op for TUI-only setters */
+  /* no-op — TUI-only setter, nothing to paint into */
 };
 
 /**
- * Build a minimal ExtensionUIContext for Archon's server-side Pi sessions.
- *
- * Pi's ExtensionRunner reports `hasUI: true` to extensions as long as any UI
- * context is bound (i.e. not the internal `noOpUIContext`). Several community
- * extensions (notably `@plannotator/pi-extension`) gate whole feature flows on
- * `ctx.hasUI` — when false, plannotator auto-approves every plan silently and
- * the browser UI never spawns. Passing this stub to `session.bindExtensions()`
- * flips that gate on while keeping Archon's headless execution model intact.
- *
- * Interaction semantics — matches Pi's own RPC-mode defaults (see
- * `dist/modes/rpc/rpc-mode.js:81-209`):
- *   - `notify()` forwards to Archon's event stream as a `system` chunk so the
- *     user sees plannotator's "Open manually: http://host:port/" URL.
- *   - Interactive prompts (`select`, `confirm`, `input`, `editor`, `custom`)
- *     return undefined / false immediately. No operator is on the terminal to
- *     answer, so the extension gets the same "cancelled" signal it would from
- *     a dismissed RPC dialog and must cope.
- *   - TUI-only setters (`setWidget`, `setFooter`, `setHeader`, `setStatus`, …)
- *     no-op. No terminal to paint into.
- *   - Getters return safe defaults. `theme` uses a lazy Proxy because Archon
- *     does not own Pi's theme singleton; the extensions we currently exercise
- *     (plannotator + pi-agent-browser) never touch it, and an extension that
- *     does will fail loudly rather than silently render garbage.
+ * Minimal ExtensionUIContext for Archon's headless Pi sessions. Binding this
+ * (vs Pi's internal `noOpUIContext`) flips `ctx.hasUI` to true so extensions
+ * like plannotator surface UI flows. `notify()` forwards to the event stream;
+ * interactive prompts resolve to undefined/false; TUI setters no-op; `theme`
+ * throws on access so TUI-only extensions fail loudly instead of rendering
+ * garbage. Mirrors Pi's own RPC-mode defaults.
  */
 export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContext {
   const themeProxy = new Proxy({} as Theme, {
@@ -89,17 +66,9 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
       return Promise.resolve(undefined);
     },
     notify(message: string, type: 'info' | 'warning' | 'error' = 'info'): void {
-      // Extension notifications are user-facing by design — plannotator, for
-      // example, sends its browser review URL through here, and the user
-      // MUST see it to approve the plan. Emit as `assistant` chunks so they
-      // (a) stream to the workflow user's stdout/SSE like normal model output,
-      // (b) accumulate into `$nodeId.output` for downstream bash/script nodes
-      // to grep for URLs or parse structured data, and (c) land in the
-      // workflow JSONL log. A `system`-typed chunk would satisfy (a) only on
-      // the ⚠️/MCP-prefix forwarding path in the DAG executor and would NOT
-      // be captured in node output at all — so the URL never reaches bash.
-      // The prefix encodes the extension-notification origin + severity so
-      // readers can distinguish these from model-generated prose.
+      // Emit as `assistant` (not `system`) so the content is captured into
+      // `$nodeId.output` for downstream bash/script nodes. System chunks are
+      // filtered to ⚠️/MCP-prefix only by the DAG executor.
       const icon = type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️';
       bridge.emit({ type: 'assistant', content: `\n[pi extension ${icon}] ${message}\n` });
     },
