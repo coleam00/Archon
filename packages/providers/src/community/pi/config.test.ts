@@ -27,4 +27,29 @@ describe('parsePiConfig', () => {
     expect(() => parsePiConfig({ model: null })).not.toThrow();
     expect(() => parsePiConfig({ model: [] })).not.toThrow();
   });
+
+  test('parses enableExtensions: true', () => {
+    expect(parsePiConfig({ enableExtensions: true })).toEqual({
+      enableExtensions: true,
+    });
+  });
+
+  test('parses enableExtensions: false', () => {
+    expect(parsePiConfig({ enableExtensions: false })).toEqual({
+      enableExtensions: false,
+    });
+  });
+
+  test('drops non-boolean enableExtensions silently', () => {
+    expect(parsePiConfig({ enableExtensions: 'yes' })).toEqual({});
+    expect(parsePiConfig({ enableExtensions: 1 })).toEqual({});
+    expect(parsePiConfig({ enableExtensions: null })).toEqual({});
+  });
+
+  test('combines model and enableExtensions', () => {
+    expect(parsePiConfig({ model: 'google/gemini-2.5-pro', enableExtensions: true })).toEqual({
+      model: 'google/gemini-2.5-pro',
+      enableExtensions: true,
+    });
+  });
 });

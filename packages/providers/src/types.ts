@@ -39,6 +39,19 @@ export interface PiProviderDefaults {
   [key: string]: unknown;
   /** Default model ref in '<pi-provider-id>/<model-id>' format, e.g. 'google/gemini-2.5-pro' */
   model?: string;
+  /**
+   * Opt-in to Pi's extension discovery (tools + lifecycle hooks from community
+   * packages — see https://shittycodingagent.ai/packages). When true, Pi loads
+   * extensions from `~/.pi/agent/extensions/`, `~/.pi/agent/settings.json`
+   * packages, AND the workflow's cwd (`<cwd>/.pi/extensions/`,
+   * `<cwd>/.pi/settings.json`). The cwd scope is the risky one — a workflow
+   * running against an untrusted repo can auto-load whatever extension code
+   * that repo ships. Disabled by default to preserve the "Archon is source of
+   * truth" trust boundary. Flip to true only on hosts whose workflows run
+   * against repos you trust.
+   * @default false
+   */
+  enableExtensions?: boolean;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */

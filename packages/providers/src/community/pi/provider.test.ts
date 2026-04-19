@@ -909,6 +909,61 @@ describe('PiProvider', () => {
     expect(caps.hooks).toBe(false);
   });
 
+  test('extensions are suppressed by default (noExtensions: true)', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.noExtensions).toBe(true);
+  });
+
+  test('assistantConfig.enableExtensions: true flips noExtensions to false', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: true },
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.noExtensions).toBe(false);
+    // Skills/prompts/themes/context still suppressed — only extensions opt-in.
+    expect(loaderArgs?.noSkills).toBe(true);
+    expect(loaderArgs?.noPromptTemplates).toBe(true);
+    expect(loaderArgs?.noThemes).toBe(true);
+    expect(loaderArgs?.noContextFiles).toBe(true);
+  });
+
+  test('assistantConfig.enableExtensions: false keeps noExtensions: true', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: false },
+      })
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.noExtensions).toBe(true);
+  });
+
   test('nodeConfig.skills with unknown name yields system warning, does not abort', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
