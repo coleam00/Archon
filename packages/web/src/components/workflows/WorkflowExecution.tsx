@@ -15,14 +15,12 @@ import { useWorkflowStore } from '@/stores/workflow-store';
 import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
-import type {
-  WorkflowState,
-  ArtifactType,
-  WorkflowRunStatus,
-  DagNodeState,
-  WorkflowStepStatus,
-  LoopIterationInfo,
-} from '@/lib/types';
+import {
+  deriveCurrentlyExecutingNode,
+  deriveDagNodesFromEvents,
+  deriveNodeStartTimes,
+} from '@/lib/workflow-event-derivations';
+import type { WorkflowState, ArtifactType, WorkflowRunStatus } from '@/lib/types';
 
 import type { WorkflowEventResponse } from '@/lib/api';
 
@@ -108,77 +106,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           runId: data.run.id,
           workflowName: data.run.workflow_name,
           status: data.run.status,
-          dagNodes: ((): DagNodeState[] => {
-            const nodeMap = new Map<string, DagNodeState>();
-            for (const e of data.events.filter(ev => ev.event_type.startsWith('node_'))) {
-              const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
-              if (!nodeId) continue;
-              const status =
-                e.event_type === 'node_started'
-                  ? 'running'
-                  : e.event_type === 'node_completed'
-                    ? 'completed'
-                    : e.event_type === 'node_failed'
-                      ? 'failed'
-                      : 'skipped';
-              const existing = nodeMap.get(nodeId);
-              // Keep the latest non-running status (completed/failed/skipped override running)
-              if (!existing || status !== 'running') {
-                nodeMap.set(nodeId, {
-                  nodeId,
-                  name: nodeId,
-                  status: status as WorkflowStepStatus,
-                  duration: e.data.duration_ms as number | undefined,
-                  error: e.data.error as string | undefined,
-                  reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
-                });
-              }
-            }
-
-            // Second pass: enrich loop nodes with iteration data
-            for (const e of data.events.filter(ev => ev.event_type.startsWith('loop_iteration_'))) {
-              const nodeId = e.step_name ?? '';
-              if (!nodeId) continue;
-              const existing = nodeMap.get(nodeId);
-              if (!existing) continue; // No node_started event yet — skip (events ordered in DB)
-
-              const iteration = e.data.iteration as number | undefined;
-              const maxIter = e.data.maxIterations as number | undefined;
-              if (iteration === undefined) continue;
-
-              let iterStatus: LoopIterationInfo['status'];
-              if (e.event_type === 'loop_iteration_started') {
-                iterStatus = 'running';
-              } else if (e.event_type === 'loop_iteration_completed') {
-                iterStatus = 'completed';
-              } else {
-                iterStatus = 'failed';
-              }
-
-              const existingIters: LoopIterationInfo[] = existing.iterations ?? [];
-              const iterIdx = existingIters.findIndex(it => it.iteration === iteration);
-              const iterState: LoopIterationInfo = {
-                iteration,
-                status: iterStatus,
-                duration: e.data.duration_ms as number | undefined,
-              };
-              const newIters = [...existingIters];
-              if (iterIdx >= 0) {
-                newIters[iterIdx] = iterState;
-              } else {
-                newIters.push(iterState);
-              }
-
-              nodeMap.set(nodeId, {
-                ...existing,
-                currentIteration: iteration,
-                maxIterations: maxIter ?? existing.maxIterations,
-                iterations: newIters,
-              });
-            }
-
-            return Array.from(nodeMap.values());
-          })(),
+          dagNodes: deriveDagNodesFromEvents(data.events),
           artifacts: data.events
             .filter(e => e.event_type === 'workflow_artifact')
             .map(e => {
@@ -374,43 +302,13 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   }, [workflow?.status]);
 
   // Derive the currently executing node/step from events data
-  const currentlyExecuting = useMemo((): { nodeName: string; startedAt: number } | null => {
-    if (!queryData?.events || workflow?.status !== 'running') return null;
-    const events = queryData.events;
-
-    // Find nodes that started but haven't completed/failed/skipped
-    const startedNodes = new Set<string>();
-    const completedNodes = new Set<string>();
-
-    for (const e of events) {
-      const nodeId = e.step_name ?? '';
-      if (e.event_type === 'node_started') startedNodes.add(nodeId);
-      if (
-        e.event_type === 'node_completed' ||
-        e.event_type === 'node_failed' ||
-        e.event_type === 'node_skipped'
-      ) {
-        completedNodes.add(nodeId);
-      }
-    }
-
-    // Find the first started-but-not-completed node
-    for (const nodeId of startedNodes) {
-      if (!completedNodes.has(nodeId)) {
-        const startEvent = events.find(
-          e => e.event_type === 'node_started' && e.step_name === nodeId
-        );
-        if (startEvent) {
-          return {
-            nodeName: nodeId,
-            startedAt: new Date(ensureUtc(startEvent.created_at)).getTime(),
-          };
-        }
-      }
-    }
-
-    return null;
-  }, [queryData?.events, workflow?.status]);
+  const currentlyExecuting = useMemo(
+    (): { nodeName: string; startedAt: number } | null =>
+      queryData && workflow
+        ? deriveCurrentlyExecutingNode(queryData.events, workflow.status)
+        : null,
+    [queryData, workflow]
+  );
 
   // Compute formatted log lines for the selected DAG node from DB events.
   const stepLogLines = useMemo((): string[] => {
@@ -455,15 +353,10 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
 
   // Compute start timestamps for each DAG node from workflow events.
   // Used to scroll the logs panel to the right position when a node is selected.
-  const nodeStartTimes = useMemo((): Map<string, number> => {
-    const map = new Map<string, number>();
-    for (const e of queryData?.events ?? []) {
-      if (e.event_type === 'node_started' && e.step_name) {
-        map.set(e.step_name, new Date(ensureUtc(e.created_at)).getTime());
-      }
-    }
-    return map;
-  }, [queryData?.events]);
+  const nodeStartTimes = useMemo(
+    (): Map<string, number> => deriveNodeStartTimes(queryData?.events ?? []),
+    [queryData?.events]
+  );
 
   const scrollToNodeTimestamp = selectedDagNode
     ? (nodeStartTimes.get(selectedDagNode) ?? null)

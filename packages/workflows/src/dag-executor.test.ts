@@ -3321,6 +3321,100 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       });
     });
 
+    it('persists node_started before loop iteration events for loop nodes', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Did the task. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-session-started' };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-node-start-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-loop-node-start',
+        testDir,
+        {
+          name: 'loop-node-started',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventTypes = (store.createWorkflowEvent as Mock<() => Promise<void>>).mock.calls.map(
+        call => (call[0] as { event_type: string }).event_type
+      );
+      expect(eventTypes.indexOf('node_started')).toBeGreaterThanOrEqual(0);
+      expect(eventTypes.indexOf('node_started')).toBeLessThan(
+        eventTypes.indexOf('loop_iteration_started')
+      );
+    });
+
+    it('persists node_failed when a loop exhausts max iterations', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Still working.' };
+        yield { type: 'result', sessionId: 'loop-session-failed' };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('loop-node-failed-run');
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-loop-node-failed',
+        testDir,
+        {
+          name: 'loop-node-failed',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Keep working.',
+                until: 'COMPLETE',
+                max_iterations: 1,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventTypes = (store.createWorkflowEvent as Mock<() => Promise<void>>).mock.calls.map(
+        call => (call[0] as { event_type: string }).event_type
+      );
+      expect(eventTypes).toContain('node_failed');
+      expect(eventTypes).not.toContain('node_completed');
+    });
+
     it('uses workflow-level Codex tuning instead of config defaults for loop nodes', async () => {
       mockGetAgentProviderDag.mockImplementation(() => ({
         sendQuery: mockSendQueryDag,
