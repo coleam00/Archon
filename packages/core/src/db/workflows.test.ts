@@ -19,6 +19,7 @@ import {
   getWorkflowRunStatus,
   getActiveWorkflowRun,
   getActiveWorkflowRunByPath,
+  pauseWorkflowRun,
   updateWorkflowRun,
   completeWorkflowRun,
   failWorkflowRun,
@@ -211,6 +212,7 @@ describe('workflows database', () => {
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('status = $1');
       expect(query).toContain('completed_at = NOW()');
+      expect(query).toContain('last_activity_at = NOW()');
     });
 
     test('updates status to failed', async () => {
@@ -221,6 +223,7 @@ describe('workflows database', () => {
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('status = $1');
       expect(query).toContain('completed_at = NOW()');
+      expect(query).toContain('last_activity_at = NOW()');
     });
 
     test('updates metadata', async () => {
@@ -245,13 +248,56 @@ describe('workflows database', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('status = $1');
       expect(query).toContain('metadata = metadata ||');
+      expect(query).toContain('last_activity_at = NOW()');
       expect(params).toEqual(['running', '{"step":"plan"}', 'workflow-run-123']);
+    });
+
+    test('refreshes activity for approval resume transition without marking completed', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateWorkflowRun('workflow-run-123', {
+        status: 'failed',
+        metadata: { approval_response: 'approved' },
+      });
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('status = $1');
+      expect(query).toContain('metadata = metadata ||');
+      expect(query).toContain('last_activity_at = NOW()');
+      expect(query).not.toContain('completed_at = NOW()');
     });
 
     test('does nothing when no updates provided', async () => {
       await updateWorkflowRun('workflow-run-123', {});
 
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('pauseWorkflowRun', () => {
+    test('marks the run paused and refreshes last activity', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', {
+        nodeId: 'review',
+        message: 'Please review the changes',
+        type: 'approval',
+      });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status = 'paused'");
+      expect(query).toContain('metadata = metadata ||');
+      expect(query).toContain('last_activity_at = NOW()');
+      expect(params).toEqual([
+        'workflow-run-123',
+        JSON.stringify({
+          approval: {
+            nodeId: 'review',
+            message: 'Please review the changes',
+            type: 'approval',
+          },
+        }),
+      ]);
     });
   });
 

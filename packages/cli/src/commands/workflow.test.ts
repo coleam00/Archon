@@ -2216,6 +2216,7 @@ describe('workflowRunCommand — progress rendering', () => {
           runId: 'run-1',
           nodeId: 'review',
           message: 'Please review the changes',
+          lastOutput: '## Questions\n1. Scope?\n2. Validation?',
         });
       }
       return { success: true, workflowRunId: 'run-1', paused: true };
@@ -2223,8 +2224,14 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith(
+    expect(stderrSpy).toHaveBeenNthCalledWith(
+      1,
       '[review] Waiting for approval: Please review the changes\n'
+    );
+    expect(stderrSpy).toHaveBeenNthCalledWith(2, 'Latest output:\n');
+    expect(stderrSpy).toHaveBeenNthCalledWith(
+      3,
+      '    ## Questions\n    1. Scope?\n    2. Validation?\n'
     );
   });
 
