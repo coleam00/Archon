@@ -38,11 +38,13 @@ const mockSubscribe = mock((listener: (event: FakeEvent) => void) => {
   };
 });
 
+const mockBindExtensions = mock(async (_bindings: unknown) => undefined);
 const mockSession = {
   subscribe: mockSubscribe,
   prompt: mockPrompt,
   abort: mockAbort,
   dispose: mockDispose,
+  bindExtensions: mockBindExtensions,
   isStreaming: false,
   sessionId: 'mock-session-uuid',
 };
@@ -161,6 +163,7 @@ describe('PiProvider', () => {
     mockAbort.mockClear();
     mockDispose.mockClear();
     mockSubscribe.mockClear();
+    mockBindExtensions.mockClear();
     mockCreateAgentSession.mockClear();
     mockGetModel.mockClear();
     mockAuthCreate.mockClear();
@@ -1238,5 +1241,64 @@ describe('PiProvider', () => {
         typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
     );
     expect(result?.structuredOutput).toBeUndefined();
+  });
+
+  // ─── Interactive ExtensionUIContext binding ───────────────────────────
+
+  test('interactive: true with enableExtensions binds a UIContext to the session', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: true, interactive: true },
+      })
+    );
+
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
+  });
+
+  test('interactive: true without enableExtensions does NOT bind (clamped silently)', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { interactive: true },
+      })
+    );
+
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+  });
+
+  test('interactive: false with enableExtensions does NOT bind', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { enableExtensions: true, interactive: false },
+      })
+    );
+
+    expect(mockBindExtensions).not.toHaveBeenCalled();
+  });
+
+  test('default (no interactive flag) does NOT bind', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(mockBindExtensions).not.toHaveBeenCalled();
   });
 });

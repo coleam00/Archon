@@ -21,6 +21,7 @@ import { parsePiModelRef } from './model-ref';
 import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
 import { createNoopResourceLoader } from './resource-loader';
 import { resolvePiSession } from './session-resolver';
+import { createArchonUIBridge, createArchonUIContext } from './ui-context-stub';
 
 /**
  * Map Pi provider id → env var name used by pi-ai's getEnvApiKey().
@@ -249,6 +250,12 @@ export class PiProvider implements IAgentProvider {
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const settingsManager = SettingsManager.inMemory();
     const enableExtensions = piConfig.enableExtensions === true;
+    // Interactive UI binding is only meaningful when extensions are loaded:
+    // Pi binds the UI context against the runner built from loaded extensions,
+    // so without extensions there is nothing to consume hasUI. Silently clamp
+    // to false (rather than warn) — a Pi workflow switching extensions on and
+    // off by node shouldn't spam logs about redundant interactive flags.
+    const interactive = enableExtensions && piConfig.interactive === true;
     const resourceLoader = createNoopResourceLoader(cwd, {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
@@ -266,6 +273,7 @@ export class PiProvider implements IAgentProvider {
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
+        interactive,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'pi.session_started'
@@ -287,6 +295,19 @@ export class PiProvider implements IAgentProvider {
       yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
     }
 
+    // 4e. Interactive extension UI. Bind a minimal ExtensionUIContext so
+    //     extensions see `ctx.hasUI === true` and can fire `ctx.ui.notify()`.
+    //     Plannotator, for example, emits its browser URL through notify()
+    //     on a remote session — without a bound UI context it silently
+    //     auto-approves every plan and never surfaces the URL. The stub
+    //     forwards notifications into the same chunk stream as assistant
+    //     output via `uiBridge`, wired in/out of bridgeSession's queue.
+    const uiBridge = interactive ? createArchonUIBridge() : undefined;
+    if (uiBridge) {
+      const uiContext = createArchonUIContext(uiBridge);
+      await session.bindExtensions({ uiContext });
+    }
+
     // 5. Structured output (best-effort). Pi has no SDK-level JSON schema
     //    mode the way Claude and Codex do, so we implement it via prompt
     //    engineering: append the schema + "JSON only, no fences" instruction,
@@ -299,13 +320,16 @@ export class PiProvider implements IAgentProvider {
       : prompt;
 
     // 6. Bridge callback-based events to the async generator contract.
-    //    bridgeSession owns dispose() and abort wiring.
+    //    bridgeSession owns dispose() and abort wiring. When `interactive`
+    //    is on, it also binds/unbinds the UI stub's emitter so extension
+    //    notifications land on the same queue as Pi events.
     try {
       yield* bridgeSession(
         session,
         effectivePrompt,
         requestOptions?.abortSignal,
-        outputFormat?.schema
+        outputFormat?.schema,
+        uiBridge
       );
       getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
     } catch (err) {

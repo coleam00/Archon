@@ -1,0 +1,51 @@
+# E2E smoke test — Pi provider with interactive extensions enabled
+# Verifies: Pi loads plannotator + pi-agent-browser-native extensions cleanly
+#   when `enableExtensions: true` AND `interactive: true` are set in
+#   `.archon/config.yaml` under `assistants.pi`. With `interactive: true`,
+#   Archon binds a minimal ExtensionUIContext so extensions see `ctx.hasUI`
+#   as true (instead of plannotator's default "silent auto-approve" path).
+#
+# Prerequisites (manual — not automated in CI):
+#   1. `pi install npm:@plannotator/pi-extension`
+#   2. `pi install npm:pi-agent-browser-native`
+#   3. `.archon/config.yaml` sets:
+#        assistants:
+#          pi:
+#            enableExtensions: true
+#            interactive: true
+#
+# What this smoke test verifies:
+#   - Pi session starts cleanly with enableExtensions + interactive
+#   - UI stub doesn't crash during extension activation (plannotator
+#     reads ctx.hasUI during its setup; a broken stub would throw here)
+#   - Pi completes a simple prompt end-to-end
+#
+# What this smoke test does NOT verify (requires manual testing):
+#   - Plannotator's browser UI — plan-mode activation is gated on Pi's
+#     `--plan` CLI flag or the `/plannotator` TUI slash command, neither of
+#     which is reachable through Archon's programmatic Pi sessions. The
+#     interactive flag wires the mechanism; triggering plannotator's UI
+#     end-to-end is a manual/recorded-demo step.
+#
+# Auth: picks up ANTHROPIC_API_KEY env var or `pi /login` OAuth creds.
+name: e2e-plannotator-smoke
+description: 'Smoke test — Pi with interactive extensions loaded (plannotator + pi-agent-browser-native).'
+provider: pi
+model: anthropic/claude-haiku-4-5
+
+nodes:
+  - id: prompt-with-extensions
+    prompt: "Reply with exactly the single word 'ok' and nothing else."
+    allowed_tools: []
+    effort: low
+    idle_timeout: 60000
+
+  - id: assert
+    bash: |
+      output="$prompt-with-extensions.output"
+      if [ -z "$output" ]; then
+        echo "FAIL: prompt returned empty output — extensions may have crashed during activation"
+        exit 1
+      fi
+      echo "PASS: session completed with extensions loaded. output=$output"
+    depends_on: [prompt-with-extensions]

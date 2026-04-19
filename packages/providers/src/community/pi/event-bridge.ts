@@ -267,13 +267,27 @@ export type BridgeQueueItem =
   | { kind: 'done' }
   | { kind: 'error'; error: Error };
 
+/**
+ * Optional producer-side interface implemented by the Archon UI stub. When
+ * passed, `bridgeSession` wires `setEmitter` so extension `ctx.ui.notify()`
+ * calls show up in the same chunk stream as assistant output. Cleared in
+ * `finally` so late notifications (post-abort, post-dispose) are dropped.
+ */
+export interface BridgeNotifier {
+  setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
+}
+
 export async function* bridgeSession(
   session: AgentSession,
   prompt: string,
   abortSignal?: AbortSignal,
-  jsonSchema?: Record<string, unknown>
+  jsonSchema?: Record<string, unknown>,
+  uiBridge?: BridgeNotifier
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
+  uiBridge?.setEmitter(chunk => {
+    queue.push({ kind: 'chunk', chunk });
+  });
   // Best-effort structured-output buffer. Only accumulates when the caller
   // requested a JSON schema; otherwise stays empty and the terminal chunk
   // passes through untouched.
@@ -358,6 +372,7 @@ export async function* bridgeSession(
     // a no-op and pending iterate() waiters resolve — otherwise a consumer
     // abort mid-iteration would leak this generator on the promise forever.
     queue.close();
+    uiBridge?.setEmitter(undefined);
     unsubscribe();
     if (abortSignal) {
       abortSignal.removeEventListener('abort', onAbort);

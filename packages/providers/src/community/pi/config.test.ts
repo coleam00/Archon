@@ -52,4 +52,32 @@ describe('parsePiConfig', () => {
       enableExtensions: true,
     });
   });
+
+  test('parses interactive: true', () => {
+    expect(parsePiConfig({ interactive: true })).toEqual({ interactive: true });
+  });
+
+  test('parses interactive: false', () => {
+    expect(parsePiConfig({ interactive: false })).toEqual({ interactive: false });
+  });
+
+  test('drops non-boolean interactive silently', () => {
+    expect(parsePiConfig({ interactive: 'yes' })).toEqual({});
+    expect(parsePiConfig({ interactive: 1 })).toEqual({});
+    expect(parsePiConfig({ interactive: null })).toEqual({});
+  });
+
+  test('combines all three fields', () => {
+    expect(
+      parsePiConfig({
+        model: 'google/gemini-2.5-pro',
+        enableExtensions: true,
+        interactive: true,
+      })
+    ).toEqual({
+      model: 'google/gemini-2.5-pro',
+      enableExtensions: true,
+      interactive: true,
+    });
+  });
 });

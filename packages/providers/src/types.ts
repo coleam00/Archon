@@ -52,6 +52,21 @@ export interface PiProviderDefaults {
    * @default false
    */
   enableExtensions?: boolean;
+  /**
+   * Opt-in to binding a minimal `ExtensionUIContext` to each Pi session so
+   * extensions see `ctx.hasUI === true` and can surface interactive flows
+   * (e.g. `@plannotator/pi-extension`'s browser UI announces its URL via
+   * `ctx.ui.notify()`, which Archon forwards to the event stream). When false
+   * (default), Pi's internal `noOpUIContext` stays bound and hasUI is false —
+   * extensions silently auto-approve or skip UI paths.
+   *
+   * Only meaningful when `enableExtensions: true`. Network-exposed extensions
+   * (plannotator, anything spawning a server) MUST be deployed with
+   * `PLANNOTATOR_REMOTE=1` or equivalent so they bind a reachable interface;
+   * otherwise their loopback URLs are unreachable from the operator's browser.
+   * @default false
+   */
+  interactive?: boolean;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */

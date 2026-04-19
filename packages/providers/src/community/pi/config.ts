@@ -19,5 +19,9 @@ export function parsePiConfig(raw: Record<string, unknown>): PiProviderDefaults 
     result.enableExtensions = raw.enableExtensions;
   }
 
+  if (typeof raw.interactive === 'boolean') {
+    result.interactive = raw.interactive;
+  }
+
   return result;
 }
