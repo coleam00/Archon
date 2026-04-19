@@ -84,6 +84,16 @@ function generateConversationId(): string {
   return `cli-${String(timestamp)}-${random}`;
 }
 
+function buildArchonStateWriteFix(archonHome: string): string {
+  return (
+    'Fix: set ARCHON_HOME to a writable directory ' +
+    "(for example 'ARCHON_HOME=/tmp/archon-home archon ...'), " +
+    `grant write access to '${archonHome}', or rerun outside the outer workspace sandbox.\n` +
+    "Note: redirecting ARCHON_HOME only moves Archon's own state. " +
+    "Worktree creation may still need write access to the repo's .git metadata."
+  );
+}
+
 async function assertArchonStateWritable(commandName: string): Promise<void> {
   if (process.env.DATABASE_URL) {
     return;
@@ -107,7 +117,7 @@ async function assertArchonStateWritable(commandName: string): Promise<void> {
           `Archon CLI '${commandName}' requires write access to '${homeAccessTarget}' ` +
             `so it can create '${archonHome}' and its SQLite state.\n` +
             `Current failure: ${parentErr.message}\n` +
-            `Fix: rerun outside the outer workspace sandbox or grant write access to '${homeAccessTarget}'.`
+            buildArchonStateWriteFix(archonHome)
         );
       }
     }
@@ -115,7 +125,7 @@ async function assertArchonStateWritable(commandName: string): Promise<void> {
       `Archon CLI '${commandName}' requires write access to '${archonHome}' ` +
         `because local workflow state uses SQLite at '${dbPath}' when DATABASE_URL is unset.\n` +
         `Current failure: ${err.message}\n` +
-        `Fix: rerun outside the outer workspace sandbox or grant write access to '${archonHome}'.`
+        buildArchonStateWriteFix(archonHome)
     );
   }
 
@@ -129,7 +139,7 @@ async function assertArchonStateWritable(commandName: string): Promise<void> {
     throw new Error(
       `Archon CLI '${commandName}' requires write access to '${dbPath}'.\n` +
         `Current failure: ${err.message}\n` +
-        `Fix: rerun outside the outer workspace sandbox or grant write access to '${archonHome}'.`
+        buildArchonStateWriteFix(archonHome)
     );
   }
 }
@@ -774,6 +784,22 @@ function indentBlock(text: string, indent = '    '): string {
     .join('\n');
 }
 
+function printRecordedDecisionNextStep(runId: string, decision: 'approval' | 'rejection'): void {
+  const label = decision === 'approval' ? 'Approval' : 'Rejection';
+  console.log(`${label} recorded. Resume explicitly to continue the workflow.`);
+  console.log(`Next: archon workflow resume ${runId}`);
+  console.log(
+    'Important: once resumed, that CLI process owns the live workflow run. Keep it alive until the workflow pauses again or reaches a terminal state.'
+  );
+}
+
+function printLiveRunnerOwnershipNote(): void {
+  console.log('This CLI process now owns the live workflow run.');
+  console.log(
+    "Keep it alive until the workflow pauses again or reaches a terminal state. Use another terminal to monitor with 'archon workflow status --json' if needed."
+  );
+}
+
 interface NodeSummary {
   nodeId: string;
   state: 'running' | 'completed' | 'failed' | 'skipped';
@@ -844,82 +870,94 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
  * Show status of all running workflow runs.
  */
 export async function workflowStatusCommand(json?: boolean, verbose?: boolean): Promise<void> {
-  let runs: WorkflowRun[];
-  try {
-    const result = await getWorkflowStatus();
-    runs = result.runs;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err }, 'cli.workflow_status_failed');
-    throw new Error(`Failed to list workflow runs: ${err.message}`);
-  }
-
+  const previousLogLevel = getLogLevel();
   if (json) {
-    let runsOutput: unknown[] = runs;
-    if (verbose) {
-      const eventsPerRun = await Promise.all(
-        runs.map(run =>
-          workflowEventsDb.listWorkflowEvents(run.id).catch(() => [] as WorkflowEventRow[])
-        )
-      );
-      runsOutput = runs.map((run, i) => ({ ...run, events: eventsPerRun[i] }));
-    }
-    console.log(JSON.stringify({ runs: runsOutput }, null, 2));
-    return;
+    // Keep stdout machine-readable for JSON consumers by suppressing info/warn
+    // logs from DB initialization and status/event reads during the command.
+    setLogLevel('fatal');
   }
-
-  if (runs.length === 0) {
-    console.log('No active workflows.');
-    return;
-  }
-
-  console.log(`\nActive workflows (${runs.length}):\n`);
-  for (const run of runs) {
-    const age = formatAge(run.started_at);
-    const approval = getApprovalContext(run);
-    console.log(`  ID:     ${run.id}`);
-    console.log(`  Name:   ${run.workflow_name}`);
-    console.log(`  Path:   ${run.working_path ?? '(none)'}`);
-    console.log(`  Status: ${run.status}`);
-    console.log(`  Age:    ${age}`);
-    if (run.status === 'paused' && approval?.lastOutput) {
-      console.log('  Latest output:');
-      console.log(indentBlock(approval.lastOutput));
+  try {
+    let runs: WorkflowRun[];
+    try {
+      const result = await getWorkflowStatus();
+      runs = result.runs;
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err }, 'cli.workflow_status_failed');
+      throw new Error(`Failed to list workflow runs: ${err.message}`);
     }
 
-    if (verbose) {
-      let events: WorkflowEventRow[];
-      try {
-        events = await workflowEventsDb.listWorkflowEvents(run.id);
-      } catch {
-        events = [];
+    if (json) {
+      let runsOutput: unknown[] = runs;
+      if (verbose) {
+        const eventsPerRun = await Promise.all(
+          runs.map(run =>
+            workflowEventsDb.listWorkflowEvents(run.id).catch(() => [] as WorkflowEventRow[])
+          )
+        );
+        runsOutput = runs.map((run, i) => ({ ...run, events: eventsPerRun[i] }));
       }
-      const nodes = buildNodeSummaries(events);
-      if (nodes.length > 0) {
-        console.log('  Nodes:');
-        for (const node of nodes) {
-          const iconMap: Record<string, string> = {
-            completed: '✓',
-            failed: '✗',
-            skipped: '-',
-            running: '◌',
-          };
-          const icon = iconMap[node.state] ?? '◌';
-          const duration =
-            node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-          const stateLabel = node.state === 'running' ? ' (running)' : '';
-          console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}`);
-          if (node.outputPreview !== undefined) {
-            console.log(`        Output: ${node.outputPreview}`);
-          }
-          if (node.error !== undefined) {
-            console.log(`        Error:  ${node.error}`);
+      console.log(JSON.stringify({ runs: runsOutput }, null, 2));
+      return;
+    }
+
+    if (runs.length === 0) {
+      console.log('No active workflows.');
+      return;
+    }
+
+    console.log(`\nActive workflows (${runs.length}):\n`);
+    for (const run of runs) {
+      const age = formatAge(run.started_at);
+      const approval = getApprovalContext(run);
+      console.log(`  ID:     ${run.id}`);
+      console.log(`  Name:   ${run.workflow_name}`);
+      console.log(`  Path:   ${run.working_path ?? '(none)'}`);
+      console.log(`  Status: ${run.status}`);
+      console.log(`  Age:    ${age}`);
+      if (run.status === 'paused' && approval?.lastOutput) {
+        console.log('  Latest output:');
+        console.log(indentBlock(approval.lastOutput));
+      }
+
+      if (verbose) {
+        let events: WorkflowEventRow[];
+        try {
+          events = await workflowEventsDb.listWorkflowEvents(run.id);
+        } catch {
+          events = [];
+        }
+        const nodes = buildNodeSummaries(events);
+        if (nodes.length > 0) {
+          console.log('  Nodes:');
+          for (const node of nodes) {
+            const iconMap: Record<string, string> = {
+              completed: '✓',
+              failed: '✗',
+              skipped: '-',
+              running: '◌',
+            };
+            const icon = iconMap[node.state] ?? '◌';
+            const duration =
+              node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
+            const stateLabel = node.state === 'running' ? ' (running)' : '';
+            console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}`);
+            if (node.outputPreview !== undefined) {
+              console.log(`        Output: ${node.outputPreview}`);
+            }
+            if (node.error !== undefined) {
+              console.log(`        Error:  ${node.error}`);
+            }
           }
         }
       }
-    }
 
-    console.log('');
+      console.log('');
+    }
+  } finally {
+    if (json) {
+      setLogLevel(previousLogLevel);
+    }
   }
 }
 
@@ -940,6 +978,8 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
   }
   console.log(`Resuming workflow: ${run.workflow_name}`);
   console.log(`Path: ${run.working_path}`);
+  console.log('');
+  printLiveRunnerOwnershipNote();
   console.log('');
 
   // Re-execute via workflowRunCommand with --resume.
@@ -972,60 +1012,13 @@ export async function workflowAbandonCommand(runId: string): Promise<void> {
 
 /**
  * Approve a paused workflow run by ID.
- * Writes the approval events and transitions to 'failed' for auto-resume.
+ * Writes the approval events and records a resumable failed state.
  */
 export async function workflowApproveCommand(runId: string, comment?: string): Promise<void> {
   await assertArchonStateWritable('workflow approve');
   const result = await approveWorkflow(runId, comment);
-
-  // CLI auto-resumes after approval (unlike chat, which defers to next user message)
-  if (!result.workingPath) {
-    throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
-        'Cannot determine where to resume.'
-    );
-  }
   console.log(`Approved workflow: ${result.workflowName}`);
-  console.log(`Path: ${result.workingPath}`);
-  console.log('');
-  console.log('Resuming workflow...');
-
-  // Look up the original platform conversation ID to keep all messages in one thread
-  let platformConversationId: string | undefined;
-  try {
-    const originalConversation = await conversationDb.getConversationById(result.conversationId);
-    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
-    if (!originalConversation) {
-      getLog().info(
-        { runId, conversationId: result.conversationId },
-        'cli.workflow_approve_conversation_not_found'
-      );
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn(
-      { err, runId, conversationId: result.conversationId },
-      'cli.workflow_approve_conversation_lookup_failed'
-    );
-  }
-
-  try {
-    await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
-      resume: true,
-      codebaseId: result.codebaseId ?? undefined,
-      conversationId: platformConversationId,
-    });
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, runId, workflowName: result.workflowName },
-      'cli.workflow_approve_resume_failed'
-    );
-    throw new Error(
-      `Approved but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The approval was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
-    );
-  }
+  printRecordedDecisionNextStep(runId, 'approval');
 }
 
 /**
@@ -1041,52 +1034,8 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
     return;
   }
 
-  // Not cancelled = has onRejectPrompt, CLI auto-resumes with rejection feedback
-  if (!result.workingPath) {
-    throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
-        'Cannot determine where to resume.'
-    );
-  }
   console.log(`Rejected workflow: ${result.workflowName}`);
-  console.log('Resuming with on_reject prompt...');
-
-  // Look up the original platform conversation ID to keep all messages in one thread
-  let platformConversationId: string | undefined;
-  try {
-    const originalConversation = await conversationDb.getConversationById(result.conversationId);
-    platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
-    if (!originalConversation) {
-      getLog().info(
-        { runId, conversationId: result.conversationId },
-        'cli.workflow_reject_conversation_not_found'
-      );
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().warn(
-      { err, runId, conversationId: result.conversationId },
-      'cli.workflow_reject_conversation_lookup_failed'
-    );
-  }
-
-  try {
-    await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
-      resume: true,
-      codebaseId: result.codebaseId ?? undefined,
-      conversationId: platformConversationId,
-    });
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, runId, workflowName: result.workflowName },
-      'cli.workflow_reject_resume_failed'
-    );
-    throw new Error(
-      `Rejected but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The rejection was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
-    );
-  }
+  printRecordedDecisionNextStep(runId, 'rejection');
 }
 
 /**

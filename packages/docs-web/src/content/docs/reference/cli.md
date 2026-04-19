@@ -183,21 +183,24 @@ archon workflow abandon <run-id>
 
 ### `workflow approve`
 
-Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
+Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`. This records the decision only; continue with a separate `workflow resume`.
 
 ```bash
 archon workflow approve <run-id>
 archon workflow approve <run-id> "Looks good, proceed"
 archon workflow approve <run-id> --comment "Looks good, proceed"
+archon workflow resume <run-id>
 ```
 
 ### `workflow reject`
 
-Reject a paused workflow run at an approval gate. Optionally provide a reason that is available to the workflow via `$REJECTION_REASON`.
+Reject a paused workflow run at an approval gate. Optionally provide a reason that is available to the workflow via `$REJECTION_REASON`. If the workflow remains resumable, continue with a separate `workflow resume`.
 
 ```bash
 archon workflow reject <run-id>
 archon workflow reject <run-id> --reason "Needs more tests"
+# If the workflow remains resumable:
+archon workflow resume <run-id>
 ```
 
 ### `workflow cleanup`
@@ -347,7 +350,7 @@ archon version
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Reduce log verbosity to warnings and errors only |
 | `--verbose`, `-v` | Show debug-level output |
-| `--json` | Output machine-readable JSON (for workflow list, workflow status) |
+| `--json` | Output machine-readable JSON where supported (for example workflow list, workflow status, and validate) |
 | `--help`, `-h` | Show help message |
 
 ## Working Directory
@@ -405,7 +408,10 @@ archon workflow run implement --cwd ~/projects/my-app --branch test-adapters --f
 
 # Approve or reject a paused workflow
 archon workflow approve <run-id> "Ship it"
+archon workflow resume <run-id>
 archon workflow reject <run-id> --reason "Missing test coverage"
+# If the workflow remains resumable:
+archon workflow resume <run-id>
 
 # Check worktrees after work session
 archon isolation list

@@ -64,10 +64,43 @@ curl http://localhost:3090/health/db
 SQLite requires no setup. The database is created automatically at `~/.archon/archon.db`. If you see errors, check that the `~/.archon/` directory exists and is writable.
 
 For workflow-mutating CLI commands (`workflow run`, `workflow resume`, `workflow approve`,
-`workflow reject`, `workflow cleanup`), Archon must be able to write the SQLite
-state under `~/.archon/`. If you run Archon from an outer workspace sandbox, grant
-write access to `~/.archon/` or rerun the CLI outside that sandbox. Changing the
-inner Codex sandbox settings does not fix a parent-process write restriction.
+`workflow reject`, `workflow cleanup`), Archon must be able to write its own state
+(SQLite, logs, artifacts, and config) under `ARCHON_HOME` -- `~/.archon/` by default.
+If you run Archon from an outer workspace sandbox, you can either grant write
+access to `~/.archon/`, rerun the CLI outside that sandbox, or redirect Archon
+state to a writable directory:
+
+```bash
+ARCHON_HOME="$PWD/.tmp/archon-home" archon workflow run e2e-codex-smoke --no-worktree "smoke test"
+```
+
+That override moves Archon's own state only. Isolated runs that create or sync
+worktrees can still need write access to the repo's `.git` metadata (for example
+`git fetch` updating `.git/FETCH_HEAD`). Changing the inner Codex sandbox settings
+does not fix a parent-process write restriction.
+
+## Interactive Workflow Stops After Approval Or Rejection
+
+For CLI-driven interactive workflows, `archon workflow approve` and
+`archon workflow reject` only record the decision. They do not keep running the
+workflow in place.
+
+Continue with:
+
+```bash
+archon workflow resume <run-id>
+```
+
+Once resumed, that CLI process owns the live workflow run. Keep it alive until
+the workflow pauses again or reaches a terminal state. If you need to inspect
+state while it is running, use a separate terminal and poll:
+
+```bash
+archon workflow status --json
+```
+
+If you terminate the live `workflow resume` process, Archon records the run as
+failed with a termination error such as `Process terminated (SIGTERM)`.
 
 **For remote PostgreSQL:**
 ```bash

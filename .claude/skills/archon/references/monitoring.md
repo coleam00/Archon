@@ -31,6 +31,16 @@ Why not every 15 seconds?
 
 If the user is not actively waiting, reduce noise and check less often.
 
+## Attached CLI Sessions
+
+Treat attached `archon workflow run` or `archon continue` stdout and stderr as a
+progress stream, not the source of truth for pause state.
+
+If an attached session is silent for one monitoring interval and has not exited,
+run `archon workflow status --json` immediately. If status is `paused`, relay
+`metadata.approval.lastOutput` or the latest run-log output even if the PTY
+never printed `Waiting for approval`.
+
 ## Evidence Order
 
 1. `archon workflow status --json`
@@ -84,9 +94,9 @@ Important nuance:
 - do not treat persisted `metadata.approval` as proof of a fresh pause
 - current `status` wins
 
-### After approve or reject
+### After approve, reject, resume, or continue
 
-After every approval, rejection, or manual resume:
+After every approval, rejection, manual resume, or `archon continue` relaunch:
 
 1. re-run `archon workflow status --json`
 2. continue checking until the run reaches:
