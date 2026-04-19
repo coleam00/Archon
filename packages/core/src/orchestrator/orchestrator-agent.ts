@@ -347,7 +347,10 @@ async function dispatchOrchestratorWorkflow(
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
-async function tryPersistSessionId(sessionId: string, assistantSessionId: string): Promise<void> {
+async function tryPersistSessionId(
+  sessionId: string,
+  assistantSessionId: string | null
+): Promise<void> {
   try {
     await sessionDb.updateSession(sessionId, assistantSessionId);
   } catch (error) {
@@ -976,7 +979,14 @@ async function handleStreamMode(
         await platform.sendStructuredEvent(conversationId, msg);
       }
     } else if (msg.type === 'result') {
-      if (msg.sessionId) {
+      if (msg.isError && msg.errorSubtype === 'error_during_execution') {
+        getLog().warn(
+          { conversationId, errorSubtype: msg.errorSubtype },
+          'clearing_stale_session_id'
+        );
+        await tryPersistSessionId(session.id, null);
+        newSessionId = undefined;
+      } else if (msg.sessionId) {
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
@@ -1099,7 +1109,14 @@ async function handleBatchMode(
         getLog().debug({ toolName: msg.toolName }, 'tool_call');
       }
     } else if (msg.type === 'result') {
-      if (msg.sessionId) {
+      if (msg.isError && msg.errorSubtype === 'error_during_execution') {
+        getLog().warn(
+          { conversationId, errorSubtype: msg.errorSubtype },
+          'clearing_stale_session_id'
+        );
+        await tryPersistSessionId(session.id, null);
+        newSessionId = undefined;
+      } else if (msg.sessionId) {
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
