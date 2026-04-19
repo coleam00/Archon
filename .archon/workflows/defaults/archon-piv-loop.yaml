@@ -734,7 +734,7 @@ nodes:
       cat .github/pull_request_template.md 2>/dev/null || echo "NO_TEMPLATE"
       ```
 
-      Create with `gh pr create --draft --base $BASE_BRANCH`:
+      Create with `gh pr create --base $BASE_BRANCH`:
       - Title from the plan's feature name
       - Body summarizing the implementation
       - Use a HEREDOC for the body

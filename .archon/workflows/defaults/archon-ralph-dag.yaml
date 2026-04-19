@@ -528,7 +528,7 @@ nodes:
 
            If no template was found, write a summary with: problem, what changed, stories table, and validation evidence.
 
-        3. **Create a draft PR** using `gh pr create --draft --base $BASE_BRANCH --title "feat: {PRD feature name}"` with the filled-in template as the body. Use a HEREDOC for the body.
+        3. **Create a PR** using `gh pr create --base $BASE_BRANCH --title "feat: {PRD feature name}"` with the filled-in template as the body. Use a HEREDOC for the body.
 
         4. **Output completion signal:**
            ```

@@ -169,7 +169,7 @@ nodes:
       4. Check if a PR already exists for this branch: `gh pr list --head $(git branch --show-current)`
          - If PR exists, skip creation and capture its number
       5. Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
-      6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
+      6. Create a PR: `gh pr create --base $BASE_BRANCH`
          - Title: concise, imperative mood, under 70 chars
          - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
          - Link to issue: include `Fixes #...` or `Closes #...`
