@@ -242,12 +242,17 @@ export class PiProvider implements IAgentProvider {
 
     // ModelRegistry + settings stay in-memory — only sessions persist, to
     // match Claude/Codex. Resource loader still suppresses filesystem
-    // discovery except for explicitly-passed skill paths.
+    // discovery by default, except for explicitly-passed skill paths and —
+    // when piConfig.enableExtensions is true — Pi's community extension
+    // ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/ and
+    // packages installed via `pi install npm:<pkg>`).
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const settingsManager = SettingsManager.inMemory();
+    const enableExtensions = piConfig.enableExtensions === true;
     const resourceLoader = createNoopResourceLoader(cwd, {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
+      ...(enableExtensions ? { enableExtensions: true } : {}),
     });
 
     getLog().info(
@@ -260,6 +265,7 @@ export class PiProvider implements IAgentProvider {
         hasSystemPrompt: systemPrompt !== undefined,
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
+        extensionsEnabled: enableExtensions,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'pi.session_started'

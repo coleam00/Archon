@@ -19,22 +19,46 @@ export interface NoopResourceLoaderOptions {
    * config through to Pi after resolution — see `resolvePiSkills`.
    */
   additionalSkillPaths?: string[];
+
+  /**
+   * Opt-in to Pi's extension discovery. When true, `noExtensions` flips to
+   * false and Pi loads:
+   *   - `~/.pi/agent/extensions/*.ts` (global, operator-installed)
+   *   - packages listed in `~/.pi/agent/settings.json` (from `pi install`)
+   *   - `<cwd>/.pi/extensions/*.ts` (project-local — REPO-CONTROLLED, risky)
+   *   - packages listed in `<cwd>/.pi/settings.json`
+   *
+   * This is the switch that opens up the community package ecosystem
+   * (https://shittycodingagent.ai/packages) — ~540 npm packages registering
+   * custom tools and lifecycle hooks via `pi.registerTool()` / `pi.on()`.
+   * Tools and hooks work fully in programmatic sessions; TUI-only features
+   * (renderers, keybindings, slash commands) silently no-op.
+   *
+   * Trust boundary: enabling this loads arbitrary JS code with the Archon
+   * server's OS permissions. Only flip this on when the operator trusts both
+   * globally-installed extensions AND whatever `.pi/` the workflow's target
+   * repo happens to contain.
+   *
+   * @default false
+   */
+  enableExtensions?: boolean;
 }
 
 /**
- * Build a Pi ResourceLoader that performs no filesystem discovery. Archon is
- * the source of truth for extensions, skills, prompts, themes, and context
- * files — Pi should not walk cwd or read ~/.pi/agent/ during server-side
- * workflow execution.
+ * Build a Pi ResourceLoader. By default performs no filesystem discovery —
+ * Archon is the source of truth for skills, prompts, themes, and context
+ * files, and Pi should not walk cwd or read `~/.pi/agent/` during server-side
+ * workflow execution. When `enableExtensions: true`, the `noExtensions` gate
+ * is lifted so Pi discovers and loads tools + hooks from the community
+ * ecosystem (see `NoopResourceLoaderOptions.enableExtensions`). Skills and
+ * prompts/themes remain suppressed even when extensions are enabled — skills
+ * are still driven by Archon's explicit `additionalSkillPaths` plumbing.
  *
- * Implementation note: we delegate to `DefaultResourceLoader` with all
- * `no*` flags set, rather than implementing `ResourceLoader` ourselves. The
- * interface's `getExtensions()` returns a `LoadExtensionsResult` requiring a
- * real `ExtensionRuntime`, which we can't meaningfully stub. DefaultResourceLoader
- * honors the flags and returns empty-but-valid results.
- *
- * A caller-supplied `systemPrompt` is still applied (it's set on the loader
- * directly, not via filesystem discovery).
+ * Implementation note: we delegate to `DefaultResourceLoader` with the
+ * relevant `no*` flags set, rather than implementing `ResourceLoader`
+ * ourselves. The interface's `getExtensions()` returns a `LoadExtensionsResult`
+ * requiring a real `ExtensionRuntime`, which we can't meaningfully stub.
+ * DefaultResourceLoader honors the flags and returns empty-but-valid results.
  */
 export function createNoopResourceLoader(
   cwd: string,
@@ -42,7 +66,7 @@ export function createNoopResourceLoader(
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
-    noExtensions: true,
+    noExtensions: options.enableExtensions !== true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
