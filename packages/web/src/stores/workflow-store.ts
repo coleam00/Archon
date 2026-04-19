@@ -272,15 +272,14 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
 
       handleLoopIteration: (event: LoopIterationEvent): void => {
         if (!event.nodeId) return; // Non-DAG loops have no nodeId — skip
+        const nodeId = event.nodeId;
         set(
           state =>
             updateWorkflow(state, event.runId, wf => {
               const dagNodes = [...wf.dagNodes];
-              const existingIdx = dagNodes.findIndex(n => n.nodeId === event.nodeId);
-              if (existingIdx < 0) return wf; // Node not yet in store — loop iteration may arrive before dag_node event in SSE ordering. Intentional silent drop.
-
-              const existing = dagNodes[existingIdx];
-              const iterations: LoopIterationInfo[] = [...(existing.iterations ?? [])];
+              const existingIdx = dagNodes.findIndex(n => n.nodeId === nodeId);
+              const existing = existingIdx >= 0 ? dagNodes[existingIdx] : undefined;
+              const iterations: LoopIterationInfo[] = [...(existing?.iterations ?? [])];
               const iterIdx = iterations.findIndex(it => it.iteration === event.iteration);
               const iterState: LoopIterationInfo = {
                 iteration: event.iteration,
@@ -293,12 +292,30 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
                 iterations.push(iterState);
               }
 
-              dagNodes[existingIdx] = {
+              const loopStatus =
+                event.status === 'failed'
+                  ? 'failed'
+                  : existing?.status === 'completed' ||
+                      existing?.status === 'failed' ||
+                      existing?.status === 'skipped'
+                    ? existing.status
+                    : 'running';
+
+              const nextNode: DagNodeState = {
                 ...existing,
+                nodeId,
+                name: existing?.name ?? nodeId,
+                status: loopStatus,
                 currentIteration: event.iteration,
-                maxIterations: event.total > 0 ? event.total : existing.maxIterations,
+                maxIterations: event.total > 0 ? event.total : existing?.maxIterations,
                 iterations,
               };
+
+              if (existingIdx >= 0) {
+                dagNodes[existingIdx] = nextNode;
+              } else {
+                dagNodes.push(nextNode);
+              }
               return { ...wf, dagNodes };
             }),
           undefined,

@@ -354,16 +354,41 @@ describe('handleLoopIteration', () => {
     expect(useWorkflowStore.getState().workflows).toBe(before);
   });
 
-  test('no-ops when nodeId not yet in dagNodes', () => {
+  test('creates a synthetic running node when loop iteration arrives before dag node event', () => {
     useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li1' }));
     useWorkflowStore
       .getState()
       .handleLoopIteration(
         loopIterationEvent({ runId: 'run-li1', iteration: 1, nodeId: 'ghost-node' })
       );
-    // Node was not registered — dagNodes must remain empty
     const wf = useWorkflowStore.getState().workflows.get('run-li1')!;
-    expect(wf.dagNodes).toHaveLength(0);
+    expect(wf.dagNodes).toHaveLength(1);
+    expect(wf.dagNodes[0]).toEqual({
+      nodeId: 'ghost-node',
+      name: 'ghost-node',
+      status: 'running',
+      currentIteration: 1,
+      maxIterations: 5,
+      iterations: [{ iteration: 1, status: 'running', duration: undefined }],
+    });
+  });
+
+  test('keeps loop node running after a completed iteration when no dag node event exists yet', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-li1b' }));
+    useWorkflowStore.getState().handleLoopIteration(
+      loopIterationEvent({
+        runId: 'run-li1b',
+        iteration: 1,
+        nodeId: 'ghost-node',
+        status: 'completed',
+        total: 0,
+        duration: 1200,
+      })
+    );
+    const node = useWorkflowStore.getState().workflows.get('run-li1b')!.dagNodes[0]!;
+    expect(node.status).toBe('running');
+    expect(node.currentIteration).toBe(1);
+    expect(node.iterations).toEqual([{ iteration: 1, status: 'completed', duration: 1200 }]);
   });
 
   test('appends first iteration to existing node', () => {

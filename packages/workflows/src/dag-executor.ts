@@ -1672,6 +1672,33 @@ async function executeLoopNode(
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  const loopNodeStartTime = Date.now();
+
+  const persistLoopNodeFailed = async (error: string): Promise<void> => {
+    await logNodeError(logDir, workflowRun.id, node.id, error).catch((logErr: Error) => {
+      getLog().warn({ err: logErr, nodeId: node.id }, 'loop.node_error_log_write_failed');
+    });
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: node.id,
+        data: { error },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error,
+    });
+  };
 
   // Resolve AI client — fail fast with descriptive error
   let aiClient: ReturnType<typeof deps.getAgentProvider>;
@@ -1684,6 +1711,7 @@ async function executeLoopNode(
       { err, nodeId: node.id, provider: workflowProvider },
       'loop_node.provider_failed'
     );
+    await persistLoopNodeFailed(errorMsg);
     return { state: 'failed', output: '', error: errorMsg };
   }
 
@@ -1714,6 +1742,30 @@ async function executeLoopNode(
   const logEventStoreError = (err: Error, iteration: number): void => {
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
   };
+
+  if (!isLoopResume) {
+    getLog().info({ nodeId: node.id, provider: workflowProvider }, 'dag_node_started');
+    await logNodeStart(logDir, workflowRun.id, node.id, '<loop>');
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_started',
+        step_name: node.id,
+        data: { type: 'loop', provider: workflowProvider },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'node_started' },
+          'workflow_event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_started',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+    });
+  }
 
   for (let i = startIteration; i <= loop.max_iterations; i++) {
     const iterationStart = Date.now();
@@ -1955,6 +2007,7 @@ async function executeLoopNode(
         .catch((evtErr: Error) => {
           logEventStoreError(evtErr, i);
         });
+      await persistLoopNodeFailed(`Loop iteration ${i} failed: ${err.message}`);
       return {
         state: 'failed',
         output: '',
@@ -2066,7 +2119,7 @@ async function executeLoopNode(
           event_type: 'node_completed',
           step_name: node.id,
           data: {
-            duration_ms: Date.now() - iterationStart,
+            duration_ms: Date.now() - loopNodeStartTime,
             node_output: lastIterationOutput,
             ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
             ...(loopFinalStopReason ? { stop_reason: loopFinalStopReason } : {}),
@@ -2084,7 +2137,7 @@ async function executeLoopNode(
         runId: workflowRun.id,
         nodeId: node.id,
         nodeName: node.id,
-        duration: Date.now() - iterationStart,
+        duration: Date.now() - loopNodeStartTime,
         ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
         ...(loopFinalStopReason ? { stopReason: loopFinalStopReason } : {}),
         ...(loopTotalNumTurns !== undefined ? { numTurns: loopTotalNumTurns } : {}),
@@ -2143,6 +2196,7 @@ async function executeLoopNode(
           'loop_node.no_progress_streak_reached'
         );
         await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+        await persistLoopNodeFailed(errorMsg);
         return {
           state: 'failed',
           output: lastIterationOutput,
@@ -2171,6 +2225,9 @@ async function executeLoopNode(
         getLog().error(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_node.gate_message_send_failed'
+        );
+        await persistLoopNodeFailed(
+          `Loop gate message failed to deliver for node '${node.id}' - cannot pause safely`
         );
         return {
           state: 'failed',
@@ -2218,6 +2275,7 @@ async function executeLoopNode(
     'loop_node.max_iterations_reached'
   );
   await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+  await persistLoopNodeFailed(errorMsg);
   return {
     state: 'failed',
     output: lastIterationOutput,
