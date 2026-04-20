@@ -37,6 +37,10 @@ export function ChatPage(): React.ReactElement {
   const [width, setWidth] = useState(getInitialWidth);
   const isResizing = useRef(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Track previous selectedProjectId to detect user-initiated project switches
+  const prevSelectedProjectIdRef = useRef<string | null | undefined>(undefined);
+  // Holds the project ID we need to navigate to once its conversations query resolves
+  const pendingProjectNavigationRef = useRef<string | null>(null);
 
   // Add-project state
   const [showAddInput, setShowAddInput] = useState(false);
@@ -135,9 +139,44 @@ export function ChatPage(): React.ReactElement {
     [conversations, searchQuery]
   );
 
+  // When a project is selected and already has conversations, navigate to the most recent one
+  // so that each project has a single persistent orchestrator session (#968).
   const handleNewChat = useCallback((): void => {
-    navigate('/chat');
-  }, [navigate]);
+    if (selectedProjectId && conversations && conversations.length > 0) {
+      navigate(`/chat/${encodeURIComponent(conversations[0].id)}`);
+    } else {
+      navigate('/chat');
+    }
+  }, [navigate, selectedProjectId, conversations]);
+
+  // Auto-navigate to a project's most recent conversation when the user switches projects.
+  // Two-phase: detect the switch → arm pendingProjectNavigationRef, then execute once
+  // the conversations query for the new project resolves (conversations !== undefined).
+  useEffect(() => {
+    // Phase 1: detect project switch (fires when selectedProjectId changes).
+    if (prevSelectedProjectIdRef.current !== selectedProjectId) {
+      const isInitialRender = prevSelectedProjectIdRef.current === undefined;
+      prevSelectedProjectIdRef.current = selectedProjectId;
+      if (!isInitialRender && selectedProjectId) {
+        // Arm the pending navigation; execute in Phase 2 once conversations load.
+        pendingProjectNavigationRef.current = selectedProjectId;
+      }
+    }
+
+    // Phase 2: execute pending navigation once conversations have loaded for this project.
+    if (
+      pendingProjectNavigationRef.current !== null &&
+      pendingProjectNavigationRef.current === selectedProjectId &&
+      conversations !== undefined
+    ) {
+      pendingProjectNavigationRef.current = null;
+      if (conversations.length > 0) {
+        navigate(`/chat/${encodeURIComponent(conversations[0].id)}`);
+      } else {
+        navigate('/chat');
+      }
+    }
+  }, [selectedProjectId, conversations, navigate]);
 
   const handleAddSubmit = useCallback((): void => {
     const trimmed = addValue.trim();
