@@ -22,7 +22,6 @@ import {
   findCodebaseByDefaultCwd,
   findCodebaseByName,
   updateCodebase,
-  updateCodebaseAllowEnvKeys,
   deleteCodebase,
 } from './codebases';
 
@@ -37,7 +36,6 @@ describe('codebases', () => {
     repository_url: 'https://github.com/user/repo',
     default_cwd: '/workspace/test-project',
     ai_assistant_type: 'claude',
-    allow_env_keys: false,
     commands: { plan: { path: '.claude/commands/plan.md', description: 'Plan feature' } },
     created_at: new Date(),
     updated_at: new Date(),
@@ -56,8 +54,8 @@ describe('codebases', () => {
 
       expect(result).toEqual(mockCodebase);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type, allow_env_keys) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        ['test-project', 'https://github.com/user/repo', '/workspace/test-project', 'claude', false]
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
+        ['test-project', 'https://github.com/user/repo', '/workspace/test-project', 'claude']
       );
     });
 
@@ -75,8 +73,8 @@ describe('codebases', () => {
 
       expect(result).toEqual(codebaseWithoutOptional);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type, allow_env_keys) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        ['test-project', null, '/workspace/test-project', 'claude', false]
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
+        ['test-project', null, '/workspace/test-project', 'claude']
       );
     });
 
@@ -191,6 +189,22 @@ describe('codebases', () => {
       // Original frozen object should be unchanged
       expect(frozenCommands).not.toHaveProperty('new-command');
     });
+
+    test('throws on corrupt JSON string (SQLite TEXT column)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: '{not valid json' }]));
+
+      await expect(getCodebaseCommands('codebase-123')).rejects.toThrow(
+        /Corrupt commands JSON for codebase codebase-123/
+      );
+    });
+
+    test('parses valid JSON string from SQLite TEXT column', async () => {
+      const commands = { plan: { path: 'plan.md', description: 'Plan' } };
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: JSON.stringify(commands) }]));
+
+      const result = await getCodebaseCommands('codebase-123');
+      expect(result).toEqual(commands);
+    });
   });
 
   describe('registerCommand', () => {
@@ -299,7 +313,6 @@ describe('codebases', () => {
             name: 'test-repo',
             default_cwd: '/workspace/test-repo',
             ai_assistant_type: 'claude',
-            allow_env_keys: false,
             repository_url: null,
             commands: {},
             created_at: new Date(),
@@ -396,26 +409,6 @@ describe('codebases', () => {
       await updateCodebase('codebase-123', {});
 
       expect(mockQuery).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('updateCodebaseAllowEnvKeys', () => {
-    test('flips the consent bit', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-
-      await updateCodebaseAllowEnvKeys('codebase-123', true);
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        'UPDATE remote_agent_codebases SET allow_env_keys = $1, updated_at = NOW() WHERE id = $2',
-        [true, 'codebase-123']
-      );
-    });
-
-    test('throws when codebase not found', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
-      await expect(updateCodebaseAllowEnvKeys('missing', false)).rejects.toThrow(
-        'Codebase missing not found'
-      );
     });
   });
 

@@ -18,9 +18,11 @@ export default tseslint.config(
       '.claude/worktrees/**',
       '.claude/skills/**',
       '.archon/scripts/**/!(forge-cli).ts',
+      '**/*.generated.ts', // Auto-generated source files (content inlined via JSON.stringify)
       '**/*.js',
       '*.mjs',
       '**/*.test.ts',
+      '**/src/test/**', // Test helper files (mock factories, fixtures)
       '*.d.ts', // Root-level declaration files (not in tsconfig project scope)
       '**/*.generated.d.ts', // Auto-generated declaration files (e.g. openapi-typescript output)
       'packages/web/vite.config.ts', // Vite config doesn't need type-checked linting
@@ -58,7 +60,7 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}'],
+    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts'],
     languageOptions: {
       parserOptions: {
         projectService: true,

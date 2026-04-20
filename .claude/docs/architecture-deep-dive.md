@@ -33,7 +33,7 @@ Slack event
             → Otherwise → buildOrchestratorPrompt() (prompt-builder.ts:116)
             → Prompt includes: registered projects, discovered workflows, /invoke-workflow format
           → sessionDb.getActiveSession() → transitionSession('first-message') if none (orchestrator-agent.ts:462)
-          → getAssistantClient(conversation.ai_assistant_type) (orchestrator-agent.ts:470)
+          → getAgentProvider(conversation.ai_assistant_type) (orchestrator-agent.ts:470)
           → cwd = getArchonWorkspacesPath() (orchestrator-agent.ts:458)
           → handleBatchMode() or handleStreamMode() based on getStreamingMode()
 
@@ -313,7 +313,7 @@ Narrows `IPlatformAdapter` to `WebAdapter` for web-specific methods: `setConvers
 | Message entry | `adapters/src/chat/slack/adapter.ts`, `server/src/index.ts` |
 | Orchestration | `core/src/orchestrator/orchestrator-agent.ts`, `core/src/orchestrator/orchestrator.ts` |
 | Locking | `core/src/utils/conversation-lock.ts` |
-| AI clients | `core/src/clients/claude.ts`, `core/src/clients/factory.ts` |
+| AI providers | `core/src/providers/claude.ts`, `core/src/providers/factory.ts` |
 | Commands | `core/src/handlers/command-handler.ts` |
 | Sessions | `core/src/db/sessions.ts`, `core/src/state/session-transitions.ts` |
 | Workflows | `workflows/src/executor.ts`, `workflows/src/dag-executor.ts`, `workflows/src/loader.ts` |

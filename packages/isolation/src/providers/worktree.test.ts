@@ -34,8 +34,12 @@ let syncWorkspaceSpy: Mock<typeof git.syncWorkspace>;
 
 // Mock fs.promises.access for destroy() existence check
 const mockAccess = mock(() => Promise.resolve());
+const mockReadFile = mock(() => Promise.reject(new Error('ENOENT')));
+const mockRm = mock(() => Promise.resolve());
 mock.module('node:fs/promises', () => ({
   access: mockAccess,
+  readFile: mockReadFile,
+  rm: mockRm,
 }));
 
 import { WorktreeProvider } from './worktree';
@@ -69,7 +73,19 @@ describe('WorktreeProvider', () => {
     listWorktreesSpy.mockResolvedValue([]);
     findWorktreeByBranchSpy.mockResolvedValue(null);
     getCanonicalRepoPathSpy.mockImplementation(async path => path);
-    mockAccess.mockResolvedValue(undefined); // Path exists by default
+    // Most paths exist by default (directoryExists checks for destroy etc.),
+    // but .gitmodules is absent by default — most repos don't use submodules,
+    // and default-on submodule init must skip cleanly in that case.
+    mockAccess.mockImplementation(async (path: unknown) => {
+      if (typeof path === 'string' && path.endsWith('.gitmodules')) {
+        const err = new Error('ENOENT') as NodeJS.ErrnoException;
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return undefined;
+    });
+    mockReadFile.mockRejectedValue(new Error('ENOENT')); // .git file not readable by default
+    mockRm.mockResolvedValue(undefined);
 
     // Default mocks for workspace sync
     getDefaultBranchSpy.mockResolvedValue('main');
@@ -92,6 +108,8 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy.mockRestore();
     syncWorkspaceSpy.mockRestore();
     mockAccess.mockClear();
+    mockReadFile.mockClear();
+    mockRm.mockClear();
   });
 
   describe('generateBranchName', () => {
@@ -297,15 +315,16 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('reuses existing branch when it already exists and no fromBranch', async () => {
+    test('resets and reuses existing branch when it already exists and no fromBranch', async () => {
       const alreadyExistsError = new Error('fatal: branch already exists') as Error & {
         stderr: string;
       };
       alreadyExistsError.stderr =
         "fatal: a branch named 'archon/task-test-adapters' already exists";
 
-      // First call fails, second succeeds (fallback)
+      // First call fails (worktree add -b), second succeeds (branch -f), third succeeds (worktree add)
       execSpy.mockRejectedValueOnce(alreadyExistsError);
+      execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
       execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
 
       const request: IsolationRequest = {
@@ -315,6 +334,13 @@ describe('WorktreeProvider', () => {
       };
 
       await provider.create(request);
+
+      // Verify branch was reset to start-point
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'branch', '-f', 'archon/task-test-adapters', 'origin/main'],
+        expect.any(Object)
+      );
 
       // Fallback call should not include a start-point
       expect(execSpy).toHaveBeenCalledWith(
@@ -492,8 +518,10 @@ describe('WorktreeProvider', () => {
       );
     });
 
-    test('adopts existing worktree if found', async () => {
+    test('adopts existing worktree when repo ownership matches', async () => {
       worktreeExistsSpy.mockResolvedValue(true);
+      // .git file points to the same repo root as the request
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
 
       const env = await provider.create(baseRequest);
 
@@ -506,6 +534,56 @@ describe('WorktreeProvider', () => {
         return args.includes('add');
       });
       expect(addCalls).toHaveLength(0);
+    });
+
+    test('throws when worktree belongs to different repo root (cross-checkout)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue('gitdir: /different/repo/.git/worktrees/archon/issue-42\n');
+
+      await expect(provider.create(baseRequest)).rejects.toThrow(/belongs to a different clone/);
+    });
+
+    test('throws when .git is a directory (full checkout, not a worktree)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      const eisdirError = new Error('EISDIR') as NodeJS.ErrnoException;
+      eisdirError.code = 'EISDIR';
+      mockReadFile.mockRejectedValue(eisdirError);
+
+      await expect(provider.create(baseRequest)).rejects.toThrow(
+        /path contains a full git checkout/
+      );
+    });
+
+    test('throws when .git file cannot be read (permission denied)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      const eaccesError = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
+      eaccesError.code = 'EACCES';
+      mockReadFile.mockRejectedValue(eaccesError);
+
+      await expect(provider.create(baseRequest)).rejects.toThrow(
+        /Cannot verify worktree ownership/
+      );
+    });
+
+    test('throws when .git pointer is not a git-worktree reference (e.g., submodule)', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/modules/submodule-name\n');
+
+      await expect(provider.create(baseRequest)).rejects.toThrow(/not a git-worktree reference/);
+    });
+
+    test('adopts across path normalization differences (trailing slash)', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        canonicalRepoPath: '/workspace/repo/' as IsolationRequest['canonicalRepoPath'],
+      };
+      worktreeExistsSpy.mockResolvedValue(true);
+      // .git file has no trailing slash — resolve() should normalize
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
+
+      const env = await provider.create(request);
+
+      expect(env.metadata).toHaveProperty('adopted', true);
     });
 
     test('adopts worktree by PR branch name (skill symbiosis)', async () => {
@@ -522,6 +600,8 @@ describe('WorktreeProvider', () => {
       worktreeExistsSpy.mockResolvedValueOnce(false);
       // findWorktreeByBranch finds existing worktree
       findWorktreeByBranchSpy.mockResolvedValue('/workspace/worktrees/repo/feature-auth');
+      // Same-clone ownership match so adoption proceeds
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/feature-auth\n');
 
       const env = await provider.create(request);
 
@@ -537,7 +617,26 @@ describe('WorktreeProvider', () => {
       expect(addCalls).toHaveLength(0);
     });
 
-    test('reuses existing branch if it already exists', async () => {
+    test('throws when PR-branch-adopted worktree belongs to a different clone', async () => {
+      const request: PRIsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/workspace/repo',
+        workflowType: 'pr',
+        identifier: '42',
+        prBranch: 'feature/auth',
+        isForkPR: false,
+      };
+
+      // Primary path misses, secondary findWorktreeByBranch hits
+      worktreeExistsSpy.mockResolvedValueOnce(false);
+      findWorktreeByBranchSpy.mockResolvedValue('/workspace/worktrees/repo/feature-auth');
+      // .git points to a different clone
+      mockReadFile.mockResolvedValue('gitdir: /other/clone/.git/worktrees/feature-auth\n');
+
+      await expect(provider.create(request)).rejects.toThrow(/belongs to a different clone/);
+    });
+
+    test('resets stale branch to start-point when it already exists', async () => {
       let callCount = 0;
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         callCount++;
@@ -571,7 +670,14 @@ describe('WorktreeProvider', () => {
         expect.any(Object)
       );
 
-      // Verify second call used existing branch
+      // Verify branch was reset to start-point before checkout
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'branch', '-f', 'archon/issue-42', 'origin/main'],
+        expect.any(Object)
+      );
+
+      // Verify final call used existing (reset) branch
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         expect.arrayContaining([
@@ -584,6 +690,42 @@ describe('WorktreeProvider', () => {
         ]),
         expect.any(Object)
       );
+    });
+
+    test('propagates error if branch -f reset fails (protected branch, etc.)', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        // First worktree add call fails (branch exists)
+        if (args.includes('worktree') && args.includes('add') && args.includes('-b')) {
+          const error = new Error(
+            'fatal: A branch named archon/issue-42 already exists.'
+          ) as Error & { stderr?: string };
+          error.stderr = 'fatal: A branch named archon/issue-42 already exists.';
+          throw error;
+        }
+        // Reset call fails (e.g., branch checked out elsewhere, update hook refused)
+        if (args.includes('branch') && args.includes('-f')) {
+          const error = new Error('fatal: cannot force update the branch') as Error & {
+            stderr?: string;
+          };
+          error.stderr = "fatal: cannot force update the current branch 'archon/issue-42'";
+          throw error;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(provider.create(baseRequest)).rejects.toThrow(/cannot force update/);
+
+      // Verify we did NOT retry the worktree add after reset failure
+      const secondWorktreeAdd = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return (
+          args.includes('worktree') &&
+          args.includes('add') &&
+          !args.includes('-b') &&
+          args.includes('archon/issue-42')
+        );
+      });
+      expect(secondWorktreeAdd).toHaveLength(0);
     });
 
     test('throws error if PR fetch fails (same-repo PR)', async () => {
@@ -814,6 +956,158 @@ describe('WorktreeProvider', () => {
       expect(mkdirSpy).toHaveBeenCalledWith(
         join(TEST_ARCHON_HOME, 'workspaces', 'Widinglabs', 'sasha-demo', 'worktrees'),
         { recursive: true }
+      );
+    });
+
+    // Helper: make .gitmodules "exist" (access resolves) while other paths
+    // retain the default behavior set in beforeEach.
+    const makeGitmodulesPresent = (): void => {
+      mockAccess.mockImplementation(async () => undefined);
+    };
+
+    const countSubmoduleExecCalls = (): number =>
+      execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule') && args.includes('update');
+      }).length;
+
+    const getSubmoduleCallArgs = (): string[] | undefined =>
+      execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('submodule') && args.includes('update');
+      })?.[1] as string[] | undefined;
+
+    test('initializes submodules by default when .gitmodules exists', async () => {
+      // Default provider has no initSubmodules in config — should run.
+      makeGitmodulesPresent();
+
+      await provider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(1);
+      expect(getSubmoduleCallArgs()).toEqual(
+        expect.arrayContaining([
+          '-C',
+          expect.any(String),
+          'submodule',
+          'update',
+          '--init',
+          '--recursive',
+        ])
+      );
+    });
+
+    test('initializes submodules when explicitly opted in and .gitmodules exists', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      makeGitmodulesPresent();
+
+      await submoduleProvider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(1);
+      expect(getSubmoduleCallArgs()).toEqual(
+        expect.arrayContaining(['submodule', 'update', '--init', '--recursive'])
+      );
+    });
+
+    test('skips submodule init when initSubmodules is false', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: false,
+      });
+      const noSubmoduleProvider = new WorktreeProvider(configLoader);
+      // Even when .gitmodules exists, explicit opt-out must win.
+      makeGitmodulesPresent();
+
+      await noSubmoduleProvider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(0);
+    });
+
+    test('skips submodule init when .gitmodules does not exist', async () => {
+      // Default mock from beforeEach already returns ENOENT for .gitmodules.
+      await provider.create(baseRequest);
+
+      expect(countSubmoduleExecCalls()).toBe(0);
+    });
+
+    test('throws classifiable error when submodule init fails (fail-fast)', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      makeGitmodulesPresent();
+
+      const gitError = Object.assign(new Error('git submodule update failed'), {
+        stderr: 'fatal: could not read from remote repository',
+      });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('submodule')) {
+          throw gitError;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      // A worktree with uninitialized submodules is a silent broken state;
+      // the error must surface rather than be swallowed.
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed/
+      );
+    });
+
+    test('throws when .gitmodules read fails with EACCES (fail-fast, no silent skip)', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+
+      // .gitmodules read fails with a non-ENOENT error. Silently skipping
+      // would produce a worktree with empty submodule dirs — the exact
+      // silent-broken-state this feature exists to prevent.
+      mockAccess.mockImplementation(async (path: unknown) => {
+        if (typeof path === 'string' && path.endsWith('.gitmodules')) {
+          const err = new Error('EACCES') as NodeJS.ErrnoException;
+          err.code = 'EACCES';
+          throw err;
+        }
+        return undefined;
+      });
+
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed: cannot read \.gitmodules \(EACCES\)/
+      );
+      // Skipped the git op since we couldn't even read .gitmodules.
+      expect(countSubmoduleExecCalls()).toBe(0);
+    });
+
+    test('throws classifiable error when submodule init times out', async () => {
+      const configLoader: RepoConfigLoader = async () => ({
+        baseBranch: 'main',
+        initSubmodules: true,
+      });
+      const submoduleProvider = new WorktreeProvider(configLoader);
+      makeGitmodulesPresent();
+
+      // Simulate execFileAsync timeout: the error surface matches what node's
+      // child_process produces when a command exceeds its timeout.
+      const timeoutError = Object.assign(new Error('Command failed: git submodule update'), {
+        killed: true,
+        signal: 'SIGTERM',
+        stderr: '',
+      });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('submodule')) {
+          throw timeoutError;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
+        /Submodule initialization failed/
       );
     });
   });
@@ -1474,6 +1768,9 @@ describe('WorktreeProvider', () => {
 
     test('does not copy files when adopting existing worktree', async () => {
       worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue(
+        'gitdir: /.archon/workspaces/owner/repo/.git/worktrees/archon/issue-42\n'
+      );
       const configLoader: RepoConfigLoader = async () => ({
         copyFiles: ['.env.example -> .env'],
       });
@@ -1623,6 +1920,7 @@ describe('WorktreeProvider', () => {
       // Simulate valid worktree: directory exists and IS a valid worktree
       accessSpy.mockResolvedValue(undefined); // Directory exists
       worktreeExistsSpy.mockResolvedValue(true); // And IS a valid worktree (will be adopted)
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-999\n');
 
       await provider.create(request);
 
@@ -1918,6 +2216,9 @@ describe('WorktreeProvider', () => {
     test('does not sync workspace when adopting existing worktree', async () => {
       // Worktree exists - triggers adoption path (skips createWorktree)
       worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue(
+        'gitdir: /workspace/owner/repo/.git/worktrees/archon/issue-42\n'
+      );
 
       await provider.create(baseRequest);
 
@@ -2158,6 +2459,93 @@ describe('WorktreeProvider', () => {
       expect(path).toBe(
         join(TEST_ARCHON_HOME, 'workspaces', 'Widinglabs', 'sasha-demo', 'worktrees', branchName)
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Per-repo `worktree.path` override (co-located worktrees opt-in) — #1117 successor
+  // ---------------------------------------------------------------------------
+  describe('worktree.path repo-local override', () => {
+    const baseRequest: IsolationRequest = {
+      codebaseId: 'cb-local-1',
+      codebaseName: 'owner/myapp',
+      canonicalRepoPath: '/Users/dev/Projects/myapp',
+      workflowType: 'task',
+      identifier: 'add-feature',
+    };
+
+    test('uses <repoRoot>/<path>/<branch> when worktree.path is set', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const result = provider.getWorktreePath(baseRequest, branch, { path: '.worktrees' });
+      expect(result).toBe(join('/Users/dev/Projects/myapp', '.worktrees', branch));
+    });
+
+    test('empty / whitespace-only path is ignored and default layout applies', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const expectedDefault = join(
+        TEST_ARCHON_HOME,
+        'workspaces',
+        'owner',
+        'myapp',
+        'worktrees',
+        branch
+      );
+      expect(provider.getWorktreePath(baseRequest, branch, { path: '' })).toBe(expectedDefault);
+      expect(provider.getWorktreePath(baseRequest, branch, { path: '   ' })).toBe(expectedDefault);
+    });
+
+    test('null / undefined config falls back to workspace-scoped default', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const expected = join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'myapp', 'worktrees', branch);
+      expect(provider.getWorktreePath(baseRequest, branch, null)).toBe(expected);
+      expect(provider.getWorktreePath(baseRequest, branch, undefined)).toBe(expected);
+      expect(provider.getWorktreePath(baseRequest, branch)).toBe(expected);
+    });
+
+    test('override wins even when repo lives under ~/.archon/workspaces/', () => {
+      // Precedence contract: per-repo `worktree.path` is the highest layer.
+      // A repo that would normally land in workspaces/owner/repo/worktrees/
+      // still gets a repo-local worktree when the config opts in.
+      const request: IsolationRequest = {
+        codebaseId: 'cb-local-2',
+        codebaseName: 'owner/repo',
+        canonicalRepoPath: join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'repo'),
+        workflowType: 'task',
+        identifier: 'my-task',
+      };
+      const branch = provider.generateBranchName(request);
+      const result = provider.getWorktreePath(request, branch, { path: 'worktrees-local' });
+      expect(result).toBe(
+        join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'repo', 'worktrees-local', branch)
+      );
+    });
+
+    test('rejects an absolute worktree.path with a clear error', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      expect(() =>
+        provider.getWorktreePath(baseRequest, branch, { path: '/tmp/worktrees' })
+      ).toThrow(/must be relative to the repo root/);
+    });
+
+    test('rejects a worktree.path that escapes the repo root via `..`', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      expect(() => provider.getWorktreePath(baseRequest, branch, { path: '../worktrees' })).toThrow(
+        /must stay within the repo/
+      );
+      expect(() => provider.getWorktreePath(baseRequest, branch, { path: '..' })).toThrow(
+        /must stay within the repo/
+      );
+      expect(() =>
+        provider.getWorktreePath(baseRequest, branch, { path: 'nested/../../escape' })
+      ).toThrow(/must stay within the repo/);
+    });
+
+    test('accepts a nested relative path without `..`', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const result = provider.getWorktreePath(baseRequest, branch, {
+        path: '.archon/worktrees',
+      });
+      expect(result).toBe(join('/Users/dev/Projects/myapp', '.archon/worktrees', branch));
     });
   });
 

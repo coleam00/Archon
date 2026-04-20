@@ -1,6 +1,6 @@
 {
   "name": "@archon/core",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -9,7 +9,6 @@
     "./types": "./src/types/index.ts",
     "./db": "./src/db/index.ts",
     "./db/*": "./src/db/*.ts",
-    "./clients": "./src/clients/index.ts",
     "./operations": "./src/operations/index.ts",
     "./operations/*": "./src/operations/*.ts",
     "./workflows": "./src/workflows/index.ts",
@@ -23,17 +22,16 @@
     "./state/*": "./src/state/*.ts"
   },
   "scripts": {
-    "test": "bun test src/clients/codex-binary-guard.test.ts && bun test src/utils/codex-binary-resolver.test.ts && bun test src/utils/codex-binary-resolver-dev.test.ts && bun test src/clients/claude.test.ts src/clients/codex.test.ts src/clients/factory.test.ts && bun test src/handlers/command-handler.test.ts && bun test src/handlers/clone.test.ts && bun test src/db/adapters/postgres.test.ts && bun test src/db/adapters/sqlite.test.ts src/db/codebases.test.ts src/db/connection.test.ts src/db/conversations.test.ts src/db/env-vars.test.ts src/db/isolation-environments.test.ts src/db/messages.test.ts src/db/sessions.test.ts src/db/workflow-events.test.ts src/db/workflows.test.ts src/utils/defaults-copy.test.ts src/utils/worktree-sync.test.ts src/utils/conversation-lock.test.ts src/utils/credential-sanitizer.test.ts src/utils/port-allocation.test.ts src/utils/error.test.ts src/utils/error-formatter.test.ts src/utils/github-graphql.test.ts src/utils/env-allowlist.test.ts src/utils/env-leak-scanner.test.ts src/config/ src/state/ && bun test src/utils/path-validation.test.ts && bun test src/services/cleanup-service.test.ts && bun test src/services/title-generator.test.ts && bun test src/workflows/ && bun test src/operations/workflow-operations.test.ts && bun test src/operations/isolation-operations.test.ts && bun test src/orchestrator/orchestrator.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts && bun test src/orchestrator/orchestrator-isolation.test.ts",
+    "test": "bun test src/handlers/command-handler.test.ts && bun test src/handlers/clone.test.ts && bun test src/db/adapters/postgres.test.ts && bun test src/db/connection.test.ts && bun test src/db/adapters/sqlite.test.ts src/db/codebases.test.ts src/db/conversations.test.ts src/db/env-vars.test.ts src/db/isolation-environments.test.ts src/db/messages.test.ts src/db/sessions.test.ts src/db/workflow-events.test.ts src/db/workflows.test.ts src/utils/defaults-copy.test.ts src/utils/worktree-sync.test.ts src/utils/conversation-lock.test.ts src/utils/credential-sanitizer.test.ts src/utils/port-allocation.test.ts src/utils/error.test.ts src/utils/error-formatter.test.ts src/utils/github-graphql.test.ts src/config/ src/state/ && bun test src/utils/path-validation.test.ts && bun test src/services/cleanup-service.test.ts && bun test src/services/title-generator.test.ts && bun test src/workflows/ && bun test src/operations/workflow-operations.test.ts && bun test src/operations/isolation-operations.test.ts && bun test src/orchestrator/orchestrator.test.ts && bun test src/orchestrator/orchestrator-agent.test.ts && bun test src/orchestrator/orchestrator-isolation.test.ts",
     "type-check": "bun x tsc --noEmit",
     "build": "echo 'No build needed - Bun runs TypeScript directly'"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.89",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
-    "@openai/codex-sdk": "^0.116.0",
     "pg": "^8.11.0",
     "zod": "^3"
   },

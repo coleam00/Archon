@@ -2,6 +2,12 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+
+// Bootstrap provider registry (needed by capability-driven warnings in validator)
+clearRegistry();
+registerBuiltinProviders();
+
 import {
   levenshtein,
   findSimilar,
@@ -25,11 +31,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-function makeWorkflow(
-  name: string,
-  nodes: DagNode[],
-  provider?: 'claude' | 'codex'
-): WorkflowDefinition {
+function makeWorkflow(name: string, nodes: DagNode[], provider?: string): WorkflowDefinition {
   return {
     name,
     description: 'test workflow',
@@ -221,7 +223,7 @@ describe('validateWorkflowResources — MCP validation', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
     expect(mcpWarnings).toHaveLength(1);
-    expect(mcpWarnings[0].message).toContain('Claude-only');
+    expect(mcpWarnings[0].message).toContain('not supported by provider');
   });
 });
 
@@ -288,6 +290,61 @@ describe('discoverAvailableCommands', () => {
     const without = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
     expect(withDefaults.length).toBeGreaterThanOrEqual(without.length);
   });
+
+  // --- Home-scoped commands (~/.archon/commands/) — new capability
+  describe('home-scoped commands', () => {
+    let homeDir: string;
+    const originalArchonHome = process.env.ARCHON_HOME;
+    const originalArchonDocker = process.env.ARCHON_DOCKER;
+
+    beforeEach(async () => {
+      homeDir = await mkdtemp(join(tmpdir(), 'validator-home-'));
+      process.env.ARCHON_HOME = homeDir;
+      delete process.env.ARCHON_DOCKER;
+    });
+
+    afterEach(async () => {
+      await rm(homeDir, { recursive: true, force: true });
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      if (originalArchonDocker === undefined) {
+        delete process.env.ARCHON_DOCKER;
+      } else {
+        process.env.ARCHON_DOCKER = originalArchonDocker;
+      }
+    });
+
+    async function createHomeCommand(name: string, content = '# Home helper'): Promise<void> {
+      const dir = join(homeDir, 'commands');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${name}.md`), content);
+    }
+
+    test('discovers commands placed at ~/.archon/commands/', async () => {
+      await createHomeCommand('my-personal-helper');
+      const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
+      expect(commands).toContain('my-personal-helper');
+    });
+
+    test('resolveCommand (via validateCommand) finds home-scoped commands when repo has none', async () => {
+      await createHomeCommand('only-in-home');
+      const result = await validateCommand('only-in-home', tmpDir, { loadDefaultCommands: false });
+      expect(result.valid).toBe(true);
+    });
+
+    test('repo command overrides home command with the same name', async () => {
+      await createHomeCommand('shared', '# Home version');
+      await createCommandFile('shared', '# Repo version');
+      // Both resolve but the repo wins — validator only asserts existence, so the
+      // strong behavioral assertion lives in the executor-shared loadCommand tests.
+      // Here we just confirm that having both doesn't error.
+      const result = await validateCommand('shared', tmpDir, { loadDefaultCommands: false });
+      expect(result.valid).toBe(true);
+    });
+  });
 });
 
 // =============================================================================
@@ -340,5 +397,50 @@ describe('validateWorkflowResources — script nodes', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const scriptErrors = issues.filter(i => i.level === 'error' && i.field === 'script');
     expect(scriptErrors).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — inline agents capability warning
+// =============================================================================
+
+describe('validateWorkflowResources — agents capability', () => {
+  const agentsField = {
+    'brief-gen': { description: 'd', prompt: 'p' },
+  };
+
+  test('warns when provider does not support inline agents (codex)', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [{ id: 'step1', prompt: 'p', agents: agentsField } as unknown as DagNode],
+      'codex'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(i => i.level === 'warning' && i.field === 'agents');
+    expect(warning).toBeDefined();
+    expect(warning!.message).toContain("not supported by provider 'codex'");
+    expect(warning!.hint).toContain('claude');
+  });
+
+  test('no agents-capability warning when provider is claude', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [{ id: 'step1', prompt: 'p', agents: agentsField } as unknown as DagNode],
+      'claude'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(i => i.level === 'warning' && i.field === 'agents');
+    expect(warning).toBeUndefined();
+  });
+
+  test('no warning when node has no agents field', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [{ id: 'step1', prompt: 'p' } as unknown as DagNode],
+      'codex'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warning = issues.find(i => i.level === 'warning' && i.field === 'agents');
+    expect(warning).toBeUndefined();
   });
 });

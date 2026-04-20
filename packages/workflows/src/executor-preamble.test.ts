@@ -114,7 +114,7 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
         commands: { folder: '' },
       })
     ),
-    createAssistantClient: mock(() => ({
+    getAgentProvider: mock(() => ({
       run: mock(async () => {}),
     })),
   } as unknown as WorkflowDeps;
@@ -177,8 +177,10 @@ describe('executeWorkflow preamble', () => {
         started_at: recentTime,
         status: 'running',
       });
+      const updateSpy = mock(async () => {});
       const store = makeStore({
         getActiveWorkflowRunByPath: mock(async () => activeRun),
+        updateWorkflowRun: updateSpy,
       });
       const deps = makeDeps(store);
       const platform = makePlatform();
@@ -194,14 +196,25 @@ describe('executeWorkflow preamble', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('already running');
+      expect(result.error).toContain('already active');
 
-      // Rejection message was sent
-      const blockMsg = findMessage(platform, 'Workflow already running');
-      expect(blockMsg).toBeDefined();
+      // Actionable rejection message was sent (mentions worktree-in-use,
+      // workflow name, and concrete next-action commands)
+      const blockCall = findMessage(platform, 'in use');
+      expect(blockCall).toBeDefined();
+      const blockMsg = blockCall?.[1] as string;
+      expect(blockMsg).toContain('active-workflow');
+      expect(blockMsg).toContain('/workflow cancel');
 
-      // No new workflow was created
-      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+      // The guard now runs AFTER the row is created (so it always has a
+      // self-ID to exclude). On guard fire, the just-created row is marked
+      // cancelled — preventing zombie pending rows that would block future
+      // dispatches.
+      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+      const cancelCall = updateSpy.mock.calls.find(
+        (call: unknown[]) => (call[1] as { status?: string })?.status === 'cancelled'
+      );
+      expect(cancelCall).toBeDefined();
     });
   });
 
@@ -278,8 +291,10 @@ describe('executeWorkflow preamble', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('Database error');
 
-      // No new workflow was created
-      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+      // The row is created BEFORE the guard runs (so the guard can exclude
+      // self). When the lock query throws, we abort early — the just-created
+      // row stays as 'pending' and falls out via the 5-min stale window.
+      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
 
       // Error message was sent
       const errorMsg =

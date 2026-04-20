@@ -224,7 +224,11 @@ concurrency:
       const config = await loadConfig();
 
       expect(config.assistant).toBe('claude');
-      expect(config.assistants).toEqual({ claude: {}, codex: {} });
+      // Built-ins always present; community providers (like `pi`) are
+      // seeded dynamically from the registry — check the built-ins
+      // explicitly rather than asserting an exhaustive shape.
+      expect(config.assistants.claude).toEqual({});
+      expect(config.assistants.codex).toEqual({});
       expect(config.streaming.telegram).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
     });
@@ -243,6 +247,31 @@ streaming:
 
       expect(config.assistant).toBe('codex');
       expect(config.streaming.telegram).toBe('batch');
+    });
+
+    test('throws on unknown DEFAULT_AI_ASSISTANT env var', async () => {
+      mockReadConfigFile.mockResolvedValue('');
+      process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
+
+      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+    });
+
+    test('throws on unknown defaultAssistant in global config', async () => {
+      mockReadConfigFile.mockResolvedValue('defaultAssistant: nonexistent-provider');
+
+      await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
+    });
+
+    test('throws on unknown assistant in repo config', async () => {
+      mockReadConfigFile.mockImplementation(async (path: string) => {
+        const normalized = path.replace(/\\/g, '/');
+        if (normalized.includes('/tmp/test-repo/.archon/config.yaml')) {
+          return 'assistant: nonexistent-provider';
+        }
+        return '';
+      });
+
+      await expect(loadConfig('/tmp/test-repo')).rejects.toThrow(/not a registered provider/);
     });
 
     test('repo config overrides global config', async () => {

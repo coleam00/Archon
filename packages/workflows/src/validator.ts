@@ -16,11 +16,13 @@ import {
   createLogger,
   getCommandFolderSearchPaths,
   getDefaultCommandsPath,
+  getHomeCommandsPath,
   findMarkdownFilesRecursive,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -31,7 +33,7 @@ function getLog(): ReturnType<typeof createLogger> {
 import { isScriptNode } from './schemas';
 import type { WorkflowDefinition, DagNode } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
-import { discoverScripts } from './script-discovery';
+import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
 
 // =============================================================================
@@ -140,17 +142,33 @@ export async function discoverAvailableCommands(
 ): Promise<string[]> {
   const names = new Set<string>();
 
-  // Repo search paths (findMarkdownFilesRecursive returns [] for ENOENT)
+  // Each scope is walked 1 subfolder deep (matches the workflows/scripts
+  // discovery convention — supports `defaults/` grouping, rejects deeper nesting).
+
+  // 1. Repo search paths
   const searchPaths = getCommandFolderSearchPaths(config?.commandFolder);
   for (const folder of searchPaths) {
     const dirPath = join(cwd, folder);
-    const files = await findMarkdownFilesRecursive(dirPath);
+    const files = await findMarkdownFilesRecursive(dirPath, '', { maxDepth: 1 });
     for (const { commandName } of files) {
       names.add(commandName);
     }
   }
 
-  // Bundled defaults
+  // 2. Home-scoped commands (~/.archon/commands/) — personal helpers reusable across repos.
+  // ENOENT already returns []; we only catch other errors (EACCES/EPERM/EIO) so a broken
+  // home-scope doesn't take down repo/bundled discovery.
+  const homePath = getHomeCommandsPath();
+  try {
+    const homeCommands = await findMarkdownFilesRecursive(homePath, '', { maxDepth: 1 });
+    for (const { commandName } of homeCommands) {
+      names.add(commandName);
+    }
+  } catch (err) {
+    getLog().warn({ err, path: homePath }, 'commands.home_discovery_failed');
+  }
+
+  // 3. Bundled defaults
   const loadDefaults = config?.loadDefaultCommands !== false;
   if (loadDefaults) {
     if (isBinaryBuild()) {
@@ -159,7 +177,7 @@ export async function discoverAvailableCommands(
       }
     } else {
       const defaultsPath = getDefaultCommandsPath();
-      const files = await findMarkdownFilesRecursive(defaultsPath);
+      const files = await findMarkdownFilesRecursive(defaultsPath, '', { maxDepth: 1 });
       for (const { commandName } of files) {
         names.add(commandName);
       }
@@ -170,24 +188,57 @@ export async function discoverAvailableCommands(
 }
 
 /**
+ * Resolve a command name to a file path within a single directory, walking at
+ * most 1 subfolder deep. Returns the first `.md` file whose basename matches
+ * `commandName`, or `null` if nothing matches.
+ *
+ * Within a single scope, if two files in different subfolders share a basename
+ * (e.g. `triage/review.md` and `team/review.md`), the earlier match by the
+ * deterministic walk order wins — duplicates within a scope are a user error.
+ */
+async function resolveCommandInDir(rootDir: string, commandName: string): Promise<string | null> {
+  const entries = await findMarkdownFilesRecursive(rootDir, '', { maxDepth: 1 });
+  const match = entries.find(e => e.commandName === commandName);
+  return match ? join(rootDir, match.relativePath) : null;
+}
+
+/**
  * Check if a command file can be resolved via the standard search paths.
  * Returns the resolved path if found, null otherwise.
+ *
+ * Resolution precedence (first hit wins):
+ *   1. Repo-local — `<cwd>/.archon/commands/` and configured folders
+ *   2. Home-scoped — `~/.archon/commands/` (personal helpers, reusable across repos)
+ *   3. Bundled defaults — embedded in the binary or the app's defaults folder
  */
 async function resolveCommand(
   commandName: string,
   cwd: string,
   config?: ValidationConfig
 ): Promise<string | null> {
-  // Repo search paths
+  // Each scope is walked 1 subfolder deep by basename — so `triage/review.md`
+  // is resolvable as `review`. This matches the workflows/scripts discovery
+  // convention and makes the listed commands in `discoverAvailableCommands`
+  // actually resolvable.
+
+  // 1. Repo search paths
   const searchPaths = getCommandFolderSearchPaths(config?.commandFolder);
   for (const folder of searchPaths) {
-    const filePath = join(cwd, folder, `${commandName}.md`);
-    if (await fileExists(filePath)) {
-      return filePath;
-    }
+    const resolved = await resolveCommandInDir(join(cwd, folder), commandName);
+    if (resolved) return resolved;
   }
 
-  // Bundled defaults
+  // 2. Home-scoped commands (~/.archon/commands/).
+  // ENOENT on the home dir already returns null; only wrap for other errors so a
+  // broken home-scope doesn't prevent bundled-default resolution.
+  try {
+    const homeResolved = await resolveCommandInDir(getHomeCommandsPath(), commandName);
+    if (homeResolved) return homeResolved;
+  } catch (err) {
+    getLog().warn({ err, commandName }, 'commands.home_resolve_failed');
+  }
+
+  // 3. Bundled defaults
   const loadDefaults = config?.loadDefaultCommands !== false;
   if (loadDefaults) {
     if (isBinaryBuild()) {
@@ -195,10 +246,8 @@ async function resolveCommand(
         return `[bundled:${commandName}]`;
       }
     } else {
-      const defaultsPath = join(getDefaultCommandsPath(), `${commandName}.md`);
-      if (await fileExists(defaultsPath)) {
-        return defaultsPath;
-      }
+      const defaultsResolved = await resolveCommandInDir(getDefaultCommandsPath(), commandName);
+      if (defaultsResolved) return defaultsResolved;
     }
   }
 
@@ -243,10 +292,15 @@ export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boo
 // Workflow resource validation (Level 3)
 // =============================================================================
 
-/** Get the resolved provider for a node (node-level > workflow-level) */
-function resolveProvider(node: DagNode, workflowProvider?: string): string {
+/** Get the resolved provider for a node (node-level > workflow-level > config default).
+ *  Returns undefined only when no provider is set at any level. */
+function resolveProvider(
+  node: DagNode,
+  workflowProvider?: string,
+  defaultProvider?: string
+): string | undefined {
   if ('provider' in node && node.provider) return node.provider;
-  return workflowProvider ?? 'claude';
+  return workflowProvider ?? defaultProvider;
 }
 
 /**
@@ -258,13 +312,14 @@ function resolveProvider(node: DagNode, workflowProvider?: string): string {
 export async function validateWorkflowResources(
   workflow: WorkflowDefinition,
   cwd: string,
-  config?: ValidationConfig
+  config?: ValidationConfig,
+  defaultProvider?: string
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
   const availableCommands = await discoverAvailableCommands(cwd, config);
 
   for (const node of workflow.nodes) {
-    const provider = resolveProvider(node, workflow.provider);
+    const provider = resolveProvider(node, workflow.provider, defaultProvider);
 
     // --- Command nodes: check file exists ---
     if ('command' in node && typeof node.command === 'string') {
@@ -335,15 +390,18 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using MCP with Codex
-      if (provider === 'codex') {
-        issues.push({
-          level: 'warning',
-          nodeId: node.id,
-          field: 'mcp',
-          message: 'MCP servers are Claude-only per-node — this will be ignored on Codex',
-          hint: 'For Codex, configure MCP servers globally in ~/.codex/config.toml instead',
-        });
+      // Warn if using MCP with a provider that doesn't support it
+      if (provider && isRegisteredProvider(provider)) {
+        const caps = getProviderCapabilities(provider);
+        if (!caps.mcp) {
+          issues.push({
+            level: 'warning',
+            nodeId: node.id,
+            field: 'mcp',
+            message: `MCP servers are not supported by provider '${provider}' — this will be ignored`,
+            hint: 'Remove the mcp field or switch to a provider that supports MCP',
+          });
+        }
       }
     }
 
@@ -367,42 +425,58 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using skills with Codex
-      if (provider === 'codex') {
-        issues.push({
-          level: 'warning',
-          nodeId: node.id,
-          field: 'skills',
-          message: 'Skills are Claude-only per-node — this will be ignored on Codex',
-          hint: 'For Codex, place skills in ~/.agents/skills/ for global discovery instead',
-        });
+      // Warn if using skills with a provider that doesn't support them
+      if (provider && isRegisteredProvider(provider)) {
+        const caps = getProviderCapabilities(provider);
+        if (!caps.skills) {
+          issues.push({
+            level: 'warning',
+            nodeId: node.id,
+            field: 'skills',
+            message: `Skills are not supported by provider '${provider}' — this will be ignored`,
+            hint: 'Remove the skills field or switch to a provider that supports skills',
+          });
+        }
       }
     }
 
-    // --- Hooks with Codex warning ---
-    if ('hooks' in node && node.hooks && provider === 'codex') {
-      issues.push({
-        level: 'warning',
-        nodeId: node.id,
-        field: 'hooks',
-        message: 'Hooks are Claude-only — this will be ignored on Codex',
-        hint: 'Hooks have no Codex equivalent. Remove them or switch to provider: claude',
-      });
-    }
+    // --- Capability-driven warnings for hooks and tool restrictions ---
+    if (provider && isRegisteredProvider(provider)) {
+      const caps = getProviderCapabilities(provider);
 
-    // --- Tool restrictions with Codex warning ---
-    if (provider === 'codex') {
-      if (
-        ('allowed_tools' in node && node.allowed_tools !== undefined) ||
-        ('denied_tools' in node && node.denied_tools !== undefined)
-      ) {
+      if ('hooks' in node && node.hooks && !caps.hooks) {
         issues.push({
           level: 'warning',
           nodeId: node.id,
-          field: 'allowed_tools/denied_tools',
-          message: 'Tool restrictions are Claude-only — this will be ignored on Codex',
-          hint: 'For Codex, configure tool restrictions per MCP server in ~/.codex/config.toml',
+          field: 'hooks',
+          message: `Hooks are not supported by provider '${provider}' — this will be ignored`,
+          hint: 'Remove the hooks field or switch to a provider that supports hooks',
         });
+      }
+
+      if ('agents' in node && node.agents && !caps.agents) {
+        issues.push({
+          level: 'warning',
+          nodeId: node.id,
+          field: 'agents',
+          message: `Inline agents are not supported by provider '${provider}' — this will be ignored`,
+          hint: 'Remove the agents field or switch to a provider that supports inline agents (e.g. claude)',
+        });
+      }
+
+      if (!caps.toolRestrictions) {
+        if (
+          ('allowed_tools' in node && node.allowed_tools !== undefined) ||
+          ('denied_tools' in node && node.denied_tools !== undefined)
+        ) {
+          issues.push({
+            level: 'warning',
+            nodeId: node.id,
+            field: 'allowed_tools/denied_tools',
+            message: `Tool restrictions are not supported by provider '${provider}' — this will be ignored`,
+            hint: 'Remove tool restriction fields or switch to a provider that supports them',
+          });
+        }
       }
     }
 
@@ -410,22 +484,23 @@ export async function validateWorkflowResources(
     if (isScriptNode(node)) {
       const script = node.script;
 
-      // Named script: validate file exists in .archon/scripts/
+      // Named script: validate file exists in repo or home scope.
+      // Precedence mirrors dag-executor: repo > home. Subfolders up to 1 level deep
+      // are searched by discoverScriptsForCwd, matching the workflows/commands convention.
       if (!isInlineScript(script)) {
-        const scriptsDir = resolve(cwd, '.archon', 'scripts');
-        const extensions = node.runtime === 'uv' ? ['.py'] : ['.ts', '.js'];
-        const existsResults = await Promise.all(
-          extensions.map(ext => fileExists(join(scriptsDir, `${script}${ext}`)))
-        );
-        const scriptExists = existsResults.some(Boolean);
+        const scripts = await discoverScriptsForCwd(cwd);
+        const entry = scripts.get(script);
+        const scriptExists =
+          entry !== undefined &&
+          (node.runtime === 'uv' ? entry.runtime === 'uv' : entry.runtime === 'bun');
 
         if (!scriptExists) {
           issues.push({
             level: 'error',
             nodeId: node.id,
             field: 'script',
-            message: `Named script '${script}' not found in .archon/scripts/`,
-            hint: `Create .archon/scripts/${script}.${node.runtime === 'uv' ? 'py' : 'ts'} with your script code`,
+            message: `Named script '${script}' not found in .archon/scripts/ or ~/.archon/scripts/`,
+            hint: `Create .archon/scripts/${script}.${node.runtime === 'uv' ? 'py' : 'ts'} with your script code (or place at ~/.archon/scripts/ to share across repos)`,
           });
         }
       }
@@ -542,19 +617,19 @@ export interface ScriptValidationResult {
 }
 
 /**
- * Discover all script names from .archon/scripts/ in the given cwd.
- * Returns a list of { name, path, runtime } entries.
+ * Discover all script names from the repo and home scopes.
+ * Returns a list of { name, path, runtime } entries. Repo-scoped scripts
+ * silently override same-named home-scoped entries.
  */
 export async function discoverAvailableScripts(
   cwd: string
 ): Promise<{ name: string; path: string; runtime: ScriptRuntime }[]> {
-  const scriptsDir = resolve(cwd, '.archon', 'scripts');
   try {
-    const scripts = await discoverScripts(scriptsDir);
+    const scripts = await discoverScriptsForCwd(cwd);
     return [...scripts.values()].map(s => ({ name: s.name, path: s.path, runtime: s.runtime }));
   } catch (error) {
     const err = error as Error;
-    getLog().warn({ err, scriptsDir }, 'script_discovery_failed');
+    getLog().warn({ err, cwd }, 'script_discovery_failed');
     return [];
   }
 }
@@ -567,28 +642,21 @@ export async function validateScript(
   cwd: string
 ): Promise<ScriptValidationResult> {
   const issues: ValidationIssue[] = [];
-  const scriptsDir = resolve(cwd, '.archon', 'scripts');
 
-  // Find the script file (any supported extension)
-  const allExtensions = ['.ts', '.js', '.py'];
-  let foundPath: string | null = null;
-  let detectedRuntime: ScriptRuntime | null = null;
+  // Look up across repo + home scopes (repo wins). discoverScriptsForCwd handles
+  // both 1-depth subfolders and the repo/home precedence.
+  const scripts = await discoverScriptsForCwd(cwd);
+  const entry = scripts.get(scriptName);
 
-  for (const ext of allExtensions) {
-    const candidate = join(scriptsDir, `${scriptName}${ext}`);
-    if (await fileExists(candidate)) {
-      foundPath = candidate;
-      detectedRuntime = ext === '.py' ? 'uv' : 'bun';
-      break;
-    }
-  }
+  const foundPath = entry?.path ?? null;
+  const detectedRuntime = entry?.runtime ?? null;
 
   if (!foundPath || !detectedRuntime) {
     issues.push({
       level: 'error',
       field: 'file',
-      message: `Script '${scriptName}' not found in .archon/scripts/`,
-      hint: `Create .archon/scripts/${scriptName}.ts (bun) or .archon/scripts/${scriptName}.py (uv)`,
+      message: `Script '${scriptName}' not found in .archon/scripts/ or ~/.archon/scripts/`,
+      hint: `Create .archon/scripts/${scriptName}.ts (bun) or .archon/scripts/${scriptName}.py (uv). Place at ~/.archon/scripts/ to share across repos.`,
     });
     return { scriptName, valid: false, issues };
   }

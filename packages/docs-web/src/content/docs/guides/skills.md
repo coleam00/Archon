@@ -124,7 +124,7 @@ Step-by-step content here. The agent loads this when the skill activates.
 ## Skill Discovery
 
 Skills are discovered from these locations (via `settingSources: ['project']`
-set in ClaudeClient):
+set in ClaudeProvider):
 
 | Location | Scope |
 |----------|-------|
@@ -235,6 +235,7 @@ To use skills, ensure the node uses Claude (the default provider, or set
 
 ## Related
 
+- [Inline sub-agents](/guides/authoring-workflows/#inline-sub-agents) — `agents:` field for workflow-scoped sub-agents (composes with `skills:` on the same node; user-defined agents win on ID collision with the internal `dag-node-skills` wrapper)
 - [Per-Node MCP Servers](/guides/mcp-servers/) — `mcp:` field for external tool access
 - [Hooks](/guides/hooks/) — `hooks:` field for tool permission control
 - [skills.sh](https://skills.sh) — marketplace for discovering skills

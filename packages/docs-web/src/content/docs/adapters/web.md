@@ -81,7 +81,7 @@ Accessible via the `/dashboard` route, the Command Center shows all workflow run
 
 ### Settings
 
-The `/settings` page lets you configure assistant defaults (model, provider) without editing YAML files.
+The `/settings` page lets you configure assistant defaults (model, provider) without editing YAML files. It also includes a **Projects** section for registering and managing codebases.
 
 ## Chat Interface
 
@@ -203,10 +203,11 @@ A separate dashboard SSE stream at `/api/stream/__dashboard__` multiplexes workf
 
 ### Registering a Project
 
-From the Web UI, you can register codebases in two ways:
+From the Web UI, you can register codebases in three ways:
 
-1. **Clone from URL** -- Use the `/clone <url>` command in chat, or use the API to POST to `/api/codebases` with a `url` field
-2. **Register a local path** -- POST to `/api/codebases` with a `path` field pointing to an existing git repository
+1. **Add Project input** -- Click **+** in the sidebar or go to **Settings → Projects** and enter a GitHub URL or local path. Inputs starting with `https://`, `ssh://`, `git@`, or `git://` are treated as remote URLs (cloned); everything else is treated as a local path (registered in place).
+2. **Clone from URL via chat** -- Use the `/clone <url>` command in chat, or use the API to POST to `/api/codebases` with a `url` field
+3. **Register a local path via API** -- POST to `/api/codebases` with a `path` field pointing to an existing git repository
 
 Registered codebases appear in the sidebar's project selector.
 

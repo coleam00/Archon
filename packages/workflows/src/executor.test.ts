@@ -54,6 +54,11 @@ mock.module('./event-emitter', () => ({
   getWorkflowEventEmitter: mock(() => mockEmitter),
 }));
 
+// --- Bootstrap provider registry (after path mocks) ---
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+clearRegistry();
+registerBuiltinProviders();
+
 // --- Import after mocks ---
 import { executeWorkflow } from './executor';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
@@ -101,7 +106,7 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
         commands: { folder: '' },
       })
     ),
-    createAssistantClient: mock(() => ({
+    getAgentProvider: mock(() => ({
       run: mock(async () => {}),
     })),
   } as unknown as WorkflowDeps;
@@ -180,6 +185,7 @@ describe('executeWorkflow', () => {
 
     it('blocks workflow when another is actively running', async () => {
       const activeRun = makeRun({
+        id: 'other-run-456',
         status: 'running',
         started_at: new Date().toISOString(), // Recent — not stale
       });
@@ -197,7 +203,210 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(result.success).toBe(false);
-      expect(result.error).toContain('already running');
+      expect(result.error).toContain('already active');
+    });
+
+    it('passes self-id and started_at to the lock query so self is excluded', async () => {
+      // The guard runs AFTER workflowRun is finalized so we always have
+      // a self-ID. Without these args, the dispatch's own row would match
+      // and falsely trigger the guard.
+      const selfRun = makeRun({ id: 'self-run-789', started_at: '2026-04-14T10:00:00.000Z' });
+      const getActiveSpy = mock(async () => null);
+      const store = makeStore({
+        createWorkflowRun: mock(async () => selfRun),
+        getActiveWorkflowRunByPath: getActiveSpy,
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(getActiveSpy).toHaveBeenCalledWith(
+        '/tmp',
+        expect.objectContaining({ id: 'self-run-789', startedAt: expect.any(Date) })
+      );
+    });
+
+    it('marks self as cancelled when guard fires (no zombie pending row)', async () => {
+      const selfRun = makeRun({ id: 'self-run-789' });
+      const otherRun = makeRun({ id: 'other-run-456', status: 'running' });
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        createWorkflowRun: mock(async () => selfRun),
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      // Without this, every guard-blocked dispatch would leak a `pending`
+      // row that briefly blocks future dispatches via the lock query.
+      expect(updateSpy).toHaveBeenCalledWith('self-run-789', { status: 'cancelled' });
+    });
+
+    it('uses the actionable "in use" message format with workflow name, duration, and short id', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'running',
+        started_at: new Date(Date.now() - 125000).toISOString(), // 2m 5s ago
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(sendMessageSpy).toHaveBeenCalled();
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon-implement');
+      expect(sentMessage).toContain('abc12345');
+      expect(sentMessage).toContain('2m 5s');
+      // Concrete next actions — every line tells the user something to do.
+      expect(sentMessage).toContain('/workflow status');
+      expect(sentMessage).toContain('/workflow cancel abc12345');
+      expect(sentMessage).toContain('--branch');
+    });
+
+    it('still returns failure when guard self-cancel update throws (best-effort)', async () => {
+      const selfRun = makeRun({ id: 'self-run', status: 'pending' });
+      const otherRun = makeRun({ id: 'other-run', status: 'running' });
+      const updateSpy = mock(async (id: string) => {
+        // Self-cancel attempt fails — must not crash, must still surface
+        // the "in use" failure to the user.
+        if (id === 'self-run') throw new Error('Update failed');
+      });
+      const store = makeStore({
+        createWorkflowRun: mock(async () => selfRun),
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test',
+        'db-conv-1'
+      );
+
+      // Cleanup failure must not mask the "in use" outcome.
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('already active');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Resume orphan cleanup
+  // -------------------------------------------------------------------------
+
+  describe('resume orphan cleanup', () => {
+    it('cancels orphaned pre-created row when resume activates', async () => {
+      // Orchestrator dispatched and pre-created this row before resume
+      // detection ran. Once resume takes over (using resumableRun instead),
+      // the pre-created row is a stale lock-token that would block the
+      // user's next back-to-back resume.
+      const preCreated = makeRun({ id: 'pre-created-orphan', status: 'pending' });
+      const resumable = makeRun({ id: 'failed-prior-run', status: 'failed' });
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        findResumableRun: mock(async () => resumable),
+        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'output1']])),
+        resumeWorkflowRun: mock(async () => makeRun({ id: 'failed-prior-run', status: 'running' })),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        preCreated
+      );
+
+      // Find the orphan-cancellation call (there may be other updateWorkflowRun
+      // calls during normal execution flow, e.g., status transitions).
+      const orphanCancelCall = updateSpy.mock.calls.find(
+        (call: unknown[]) =>
+          call[0] === 'pre-created-orphan' &&
+          (call[1] as { status?: string })?.status === 'cancelled'
+      );
+      expect(orphanCancelCall).toBeDefined();
+    });
+
+    it('proceeds with resume even if orphan cancellation fails (best-effort)', async () => {
+      const preCreated = makeRun({ id: 'pre-created-orphan', status: 'pending' });
+      const resumable = makeRun({ id: 'failed-prior-run', status: 'failed' });
+      const updateSpy = mock(async (id: string) => {
+        if (id === 'pre-created-orphan') throw new Error('DB busy');
+      });
+      const store = makeStore({
+        findResumableRun: mock(async () => resumable),
+        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'output1']])),
+        resumeWorkflowRun: mock(async () => makeRun({ id: 'failed-prior-run', status: 'running' })),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        preCreated
+      );
+
+      // Resume must still complete — the 5-min stale-pending window is the
+      // safety net for cleanup failures here.
+      expect(result.workflowRunId).toBe('failed-prior-run');
     });
   });
 
@@ -291,7 +500,7 @@ describe('executeWorkflow', () => {
             docsPath: 'packages/docs-web/src/content/docs',
           })
         ),
-        createAssistantClient: mock(() => ({
+        getAgentProvider: mock(() => ({
           run: mock(async () => {}),
         })),
       } as unknown as WorkflowDeps;
@@ -508,10 +717,10 @@ describe('executeWorkflow', () => {
       // DB env vars should have been fetched for the codebaseId
       expect(store.getCodebaseEnvVars).toHaveBeenCalledWith('codebase-1');
 
-      // The config passed to executeDagWorkflow (arg index 15) should have merged envVars
-      // (indices 12-14 are forgeType, forgeApiBase, forgeCli)
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[15] as WorkflowConfig | undefined;
-      expect(configArg?.envVars).toEqual({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
+      // The config passed to executeDagWorkflow (arg index 12) should have merged envVars
+      // (forge env vars are also injected by executor.ts into config.envVars)
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[12] as WorkflowConfig | undefined;
+      expect(configArg?.envVars).toMatchObject({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
     });
 
     it('does not call getCodebaseEnvVars when no codebaseId', async () => {
@@ -530,6 +739,160 @@ describe('executeWorkflow', () => {
       );
 
       expect(store.getCodebaseEnvVars).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Lock-token cleanup on pre-DAG failure paths (review #1)
+  //
+  // Any failure between row creation and DAG start that returns early must
+  // release the lock token. Without this, ghost pending/running rows block
+  // the path until the 5-min stale window or manual intervention.
+  // -------------------------------------------------------------------------
+
+  describe('lock cleanup on failure paths', () => {
+    it('cancels pre-created row when resumeWorkflowRun throws', async () => {
+      const preCreated = makeRun({ id: 'pre-created-orphan', status: 'pending' });
+      const resumable = makeRun({ id: 'failed-prior-run', status: 'failed' });
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        findResumableRun: mock(async () => resumable),
+        getCompletedDagNodeOutputs: mock(async () => new Map([['node1', 'out1']])),
+        resumeWorkflowRun: mock(async () => {
+          throw new Error('DB blew up during resume activation');
+        }),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test',
+        'db-conv-1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        preCreated
+      );
+
+      expect(result.success).toBe(false);
+      const cancelCall = updateSpy.mock.calls.find(
+        (call: unknown[]) =>
+          call[0] === 'pre-created-orphan' &&
+          (call[1] as { status?: string })?.status === 'cancelled'
+      );
+      expect(cancelCall).toBeDefined();
+    });
+
+    it('cancels workflowRun when guard query throws (no zombie row)', async () => {
+      const updateSpy = mock(async () => {});
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => {
+          throw new Error('DB connection lost during guard');
+        }),
+        updateWorkflowRun: updateSpy,
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test',
+        'db-conv-1'
+      );
+
+      expect(result.success).toBe(false);
+      const cancelCall = updateSpy.mock.calls.find(
+        (call: unknown[]) => (call[1] as { status?: string })?.status === 'cancelled'
+      );
+      expect(cancelCall).toBeDefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Status-aware blocking message (review #3)
+  //
+  // The lock query returns running, paused, AND fresh-pending rows.
+  // Telling a user to "wait" when the holder is `paused` is misleading —
+  // they need to approve/reject to unblock it.
+  // -------------------------------------------------------------------------
+
+  describe('blocking message status awareness', () => {
+    it('uses paused-specific copy when blocker is paused', async () => {
+      const pausedRun = makeRun({
+        id: 'paused-run-id',
+        workflow_name: 'archon-implement',
+        status: 'paused',
+        started_at: new Date(Date.now() - 10000).toISOString(),
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => pausedRun) });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+
+      const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      // Wrong action ("wait for it to finish") would let users sit forever
+      // on a workflow waiting for their own approval.
+      expect(msg).toContain('paused');
+      expect(msg).toContain('/workflow approve');
+      expect(msg).toContain('/workflow reject');
+      expect(msg).not.toContain('Wait for it to finish');
+    });
+
+    it('uses pending-specific copy when blocker is just starting', async () => {
+      const pendingRun = makeRun({
+        id: 'pending-run',
+        workflow_name: 'archon-implement',
+        status: 'pending',
+        started_at: new Date(Date.now() - 500).toISOString(),
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => pendingRun) });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+
+      const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(msg).toContain('starting');
+    });
+
+    it('uses running copy by default', async () => {
+      const runningRun = makeRun({
+        id: 'running-run',
+        workflow_name: 'archon-implement',
+        status: 'running',
+        started_at: new Date(Date.now() - 60000).toISOString(),
+      });
+      const sendMessageSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => runningRun) });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(deps, platform, 'conv-1', '/tmp', makeWorkflow(), 'test', 'db-conv-1');
+
+      const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(msg).toContain('running 1m');
+      expect(msg).toContain('Wait for it to finish');
     });
   });
 });
