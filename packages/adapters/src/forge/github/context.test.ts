@@ -276,7 +276,7 @@ describe('GitHubAdapter non-slash command context passing', () => {
   });
 
   test('should set contextToAppend for issue_comment events on issues', async () => {
-    const payload = createIssueCommentPayload('@archon help me with this issue', {
+    const payload = createIssueCommentPayload('@HarnessLab help me with this issue', {
       issueNumber: 99,
       issueTitle: 'Bug in login flow',
     });
@@ -291,7 +291,7 @@ describe('GitHubAdapter non-slash command context passing', () => {
   });
 
   test('should set contextToAppend for issue_comment events on PRs', async () => {
-    const payload = createIssueCommentPayload('@archon review this PR', {
+    const payload = createIssueCommentPayload('@HarnessLab review this PR', {
       issueNumber: 55,
       issueTitle: 'Add dark mode',
       isPR: true,
@@ -307,7 +307,7 @@ describe('GitHubAdapter non-slash command context passing', () => {
   });
 
   test('should set contextToAppend with different issue numbers and titles', async () => {
-    const payload = createIssueCommentPayload('@archon investigate this bug', {
+    const payload = createIssueCommentPayload('@HarnessLab investigate this bug', {
       issueNumber: 33,
       issueTitle: 'Memory leak in worker',
     });
@@ -322,7 +322,7 @@ describe('GitHubAdapter non-slash command context passing', () => {
   });
 
   test('should also set contextToAppend for slash commands (existing behavior)', async () => {
-    const payload = createIssueCommentPayload('@archon /status', {
+    const payload = createIssueCommentPayload('@HarnessLab /status', {
       issueNumber: 10,
       issueTitle: 'Setup tracking',
     });
@@ -338,7 +338,7 @@ describe('GitHubAdapter non-slash command context passing', () => {
 
   test('context format matches between slash and non-slash commands', async () => {
     // Slash command
-    const slashPayload = createIssueCommentPayload('@archon /help', {
+    const slashPayload = createIssueCommentPayload('@HarnessLab /help', {
       issueNumber: 42,
       issueTitle: 'Test Issue',
     });
@@ -348,7 +348,7 @@ describe('GitHubAdapter non-slash command context passing', () => {
     mockHandleMessage.mockClear();
 
     // Non-slash command
-    const nonSlashPayload = createIssueCommentPayload('@archon help me debug this', {
+    const nonSlashPayload = createIssueCommentPayload('@HarnessLab help me debug this', {
       issueNumber: 42,
       issueTitle: 'Test Issue',
     });
