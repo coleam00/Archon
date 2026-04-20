@@ -10,7 +10,7 @@
  * - Conversation-scoped subscriptions via registerRun() mapping
  */
 import { EventEmitter } from 'events';
-import type { ArtifactType } from './schemas';
+import type { ApprovalContext, ArtifactType } from './schemas';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -128,12 +128,17 @@ interface ToolCompletedEvent {
   durationMs: number;
 }
 
-interface ApprovalPendingEvent {
+interface ApprovalPendingEvent extends Pick<
+  ApprovalContext,
+  | 'nodeId'
+  | 'message'
+  | 'lastOutput'
+  | 'lastOutputTruncated'
+  | 'finalAssistantOutput'
+  | 'finalAssistantOutputTruncated'
+> {
   type: 'approval_pending';
   runId: string;
-  nodeId: string;
-  message: string;
-  lastOutput?: string;
 }
 
 interface WorkflowCancelledEvent {
