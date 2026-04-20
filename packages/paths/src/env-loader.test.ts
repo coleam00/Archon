@@ -66,9 +66,14 @@ describe('loadArchonEnv', () => {
 
     expect(process.env.TEST_EL_HOME_ONLY).toBe('from-home');
     expect(process.env.TEST_EL_OTHER).toBe('keep');
-    const line = stderrWrites.find(s => s.includes('loaded') && s.includes('from ~/'));
+    // Tilde-shortening of the rendered path is opportunistic (only when the
+    // tmpdir lives under `homedir()`). On Windows CI the tmpdir is on a
+    // different drive and the path renders absolute, so we match on count and
+    // the archon-home tmpdir segment rather than a literal `~` prefix.
+    const line = stderrWrites.find(s => s.includes('[archon] loaded') && !s.includes('repo scope'));
     expect(line).toBeDefined();
-    expect(line).toContain('loaded 2 keys from ~/');
+    expect(line).toContain('loaded 2 keys');
+    expect(line).toContain(join('archon-home', '.env'));
   });
 
   it('loads keys from <cwd>/.archon/.env and marks it as repo scope', () => {
