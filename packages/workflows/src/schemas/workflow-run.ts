@@ -113,6 +113,12 @@ export interface ApprovalContext {
   message: string;
   /** Bounded copy of the latest assistant output shown immediately before pausing. */
   lastOutput?: string;
+  /** Whether the bounded compatibility `lastOutput` snapshot was clipped. */
+  lastOutputTruncated?: boolean;
+  /** Semantic paused summary from the last contiguous assistant segment. */
+  finalAssistantOutput?: string;
+  /** Whether the semantic paused summary snapshot was clipped. */
+  finalAssistantOutputTruncated?: boolean;
   /** Distinguishes approval-gate pauses from interactive-loop pauses. */
   type?: 'approval' | 'interactive_loop';
   /** Current loop iteration when paused (interactive loops only). */
