@@ -12,6 +12,7 @@ import type { DagNodeState, WorkflowStepStatus } from '@/lib/types';
 import type { DagNode } from '@/lib/api';
 import { dagNodesToReactFlow, resolveNodeDisplay } from '@/lib/dag-layout';
 import { formatDurationMs } from '@/lib/format';
+import { t } from '@/lib/i18n';
 import {
   executionDagNode,
   type ExecutionFlowNode,
@@ -115,7 +116,7 @@ export function WorkflowDagViewer({
       {isRunning && currentlyExecuting && (
         <div className="absolute top-3 right-3 z-10 flex items-center gap-2 rounded-md bg-surface/90 backdrop-blur-sm border border-border px-3 py-1.5 text-xs">
           <span className="inline-block w-2 h-2 rounded-full bg-accent-bright animate-pulse" />
-          <span className="text-text-secondary">Executing:</span>
+          <span className="text-text-secondary">{t('execution.executing')}</span>
           <span className="font-medium text-text-primary">{currentlyExecuting.nodeName}</span>
           <span className="text-text-tertiary">
             {formatDurationMs(Date.now() - currentlyExecuting.startedAt)}

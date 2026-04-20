@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ExternalLink, Copy, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 interface HeaderProps {
   title: string;
@@ -64,7 +65,7 @@ export function Header({
         ) : projectName ? (
           <span className="text-xs text-text-secondary">{projectName}</span>
         ) : connected !== undefined ? (
-          <span className="text-xs text-text-tertiary italic">No project</span>
+          <span className="text-xs text-text-tertiary italic">{t('common.noProject')}</span>
         ) : null}
       </div>
       <div className="ml-auto flex items-center gap-3">
@@ -72,10 +73,10 @@ export function Header({
           <button
             onClick={openInVSCode}
             className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-secondary hover:bg-surface hover:text-text-primary transition-colors"
-            title="Open in VS Code"
+            title={t('header.openInVsCode')}
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            <span>Open in IDE</span>
+            <span>{t('common.openInIde')}</span>
           </button>
         )}
         {connected !== undefined && (
@@ -84,7 +85,7 @@ export function Header({
               className={cn('h-2 w-2 rounded-full', connected ? 'bg-success' : 'bg-text-tertiary')}
             />
             <span className="text-xs text-text-tertiary">
-              {connected ? 'Connected' : 'Disconnected'}
+              {connected ? t('common.connected') : t('common.disconnected')}
             </span>
           </div>
         )}

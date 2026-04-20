@@ -5,6 +5,7 @@ import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 interface ArtifactViewerModalProps {
   open: boolean;
@@ -91,13 +92,13 @@ export function ArtifactViewerModal({
       try {
         const res = await fetch(`/api/artifacts/${encodeURIComponent(runId)}/${encodedFilename}`);
         if (!res.ok) {
-          const body = await res.json().catch(() => ({ error: 'Failed to load artifact' }));
-          throw new Error((body as { error?: string }).error ?? 'Failed to load artifact');
+          const body = await res.json().catch(() => ({ error: t('execution.loadArtifactFailed') }));
+          throw new Error((body as { error?: string }).error ?? t('execution.loadArtifactFailed'));
         }
         setContent(await res.text());
       } catch (err: unknown) {
         console.error('[ArtifactViewerModal] fetch failed', { runId, filename, err });
-        setError(err instanceof Error ? err.message : 'Failed to load artifact');
+        setError(err instanceof Error ? err.message : t('execution.loadArtifactFailed'));
       } finally {
         setLoading(false);
       }
@@ -116,7 +117,11 @@ export function ArtifactViewerModal({
           <DialogTitle>{basename}</DialogTitle>
         </DialogHeader>
         <div className="flex-1 overflow-auto min-h-0">
-          {loading && <p className="text-sm text-text-secondary animate-pulse">Loading…</p>}
+          {loading && (
+            <p className="text-sm text-text-secondary animate-pulse">
+              {t('execution.loadingArtifact')}
+            </p>
+          )}
           {error && <p className="text-sm text-error">{error}</p>}
           {content !== null &&
             (isMarkdown ? (

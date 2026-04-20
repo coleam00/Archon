@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v0.2.0)'
+        description: 'Version tag (e.g., v0.1.0)'
         required: true
         type: string
 
@@ -95,7 +95,7 @@ jobs:
           # value that was baked into the binary (VERSION#v), not the raw ref,
           # so the check doesn't rely on the CLI re-adding a 'v' prefix.
           EXPECTED_VERSION="${RAW_VERSION#v}"
-          if echo "$VERSION_OUTPUT" | grep -qE "v?${EXPECTED_VERSION}(\s|$)"; then
+          if echo "$VERSION_OUTPUT" | grep -Fq "$EXPECTED_VERSION"; then
             echo "::notice::Binary correctly reports version ${EXPECTED_VERSION}"
           else
             echo "::error::Binary does not report version ${EXPECTED_VERSION}"
@@ -256,7 +256,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: Archon CLI ${{ steps.version.outputs.version }}
+          name: HarnessLab CLI ${{ steps.version.outputs.version }}
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           generate_release_notes: true
@@ -271,47 +271,47 @@ jobs:
 
             **macOS / Linux**
             ```bash
-            curl -fsSL https://archon.diy/install | bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/dev/scripts/install.sh | REPO=${{ github.repository }} bash
             ```
 
             **Windows (PowerShell)**
             ```powershell
-            irm https://archon.diy/install.ps1 | iex
+            $env:REPO="${{ github.repository }}"; irm https://raw.githubusercontent.com/${{ github.repository }}/dev/scripts/install.ps1 | iex
             ```
 
             **Homebrew (macOS / Linux)**
             ```bash
-            brew install coleam00/archon/archon
+            brew install <tap>/archon
             ```
 
             **Docker**
             ```bash
-            docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
+            docker run --rm -v "$PWD:/workspace" ghcr.io/newturn2017/archon:latest workflow list
             ```
 
             ### Manual Installation
 
             **macOS (Apple Silicon)**
             ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-arm64 -o /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-darwin-arm64 -o /usr/local/bin/archon
             chmod +x /usr/local/bin/archon
             ```
 
             **macOS (Intel)**
             ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-x64 -o /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-darwin-x64 -o /usr/local/bin/archon
             chmod +x /usr/local/bin/archon
             ```
 
             **Linux (x64)**
             ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-x64 -o /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-linux-x64 -o /usr/local/bin/archon
             chmod +x /usr/local/bin/archon
             ```
 
             **Linux (ARM64)**
             ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-arm64 -o /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-linux-arm64 -o /usr/local/bin/archon
             chmod +x /usr/local/bin/archon
             ```
 
@@ -325,6 +325,7 @@ jobs:
 
   update-homebrew:
     needs: release
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -346,6 +347,8 @@ jobs:
         run: sleep 30
 
       - name: Update Homebrew formula
+        env:
+          REPO: ${{ github.repository }}
         run: bash scripts/update-homebrew.sh ${{ steps.version.outputs.version }}
 
       - name: Commit updated formula
@@ -355,3 +358,34 @@ jobs:
           git add homebrew/archon.rb
           git diff --cached --quiet || git commit -m "chore: update Homebrew formula for ${{ steps.version.outputs.version }}"
           git push origin dev
+
+      - name: Sync external Homebrew tap
+        env:
+          TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          TAP_FORMULA_PATH: ${{ vars.HOMEBREW_TAP_FORMULA_PATH }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAP_REPO" ]; then
+            echo "No HOMEBREW_TAP_REPO variable configured; skipping tap sync."
+            exit 0
+          fi
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::warning::HOMEBREW_TAP_REPO is set but HOMEBREW_TAP_TOKEN is missing; skipping tap sync."
+            exit 0
+          fi
+
+          TAP_FORMULA_PATH="${TAP_FORMULA_PATH:-Formula/archon.rb}"
+          TAP_DIR="$(mktemp -d)"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$TAP_DIR"
+
+          mkdir -p "$(dirname "$TAP_DIR/$TAP_FORMULA_PATH")"
+          cp homebrew/archon.rb "$TAP_DIR/$TAP_FORMULA_PATH"
+
+          cd "$TAP_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$TAP_FORMULA_PATH"
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: update Archon formula for ${{ steps.version.outputs.version }}"
+          git push origin HEAD

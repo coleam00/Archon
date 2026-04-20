@@ -16,6 +16,7 @@ import { getWorkflowRun } from '@/lib/api';
 import { StatusIcon } from '@/components/workflows/StatusIcon';
 import { ArtifactSummary } from '@/components/workflows/ArtifactSummary';
 import { formatDurationMs, ensureUtc } from '@/lib/format';
+import { t } from '@/lib/i18n';
 import type { ChatMessage, WorkflowArtifact, ArtifactType } from '@/lib/types';
 
 // Matches artifact paths (forward- and back-slash safe); groups: [1] runId, [2] filename
@@ -184,11 +185,11 @@ function WorkflowResultCard({
   // Status-aware header title
   let headerTitle: string;
   if (status === 'failed') {
-    headerTitle = 'Workflow failed';
+    headerTitle = t('chat.workflowFailed');
   } else if (status === 'cancelled') {
-    headerTitle = 'Workflow cancelled';
+    headerTitle = t('chat.workflowCancelled');
   } else {
-    headerTitle = 'Workflow complete';
+    headerTitle = t('chat.workflowComplete');
   }
 
   // Expand/collapse for text content
@@ -212,7 +213,7 @@ function WorkflowResultCard({
           </span>
           {!fetchFailed && totalCount > 0 && (
             <span className="shrink-0 text-[10px] text-text-secondary">
-              {completedCount}/{totalCount} nodes
+              {completedCount}/{totalCount} {t('dashboard.nodes')}
             </span>
           )}
           {!fetchFailed && duration != null && (
@@ -226,7 +227,7 @@ function WorkflowResultCard({
             }}
             className="text-[10px] text-primary hover:text-accent-bright transition-colors shrink-0"
           >
-            View full logs &rarr;
+            {t('chat.viewFullLogs')} &rarr;
           </button>
         </div>
         <div className="px-3 py-2">
@@ -247,7 +248,7 @@ function WorkflowResultCard({
               }}
               className="mt-1 text-[10px] text-primary hover:text-accent-bright transition-colors"
             >
-              {expanded ? 'Show less' : 'Show more'}
+              {expanded ? t('dashboard.showLess') : t('dashboard.showMore')}
             </button>
           )}
         </div>
@@ -330,9 +331,7 @@ function MessageListRaw({
           <div className="flex flex-col items-center gap-4 max-w-sm w-full px-4">
             <div className="flex flex-col items-center gap-2 text-center">
               <Sparkles className="h-8 w-8 text-primary" />
-              <h2 className="text-base font-semibold text-text-primary">
-                What would you like to do?
-              </h2>
+              <h2 className="text-base font-semibold text-text-primary">{t('chat.promptTitle')}</h2>
             </div>
             <div className="flex flex-wrap justify-center gap-2">
               <Button
@@ -343,18 +342,20 @@ function MessageListRaw({
                 }}
                 className="flex items-center gap-1.5"
               >
-                Run a workflow
+                {t('chat.runWorkflow')}
                 <ArrowRight className="h-3.5 w-3.5" />
               </Button>
               <Button variant="outline" size="sm" onClick={(): void => onQuickAction?.('focus')}>
-                Ask a question
+                {t('chat.askQuestion')}
               </Button>
               <Button variant="outline" size="sm" onClick={(): void => onQuickAction?.('/status')}>
                 /status
               </Button>
             </div>
             {projectName && (
-              <p className="text-xs text-text-tertiary text-center">Project: {projectName}</p>
+              <p className="text-xs text-text-tertiary text-center">
+                {t('chat.projectLabel')}: {projectName}
+              </p>
             )}
           </div>
         </div>
@@ -364,7 +365,7 @@ function MessageListRaw({
       <div className="flex flex-1 items-center justify-center">
         <div className="flex flex-col items-center gap-3 text-text-tertiary">
           <MessageSquare className="h-10 w-10" />
-          <p className="text-sm">Send a message to start chatting</p>
+          <p className="text-sm">{t('chat.startMessage')}</p>
         </div>
       </div>
     );
@@ -428,7 +429,7 @@ function MessageListRaw({
             className="rounded-full bg-surface-elevated shadow-lg"
           >
             <ArrowDown className="mr-1 h-3 w-3" />
-            Jump to bottom
+            {t('chat.jumpToBottom')}
           </Button>
         </div>
       )}

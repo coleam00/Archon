@@ -13,10 +13,10 @@ export function formatDuration(startedAt: string, completedAt: string | null): s
   return `${(ms / 60000).toFixed(1)}m`;
 }
 
-/** Format a started_at timestamp as a short locale string (e.g., "Mar 10, 2:30 PM"). */
+/** Format a started_at timestamp as a short Korean locale string. */
 export function formatStarted(startedAt: string): string {
   const d = new Date(ensureUtc(startedAt));
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString('ko-KR', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

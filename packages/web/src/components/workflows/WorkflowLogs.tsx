@@ -4,6 +4,7 @@ import { MessageList } from '@/components/chat/MessageList';
 import { useSSE } from '@/hooks/useSSE';
 import { getMessages } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
+import { t } from '@/lib/i18n';
 import type { MessageResponse } from '@/lib/api';
 import { workflowSSEHandlers } from '@/stores/workflow-store';
 import type { ChatMessage, ToolCallDisplay, ErrorDisplay } from '@/lib/types';
@@ -621,7 +622,7 @@ export function WorkflowLogs({
       <div className="flex flex-1 items-center justify-center">
         <div className="flex flex-col items-center gap-3 text-text-tertiary">
           <span className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <p className="text-sm">Loading workflow logs...</p>
+          <p className="text-sm">{t('execution.loadingLogs')}</p>
         </div>
       </div>
     );
@@ -632,7 +633,7 @@ export function WorkflowLogs({
       {isRunning && currentlyExecuting && (
         <div className="px-4 py-2 bg-surface-secondary border-b border-border flex items-center gap-2 text-sm shrink-0">
           <span className="inline-block w-2 h-2 rounded-full bg-accent animate-pulse" />
-          <span className="text-text-secondary">Currently executing:</span>
+          <span className="text-text-secondary">{t('execution.currentlyExecuting')}</span>
           <span className="font-medium text-text-primary">{currentlyExecuting.nodeName}</span>
           <span className="text-text-tertiary text-xs">
             ({formatDurationMs(Date.now() - currentlyExecuting.startedAt)})

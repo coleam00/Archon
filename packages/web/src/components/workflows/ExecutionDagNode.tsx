@@ -5,6 +5,7 @@ import type { DagNodeData } from './DagNodeComponent';
 import type { WorkflowStepStatus } from '@/lib/types';
 import { formatDurationMs } from '@/lib/format';
 import { StatusIcon } from './StatusIcon';
+import { t } from '@/lib/i18n';
 
 export interface ExecutionNodeData extends DagNodeData {
   status?: WorkflowStepStatus;
@@ -66,7 +67,7 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
       </div>
       {data.currentIteration !== undefined && data.maxIterations !== undefined && (
         <div className="text-[10px] text-text-tertiary mt-0.5">
-          {data.currentIteration}/{data.maxIterations} iterations
+          {data.currentIteration}/{data.maxIterations} {t('execution.iterations')}
         </div>
       )}
       {data.error && (

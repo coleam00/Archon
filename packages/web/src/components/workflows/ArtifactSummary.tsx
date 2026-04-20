@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { WorkflowArtifact } from '@/lib/types';
 import { ArtifactViewerModal } from './ArtifactViewerModal';
+import { t } from '@/lib/i18n';
 
 interface ArtifactSummaryProps {
   artifacts: WorkflowArtifact[];
@@ -73,7 +74,7 @@ export function ArtifactSummary({ artifacts, runId }: ArtifactSummaryProps): Rea
     <>
       <div className="rounded-lg border border-border bg-surface p-3">
         <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
-          Artifacts
+          {t('execution.artifacts')}
         </h4>
         <div className="space-y-1.5">
           {artifacts.map((artifact, idx) => (

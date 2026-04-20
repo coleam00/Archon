@@ -1,5 +1,6 @@
 import { Search } from 'lucide-react';
 import type { DashboardCounts, CodebaseResponse, HealthResponse } from '@/lib/api';
+import { t, workflowStatusLabel } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 type DateRange = 'today' | '7d' | '30d' | 'all';
@@ -21,10 +22,10 @@ interface StatusSummaryBarProps {
 const STATUS_CHIPS = ['running', 'paused', 'completed', 'failed', 'cancelled', 'pending'] as const;
 
 const DATE_RANGE_OPTIONS: { value: DateRange; label: string }[] = [
-  { value: 'today', label: 'Today' },
-  { value: '7d', label: 'Last 7 days' },
-  { value: '30d', label: 'Last 30 days' },
-  { value: 'all', label: 'All time' },
+  { value: 'today', label: t('date.today') },
+  { value: '7d', label: t('date.last7Days') },
+  { value: '30d', label: t('date.last30Days') },
+  { value: 'all', label: t('date.allTime') },
 ];
 
 export function StatusSummaryBar({
@@ -55,7 +56,7 @@ export function StatusSummaryBar({
               : 'bg-surface-elevated text-text-secondary border border-border hover:border-text-tertiary'
           )}
         >
-          All: {String(counts.all)}
+          {workflowStatusLabel('all')}: {String(counts.all)}
         </button>
         {STATUS_CHIPS.map(status => {
           const count = counts[status];
@@ -74,7 +75,7 @@ export function StatusSummaryBar({
                 status === 'running' && count > 0 && !isActive && 'animate-pulse'
               )}
             >
-              {status.charAt(0).toUpperCase() + status.slice(1)}: {String(count)}
+              {workflowStatusLabel(status)}: {String(count)}
             </button>
           );
         })}
@@ -89,7 +90,7 @@ export function StatusSummaryBar({
           }}
           className="rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-xs text-text-primary focus:border-primary focus:outline-none"
         >
-          <option value="">All Projects</option>
+          <option value="">{t('dashboard.allProjects')}</option>
           {codebases?.map(cb => (
             <option key={cb.id} value={cb.id}>
               {cb.name}
@@ -119,15 +120,15 @@ export function StatusSummaryBar({
             onChange={(e): void => {
               onSearchChange(e.target.value);
             }}
-            placeholder="Search workflows..."
+            placeholder={t('dashboard.searchWorkflows')}
             className="w-full rounded-md border border-border bg-surface-elevated py-1.5 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none"
           />
         </div>
 
         {health && (
           <span className="text-xs text-text-tertiary shrink-0">
-            Capacity: {String(health.concurrency.active)}/{String(health.concurrency.maxConcurrent)}{' '}
-            active
+            {t('dashboard.capacity')}: {String(health.concurrency.active)}/
+            {String(health.concurrency.maxConcurrent)} {t('dashboard.active')}
           </span>
         )}
       </div>

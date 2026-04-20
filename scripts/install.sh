@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 # scripts/install.sh
-# Install Archon CLI from GitHub releases
+# Install HarnessLab CLI from GitHub releases
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.sh | bash
 #
 # Options (via environment variables):
+#   REPO          - GitHub repository to install from (default: NewTurn2017/Archon)
 #   VERSION       - Specific version to install (default: latest)
 #   INSTALL_DIR   - Installation directory (default: /usr/local/bin)
 #   SKIP_CHECKSUM - Set to "true" to skip checksum verification (not recommended)
 #
 # Examples:
 #   # Install latest
-#   curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.sh | bash
 #
 #   # Install specific version
-#   VERSION=v0.2.0 curl -fsSL ... | bash
+#   VERSION=v0.1.0 curl -fsSL ... | bash
 #
 #   # Install to custom directory
 #   INSTALL_DIR=~/.local/bin curl -fsSL ... | bash
@@ -23,7 +24,7 @@
 set -euo pipefail
 
 # Configuration
-REPO="coleam00/Archon"
+REPO="${REPO:-NewTurn2017/Archon}"
 BINARY_NAME="archon"
 VERSION="${VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
@@ -163,7 +164,7 @@ verify_checksum() {
 main() {
   echo ""
   echo "  ╔═══════════════════════════════════════╗"
-  echo "  ║      Archon CLI Installer             ║"
+  echo "  ║      HarnessLab CLI Installer         ║"
   echo "  ╚═══════════════════════════════════════╝"
   echo ""
 

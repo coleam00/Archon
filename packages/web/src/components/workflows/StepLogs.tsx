@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAutoScroll } from '@/hooks/useAutoScroll';
+import { t } from '@/lib/i18n';
 
 interface StepLogsProps {
   runId: string;
@@ -22,11 +23,9 @@ export function StepLogs({ runId, lines = [] }: StepLogsProps): React.ReactEleme
     return (
       <div className="flex-1 overflow-auto p-4 font-mono text-sm bg-surface-inset">
         <div className="text-text-secondary text-xs mb-2">
-          Node logs &middot; Run {runId.slice(0, 8)}
+          {t('execution.nodeLogs')} &middot; {t('execution.runShort')} {runId.slice(0, 8)}
         </div>
-        <div className="text-text-secondary italic">
-          Live log output will appear here during workflow execution.
-        </div>
+        <div className="text-text-secondary italic">{t('execution.liveLogsHint')}</div>
       </div>
     );
   }
@@ -34,7 +33,9 @@ export function StepLogs({ runId, lines = [] }: StepLogsProps): React.ReactEleme
   return (
     <div className="flex-1 flex flex-col bg-surface-inset relative">
       <div className="text-text-secondary text-xs px-4 pt-3 pb-1">
-        Node logs &middot; Run {runId.slice(0, 8)} &middot; {String(lines.length)} lines
+        {t('execution.nodeLogs')} &middot; {t('execution.runShort')} {runId.slice(0, 8)} &middot;{' '}
+        {String(lines.length)}
+        {t('execution.lines')}
       </div>
       <div ref={containerRef} className="flex-1 overflow-auto px-4 pb-4 font-mono text-sm">
         <div
@@ -67,7 +68,7 @@ export function StepLogs({ runId, lines = [] }: StepLogsProps): React.ReactEleme
           onClick={scrollToBottom}
           className="absolute bottom-4 right-4 bg-accent text-white text-xs px-3 py-1.5 rounded-full shadow-lg hover:bg-accent-bright transition-colors"
         >
-          Jump to bottom
+          {t('execution.jumpToBottom')}
         </button>
       )}
     </div>

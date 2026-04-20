@@ -1,6 +1,6 @@
 ---
 title: 릴리스
-description: Archon CLI의 새 릴리스를 만드는 방법 — 버전 관리, 릴리스 절차, 문제 해결.
+description: HarnessLab CLI의 새 릴리스를 만드는 방법 — 버전 관리, 릴리스 절차, Homebrew 자동화, 문제 해결.
 category: contributing
 area: infra
 audience: [developer]
@@ -9,7 +9,7 @@ sidebar:
   order: 3
 ---
 
-이 가이드는 Archon CLI의 새 릴리스를 만드는 방법을 다룹니다. HarnessLab은 Archon fork로 운영되므로, upstream 흐름을 유지하면서 릴리스를 준비할 때 이 절차를 기준으로 삼습니다.
+이 가이드는 HarnessLab CLI의 새 릴리스를 만드는 방법을 다룹니다. HarnessLab은 독립 버전 라인을 사용하며 `0.1.0`부터 시작합니다.
 
 ## 버전 관리
 
@@ -18,15 +18,33 @@ sidebar:
 - **Minor** (0.1.0): 새 feature, 새 workflow, 새 command
 - **Patch** (0.0.1): bug fix, documentation update
 
-버전은 root `package.json`에만 저장됩니다. 이 값이 single source of truth입니다.
+버전은 root `package.json`에 저장됩니다. 이 값이 single source of truth이며 `packages/*/package.json`은 release helper가 자동으로 동기화합니다.
+
+로컬에서 버전을 확인하거나 올릴 때는 다음 helper를 사용합니다.
+
+```bash
+# 현재 버전
+bun run version:harnesslab -- current
+
+# 다음 patch/minor/major 버전 미리보기
+bun run version:harnesslab -- next patch
+bun run version:harnesslab -- next minor
+
+# 모든 workspace package 버전 동기화
+bun run version:harnesslab -- bump patch
+bun run version:harnesslab -- set 0.1.0
+
+# 현재 버전의 release tag 출력
+bun run version:harnesslab -- tag
+```
 
 ## 릴리스 절차
 
-릴리스는 `dev`를 `main`에 merge해서 만듭니다. `main`에 직접 commit하지 마세요.
+릴리스는 GitHub Actions의 **HarnessLab Release** workflow로 만듭니다. 이 workflow가 버전 bump, release tag 생성, binary release workflow trigger를 처리합니다.
 
 ### 1. 릴리스 준비
 
-`/release` skill을 사용하세요. 또는 다음 manual step을 따릅니다.
+릴리스 전에 `dev`가 배포 가능한 상태인지 확인합니다.
 
 ```bash
 # Ensure dev is up to date
@@ -37,51 +55,47 @@ git pull origin dev
 bun run validate
 ```
 
-`/release` skill은 다음 작업을 자동화합니다.
-1. `dev`와 `main`을 비교해 changelog entry를 생성합니다.
-2. root `package.json`의 버전을 올립니다. 기본은 patch이며, 다른 증가 단위는 `/release minor` 또는 `/release major`를 사용합니다.
-3. Keep a Changelog format에 맞춰 `CHANGELOG.md`를 업데이트합니다.
-4. `dev`에서 `main`으로 향하는 PR을 생성합니다.
+### 2. Version Bump와 Tag
 
-### 2. Merge와 Tag
+GitHub Actions에서 **HarnessLab Release**를 실행합니다.
 
-Release PR이 review되고 merge되면 다음을 실행합니다.
+- `target_branch`: 보통 `dev`
+- `version`: 특정 버전을 직접 지정할 때 사용합니다. 예: `0.1.0`
+- `bump`: `version`이 비어 있을 때 `patch`, `minor`, `major` 중 하나를 선택합니다. 현재 버전을 그대로 release하려면 `none`을 선택합니다.
 
-```bash
-# Create and push the tag from main
-git checkout main
-git pull origin main
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+workflow는 다음을 수행합니다.
+1. root/package workspace 버전을 동기화합니다.
+2. 필요하면 `chore: release vX.Y.Z` commit을 `target_branch`에 push합니다.
+3. `vX.Y.Z` tag를 생성하고 push합니다.
+4. tag push로 `.github/workflows/release.yml`을 trigger합니다.
 
-이 작업은 GitHub Actions release workflow를 trigger하며, workflow는 다음을 수행합니다.
+Release workflow는 다음을 수행합니다.
 1. 모든 platform용 binary를 build합니다(macOS arm64/x64, Linux arm64/x64, Windows x64).
 2. checksum을 생성합니다.
 3. 모든 artifact를 포함한 GitHub Release를 생성합니다.
+4. stable release이면 Homebrew formula를 자동 갱신합니다.
 
-### 3. Homebrew Formula 업데이트(Optional)
+### 3. Homebrew Formula 자동화
 
-Release workflow가 완료된 뒤:
+stable tag(`v0.1.0`처럼 `-`가 없는 tag)가 release되면 `release.yml`의 `update-homebrew` job이 자동으로 실행됩니다.
 
-```bash
-# Update checksums in the Homebrew formula
-./scripts/update-homebrew.sh vX.Y.Z
+이 job은 다음을 처리합니다.
+1. GitHub Release의 `checksums.txt`를 다운로드합니다.
+2. `homebrew/archon.rb`의 version, release URL, platform별 SHA256을 갱신합니다.
+3. 갱신 commit을 `dev`에 push합니다.
+4. repository variable `HOMEBREW_TAP_REPO`가 있으면 외부 tap repository에도 formula를 복사합니다.
 
-# Review and commit
-git diff homebrew/archon.rb
-git add homebrew/archon.rb
-git commit -m "chore: update Homebrew formula for vX.Y.Z"
-git push origin main
-```
+외부 Homebrew tap까지 자동화하려면 repository settings에 다음을 설정합니다.
 
-Homebrew tap(`homebrew-archon`)을 운영한다면 업데이트된 formula를 그곳에 복사하세요.
+- Variable `HOMEBREW_TAP_REPO`: 예: `NewTurn2017/homebrew-harnesslab`
+- Secret `HOMEBREW_TAP_TOKEN`: 해당 tap repo에 push 가능한 GitHub token
+- Variable `HOMEBREW_TAP_FORMULA_PATH` optional: 기본값은 `Formula/archon.rb`
 
 ### 4. 릴리스 검증
 
 ```bash
 # Test the install script (only works if repo is public)
-curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.sh | bash
 
 # Verify version
 archon version
@@ -94,7 +108,7 @@ archon version
 >
 > ```bash
 > # Download and install using gh (requires GitHub authentication)
-> gh release download v0.2.0 --repo coleam00/Archon \
+> gh release download v0.1.0 --repo NewTurn2017/Archon \
 >   --pattern "archon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')" \
 >   --dir /tmp/archon-install
 >
@@ -116,7 +130,7 @@ GitHub Actions를 실행할 수 없다면(billing issue, private repo limit 등)
 
 # 2. Create the release with binaries
 gh release create vX.Y.Z dist/binaries/* \
-  --title "Archon CLI vX.Y.Z" \
+  --title "HarnessLab CLI vX.Y.Z" \
   --generate-notes
 
 # 3. Verify the release
@@ -191,9 +205,12 @@ Install script에는 다음이 필요합니다.
 공개 발표 전에 release를 테스트하려면:
 
 ```bash
-# Create a pre-release tag
-git tag v0.3.0-beta.1
-git push origin v0.3.0-beta.1
+# Create a pre-release tag through the version helper
+bun run version:harnesslab -- set 0.2.0-beta.1
+git add package.json packages/*/package.json
+git commit -m "chore: release v0.2.0-beta.1"
+git tag v0.2.0-beta.1
+git push origin dev v0.2.0-beta.1
 ```
 
 Pre-release(`-`가 포함된 tag)는 GitHub에서 pre-release로 표시됩니다.
@@ -204,14 +221,14 @@ Pre-release(`-`가 포함된 tag)는 GitHub에서 pre-release로 표시됩니다
 
 ```bash
 # Create hotfix branch from tag
-git checkout -b hotfix/0.2.1 v0.2.0
+git checkout -b hotfix/0.1.1 v0.1.0
 
 # Make fixes, then tag
-git tag v0.2.1
-git push origin v0.2.1
+git tag v0.1.1
+git push origin v0.1.1
 
 # Merge fixes back to dev
 git checkout dev
-git merge hotfix/0.2.1
+git merge hotfix/0.1.1
 git push origin dev
 ```

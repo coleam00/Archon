@@ -2,6 +2,7 @@ import { cn } from '@/lib/utils';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import type { ValidationIssue } from '@/hooks/useBuilderValidation';
+import { t } from '@/lib/i18n';
 
 interface ValidationPanelProps {
   issues: ValidationIssue[];
@@ -43,7 +44,7 @@ export function ValidationPanel({
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-text-primary">Problems</span>
+          <span className="text-xs font-medium text-text-primary">{t('validation.problems')}</span>
           {errorCount > 0 && (
             <span className="inline-flex items-center justify-center rounded-full bg-error/20 px-1.5 py-0.5 text-[10px] font-medium text-error min-w-[18px]">
               {errorCount}
@@ -55,7 +56,12 @@ export function ValidationPanel({
             </span>
           )}
         </div>
-        <Button variant="ghost" size="icon-xs" onClick={onToggle} aria-label="Close problems panel">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={onToggle}
+          aria-label={t('validation.closeProblems')}
+        >
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="14"
@@ -90,7 +96,7 @@ export function ValidationPanel({
             >
               <polyline points="20 6 9 17 4 12" />
             </svg>
-            No issues found
+            {t('validation.noIssues')}
           </div>
         ) : (
           <div className="flex flex-col">

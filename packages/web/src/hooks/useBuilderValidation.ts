@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
 import type { Edge } from '@xyflow/react';
 import { hasCycle } from '@/lib/dag-layout';
+import { t } from '@/lib/i18n';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning' | 'info';
@@ -27,7 +28,7 @@ function getInstantIssues(
   if (!workflowName.trim()) {
     issues.push({
       severity: 'error',
-      message: 'Workflow name is required',
+      message: t('builder.workflowNameRequired'),
       field: 'name',
     });
   }
@@ -35,7 +36,7 @@ function getInstantIssues(
   if (!workflowDescription.trim()) {
     issues.push({
       severity: 'error',
-      message: 'Workflow description is required',
+      message: t('validation.descriptionRequired'),
       field: 'description',
     });
   }
@@ -43,7 +44,7 @@ function getInstantIssues(
   if (nodes.length === 0) {
     issues.push({
       severity: 'error',
-      message: 'At least one node is required',
+      message: t('validation.oneNodeRequired'),
     });
   }
 
@@ -51,19 +52,19 @@ function getInstantIssues(
     if (node.data.nodeType === 'bash' && !node.data.bashScript?.trim()) {
       issues.push({
         severity: 'error',
-        message: `Node "${node.data.id}": bash script cannot be empty`,
+        message: `노드 "${node.data.id}": ${t('validation.bashEmpty')}`,
         nodeId: node.data.id,
         field: 'bashScript',
-        suggestion: 'Enter a bash script for this node',
+        suggestion: t('validation.enterBash'),
       });
     }
     if (node.data.nodeType === 'prompt' && !node.data.promptText?.trim()) {
       issues.push({
         severity: 'error',
-        message: `Node "${node.data.id}": prompt cannot be empty`,
+        message: `노드 "${node.data.id}": ${t('validation.promptEmpty')}`,
         nodeId: node.data.id,
         field: 'promptText',
-        suggestion: 'Enter a prompt for this node',
+        suggestion: t('validation.enterPrompt'),
       });
     }
   }
@@ -85,10 +86,10 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     if (count > 1) {
       issues.push({
         severity: 'error',
-        message: `Duplicate node ID "${id}" (appears ${count} times)`,
+        message: `중복 노드 ID "${id}" (${count}${t('validation.duplicateNodeIdSuffix')})`,
         nodeId: id,
         field: 'id',
-        suggestion: 'Each node must have a unique ID',
+        suggestion: t('validation.uniqueNodeId'),
       });
     }
   }
@@ -98,7 +99,7 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     if (!nodeIds.has(edge.source)) {
       issues.push({
         severity: 'error',
-        message: `Edge references non-existent source node "${edge.source}"`,
+        message: `${t('validation.edgeMissingSourcePrefix')} "${edge.source}"`,
         nodeId: edge.target,
         field: 'depends_on',
       });
@@ -106,7 +107,7 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     if (!nodeIds.has(edge.target)) {
       issues.push({
         severity: 'error',
-        message: `Edge references non-existent target node "${edge.target}"`,
+        message: `${t('validation.edgeMissingTargetPrefix')} "${edge.target}"`,
         nodeId: edge.source,
         field: 'depends_on',
       });
@@ -118,10 +119,10 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     if (edge.source === edge.target) {
       issues.push({
         severity: 'error',
-        message: `Node "${edge.source}" has a self-loop dependency`,
+        message: `노드 "${edge.source}" ${t('validation.selfLoopSuffix')}`,
         nodeId: edge.source,
         field: 'depends_on',
-        suggestion: 'A node cannot depend on itself',
+        suggestion: t('validation.noSelfDependency'),
       });
     }
   }
@@ -130,8 +131,8 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
   if (hasCycle(nodeIds, edges)) {
     issues.push({
       severity: 'error',
-      message: 'Cycle detected in workflow graph',
-      suggestion: 'Remove circular dependencies between nodes',
+      message: t('validation.cycleDetected'),
+      suggestion: t('validation.removeCycles'),
     });
   }
 
@@ -149,9 +150,9 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
         if (!nodeIds.has(referencedId)) {
           issues.push({
             severity: 'warning',
-            message: `Node "${node.data.id}" references "$${referencedId}.output" but node "${referencedId}" does not exist`,
+            message: `노드 "${node.data.id}" "$${referencedId}.output"${t('validation.outputReferenceMissingSuffix')}`,
             nodeId: node.data.id,
-            suggestion: `Check that node ID "${referencedId}" is correct`,
+            suggestion: `${t('validation.checkNodeIdPrefix')} "${referencedId}"`,
           });
         }
       }

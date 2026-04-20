@@ -24,6 +24,7 @@ import {
   getWorkflowIconName,
   type WorkflowIconName,
 } from '@/lib/workflow-metadata';
+import { t } from '@/lib/i18n';
 
 const ICON_MAP: Record<WorkflowIconName, LucideIcon> = {
   Bug,
@@ -66,7 +67,7 @@ export function WorkflowCard({
     <div
       role="button"
       tabIndex={0}
-      aria-label={`Select workflow: ${displayName}`}
+      aria-label={`${t('workflowCard.selectPrefix')} ${displayName}`}
       aria-pressed={isSelected}
       onClick={(): void => {
         onToggle(workflow.name);
@@ -102,7 +103,7 @@ export function WorkflowCard({
             {parsed.whenToUse && (
               <div>
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-bright">
-                  When to use
+                  {t('workflowCard.whenToUse')}
                 </span>
                 <p className="text-text-secondary mt-0.5 line-clamp-3 leading-relaxed">
                   {parsed.whenToUse}
@@ -112,7 +113,7 @@ export function WorkflowCard({
             {parsed.does && (
               <div>
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-bright">
-                  Does
+                  {t('workflowCard.does')}
                 </span>
                 <p className="text-text-secondary mt-0.5 line-clamp-2 leading-relaxed">
                   {parsed.does}
@@ -126,7 +127,7 @@ export function WorkflowCard({
             {parsed.triggers.length > 0 && (
               <div>
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-accent-bright">
-                  Triggers
+                  {t('workflowCard.triggers')}
                 </span>
                 <div className="flex flex-wrap gap-1 mt-0.5">
                   {parsed.triggers.slice(0, 4).map(trigger => (
@@ -139,7 +140,7 @@ export function WorkflowCard({
                   ))}
                   {parsed.triggers.length > 4 && (
                     <span className="inline-block text-[10px] text-text-tertiary">
-                      +{parsed.triggers.length - 4} more
+                      +{parsed.triggers.length - 4} {t('workflowCard.moreSuffix')}
                     </span>
                   )}
                 </div>
@@ -148,7 +149,7 @@ export function WorkflowCard({
             {parsed.constraints && (
               <div>
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-warning">
-                  Not for
+                  {t('workflowCard.notFor')}
                 </span>
                 <p className="text-text-secondary mt-0.5 line-clamp-2 leading-relaxed">
                   {parsed.constraints}
@@ -185,7 +186,7 @@ export function WorkflowCard({
               e.stopPropagation();
             }}
             className="p-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-elevated transition-colors"
-            title="Edit in builder"
+            title={t('workflowCard.editInBuilder')}
           >
             <Pencil className="size-3.5" />
           </Link>
@@ -195,10 +196,10 @@ export function WorkflowCard({
               onRun(workflow.name);
             }}
             className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors"
-            title="Configure and run workflow"
+            title={t('workflowCard.configureRun')}
           >
             <Play className="size-3" />
-            Run
+            {t('workflows.run')}
           </button>
         </div>
       </div>

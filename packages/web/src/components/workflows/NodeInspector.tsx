@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import type { DagNodeData } from './DagNodeComponent';
 import type { CommandEntry, DagNode } from '@/lib/api';
 import { useProviders } from '@/hooks/useProviders';
+import { t } from '@/lib/i18n';
 
 // Keep in sync with triggerRuleSchema.options in @archon/workflows/schemas/dag-node.ts
 // (api.generated.d.ts is type-only and cannot export runtime values)
@@ -71,7 +72,7 @@ function ProviderField({
 }): React.ReactElement {
   const { providers } = useProviders();
   return (
-    <Field label="Provider">
+    <Field label={t('inspector.provider')}>
       <select
         value={node.provider ?? ''}
         onChange={(e): void => {
@@ -79,7 +80,7 @@ function ProviderField({
         }}
         className={cls}
       >
-        <option value="">Inherit</option>
+        <option value="">{t('inspector.inherit')}</option>
         {providers.map(p => (
           <option key={p.id} value={p.id}>
             {p.displayName}
@@ -93,9 +94,9 @@ function ProviderField({
 type ToolsMode = 'none' | 'allow' | 'deny';
 
 const TOOLS_MODE_LABELS: Record<ToolsMode, string> = {
-  none: 'Default',
-  allow: 'Allow',
-  deny: 'Deny',
+  none: t('inspector.default'),
+  allow: t('inspector.allow'),
+  deny: t('inspector.deny'),
 };
 
 function resolveToolsMode(node: DagNodeData): ToolsMode {
@@ -196,7 +197,7 @@ function GeneralTab({
   return (
     <div className="flex flex-col gap-3 p-3">
       {/* Node ID */}
-      <Field label="Node ID">
+      <Field label={t('inspector.nodeId')}>
         <input
           type="text"
           value={node.id}
@@ -205,13 +206,11 @@ function GeneralTab({
           }}
           className={cn(inputClass, 'font-mono')}
         />
-        <p className="text-[9px] text-warning">
-          Changing the node ID may break dependency references.
-        </p>
+        <p className="text-[9px] text-warning">{t('inspector.nodeIdWarning')}</p>
       </Field>
 
       {/* Type selector */}
-      <Field label="Type">
+      <Field label={t('inspector.type')}>
         <select
           value={node.nodeType}
           onChange={(e): void => {
@@ -240,15 +239,15 @@ function GeneralTab({
           }}
           className={selectClass}
         >
-          <option value="command">Command</option>
-          <option value="prompt">Prompt</option>
-          <option value="bash">Bash</option>
+          <option value="command">{t('inspector.command')}</option>
+          <option value="prompt">{t('inspector.prompt')}</option>
+          <option value="bash">{t('inspector.bash')}</option>
         </select>
       </Field>
 
       {/* Type-adaptive content */}
       {node.nodeType === 'command' && (
-        <Field label="Command">
+        <Field label={t('inspector.command')}>
           <select
             value={node.label}
             onChange={(e): void => {
@@ -256,7 +255,7 @@ function GeneralTab({
             }}
             className={selectClass}
           >
-            <option value="">Select command...</option>
+            <option value="">{t('inspector.selectCommand')}</option>
             {commands.map(cmd => (
               <option key={cmd.name} value={cmd.name}>
                 {cmd.name}
@@ -267,14 +266,14 @@ function GeneralTab({
       )}
 
       {node.nodeType === 'prompt' && (
-        <Field label="Prompt">
+        <Field label={t('inspector.prompt')}>
           <textarea
             value={node.promptText ?? ''}
             onChange={(e): void => {
               onUpdate({ promptText: e.target.value });
             }}
             rows={5}
-            placeholder="Enter inline prompt..."
+            placeholder={t('inspector.enterInlinePrompt')}
             className={cn(textareaClass, 'min-h-[120px]')}
           />
         </Field>
@@ -282,7 +281,7 @@ function GeneralTab({
 
       {node.nodeType === 'bash' && (
         <>
-          <Field label="Shell Script">
+          <Field label={t('inspector.shellScript')}>
             <textarea
               value={node.bashScript ?? ''}
               onChange={(e): void => {
@@ -293,7 +292,7 @@ function GeneralTab({
               className={cn(textareaClass, 'min-h-[120px]')}
             />
           </Field>
-          <Field label="Timeout (ms)">
+          <Field label={t('inspector.timeoutMs')}>
             <input
               type="number"
               value={node.bashTimeout ?? ''}
@@ -309,7 +308,7 @@ function GeneralTab({
       )}
 
       {/* Dependencies */}
-      <Field label="Dependencies">
+      <Field label={t('inspector.dependencies')}>
         <DependencyTags
           values={node.depends_on ?? []}
           onChange={(deps): void => {
@@ -319,7 +318,7 @@ function GeneralTab({
       </Field>
 
       {/* When condition */}
-      <Field label="When Condition">
+      <Field label={t('inspector.whenCondition')}>
         <input
           type="text"
           value={node.when ?? ''}
@@ -349,19 +348,19 @@ function ExecutionTab({
         <>
           <ProviderField node={node} onUpdate={onUpdate} selectClass={selectClass} />
 
-          <Field label="Model">
+          <Field label={t('inspector.model')}>
             <input
               type="text"
               value={node.model ?? ''}
               onChange={(e): void => {
                 onUpdate({ model: e.target.value || undefined });
               }}
-              placeholder="Inherit"
+              placeholder={t('inspector.inherit')}
               className={inputClass}
             />
           </Field>
 
-          <Field label="Context">
+          <Field label={t('inspector.context')}>
             <select
               value={node.context ?? ''}
               onChange={(e): void => {
@@ -369,14 +368,14 @@ function ExecutionTab({
               }}
               className={selectClass}
             >
-              <option value="">Inherit</option>
-              <option value="fresh">Fresh</option>
+              <option value="">{t('inspector.inherit')}</option>
+              <option value="fresh">{t('inspector.fresh')}</option>
             </select>
           </Field>
         </>
       )}
 
-      <Field label="Trigger Rule">
+      <Field label={t('inspector.triggerRule')}>
         <select
           value={node.trigger_rule ?? ''}
           onChange={(e): void => {
@@ -386,7 +385,7 @@ function ExecutionTab({
           }}
           className={selectClass}
         >
-          <option value="">Default (all_success)</option>
+          <option value="">{t('inspector.defaultAllSuccess')}</option>
           {TRIGGER_RULES.map(rule => (
             <option key={rule} value={rule}>
               {rule}
@@ -395,7 +394,7 @@ function ExecutionTab({
         </select>
       </Field>
 
-      <Field label="Idle Timeout (ms)">
+      <Field label={t('inspector.idleTimeoutMs')}>
         <input
           type="number"
           value={node.idle_timeout ?? ''}
@@ -410,10 +409,10 @@ function ExecutionTab({
 
       {/* Retry config */}
       <div className="border-t border-border pt-3 mt-1">
-        <p className={cn(labelClass, 'mb-2')}>Retry Configuration</p>
+        <p className={cn(labelClass, 'mb-2')}>{t('inspector.retryConfiguration')}</p>
 
         <div className="flex flex-col gap-2">
-          <Field label="Max Attempts (1-5)">
+          <Field label={t('inspector.maxAttempts')}>
             <input
               type="number"
               min={1}
@@ -438,7 +437,7 @@ function ExecutionTab({
             />
           </Field>
 
-          <Field label="Delay (ms, 1000-60000)">
+          <Field label={t('inspector.delayMs')}>
             <input
               type="number"
               min={1000}
@@ -461,7 +460,7 @@ function ExecutionTab({
             />
           </Field>
 
-          <Field label="On Error">
+          <Field label={t('inspector.onError')}>
             <select
               value={node.retry?.on_error ?? ''}
               onChange={(e): void => {
@@ -477,7 +476,7 @@ function ExecutionTab({
               disabled={!node.retry}
               className={cn(selectClass, !node.retry && 'opacity-50')}
             >
-              <option value="">Default (transient)</option>
+              <option value="">{t('inspector.defaultTransient')}</option>
               <option value="transient">transient</option>
               <option value="all">all</option>
             </select>
@@ -492,9 +491,9 @@ const TOOL_PRESETS: readonly {
   label: string;
   allowed: string[];
 }[] = [
-  { label: 'No tools', allowed: [] },
-  { label: 'Read-only', allowed: ['Read', 'Glob', 'Grep'] },
-  { label: 'Edit-only', allowed: ['Read', 'Write', 'Edit', 'Glob', 'Grep'] },
+  { label: t('inspector.noTools'), allowed: [] },
+  { label: t('inspector.readOnly'), allowed: ['Read', 'Glob', 'Grep'] },
+  { label: t('inspector.editOnly'), allowed: ['Read', 'Write', 'Edit', 'Glob', 'Grep'] },
 ];
 
 function ToolsTab({
@@ -518,7 +517,7 @@ function ToolsTab({
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      <Field label="Mode">
+      <Field label={t('inspector.mode')}>
         <div className="flex gap-1">
           {(['none', 'allow', 'deny'] as const).map(mode => (
             <button
@@ -540,7 +539,7 @@ function ToolsTab({
         </div>
       </Field>
 
-      <Field label="Presets">
+      <Field label={t('inspector.presets')}>
         <div className="flex flex-wrap gap-1">
           {TOOL_PRESETS.map(preset => (
             <button
@@ -557,7 +556,7 @@ function ToolsTab({
         </div>
       </Field>
 
-      <Field label="Allowed Tools">
+      <Field label={t('inspector.allowedTools')}>
         <input
           type="text"
           value={node.allowed_tools?.join(', ') ?? ''}
@@ -569,7 +568,7 @@ function ToolsTab({
         />
       </Field>
 
-      <Field label="Denied Tools">
+      <Field label={t('inspector.deniedTools')}>
         <input
           type="text"
           value={node.denied_tools?.join(', ') ?? ''}
@@ -651,7 +650,7 @@ function AdvancedTab({
   return (
     <div className="flex flex-col gap-3 p-3">
       <JsonTextareaField
-        label="Output Format (JSON Schema)"
+        label={t('inspector.outputFormat')}
         value={node.output_format}
         placeholder='{"type": "object", "properties": {...}}'
         rows={5}
@@ -660,7 +659,7 @@ function AdvancedTab({
         }}
       />
 
-      <Field label="Skills">
+      <Field label={t('inspector.skills')}>
         <input
           type="text"
           value={node.skills?.join(', ') ?? ''}
@@ -672,7 +671,7 @@ function AdvancedTab({
         />
       </Field>
 
-      <Field label="MCP Config Path">
+      <Field label={t('inspector.mcpConfigPath')}>
         <input
           type="text"
           value={node.mcp ?? ''}
@@ -682,13 +681,11 @@ function AdvancedTab({
           placeholder=".archon/mcp/github.json"
           className={cn(inputClass, 'font-mono')}
         />
-        <p className="text-[9px] text-text-tertiary">
-          Path relative to repo root. JSON matching SDK McpServerConfig format.
-        </p>
+        <p className="text-[9px] text-text-tertiary">{t('inspector.mcpPathHint')}</p>
       </Field>
 
       <JsonTextareaField
-        label="Hooks (SDK SyncHookJSONOutput)"
+        label={t('inspector.hooks')}
         value={node.hooks as Record<string, unknown> | undefined}
         placeholder='{"PreToolUse": [{"matcher": "Bash", "response": {...}}]}'
         rows={5}
@@ -699,7 +696,7 @@ function AdvancedTab({
 
       <div className="border-t border-border pt-3 mt-2">
         <Button variant="destructive" size="sm" onClick={onDelete} className="w-full">
-          Delete Node
+          {t('inspector.deleteNode')}
         </Button>
       </div>
     </div>
@@ -726,7 +723,7 @@ function DagInspector({
           type="button"
           onClick={onClose}
           className="text-text-tertiary hover:text-text-primary text-sm leading-none px-1"
-          title="Close inspector"
+          title={t('inspector.closeInspector')}
         >
           x
         </button>
@@ -736,19 +733,19 @@ function DagInspector({
       <Tabs defaultValue="general" className="flex-1 flex flex-col gap-0">
         <TabsList variant="line" className="px-2 pt-1 w-full justify-start">
           <TabsTrigger value="general" className="text-xs">
-            General
+            {t('inspector.general')}
           </TabsTrigger>
           <TabsTrigger value="execution" className="text-xs">
-            Execution
+            {t('inspector.execution')}
           </TabsTrigger>
           {!isBash && (
             <TabsTrigger value="tools" className="text-xs">
-              Tools
+              {t('inspector.tools')}
             </TabsTrigger>
           )}
           {!isBash && (
             <TabsTrigger value="advanced" className="text-xs">
-              Advanced
+              {t('inspector.advanced')}
             </TabsTrigger>
           )}
         </TabsList>

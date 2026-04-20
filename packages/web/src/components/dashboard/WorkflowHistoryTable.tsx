@@ -3,6 +3,7 @@ import { Globe, Terminal, Hash, Send, GitBranch, Trash2 } from 'lucide-react';
 import type { DashboardRunResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { formatDuration, formatStarted } from '@/lib/format';
+import { platformLabel, t } from '@/lib/i18n';
 import { ConfirmRunActionDialog } from './ConfirmRunActionDialog';
 
 interface WorkflowHistoryTableProps {
@@ -31,7 +32,7 @@ export function WorkflowHistoryTable({
   if (runs.length === 0) {
     return (
       <div className="flex items-center justify-center py-8">
-        <span className="text-xs text-text-tertiary">No history</span>
+        <span className="text-xs text-text-tertiary">{t('dashboard.noHistory')}</span>
       </div>
     );
   }
@@ -41,13 +42,13 @@ export function WorkflowHistoryTable({
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-border bg-surface-elevated text-left text-text-tertiary">
-            <th className="px-3 py-2 font-medium w-8">Status</th>
-            <th className="px-3 py-2 font-medium">Workflow</th>
-            <th className="px-3 py-2 font-medium">Project</th>
-            <th className="px-3 py-2 font-medium w-16">Source</th>
-            <th className="px-3 py-2 font-medium w-20">Duration</th>
-            <th className="px-3 py-2 font-medium w-32">Started</th>
-            <th className="px-3 py-2 font-medium w-20">Actions</th>
+            <th className="px-3 py-2 font-medium w-8">{t('dashboard.table.status')}</th>
+            <th className="px-3 py-2 font-medium">{t('dashboard.table.workflow')}</th>
+            <th className="px-3 py-2 font-medium">{t('dashboard.table.project')}</th>
+            <th className="px-3 py-2 font-medium w-16">{t('dashboard.table.source')}</th>
+            <th className="px-3 py-2 font-medium w-20">{t('dashboard.table.duration')}</th>
+            <th className="px-3 py-2 font-medium w-32">{t('dashboard.table.started')}</th>
+            <th className="px-3 py-2 font-medium w-20">{t('dashboard.table.actions')}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -86,7 +87,7 @@ export function WorkflowHistoryTable({
               <td className="px-3 py-2">
                 <span className="flex items-center gap-1 text-text-secondary">
                   {PLATFORM_ICONS[run.platform_type ?? ''] ?? null}
-                  {run.platform_type ?? '\u2014'}
+                  {run.platform_type ? platformLabel(run.platform_type) : '\u2014'}
                 </span>
               </td>
               <td className="px-3 py-2 text-text-secondary">
@@ -99,26 +100,27 @@ export function WorkflowHistoryTable({
                     to={`/workflows/runs/${run.id}`}
                     className="text-primary hover:text-primary/80 transition-colors"
                   >
-                    View Logs
+                    {t('common.viewLogs')}
                   </Link>
                   {onDelete && (
                     <ConfirmRunActionDialog
                       trigger={
                         <button
                           className="text-text-tertiary hover:text-error transition-colors"
-                          title="Delete run"
+                          title={t('dashboard.deleteRun')}
                         >
                           <Trash2 className="h-3 w-3" />
                         </button>
                       }
-                      title="Delete workflow run?"
+                      title={t('dialog.delete.title')}
                       description={
                         <>
-                          Permanently delete the run record for <strong>{run.workflow_name}</strong>{' '}
-                          and its events. This cannot be undone.
+                          {t('dialog.delete.descriptionPrefix')}
+                          <strong>{run.workflow_name}</strong>
+                          {t('dialog.delete.descriptionSuffix')}
                         </>
                       }
-                      confirmLabel="Delete"
+                      confirmLabel={t('common.delete')}
                       onConfirm={(): void => {
                         onDelete(run.id);
                       }}

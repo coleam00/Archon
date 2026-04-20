@@ -2,7 +2,12 @@
 # scripts/update-homebrew.sh
 # Update Homebrew formula with checksums from a release
 #
-# Usage: ./scripts/update-homebrew.sh v0.2.0
+# Usage: ./scripts/update-homebrew.sh v0.1.0
+#
+# Env vars:
+#   REPO         - GitHub repo containing release assets (default: current origin/GITHUB_REPOSITORY)
+#   FORMULA_FILE - Homebrew formula to update (default: homebrew/archon.rb)
+#   CHECKSUMS_FILE - Local checksums.txt path for offline validation
 
 set -euo pipefail
 
@@ -10,23 +15,54 @@ VERSION="${1:-}"
 
 if [ -z "$VERSION" ]; then
   echo "Usage: $0 <version>"
-  echo "Example: $0 v0.2.0"
+  echo "Example: $0 v0.1.0"
   exit 1
 fi
 
-# Remove 'v' prefix if present for formula version
-FORMULA_VERSION="${VERSION#v}"
+derive_repo_from_origin() {
+  local origin
+  origin="$(git remote get-url origin 2>/dev/null || true)"
+  if [ -z "$origin" ]; then
+    return 1
+  fi
 
-REPO="coleam00/Archon"
-FORMULA_FILE="homebrew/archon.rb"
+  origin="${origin%.git}"
+  origin="${origin#https://github.com/}"
+  origin="${origin#git@github.com:}"
 
-echo "Updating Homebrew formula for version $VERSION"
+  if echo "$origin" | grep -qE '^[^/]+/[^/]+$'; then
+    echo "$origin"
+    return 0
+  fi
 
-# Download checksums
-CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
-echo "Downloading checksums from $CHECKSUMS_URL"
+  return 1
+}
 
-CHECKSUMS=$(curl -fsSL "$CHECKSUMS_URL")
+RELEASE_TAG="$VERSION"
+if [[ "$RELEASE_TAG" != v* ]]; then
+  RELEASE_TAG="v${RELEASE_TAG}"
+fi
+
+# Remove 'v' prefix for formula version because Homebrew adds it in URLs.
+FORMULA_VERSION="${RELEASE_TAG#v}"
+REPO="${REPO:-${GITHUB_REPOSITORY:-$(derive_repo_from_origin || echo 'NewTurn2017/Archon')}}"
+FORMULA_FILE="${FORMULA_FILE:-homebrew/archon.rb}"
+
+if [ ! -f "$FORMULA_FILE" ]; then
+  echo "ERROR: Formula file not found: $FORMULA_FILE" >&2
+  exit 1
+fi
+
+echo "Updating Homebrew formula for $REPO $RELEASE_TAG"
+
+if [ -n "${CHECKSUMS_FILE:-}" ]; then
+  echo "Reading checksums from $CHECKSUMS_FILE"
+  CHECKSUMS="$(cat "$CHECKSUMS_FILE")"
+else
+  CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/checksums.txt"
+  echo "Downloading checksums from $CHECKSUMS_URL"
+  CHECKSUMS="$(curl -fsSL "$CHECKSUMS_URL")"
+fi
 echo "Checksums:"
 echo "$CHECKSUMS"
 echo ""
@@ -72,6 +108,14 @@ echo "Updating formula..."
 # Update version
 sed -i.bak "s/version \".*\"/version \"${FORMULA_VERSION}\"/" "$FORMULA_FILE"
 
+# Update repository metadata and release asset URLs.
+export REPO
+perl -0pi.bak -e 's~homepage "[^"]+"~homepage "https://github.com/$ENV{REPO}"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-darwin-arm64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-darwin-arm64"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-darwin-x64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-darwin-x64"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-linux-arm64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-linux-arm64"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-linux-x64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-linux-x64"~g' "$FORMULA_FILE"
+
 # Update checksums - handles both PLACEHOLDER and existing 64-char hex hashes
 # The formula structure places sha256 on its own line after url in each on_* block
 # Pattern matches: sha256 "PLACEHOLDER..." or sha256 "64-hex-chars"
@@ -101,5 +145,5 @@ echo "Updated $FORMULA_FILE"
 echo ""
 echo "Next steps:"
 echo "1. Review changes: git diff $FORMULA_FILE"
-echo "2. Commit: git add $FORMULA_FILE && git commit -m 'chore: update Homebrew formula for $VERSION'"
+echo "2. Commit: git add $FORMULA_FILE && git commit -m 'chore: update Homebrew formula for $RELEASE_TAG'"
 echo "3. If you have a tap repo, copy the formula there"

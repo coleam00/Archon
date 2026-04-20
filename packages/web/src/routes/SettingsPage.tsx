@@ -24,6 +24,7 @@ import type {
   ProviderDefaults,
   ProviderInfo,
 } from '@/lib/api';
+import { healthStatusLabel, platformLabel, t } from '@/lib/i18n';
 
 const selectClass =
   'h-9 rounded-md border border-border bg-surface-elevated text-text-primary px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring [&>option]:bg-surface-elevated [&>option]:text-text-primary';
@@ -47,50 +48,50 @@ function SystemHealthSection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>System Health</CardTitle>
+        <CardTitle>{t('settings.systemHealth')}</CardTitle>
       </CardHeader>
       <CardContent>
         {!health ? (
-          <div className="text-sm text-muted-foreground">Loading...</div>
+          <div className="text-sm text-muted-foreground">{t('common.loading')}</div>
         ) : (
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
             <div>
-              <span className="text-muted-foreground">Status: </span>
+              <span className="text-muted-foreground">{t('settings.status')}: </span>
               <Badge variant={health.status === 'ok' ? 'default' : 'destructive'}>
-                {health.status}
+                {healthStatusLabel(health.status)}
               </Badge>
             </div>
             <div>
-              <span className="text-muted-foreground">Adapter: </span>
+              <span className="text-muted-foreground">{t('settings.adapter')}: </span>
               <span className="font-medium">{health.adapter}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Database: </span>
-              <span className="font-medium">{database ?? 'unknown'}</span>
+              <span className="text-muted-foreground">{t('settings.database')}: </span>
+              <span className="font-medium">{database ?? t('settings.unknown')}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Active: </span>
+              <span className="text-muted-foreground">{t('settings.active')}: </span>
               <span className="font-medium">
                 {health.concurrency.active}/{health.concurrency.maxConcurrent}
               </span>
             </div>
             <div>
-              <span className="text-muted-foreground">Queued: </span>
+              <span className="text-muted-foreground">{t('settings.queued')}: </span>
               <span className="font-medium">{health.concurrency.queuedTotal}</span>
             </div>
             <div>
-              <span className="text-muted-foreground">Workflows: </span>
+              <span className="text-muted-foreground">{t('settings.workflows')}: </span>
               <span className="font-medium">{health.runningWorkflows}</span>
             </div>
             {health.version && (
               <div>
-                <span className="text-muted-foreground">Version: </span>
+                <span className="text-muted-foreground">{t('settings.version')}: </span>
                 <span className="font-medium">{health.version}</span>
               </div>
             )}
             {gitCommit && gitCommit !== 'unknown' && (
               <div>
-                <span className="text-muted-foreground">Commit: </span>
+                <span className="text-muted-foreground">{t('settings.commit')}: </span>
                 <span className="font-medium font-mono">{gitCommit}</span>
               </div>
             )}
@@ -163,7 +164,7 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
     <div className="mt-2 pl-2 border-l border-border space-y-2">
       {mutationError && <div className="text-xs text-destructive">{mutationError}</div>}
       {keys.length === 0 ? (
-        <div className="text-xs text-muted-foreground">No env vars set.</div>
+        <div className="text-xs text-muted-foreground">{t('settings.noEnvVars')}</div>
       ) : (
         <div className="space-y-1">
           {keys.map(key => (
@@ -185,7 +186,7 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
                     }
                   }}
                 >
-                  {editingKey === key ? 'Cancel' : 'Edit'}
+                  {editingKey === key ? t('common.cancel') : t('settings.edit')}
                 </Button>
                 <Button
                   variant="ghost"
@@ -196,7 +197,7 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
                   }}
                   disabled={deleteMutation.isPending}
                 >
-                  Remove
+                  {t('common.remove')}
                 </Button>
               </div>
               {editingKey === key && (
@@ -206,7 +207,7 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
                     onChange={e => {
                       setEditValue(e.target.value);
                     }}
-                    placeholder="new value"
+                    placeholder={t('settings.newValue')}
                     className="flex-1 h-7 text-xs"
                     autoFocus
                     onKeyDown={e => {
@@ -224,7 +225,7 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
                     }}
                     disabled={setMutation.isPending}
                   >
-                    Save
+                    {t('builder.save')}
                   </Button>
                 </div>
               )}
@@ -238,7 +239,7 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
           onChange={e => {
             setNewKey(e.target.value);
           }}
-          placeholder="KEY"
+          placeholder={t('settings.keyPlaceholder')}
           className="flex-1 h-7 text-xs font-mono"
         />
         <Input
@@ -246,11 +247,11 @@ function EnvVarsPanel({ codebaseId }: { codebaseId: string }): React.ReactElemen
           onChange={e => {
             setNewValue(e.target.value);
           }}
-          placeholder="value"
+          placeholder={t('settings.valuePlaceholder')}
           className="flex-1 h-7 text-xs"
         />
         <Button type="submit" size="sm" className="h-7 text-xs" disabled={setMutation.isPending}>
-          Add
+          {t('settings.add')}
         </Button>
       </form>
     </div>
@@ -294,11 +295,11 @@ function ProjectsSection(): React.ReactElement {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Projects</CardTitle>
+        <CardTitle>{t('settings.projects')}</CardTitle>
       </CardHeader>
       <CardContent>
         {!codebases || codebases.length === 0 ? (
-          <div className="text-sm text-muted-foreground">No projects registered.</div>
+          <div className="text-sm text-muted-foreground">{t('settings.noProjects')}</div>
         ) : (
           <div className="space-y-2">
             {codebases.map((cb: CodebaseResponse) => (
@@ -317,7 +318,7 @@ function ProjectsSection(): React.ReactElement {
                         setExpandedEnvVars(expandedEnvVars === cb.id ? null : cb.id);
                       }}
                     >
-                      Env Vars {expandedEnvVars === cb.id ? '\u25B2' : '\u25BC'}
+                      {t('settings.envVars')} {expandedEnvVars === cb.id ? '\u25B2' : '\u25BC'}
                     </Button>
                     <Button
                       variant="ghost"
@@ -327,7 +328,7 @@ function ProjectsSection(): React.ReactElement {
                       }}
                       disabled={deleteMutation.isPending}
                     >
-                      Remove
+                      {t('common.remove')}
                     </Button>
                   </div>
                 </div>
@@ -344,11 +345,11 @@ function ProjectsSection(): React.ReactElement {
               onChange={e => {
                 setAddValue(e.target.value);
               }}
-              placeholder="GitHub URL or local path"
+              placeholder={t('settings.githubUrlOrLocalPath')}
               className="flex-1"
             />
             <Button type="submit" size="sm" disabled={addMutation.isPending}>
-              Add
+              {t('settings.add')}
             </Button>
             <Button
               type="button"
@@ -359,7 +360,7 @@ function ProjectsSection(): React.ReactElement {
                 setAddValue('');
               }}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
           </form>
         ) : (
@@ -371,7 +372,7 @@ function ProjectsSection(): React.ReactElement {
               setShowAdd(true);
             }}
           >
-            + Add Project
+            {t('settings.addProject')}
           </Button>
         )}
 
@@ -379,7 +380,7 @@ function ProjectsSection(): React.ReactElement {
           <div className="mt-2 text-sm text-destructive">
             {addMutation.error instanceof Error
               ? addMutation.error.message
-              : 'Failed to add project'}
+              : t('settings.failedAddProject')}
           </div>
         )}
       </CardContent>
@@ -443,7 +444,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
     mutationFn: updateAssistantConfig,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['config'] });
-      setSaveMsg({ type: 'success', text: 'Settings saved.' });
+      setSaveMsg({ type: 'success', text: t('settings.saved') });
       setTimeout(() => {
         setSaveMsg(null);
       }, 3000);
@@ -463,12 +464,12 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Assistant Configuration</CardTitle>
+        <CardTitle>{t('settings.assistantConfiguration')}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
           <div className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm">
-            <label htmlFor="default-assistant">Default Assistant</label>
+            <label htmlFor="default-assistant">{t('settings.defaultAssistant')}</label>
             <select
               id="default-assistant"
               value={assistant}
@@ -496,9 +497,11 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                     className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm"
                   >
                     <div className="font-medium">{provider.displayName}</div>
-                    <div className="text-muted-foreground">Built-in provider settings</div>
+                    <div className="text-muted-foreground">
+                      {t('settings.builtInProviderSettings')}
+                    </div>
 
-                    <label htmlFor="claude-model">Model</label>
+                    <label htmlFor="claude-model">{t('settings.model')}</label>
                     <select
                       id="claude-model"
                       value={(providerSettings.model as string | undefined) ?? 'sonnet'}
@@ -522,9 +525,11 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                     className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm"
                   >
                     <div className="font-medium">{provider.displayName}</div>
-                    <div className="text-muted-foreground">Built-in provider settings</div>
+                    <div className="text-muted-foreground">
+                      {t('settings.builtInProviderSettings')}
+                    </div>
 
-                    <label htmlFor="codex-model">Model</label>
+                    <label htmlFor="codex-model">{t('settings.model')}</label>
                     <Input
                       id="codex-model"
                       value={(providerSettings.model as string | undefined) ?? ''}
@@ -534,7 +539,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                       placeholder="gpt-5.3-codex"
                     />
 
-                    <label htmlFor="reasoning">Reasoning Effort</label>
+                    <label htmlFor="reasoning">{t('settings.reasoningEffort')}</label>
                     <select
                       id="reasoning"
                       value={
@@ -554,7 +559,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                       <option value="xhigh">xhigh</option>
                     </select>
 
-                    <label htmlFor="web-search">Web Search</label>
+                    <label htmlFor="web-search">{t('settings.webSearch')}</label>
                     <select
                       id="web-search"
                       value={(providerSettings.webSearchMode as string | undefined) ?? 'disabled'}
@@ -575,8 +580,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                 <div key={provider.id} className="rounded-md border border-border p-3 text-sm">
                   <div className="font-medium">{provider.displayName}</div>
                   <div className="mt-1 text-muted-foreground">
-                    Provider-specific settings are stored generically for Phase 2. This provider
-                    does not have a dedicated editor yet.
+                    {t('settings.genericProviderSettings')}
                   </div>
                   {Object.keys(providerSettings).length > 0 && (
                     <pre className="mt-2 overflow-x-auto rounded bg-muted p-2 text-xs">
@@ -590,7 +594,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
 
           <div className="flex items-center gap-3">
             <Button onClick={handleSave} disabled={mutation.isPending || !hasChanges} size="sm">
-              {mutation.isPending ? 'Saving...' : 'Save Changes'}
+              {mutation.isPending ? t('settings.saving') : t('settings.saveChanges')}
             </Button>
             {saveMsg && (
               <span
@@ -622,15 +626,15 @@ function PlatformConnectionsSection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Platform Connections</CardTitle>
+        <CardTitle>{t('settings.platformConnections')}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="space-y-2">
           {platforms.map(p => (
             <div key={p.name} className="flex items-center justify-between text-sm">
-              <span>{p.name}</span>
+              <span>{platformLabel(p.name)}</span>
               <Badge variant={p.connected ? 'default' : 'secondary'}>
-                {p.connected ? 'Connected' : 'Not configured'}
+                {p.connected ? t('common.connected') : t('settings.notConfigured')}
               </Badge>
             </div>
           ))}
@@ -652,7 +656,7 @@ function ConcurrencySection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Concurrency</CardTitle>
+        <CardTitle>{t('settings.concurrency')}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="space-y-2">
@@ -663,7 +667,8 @@ function ConcurrencySection({
             />
           </div>
           <div className="text-sm text-muted-foreground">
-            {active} / {max} concurrent conversations
+            {active} / {max}
+            {t('settings.concurrentConversations')}
           </div>
         </div>
       </CardContent>
@@ -694,21 +699,23 @@ export function SettingsPage(): React.ReactElement {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <Header title="Settings" />
+      <Header title={t('settings.title')} />
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-5xl space-y-6">
           {(configError || healthError) && (
             <div className="text-sm text-destructive">
-              Failed to load settings:{' '}
+              {t('settings.loadFailedPrefix')}{' '}
               {((): string => {
                 const err = configError ?? healthError;
-                return err instanceof Error ? err.message : 'Unknown error';
+                return err instanceof Error ? err.message : t('settings.unknown');
               })()}
-              . Check that the server is running.
+              . {t('settings.loadFailedSuffix')}
             </div>
           )}
 
-          {isLoading && <div className="text-sm text-muted-foreground">Loading settings...</div>}
+          {isLoading && (
+            <div className="text-sm text-muted-foreground">{t('settings.loadingSettings')}</div>
+          )}
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <SystemHealthSection health={health} database={configData?.database} />

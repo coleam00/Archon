@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { listCommands, type CommandEntry } from '@/lib/api';
 import { useProject } from '@/contexts/ProjectContext';
+import { t } from '@/lib/i18n';
 
 export function NodePalette(): React.ReactElement {
   const { codebases, selectedProjectId } = useProject();
@@ -34,7 +35,7 @@ export function NodePalette(): React.ReactElement {
   return (
     <div className="flex flex-col h-full overflow-auto p-2">
       <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">
-        Nodes
+        {t('nodePalette.nodes')}
       </h3>
 
       {/* Prompt node */}
@@ -46,7 +47,7 @@ export function NodePalette(): React.ReactElement {
         className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-dashed border-border hover:border-accent hover:bg-accent/5 cursor-grab text-xs text-text-primary mb-1"
       >
         <span className="text-[10px] text-accent font-medium">PROMPT</span>
-        <span>Inline prompt</span>
+        <span>{t('nodePalette.inlinePrompt')}</span>
       </div>
 
       {/* Bash node */}
@@ -58,20 +59,23 @@ export function NodePalette(): React.ReactElement {
         className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-dashed border-border hover:border-accent hover:bg-accent/5 cursor-grab text-xs text-text-primary mb-2"
       >
         <span className="text-[10px] text-accent font-medium">BASH</span>
-        <span>Shell script</span>
+        <span>{t('nodePalette.shellScript')}</span>
       </div>
 
-      {isLoading && <p className="text-xs text-text-tertiary">Loading commands...</p>}
+      {isLoading && (
+        <p className="text-xs text-text-tertiary">{t('nodePalette.loadingCommands')}</p>
+      )}
       {isError && (
         <p className="text-xs text-error">
-          Failed to load commands: {error instanceof Error ? error.message : 'Unknown error'}
+          {t('nodePalette.loadCommandsFailedPrefix')}{' '}
+          {error instanceof Error ? error.message : t('nodePalette.unknownError')}
         </p>
       )}
 
       {project.length > 0 && (
         <>
           <h4 className="text-[10px] font-medium text-text-tertiary uppercase tracking-wide mt-2 mb-1">
-            Project
+            {t('nodePalette.project')}
           </h4>
           {project.map((cmd: CommandEntry) => (
             <div
@@ -92,7 +96,7 @@ export function NodePalette(): React.ReactElement {
       {bundled.length > 0 && (
         <>
           <h4 className="text-[10px] font-medium text-text-tertiary uppercase tracking-wide mt-2 mb-1">
-            Bundled
+            {t('nodePalette.bundled')}
           </h4>
           {bundled.map((cmd: CommandEntry) => (
             <div

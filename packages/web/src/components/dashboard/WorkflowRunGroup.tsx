@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router';
 import { MessageSquare } from 'lucide-react';
 import type { DashboardRunResponse } from '@/lib/api';
+import { t } from '@/lib/i18n';
 import { WorkflowRunCard } from './WorkflowRunCard';
 
 interface WorkflowRunGroupProps {
@@ -41,7 +42,8 @@ export function WorkflowRunGroup({
             className="flex items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-2.5 py-0.5 text-[11px] text-text-secondary hover:border-primary/40 hover:text-primary transition-colors shrink-0"
           >
             <MessageSquare className="h-3 w-3" />
-            {runs.length} run{runs.length !== 1 ? 's' : ''} from this chat
+            {String(runs.length)}
+            {t('dashboard.runFromChat')}
           </button>
           <div className="h-px flex-1 bg-border" />
         </div>

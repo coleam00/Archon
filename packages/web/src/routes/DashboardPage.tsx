@@ -23,6 +23,7 @@ import { WorkflowRunCard } from '@/components/dashboard/WorkflowRunCard';
 import { WorkflowHistoryTable } from '@/components/dashboard/WorkflowHistoryTable';
 import { useDashboardSSE } from '@/hooks/useDashboardSSE';
 import { useWorkflowStore } from '@/stores/workflow-store';
+import { t } from '@/lib/i18n';
 
 const DEFAULT_PAGE_SIZE = 10;
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
@@ -284,17 +285,17 @@ export function DashboardPage(): React.ReactElement {
   }
 
   const handleCancel = (runId: string): Promise<void> =>
-    runAction(cancelWorkflowRun, runId, 'Failed to cancel workflow');
+    runAction(cancelWorkflowRun, runId, '워크플로를 취소하지 못했습니다');
   const handleResume = (runId: string): Promise<void> =>
-    runAction(resumeWorkflowRun, runId, 'Failed to resume workflow');
+    runAction(resumeWorkflowRun, runId, '워크플로를 재개하지 못했습니다');
   const handleAbandon = (runId: string): Promise<void> =>
-    runAction(abandonWorkflowRun, runId, 'Failed to abandon workflow');
+    runAction(abandonWorkflowRun, runId, '워크플로를 중단 처리하지 못했습니다');
   const handleDelete = (runId: string): Promise<void> =>
-    runAction(deleteWorkflowRun, runId, 'Failed to delete workflow run');
+    runAction(deleteWorkflowRun, runId, '워크플로 실행 기록을 삭제하지 못했습니다');
   const handleApprove = (runId: string): Promise<void> =>
-    runAction(approveWorkflowRun, runId, 'Failed to approve workflow');
+    runAction(approveWorkflowRun, runId, '워크플로를 승인하지 못했습니다');
   const handleReject = (runId: string): Promise<void> =>
-    runAction(rejectWorkflowRun, runId, 'Failed to reject workflow');
+    runAction(rejectWorkflowRun, runId, '워크플로를 거절하지 못했습니다');
 
   const totalPages = Math.ceil(total / pageSize);
   const hasMore = page + 1 < totalPages;
@@ -304,10 +305,10 @@ export function DashboardPage(): React.ReactElement {
       <div className="flex-1 overflow-auto p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-text-primary">Mission Control</h1>
+          <h1 className="text-lg font-semibold text-text-primary">{t('dashboard.title')}</h1>
           {dataUpdatedAt > 0 && (
             <span className="text-xs text-text-tertiary">
-              Last updated {new Date(dataUpdatedAt).toLocaleTimeString()}
+              {t('dashboard.lastUpdated')} {new Date(dataUpdatedAt).toLocaleTimeString('ko-KR')}
             </span>
           )}
         </div>
@@ -335,26 +336,28 @@ export function DashboardPage(): React.ReactElement {
 
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
-            <span className="text-sm text-text-tertiary">Loading...</span>
+            <span className="text-sm text-text-tertiary">{t('common.loading')}</span>
           </div>
         ) : isError ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <p className="text-sm text-error">
-              Failed to load workflow runs
+              {t('dashboard.loadFailed')}
               {fetchError instanceof Error ? `: ${fetchError.message}` : ''}
             </p>
           </div>
         ) : runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-16">
             <Workflow className="h-10 w-10 text-text-tertiary" />
-            <p className="text-sm text-text-tertiary">No workflow runs found</p>
+            <p className="text-sm text-text-tertiary">{t('dashboard.empty')}</p>
           </div>
         ) : (
           <>
             {/* Active Workflows */}
             {activeRuns.length > 0 && (
               <section>
-                <h2 className="mb-3 text-sm font-semibold text-text-secondary">Active Workflows</h2>
+                <h2 className="mb-3 text-sm font-semibold text-text-secondary">
+                  {t('dashboard.activeWorkflows')}
+                </h2>
                 <div className="space-y-6">
                   {/* Singleton runs (1 per chat or standalone) share a single grid */}
                   {singletonRuns.length > 0 && (
@@ -396,7 +399,9 @@ export function DashboardPage(): React.ReactElement {
             {/* History */}
             {historyRuns.length > 0 && (
               <section>
-                <h2 className="mb-3 text-sm font-semibold text-text-secondary">History</h2>
+                <h2 className="mb-3 text-sm font-semibold text-text-secondary">
+                  {t('dashboard.history')}
+                </h2>
                 <WorkflowHistoryTable runs={historyRuns} onDelete={handleDelete} />
               </section>
             )}
@@ -405,8 +410,8 @@ export function DashboardPage(): React.ReactElement {
             <div className="flex items-center justify-between pt-2">
               <div className="flex items-center gap-3">
                 <span className="text-xs text-text-tertiary">
-                  Showing {String(page * pageSize + 1)}&ndash;
-                  {String(Math.min((page + 1) * pageSize, total))} of {String(total)} runs
+                  {String(page * pageSize + 1)}&ndash;
+                  {String(Math.min((page + 1) * pageSize, total))} / {String(total)}
                 </span>
                 <select
                   value={pageSize}
@@ -417,7 +422,8 @@ export function DashboardPage(): React.ReactElement {
                 >
                   {PAGE_SIZE_OPTIONS.map(size => (
                     <option key={size} value={size}>
-                      {String(size)} per page
+                      {String(size)}
+                      {t('dashboard.perPage')}
                     </option>
                   ))}
                 </select>
@@ -430,10 +436,10 @@ export function DashboardPage(): React.ReactElement {
                   disabled={page === 0}
                   className="rounded-md border border-border bg-surface-elevated px-3 py-1 text-xs text-text-secondary transition-colors hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Previous
+                  {t('dashboard.previous')}
                 </button>
                 <span className="text-xs text-text-tertiary">
-                  Page {String(page + 1)} of {String(Math.max(1, totalPages))}
+                  {String(page + 1)} / {String(Math.max(1, totalPages))} 페이지
                 </span>
                 <button
                   onClick={(): void => {
@@ -442,7 +448,7 @@ export function DashboardPage(): React.ReactElement {
                   disabled={!hasMore}
                   className="rounded-md border border-border bg-surface-elevated px-3 py-1 text-xs text-text-secondary transition-colors hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  Next
+                  {t('dashboard.next')}
                 </button>
               </div>
             </div>

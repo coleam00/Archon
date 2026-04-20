@@ -3,6 +3,7 @@ import { Box, FileText, Terminal, Zap, Plug, ChevronRight } from 'lucide-react';
 import type { CommandEntry } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useClickOutside } from '@/hooks/useClickOutside';
+import { t } from '@/lib/i18n';
 import { CommandPicker } from './CommandPicker';
 
 interface QuickAddPickerProps {
@@ -97,12 +98,12 @@ export function QuickAddPicker({
             ←
           </button>
           <span className="text-xs font-medium text-text-secondary">
-            {isSkill ? 'Add Skill Node' : 'Add MCP Node'}
+            {isSkill ? t('quickAdd.addSkillNode') : t('quickAdd.addMcpNode')}
           </span>
         </div>
         <div className="p-3">
           <label className="text-[10px] text-text-tertiary block mb-1.5">
-            {isSkill ? 'Skill name' : 'MCP config path'}
+            {isSkill ? t('quickAdd.skillName') : t('quickAdd.mcpConfigPath')}
           </label>
           <input
             ref={inputRef}
@@ -126,7 +127,7 @@ export function QuickAddPicker({
                 : 'bg-surface border border-border text-text-tertiary cursor-not-allowed'
             )}
           >
-            Create Node
+            {t('quickAdd.createNode')}
           </button>
         </div>
       </div>
@@ -141,7 +142,7 @@ export function QuickAddPicker({
       className="w-56 bg-surface-elevated border border-border rounded-lg shadow-lg overflow-hidden"
     >
       <div className="px-3 py-2 border-b border-border">
-        <span className="text-xs font-medium text-text-secondary">Add Node</span>
+        <span className="text-xs font-medium text-text-secondary">{t('quickAdd.addNode')}</span>
       </div>
       <div className="py-1">
         {/* Command */}
@@ -156,8 +157,8 @@ export function QuickAddPicker({
             <Box className="size-4" />
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-text-primary">Command</div>
-            <div className="text-[10px] text-text-tertiary">Run a named command</div>
+            <div className="text-xs font-medium text-text-primary">{t('quickAdd.command')}</div>
+            <div className="text-[10px] text-text-tertiary">{t('quickAdd.runNamedCommand')}</div>
           </div>
           <ChevronRight className="size-3.5 text-text-tertiary shrink-0" />
         </button>
@@ -174,8 +175,8 @@ export function QuickAddPicker({
             <FileText className="size-4" />
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-text-primary">Prompt</div>
-            <div className="text-[10px] text-text-tertiary">Inline AI prompt</div>
+            <div className="text-xs font-medium text-text-primary">{t('quickAdd.prompt')}</div>
+            <div className="text-[10px] text-text-tertiary">{t('quickAdd.inlineAiPrompt')}</div>
           </div>
         </button>
 
@@ -191,8 +192,8 @@ export function QuickAddPicker({
             <Terminal className="size-4" />
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-text-primary">Bash</div>
-            <div className="text-[10px] text-text-tertiary">Shell script</div>
+            <div className="text-xs font-medium text-text-primary">{t('quickAdd.bash')}</div>
+            <div className="text-[10px] text-text-tertiary">{t('quickAdd.shellScript')}</div>
           </div>
         </button>
 
@@ -200,7 +201,7 @@ export function QuickAddPicker({
         <div className="my-1 mx-3 border-t border-border" />
         <div className="px-3 py-1">
           <span className="text-[10px] font-medium text-text-tertiary uppercase tracking-wider">
-            Advanced
+            {t('quickAdd.advanced')}
           </span>
         </div>
 
@@ -216,8 +217,8 @@ export function QuickAddPicker({
             <Zap className="size-4" />
           </span>
           <div className="flex-1 min-w-0">
-            <div className="text-xs font-medium text-text-primary">Skill</div>
-            <div className="text-[10px] text-text-tertiary">Prompt + skill preloading</div>
+            <div className="text-xs font-medium text-text-primary">{t('quickAdd.skill')}</div>
+            <div className="text-[10px] text-text-tertiary">{t('quickAdd.skillPreloading')}</div>
           </div>
           <ChevronRight className="size-3.5 text-text-tertiary shrink-0" />
         </button>
@@ -235,7 +236,7 @@ export function QuickAddPicker({
           </span>
           <div className="flex-1 min-w-0">
             <div className="text-xs font-medium text-text-primary">MCP</div>
-            <div className="text-[10px] text-text-tertiary">Prompt + MCP server</div>
+            <div className="text-[10px] text-text-tertiary">{t('quickAdd.mcpPreloading')}</div>
           </div>
           <ChevronRight className="size-3.5 text-text-tertiary shrink-0" />
         </button>

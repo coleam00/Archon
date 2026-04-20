@@ -1,5 +1,6 @@
 import type { WorkflowDefinition, DagNode } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 interface YamlCodeViewProps {
   definition: WorkflowDefinition | null;
@@ -183,7 +184,7 @@ export function YamlCodeView({ definition, mode }: YamlCodeViewProps): React.Rea
     <div className="flex h-full flex-col bg-surface-inset">
       {mode === 'full' && (
         <div className="flex items-center border-b border-border px-3 py-2">
-          <span className="text-xs text-text-tertiary">Read-only YAML preview</span>
+          <span className="text-xs text-text-tertiary">{t('execution.readOnlyYamlPreview')}</span>
         </div>
       )}
       <pre
@@ -193,7 +194,7 @@ export function YamlCodeView({ definition, mode }: YamlCodeViewProps): React.Rea
           'whitespace-pre-wrap break-words'
         )}
       >
-        {yamlText || '# No workflow definition'}
+        {yamlText || t('execution.noWorkflowDefinition')}
       </pre>
     </div>
   );
