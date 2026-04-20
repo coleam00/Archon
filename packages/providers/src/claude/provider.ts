@@ -84,7 +84,8 @@ function normalizeClaudeUsage(usage?: {
  */
 function buildSubprocessEnv(): NodeJS.ProcessEnv {
   const hasExplicitTokens = Boolean(
-    process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.CLAUDE_API_KEY
+    // Use || (not ??) so that an empty string falls through to check CLAUDE_API_KEY (#1027)
+    process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY
   );
   const authMode = hasExplicitTokens ? 'explicit' : 'global';
   getLog().info(
