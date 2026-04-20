@@ -1330,6 +1330,104 @@ nodes:
       Keep the digest scannable — a maintainer should be able to assess
       "did anything need my attention?" in under 30 seconds.
 
+      # Post to Slack (optional)
+
+      AFTER writing `digest.md`, check the env:
+
+          echo "SLACK_WEBHOOK=${SLACK_WEBHOOK:-<unset>}"
+
+      If `SLACK_WEBHOOK` is unset or empty → print
+          "Slack post skipped: SLACK_WEBHOOK not set."
+      and finish. This is the normal path when Slack isn't wired.
+
+      If set, prepare a COMPACT Slack-flavoured variant and post it to
+      the webhook. Rules:
+
+      ## Length budget
+
+      Keep the Slack payload under ~3,500 characters. The full digest
+      stays on disk at `$ARTIFACTS_DIR/digest.md`; Slack gets a summary
+      + the comment-URL index. Never send the whole digest.md to Slack.
+
+      ## Slack mrkdwn rules (NOT standard Markdown)
+
+      - Bold: `*bold*` (NOT `**bold**`)
+      - Italics: `_italic_`
+      - Links: `<https://url|text>` (NOT `[text](url)`)
+      - Lists: use `•` or `-` at line start — no numbered lists
+      - No `##` headers — use a `*Bold line*` instead
+      - No tables — convert to bulleted key/value lines
+      - Code: single-backtick inline, triple-backtick blocks
+
+      ## Payload shape
+
+      Write the Slack text to `$ARTIFACTS_DIR/digest-slack.txt` FIRST
+      (so it lands as a traceable artifact), then read it back into a
+      JSON payload via `jq`:
+
+      ```
+      jq -cn --rawfile t "$ARTIFACTS_DIR/digest-slack.txt" \
+        '{text: $t, mrkdwn: true}' > "$ARTIFACTS_DIR/slack-payload.json"
+      ```
+
+      ## Template for the Slack text
+
+      ```
+      *Repo-triage digest — <now-iso>*
+      <if dry run: _(dry run — no mutations)_>
+
+      *Headline*
+      • Labels applied: <N>
+      • Dedup clusters (open↔open): <N>
+      • Closed-issue matches: <N>
+      • Auto-closed: <N>
+      • PR `Closes #X` suggestions: <N>
+      • Related cross-refs: <N>
+      • Closed-PR duplicates: <N>
+      • PR template nudges: <N>
+      • Stale nudges: <N>
+
+      *Comments posted this run*  (click to jump to GitHub)
+      • #<N> dup of #<canon> → <https://github.com/<slug>/issues/<N>#issuecomment-<id>|comment>
+      • #<N> may be resolved by #<closed> → <URL|comment>
+      • PR #<N> `Closes #<X>` → <URL|comment>
+      • (list every comment — if the total would push past 3,500 chars,
+         collapse the largest category to a single line:
+         "...plus N more related cross-refs")
+
+      *Pending* (3-day clock running)
+      • #<N> → #<canonical>, <M>d elapsed
+      • PR #<N> → closed #<X>
+
+      *Full digest:* `$ARTIFACTS_DIR/digest.md`
+      ```
+
+      Omit sections whose list is empty — don't print a header followed
+      by "none".
+
+      ## Posting
+
+      If `DRY_RUN=1`:
+          Print `[DRY] would POST to Slack (<bytes> chars):` followed by
+          the full payload text. Do NOT curl.
+
+      Otherwise:
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "@$ARTIFACTS_DIR/slack-payload.json" \
+            "$SLACK_WEBHOOK"
+
+      Capture stdout+stderr. Slack returns `ok` on success, otherwise an
+      error body like `invalid_payload` / `channel_not_found`.
+
+      ## Failure handling
+
+      Slack posting is a side channel, not the source of truth. If curl
+      fails (non-zero exit, non-`ok` body), log the error to stdout but
+      do NOT fail the node — the digest.md on disk is authoritative.
+      Append a line to the node's stdout:
+
+          Slack post FAILED: <curl error or Slack response body>
+
       # Guardrails
 
       - No gh calls here. No comments. No closes. Synthesis only.
@@ -1337,3 +1435,5 @@ nodes:
         corresponding section: "(output unavailable)". Don't invent numbers.
       - Preserve `(DRY RUN)` markers — readers need to know if counts are
         hypothetical.
+      - Slack posting is best-effort; digest.md on disk is the source
+        of truth.
