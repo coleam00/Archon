@@ -1,5 +1,9 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import type { IWorkflowStore } from '@archon/workflows/store';
+import * as dbWorkflows from '../db/workflows';
+import * as dbWorkflowEvents from '../db/workflow-events';
+import * as dbCodebases from '../db/codebases';
+import * as configLoader from '../config/config-loader';
 
 // Mock DB modules before importing store-adapter
 const mockCreateWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
@@ -16,43 +20,109 @@ const mockFailWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRun = mock(() => Promise.resolve());
 
-mock.module('../db/workflows', () => ({
-  createWorkflowRun: mockCreateWorkflowRun,
-  getWorkflowRun: mockGetWorkflowRun,
-  getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
-  failOrphanedRuns: mockFailOrphanedRuns,
-  findResumableRun: mockFindResumableRun,
-  resumeWorkflowRun: mockResumeWorkflowRun,
-  updateWorkflowRun: mockUpdateWorkflowRun,
-  updateWorkflowActivity: mockUpdateWorkflowActivity,
-  getWorkflowRunStatus: mockGetWorkflowRunStatus,
-  completeWorkflowRun: mockCompleteWorkflowRun,
-  failWorkflowRun: mockFailWorkflowRun,
-  cancelWorkflowRun: mockCancelWorkflowRun,
-  pauseWorkflowRun: mockPauseWorkflowRun,
-}));
-
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
 const mockGetCompletedDagNodeOutputs = mock(() => Promise.resolve(new Map<string, string>()));
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-  getCompletedDagNodeOutputs: mockGetCompletedDagNodeOutputs,
-}));
 
 const mockGetCodebase = mock(() => Promise.resolve(null));
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-}));
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
 }));
 
-mock.module('../config/config-loader', () => ({
-  loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
-}));
+// Spy variable declarations
+let spyDbWorkflowsCreateRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsGetRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsGetActiveByPath: ReturnType<typeof spyOn>;
+let spyDbWorkflowsFailOrphaned: ReturnType<typeof spyOn>;
+let spyDbWorkflowsFindResumable: ReturnType<typeof spyOn>;
+let spyDbWorkflowsResumeRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsUpdateRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsUpdateActivity: ReturnType<typeof spyOn>;
+let spyDbWorkflowsGetStatus: ReturnType<typeof spyOn>;
+let spyDbWorkflowsCompleteRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsFailRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsCancelRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsPauseRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowEventsCreate: ReturnType<typeof spyOn>;
+let spyDbWorkflowEventsGetOutputs: ReturnType<typeof spyOn>;
+let spyDbCodebasesGet: ReturnType<typeof spyOn>;
+let spyConfigLoaderLoad: ReturnType<typeof spyOn>;
 
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
+
+beforeEach(() => {
+  spyDbWorkflowsCreateRun = spyOn(dbWorkflows, 'createWorkflowRun').mockImplementation(
+    mockCreateWorkflowRun
+  );
+  spyDbWorkflowsGetRun = spyOn(dbWorkflows, 'getWorkflowRun').mockImplementation(
+    mockGetWorkflowRun
+  );
+  spyDbWorkflowsGetActiveByPath = spyOn(
+    dbWorkflows,
+    'getActiveWorkflowRunByPath'
+  ).mockImplementation(mockGetActiveWorkflowRunByPath);
+  spyDbWorkflowsFailOrphaned = spyOn(dbWorkflows, 'failOrphanedRuns').mockImplementation(
+    mockFailOrphanedRuns
+  );
+  spyDbWorkflowsFindResumable = spyOn(dbWorkflows, 'findResumableRun').mockImplementation(
+    mockFindResumableRun
+  );
+  spyDbWorkflowsResumeRun = spyOn(dbWorkflows, 'resumeWorkflowRun').mockImplementation(
+    mockResumeWorkflowRun
+  );
+  spyDbWorkflowsUpdateRun = spyOn(dbWorkflows, 'updateWorkflowRun').mockImplementation(
+    mockUpdateWorkflowRun
+  );
+  spyDbWorkflowsUpdateActivity = spyOn(dbWorkflows, 'updateWorkflowActivity').mockImplementation(
+    mockUpdateWorkflowActivity
+  );
+  spyDbWorkflowsGetStatus = spyOn(dbWorkflows, 'getWorkflowRunStatus').mockImplementation(
+    mockGetWorkflowRunStatus
+  );
+  spyDbWorkflowsCompleteRun = spyOn(dbWorkflows, 'completeWorkflowRun').mockImplementation(
+    mockCompleteWorkflowRun
+  );
+  spyDbWorkflowsFailRun = spyOn(dbWorkflows, 'failWorkflowRun').mockImplementation(
+    mockFailWorkflowRun
+  );
+  spyDbWorkflowsCancelRun = spyOn(dbWorkflows, 'cancelWorkflowRun').mockImplementation(
+    mockCancelWorkflowRun
+  );
+  spyDbWorkflowsPauseRun = spyOn(dbWorkflows, 'pauseWorkflowRun').mockImplementation(
+    mockPauseWorkflowRun
+  );
+  spyDbWorkflowEventsCreate = spyOn(dbWorkflowEvents, 'createWorkflowEvent').mockImplementation(
+    mockCreateWorkflowEvent
+  );
+  spyDbWorkflowEventsGetOutputs = spyOn(
+    dbWorkflowEvents,
+    'getCompletedDagNodeOutputs'
+  ).mockImplementation(mockGetCompletedDagNodeOutputs);
+  spyDbCodebasesGet = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase);
+  spyConfigLoaderLoad = spyOn(configLoader, 'loadConfig').mockImplementation(
+    mock(() => Promise.resolve({ assistant: 'claude' }))
+  );
+});
+
+afterEach(() => {
+  spyDbWorkflowsCreateRun.mockRestore();
+  spyDbWorkflowsGetRun.mockRestore();
+  spyDbWorkflowsGetActiveByPath.mockRestore();
+  spyDbWorkflowsFailOrphaned.mockRestore();
+  spyDbWorkflowsFindResumable.mockRestore();
+  spyDbWorkflowsResumeRun.mockRestore();
+  spyDbWorkflowsUpdateRun.mockRestore();
+  spyDbWorkflowsUpdateActivity.mockRestore();
+  spyDbWorkflowsGetStatus.mockRestore();
+  spyDbWorkflowsCompleteRun.mockRestore();
+  spyDbWorkflowsFailRun.mockRestore();
+  spyDbWorkflowsCancelRun.mockRestore();
+  spyDbWorkflowsPauseRun.mockRestore();
+  spyDbWorkflowEventsCreate.mockRestore();
+  spyDbWorkflowEventsGetOutputs.mockRestore();
+  spyDbCodebasesGet.mockRestore();
+  spyConfigLoaderLoad.mockRestore();
+});
 
 describe('createWorkflowStore', () => {
   test('returns object with all IWorkflowStore methods', () => {

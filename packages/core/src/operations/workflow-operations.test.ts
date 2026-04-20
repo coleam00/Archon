@@ -1,4 +1,7 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import * as dbWorkflows from '../db/workflows';
+import * as dbWorkflowEvents from '../db/workflow-events';
+import * as paths from '@archon/paths';
 
 // ---------------------------------------------------------------------------
 // Mock DB modules before importing the module under test
@@ -9,18 +12,14 @@ const mockListWorkflowRuns = mock(() => Promise.resolve([]));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve());
 
-mock.module('../db/workflows', () => ({
-  getWorkflowRun: mockGetWorkflowRun,
-  listWorkflowRuns: mockListWorkflowRuns,
-  updateWorkflowRun: mockUpdateWorkflowRun,
-  cancelWorkflowRun: mockCancelWorkflowRun,
-}));
-
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
 
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-}));
+// Spy variable declarations
+let spyDbWorkflowsGetRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsListRuns: ReturnType<typeof spyOn>;
+let spyDbWorkflowsUpdateRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsCancelRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowEventsCreate: ReturnType<typeof spyOn>;
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -30,13 +29,43 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
+
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
 
 // Import AFTER mocks
 const { approveWorkflow, rejectWorkflow, getWorkflowStatus, resumeWorkflow, abandonWorkflow } =
   await import('./workflow-operations');
+
+// Set up spies after the module is imported
+beforeEach(() => {
+  spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(
+    mockLogger as ReturnType<typeof paths.createLogger>
+  );
+  spyDbWorkflowsGetRun = spyOn(dbWorkflows, 'getWorkflowRun').mockImplementation(
+    mockGetWorkflowRun
+  );
+  spyDbWorkflowsListRuns = spyOn(dbWorkflows, 'listWorkflowRuns').mockImplementation(
+    mockListWorkflowRuns
+  );
+  spyDbWorkflowsUpdateRun = spyOn(dbWorkflows, 'updateWorkflowRun').mockImplementation(
+    mockUpdateWorkflowRun
+  );
+  spyDbWorkflowsCancelRun = spyOn(dbWorkflows, 'cancelWorkflowRun').mockImplementation(
+    mockCancelWorkflowRun
+  );
+  spyDbWorkflowEventsCreate = spyOn(dbWorkflowEvents, 'createWorkflowEvent').mockImplementation(
+    mockCreateWorkflowEvent
+  );
+});
+
+afterEach(() => {
+  spyPathsCreateLogger.mockRestore();
+  spyDbWorkflowsGetRun.mockRestore();
+  spyDbWorkflowsListRuns.mockRestore();
+  spyDbWorkflowsUpdateRun.mockRestore();
+  spyDbWorkflowsCancelRun.mockRestore();
+  spyDbWorkflowEventsCreate.mockRestore();
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures

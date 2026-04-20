@@ -1,13 +1,14 @@
-import { mock, describe, test, expect, beforeEach, type Mock } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import type { MessageChunk } from '../types';
+import * as paths from '@archon/paths';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
+
+// @archon/paths spy declaration
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
 
 // DB mock
 const mockUpdateConversationTitle = mock(() => Promise.resolve()) as Mock<
@@ -48,6 +49,9 @@ import { generateAndSetTitle } from './title-generator';
 
 describe('title-generator', () => {
   beforeEach(() => {
+    spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(
+      mockLogger as ReturnType<typeof paths.createLogger>
+    );
     mockUpdateConversationTitle.mockClear();
     mockSendQuery.mockClear();
     mockGetAgentProvider.mockClear();
@@ -67,6 +71,10 @@ describe('title-generator', () => {
 
     // Clean env
     delete process.env.TITLE_GENERATION_MODEL;
+  });
+
+  afterEach(() => {
+    spyPathsCreateLogger.mockRestore();
   });
 
   test('happy path: generates and saves a clean title', async () => {

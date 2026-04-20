@@ -1,29 +1,14 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { WorkflowEventRow } from './workflow-events';
+import * as paths from '@archon/paths';
+import * as connection from './connection';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonHome: mock(() => '/home/test/.archon'),
-  getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getArchonWorktreesPath: mock(() => '/home/test/.archon/worktrees'),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
-}));
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
-
-// Mock the connection module before importing the module under test
-mock.module('./connection', () => ({
-  pool: {
-    query: mockQuery,
-  },
-  getDialect: () => mockPostgresDialect,
-}));
 
 import {
   createWorkflowEvent,
@@ -32,9 +17,23 @@ import {
   getCompletedDagNodeOutputs,
 } from './workflow-events';
 
+// Spy variable declarations
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyConnectionPoolQuery: ReturnType<typeof spyOn>;
+let spyConnectionGetDialect: ReturnType<typeof spyOn>;
+
 describe('workflow-events', () => {
   beforeEach(() => {
+    spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(mockLogger);
+    spyConnectionPoolQuery = spyOn(connection.pool, 'query').mockImplementation(mockQuery);
+    spyConnectionGetDialect = spyOn(connection, 'getDialect').mockReturnValue(mockPostgresDialect);
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyPathsCreateLogger.mockRestore();
+    spyConnectionPoolQuery.mockRestore();
+    spyConnectionGetDialect.mockRestore();
   });
 
   const mockEvent: WorkflowEventRow = {

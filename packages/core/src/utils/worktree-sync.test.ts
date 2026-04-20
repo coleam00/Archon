@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
+import * as paths from '@archon/paths';
 import * as git from '@archon/git';
 import * as worktreeCopy from '@archon/isolation';
 import * as configLoader from '../config/config-loader';
@@ -14,15 +15,9 @@ function normPath(p: string): string {
 }
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonHome: mock(() => '/home/test/.archon'),
-  getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getArchonWorktreesPath: mock(() => '/home/test/.archon/worktrees'),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
-}));
+
+// @archon/paths spy declaration
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
 
 import { syncArchonToWorktree } from './worktree-sync';
 
@@ -36,6 +31,9 @@ describe('syncArchonToWorktree', () => {
   >;
 
   beforeEach(() => {
+    spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(
+      mockLogger as ReturnType<typeof paths.createLogger>
+    );
     isWorktreePathSpy = spyOn(git, 'isWorktreePath');
     getCanonicalRepoPathSpy = spyOn(git, 'getCanonicalRepoPath');
     statSpy = spyOn(fs, 'stat');
@@ -48,6 +46,7 @@ describe('syncArchonToWorktree', () => {
   });
 
   afterEach(() => {
+    spyPathsCreateLogger.mockRestore();
     isWorktreePathSpy.mockRestore();
     getCanonicalRepoPathSpy.mockRestore();
     statSpy.mockRestore();

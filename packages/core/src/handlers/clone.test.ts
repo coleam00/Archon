@@ -7,9 +7,10 @@
  *   to avoid process-global mock.module pollution that would break git.test.ts
  * - Lazy logger pattern means @archon/paths mock must be set up before the module import
  */
-import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
+import * as paths from '@archon/paths';
 import { createMockLogger } from '../test/mocks/logger';
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
@@ -42,23 +43,49 @@ mock.module('../db/codebases', () => ({
   updateCodebase: mockUpdateCodebase,
 }));
 
-// ── @archon/paths mock ──────────────────────────────────────────────────────
+// ── @archon/paths spy declarations ──────────────────────────────────────────
 const mockLogger = createMockLogger();
 
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  expandTilde: mock((p: string) => p.replace(/^~/, '/home/test')),
-  getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  ensureProjectStructure: mock(() => Promise.resolve()),
-  getProjectSourcePath: mock(
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyPathsExpandTilde: ReturnType<typeof spyOn>;
+let spyPathsGetCommandFolderSearchPaths: ReturnType<typeof spyOn>;
+let spyPathsEnsureProjectStructure: ReturnType<typeof spyOn>;
+let spyPathsGetProjectSourcePath: ReturnType<typeof spyOn>;
+let spyPathsCreateProjectSourceSymlink: ReturnType<typeof spyOn>;
+let spyPathsParseOwnerRepo: ReturnType<typeof spyOn>;
+
+function setupPathsSpies(): void {
+  spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(mockLogger);
+  spyPathsExpandTilde = spyOn(paths, 'expandTilde').mockImplementation((p: string) =>
+    p.replace(/^~/, '/home/test')
+  );
+  spyPathsGetCommandFolderSearchPaths = spyOn(paths, 'getCommandFolderSearchPaths').mockReturnValue(
+    ['.archon/commands']
+  );
+  spyPathsEnsureProjectStructure = spyOn(paths, 'ensureProjectStructure').mockResolvedValue(
+    undefined
+  );
+  spyPathsGetProjectSourcePath = spyOn(paths, 'getProjectSourcePath').mockImplementation(
     (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
-  ),
-  createProjectSourceSymlink: mock(() => Promise.resolve()),
-  parseOwnerRepo: mock((name: string) => {
+  );
+  spyPathsCreateProjectSourceSymlink = spyOn(paths, 'createProjectSourceSymlink').mockResolvedValue(
+    undefined
+  );
+  spyPathsParseOwnerRepo = spyOn(paths, 'parseOwnerRepo').mockImplementation((name: string) => {
     const parts = name.split('/');
     return parts.length === 2 ? { owner: parts[0], repo: parts[1] } : null;
-  }),
-}));
+  });
+}
+
+function restorePathsSpies(): void {
+  spyPathsCreateLogger?.mockRestore();
+  spyPathsExpandTilde?.mockRestore();
+  spyPathsGetCommandFolderSearchPaths?.mockRestore();
+  spyPathsEnsureProjectStructure?.mockRestore();
+  spyPathsGetProjectSourcePath?.mockRestore();
+  spyPathsCreateProjectSourceSymlink?.mockRestore();
+  spyPathsParseOwnerRepo?.mockRestore();
+}
 
 // ── utils/commands mock ─────────────────────────────────────────────────────
 const mockFindMarkdownFilesRecursive = mock(() => Promise.resolve([]));
@@ -118,6 +145,10 @@ function clearMocks(): void {
   mockFindMarkdownFilesRecursive.mockResolvedValue([]);
 }
 
+afterEach(() => {
+  restorePathsSpies();
+});
+
 afterAll(() => {
   restoreSpies();
 });
@@ -150,6 +181,7 @@ function makeCodebase(
 // ────────────────────────────────────────────────────────────────────────────
 describe('cloneRepository', () => {
   beforeEach(() => {
+    setupPathsSpies();
     clearMocks();
     restoreSpies();
     setupSpies();
@@ -564,6 +596,7 @@ describe('cloneRepository', () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe('registerRepository', () => {
   beforeEach(() => {
+    setupPathsSpies();
     clearMocks();
     restoreSpies();
     setupSpies();
@@ -738,6 +771,7 @@ describe('registerRepository', () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe('normalizeRepoUrl (via cloneRepository)', () => {
   beforeEach(() => {
+    setupPathsSpies();
     clearMocks();
     restoreSpies();
     setupSpies();
@@ -778,6 +812,7 @@ describe('normalizeRepoUrl (via cloneRepository)', () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe('name-based deduplication', () => {
   beforeEach(() => {
+    setupPathsSpies();
     clearMocks();
     restoreSpies();
     setupSpies();
@@ -893,6 +928,7 @@ describe('name-based deduplication', () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe('RegisterResult shape', () => {
   beforeEach(() => {
+    setupPathsSpies();
     clearMocks();
     restoreSpies();
     setupSpies();

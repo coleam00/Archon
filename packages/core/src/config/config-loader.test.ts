@@ -1,19 +1,20 @@
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { homedir } from 'os';
 import { join } from 'path';
 import { createMockLogger } from '../test/mocks/logger';
+import * as paths from '@archon/paths';
 
 const mockLogger = createMockLogger();
 const archonHome = join(homedir(), '.archon');
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonHome: mock(() => archonHome),
-  getArchonConfigPath: mock(() => join(archonHome, 'config.yaml')),
-  getArchonWorkspacesPath: mock(() => join(archonHome, 'workspaces')),
-  getArchonWorktreesPath: mock(() => join(archonHome, 'worktrees')),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
-}));
+
+// Spy variable declarations
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyPathsGetArchonHome: ReturnType<typeof spyOn>;
+let spyPathsGetArchonConfigPath: ReturnType<typeof spyOn>;
+let spyPathsGetArchonWorkspacesPath: ReturnType<typeof spyOn>;
+let spyPathsGetArchonWorktreesPath: ReturnType<typeof spyOn>;
+let spyPathsGetDefaultCommandsPath: ReturnType<typeof spyOn>;
+let spyPathsGetDefaultWorkflowsPath: ReturnType<typeof spyOn>;
 
 // Mock for reading/writing config files (replaces fs/promises mock)
 const mockReadConfigFile = mock(() => Promise.resolve(''));
@@ -50,6 +51,24 @@ describe('config-loader', () => {
   ];
 
   beforeEach(() => {
+    spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(mockLogger);
+    spyPathsGetArchonHome = spyOn(paths, 'getArchonHome').mockReturnValue(archonHome);
+    spyPathsGetArchonConfigPath = spyOn(paths, 'getArchonConfigPath').mockReturnValue(
+      join(archonHome, 'config.yaml')
+    );
+    spyPathsGetArchonWorkspacesPath = spyOn(paths, 'getArchonWorkspacesPath').mockReturnValue(
+      join(archonHome, 'workspaces')
+    );
+    spyPathsGetArchonWorktreesPath = spyOn(paths, 'getArchonWorktreesPath').mockReturnValue(
+      join(archonHome, 'worktrees')
+    );
+    spyPathsGetDefaultCommandsPath = spyOn(paths, 'getDefaultCommandsPath').mockReturnValue(
+      '/app/.archon/commands/defaults'
+    );
+    spyPathsGetDefaultWorkflowsPath = spyOn(paths, 'getDefaultWorkflowsPath').mockReturnValue(
+      '/app/.archon/workflows/defaults'
+    );
+
     clearConfigCache();
     mockReadConfigFile.mockReset();
     mockWriteConfigFile.mockReset();
@@ -62,6 +81,14 @@ describe('config-loader', () => {
   });
 
   afterEach(() => {
+    spyPathsCreateLogger.mockRestore();
+    spyPathsGetArchonHome.mockRestore();
+    spyPathsGetArchonConfigPath.mockRestore();
+    spyPathsGetArchonWorkspacesPath.mockRestore();
+    spyPathsGetArchonWorktreesPath.mockRestore();
+    spyPathsGetDefaultCommandsPath.mockRestore();
+    spyPathsGetDefaultWorkflowsPath.mockRestore();
+
     // Restore env vars
     envVars.forEach(key => {
       if (originalEnv[key] === undefined) {

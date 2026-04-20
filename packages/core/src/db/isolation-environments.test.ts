@@ -1,15 +1,9 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
+import * as connection from './connection';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
-
-mock.module('./connection', () => ({
-  pool: {
-    query: mockQuery,
-  },
-  getDialect: () => mockPostgresDialect,
-}));
 
 import {
   getById,
@@ -24,9 +18,20 @@ import {
   listAllActiveWithCodebase,
 } from './isolation-environments';
 
+// Spy variable declarations
+let spyConnectionPoolQuery: ReturnType<typeof spyOn>;
+let spyConnectionGetDialect: ReturnType<typeof spyOn>;
+
 describe('isolation-environments', () => {
   beforeEach(() => {
+    spyConnectionPoolQuery = spyOn(connection.pool, 'query').mockImplementation(mockQuery);
+    spyConnectionGetDialect = spyOn(connection, 'getDialect').mockReturnValue(mockPostgresDialect);
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyConnectionPoolQuery.mockRestore();
+    spyConnectionGetDialect.mockRestore();
   });
 
   const sampleEnv: IsolationEnvironmentRow = {

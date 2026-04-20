@@ -1,7 +1,8 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { ZodError } from 'zod';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Session, SessionMetadata, sessionMetadataSchema } from '../types';
+import * as connection from './connection';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 const mockWithTransaction = mock(
@@ -9,17 +10,6 @@ const mockWithTransaction = mock(
     return fn(mockQuery);
   }
 );
-
-// Mock the connection module before importing the module under test
-mock.module('./connection', () => ({
-  pool: {
-    query: mockQuery,
-  },
-  getDatabase: () => ({
-    withTransaction: mockWithTransaction,
-  }),
-  getDialect: () => mockPostgresDialect,
-}));
 
 import {
   getActiveSession,
@@ -34,10 +24,26 @@ import {
   SessionNotFoundError,
 } from './sessions';
 
+// Spy variable declarations
+let spyConnectionPoolQuery: ReturnType<typeof spyOn>;
+let spyConnectionGetDatabase: ReturnType<typeof spyOn>;
+let spyConnectionGetDialect: ReturnType<typeof spyOn>;
+
 describe('sessions', () => {
   beforeEach(() => {
+    spyConnectionPoolQuery = spyOn(connection.pool, 'query').mockImplementation(mockQuery);
+    spyConnectionGetDatabase = spyOn(connection, 'getDatabase').mockReturnValue({
+      withTransaction: mockWithTransaction,
+    } as ReturnType<typeof connection.getDatabase>);
+    spyConnectionGetDialect = spyOn(connection, 'getDialect').mockReturnValue(mockPostgresDialect);
     mockQuery.mockClear();
     mockWithTransaction.mockClear();
+  });
+
+  afterEach(() => {
+    spyConnectionPoolQuery.mockRestore();
+    spyConnectionGetDatabase.mockRestore();
+    spyConnectionGetDialect.mockRestore();
   });
 
   const mockSession: Session = {

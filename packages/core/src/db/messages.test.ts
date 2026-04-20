@@ -1,36 +1,43 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { MessageRow } from './messages';
+import * as paths from '@archon/paths';
+import * as connection from './connection';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 const mockGetDatabaseType = mock(() => 'postgresql' as const);
 
-// Mock the connection module before importing the module under test
-mock.module('./connection', () => ({
-  pool: {
-    query: mockQuery,
-  },
-  getDialect: () => mockPostgresDialect,
-  getDatabaseType: mockGetDatabaseType,
-}));
-
-// Mock @archon/paths to avoid lazy logger initialization issues in tests
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => ({
-    fatal: mock(() => undefined),
-    error: mock(() => undefined),
-    warn: mock(() => undefined),
-    info: mock(() => undefined),
-    debug: mock(() => undefined),
-    trace: mock(() => undefined),
-  })),
-}));
-
 import { addMessage, listMessages, getRecentWorkflowResultMessages } from './messages';
+
+// Spy variable declarations
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyConnectionPoolQuery: ReturnType<typeof spyOn>;
+let spyConnectionGetDialect: ReturnType<typeof spyOn>;
+let spyConnectionGetDatabaseType: ReturnType<typeof spyOn>;
 
 describe('messages', () => {
   beforeEach(() => {
+    spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue({
+      fatal: mock(() => undefined),
+      error: mock(() => undefined),
+      warn: mock(() => undefined),
+      info: mock(() => undefined),
+      debug: mock(() => undefined),
+      trace: mock(() => undefined),
+    } as ReturnType<typeof paths.createLogger>);
+    spyConnectionPoolQuery = spyOn(connection.pool, 'query').mockImplementation(mockQuery);
+    spyConnectionGetDialect = spyOn(connection, 'getDialect').mockReturnValue(mockPostgresDialect);
+    spyConnectionGetDatabaseType = spyOn(connection, 'getDatabaseType').mockImplementation(
+      mockGetDatabaseType
+    );
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyPathsCreateLogger.mockRestore();
+    spyConnectionPoolQuery.mockRestore();
+    spyConnectionGetDialect.mockRestore();
+    spyConnectionGetDatabaseType.mockRestore();
   });
 
   const mockMessage: MessageRow = {

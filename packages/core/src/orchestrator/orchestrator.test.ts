@@ -1,19 +1,32 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { MockPlatformAdapter } from '../test/mocks/platform';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflow, makeTestWorkflowList } from '@archon/workflows/test-utils';
 import type { Conversation, Codebase, Session } from '../types';
 import { ConversationNotFoundError } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import { IsolationBlockedError } from '@archon/isolation';
+import * as paths from '@archon/paths';
+import * as dbConversations from '../db/conversations';
+import * as dbCodebases from '../db/codebases';
+import * as dbSessions from '../db/sessions';
+import * as commandHandler from '../handlers/command-handler';
+import * as storeAdapter from '../workflows/store-adapter';
+import * as configLoader from '../config/config-loader';
+import * as worktreeSync from '../utils/worktree-sync';
+import * as orchestratorModule from './orchestrator';
+import * as promptBuilder from './prompt-builder';
+import * as errorFormatter from '../utils/error-formatter';
+import * as titleGenerator from '../services/title-generator';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getArchonHome: mock(() => '/home/test/.archon'),
-}));
+
+// @archon/paths spy declarations
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyPathsGetArchonWorkspacesPath: ReturnType<typeof spyOn>;
+let spyPathsGetArchonHome: ReturnType<typeof spyOn>;
 
 // DB mocks
 const mockGetOrCreateConversation = mock(() => Promise.resolve(null));
@@ -21,22 +34,9 @@ const mockGetConversationByPlatformId = mock(() => Promise.resolve(null));
 const mockUpdateConversation = mock(() => Promise.resolve());
 const mockTouchConversation = mock(() => Promise.resolve());
 
-mock.module('../db/conversations', () => ({
-  getOrCreateConversation: mockGetOrCreateConversation,
-  getConversationByPlatformId: mockGetConversationByPlatformId,
-  updateConversation: mockUpdateConversation,
-  touchConversation: mockTouchConversation,
-}));
-
 const mockGetCodebase = mock(() => Promise.resolve(null));
 const mockListCodebases = mock(() => Promise.resolve([]));
 const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
-
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-  listCodebases: mockListCodebases,
-  createCodebase: mockCreateCodebase,
-}));
 
 const mockGetActiveSession = mock(() => Promise.resolve(null));
 const mockCreateSession = mock(() => Promise.resolve(null));
@@ -57,14 +57,6 @@ const mockTransitionSession = mock(
   }
 );
 
-mock.module('../db/sessions', () => ({
-  getActiveSession: mockGetActiveSession,
-  createSession: mockCreateSession,
-  updateSession: mockUpdateSession,
-  deactivateSession: mockDeactivateSession,
-  transitionSession: mockTransitionSession,
-}));
-
 // Command handler mock
 const mockHandleCommand = mock(() =>
   Promise.resolve({ message: '', modified: false, success: true })
@@ -73,11 +65,6 @@ const mockParseCommand = mock((message: string) => {
   const parts = message.split(/\s+/);
   return { command: parts[0].substring(1), args: parts.slice(1) };
 });
-
-mock.module('../handlers/command-handler', () => ({
-  handleCommand: mockHandleCommand,
-  parseCommand: mockParseCommand,
-}));
 
 // AI provider mock
 const mockGetAgentProvider = mock(() => null);
@@ -93,14 +80,6 @@ const mockFindWorkflow = mock((name: string, workflows: readonly WorkflowDefinit
   workflows.find(w => w.name === name)
 );
 
-mock.module('../workflows/store-adapter', () => ({
-  createWorkflowDeps: mock(() => ({
-    store: {},
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
-  })),
-}));
-
 // Config mock
 const mockLoadConfig = mock(() =>
   Promise.resolve({
@@ -115,16 +94,8 @@ const mockLoadConfig = mock(() =>
   })
 );
 
-mock.module('../config/config-loader', () => ({
-  loadConfig: mockLoadConfig,
-}));
-
 // Worktree sync mock
 const mockSyncArchonToWorktree = mock(() => Promise.resolve(false));
-
-mock.module('../utils/worktree-sync', () => ({
-  syncArchonToWorktree: mockSyncArchonToWorktree,
-}));
 
 // Orchestrator (isolation & dispatch) mocks
 const mockValidateAndResolveIsolation = mock(() =>
@@ -132,30 +103,12 @@ const mockValidateAndResolveIsolation = mock(() =>
 );
 const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
 
-mock.module('./orchestrator', () => ({
-  validateAndResolveIsolation: mockValidateAndResolveIsolation,
-  dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
-  IsolationBlockedError: class IsolationBlockedError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = 'IsolationBlockedError';
-    }
-  },
-}));
-
 // Prompt builder mock
 const mockBuildOrchestratorPrompt = mock(() => 'You are the orchestrator agent.');
 const mockBuildProjectScopedPrompt = mock(() => 'You are scoped to project X.');
 
-mock.module('./prompt-builder', () => ({
-  buildOrchestratorPrompt: mockBuildOrchestratorPrompt,
-  buildProjectScopedPrompt: mockBuildProjectScopedPrompt,
-}));
-
-// Error/tool formatter mocks
-mock.module('../utils/error-formatter', () => ({
-  classifyAndFormatError: mock((err: Error) => `⚠️ Error: ${err.message}`),
-}));
+// Error formatter mock
+const mockClassifyAndFormatError = mock((err: Error) => `⚠️ Error: ${err.message}`);
 
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflows,
@@ -178,13 +131,35 @@ mock.module('fs', () => ({
 
 // Title generator mock
 const mockGenerateAndSetTitle = mock(() => Promise.resolve());
-mock.module('../services/title-generator', () => ({
-  generateAndSetTitle: mockGenerateAndSetTitle,
-}));
+
+// Spy variable declarations
+let spyDbConversationsGetOrCreate: ReturnType<typeof spyOn>;
+let spyDbConversationsGetByPlatformId: ReturnType<typeof spyOn>;
+let spyDbConversationsUpdate: ReturnType<typeof spyOn>;
+let spyDbConversationsTouch: ReturnType<typeof spyOn>;
+let spyDbCodebasesGet: ReturnType<typeof spyOn>;
+let spyDbCodebasesList: ReturnType<typeof spyOn>;
+let spyDbCodebasesCreate: ReturnType<typeof spyOn>;
+let spyDbSessionsGetActive: ReturnType<typeof spyOn>;
+let spyDbSessionsCreate: ReturnType<typeof spyOn>;
+let spyDbSessionsUpdate: ReturnType<typeof spyOn>;
+let spyDbSessionsDeactivate: ReturnType<typeof spyOn>;
+let spyDbSessionsTransition: ReturnType<typeof spyOn>;
+let spyCommandHandlerHandle: ReturnType<typeof spyOn>;
+let spyCommandHandlerParse: ReturnType<typeof spyOn>;
+let spyStoreAdapterCreate: ReturnType<typeof spyOn>;
+let spyConfigLoaderLoad: ReturnType<typeof spyOn>;
+let spyWorktreeSyncSync: ReturnType<typeof spyOn>;
+let spyOrchestratorValidate: ReturnType<typeof spyOn>;
+let spyOrchestratorDispatch: ReturnType<typeof spyOn>;
+let spyPromptBuilderOrchestrator: ReturnType<typeof spyOn>;
+let spyPromptBuilderProjectScoped: ReturnType<typeof spyOn>;
+let spyErrorFormatterClassify: ReturnType<typeof spyOn>;
+let spyTitleGeneratorGenerate: ReturnType<typeof spyOn>;
 
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
 
-import { handleMessage, parseOrchestratorCommands } from './orchestrator-agent';
+import { handleMessage, parseOrchestratorCommands, resetLogForTest } from './orchestrator-agent';
 
 // Also import wrapCommandForExecution which still lives in orchestrator.ts
 import { wrapCommandForExecution } from './orchestrator';
@@ -287,6 +262,113 @@ function clearAllMocks(): void {
   mockGenerateAndSetTitle.mockClear();
   mockClient.sendQuery.mockClear();
   mockClient.getType.mockClear();
+}
+
+function setupSpies(): void {
+  spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(
+    mockLogger as ReturnType<typeof paths.createLogger>
+  );
+  spyPathsGetArchonWorkspacesPath = spyOn(paths, 'getArchonWorkspacesPath').mockReturnValue(
+    '/home/test/.archon/workspaces'
+  );
+  spyPathsGetArchonHome = spyOn(paths, 'getArchonHome').mockReturnValue('/home/test/.archon');
+  spyDbConversationsGetOrCreate = spyOn(
+    dbConversations,
+    'getOrCreateConversation'
+  ).mockImplementation(mockGetOrCreateConversation);
+  spyDbConversationsGetByPlatformId = spyOn(
+    dbConversations,
+    'getConversationByPlatformId'
+  ).mockImplementation(mockGetConversationByPlatformId);
+  spyDbConversationsUpdate = spyOn(dbConversations, 'updateConversation').mockImplementation(
+    mockUpdateConversation
+  );
+  spyDbConversationsTouch = spyOn(dbConversations, 'touchConversation').mockImplementation(
+    mockTouchConversation
+  );
+  spyDbCodebasesGet = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase);
+  spyDbCodebasesList = spyOn(dbCodebases, 'listCodebases').mockImplementation(mockListCodebases);
+  spyDbCodebasesCreate = spyOn(dbCodebases, 'createCodebase').mockImplementation(
+    mockCreateCodebase
+  );
+  spyDbSessionsGetActive = spyOn(dbSessions, 'getActiveSession').mockImplementation(
+    mockGetActiveSession
+  );
+  spyDbSessionsCreate = spyOn(dbSessions, 'createSession').mockImplementation(mockCreateSession);
+  spyDbSessionsUpdate = spyOn(dbSessions, 'updateSession').mockImplementation(mockUpdateSession);
+  spyDbSessionsDeactivate = spyOn(dbSessions, 'deactivateSession').mockImplementation(
+    mockDeactivateSession
+  );
+  spyDbSessionsTransition = spyOn(dbSessions, 'transitionSession').mockImplementation(
+    mockTransitionSession
+  );
+  spyCommandHandlerHandle = spyOn(commandHandler, 'handleCommand').mockImplementation(
+    mockHandleCommand
+  );
+  spyCommandHandlerParse = spyOn(commandHandler, 'parseCommand').mockImplementation(
+    mockParseCommand
+  );
+  spyStoreAdapterCreate = spyOn(storeAdapter, 'createWorkflowDeps').mockImplementation(
+    mock(() => ({
+      store: {},
+      getAgentProvider: () => ({}),
+      loadConfig: async () => ({}),
+    }))
+  );
+  spyConfigLoaderLoad = spyOn(configLoader, 'loadConfig').mockImplementation(mockLoadConfig);
+  spyWorktreeSyncSync = spyOn(worktreeSync, 'syncArchonToWorktree').mockImplementation(
+    mockSyncArchonToWorktree
+  );
+  spyOrchestratorValidate = spyOn(
+    orchestratorModule,
+    'validateAndResolveIsolation'
+  ).mockImplementation(mockValidateAndResolveIsolation);
+  spyOrchestratorDispatch = spyOn(
+    orchestratorModule,
+    'dispatchBackgroundWorkflow'
+  ).mockImplementation(mockDispatchBackgroundWorkflow);
+  spyPromptBuilderOrchestrator = spyOn(promptBuilder, 'buildOrchestratorPrompt').mockImplementation(
+    mockBuildOrchestratorPrompt
+  );
+  spyPromptBuilderProjectScoped = spyOn(
+    promptBuilder,
+    'buildProjectScopedPrompt'
+  ).mockImplementation(mockBuildProjectScopedPrompt);
+  spyErrorFormatterClassify = spyOn(errorFormatter, 'classifyAndFormatError').mockImplementation(
+    mockClassifyAndFormatError
+  );
+  spyTitleGeneratorGenerate = spyOn(titleGenerator, 'generateAndSetTitle').mockImplementation(
+    mockGenerateAndSetTitle
+  );
+}
+
+function restoreSpies(): void {
+  spyPathsCreateLogger?.mockRestore();
+  spyPathsGetArchonWorkspacesPath?.mockRestore();
+  spyPathsGetArchonHome?.mockRestore();
+  spyDbConversationsGetOrCreate?.mockRestore();
+  spyDbConversationsGetByPlatformId?.mockRestore();
+  spyDbConversationsUpdate?.mockRestore();
+  spyDbConversationsTouch?.mockRestore();
+  spyDbCodebasesGet?.mockRestore();
+  spyDbCodebasesList?.mockRestore();
+  spyDbCodebasesCreate?.mockRestore();
+  spyDbSessionsGetActive?.mockRestore();
+  spyDbSessionsCreate?.mockRestore();
+  spyDbSessionsUpdate?.mockRestore();
+  spyDbSessionsDeactivate?.mockRestore();
+  spyDbSessionsTransition?.mockRestore();
+  spyCommandHandlerHandle?.mockRestore();
+  spyCommandHandlerParse?.mockRestore();
+  spyStoreAdapterCreate?.mockRestore();
+  spyConfigLoaderLoad?.mockRestore();
+  spyWorktreeSyncSync?.mockRestore();
+  spyOrchestratorValidate?.mockRestore();
+  spyOrchestratorDispatch?.mockRestore();
+  spyPromptBuilderOrchestrator?.mockRestore();
+  spyPromptBuilderProjectScoped?.mockRestore();
+  spyErrorFormatterClassify?.mockRestore();
+  spyTitleGeneratorGenerate?.mockRestore();
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -447,11 +529,15 @@ describe('orchestrator-agent handleMessage', () => {
   let platform: MockPlatformAdapter;
 
   beforeEach(() => {
+    restoreSpies();
+    setupSpies();
+    resetLogForTest();
     clearAllMocks();
     platform = new MockPlatformAdapter();
 
     // Default mocks
     mockGetOrCreateConversation.mockResolvedValue(mockConversation);
+
     mockListCodebases.mockResolvedValue([]);
     mockGetActiveSession.mockResolvedValue(null);
     mockCreateSession.mockResolvedValue(mockSession);
@@ -462,6 +548,10 @@ describe('orchestrator-agent handleMessage', () => {
       const parts = message.split(/\s+/);
       return { command: parts[0].substring(1), args: parts.slice(1) };
     });
+  });
+
+  afterEach(() => {
+    restoreSpies();
   });
 
   // ─── Slash Commands ─────────────────────────────────────────────────────

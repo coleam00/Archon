@@ -1,29 +1,36 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import * as paths from '@archon/paths';
+import * as connection from './connection';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 
-mock.module('./connection', () => ({
-  pool: { query: mockQuery },
-  getDialect: () => mockPostgresDialect,
-}));
-
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => ({
-    info: mock(() => {}),
-    warn: mock(() => {}),
-    error: mock(() => {}),
-    debug: mock(() => {}),
-    trace: mock(() => {}),
-    fatal: mock(() => {}),
-  })),
-}));
-
 import { getCodebaseEnvVars, setCodebaseEnvVar, deleteCodebaseEnvVar } from './env-vars';
+
+// Spy variable declarations
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyConnectionPoolQuery: ReturnType<typeof spyOn>;
+let spyConnectionGetDialect: ReturnType<typeof spyOn>;
 
 describe('env-vars', () => {
   beforeEach(() => {
+    spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue({
+      info: mock(() => {}),
+      warn: mock(() => {}),
+      error: mock(() => {}),
+      debug: mock(() => {}),
+      trace: mock(() => {}),
+      fatal: mock(() => {}),
+    } as ReturnType<typeof paths.createLogger>);
+    spyConnectionPoolQuery = spyOn(connection.pool, 'query').mockImplementation(mockQuery);
+    spyConnectionGetDialect = spyOn(connection, 'getDialect').mockReturnValue(mockPostgresDialect);
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyPathsCreateLogger.mockRestore();
+    spyConnectionPoolQuery.mockRestore();
+    spyConnectionGetDialect.mockRestore();
   });
 
   describe('getCodebaseEnvVars', () => {

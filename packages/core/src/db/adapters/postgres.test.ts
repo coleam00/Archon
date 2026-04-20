@@ -1,4 +1,5 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import * as paths from '@archon/paths';
 
 // ---- pg mock setup --------------------------------------------------------
 // Must be declared before importing the module under test so that the mock
@@ -39,17 +40,8 @@ mock.module('pg', () => ({
   Pool: MockPool,
 }));
 
-// ---- also mock @archon/paths so logger calls don't blow up ----------------
-mock.module('@archon/paths', () => ({
-  createLogger: () => ({
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    fatal: () => {},
-    debug: () => {},
-    trace: () => {},
-  }),
-}));
+// ---- also spy on @archon/paths so logger calls don't blow up ---------------
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
 
 // ---- import after mocks are registered ------------------------------------
 import { PostgresAdapter, postgresDialect } from './postgres';
@@ -60,6 +52,15 @@ describe('PostgresAdapter', () => {
   let adapter: PostgresAdapter;
 
   beforeEach(() => {
+    spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue({
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      fatal: () => {},
+      debug: () => {},
+      trace: () => {},
+    } as ReturnType<typeof paths.createLogger>);
+
     // Reset shared mock state before each test
     mockPoolQuery = async () => ({ rows: [], rowCount: 0 });
     mockClient = {
@@ -69,6 +70,10 @@ describe('PostgresAdapter', () => {
     poolErrorHandler = undefined;
 
     adapter = new PostgresAdapter('postgresql://localhost:5432/testdb');
+  });
+
+  afterEach(() => {
+    spyPathsCreateLogger.mockRestore();
   });
 
   // -------------------------------------------------------------------------

@@ -1,10 +1,17 @@
-import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
+import * as paths from '@archon/paths';
+import * as git from '@archon/git';
+import * as dbIsolationEnvironments from '../db/isolation-environments';
+import * as dbConversations from '../db/conversations';
+import * as dbSessions from '../db/sessions';
+import * as dbCodebases from '../db/codebases';
+
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
+
+// @archon/paths spy declaration
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
 
 // Mock @archon/git - the cleanup service imports git functions from @archon/git
 const mockExecFileAsync = mock(() => Promise.resolve({ stdout: '', stderr: '' }));
@@ -14,18 +21,6 @@ const mockGetDefaultBranch = mock(() => Promise.resolve('main'));
 const mockIsBranchMerged = mock(() => Promise.resolve(false));
 const mockIsPatchEquivalent = mock(() => Promise.resolve(false));
 const mockGetLastCommitDate = mock(() => Promise.resolve(null as Date | null));
-mock.module('@archon/git', () => ({
-  execFileAsync: mockExecFileAsync,
-  hasUncommittedChanges: mockHasUncommittedChanges,
-  worktreeExists: mockWorktreeExists,
-  getDefaultBranch: mockGetDefaultBranch,
-  isBranchMerged: mockIsBranchMerged,
-  isPatchEquivalent: mockIsPatchEquivalent,
-  getLastCommitDate: mockGetLastCommitDate,
-  toRepoPath: (p: string) => p,
-  toBranchName: (b: string) => b,
-  toWorktreePath: (p: string) => p,
-}));
 
 // Mock isolation provider
 const mockDestroy = mock(() =>
@@ -59,39 +54,139 @@ const mockGetById = mock(() => Promise.resolve(null));
 const mockListByCodebase = mock(() => Promise.resolve([]));
 const mockListByCodebaseWithAge = mock(() => Promise.resolve([]));
 const mockCountActiveByCodebase = mock(() => Promise.resolve(0));
-mock.module('../db/isolation-environments', () => ({
-  listAllActiveWithCodebase: mockListAllActiveWithCodebase,
-  updateStatus: mockUpdateStatus,
-  getConversationsUsingEnv: mockGetConversationsUsingEnv,
-  getById: mockGetById,
-  listByCodebase: mockListByCodebase,
-  listByCodebaseWithAge: mockListByCodebaseWithAge,
-  countActiveByCodebase: mockCountActiveByCodebase,
-}));
 
 // Mock conversations DB
 const mockGetConversationByPlatformId = mock(() => Promise.resolve(null));
 const mockUpdateConversation = mock(() => Promise.resolve());
-mock.module('../db/conversations', () => ({
-  getConversationByPlatformId: mockGetConversationByPlatformId,
-  updateConversation: mockUpdateConversation,
-}));
 
 // Mock sessions DB
 const mockGetActiveSession = mock(() => Promise.resolve(null));
 const mockDeactivateSession = mock(() => Promise.resolve());
 const mockDeleteOldSessions = mock(() => Promise.resolve(0));
-mock.module('../db/sessions', () => ({
-  getActiveSession: mockGetActiveSession,
-  deactivateSession: mockDeactivateSession,
-  deleteOldSessions: mockDeleteOldSessions,
-}));
 
 // Mock codebases DB
 const mockGetCodebase = mock(() => Promise.resolve(null));
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-}));
+
+// Spy variable declarations
+let spyGitExecFileAsync: ReturnType<typeof spyOn>;
+let spyGitHasUncommittedChanges: ReturnType<typeof spyOn>;
+let spyGitWorktreeExists: ReturnType<typeof spyOn>;
+let spyGitGetDefaultBranch: ReturnType<typeof spyOn>;
+let spyGitIsBranchMerged: ReturnType<typeof spyOn>;
+let spyGitIsPatchEquivalent: ReturnType<typeof spyOn>;
+let spyGitGetLastCommitDate: ReturnType<typeof spyOn>;
+let spyGitToRepoPath: ReturnType<typeof spyOn>;
+let spyGitToBranchName: ReturnType<typeof spyOn>;
+let spyGitToWorktreePath: ReturnType<typeof spyOn>;
+let spyDbIsolationListAllActive: ReturnType<typeof spyOn>;
+let spyDbIsolationUpdateStatus: ReturnType<typeof spyOn>;
+let spyDbIsolationGetConversationsUsingEnv: ReturnType<typeof spyOn>;
+let spyDbIsolationGetById: ReturnType<typeof spyOn>;
+let spyDbIsolationListByCodebase: ReturnType<typeof spyOn>;
+let spyDbIsolationListByCodebaseWithAge: ReturnType<typeof spyOn>;
+let spyDbIsolationCountActive: ReturnType<typeof spyOn>;
+let spyDbConversationsGetByPlatformId: ReturnType<typeof spyOn>;
+let spyDbConversationsUpdate: ReturnType<typeof spyOn>;
+let spyDbSessionsGetActive: ReturnType<typeof spyOn>;
+let spyDbSessionsDeactivate: ReturnType<typeof spyOn>;
+let spyDbSessionsDeleteOld: ReturnType<typeof spyOn>;
+let spyDbCodebasesGet: ReturnType<typeof spyOn>;
+
+beforeEach(() => {
+  spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(
+    mockLogger as ReturnType<typeof paths.createLogger>
+  );
+  spyGitExecFileAsync = spyOn(git, 'execFileAsync').mockImplementation(mockExecFileAsync);
+  spyGitHasUncommittedChanges = spyOn(git, 'hasUncommittedChanges').mockImplementation(
+    mockHasUncommittedChanges
+  );
+  spyGitWorktreeExists = spyOn(git, 'worktreeExists').mockImplementation(mockWorktreeExists);
+  spyGitGetDefaultBranch = spyOn(git, 'getDefaultBranch').mockImplementation(mockGetDefaultBranch);
+  spyGitIsBranchMerged = spyOn(git, 'isBranchMerged').mockImplementation(mockIsBranchMerged);
+  spyGitIsPatchEquivalent = spyOn(git, 'isPatchEquivalent').mockImplementation(
+    mockIsPatchEquivalent
+  );
+  spyGitGetLastCommitDate = spyOn(git, 'getLastCommitDate').mockImplementation(
+    mockGetLastCommitDate
+  );
+  spyGitToRepoPath = spyOn(git, 'toRepoPath').mockImplementation(
+    (p: string) => p as ReturnType<typeof git.toRepoPath>
+  );
+  spyGitToBranchName = spyOn(git, 'toBranchName').mockImplementation(
+    (p: string) => p as ReturnType<typeof git.toBranchName>
+  );
+  spyGitToWorktreePath = spyOn(git, 'toWorktreePath').mockImplementation(
+    (p: string) => p as ReturnType<typeof git.toWorktreePath>
+  );
+  spyDbIsolationListAllActive = spyOn(
+    dbIsolationEnvironments,
+    'listAllActiveWithCodebase'
+  ).mockImplementation(mockListAllActiveWithCodebase);
+  spyDbIsolationUpdateStatus = spyOn(dbIsolationEnvironments, 'updateStatus').mockImplementation(
+    mockUpdateStatus
+  );
+  spyDbIsolationGetConversationsUsingEnv = spyOn(
+    dbIsolationEnvironments,
+    'getConversationsUsingEnv'
+  ).mockImplementation(mockGetConversationsUsingEnv);
+  spyDbIsolationGetById = spyOn(dbIsolationEnvironments, 'getById').mockImplementation(mockGetById);
+  spyDbIsolationListByCodebase = spyOn(
+    dbIsolationEnvironments,
+    'listByCodebase'
+  ).mockImplementation(mockListByCodebase);
+  spyDbIsolationListByCodebaseWithAge = spyOn(
+    dbIsolationEnvironments,
+    'listByCodebaseWithAge'
+  ).mockImplementation(mockListByCodebaseWithAge);
+  spyDbIsolationCountActive = spyOn(
+    dbIsolationEnvironments,
+    'countActiveByCodebase'
+  ).mockImplementation(mockCountActiveByCodebase);
+  spyDbConversationsGetByPlatformId = spyOn(
+    dbConversations,
+    'getConversationByPlatformId'
+  ).mockImplementation(mockGetConversationByPlatformId);
+  spyDbConversationsUpdate = spyOn(dbConversations, 'updateConversation').mockImplementation(
+    mockUpdateConversation
+  );
+  spyDbSessionsGetActive = spyOn(dbSessions, 'getActiveSession').mockImplementation(
+    mockGetActiveSession
+  );
+  spyDbSessionsDeactivate = spyOn(dbSessions, 'deactivateSession').mockImplementation(
+    mockDeactivateSession
+  );
+  spyDbSessionsDeleteOld = spyOn(dbSessions, 'deleteOldSessions').mockImplementation(
+    mockDeleteOldSessions
+  );
+  spyDbCodebasesGet = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase);
+});
+
+afterEach(() => {
+  spyPathsCreateLogger.mockRestore();
+  spyGitExecFileAsync.mockRestore();
+  spyGitHasUncommittedChanges.mockRestore();
+  spyGitWorktreeExists.mockRestore();
+  spyGitGetDefaultBranch.mockRestore();
+  spyGitIsBranchMerged.mockRestore();
+  spyGitIsPatchEquivalent.mockRestore();
+  spyGitGetLastCommitDate.mockRestore();
+  spyGitToRepoPath.mockRestore();
+  spyGitToBranchName.mockRestore();
+  spyGitToWorktreePath.mockRestore();
+  spyDbIsolationListAllActive.mockRestore();
+  spyDbIsolationUpdateStatus.mockRestore();
+  spyDbIsolationGetConversationsUsingEnv.mockRestore();
+  spyDbIsolationGetById.mockRestore();
+  spyDbIsolationListByCodebase.mockRestore();
+  spyDbIsolationListByCodebaseWithAge.mockRestore();
+  spyDbIsolationCountActive.mockRestore();
+  spyDbConversationsGetByPlatformId.mockRestore();
+  spyDbConversationsUpdate.mockRestore();
+  spyDbSessionsGetActive.mockRestore();
+  spyDbSessionsDeactivate.mockRestore();
+  spyDbSessionsDeleteOld.mockRestore();
+  spyDbCodebasesGet.mockRestore();
+});
 
 import {
   runScheduledCleanup,

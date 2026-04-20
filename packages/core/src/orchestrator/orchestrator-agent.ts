@@ -61,6 +61,10 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('orchestrator-agent');
   return cachedLog;
 }
+/** Reset cached logger — for test isolation only (same pattern as resetDatabase in connection.ts) */
+export function resetLogForTest(): void {
+  cachedLog = undefined;
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 

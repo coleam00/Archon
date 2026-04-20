@@ -15,8 +15,16 @@ import { Conversation } from '../types';
 import { resolve, join } from 'path';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
+import * as paths from '@archon/paths';
 import * as pathValidation from '../utils/path-validation';
 import * as workflowDiscovery from '@archon/workflows/workflow-discovery';
+import * as dbConversations from '../db/conversations';
+import * as dbCodebases from '../db/codebases';
+import * as dbSessions from '../db/sessions';
+import * as dbWorkflows from '../db/workflows';
+import * as dbWorkflowEvents from '../db/workflow-events';
+import * as dbIsolationEnvironments from '../db/isolation-environments';
+import * as cleanupServiceModule from '../services/cleanup-service';
 
 // Create mock functions for database modules (safe to mock - no standalone tests)
 const mockUpdateConversation = mock(() => Promise.resolve());
@@ -61,38 +69,35 @@ let spyFsRm: ReturnType<typeof spyOn>;
 // Spies for workflows module
 let spyDiscoverWorkflows: ReturnType<typeof spyOn>;
 
-// Mock database modules (safe - these don't have standalone tests that would be affected)
-mock.module('../db/conversations', () => ({
-  updateConversation: mockUpdateConversation,
-}));
-
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-  findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
-  createCodebase: mockCreateCodebase,
-  getCodebaseCommands: mockGetCodebaseCommands,
-  updateCodebaseCommands: mockUpdateCodebaseCommands,
-  deleteCodebase: mockDeleteCodebase,
-}));
-
-mock.module('../db/sessions', () => ({
-  getActiveSession: mockGetActiveSession,
-  deactivateSession: mockDeactivateSession,
-}));
-
-mock.module('../db/workflows', () => ({
-  getActiveWorkflowRun: mockGetActiveWorkflowRun,
-  cancelWorkflowRun: mockCancelWorkflowRun,
-  listWorkflowRuns: mockListWorkflowRuns,
-  getWorkflowRun: mockGetWorkflowRun,
-  resumeWorkflowRun: mockResumeWorkflowRun,
-  failWorkflowRun: mockFailWorkflowRun,
-  updateWorkflowRun: mockUpdateWorkflowRun,
-}));
-
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-}));
+// Spies for internal DB and service modules
+let spyDbConversationsUpdate: ReturnType<typeof spyOn>;
+let spyDbCodebasesGet: ReturnType<typeof spyOn>;
+let spyDbCodebasesFindByDefaultCwd: ReturnType<typeof spyOn>;
+let spyDbCodebasesCreate: ReturnType<typeof spyOn>;
+let spyDbCodebasesGetCommands: ReturnType<typeof spyOn>;
+let spyDbCodebasesUpdateCommands: ReturnType<typeof spyOn>;
+let spyDbCodebasesDelete: ReturnType<typeof spyOn>;
+let spyDbSessionsGetActive: ReturnType<typeof spyOn>;
+let spyDbSessionsDeactivate: ReturnType<typeof spyOn>;
+let spyDbWorkflowsGetActiveRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsCancel: ReturnType<typeof spyOn>;
+let spyDbWorkflowsList: ReturnType<typeof spyOn>;
+let spyDbWorkflowsGetRun: ReturnType<typeof spyOn>;
+let spyDbWorkflowsResume: ReturnType<typeof spyOn>;
+let spyDbWorkflowsFail: ReturnType<typeof spyOn>;
+let spyDbWorkflowsUpdate: ReturnType<typeof spyOn>;
+let spyDbWorkflowEventsCreate: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvCreate: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvGetById: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvGetByWorkingPath: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvUpdateStatus: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvMarkDestroyed: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvGetActive: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvGetActiveEnvs: ReturnType<typeof spyOn>;
+let spyDbIsolationEnvCountActive: ReturnType<typeof spyOn>;
+let spyCleanupMerged: ReturnType<typeof spyOn>;
+let spyCleanupStale: ReturnType<typeof spyOn>;
+let spyCleanupGetStatus: ReturnType<typeof spyOn>;
 
 // Mock isolation-environments database
 const mockIsolationEnvDbCreate = mock(() =>
@@ -113,16 +118,6 @@ const mockIsolationEnvDbGet = mock(() => Promise.resolve(null));
 const mockIsolationEnvDbUpdate = mock(() => Promise.resolve());
 
 const mockCountActiveByCodebase = mock(() => Promise.resolve(0));
-mock.module('../db/isolation-environments', () => ({
-  create: mockIsolationEnvDbCreate,
-  getById: mockIsolationEnvDbGet,
-  getByWorkingPath: mock(() => Promise.resolve(null)),
-  updateStatus: mockIsolationEnvDbUpdate,
-  markDestroyed: mock(() => Promise.resolve()),
-  getActiveByCodebase: mock(() => Promise.resolve([])),
-  getActiveEnvironments: mock(() => Promise.resolve([])),
-  countActiveByCodebase: mockCountActiveByCodebase,
-}));
 
 // Mock isolation provider
 const mockIsolationCreate = mock(() =>
@@ -174,13 +169,9 @@ const mockCleanupStaleWorktrees = mock(() =>
     skipped: [] as { branchName: string; reason: string }[],
   })
 );
-mock.module('../services/cleanup-service', () => ({
-  cleanupMergedWorktrees: mockCleanupMergedWorktrees,
-  cleanupStaleWorktrees: mockCleanupStaleWorktrees,
-  getWorktreeStatusBreakdown: mock(() =>
-    Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0 })
-  ),
-}));
+const mockGetWorktreeStatusBreakdown = mock(() =>
+  Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0 })
+);
 
 // Note: We removed mock.module('child_process') because:
 // 1. We already spy on gitUtils.execFileAsync which covers git operations
@@ -191,21 +182,16 @@ mock.module('../services/cleanup-service', () => ({
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  expandTilde: mock((p: string) => p.replace(/^~/, '/home/test')),
-  ensureProjectStructure: mock(() => Promise.resolve()),
-  getProjectSourcePath: mock(
-    (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
-  ),
-  createProjectSourceSymlink: mock(() => Promise.resolve()),
-  parseOwnerRepo: mock((name: string) => {
-    const parts = name.split('/');
-    return parts.length === 2 ? { owner: parts[0], repo: parts[1] } : null;
-  }),
-}));
+
+// @archon/paths spy declarations
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyPathsGetArchonWorkspacesPath: ReturnType<typeof spyOn>;
+let spyPathsGetCommandFolderSearchPaths: ReturnType<typeof spyOn>;
+let spyPathsExpandTilde: ReturnType<typeof spyOn>;
+let spyPathsEnsureProjectStructure: ReturnType<typeof spyOn>;
+let spyPathsGetProjectSourcePath: ReturnType<typeof spyOn>;
+let spyPathsCreateProjectSourceSymlink: ReturnType<typeof spyOn>;
+let spyPathsParseOwnerRepo: ReturnType<typeof spyOn>;
 
 import { parseCommand, handleCommand } from './command-handler';
 
@@ -244,6 +230,31 @@ function clearAllMocks(): void {
 
 // Setup spies for internal modules
 function setupSpies(): void {
+  // @archon/paths spies
+  spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(mockLogger);
+  spyPathsGetArchonWorkspacesPath = spyOn(paths, 'getArchonWorkspacesPath').mockReturnValue(
+    '/home/test/.archon/workspaces'
+  );
+  spyPathsGetCommandFolderSearchPaths = spyOn(paths, 'getCommandFolderSearchPaths').mockReturnValue(
+    ['.archon/commands']
+  );
+  spyPathsExpandTilde = spyOn(paths, 'expandTilde').mockImplementation((p: string) =>
+    p.replace(/^~/, '/home/test')
+  );
+  spyPathsEnsureProjectStructure = spyOn(paths, 'ensureProjectStructure').mockResolvedValue(
+    undefined
+  );
+  spyPathsGetProjectSourcePath = spyOn(paths, 'getProjectSourcePath').mockImplementation(
+    (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
+  );
+  spyPathsCreateProjectSourceSymlink = spyOn(paths, 'createProjectSourceSymlink').mockResolvedValue(
+    undefined
+  );
+  spyPathsParseOwnerRepo = spyOn(paths, 'parseOwnerRepo').mockImplementation((name: string) => {
+    const parts = name.split('/');
+    return parts.length === 2 ? { owner: parts[0], repo: parts[1] } : null;
+  });
+
   // Path validation spy
   spyIsPathWithinWorkspace = spyOn(pathValidation, 'isPathWithinWorkspace').mockReturnValue(true);
 
@@ -274,10 +285,109 @@ function setupSpies(): void {
     workflows: [],
     errors: [],
   });
+
+  // DB and service spies
+  spyDbConversationsUpdate = spyOn(dbConversations, 'updateConversation').mockImplementation(
+    mockUpdateConversation
+  );
+  spyDbCodebasesGet = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase);
+  spyDbCodebasesFindByDefaultCwd = spyOn(
+    dbCodebases,
+    'findCodebaseByDefaultCwd'
+  ).mockImplementation(mockFindCodebaseByDefaultCwd);
+  spyDbCodebasesCreate = spyOn(dbCodebases, 'createCodebase').mockImplementation(
+    mockCreateCodebase
+  );
+  spyDbCodebasesGetCommands = spyOn(dbCodebases, 'getCodebaseCommands').mockImplementation(
+    mockGetCodebaseCommands
+  );
+  spyDbCodebasesUpdateCommands = spyOn(dbCodebases, 'updateCodebaseCommands').mockImplementation(
+    mockUpdateCodebaseCommands
+  );
+  spyDbCodebasesDelete = spyOn(dbCodebases, 'deleteCodebase').mockImplementation(
+    mockDeleteCodebase
+  );
+  spyDbSessionsGetActive = spyOn(dbSessions, 'getActiveSession').mockImplementation(
+    mockGetActiveSession
+  );
+  spyDbSessionsDeactivate = spyOn(dbSessions, 'deactivateSession').mockImplementation(
+    mockDeactivateSession
+  );
+  spyDbWorkflowsGetActiveRun = spyOn(dbWorkflows, 'getActiveWorkflowRun').mockImplementation(
+    mockGetActiveWorkflowRun
+  );
+  spyDbWorkflowsCancel = spyOn(dbWorkflows, 'cancelWorkflowRun').mockImplementation(
+    mockCancelWorkflowRun
+  );
+  spyDbWorkflowsList = spyOn(dbWorkflows, 'listWorkflowRuns').mockImplementation(
+    mockListWorkflowRuns
+  );
+  spyDbWorkflowsGetRun = spyOn(dbWorkflows, 'getWorkflowRun').mockImplementation(
+    mockGetWorkflowRun
+  );
+  spyDbWorkflowsResume = spyOn(dbWorkflows, 'resumeWorkflowRun').mockImplementation(
+    mockResumeWorkflowRun
+  );
+  spyDbWorkflowsFail = spyOn(dbWorkflows, 'failWorkflowRun').mockImplementation(
+    mockFailWorkflowRun
+  );
+  spyDbWorkflowsUpdate = spyOn(dbWorkflows, 'updateWorkflowRun').mockImplementation(
+    mockUpdateWorkflowRun
+  );
+  spyDbWorkflowEventsCreate = spyOn(dbWorkflowEvents, 'createWorkflowEvent').mockImplementation(
+    mockCreateWorkflowEvent
+  );
+  spyDbIsolationEnvCreate = spyOn(dbIsolationEnvironments, 'create').mockImplementation(
+    mockIsolationEnvDbCreate
+  );
+  spyDbIsolationEnvGetById = spyOn(dbIsolationEnvironments, 'getById').mockImplementation(
+    mockIsolationEnvDbGet
+  );
+  spyDbIsolationEnvGetByWorkingPath = spyOn(
+    dbIsolationEnvironments,
+    'getByWorkingPath'
+  ).mockImplementation(mock(() => Promise.resolve(null)));
+  spyDbIsolationEnvUpdateStatus = spyOn(dbIsolationEnvironments, 'updateStatus').mockImplementation(
+    mockIsolationEnvDbUpdate
+  );
+  spyDbIsolationEnvMarkDestroyed = spyOn(
+    dbIsolationEnvironments,
+    'markDestroyed'
+  ).mockImplementation(mock(() => Promise.resolve()));
+  spyDbIsolationEnvGetActive = spyOn(
+    dbIsolationEnvironments,
+    'getActiveByCodebase'
+  ).mockImplementation(mock(() => Promise.resolve([])));
+  spyDbIsolationEnvGetActiveEnvs = spyOn(
+    dbIsolationEnvironments,
+    'getActiveEnvironments'
+  ).mockImplementation(mock(() => Promise.resolve([])));
+  spyDbIsolationEnvCountActive = spyOn(
+    dbIsolationEnvironments,
+    'countActiveByCodebase'
+  ).mockImplementation(mockCountActiveByCodebase);
+  spyCleanupMerged = spyOn(cleanupServiceModule, 'cleanupMergedWorktrees').mockImplementation(
+    mockCleanupMergedWorktrees
+  );
+  spyCleanupStale = spyOn(cleanupServiceModule, 'cleanupStaleWorktrees').mockImplementation(
+    mockCleanupStaleWorktrees
+  );
+  spyCleanupGetStatus = spyOn(
+    cleanupServiceModule,
+    'getWorktreeStatusBreakdown'
+  ).mockImplementation(mockGetWorktreeStatusBreakdown);
 }
 
 // Restore all spies
 function restoreSpies(): void {
+  spyPathsCreateLogger?.mockRestore();
+  spyPathsGetArchonWorkspacesPath?.mockRestore();
+  spyPathsGetCommandFolderSearchPaths?.mockRestore();
+  spyPathsExpandTilde?.mockRestore();
+  spyPathsEnsureProjectStructure?.mockRestore();
+  spyPathsGetProjectSourcePath?.mockRestore();
+  spyPathsCreateProjectSourceSymlink?.mockRestore();
+  spyPathsParseOwnerRepo?.mockRestore();
   spyIsPathWithinWorkspace?.mockRestore();
   spyExecFileAsync?.mockRestore();
   spyWorktreeExists?.mockRestore();
@@ -292,6 +402,34 @@ function restoreSpies(): void {
   spyFsReaddir?.mockRestore();
   spyFsRm?.mockRestore();
   spyDiscoverWorkflows?.mockRestore();
+  spyDbConversationsUpdate?.mockRestore();
+  spyDbCodebasesGet?.mockRestore();
+  spyDbCodebasesFindByDefaultCwd?.mockRestore();
+  spyDbCodebasesCreate?.mockRestore();
+  spyDbCodebasesGetCommands?.mockRestore();
+  spyDbCodebasesUpdateCommands?.mockRestore();
+  spyDbCodebasesDelete?.mockRestore();
+  spyDbSessionsGetActive?.mockRestore();
+  spyDbSessionsDeactivate?.mockRestore();
+  spyDbWorkflowsGetActiveRun?.mockRestore();
+  spyDbWorkflowsCancel?.mockRestore();
+  spyDbWorkflowsList?.mockRestore();
+  spyDbWorkflowsGetRun?.mockRestore();
+  spyDbWorkflowsResume?.mockRestore();
+  spyDbWorkflowsFail?.mockRestore();
+  spyDbWorkflowsUpdate?.mockRestore();
+  spyDbWorkflowEventsCreate?.mockRestore();
+  spyDbIsolationEnvCreate?.mockRestore();
+  spyDbIsolationEnvGetById?.mockRestore();
+  spyDbIsolationEnvGetByWorkingPath?.mockRestore();
+  spyDbIsolationEnvUpdateStatus?.mockRestore();
+  spyDbIsolationEnvMarkDestroyed?.mockRestore();
+  spyDbIsolationEnvGetActive?.mockRestore();
+  spyDbIsolationEnvGetActiveEnvs?.mockRestore();
+  spyDbIsolationEnvCountActive?.mockRestore();
+  spyCleanupMerged?.mockRestore();
+  spyCleanupStale?.mockRestore();
+  spyCleanupGetStatus?.mockRestore();
 }
 
 describe('CommandHandler', () => {

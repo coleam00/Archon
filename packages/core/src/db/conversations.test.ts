@@ -1,15 +1,8 @@
-import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import * as connection from './connection';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
-
-// Mock the connection module before importing the module under test
-mock.module('./connection', () => ({
-  pool: {
-    query: mockQuery,
-  },
-  getDialect: () => mockPostgresDialect,
-}));
 
 import {
   getOrCreateConversation,
@@ -19,9 +12,20 @@ import {
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 
+// Spy variable declarations
+let spyConnectionPoolQuery: ReturnType<typeof spyOn>;
+let spyConnectionGetDialect: ReturnType<typeof spyOn>;
+
 describe('conversations', () => {
   beforeEach(() => {
+    spyConnectionPoolQuery = spyOn(connection.pool, 'query').mockImplementation(mockQuery);
+    spyConnectionGetDialect = spyOn(connection, 'getDialect').mockReturnValue(mockPostgresDialect);
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyConnectionPoolQuery.mockRestore();
+    spyConnectionGetDialect.mockRestore();
   });
 
   describe('getOrCreateConversation', () => {

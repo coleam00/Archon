@@ -1,4 +1,8 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import * as git from '@archon/git';
+import * as paths from '@archon/paths';
+import * as dbIsolationEnvironments from '../db/isolation-environments';
+import * as cleanupService from '../services/cleanup-service';
 
 // ---------------------------------------------------------------------------
 // Mock modules before importing the module under test
@@ -6,26 +10,22 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
 const mockWorktreeExists = mock(() => Promise.resolve(true));
 const mockToWorktreePath = mock((p: string) => p);
-mock.module('@archon/git', () => ({
-  worktreeExists: mockWorktreeExists,
-  toWorktreePath: mockToWorktreePath,
-}));
 
 const mockListAllActiveWithCodebase = mock(() => Promise.resolve([]));
 const mockListByCodebaseWithAge = mock(() => Promise.resolve([]));
 const mockUpdateStatus = mock(() => Promise.resolve());
-mock.module('../db/isolation-environments', () => ({
-  listAllActiveWithCodebase: mockListAllActiveWithCodebase,
-  listByCodebaseWithAge: mockListByCodebaseWithAge,
-  updateStatus: mockUpdateStatus,
-}));
 
 const mockCleanupStale = mock(() => Promise.resolve({ removed: 0, errors: [] }));
 const mockCleanupMerged = mock(() => Promise.resolve({ removed: 0, errors: [] }));
-mock.module('../services/cleanup-service', () => ({
-  cleanupStaleWorktrees: mockCleanupStale,
-  cleanupMergedWorktrees: mockCleanupMerged,
-}));
+
+// Spy variable declarations
+let spyGitWorktreeExists: ReturnType<typeof spyOn>;
+let spyGitToWorktreePath: ReturnType<typeof spyOn>;
+let spyDbIsolationListAllActive: ReturnType<typeof spyOn>;
+let spyDbIsolationListByCodebaseWithAge: ReturnType<typeof spyOn>;
+let spyDbIsolationUpdateStatus: ReturnType<typeof spyOn>;
+let spyCleanupStale: ReturnType<typeof spyOn>;
+let spyCleanupMerged: ReturnType<typeof spyOn>;
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -35,13 +35,50 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
+
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
 
 // Import AFTER mocks
 const { listEnvironments, cleanupStaleEnvironments, cleanupMergedEnvironments } =
   await import('./isolation-operations');
+
+beforeEach(() => {
+  spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(
+    mockLogger as ReturnType<typeof paths.createLogger>
+  );
+  spyGitWorktreeExists = spyOn(git, 'worktreeExists').mockImplementation(mockWorktreeExists);
+  spyGitToWorktreePath = spyOn(git, 'toWorktreePath').mockImplementation(
+    (p: string) => p as ReturnType<typeof git.toWorktreePath>
+  );
+  spyDbIsolationListAllActive = spyOn(
+    dbIsolationEnvironments,
+    'listAllActiveWithCodebase'
+  ).mockImplementation(mockListAllActiveWithCodebase);
+  spyDbIsolationListByCodebaseWithAge = spyOn(
+    dbIsolationEnvironments,
+    'listByCodebaseWithAge'
+  ).mockImplementation(mockListByCodebaseWithAge);
+  spyDbIsolationUpdateStatus = spyOn(dbIsolationEnvironments, 'updateStatus').mockImplementation(
+    mockUpdateStatus
+  );
+  spyCleanupStale = spyOn(cleanupService, 'cleanupStaleWorktrees').mockImplementation(
+    mockCleanupStale
+  );
+  spyCleanupMerged = spyOn(cleanupService, 'cleanupMergedWorktrees').mockImplementation(
+    mockCleanupMerged
+  );
+});
+
+afterEach(() => {
+  spyPathsCreateLogger.mockRestore();
+  spyGitWorktreeExists.mockRestore();
+  spyGitToWorktreePath.mockRestore();
+  spyDbIsolationListAllActive.mockRestore();
+  spyDbIsolationListByCodebaseWithAge.mockRestore();
+  spyDbIsolationUpdateStatus.mockRestore();
+  spyCleanupStale.mockRestore();
+  spyCleanupMerged.mockRestore();
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures

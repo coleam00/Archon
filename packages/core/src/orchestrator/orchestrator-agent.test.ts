@@ -12,11 +12,29 @@
  * Mock setup MUST occur before any import of the module under test.
  */
 
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, IPlatformAdapter } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import * as paths from '@archon/paths';
+import * as dbConversations from '../db/conversations';
+import * as dbCodebases from '../db/codebases';
+import * as dbSessions from '../db/sessions';
+import * as commandHandler from '../handlers/command-handler';
+import * as dbEnvVars from '../db/env-vars';
+import * as errorFormatter from '../utils/error-formatter';
+import * as errorUtils from '../utils/error';
+import * as storeAdapter from '../workflows/store-adapter';
+import * as dbWorkflows from '../db/workflows';
+import * as dbWorkflowEvents from '../db/workflow-events';
+import * as configLoader from '../config/config-loader';
+import * as titleGenerator from '../services/title-generator';
+import * as orchestratorModule from './orchestrator';
+import * as promptBuilder from './prompt-builder';
+import * as dbMessages from '../db/messages';
+import * as worktreeSync from '../utils/worktree-sync';
+import * as git from '@archon/git';
 
 // ─── Mock setup (ALL mocks must come before the module under test import) ────
 
@@ -51,40 +69,27 @@ const mockLoadConfig = mock(() =>
 
 const mockLogger = createMockLogger();
 
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getArchonHome: mock(() => '/home/test/.archon'),
-}));
+// @archon/paths spy declarations
+let spyPathsCreateLogger: ReturnType<typeof spyOn>;
+let spyPathsGetArchonWorkspacesPath: ReturnType<typeof spyOn>;
+let spyPathsGetArchonHome: ReturnType<typeof spyOn>;
 
 const mockUpdateConversation = mock(() => Promise.resolve());
-mock.module('../db/conversations', () => ({
-  getOrCreateConversation: mockGetOrCreateConversation,
-  getConversationByPlatformId: mock(() => Promise.resolve(null)),
-  updateConversation: mockUpdateConversation,
-  touchConversation: mock(() => Promise.resolve()),
-}));
+const mockGetConversationByPlatformId = mock(() => Promise.resolve(null));
+const mockTouchConversation = mock(() => Promise.resolve());
 
 const mockListCodebases = mock(() => Promise.resolve([] as unknown[]));
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-  listCodebases: mockListCodebases,
-  createCodebase: mock(() => Promise.resolve({ id: 'new-codebase-id' })),
-}));
+const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
 
-mock.module('../db/sessions', () => ({
-  getActiveSession: mock(() => Promise.resolve(null)),
-  updateSession: mock(() => Promise.resolve()),
-  transitionSession: mock(() => Promise.resolve({ id: 'session-1', assistant_session_id: null })),
-}));
+const mockGetActiveSession = mock(() => Promise.resolve(null));
+const mockUpdateSession = mock(() => Promise.resolve());
+const mockTransitionSession = mock(() =>
+  Promise.resolve({ id: 'session-1', assistant_session_id: null })
+);
 
 const mockParseCommand = mock(
   () => ({ command: 'help', args: [] }) as { command: string; args: string[] } | null
 );
-mock.module('../handlers/command-handler', () => ({
-  parseCommand: mockParseCommand,
-  handleCommand: mockHandleCommand,
-}));
 
 mock.module('@archon/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock((toolName: string) => `🔧 ${toolName}`),
@@ -113,64 +118,6 @@ mock.module('@archon/providers', () => ({
   getProviderCapabilities: mock(() => ({ envInjection: true })),
 }));
 
-mock.module('../db/env-vars', () => ({
-  getCodebaseEnvVars: mockGetCodebaseEnvVars,
-}));
-
-mock.module('../utils/error-formatter', () => ({
-  classifyAndFormatError: mock((err: Error) => `Error: ${err.message}`),
-}));
-
-mock.module('../utils/error', () => ({
-  toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
-}));
-
-mock.module('../workflows/store-adapter', () => ({
-  createWorkflowDeps: mock(() => ({})),
-}));
-
-const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
-const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
-mock.module('../db/workflows', () => ({
-  getPausedWorkflowRun: mockGetPausedWorkflowRun,
-  findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
-  updateWorkflowRun: mock(() => Promise.resolve()),
-}));
-
-const mockCreateWorkflowEvent = mock(() => Promise.resolve());
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-}));
-
-mock.module('../config/config-loader', () => ({
-  loadConfig: mockLoadConfig,
-}));
-
-mock.module('../services/title-generator', () => ({
-  generateAndSetTitle: mock(() => Promise.resolve()),
-}));
-
-const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
-mock.module('./orchestrator', () => ({
-  validateAndResolveIsolation: mock(() => Promise.resolve({ cwd: '/test/cwd' })),
-  dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
-}));
-
-mock.module('./prompt-builder', () => ({
-  buildOrchestratorPrompt: mock(() => 'orchestrator system prompt'),
-  buildProjectScopedPrompt: mock(() => 'project scoped system prompt'),
-  formatWorkflowContextSection: mock((results: unknown[]) =>
-    results.length > 0 ? '## Recent Workflow Results\n\n...' : ''
-  ),
-}));
-
-const mockGetRecentWorkflowResultMessages = mock(() => Promise.resolve([]));
-mock.module('../db/messages', () => ({
-  addMessage: mock(() => Promise.resolve()),
-  listMessages: mock(() => Promise.resolve([])),
-  getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
-}));
-
 mock.module('@archon/isolation', () => ({
   IsolationBlockedError: class IsolationBlockedError extends Error {
     public reason: string;
@@ -182,14 +129,63 @@ mock.module('@archon/isolation', () => ({
   },
 }));
 
-mock.module('../utils/worktree-sync', () => ({
-  syncArchonToWorktree: mock(() => Promise.resolve()),
-}));
+const mockGetPausedWorkflowRun = mock(() => Promise.resolve(null as unknown));
+const mockFindResumableRunByParentConversation = mock(() => Promise.resolve(null as unknown));
+const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 
-mock.module('@archon/git', () => ({
-  syncWorkspace: mockSyncWorkspace,
-  toRepoPath: mockToRepoPath,
-}));
+const mockCreateWorkflowEvent = mock(() => Promise.resolve());
+
+const mockGenerateAndSetTitle = mock(() => Promise.resolve());
+
+const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
+const mockValidateAndResolveIsolation = mock(() => Promise.resolve({ cwd: '/test/cwd' }));
+
+const mockBuildOrchestratorPrompt = mock(() => 'orchestrator system prompt');
+const mockBuildProjectScopedPrompt = mock(() => 'project scoped system prompt');
+const mockFormatWorkflowContextSection = mock((results: unknown[]) =>
+  results.length > 0 ? '## Recent Workflow Results\n\n...' : ''
+);
+
+const mockGetRecentWorkflowResultMessages = mock(() => Promise.resolve([]));
+const mockAddMessage = mock(() => Promise.resolve());
+const mockListMessages = mock(() => Promise.resolve([]));
+
+const mockSyncArchonToWorktree = mock(() => Promise.resolve());
+
+// Spy variable declarations
+let spyDbConversationsGetOrCreate: ReturnType<typeof spyOn>;
+let spyDbConversationsGetByPlatformId: ReturnType<typeof spyOn>;
+let spyDbConversationsUpdate: ReturnType<typeof spyOn>;
+let spyDbConversationsTouch: ReturnType<typeof spyOn>;
+let spyDbCodebasesGet: ReturnType<typeof spyOn>;
+let spyDbCodebasesList: ReturnType<typeof spyOn>;
+let spyDbCodebasesCreate: ReturnType<typeof spyOn>;
+let spyDbSessionsGetActive: ReturnType<typeof spyOn>;
+let spyDbSessionsUpdate: ReturnType<typeof spyOn>;
+let spyDbSessionsTransition: ReturnType<typeof spyOn>;
+let spyCommandHandlerParse: ReturnType<typeof spyOn>;
+let spyCommandHandlerHandle: ReturnType<typeof spyOn>;
+let spyDbEnvVarsGet: ReturnType<typeof spyOn>;
+let spyErrorFormatterClassify: ReturnType<typeof spyOn>;
+let spyErrorUtilsToError: ReturnType<typeof spyOn>;
+let spyStoreAdapterCreate: ReturnType<typeof spyOn>;
+let spyDbWorkflowsGetPaused: ReturnType<typeof spyOn>;
+let spyDbWorkflowsFindResumable: ReturnType<typeof spyOn>;
+let spyDbWorkflowsUpdate: ReturnType<typeof spyOn>;
+let spyDbWorkflowEventsCreate: ReturnType<typeof spyOn>;
+let spyConfigLoaderLoad: ReturnType<typeof spyOn>;
+let spyTitleGeneratorGenerate: ReturnType<typeof spyOn>;
+let spyOrchestratorValidate: ReturnType<typeof spyOn>;
+let spyOrchestratorDispatch: ReturnType<typeof spyOn>;
+let spyPromptBuilderOrchestrator: ReturnType<typeof spyOn>;
+let spyPromptBuilderProjectScoped: ReturnType<typeof spyOn>;
+let spyPromptBuilderFormatWorkflowContext: ReturnType<typeof spyOn>;
+let spyDbMessagesGetRecent: ReturnType<typeof spyOn>;
+let spyDbMessagesAdd: ReturnType<typeof spyOn>;
+let spyDbMessagesList: ReturnType<typeof spyOn>;
+let spyWorktreeSyncSync: ReturnType<typeof spyOn>;
+let spyGitSyncWorkspace: ReturnType<typeof spyOn>;
+let spyGitToRepoPath: ReturnType<typeof spyOn>;
 
 mock.module('fs', () => ({
   existsSync: mock(() => true),
@@ -198,6 +194,147 @@ mock.module('fs', () => ({
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
 
 import { parseOrchestratorCommands, handleMessage } from './orchestrator-agent';
+
+// ─── Spy setup / teardown ─────────────────────────────────────────────────────
+
+beforeEach(() => {
+  spyPathsCreateLogger = spyOn(paths, 'createLogger').mockReturnValue(mockLogger);
+  spyPathsGetArchonWorkspacesPath = spyOn(paths, 'getArchonWorkspacesPath').mockReturnValue(
+    '/home/test/.archon/workspaces'
+  );
+  spyPathsGetArchonHome = spyOn(paths, 'getArchonHome').mockReturnValue('/home/test/.archon');
+  spyDbConversationsGetOrCreate = spyOn(
+    dbConversations,
+    'getOrCreateConversation'
+  ).mockImplementation(mockGetOrCreateConversation);
+  spyDbConversationsGetByPlatformId = spyOn(
+    dbConversations,
+    'getConversationByPlatformId'
+  ).mockImplementation(mockGetConversationByPlatformId);
+  spyDbConversationsUpdate = spyOn(dbConversations, 'updateConversation').mockImplementation(
+    mockUpdateConversation
+  );
+  spyDbConversationsTouch = spyOn(dbConversations, 'touchConversation').mockImplementation(
+    mockTouchConversation
+  );
+  spyDbCodebasesGet = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase);
+  spyDbCodebasesList = spyOn(dbCodebases, 'listCodebases').mockImplementation(mockListCodebases);
+  spyDbCodebasesCreate = spyOn(dbCodebases, 'createCodebase').mockImplementation(
+    mockCreateCodebase
+  );
+  spyDbSessionsGetActive = spyOn(dbSessions, 'getActiveSession').mockImplementation(
+    mockGetActiveSession
+  );
+  spyDbSessionsUpdate = spyOn(dbSessions, 'updateSession').mockImplementation(mockUpdateSession);
+  spyDbSessionsTransition = spyOn(dbSessions, 'transitionSession').mockImplementation(
+    mockTransitionSession
+  );
+  spyCommandHandlerParse = spyOn(commandHandler, 'parseCommand').mockImplementation(
+    mockParseCommand
+  );
+  spyCommandHandlerHandle = spyOn(commandHandler, 'handleCommand').mockImplementation(
+    mockHandleCommand
+  );
+  spyDbEnvVarsGet = spyOn(dbEnvVars, 'getCodebaseEnvVars').mockImplementation(
+    mockGetCodebaseEnvVars
+  );
+  spyErrorFormatterClassify = spyOn(errorFormatter, 'classifyAndFormatError').mockImplementation(
+    mock((err: Error) => `Error: ${err.message}`)
+  );
+  spyErrorUtilsToError = spyOn(errorUtils, 'toError').mockImplementation(
+    mock((e: unknown) => (e instanceof Error ? e : new Error(String(e))))
+  );
+  spyStoreAdapterCreate = spyOn(storeAdapter, 'createWorkflowDeps').mockImplementation(
+    mock(() => ({}))
+  );
+  spyDbWorkflowsGetPaused = spyOn(dbWorkflows, 'getPausedWorkflowRun').mockImplementation(
+    mockGetPausedWorkflowRun
+  );
+  spyDbWorkflowsFindResumable = spyOn(
+    dbWorkflows,
+    'findResumableRunByParentConversation'
+  ).mockImplementation(mockFindResumableRunByParentConversation);
+  spyDbWorkflowsUpdate = spyOn(dbWorkflows, 'updateWorkflowRun').mockImplementation(
+    mockUpdateWorkflowRun
+  );
+  spyDbWorkflowEventsCreate = spyOn(dbWorkflowEvents, 'createWorkflowEvent').mockImplementation(
+    mockCreateWorkflowEvent
+  );
+  spyConfigLoaderLoad = spyOn(configLoader, 'loadConfig').mockImplementation(mockLoadConfig);
+  spyTitleGeneratorGenerate = spyOn(titleGenerator, 'generateAndSetTitle').mockImplementation(
+    mockGenerateAndSetTitle
+  );
+  spyOrchestratorValidate = spyOn(
+    orchestratorModule,
+    'validateAndResolveIsolation'
+  ).mockImplementation(mockValidateAndResolveIsolation);
+  spyOrchestratorDispatch = spyOn(
+    orchestratorModule,
+    'dispatchBackgroundWorkflow'
+  ).mockImplementation(mockDispatchBackgroundWorkflow);
+  spyPromptBuilderOrchestrator = spyOn(promptBuilder, 'buildOrchestratorPrompt').mockImplementation(
+    mockBuildOrchestratorPrompt
+  );
+  spyPromptBuilderProjectScoped = spyOn(
+    promptBuilder,
+    'buildProjectScopedPrompt'
+  ).mockImplementation(mockBuildProjectScopedPrompt);
+  spyPromptBuilderFormatWorkflowContext = spyOn(
+    promptBuilder,
+    'formatWorkflowContextSection'
+  ).mockImplementation(mockFormatWorkflowContextSection);
+  spyDbMessagesGetRecent = spyOn(dbMessages, 'getRecentWorkflowResultMessages').mockImplementation(
+    mockGetRecentWorkflowResultMessages
+  );
+  spyDbMessagesAdd = spyOn(dbMessages, 'addMessage').mockImplementation(mockAddMessage);
+  spyDbMessagesList = spyOn(dbMessages, 'listMessages').mockImplementation(mockListMessages);
+  spyWorktreeSyncSync = spyOn(worktreeSync, 'syncArchonToWorktree').mockImplementation(
+    mockSyncArchonToWorktree
+  );
+  spyGitSyncWorkspace = spyOn(git, 'syncWorkspace').mockImplementation(mockSyncWorkspace);
+  spyGitToRepoPath = spyOn(git, 'toRepoPath').mockImplementation(
+    (p: string) => p as ReturnType<typeof git.toRepoPath>
+  );
+});
+
+afterEach(() => {
+  spyPathsCreateLogger.mockRestore();
+  spyPathsGetArchonWorkspacesPath.mockRestore();
+  spyPathsGetArchonHome.mockRestore();
+  spyDbConversationsGetOrCreate.mockRestore();
+  spyDbConversationsGetByPlatformId.mockRestore();
+  spyDbConversationsUpdate.mockRestore();
+  spyDbConversationsTouch.mockRestore();
+  spyDbCodebasesGet.mockRestore();
+  spyDbCodebasesList.mockRestore();
+  spyDbCodebasesCreate.mockRestore();
+  spyDbSessionsGetActive.mockRestore();
+  spyDbSessionsUpdate.mockRestore();
+  spyDbSessionsTransition.mockRestore();
+  spyCommandHandlerParse.mockRestore();
+  spyCommandHandlerHandle.mockRestore();
+  spyDbEnvVarsGet.mockRestore();
+  spyErrorFormatterClassify.mockRestore();
+  spyErrorUtilsToError.mockRestore();
+  spyStoreAdapterCreate.mockRestore();
+  spyDbWorkflowsGetPaused.mockRestore();
+  spyDbWorkflowsFindResumable.mockRestore();
+  spyDbWorkflowsUpdate.mockRestore();
+  spyDbWorkflowEventsCreate.mockRestore();
+  spyConfigLoaderLoad.mockRestore();
+  spyTitleGeneratorGenerate.mockRestore();
+  spyOrchestratorValidate.mockRestore();
+  spyOrchestratorDispatch.mockRestore();
+  spyPromptBuilderOrchestrator.mockRestore();
+  spyPromptBuilderProjectScoped.mockRestore();
+  spyPromptBuilderFormatWorkflowContext.mockRestore();
+  spyDbMessagesGetRecent.mockRestore();
+  spyDbMessagesAdd.mockRestore();
+  spyDbMessagesList.mockRestore();
+  spyWorktreeSyncSync.mockRestore();
+  spyGitSyncWorkspace.mockRestore();
+  spyGitToRepoPath.mockRestore();
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
