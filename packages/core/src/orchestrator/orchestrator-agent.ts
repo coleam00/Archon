@@ -16,7 +16,7 @@ import type {
   AttachedFile,
 } from '../types';
 import type { SendQueryOptions } from '@archon/providers/types';
-import { ConversationNotFoundError } from '../types';
+import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -540,6 +540,16 @@ export async function handleMessage(
       parentConversationId,
       conversationId
     );
+
+    // 1b. Persist user message for non-web platforms.
+    // Web adapter: the HTTP route (api.ts) already saves before calling handleMessage().
+    // Non-web adapters (GitHub, Telegram, Slack, …): messages are dispatched externally
+    // but never written to remote_agent_messages, so the Web UI sees empty conversations.
+    if (!isWebAdapter(platform)) {
+      await messageDb.addMessage(conversation.id, 'user', message).catch((err: Error) => {
+        getLog().warn({ conversationId, err }, 'orchestrator.user_message_persist_failed');
+      });
+    }
 
     // 1c. Auto-generate title for untitled conversations (fire-and-forget)
     if (!conversation.title && !message.startsWith('/')) {
