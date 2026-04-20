@@ -88,12 +88,13 @@ nodes:
         fi
       fi
 
-      # Write initial state machine file
-      cat > "$ARTIFACTS/state.json" << 'STATEEOF'
+      # Write initial state machine file (unquoted heredoc so $SPRINT_COUNT expands natively;
+      # avoids BSD/GNU sed -i incompatibility that caused state.json corruption on macOS)
+      cat > "$ARTIFACTS/state.json" << STATEEOF
       {
         "phase": "negotiating",
         "sprint": 1,
-        "totalSprints": SPRINT_COUNT_PLACEHOLDER,
+        "totalSprints": $SPRINT_COUNT,
         "retry": 0,
         "maxRetries": 3,
         "passThreshold": 7,
@@ -101,7 +102,6 @@ nodes:
         "status": "running"
       }
       STATEEOF
-      sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json"
 
       echo "{\"totalSprints\": $SPRINT_COUNT, \"appDir\": \"$ARTIFACTS/app\", \"artifactsDir\": \"$ARTIFACTS\"}"
     timeout: 30000
