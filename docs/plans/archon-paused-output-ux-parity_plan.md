@@ -37,6 +37,64 @@ Current operating rule:
 - Run `archon-piv-loop-codex` on exactly one slice.
 - Update this umbrella plan after each meaningful workflow transition.
 
+## Reusable Slice Handover
+
+Use this section to start future slice sessions without rethinking the framing.
+The umbrella plan is the stable context source; the active slice changes, but
+the operator rules stay the same.
+
+Canonical umbrella-plan reference:
+
+- repo-relative:
+  `docs/plans/archon-paused-output-ux-parity_plan.md`
+- absolute:
+  `/Users/mase/Codebase/Personal-Projects/Archon/docs/plans/archon-paused-output-ux-parity_plan.md`
+
+Default handover rules for every later slice:
+
+- use the umbrella plan as context only
+- activate exactly one named slice
+- state the expected slice artifact explicitly, for example PRD, brief, or
+  implementation run
+- reuse the persistent Slice lane branch and worktree
+- treat every other slice as non-scope unless the umbrella plan is updated
+- pause for human review at the slice artifact checkpoint before broader
+  implementation
+
+Default wording to reuse in future prompts:
+
+> Use the umbrella plan at
+> `docs/plans/archon-paused-output-ux-parity_plan.md` as context only. Treat
+> `<Slice Name>` as the only active scope. Reuse branch
+> `archon/task-piv-paused-output-web-parity-v2` and worktree
+> `/Users/mase/.archon/worktrees/Personal-Projects/Archon/archon/task-piv-paused-output-web-parity-v2`.
+> Create or refine the slice-specific artifact first. Do not implement directly
+> from the umbrella plan. Keep all other slices out of scope. Pause for review
+> when the slice artifact is ready.
+
+Copy-paste session template:
+
+```text
+Use the umbrella plan at `docs/plans/archon-paused-output-ux-parity_plan.md`
+as context only.
+
+Treat `<Slice Name>` as the only active scope.
+
+Active slice artifact goal:
+- `<slice artifact to create or refine>`
+
+Operating rules:
+- reuse branch `archon/task-piv-paused-output-web-parity-v2`
+- reuse worktree `/Users/mase/.archon/worktrees/Personal-Projects/Archon/archon/task-piv-paused-output-web-parity-v2`
+- do not implement directly from the umbrella plan
+- keep all other slices out of scope
+- pause for human review when the slice artifact is ready
+
+If the active worktree cannot read the umbrella-plan file directly, use the
+named slice section from that plan as authoritative context and continue with
+the same scope limits.
+```
+
 ## Single Persistent Slice Lane
 
 Operator decision on 2026-04-20:
