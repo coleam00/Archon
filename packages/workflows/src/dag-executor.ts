@@ -17,6 +17,7 @@ import type {
 } from './deps';
 import type {
   AgentRequestOptions,
+  MessageChunk,
   SendQueryOptions,
   NodeConfig,
   ProviderCapabilities,
@@ -34,6 +35,7 @@ import type {
   NodeOutput,
   TriggerRule,
   WorkflowRun,
+  ApprovalContext,
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
@@ -49,6 +51,7 @@ import {
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
+import type { WorkflowEmitterEvent } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import {
@@ -94,8 +97,16 @@ interface WorkflowLevelOptions {
   additionalDirectories?: string[];
 }
 
+type ApprovalPauseSnapshot = Pick<
+  ApprovalContext,
+  'lastOutput' | 'lastOutputTruncated' | 'finalAssistantOutput' | 'finalAssistantOutputTruncated'
+>;
+
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
-type NodeExecutionResult = NodeOutput & { costUsd?: number };
+type NodeExecutionResult = NodeOutput & {
+  costUsd?: number;
+  approvalSnapshot?: ApprovalPauseSnapshot;
+};
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
@@ -116,18 +127,97 @@ const DEFAULT_NODE_MAX_RETRIES = 2;
 const MAX_APPROVAL_LAST_OUTPUT_CHARS = 8000;
 const APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX = '\n\n[truncated]';
 
-function toApprovalLastOutput(output: string | undefined): string | undefined {
+function toApprovalSnapshotText(
+  output: string | undefined
+): { text: string; truncated: boolean } | undefined {
   if (typeof output !== 'string') return undefined;
   const normalized = output.trim();
   if (normalized.length === 0) return undefined;
   if (normalized.length <= MAX_APPROVAL_LAST_OUTPUT_CHARS) {
-    return normalized;
+    return { text: normalized, truncated: false };
   }
   const keepLength = Math.max(
     0,
     MAX_APPROVAL_LAST_OUTPUT_CHARS - APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX.length
   );
-  return normalized.slice(0, keepLength) + APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX;
+  return {
+    text: normalized.slice(0, keepLength) + APPROVAL_LAST_OUTPUT_TRUNCATION_SUFFIX,
+    truncated: true,
+  };
+}
+
+function normalizeApprovalSnapshotChunk(chunk: MessageChunk): MessageChunk {
+  if (chunk.type !== 'assistant') {
+    return chunk;
+  }
+
+  return {
+    type: 'assistant',
+    content: stripCompletionTags(chunk.content),
+  };
+}
+
+function extractFinalAssistantOutput(chunks: readonly MessageChunk[]): string | undefined {
+  let currentAssistantSegment: string | undefined;
+  let latestAssistantSegment: string | undefined;
+
+  for (const chunk of chunks) {
+    if (chunk.type === 'assistant') {
+      currentAssistantSegment = (currentAssistantSegment ?? '') + chunk.content;
+      latestAssistantSegment = currentAssistantSegment;
+      continue;
+    }
+
+    currentAssistantSegment = undefined;
+    if (chunk.type === 'tool') {
+      latestAssistantSegment = undefined;
+    }
+  }
+
+  const normalized = latestAssistantSegment?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function buildApprovalPauseSnapshot(
+  chunks: readonly MessageChunk[],
+  lastOutputSource: string | undefined
+): ApprovalPauseSnapshot {
+  const lastOutput = toApprovalSnapshotText(lastOutputSource);
+  const finalAssistantOutput = toApprovalSnapshotText(extractFinalAssistantOutput(chunks));
+
+  return {
+    ...(lastOutput
+      ? {
+          lastOutput: lastOutput.text,
+          lastOutputTruncated: lastOutput.truncated,
+        }
+      : {}),
+    ...(finalAssistantOutput
+      ? {
+          finalAssistantOutput: finalAssistantOutput.text,
+          finalAssistantOutputTruncated: finalAssistantOutput.truncated,
+        }
+      : {}),
+  };
+}
+
+function hasApprovalPauseSnapshot(snapshot: ApprovalPauseSnapshot | undefined): boolean {
+  return snapshot?.lastOutput !== undefined || snapshot?.finalAssistantOutput !== undefined;
+}
+
+function emitApprovalPendingEvent(
+  runId: string,
+  nodeId: string,
+  message: string,
+  snapshot: ApprovalPauseSnapshot
+): void {
+  getWorkflowEventEmitter().emit({
+    type: 'approval_pending',
+    runId,
+    nodeId,
+    message,
+    ...snapshot,
+  } as WorkflowEmitterEvent);
 }
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
@@ -660,6 +750,7 @@ async function executeNodeInternal(
   let nodeNumTurns: number | undefined;
   let nodeModelUsage: Record<string, unknown> | undefined;
   const batchMessages: string[] = [];
+  const approvalSnapshotChunks: MessageChunk[] = [];
 
   // Create per-node abort controller for idle timeout cleanup
   const nodeAbortController = new AbortController();
@@ -687,6 +778,7 @@ async function executeNodeInternal(
         nodeAbortController.abort();
       }
     )) {
+      approvalSnapshotChunks.push(normalizeApprovalSnapshotChunk(msg));
       const tickNow = Date.now();
       const nodeKey = `${workflowRun.id}:${node.id}`;
 
@@ -1079,11 +1171,14 @@ async function executeNodeInternal(
     lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
     lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
 
+    const approvalSnapshot = buildApprovalPauseSnapshot(approvalSnapshotChunks, nodeOutputText);
+
     return {
       state: 'completed',
       output: nodeOutputText,
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
+      ...(hasApprovalPauseSnapshot(approvalSnapshot) ? { approvalSnapshot } : {}),
     };
   } catch (error) {
     const err = error as Error;
@@ -1834,6 +1929,7 @@ async function executeLoopNode(
     // Stream AI response for this iteration
     let fullOutput = ''; // raw, for signal detection
     let cleanOutput = ''; // stripped, for platform display
+    const approvalSnapshotChunks: MessageChunk[] = [];
     let iterationIdleTimedOut = false;
     const iterationAbortController = new AbortController();
 
@@ -1871,9 +1967,13 @@ async function executeLoopNode(
         );
         iterationAbortController.abort();
       })) {
+        const approvalSnapshotMsg = normalizeApprovalSnapshotChunk(msg);
+        approvalSnapshotChunks.push(approvalSnapshotMsg);
+
         if (msg.type === 'assistant') {
           fullOutput += msg.content;
-          const cleaned = stripCompletionTags(msg.content);
+          const cleaned =
+            approvalSnapshotMsg.type === 'assistant' ? approvalSnapshotMsg.content : '';
           cleanOutput += cleaned;
           if (platform.getStreamingMode() === 'stream' && cleaned) {
             await safeSendMessage(platform, conversationId, cleaned, msgContext);
@@ -2231,7 +2331,10 @@ async function executeLoopNode(
     // completion signal. The user reviews the AI's output and provides feedback or approval.
     // On approval, the AI will emit the signal in the next iteration, exiting above.
     if (loop.interactive && loop.gate_message) {
-      const approvalLastOutput = toApprovalLastOutput(lastIterationOutput);
+      const approvalSnapshot = buildApprovalPauseSnapshot(
+        approvalSnapshotChunks,
+        lastIterationOutput
+      );
       const gateMsg =
         `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${loop.gate_message}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
@@ -2269,7 +2372,7 @@ async function executeLoopNode(
       await deps.store.pauseWorkflowRun(workflowRun.id, {
         nodeId: node.id,
         message: loop.gate_message,
-        ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
+        ...approvalSnapshot,
         type: 'interactive_loop',
         iteration: i,
         sessionId: currentSessionId,
@@ -2277,13 +2380,7 @@ async function executeLoopNode(
           ? { completeOnUserInput: loop.complete_on_user_input }
           : {}),
       });
-      getWorkflowEventEmitter().emit({
-        type: 'approval_pending',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        message: loop.gate_message,
-        ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
-      });
+      emitApprovalPendingEvent(workflowRun.id, node.id, loop.gate_message, approvalSnapshot);
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
       // in multi-node workflows. Resume correctness relies on the 'paused' DB status, not
@@ -2333,7 +2430,7 @@ async function executeApprovalNode(
   issueContext?: string
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
-  let approvalLastOutput: string | undefined;
+  let approvalSnapshot: ApprovalPauseSnapshot | undefined;
 
   // Detect rejection resume — check metadata for rejection_reason set by reject handlers
   const rawApproval = workflowRun.metadata?.approval;
@@ -2434,7 +2531,7 @@ async function executeApprovalNode(
     if (output.state === 'failed') {
       return output;
     }
-    approvalLastOutput = toApprovalLastOutput(output.output);
+    approvalSnapshot = output.approvalSnapshot ?? buildApprovalPauseSnapshot([], output.output);
     // Fall through to re-pause at the approval gate
   }
 
@@ -2452,7 +2549,7 @@ async function executeApprovalNode(
       step_name: node.id,
       data: {
         message: node.approval.message,
-        ...(approvalLastOutput ? { last_output: approvalLastOutput } : {}),
+        ...(approvalSnapshot?.lastOutput ? { last_output: approvalSnapshot.lastOutput } : {}),
       },
     })
     .catch((err: Error) => {
@@ -2464,7 +2561,7 @@ async function executeApprovalNode(
 
   await deps.store.pauseWorkflowRun(workflowRun.id, {
     message: node.approval.message,
-    ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
+    ...(approvalSnapshot ?? {}),
     nodeId: node.id,
     type: 'approval',
     captureResponse: node.approval.capture_response,
@@ -2472,13 +2569,7 @@ async function executeApprovalNode(
     onRejectMaxAttempts: node.approval.on_reject?.max_attempts,
   });
 
-  getWorkflowEventEmitter().emit({
-    type: 'approval_pending',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    message: node.approval.message,
-    ...(approvalLastOutput ? { lastOutput: approvalLastOutput } : {}),
-  });
+  emitApprovalPendingEvent(workflowRun.id, node.id, node.approval.message, approvalSnapshot ?? {});
 
   // Return completed — the between-layer status check will see 'paused' and break.
   // On resume, the approve endpoint writes a real node_completed event with the user's response.
