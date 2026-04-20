@@ -45,6 +45,9 @@ e2e-screenshots/
 .archon/logs/
 .archon/artifacts/
 
+# Cross-run workflow state (e.g. issue-triage memory)
+.archon/state/
+
 # Agent artifacts (generated, local only)
 .agents/
 .agents/rca-reports/

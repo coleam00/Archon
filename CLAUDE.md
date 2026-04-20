@@ -565,6 +565,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 ├── commands/       # Custom commands
 ├── workflows/      # Workflow definitions (YAML files)
 ├── scripts/        # Named scripts for script: nodes (.ts/.js for bun, .py for uv)
+├── state/          # Cross-run workflow state (gitignored — never in git)
 └── config.yaml     # Repo-specific configuration
 ```
 
