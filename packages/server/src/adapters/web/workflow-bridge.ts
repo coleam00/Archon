@@ -152,6 +152,31 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         timestamp: Date.now(),
       });
 
+    case 'task_activity':
+      return JSON.stringify({
+        type: 'task_activity',
+        runId: event.runId,
+        nodeId: event.nodeId,
+        taskId: event.taskId,
+        status: event.status,
+        description: event.description,
+        summary: event.summary,
+        timestamp: Date.now(),
+      });
+
+    case 'hook_activity':
+      return JSON.stringify({
+        type: 'hook_activity',
+        runId: event.runId,
+        nodeId: event.nodeId,
+        hookId: event.hookId,
+        hookName: event.hookName,
+        hookEvent: event.hookEvent,
+        outcome: event.outcome,
+        exitCode: event.exitCode,
+        timestamp: Date.now(),
+      });
+
     default: {
       const exhaustiveCheck: never = event;
       getLog().warn(

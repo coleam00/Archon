@@ -155,6 +155,31 @@ export interface WorkflowOutputPreviewEvent extends BaseSSEEvent {
   lines: string[];
 }
 
+// SDK task lifecycle (subagent activity)
+export interface TaskActivityEvent extends BaseSSEEvent {
+  type: 'task_activity';
+  runId: string;
+  nodeId: string;
+  taskId: string;
+  /** 'started' | 'progress' | 'completed' | 'failed' | 'stopped' */
+  status: string;
+  description: string;
+  summary?: string;
+}
+
+// SDK hook lifecycle
+export interface HookActivityEvent extends BaseSSEEvent {
+  type: 'hook_activity';
+  runId: string;
+  nodeId: string;
+  hookId: string;
+  hookName: string;
+  hookEvent: string;
+  /** 'started' | 'success' | 'error' | 'cancelled' */
+  outcome: string;
+  exitCode?: number;
+}
+
 // Retract previously streamed text (workflow routing detected)
 export interface RetractEvent extends BaseSSEEvent {
   type: 'retract';
@@ -186,6 +211,8 @@ export type SSEEvent =
   | WorkflowArtifactEvent
   | WorkflowDispatchEvent
   | WorkflowOutputPreviewEvent
+  | TaskActivityEvent
+  | HookActivityEvent
   | RetractEvent
   | SystemStatusEvent;
 

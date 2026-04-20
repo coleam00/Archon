@@ -8,6 +8,8 @@ import type {
   WorkflowDispatchEvent,
   WorkflowOutputPreviewEvent,
   DagNodeEvent,
+  TaskActivityEvent,
+  HookActivityEvent,
 } from '@/lib/types';
 import { SSE_BASE_URL } from '@/lib/api';
 
@@ -41,6 +43,8 @@ interface SSEHandlers {
   onLoopIteration?: (event: LoopIterationEvent) => void;
   onWorkflowDispatch?: (event: WorkflowDispatchEvent) => void;
   onWorkflowOutputPreview?: (event: WorkflowOutputPreviewEvent) => void;
+  onTaskActivity?: (event: TaskActivityEvent) => void;
+  onHookActivity?: (event: HookActivityEvent) => void;
   onWarning?: (message: string) => void;
   onRetract?: () => void;
   onSystemStatus?: (content: string) => void;
@@ -207,6 +211,12 @@ export function useSSE(
             break;
           case 'workflow_output_preview':
             h.onWorkflowOutputPreview?.(data);
+            break;
+          case 'task_activity':
+            h.onTaskActivity?.(data);
+            break;
+          case 'hook_activity':
+            h.onHookActivity?.(data);
             break;
           case 'warning':
             h.onWarning?.(data.message);

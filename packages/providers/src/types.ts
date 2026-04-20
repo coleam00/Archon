@@ -110,7 +110,25 @@ export type MessageChunk =
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
     }
-  | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
+  | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string }
+  // ── SDK lifecycle events (task/hook observability) ──────────────────────
+  | { type: 'task_started'; taskId: string; description: string; taskType?: string }
+  | { type: 'task_progress'; taskId: string; description: string; summary?: string }
+  | {
+      type: 'task_notification';
+      taskId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+    }
+  | { type: 'hook_started'; hookId: string; hookName: string; hookEvent: string }
+  | {
+      type: 'hook_response';
+      hookId: string;
+      hookName: string;
+      hookEvent: string;
+      outcome: 'success' | 'error' | 'cancelled';
+      exitCode?: number;
+    };
 
 /**
  * Universal request options accepted by all providers.

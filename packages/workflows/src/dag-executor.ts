@@ -833,6 +833,56 @@ async function executeNodeInternal(
             'dag.system_message_unhandled'
           );
         }
+      } else if (msg.type === 'task_started') {
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          status: 'started',
+          description: msg.description,
+        });
+      } else if (msg.type === 'task_progress') {
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          status: 'progress',
+          description: msg.description,
+          ...(msg.summary ? { summary: msg.summary } : {}),
+        });
+      } else if (msg.type === 'task_notification') {
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          status: msg.status,
+          description: msg.summary,
+          summary: msg.summary,
+        });
+      } else if (msg.type === 'hook_started') {
+        getWorkflowEventEmitter().emit({
+          type: 'hook_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          hookId: msg.hookId,
+          hookName: msg.hookName,
+          hookEvent: msg.hookEvent,
+          outcome: 'started',
+        });
+      } else if (msg.type === 'hook_response') {
+        getWorkflowEventEmitter().emit({
+          type: 'hook_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          hookId: msg.hookId,
+          hookName: msg.hookName,
+          hookEvent: msg.hookEvent,
+          outcome: msg.outcome,
+          ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
+        });
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
     }

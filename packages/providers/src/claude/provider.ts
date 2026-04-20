@@ -605,6 +605,10 @@ async function applyNodeConfig(
     options.fallbackModel = nodeConfig.fallbackModel;
   }
 
+  // Enable agent progress summaries so task_progress events carry AI-generated summaries.
+  // This allows the Web UI to show meaningful subagent activity descriptions.
+  options.agentProgressSummaries = true;
+
   return warnings;
 }
 
@@ -828,6 +832,18 @@ async function* streamClaudeMessages(
       const sysMsg = msg as {
         subtype?: string;
         mcp_servers?: { name: string; status: string }[];
+        // task lifecycle
+        task_id?: string;
+        description?: string;
+        task_type?: string;
+        status?: string;
+        summary?: string;
+        // hook lifecycle
+        hook_id?: string;
+        hook_name?: string;
+        hook_event?: string;
+        outcome?: string;
+        exit_code?: number;
       };
       if (sysMsg.subtype === 'init' && sysMsg.mcp_servers) {
         const failed = sysMsg.mcp_servers.filter(s => s.status !== 'connected');
@@ -835,6 +851,43 @@ async function* streamClaudeMessages(
           const names = failed.map(s => `${s.name} (${s.status})`).join(', ');
           yield { type: 'system', content: `MCP server connection failed: ${names}` };
         }
+      } else if (sysMsg.subtype === 'task_started' && sysMsg.task_id) {
+        yield {
+          type: 'task_started',
+          taskId: sysMsg.task_id,
+          description: sysMsg.description ?? '',
+          ...(sysMsg.task_type ? { taskType: sysMsg.task_type } : {}),
+        };
+      } else if (sysMsg.subtype === 'task_progress' && sysMsg.task_id) {
+        yield {
+          type: 'task_progress',
+          taskId: sysMsg.task_id,
+          description: sysMsg.description ?? '',
+          ...(sysMsg.summary ? { summary: sysMsg.summary } : {}),
+        };
+      } else if (sysMsg.subtype === 'task_notification' && sysMsg.task_id) {
+        yield {
+          type: 'task_notification',
+          taskId: sysMsg.task_id,
+          status: (sysMsg.status ?? 'completed') as 'completed' | 'failed' | 'stopped',
+          summary: sysMsg.summary ?? '',
+        };
+      } else if (sysMsg.subtype === 'hook_started' && sysMsg.hook_id) {
+        yield {
+          type: 'hook_started',
+          hookId: sysMsg.hook_id,
+          hookName: sysMsg.hook_name ?? '',
+          hookEvent: sysMsg.hook_event ?? '',
+        };
+      } else if (sysMsg.subtype === 'hook_response' && sysMsg.hook_id) {
+        yield {
+          type: 'hook_response',
+          hookId: sysMsg.hook_id,
+          hookName: sysMsg.hook_name ?? '',
+          hookEvent: sysMsg.hook_event ?? '',
+          outcome: (sysMsg.outcome ?? 'success') as 'success' | 'error' | 'cancelled',
+          ...(sysMsg.exit_code !== undefined ? { exitCode: sysMsg.exit_code } : {}),
+        };
       } else {
         getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
       }

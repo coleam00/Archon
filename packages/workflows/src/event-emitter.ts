@@ -142,6 +142,32 @@ interface WorkflowCancelledEvent {
   reason: string;
 }
 
+/** Aggregated task lifecycle event (covers task_started / task_progress / task_notification). */
+interface TaskActivityEvent {
+  type: 'task_activity';
+  runId: string;
+  nodeId: string;
+  /** SDK task_id */
+  taskId: string;
+  /** 'started' | 'progress' | 'completed' | 'failed' | 'stopped' */
+  status: string;
+  description: string;
+  summary?: string;
+}
+
+/** Aggregated hook lifecycle event (covers hook_started / hook_response). */
+interface HookActivityEvent {
+  type: 'hook_activity';
+  runId: string;
+  nodeId: string;
+  hookId: string;
+  hookName: string;
+  hookEvent: string;
+  /** 'started' | 'success' | 'error' | 'cancelled' */
+  outcome: string;
+  exitCode?: number;
+}
+
 export type WorkflowEmitterEvent =
   | WorkflowStartedEvent
   | WorkflowCompletedEvent
@@ -157,7 +183,9 @@ export type WorkflowEmitterEvent =
   | ToolStartedEvent
   | ToolCompletedEvent
   | ApprovalPendingEvent
-  | WorkflowCancelledEvent;
+  | WorkflowCancelledEvent
+  | TaskActivityEvent
+  | HookActivityEvent;
 
 // ---------------------------------------------------------------------------
 // Emitter class
