@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
   name VARCHAR(255) NOT NULL,
   repository_url VARCHAR(500),
   default_cwd VARCHAR(500) NOT NULL,
+  default_branch VARCHAR(255) DEFAULT 'main',
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
   allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE,
   commands JSONB DEFAULT '{}'::jsonb,
@@ -312,3 +313,7 @@ ALTER TABLE remote_agent_sessions
 -- From migration 021: allow_env_keys on codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- From migration 022: default_branch on codebases
+ALTER TABLE remote_agent_codebases
+  ADD COLUMN IF NOT EXISTS default_branch VARCHAR(255) DEFAULT 'main';
