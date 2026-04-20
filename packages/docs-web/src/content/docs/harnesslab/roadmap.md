@@ -1,6 +1,6 @@
 ---
 title: 한글화 로드맵
-description: Archon 한국어 포크의 초기 작업 순서와 기준을 정리합니다.
+description: HarnessLab의 초기 작업 순서와 기준을 정리합니다.
 ---
 
 # 한글화 로드맵

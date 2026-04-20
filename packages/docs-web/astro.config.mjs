@@ -11,13 +11,13 @@ export default defineConfig({
   base,
   integrations: [
     starlight({
-      title: 'Archon 한국어 포크',
+      title: 'HarnessLab',
       favicon: '/favicon.png',
       logo: {
         src: './src/assets/logo.png',
-        alt: 'Archon 한국어 포크',
+        alt: 'HarnessLab',
       },
-      description: 'AI 코딩 워크플로 엔진 Archon을 한국어 학습, 운영, 연구용으로 재구성하는 포크입니다.',
+      description: 'HarnessLab is an Archon fork for studying, teaching, and building repeatable AI coding workflows.',
       head: [
         {
           tag: 'script',
@@ -38,8 +38,8 @@ export default defineConfig({
           autogenerate: { directory: 'getting-started' },
         },
         {
-          label: '한국어 포크',
-          autogenerate: { directory: 'korean-fork' },
+          label: 'HarnessLab',
+          autogenerate: { directory: 'harnesslab' },
         },
         {
           label: '가이드',
