@@ -134,6 +134,27 @@ function NodeCountsSummary({ counts }: { counts: NodeCounts }): React.ReactEleme
   );
 }
 
+interface PausedApprovalDetails {
+  message: string;
+  lastOutput?: string;
+}
+
+function parsePausedApproval(value: unknown): PausedApprovalDetails | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.message !== 'string') {
+    return null;
+  }
+
+  return {
+    message: candidate.message,
+    lastOutput: typeof candidate.lastOutput === 'string' ? candidate.lastOutput : undefined,
+  };
+}
+
 export function WorkflowRunCard({
   run,
   isDocker,
@@ -168,6 +189,10 @@ export function WorkflowRunCard({
       ? run.user_message
       : run.user_message.slice(0, 80) + '…'
     : null;
+  const approval = run.status === 'paused' ? parsePausedApproval(run.metadata?.approval) : null;
+  const latestOutput = approval?.lastOutput?.trim() ?? '';
+  const hasLatestOutput = latestOutput.length > 0;
+  const isLatestOutputClipped = approval?.lastOutput?.trimEnd().endsWith('[truncated]') ?? false;
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4 space-y-3">
@@ -253,16 +278,27 @@ export function WorkflowRunCard({
       )}
 
       {/* Approval request message */}
-      {run.status === 'paused' && run.metadata?.approval != null && (
-        <div className="rounded-md bg-warning/5 border border-warning/20 px-3 py-2 flex items-start gap-2">
-          <Pause className="h-4 w-4 text-warning shrink-0 mt-0.5" />
-          <p className="text-xs text-text-secondary">
-            {(
-              run.metadata.approval as {
-                message?: string;
-              }
-            )?.message ?? 'Waiting for approval'}
-          </p>
+      {run.status === 'paused' && (
+        <div className="space-y-2">
+          <div className="rounded-md bg-warning/5 border border-warning/20 px-3 py-2 flex items-start gap-2">
+            <Pause className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+            <p className="text-xs text-text-secondary">
+              {approval?.message ?? 'Waiting for approval'}
+            </p>
+          </div>
+          {hasLatestOutput && (
+            <div className="space-y-1">
+              <p className="text-[11px] font-medium text-text-secondary">Latest output</p>
+              {isLatestOutputClipped && (
+                <p className="text-[11px] text-warning">
+                  Output clipped; showing the latest available text.
+                </p>
+              )}
+              <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-surface-elevated px-3 py-2 text-xs text-text-secondary whitespace-pre-wrap break-words">
+                {latestOutput}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
