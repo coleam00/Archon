@@ -176,6 +176,29 @@ export interface RepoConfig {
      * @default true
      */
     initSubmodules?: boolean;
+
+    /**
+     * Per-project worktree directory (relative to repo root). When set,
+     * worktrees are created at `<repoRoot>/<path>/<branch>` instead of under
+     * `~/.archon/worktrees/` or the workspaces layout.
+     *
+     * Opt-in — co-locates worktrees with the repo so they appear in the IDE
+     * file tree. The user is responsible for adding the directory to their
+     * `.gitignore` (no automatic file mutation).
+     *
+     * Path resolution precedence (highest to lowest):
+     *   1. this `worktree.path` (repo-local)
+     *   2. global `paths.worktrees` (absolute override in `~/.archon/config.yaml`)
+     *   3. auto-detected project-scoped (`~/.archon/workspaces/owner/repo/...`)
+     *   4. default global (`~/.archon/worktrees/`)
+     *
+     * Must be a safe relative path: no leading `/`, no `..` segments. Absolute
+     * or escaping values fail loudly at worktree creation (Fail Fast — no silent
+     * fallback).
+     *
+     * @example '.worktrees'
+     */
+    path?: string;
   };
 
   /**

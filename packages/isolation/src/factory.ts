@@ -14,7 +14,7 @@ let configuredLoader: RepoConfigLoader = () => Promise.resolve(null);
 /**
  * Configure the isolation system with a repo config loader.
  * Must be called before getIsolationProvider() for full functionality.
- * If not called, WorktreeProvider uses a no-op loader (no custom baseBranch or copyFiles).
+ * If not called, WorktreeProvider uses a no-op loader (no custom baseBranch, copyFiles, or path).
  */
 export function configureIsolation(loader: RepoConfigLoader): void {
   configuredLoader = loader;

@@ -194,79 +194,78 @@ describe('git utilities', () => {
       }
     });
 
-    test('returns ~/.archon/worktrees by default for local (non-Docker)', () => {
+    test('returns workspace-scoped base for a local non-workspace repo (via path fallback)', () => {
+      // New-model invariant: every repo resolves to workspace-scoped. For a repo
+      // living outside ~/.archon/workspaces/, owner/repo is derived from the last
+      // two path segments (extractOwnerRepo) so the worktree base is still stable.
       delete process.env.WORKTREE_BASE;
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_HOME;
       delete process.env.ARCHON_DOCKER;
       const result = git.getWorktreeBase('/workspace/my-repo');
-      expect(result).toBe(join(homedir(), '.archon', 'worktrees'));
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', 'workspace', 'my-repo', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
     });
 
-    test('returns /.archon/worktrees for Docker environment', () => {
-      delete process.env.WORKTREE_BASE;
-      delete process.env.ARCHON_HOME;
-      process.env.WORKSPACE_PATH = '/workspace';
-      const result = git.getWorktreeBase('/workspace/my-repo');
-      expect(result).toBe(join('/', '.archon', 'worktrees'));
-    });
-
-    test('detects Docker by HOME=/root + WORKSPACE_PATH', () => {
-      delete process.env.WORKTREE_BASE;
-      delete process.env.ARCHON_HOME;
-      delete process.env.ARCHON_DOCKER;
-      process.env.HOME = '/root';
-      process.env.WORKSPACE_PATH = '/app/workspace';
-      const result = git.getWorktreeBase('/workspace/my-repo');
-      expect(result).toBe(join('/', '.archon', 'worktrees'));
-    });
-
-    test('uses ARCHON_HOME for local (non-Docker)', () => {
+    test('uses ARCHON_HOME for the workspace-scoped base (local non-Docker)', () => {
       delete process.env.WORKSPACE_PATH;
       delete process.env.WORKTREE_BASE;
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = '/custom/archon';
       const result = git.getWorktreeBase('/workspace/my-repo');
-      expect(result).toBe(join('/custom/archon', 'worktrees'));
+      expect(result).toEqual({
+        base: join('/custom/archon', 'workspaces', 'workspace', 'my-repo', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
     });
 
-    test('uses fixed path in Docker', () => {
+    test('uses the Docker archon home for the workspace-scoped base', () => {
       delete process.env.ARCHON_HOME;
       process.env.ARCHON_DOCKER = 'true';
       const result = git.getWorktreeBase('/workspace/my-repo');
-      expect(result).toBe(join('/', '.archon', 'worktrees'));
+      expect(result).toEqual({
+        base: join('/', '.archon', 'workspaces', 'workspace', 'my-repo', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
     });
 
-    test('returns project-scoped worktrees path when repo is under workspaces', () => {
+    test('returns workspace-scoped path when repo is already under workspaces/', () => {
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
       const workspacesPath = join(homedir(), '.archon', 'workspaces');
       const repoPath = join(workspacesPath, 'acme', 'widget', 'source');
       const result = git.getWorktreeBase(repoPath);
-      expect(result).toBe(join(workspacesPath, 'acme', 'widget', 'worktrees'));
+      expect(result).toEqual({
+        base: join(workspacesPath, 'acme', 'widget', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
     });
 
-    test('returns project-scoped path with ARCHON_HOME override', () => {
+    test('workspace-scoped path honors ARCHON_HOME override', () => {
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = join('/', 'custom', 'archon');
       const repoPath = join('/', 'custom', 'archon', 'workspaces', 'acme', 'widget', 'source');
       const result = git.getWorktreeBase(repoPath);
-      expect(result).toBe(
-        join('/', 'custom', 'archon', 'workspaces', 'acme', 'widget', 'worktrees')
-      );
+      expect(result).toEqual({
+        base: join('/', 'custom', 'archon', 'workspaces', 'acme', 'widget', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
     });
 
-    test('uses codebaseName to resolve project-scoped path for local repo', () => {
+    test('uses codebaseName to resolve workspace-scoped path for a local repo', () => {
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
       const localRepoPath = '/Users/rasmus/Projects/sasha-demo';
       const result = git.getWorktreeBase(localRepoPath, 'Widinglabs/sasha-demo');
-      expect(result).toBe(
-        join(homedir(), '.archon', 'workspaces', 'Widinglabs', 'sasha-demo', 'worktrees')
-      );
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', 'Widinglabs', 'sasha-demo', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
     });
 
     test('codebaseName takes priority over workspaces path detection', () => {
@@ -276,19 +275,52 @@ describe('git utilities', () => {
       const workspacesPath = join(homedir(), '.archon', 'workspaces');
       const repoPath = join(workspacesPath, 'old-owner', 'old-repo', 'source');
       const result = git.getWorktreeBase(repoPath, 'new-owner/new-repo');
-      expect(result).toBe(join(workspacesPath, 'new-owner', 'new-repo', 'worktrees'));
+      expect(result).toEqual({
+        base: join(workspacesPath, 'new-owner', 'new-repo', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
     });
 
-    test('ignores invalid codebaseName and falls back to path detection', () => {
+    test('ignores invalid codebaseName and falls back to path-derived owner/repo', () => {
+      // "invalid-no-slash" doesn't parse as owner/repo; the layout still resolves
+      // to workspace-scoped using the last two segments of the repoPath.
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
       const result = git.getWorktreeBase('/local/repo', 'invalid-no-slash');
-      expect(result).toBe(join(homedir(), '.archon', 'worktrees'));
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', 'local', 'repo', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
+    });
+
+    test('repoLocal override wins over workspace-scoped default', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const repoPath = '/Users/rasmus/Projects/myapp';
+      const result = git.getWorktreeBase(repoPath, undefined, { repoLocal: '.worktrees' });
+      expect(result).toEqual({
+        base: join(repoPath, '.worktrees'),
+        layout: 'repo-local',
+      });
+    });
+
+    test('repoLocal override wins even for repos under workspaces/', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const workspacesPath = join(homedir(), '.archon', 'workspaces');
+      const repoPath = join(workspacesPath, 'acme', 'widget', 'source');
+      const result = git.getWorktreeBase(repoPath, 'acme/widget', { repoLocal: '.wt' });
+      expect(result).toEqual({
+        base: join(repoPath, '.wt'),
+        layout: 'repo-local',
+      });
     });
   });
 
-  describe('isProjectScopedWorktreeBase', () => {
+  describe('isProjectScopedWorktreeBase (deprecated)', () => {
     const originalArchonHome = process.env.ARCHON_HOME;
     const originalWorkspacePath = process.env.WORKSPACE_PATH;
     const originalArchonDocker = process.env.ARCHON_DOCKER;
@@ -321,19 +353,14 @@ describe('git utilities', () => {
       ).toBe(true);
     });
 
-    test('returns false for path outside workspaces', () => {
+    test('returns true for a local non-workspace path (new two-layout model)', () => {
+      // In the pre-refactor three-layout model, this returned false (legacy global).
+      // Under the two-layout model every repo is workspace-scoped unless a
+      // `repoLocal` override is supplied, which this helper does not accept.
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
-      expect(git.isProjectScopedWorktreeBase('/workspace/my-repo')).toBe(false);
-    });
-
-    test('returns false for path under workspaces with only owner (no repo)', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_DOCKER;
-      delete process.env.ARCHON_HOME;
-      const workspacesPath = join(homedir(), '.archon', 'workspaces');
-      expect(git.isProjectScopedWorktreeBase(join(workspacesPath, 'acme'))).toBe(false);
+      expect(git.isProjectScopedWorktreeBase('/workspace/my-repo')).toBe(true);
     });
 
     test('returns true when codebaseName is provided (local repo)', () => {
@@ -345,11 +372,13 @@ describe('git utilities', () => {
       );
     });
 
-    test('returns false when codebaseName is invalid', () => {
+    test('returns true when codebaseName is invalid (falls back to path-derived)', () => {
+      // Under the two-layout model the helper always returns true for any resolvable
+      // owner/repo. Invalid codebaseName + valid repo path → still workspace-scoped.
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
       delete process.env.ARCHON_HOME;
-      expect(git.isProjectScopedWorktreeBase('/local/repo', 'invalid')).toBe(false);
+      expect(git.isProjectScopedWorktreeBase('/local/repo', 'invalid')).toBe(true);
     });
   });
 

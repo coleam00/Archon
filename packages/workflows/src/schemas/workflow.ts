@@ -23,6 +23,33 @@ export const webSearchModeSchema = z.enum(['disabled', 'cached', 'live']);
 export type WebSearchMode = z.infer<typeof webSearchModeSchema>;
 
 // ---------------------------------------------------------------------------
+// Workflow-level worktree policy
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-workflow worktree policy. Pins whether a run uses isolation regardless of
+ * how it was invoked (CLI flags, web UI, chat). When the field is omitted the
+ * caller's default applies — worktree for task/issue/pr, etc.
+ *
+ * Currently one field (`enabled`). Other worktree-shaped settings (copyFiles,
+ * initSubmodules, path, baseBranch) live in repo-level `.archon/config.yaml`
+ * because they are repo-wide, not per-workflow. This block is deliberately
+ * narrow to avoid re-expressing the repo-level knobs here.
+ */
+export const workflowWorktreePolicySchema = z.object({
+  /**
+   * Pin worktree isolation on or off for this workflow.
+   * - `true`  — always run inside a worktree; CLI `--no-worktree` hard-errors
+   * - `false` — always run in the live checkout; CLI `--branch` / `--from`
+   *             hard-error, orchestrator skips isolation resolution
+   * - omitted — caller decides (current default = worktree for most types)
+   */
+  enabled: z.boolean().optional(),
+});
+
+export type WorkflowWorktreePolicy = z.infer<typeof workflowWorktreePolicySchema>;
+
+// ---------------------------------------------------------------------------
 // WorkflowBase — common fields shared by all workflow types
 // ---------------------------------------------------------------------------
 
@@ -40,6 +67,7 @@ export const workflowBaseSchema = z.object({
   fallbackModel: z.string().min(1).optional(),
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
+  worktree: workflowWorktreePolicySchema.optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;

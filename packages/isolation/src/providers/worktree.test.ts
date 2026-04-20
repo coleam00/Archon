@@ -2463,6 +2463,93 @@ describe('WorktreeProvider', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Per-repo `worktree.path` override (co-located worktrees opt-in) — #1117 successor
+  // ---------------------------------------------------------------------------
+  describe('worktree.path repo-local override', () => {
+    const baseRequest: IsolationRequest = {
+      codebaseId: 'cb-local-1',
+      codebaseName: 'owner/myapp',
+      canonicalRepoPath: '/Users/dev/Projects/myapp',
+      workflowType: 'task',
+      identifier: 'add-feature',
+    };
+
+    test('uses <repoRoot>/<path>/<branch> when worktree.path is set', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const result = provider.getWorktreePath(baseRequest, branch, { path: '.worktrees' });
+      expect(result).toBe(join('/Users/dev/Projects/myapp', '.worktrees', branch));
+    });
+
+    test('empty / whitespace-only path is ignored and default layout applies', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const expectedDefault = join(
+        TEST_ARCHON_HOME,
+        'workspaces',
+        'owner',
+        'myapp',
+        'worktrees',
+        branch
+      );
+      expect(provider.getWorktreePath(baseRequest, branch, { path: '' })).toBe(expectedDefault);
+      expect(provider.getWorktreePath(baseRequest, branch, { path: '   ' })).toBe(expectedDefault);
+    });
+
+    test('null / undefined config falls back to workspace-scoped default', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const expected = join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'myapp', 'worktrees', branch);
+      expect(provider.getWorktreePath(baseRequest, branch, null)).toBe(expected);
+      expect(provider.getWorktreePath(baseRequest, branch, undefined)).toBe(expected);
+      expect(provider.getWorktreePath(baseRequest, branch)).toBe(expected);
+    });
+
+    test('override wins even when repo lives under ~/.archon/workspaces/', () => {
+      // Precedence contract: per-repo `worktree.path` is the highest layer.
+      // A repo that would normally land in workspaces/owner/repo/worktrees/
+      // still gets a repo-local worktree when the config opts in.
+      const request: IsolationRequest = {
+        codebaseId: 'cb-local-2',
+        codebaseName: 'owner/repo',
+        canonicalRepoPath: join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'repo'),
+        workflowType: 'task',
+        identifier: 'my-task',
+      };
+      const branch = provider.generateBranchName(request);
+      const result = provider.getWorktreePath(request, branch, { path: 'worktrees-local' });
+      expect(result).toBe(
+        join(TEST_ARCHON_HOME, 'workspaces', 'owner', 'repo', 'worktrees-local', branch)
+      );
+    });
+
+    test('rejects an absolute worktree.path with a clear error', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      expect(() =>
+        provider.getWorktreePath(baseRequest, branch, { path: '/tmp/worktrees' })
+      ).toThrow(/must be relative to the repo root/);
+    });
+
+    test('rejects a worktree.path that escapes the repo root via `..`', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      expect(() => provider.getWorktreePath(baseRequest, branch, { path: '../worktrees' })).toThrow(
+        /must stay within the repo/
+      );
+      expect(() => provider.getWorktreePath(baseRequest, branch, { path: '..' })).toThrow(
+        /must stay within the repo/
+      );
+      expect(() =>
+        provider.getWorktreePath(baseRequest, branch, { path: 'nested/../../escape' })
+      ).toThrow(/must stay within the repo/);
+    });
+
+    test('accepts a nested relative path without `..`', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const result = provider.getWorktreePath(baseRequest, branch, {
+        path: '.archon/worktrees',
+      });
+      expect(result).toBe(join('/Users/dev/Projects/myapp', '.archon/worktrees', branch));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Additional lifecycle method tests
   // ---------------------------------------------------------------------------
 
