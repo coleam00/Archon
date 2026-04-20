@@ -50,6 +50,9 @@ function getRuntimeForExtension(ext: string): ScriptRuntime | undefined {
  *
  * `1` matches the workflows/commands convention: allow one level of
  * grouping (e.g. `.archon/scripts/triage/foo.ts`) but no nested folders.
+ * We stop at 1 deliberately — deeper nesting has never been part of the
+ * documented convention and adds no organizational value, just routing
+ * ambiguity when two basenames collide across folders.
  */
 const MAX_SCRIPT_DISCOVERY_DEPTH = 1;
 

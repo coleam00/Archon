@@ -1318,7 +1318,42 @@ async function executeScriptNode(
     } else {
       // Named script — look up across repo and home scopes.
       // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
-      const scripts = await discoverScriptsForCwd(cwd);
+      // Wrap discovery in its own try/catch so a permission error on ~/.archon/scripts/
+      // isn't mis-attributed by the outer catch's "permission denied (check cwd
+      // permissions)" branch — that branch is for execFileAsync EACCES.
+      let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
+      try {
+        scripts = await discoverScriptsForCwd(cwd);
+      } catch (discoveryErr) {
+        const err = discoveryErr as Error;
+        const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
+        getLog().error({ err, nodeId: node.id, cwd }, 'script_discovery_failed');
+        await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
+        await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
+
+        emitter.emit({
+          type: 'node_failed',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          nodeName: node.id,
+          error: errorMsg,
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'node_failed',
+            step_name: node.id,
+            data: { error: errorMsg, type: 'script' },
+          })
+          .catch((dbErr: Error) => {
+            getLog().error(
+              { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+              'workflow_event_persist_failed'
+            );
+          });
+
+        return { state: 'failed', output: '', error: errorMsg };
+      }
       const scriptDef = scripts.get(finalScript);
 
       if (!scriptDef) {

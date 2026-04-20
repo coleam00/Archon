@@ -155,12 +155,17 @@ export async function discoverAvailableCommands(
     }
   }
 
-  // 2. Home-scoped commands (~/.archon/commands/) — personal helpers reusable across repos
-  const homeCommands = await findMarkdownFilesRecursive(getHomeCommandsPath(), '', {
-    maxDepth: 1,
-  });
-  for (const { commandName } of homeCommands) {
-    names.add(commandName);
+  // 2. Home-scoped commands (~/.archon/commands/) — personal helpers reusable across repos.
+  // ENOENT already returns []; we only catch other errors (EACCES/EPERM/EIO) so a broken
+  // home-scope doesn't take down repo/bundled discovery.
+  const homePath = getHomeCommandsPath();
+  try {
+    const homeCommands = await findMarkdownFilesRecursive(homePath, '', { maxDepth: 1 });
+    for (const { commandName } of homeCommands) {
+      names.add(commandName);
+    }
+  } catch (err) {
+    getLog().warn({ err, path: homePath }, 'commands.home_discovery_failed');
   }
 
   // 3. Bundled defaults
@@ -224,8 +229,14 @@ async function resolveCommand(
   }
 
   // 2. Home-scoped commands (~/.archon/commands/).
-  const homeResolved = await resolveCommandInDir(getHomeCommandsPath(), commandName);
-  if (homeResolved) return homeResolved;
+  // ENOENT on the home dir already returns null; only wrap for other errors so a
+  // broken home-scope doesn't prevent bundled-default resolution.
+  try {
+    const homeResolved = await resolveCommandInDir(getHomeCommandsPath(), commandName);
+    if (homeResolved) return homeResolved;
+  } catch (err) {
+    getLog().warn({ err, commandName }, 'commands.home_resolve_failed');
+  }
 
   // 3. Bundled defaults
   const loadDefaults = config?.loadDefaultCommands !== false;

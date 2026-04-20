@@ -14,6 +14,7 @@ import {
   getArchonConfigPath,
   getHomeWorkflowsPath,
   getHomeCommandsPath,
+  getHomeScriptsPath,
   getLegacyHomeWorkflowsPath,
   getCommandFolderSearchPaths,
   getWorkflowFolderSearchPaths,
@@ -269,6 +270,25 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = '/custom/archon';
       expect(getHomeCommandsPath()).toBe(join('/custom/archon', 'commands'));
+    });
+  });
+
+  describe('getHomeScriptsPath', () => {
+    test('returns ~/.archon/scripts by default', () => {
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getHomeScriptsPath()).toBe(join(homedir(), '.archon', 'scripts'));
+    });
+
+    test('returns /.archon/scripts in Docker', () => {
+      process.env.ARCHON_DOCKER = 'true';
+      expect(getHomeScriptsPath()).toBe(join('/', '.archon', 'scripts'));
+    });
+
+    test('uses ARCHON_HOME when set', () => {
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getHomeScriptsPath()).toBe(join('/custom/archon', 'scripts'));
     });
   });
 

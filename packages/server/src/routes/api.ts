@@ -2307,11 +2307,17 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
+      // maxDepth: 1 matches the executor's resolver (resolveCommand /
+      // loadCommandPrompt) — without this cap, the UI palette would surface
+      // commands buried in deep subfolders that the executor silently can't
+      // resolve at runtime.
+      const COMMAND_LIST_DEPTH = { maxDepth: 1 };
+
       // 2. If not binary build, also check filesystem defaults
       if (!isBinaryBuild()) {
         try {
           const defaultsPath = getDefaultCommandsPath();
-          const files = await findMarkdownFilesRecursive(defaultsPath);
+          const files = await findMarkdownFilesRecursive(defaultsPath, '', COMMAND_LIST_DEPTH);
           for (const { commandName } of files) {
             commandMap.set(commandName, 'bundled');
           }
@@ -2326,7 +2332,7 @@ export function registerApiRoutes(
       // 3. Home-scoped commands (~/.archon/commands/) override bundled
       try {
         const homeCommandsPath = getHomeCommandsPath();
-        const files = await findMarkdownFilesRecursive(homeCommandsPath);
+        const files = await findMarkdownFilesRecursive(homeCommandsPath, '', COMMAND_LIST_DEPTH);
         for (const { commandName } of files) {
           commandMap.set(commandName, 'global');
         }
@@ -2343,7 +2349,7 @@ export function registerApiRoutes(
         for (const folder of searchPaths) {
           const dirPath = join(workingDir, folder);
           try {
-            const files = await findMarkdownFilesRecursive(dirPath);
+            const files = await findMarkdownFilesRecursive(dirPath, '', COMMAND_LIST_DEPTH);
             for (const { commandName } of files) {
               commandMap.set(commandName, 'project');
             }

@@ -52,24 +52,25 @@ export function resetLegacyHomeWarningForTests(): void {
 
 async function maybeWarnLegacyHomePath(): Promise<void> {
   if (hasWarnedLegacyHomePath) return;
+  // Set the flag eagerly so concurrent discovery calls (e.g. parallel codebase
+  // resolution at server startup) can't both pass the guard and double-warn.
+  hasWarnedLegacyHomePath = true;
+
   const legacyPath = archonPaths.getLegacyHomeWorkflowsPath();
   const newPath = archonPaths.getHomeWorkflowsPath();
   try {
     await access(legacyPath);
   } catch (error) {
-    // ENOENT is the happy path — the legacy location isn't in use.
     const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      hasWarnedLegacyHomePath = true; // no work to do on subsequent calls
-      return;
-    }
-    getLog().debug({ err, legacyPath }, 'workflow.legacy_home_path_probe_error');
+    if (err.code === 'ENOENT') return; // happy path — legacy location not in use
+    // EACCES/EPERM/EIO: directory exists but we can't read it. Surface at WARN
+    // so the user sees it — silent debug would hide a real permission issue.
+    getLog().warn({ err, legacyPath }, 'workflow.legacy_home_path_probe_error');
     return;
   }
   // Legacy directory exists — surface an actionable migration hint exactly once.
   const moveCommand = `mv "${legacyPath}" "${newPath}" && rmdir "${join(archonPaths.getArchonHome(), '.archon')}"`;
   getLog().warn({ legacyPath, newPath, moveCommand }, 'workflow.legacy_home_path_detected');
-  hasWarnedLegacyHomePath = true;
 }
 
 interface DirLoadResult {
@@ -80,8 +81,8 @@ interface DirLoadResult {
 /**
  * Maximum subfolder depth we descend into when discovering workflows/commands/scripts.
  *
- * `0` = only files at the root. `1` = allow one level of grouping (e.g.
- * `.archon/workflows/defaults/foo.yaml`). We stop at 1 deliberately — deeper
+ * `1` allows one level of grouping (e.g. `.archon/workflows/defaults/foo.yaml`);
+ * `0` would mean only files at the root. We stop at 1 deliberately — deeper
  * nesting has never been part of the documented convention and adds no
  * organizational value, just routing ambiguity.
  */
