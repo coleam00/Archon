@@ -1,6 +1,7 @@
 import { AlertCircle } from 'lucide-react';
 import type { ErrorDisplay } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { errorActionLabel, t } from '@/lib/i18n';
 
 interface ErrorCardProps {
   error: ErrorDisplay;
@@ -23,7 +24,9 @@ export function ErrorCard({ error, onRetry }: ErrorCardProps): React.ReactElemen
                   : 'bg-error/20 text-error'
               )}
             >
-              {error.classification === 'transient' ? 'Transient' : 'Fatal'}
+              {error.classification === 'transient'
+                ? t('chat.errorTransient')
+                : t('chat.errorFatal')}
             </span>
           </div>
           {error.suggestedActions.length > 0 && (
@@ -34,7 +37,7 @@ export function ErrorCard({ error, onRetry }: ErrorCardProps): React.ReactElemen
                   onClick={action === 'Retry' ? onRetry : undefined}
                   className="text-xs text-text-secondary hover:text-text-primary"
                 >
-                  {action}
+                  {errorActionLabel(action)}
                 </button>
               ))}
             </div>
@@ -44,7 +47,7 @@ export function ErrorCard({ error, onRetry }: ErrorCardProps): React.ReactElemen
               onClick={onRetry}
               className="mt-2 text-xs text-text-secondary hover:text-text-primary"
             >
-              Retry
+              {t('common.retry')}
             </button>
           )}
         </div>

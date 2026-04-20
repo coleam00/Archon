@@ -12,6 +12,7 @@ import { AllConversationsView } from '@/components/sidebar/AllConversationsView'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useProject } from '@/contexts/ProjectContext';
 import { addCodebase, getCodebaseInput } from '@/lib/api';
+import { t } from '@/lib/i18n';
 
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 400;
@@ -175,10 +176,8 @@ export function Sidebar(): React.ReactElement {
       {/* Logo */}
       <div className="flex flex-col gap-3 p-4">
         <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
-            <span className="text-sm font-semibold text-primary-foreground">A</span>
-          </div>
-          <span className="text-base font-semibold text-text-primary">Archon</span>
+          <img src="/favicon.png" alt="" className="h-8 w-8 shrink-0 object-contain" />
+          <span className="text-base font-semibold text-text-primary">HarnessLab</span>
         </Link>
       </div>
 
@@ -189,7 +188,7 @@ export function Sidebar(): React.ReactElement {
         <SearchBar
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Search..."
+          placeholder={t('sidebar.search')}
           inputRef={searchInputRef}
         />
       </div>
@@ -201,7 +200,7 @@ export function Sidebar(): React.ReactElement {
           className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium text-text-secondary hover:bg-surface-elevated hover:text-text-primary transition-colors"
         >
           <MessageSquarePlus className="h-4 w-4 shrink-0" />
-          New Chat
+          {t('sidebar.newChat')}
         </button>
       </div>
 
@@ -211,7 +210,7 @@ export function Sidebar(): React.ReactElement {
       <div className="px-2 py-2">
         <div className="flex items-center justify-between px-1">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-            Projects
+            {t('sidebar.projects')}
           </span>
           <button
             onClick={(): void => {
@@ -220,7 +219,7 @@ export function Sidebar(): React.ReactElement {
               setAddValue('');
             }}
             className="p-1 rounded hover:bg-surface-elevated transition-colors"
-            title="Add project"
+            title={t('sidebar.addProject')}
           >
             <Plus className="h-4 w-4 text-text-tertiary hover:text-primary" />
           </button>
@@ -242,7 +241,7 @@ export function Sidebar(): React.ReactElement {
                     setShowAddInput(false);
                   }
                 }}
-                placeholder="GitHub URL or local path"
+                placeholder={t('sidebar.projectInputPlaceholder')}
                 disabled={addLoading}
                 className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:opacity-50"
               />
@@ -256,7 +255,9 @@ export function Sidebar(): React.ReactElement {
           {selectedProjectId && !projectsExpanded ? (
             <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 mt-1 text-left text-sm text-primary hover:bg-surface-elevated transition-colors">
               <FolderGit2 className="h-4 w-4 shrink-0" />
-              <span className="truncate flex-1">{selectedProject?.name ?? 'Project'}</span>
+              <span className="truncate flex-1">
+                {selectedProject?.name ?? t('common.project')}
+              </span>
               <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
             </CollapsibleTrigger>
           ) : (
@@ -287,7 +288,7 @@ export function Sidebar(): React.ReactElement {
           </div>
         )}
         {isErrorCodebases && (
-          <p className="px-2 text-[10px] text-error mt-1">Failed to load projects — retrying</p>
+          <p className="px-2 text-[10px] text-error mt-1">{t('sidebar.loadProjectsFailed')}</p>
         )}
       </div>
 

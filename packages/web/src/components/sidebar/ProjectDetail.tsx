@@ -6,6 +6,7 @@ import type { WorkflowRunResponse, IsolationEnvironment } from '@/lib/api';
 import { ConversationItem } from '@/components/conversations/ConversationItem';
 import { WorkflowInvoker } from '@/components/sidebar/WorkflowInvoker';
 import { formatDuration } from '@/lib/format';
+import { t, workflowStatusLabel } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 interface ProjectDetailProps {
@@ -26,7 +27,7 @@ function RunStatusBadge({ status }: { status: string }): React.ReactElement {
         status === 'cancelled' && 'bg-surface-elevated text-text-secondary'
       )}
     >
-      {status}
+      {workflowStatusLabel(status)}
     </span>
   );
 }
@@ -117,7 +118,7 @@ export function ProjectDetail({
         onClick={handleNewChat}
         className="mx-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
       >
-        New Chat
+        {t('chat.newChat')}
       </button>
 
       <WorkflowInvoker codebaseId={codebaseId} />
@@ -125,11 +126,11 @@ export function ProjectDetail({
       {/* Conversations section */}
       <div>
         <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-          Conversations
+          {t('chat.conversations')}
         </span>
         <div className="mt-1 flex flex-col gap-0.5">
           {isErrorConversations ? (
-            <span className="px-1 text-xs text-error">Failed to load — retrying</span>
+            <span className="px-1 text-xs text-error">{t('common.failedToLoadRetrying')}</span>
           ) : filteredConversations && filteredConversations.length > 0 ? (
             filteredConversations.map(conv => (
               <ConversationItem
@@ -139,7 +140,7 @@ export function ProjectDetail({
               />
             ))
           ) : (
-            <span className="px-1 text-xs text-text-tertiary">No conversations</span>
+            <span className="px-1 text-xs text-text-tertiary">{t('chat.noConversations')}</span>
           )}
         </div>
       </div>
@@ -147,11 +148,11 @@ export function ProjectDetail({
       {/* Workflow runs section */}
       <div>
         <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-          Workflow Runs
+          {t('chat.workflowRuns')}
         </span>
         <div className="mt-1 flex flex-col gap-0.5">
           {isErrorRuns ? (
-            <span className="px-1 text-xs text-error">Failed to load — retrying</span>
+            <span className="px-1 text-xs text-error">{t('common.failedToLoadRetrying')}</span>
           ) : sortedRuns && sortedRuns.length > 0 ? (
             sortedRuns.map(run => (
               <button
@@ -169,7 +170,7 @@ export function ProjectDetail({
               </button>
             ))
           ) : (
-            <span className="px-1 text-xs text-text-tertiary">No workflow runs</span>
+            <span className="px-1 text-xs text-text-tertiary">{t('chat.noWorkflowRuns')}</span>
           )}
         </div>
       </div>
@@ -178,11 +179,12 @@ export function ProjectDetail({
       {(isErrorEnvironments || activeEnvironments.length > 0) && (
         <div>
           <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-            Active Worktrees{!isErrorEnvironments && ` (${String(activeEnvironments.length)})`}
+            {t('chat.activeWorktrees')}
+            {!isErrorEnvironments && ` (${String(activeEnvironments.length)})`}
           </span>
           <div className="mt-1 flex flex-col gap-0.5">
             {isErrorEnvironments ? (
-              <span className="px-1 text-xs text-error">Failed to load — retrying</span>
+              <span className="px-1 text-xs text-error">{t('common.failedToLoadRetrying')}</span>
             ) : (
               activeEnvironments.map((env: IsolationEnvironment) => (
                 <div
@@ -194,8 +196,8 @@ export function ProjectDetail({
                   </span>
                   <span className="shrink-0 text-[10px] text-text-tertiary">
                     {env.days_since_activity === 0
-                      ? 'today'
-                      : `${String(env.days_since_activity)}d ago`}
+                      ? t('common.today')
+                      : `${String(env.days_since_activity)}${t('common.daysAgo')}`}
                   </span>
                 </div>
               ))

@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { ArrowUp, Loader2, Paperclip, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { t } from '@/lib/i18n';
 
 /** Binary (non-text) MIME types explicitly accepted */
 const ACCEPTED_BINARY_MIME_TYPES = new Set([
@@ -145,15 +146,15 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
       const rejections: string[] = [];
       for (const file of incoming) {
         if (combined.length >= MAX_FILES) {
-          rejections.push(`Maximum ${String(MAX_FILES)} files per message`);
+          rejections.push(t('chat.maxFilesPerMessage'));
           break;
         }
         if (file.size > MAX_FILE_BYTES) {
-          rejections.push(`"${file.name}" exceeds the 10 MB size limit`);
+          rejections.push(`"${file.name}" ${t('chat.fileSizeLimit')}`);
           continue;
         }
         if (!isAcceptedFileType(file)) {
-          rejections.push(`"${file.name}" is not a supported file type`);
+          rejections.push(`"${file.name}" ${t('chat.unsupportedFileType')}`);
           continue;
         }
         combined.push({ file, id: crypto.randomUUID() });
@@ -267,7 +268,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
                     removeFile(id);
                   }}
                   className="ml-1 text-text-tertiary hover:text-text-primary"
-                  aria-label={`Remove ${file.name}`}
+                  aria-label={`${t('chat.removeFile')}: ${file.name}`}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -300,7 +301,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             disabled={disabled || files.length >= MAX_FILES}
             onClick={() => fileInputRef.current?.click()}
             className="h-10 w-10 shrink-0 text-text-tertiary hover:text-text-primary"
-            title="Attach file"
+            title={t('chat.attachFile')}
           >
             <Paperclip className="h-4 w-4" />
           </Button>
@@ -312,7 +313,9 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             disabled={disabled}
-            placeholder={dragging ? 'Drop files here...' : (disabledReason ?? 'Message Archon...')}
+            placeholder={
+              dragging ? t('chat.dropFiles') : (disabledReason ?? t('chat.messagePlaceholder'))
+            }
             rows={1}
             className="flex-1 resize-none overflow-hidden rounded-lg border border-border bg-background px-4 py-2 text-sm leading-6 text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             style={{ minHeight: '40px', maxHeight: '200px' }}

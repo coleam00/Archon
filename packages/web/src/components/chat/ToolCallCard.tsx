@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ChevronRight, Loader2, Terminal } from 'lucide-react';
 import type { ToolCallDisplay } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 interface ToolCallCardProps {
   tool: ToolCallDisplay;
@@ -83,7 +84,7 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
           {Object.keys(tool.input).length > 0 && (
             <div className="mb-2">
               <span className="text-[10px] font-medium uppercase tracking-wider text-text-tertiary">
-                Input
+                {t('common.input')}
               </span>
               <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-xs text-text-secondary">
                 {JSON.stringify(tool.input, null, 2)}
@@ -93,10 +94,10 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
           {tool.output !== undefined && (
             <div>
               <span className="text-[10px] font-medium uppercase tracking-wider text-text-tertiary">
-                Output
+                {t('common.output')}
               </span>
               <pre className="mt-1 max-h-80 overflow-auto rounded-md bg-background p-2 font-mono text-xs text-text-secondary">
-                {displayOutput || '(no output)'}
+                {displayOutput || t('common.noOutput')}
               </pre>
               {isLongOutput && !showAllOutput && (
                 <button
@@ -105,7 +106,8 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
                   }}
                   className="mt-1 text-xs text-text-secondary hover:text-text-primary"
                 >
-                  Show {String(outputLines.length - 20)} more lines
+                  {String(outputLines.length - 20)}
+                  {t('chat.showMoreLines')}
                 </button>
               )}
             </div>

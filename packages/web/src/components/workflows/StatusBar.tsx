@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 interface StatusBarProps {
   nodeCount: number;
@@ -49,13 +50,23 @@ export function StatusBar({
               >
                 <polyline points="20 6 9 17 4 12" />
               </svg>
-              <span>Valid</span>
+              <span>{t('status.valid')}</span>
             </>
           ) : (
             <>
-              {errorCount > 0 && <span className="text-error">{errorCount} errors</span>}
+              {errorCount > 0 && (
+                <span className="text-error">
+                  {errorCount}
+                  {t('status.errors')}
+                </span>
+              )}
               {errorCount > 0 && warningCount > 0 && <span>,</span>}
-              {warningCount > 0 && <span className="text-warning">{warningCount} warnings</span>}
+              {warningCount > 0 && (
+                <span className="text-warning">
+                  {warningCount}
+                  {t('status.warnings')}
+                </span>
+              )}
             </>
           )}
         </button>
@@ -65,7 +76,9 @@ export function StatusBar({
 
         {/* Node/edge count */}
         <span>
-          {nodeCount} nodes &middot; {edgeCount} edges
+          {nodeCount}
+          {t('status.nodes')} &middot; {edgeCount}
+          {t('status.edges')}
         </span>
       </div>
 
@@ -75,7 +88,7 @@ export function StatusBar({
         {hasUnsavedChanges && (
           <span className="flex items-center gap-1 text-warning">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-warning" />
-            Unsaved
+            {t('status.unsaved')}
           </span>
         )}
 

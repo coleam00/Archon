@@ -3,6 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { categorizeCommands } from '@/lib/command-categories';
 import type { CommandEntry } from '@/lib/api';
+import { commandCategoryLabel, t } from '@/lib/i18n';
 
 interface NodeLibraryProps {
   commands: CommandEntry[];
@@ -111,7 +112,7 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
       {/* Header */}
       <div className="px-3 py-2 border-b border-border">
         <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-2">
-          Node Library
+          {t('nodeLibrary.title')}
         </h3>
         <input
           type="text"
@@ -119,7 +120,7 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
           onChange={(e): void => {
             setSearch(e.target.value);
           }}
-          placeholder="Search..."
+          placeholder={t('nodeLibrary.search')}
           className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent"
         />
       </div>
@@ -131,9 +132,9 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
           <div className="flex flex-col gap-2 p-2">
             {/* Quick Nodes */}
             {showQuickNodes && (
-              <CollapsibleSection title="Quick Nodes" count={2} defaultOpen>
-                <DraggableItem type="prompt" name="Prompt" displayName="Prompt" />
-                <DraggableItem type="bash" name="Shell" displayName="Bash" />
+              <CollapsibleSection title={t('nodeLibrary.quickNodes')} count={2} defaultOpen>
+                <DraggableItem type="prompt" name="Prompt" displayName={t('nodeLibrary.prompt')} />
+                <DraggableItem type="bash" name="Shell" displayName={t('nodeLibrary.bash')} />
               </CollapsibleSection>
             )}
 
@@ -141,7 +142,7 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
             {filteredCategories.map(category => (
               <CollapsibleSection
                 key={category.name}
-                title={category.name}
+                title={commandCategoryLabel(category.name)}
                 count={category.commands.length}
                 defaultOpen={category.name === 'Project'}
               >
@@ -157,7 +158,9 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
             ))}
 
             {filteredCategories.length === 0 && !showQuickNodes && (
-              <p className="text-xs text-text-tertiary px-2 py-4 text-center">No matching nodes</p>
+              <p className="text-xs text-text-tertiary px-2 py-4 text-center">
+                {t('nodeLibrary.noMatchingNodes')}
+              </p>
             )}
           </div>
         </ScrollArea>

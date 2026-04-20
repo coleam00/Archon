@@ -16,6 +16,7 @@ import {
 } from '@/lib/api';
 import type { CommandEntry } from '@/lib/api';
 import { dagNodesToReactFlow } from '@/lib/dag-layout';
+import { t } from '@/lib/i18n';
 import { useBuilderKeyboard } from '@/hooks/useBuilderKeyboard';
 import { useBuilderUndo } from '@/hooks/useBuilderUndo';
 import { useBuilderValidation } from '@/hooks/useBuilderValidation';
@@ -105,10 +106,10 @@ function NodeLibraryPanel({
       <div
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize node library panel"
+        aria-label={t('builder.resizeNodeLibrary')}
         onMouseDown={onMouseDown}
         className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-accent/40 transition-colors z-10"
-        title="Drag to resize"
+        title={t('builder.dragToResize')}
       />
     </div>
   );
@@ -207,7 +208,7 @@ function WorkflowBuilderInner(): React.ReactElement {
           cwd,
           error,
         });
-        setValidationErrors([`Failed to load workflow: ${error.message}`]);
+        setValidationErrors([`${t('builder.loadWorkflowFailedPrefix')} ${error.message}`]);
       }
     },
     [cwd, setNodes, setEdges]
@@ -253,35 +254,35 @@ function WorkflowBuilderInner(): React.ReactElement {
       if (result.valid) {
         setValidationErrors([]);
       } else {
-        setValidationErrors(result.errors ?? ['Unknown validation error']);
+        setValidationErrors(result.errors ?? [t('builder.unknownValidationError')]);
       }
       setValidationPanelOpen(true);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error('Unknown error');
+      const error = err instanceof Error ? err : new Error(t('execution.unknownError'));
       console.error('[workflow-builder] workflow.validate_failed', { workflowName, error });
-      setValidationErrors([`Validation request failed: ${error.message}`]);
+      setValidationErrors([`${t('builder.validationRequestFailedPrefix')} ${error.message}`]);
     }
   }, [buildDefinition]);
 
   const handleSave = useCallback(async (): Promise<void> => {
     if (!workflowName.trim()) {
-      setValidationErrors(['Workflow name is required']);
+      setValidationErrors([t('builder.workflowNameRequired')]);
       return;
     }
     try {
       const def = buildDefinition();
       const validation = await validateWorkflow(def);
       if (!validation.valid) {
-        setValidationErrors(validation.errors ?? ['Workflow is invalid']);
+        setValidationErrors(validation.errors ?? [t('builder.workflowInvalid')]);
         return;
       }
       setValidationErrors([]);
       await saveWorkflow(workflowName.trim(), def, cwd);
       setHasUnsavedChanges(false);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error('Unknown error');
+      const error = err instanceof Error ? err : new Error(t('execution.unknownError'));
       console.error('[workflow-builder] workflow.save_failed', { workflowName, cwd, error });
-      setValidationErrors([`Save failed: ${error.message}`]);
+      setValidationErrors([`${t('builder.saveFailedPrefix')} ${error.message}`]);
       setValidationPanelOpen(true);
     }
   }, [buildDefinition, workflowName, cwd]);
@@ -294,9 +295,9 @@ function WorkflowBuilderInner(): React.ReactElement {
       await runWorkflow(workflowName.trim(), conversationId, '');
       navigate(`/chat/${conversationId}`);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error('Unknown error');
+      const error = err instanceof Error ? err : new Error(t('execution.unknownError'));
       console.error('[workflow-builder] workflow.run_failed', { workflowName, error });
-      setValidationErrors([`Run failed: ${error.message}`]);
+      setValidationErrors([`${t('builder.runFailedPrefix')} ${error.message}`]);
       setValidationPanelOpen(true);
     }
   }, [workflowName, hasUnsavedChanges, selectedProjectId, navigate]);
@@ -459,7 +460,7 @@ function WorkflowBuilderInner(): React.ReactElement {
 
       {commandsError && (
         <div className="px-4 py-1.5 text-xs text-error bg-surface-inset border-b border-border">
-          Failed to load commands. Command palette and dropdowns may be empty.
+          {t('builder.commandLoadFailed')}
         </div>
       )}
 

@@ -4,6 +4,7 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ConversationResponse } from '@/lib/api';
 import { deleteConversation, updateConversation } from '@/lib/api';
+import { platformLabel, t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
   AlertDialog,
@@ -43,20 +44,20 @@ export function ConversationItem({
     ? conversation.title.length > 30
       ? conversation.title.slice(0, 30) + '...'
       : conversation.title
-    : 'Untitled conversation';
+    : t('chat.untitledConversation');
 
   const lastActivity = conversation.last_activity_at
     ? new Date(
         conversation.last_activity_at.endsWith('Z')
           ? conversation.last_activity_at
           : conversation.last_activity_at + 'Z'
-      ).toLocaleString(undefined, {
+      ).toLocaleString('ko-KR', {
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit',
       })
-    : 'No activity';
+    : t('chat.noActivity');
 
   const handleDelete = useCallback((): void => {
     setDeleteError(null);
@@ -69,7 +70,7 @@ export function ConversationItem({
         }
       })
       .catch((err: unknown) => {
-        setDeleteError(err instanceof Error ? err.message : 'Failed to delete conversation');
+        setDeleteError(err instanceof Error ? err.message : t('chat.deleteConversationFailed'));
         setDeleteDialogOpen(true);
       });
   }, [conversation.platform_conversation_id, queryClient, navigate, params.conversationId]);
@@ -83,7 +84,7 @@ export function ConversationItem({
           void queryClient.invalidateQueries({ queryKey: ['conversations'] });
         })
         .catch((err: unknown) => {
-          setRenameError(err instanceof Error ? err.message : 'Failed to rename conversation');
+          setRenameError(err instanceof Error ? err.message : t('chat.renameConversationFailed'));
           setIsEditing(true);
         });
     } else {
@@ -145,13 +146,13 @@ export function ConversationItem({
           <div className="flex items-center gap-1.5 min-w-0">
             <span
               className="truncate text-sm text-text-primary"
-              title={conversation.title ?? 'Untitled conversation'}
+              title={conversation.title ?? t('chat.untitledConversation')}
             >
               {displayName}
             </span>
             {conversation.platform_type !== 'web' && (
               <span className="text-[10px] font-medium uppercase tracking-wider text-text-tertiary bg-surface-secondary rounded px-1 py-0.5 shrink-0">
-                {conversation.platform_type}
+                {platformLabel(conversation.platform_type)}
               </span>
             )}
           </div>
@@ -178,7 +179,7 @@ export function ConversationItem({
                 }, 0);
               }}
               className="p-1 rounded hover:bg-surface-elevated"
-              title="Rename conversation"
+              title={t('chat.renameConversation')}
             >
               <Pencil className="h-3.5 w-3.5 text-text-tertiary hover:text-primary" />
             </button>
@@ -190,7 +191,7 @@ export function ConversationItem({
                 setDeleteDialogOpen(true);
               }}
               className="p-1 rounded hover:bg-surface-elevated"
-              title="Delete conversation"
+              title={t('chat.deleteConversation')}
             >
               <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-error" />
             </button>
@@ -198,16 +199,15 @@ export function ConversationItem({
           <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete conversation?</AlertDialogTitle>
+                <AlertDialogTitle>{t('chat.deleteConversationTitle')}</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will permanently delete this conversation and its messages. This action
-                  cannot be undone.
+                  {t('chat.deleteConversationDescription')}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               {deleteError && <p className="text-sm text-error px-1">{deleteError}</p>}
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
+                <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+                <AlertDialogAction onClick={handleDelete}>{t('common.delete')}</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

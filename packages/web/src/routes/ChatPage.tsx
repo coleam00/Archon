@@ -10,6 +10,7 @@ import { useProject } from '@/contexts/ProjectContext';
 import { listConversations, listWorkflowRuns, addCodebase, getCodebaseInput } from '@/lib/api';
 import type { CodebaseResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 const PANEL_MIN = 220;
 const PANEL_MAX = 420;
@@ -189,7 +190,7 @@ export function ChatPage(): React.ReactElement {
             className="flex w-full items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
           >
             <MessageSquarePlus className="h-4 w-4 shrink-0" />
-            New Chat
+            {t('chat.newChat')}
           </button>
         </div>
 
@@ -197,7 +198,7 @@ export function ChatPage(): React.ReactElement {
         <div className="px-3 pb-2">
           <div className="flex items-center justify-between mb-1">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-              Project
+              {t('chat.project')}
             </span>
             <button
               onClick={(): void => {
@@ -206,7 +207,7 @@ export function ChatPage(): React.ReactElement {
                 setAddValue('');
               }}
               className="p-1 rounded hover:bg-surface-elevated transition-colors"
-              title="Add project"
+              title={t('sidebar.addProject')}
             >
               <Plus className="h-3.5 w-3.5 text-text-tertiary hover:text-primary" />
             </button>
@@ -227,7 +228,7 @@ export function ChatPage(): React.ReactElement {
                       setShowAddInput(false);
                     }
                   }}
-                  placeholder="GitHub URL or local path"
+                  placeholder={t('sidebar.projectInputPlaceholder')}
                   disabled={addLoading}
                   className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:opacity-50"
                 />
@@ -241,7 +242,7 @@ export function ChatPage(): React.ReactElement {
 
           {isLoadingCodebases ? (
             <div className="flex items-center justify-center py-2">
-              <span className="text-xs text-text-tertiary">Loading...</span>
+              <span className="text-xs text-text-tertiary">{t('common.loading')}</span>
             </div>
           ) : (
             <select
@@ -251,7 +252,7 @@ export function ChatPage(): React.ReactElement {
               }}
               className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-xs text-text-primary focus:border-primary focus:outline-none"
             >
-              <option value="">All Projects</option>
+              <option value="">{t('dashboard.allProjects')}</option>
               {codebases?.map(cb => (
                 <option key={cb.id} value={cb.id}>
                   {cb.name}
@@ -273,7 +274,7 @@ export function ChatPage(): React.ReactElement {
               onChange={(e): void => {
                 setSearchQuery(e.target.value);
               }}
-              placeholder="Search..."
+              placeholder={t('chat.search')}
               className="w-full rounded-md border border-border bg-surface-elevated py-1.5 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none"
             />
           </div>
@@ -303,8 +304,8 @@ export function ChatPage(): React.ReactElement {
                   )}
                 >
                   {conversations && conversations.length > 0
-                    ? 'No matching conversations'
-                    : 'No conversations yet — start a new chat!'}
+                    ? t('chat.noMatchingConversations')
+                    : t('chat.noConversationsYet')}
                 </span>
               </div>
             )}

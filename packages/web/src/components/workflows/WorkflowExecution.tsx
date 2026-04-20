@@ -14,6 +14,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/componen
 import { useWorkflowStore } from '@/stores/workflow-store';
 import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
+import { t, workflowStatusLabel } from '@/lib/i18n';
 import { selectInitialNode } from '@/lib/select-initial-node';
 import type {
   WorkflowState,
@@ -68,7 +69,7 @@ function StatusBadge({ status }: { status: string }): React.ReactElement {
     <span
       className={`px-2 py-0.5 rounded-full text-xs font-medium ${colors[status] ?? 'bg-surface text-text-secondary'}`}
     >
-      {status}
+      {workflowStatusLabel(status)}
     </span>
   );
 }
@@ -420,25 +421,25 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     if (stepEvents.length === 0) return [];
 
     return stepEvents.map(e => {
-      const ts = new Date(ensureUtc(e.created_at)).toLocaleTimeString();
+      const ts = new Date(ensureUtc(e.created_at)).toLocaleTimeString('ko-KR');
       switch (e.event_type) {
         case 'loop_iteration_started':
-          return `[${ts}] Iteration ${String(e.data.iteration)}/${String((e.data.maxIterations as number | undefined) ?? '?')} started`;
+          return `[${ts}] ${t('execution.iteration')} ${String(e.data.iteration)}/${String((e.data.maxIterations as number | undefined) ?? '?')} ${t('execution.started')}`;
         case 'loop_iteration_completed': {
           const dur = e.data.duration_ms as number | undefined;
           const durStr = dur !== undefined ? ` (${String(Math.round(dur / 100) / 10)}s)` : '';
-          return `[${ts}] Iteration ${String(e.data.iteration)} completed${durStr}`;
+          return `[${ts}] ${t('execution.iteration')} ${String(e.data.iteration)} ${t('execution.completed')}${durStr}`;
         }
         case 'loop_iteration_failed':
-          return `[${ts}] Iteration ${String(e.data.iteration)} failed: ${(e.data.error as string | undefined) ?? 'Unknown error'}`;
+          return `[${ts}] ${t('execution.iteration')} ${String(e.data.iteration)} ${t('execution.failed')}: ${(e.data.error as string | undefined) ?? t('execution.unknownError')}`;
         case 'node_started':
-          return `[${ts}] Node started: ${e.step_name ?? 'node'}`;
+          return `[${ts}] ${t('execution.nodeStarted')} ${e.step_name ?? 'node'}`;
         case 'node_completed':
-          return `[${ts}] Node completed: ${e.step_name ?? 'node'}`;
+          return `[${ts}] ${t('execution.nodeCompleted')} ${e.step_name ?? 'node'}`;
         case 'node_failed':
-          return `[${ts}] Node failed: ${e.step_name ?? 'node'}: ${(e.data.error as string | undefined) ?? 'Unknown error'}`;
+          return `[${ts}] ${t('execution.nodeFailed')} ${e.step_name ?? 'node'}: ${(e.data.error as string | undefined) ?? t('execution.unknownError')}`;
         case 'node_skipped':
-          return `[${ts}] Node skipped: ${e.step_name ?? 'node'}`;
+          return `[${ts}] ${t('execution.nodeSkipped')} ${e.step_name ?? 'node'}`;
         default:
           return `[${ts}] ${e.event_type}${e.step_name ? `: ${e.step_name}` : ''}`;
       }
@@ -479,7 +480,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   if (error) {
     return (
       <div className="flex items-center justify-center h-full text-error">
-        <p>Failed to load workflow run: {error}</p>
+        <p>
+          {t('execution.loadFailedPrefix')} {error}
+        </p>
       </div>
     );
   }
@@ -487,7 +490,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   if (!workflow) {
     return (
       <div className="flex items-center justify-center h-full text-text-secondary">
-        <p>Loading workflow execution...</p>
+        <p>{t('execution.loading')}</p>
       </div>
     );
   }
@@ -514,7 +517,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         {logsPlatformId && !selectedStepHasEvents && !isRunning ? (
           <div className="flex-1 flex items-center justify-center text-text-secondary text-sm">
-            No output available for this step.
+            {t('execution.noOutput')}
           </div>
         ) : logsPlatformId ? (
           <WorkflowLogs
@@ -555,7 +558,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             ) : (
               <div className="flex items-center justify-center h-full text-text-secondary">
                 <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent mr-2" />
-                Loading graph...
+                {t('execution.loadingGraph')}
               </div>
             )}
           </ResizablePanel>
@@ -601,7 +604,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             }
           }}
           className="text-text-secondary hover:text-text-primary transition-colors text-sm"
-          title="Back"
+          title={t('execution.back')}
         >
           &larr;
         </button>
@@ -617,9 +620,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
                 navigate(`/workflows/runs/${workerRunId}`);
               }}
               className="flex items-center gap-1 text-xs text-primary hover:text-accent-bright transition-colors"
-              title="View workflow run details"
+              title={t('execution.viewRunDetails')}
             >
-              <span>Run Details</span>
+              <span>{t('execution.runDetails')}</span>
             </button>
           )}
           <span className="text-xs text-text-secondary">{formatDurationMs(elapsed)}</span>
@@ -636,12 +639,12 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             }}
           >
             <TabsList>
-              <TabsTrigger value="graph">Graph</TabsTrigger>
-              <TabsTrigger value="logs">Logs</TabsTrigger>
+              <TabsTrigger value="graph">{t('execution.graph')}</TabsTrigger>
+              <TabsTrigger value="logs">{t('execution.logs')}</TabsTrigger>
               {parentPlatformId && (
                 <TabsTrigger value="chat">
                   <MessageSquare className="h-3 w-3 mr-1" />
-                  Chat
+                  {t('execution.chat')}
                 </TabsTrigger>
               )}
             </TabsList>

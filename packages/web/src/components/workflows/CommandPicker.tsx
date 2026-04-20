@@ -4,6 +4,7 @@ import type { CommandEntry } from '@/lib/api';
 import { categorizeCommands } from '@/lib/command-categories';
 import { cn } from '@/lib/utils';
 import { useClickOutside } from '@/hooks/useClickOutside';
+import { commandCategoryLabel, commandSourceLabel, t } from '@/lib/i18n';
 
 interface CommandPickerProps {
   commands: CommandEntry[];
@@ -62,7 +63,7 @@ export function CommandPicker({
           <input
             ref={inputRef}
             type="text"
-            placeholder="Search commands..."
+            placeholder={t('commandPicker.searchCommands')}
             value={searchQuery}
             onChange={(e): void => {
               setSearchQuery(e.target.value);
@@ -75,7 +76,9 @@ export function CommandPicker({
       {/* Categories */}
       <div className="flex-1 overflow-y-auto py-1">
         {categories.length === 0 && (
-          <div className="px-3 py-4 text-center text-xs text-text-tertiary">No commands found</div>
+          <div className="px-3 py-4 text-center text-xs text-text-tertiary">
+            {t('commandPicker.noCommands')}
+          </div>
         )}
 
         {categories.map(category => {
@@ -97,7 +100,7 @@ export function CommandPicker({
                   <ChevronDown className="size-3 text-text-tertiary shrink-0" />
                 )}
                 <span className="text-[10px] font-semibold text-text-secondary uppercase tracking-wide">
-                  {category.name}
+                  {commandCategoryLabel(category.name)}
                 </span>
                 <span className="text-[10px] text-text-tertiary">({category.commands.length})</span>
               </button>
@@ -124,7 +127,7 @@ export function CommandPicker({
                           : 'bg-surface-inset text-text-tertiary'
                       )}
                     >
-                      {cmd.source}
+                      {commandSourceLabel(cmd.source)}
                     </span>
                   </button>
                 ))}

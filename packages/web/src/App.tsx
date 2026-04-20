@@ -11,6 +11,7 @@ import { WorkflowsPage } from '@/routes/WorkflowsPage';
 import { WorkflowExecutionPage } from '@/routes/WorkflowExecutionPage';
 import { WorkflowBuilderPage } from '@/routes/WorkflowBuilderPage';
 import { SettingsPage } from '@/routes/SettingsPage';
+import { t } from '@/lib/i18n';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -40,9 +41,9 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
       return (
         <div className="flex h-screen items-center justify-center bg-zinc-950 p-8">
           <div className="max-w-md text-center">
-            <h1 className="mb-2 text-xl font-semibold text-zinc-100">Something went wrong</h1>
+            <h1 className="mb-2 text-xl font-semibold text-zinc-100">{t('app.error.title')}</h1>
             <p className="mb-4 text-sm text-zinc-400">
-              {this.state.error?.message ?? 'An unexpected error occurred.'}
+              {this.state.error?.message ?? t('app.error.unexpected')}
             </p>
             <button
               onClick={(): void => {
@@ -50,7 +51,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
               }}
               className="rounded-md bg-zinc-800 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-700"
             >
-              Reload page
+              {t('app.error.reload')}
             </button>
           </div>
         </div>

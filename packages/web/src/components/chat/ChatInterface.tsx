@@ -37,6 +37,7 @@ import {
 } from '@/lib/message-cache';
 import { useProject } from '@/contexts/ProjectContext';
 import { ensureUtc } from '@/lib/format';
+import { t } from '@/lib/i18n';
 
 function mapMessageRow(row: MessageResponse): ChatMessage {
   let meta: {
@@ -61,7 +62,7 @@ function mapMessageRow(row: MessageResponse): ChatMessage {
     });
     meta = {
       error: {
-        message: 'Message data corrupted',
+        message: t('chat.messageDataCorrupted'),
         classification: 'fatal' as const,
         suggestedActions: [],
       },
@@ -203,7 +204,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
             role: 'assistant' as const,
             content: '',
             error: {
-              message: 'Failed to load message history. Try refreshing the page.',
+              message: t('chat.loadHistoryFailed'),
               classification: 'transient' as const,
               suggestedActions: ['Refresh page'],
             },
@@ -276,7 +277,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
     !currentCodebase && selectedProjectId
       ? codebases?.find(cb => cb.id === selectedProjectId)
       : undefined;
-  const headerTitle = currentConv?.title ?? 'Chat';
+  const headerTitle = currentConv?.title ?? t('chat.titleFallback');
   const headerSubtitle = currentConv?.cwd ?? undefined;
 
   const nextId = (): string => {
@@ -635,7 +636,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
         } catch (error) {
           console.error('[Chat] Failed to create conversation', { error });
           onError({
-            message: 'Failed to create conversation. Please try again.',
+            message: t('chat.createConversationFailed'),
             classification: 'transient',
             suggestedActions: ['Retry'],
           });
@@ -666,7 +667,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
         const userMessage =
           errMsg && /API error 4\d\d/.test(errMsg)
             ? errMsg.replace(/^API error \d+ \([^)]*\): /, '')
-            : 'Failed to send message. Please try again.';
+            : t('chat.sendMessageFailed');
         onError({
           message: userMessage,
           classification: 'transient',
@@ -690,7 +691,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
   return (
     <div className="flex flex-1 flex-col overflow-hidden min-h-0">
       <Header
-        title={isNewChat ? 'New Chat' : headerTitle}
+        title={isNewChat ? t('chat.newChat') : headerTitle}
         subtitle={headerSubtitle}
         projectName={currentCodebase?.name ?? contextCodebase?.name}
         connected={isNewChat ? undefined : connected}
@@ -699,9 +700,11 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
       {(conversationsError || codebasesError) && (
         <div className="flex gap-2 px-4 py-1">
           {conversationsError && (
-            <span className="text-xs text-red-400">Failed to load conversations</span>
+            <span className="text-xs text-red-400">{t('chat.loadConversationsFailed')}</span>
           )}
-          {codebasesError && <span className="text-xs text-red-400">Failed to load projects</span>}
+          {codebasesError && (
+            <span className="text-xs text-red-400">{t('chat.loadProjectsFailed')}</span>
+          )}
         </div>
       )}
       <MessageList
@@ -729,7 +732,7 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
         }
         disabledReason={
           currentConv != null && currentConv.platform_type !== 'web'
-            ? 'Continuing chats from other platforms in the Web UI is coming soon'
+            ? t('chat.otherPlatformDisabled')
             : undefined
         }
       />

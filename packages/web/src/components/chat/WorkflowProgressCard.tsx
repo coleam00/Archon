@@ -7,6 +7,7 @@ import { approveWorkflowRun, getWorkflowRunByWorker, rejectWorkflowRun } from '@
 import { useWorkflowStore } from '@/stores/workflow-store';
 import { StatusIcon } from '@/components/workflows/StatusIcon';
 import { formatDurationMs } from '@/lib/format';
+import { t } from '@/lib/i18n';
 import { isTerminalStatus } from '@/lib/workflow-utils';
 import type { DagNodeState } from '@/lib/types';
 
@@ -114,7 +115,7 @@ export function WorkflowProgressCard({
       <div className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs max-w-md">
         <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
         <span className="truncate text-text-primary font-medium">{workflowName}</span>
-        <span className="text-text-tertiary">Starting...</span>
+        <span className="text-text-tertiary">{t('chat.workflowStarting')}</span>
       </div>
     );
   }
@@ -131,7 +132,7 @@ export function WorkflowProgressCard({
           }}
           className="text-primary hover:text-accent-bright transition-colors shrink-0"
         >
-          Retry
+          {t('common.retry')}
         </button>
       </div>
     );
@@ -162,7 +163,7 @@ export function WorkflowProgressCard({
         <span className="truncate text-xs font-medium text-text-primary">{workflowName}</span>
         {totalNodes > 0 && (
           <span className="shrink-0 text-[10px] text-text-secondary">
-            {String(completedCount)}/{String(totalNodes)} nodes
+            {String(completedCount)}/{String(totalNodes)} {t('dashboard.nodes')}
           </span>
         )}
         <span className="ml-auto shrink-0">
@@ -206,7 +207,7 @@ export function WorkflowProgressCard({
               <div className="rounded-md bg-warning/5 border border-warning/20 px-3 py-2 flex items-start gap-2">
                 <Pause className="h-3.5 w-3.5 text-warning shrink-0 mt-0.5" />
                 <p className="text-xs text-text-secondary">
-                  {approval?.message ?? 'Waiting for approval'}
+                  {approval?.message ?? t('chat.waitingForApproval')}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -218,11 +219,11 @@ export function WorkflowProgressCard({
                   className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-success/80 hover:bg-success/10 hover:text-success transition-colors disabled:opacity-50"
                 >
                   <CheckCircle className="h-3.5 w-3.5" />
-                  Approve
+                  {t('dashboard.approve')}
                 </button>
                 <button
                   onClick={() => {
-                    if (window.confirm(`Reject workflow "${workflowName}"?`)) {
+                    if (window.confirm(`${t('chat.rejectWorkflowConfirmPrefix')}${workflowName}`)) {
                       rejectMutation.mutate();
                     }
                   }}
@@ -230,14 +231,12 @@ export function WorkflowProgressCard({
                   className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
                 >
                   <XCircle className="h-3.5 w-3.5" />
-                  Reject
+                  {t('dashboard.reject')}
                 </button>
               </div>
               {(approveMutation.isError || rejectMutation.isError) && (
                 <p className="text-xs text-error">
-                  {mutationError instanceof Error
-                    ? mutationError.message
-                    : 'Action failed — please try again'}
+                  {mutationError instanceof Error ? mutationError.message : t('chat.actionFailed')}
                 </p>
               )}
             </div>
@@ -267,7 +266,7 @@ export function WorkflowProgressCard({
               onClick={handleViewFullScreen}
               className="text-[10px] text-primary hover:text-accent-bright transition-colors"
             >
-              View Full Screen &rarr;
+              {t('chat.viewFullScreen')} &rarr;
             </button>
           </div>
         </div>

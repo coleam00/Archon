@@ -6,6 +6,7 @@ import { listWorkflows, createConversation, runWorkflow, deleteConversation } fr
 import { Button } from '@/components/ui/button';
 import { useProject } from '@/contexts/ProjectContext';
 import { WorkflowCard } from '@/components/workflows/WorkflowCard';
+import { t, workflowCategoryLabel } from '@/lib/i18n';
 import {
   getWorkflowCategory,
   getWorkflowDisplayName,
@@ -62,8 +63,8 @@ export function WorkflowList(): React.ReactElement {
       console.error('[Workflows] Failed to run workflow', { error });
       setRunError(
         error instanceof Error
-          ? `Failed to start workflow: ${error.message}`
-          : 'Failed to start workflow. Check server connectivity.'
+          ? `${t('workflows.startFailedPrefix')} ${error.message}`
+          : t('workflows.startFailed')
       );
       if (conversationId !== undefined && !workflowStarted) {
         void deleteConversation(conversationId).catch((cleanupErr: unknown) => {
@@ -116,15 +117,13 @@ export function WorkflowList(): React.ReactElement {
   if (loadingWorkflows) {
     return (
       <div className="flex items-center justify-center h-32 text-text-secondary text-sm">
-        Loading workflows...
+        {t('workflows.loading')}
       </div>
     );
   }
 
   if (workflowsError) {
-    return (
-      <div className="text-sm text-error">Failed to load workflows. Check server connectivity.</div>
-    );
+    return <div className="text-sm text-error">{t('workflows.loadFailed')}</div>;
   }
 
   const hasWorkflows = workflows != null && workflows.length > 0;
@@ -145,7 +144,7 @@ export function WorkflowList(): React.ReactElement {
                 onChange={(e): void => {
                   setSearchQuery(e.target.value);
                 }}
-                placeholder="Search workflows..."
+                placeholder={t('workflows.search')}
                 className="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-surface text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </div>
@@ -164,7 +163,7 @@ export function WorkflowList(): React.ReactElement {
                       : 'bg-surface-elevated text-text-secondary hover:text-text-primary'
                   }`}
                 >
-                  {cat}
+                  {workflowCategoryLabel(cat)}
                 </button>
               ))}
             </div>
@@ -174,12 +173,12 @@ export function WorkflowList(): React.ReactElement {
         {/* Workflow grid */}
         {!hasWorkflows ? (
           <div className="text-sm text-text-secondary">
-            No workflows found. Add workflow definitions to{' '}
+            {t('workflows.emptyPrefix')}{' '}
             <code className="text-xs bg-surface-inset px-1 py-0.5 rounded">.archon/workflows/</code>
           </div>
         ) : filteredWorkflows.length === 0 ? (
           <div className="text-sm text-text-secondary py-8 text-center">
-            No workflows match your search.
+            {t('workflows.noMatch')}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -218,7 +217,7 @@ export function WorkflowList(): React.ReactElement {
                   setRunError(null);
                 }}
                 className="p-0.5 rounded text-text-tertiary hover:text-text-primary transition-colors"
-                title="Dismiss"
+                title={t('workflows.dismiss')}
               >
                 <X className="size-3.5" />
               </button>
@@ -232,7 +231,7 @@ export function WorkflowList(): React.ReactElement {
               }}
               className="w-48 shrink-0 rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
             >
-              <option value="">No project</option>
+              <option value="">{t('workflows.noProject')}</option>
               {codebases?.map(cb => (
                 <option key={cb.id} value={cb.id}>
                   {cb.name}
@@ -248,7 +247,7 @@ export function WorkflowList(): React.ReactElement {
               onChange={(e): void => {
                 setRunMessage(e.target.value);
               }}
-              placeholder="Enter a message for this workflow..."
+              placeholder={t('workflows.runMessagePlaceholder')}
               className="flex-1 min-w-0 px-3 py-1.5 rounded-md border border-border bg-surface text-sm text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
               onKeyDown={(e): void => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -265,7 +264,7 @@ export function WorkflowList(): React.ReactElement {
               }}
               disabled={running || !runMessage.trim()}
             >
-              {running ? 'Starting...' : 'Run'}
+              {running ? t('workflows.starting') : t('workflows.run')}
             </Button>
           </div>
           {runError && <p className="text-xs text-error mt-1">{runError}</p>}

@@ -10,6 +10,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import { t } from '@/lib/i18n';
 
 interface Props {
   /** The element that opens the dialog when clicked (typically a button). */
@@ -57,7 +58,7 @@ export function ConfirmRunActionDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
           <AlertDialogAction
             onClick={(): void => {
               // Caller's onConfirm is fire-and-forget over a parent-level

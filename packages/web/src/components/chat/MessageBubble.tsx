@@ -5,6 +5,7 @@ import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import type { ChatMessage, FileAttachment } from '@/lib/types';
+import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { ArtifactViewerModal } from '@/components/workflows/ArtifactViewerModal';
 
@@ -181,8 +182,8 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
                 <button
                   onClick={copyMessage}
                   className="shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-text-tertiary hover:text-text-primary"
-                  title="Copy message"
-                  aria-label={copied ? 'Copied' : 'Copy message'}
+                  title={t('chat.copyMessage')}
+                  aria-label={copied ? t('chat.copied') : t('chat.copyMessage')}
                 >
                   {copied ? (
                     <Check className="h-3.5 w-3.5 text-success" />
@@ -225,7 +226,7 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
                 <details className="group">
                   <summary className="cursor-pointer text-sm text-text-secondary hover:text-text-primary">
                     <span className="text-xs bg-surface-secondary rounded px-1.5 py-0.5 font-mono">
-                      JSON output
+                      {t('chat.jsonOutput')}
                     </span>
                   </summary>
                   <pre className="mt-2 text-xs bg-surface-inset rounded p-3 overflow-x-auto">
@@ -249,7 +250,7 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
 
           {!isThinking && (
             <div className="mt-0.5 text-[11px] text-text-tertiary">
-              {new Date(message.timestamp).toLocaleTimeString()}
+              {new Date(message.timestamp).toLocaleTimeString('ko-KR')}
             </div>
           )}
         </div>

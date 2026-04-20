@@ -3,12 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import { LayoutDashboard, MessageSquare, Workflow, Settings } from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { t } from '@/lib/i18n';
 
 const tabs = [
-  { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
-  { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
-  { to: '/settings', end: false, icon: Settings, label: 'Settings' },
+  { to: '/chat', end: false, icon: MessageSquare, label: t('nav.chat') },
+  { to: '/dashboard', end: true, icon: LayoutDashboard, label: t('nav.dashboard') },
+  { to: '/workflows', end: false, icon: Workflow, label: t('nav.workflows') },
+  { to: '/settings', end: false, icon: Settings, label: t('nav.settings') },
 ] as const;
 
 export function TopNav(): React.ReactElement {
@@ -34,10 +35,8 @@ export function TopNav(): React.ReactElement {
     <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
       {/* Brand logo */}
       <Link to="/chat" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
-          <span className="text-sm font-semibold text-primary-foreground">A</span>
-        </div>
-        <span className="text-sm font-semibold text-text-primary">Archon</span>
+        <img src="/favicon.png" alt="" className="h-7 w-7 shrink-0 object-contain" />
+        <span className="text-sm font-semibold text-text-primary">HarnessLab</span>
       </Link>
 
       {tabs.map(({ to, end, icon: Icon, label }) => (
@@ -59,7 +58,7 @@ export function TopNav(): React.ReactElement {
           {to === '/dashboard' && runningCount > 0 && (
             <span
               className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
-              aria-label={`${runningCount} workflows running`}
+              aria-label={`${String(runningCount)}개 워크플로 실행 중`}
             >
               {runningCount}
             </span>
@@ -74,7 +73,7 @@ export function TopNav(): React.ReactElement {
             target="_blank"
             rel="noopener noreferrer"
             className="ml-1.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
-            title={`v${updateCheck.latestVersion} available`}
+            title={`v${updateCheck.latestVersion} 사용 가능`}
           >
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />v
             {updateCheck.latestVersion}

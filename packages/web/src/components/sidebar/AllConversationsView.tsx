@@ -5,6 +5,7 @@ import { listConversations, listWorkflowRuns } from '@/lib/api';
 import type { CodebaseResponse } from '@/lib/api';
 import { ConversationItem } from '@/components/conversations/ConversationItem';
 import { useProject } from '@/contexts/ProjectContext';
+import { t } from '@/lib/i18n';
 
 interface AllConversationsViewProps {
   searchQuery: string;
@@ -67,16 +68,16 @@ export function AllConversationsView({
         onClick={handleNewChat}
         className="mx-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
       >
-        New Chat
+        {t('chat.newChat')}
       </button>
 
       <div>
         <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
-          All Conversations
+          {t('chat.allConversations')}
         </span>
         <div className="mt-1 flex flex-col gap-0.5">
           {isErrorConversations ? (
-            <span className="px-1 text-xs text-error">Failed to load — retrying</span>
+            <span className="px-1 text-xs text-error">{t('common.failedToLoadRetrying')}</span>
           ) : filtered && filtered.length > 0 ? (
             filtered.map(conv => (
               <ConversationItem
@@ -89,8 +90,8 @@ export function AllConversationsView({
           ) : (
             <span className="px-1 text-xs text-text-tertiary">
               {conversations && conversations.length > 0
-                ? 'No matching conversations'
-                : 'No conversations yet — start a new chat!'}
+                ? t('chat.noMatchingConversations')
+                : t('chat.noConversationsYet')}
             </span>
           )}
         </div>
