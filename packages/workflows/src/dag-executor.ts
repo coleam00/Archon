@@ -46,7 +46,8 @@ import {
   isApprovalNode,
   isCancelNode,
   isScriptNode,
-  isApprovalContext,
+  isLastApprovalContext,
+  getResumeApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
@@ -107,6 +108,15 @@ type NodeExecutionResult = NodeOutput & {
   costUsd?: number;
   approvalSnapshot?: ApprovalPauseSnapshot;
 };
+
+function getDagResumeApprovalContext(workflowRun: WorkflowRun): ApprovalContext | undefined {
+  const lastApproval = workflowRun.metadata.lastApproval;
+  if (isLastApprovalContext(lastApproval)) {
+    return lastApproval;
+  }
+
+  return getResumeApprovalContext(workflowRun);
+}
 
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
@@ -1832,8 +1842,7 @@ async function executeLoopNode(
   }
 
   // Detect interactive loop resume — check if workflowRun.metadata has loop gate state for this node
-  const rawApproval = workflowRun.metadata?.approval;
-  const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const loopGateMeta = getDagResumeApprovalContext(workflowRun);
   const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
   const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
   let currentSessionId: string | undefined = isLoopResume ? loopGateMeta.sessionId : undefined;
@@ -2433,8 +2442,7 @@ async function executeApprovalNode(
   let approvalSnapshot: ApprovalPauseSnapshot | undefined;
 
   // Detect rejection resume — check metadata for rejection_reason set by reject handlers
-  const rawApproval = workflowRun.metadata?.approval;
-  const approvalMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
+  const approvalMeta = getDagResumeApprovalContext(workflowRun);
   const rawRejection = workflowRun.metadata?.rejection_reason;
   const rejectionReason =
     approvalMeta?.type === 'approval' &&

@@ -4482,13 +4482,16 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const platform = createMockPlatform();
       // Simulate a resumed run where the user said "approved"
       const workflowRun = makeWorkflowRun('resume-signal-run', {
+        status: 'running',
         metadata: {
-          approval: {
+          lastApproval: {
             type: 'interactive_loop',
             nodeId: 'refine',
             iteration: 1,
             sessionId: 'loop-session-2',
             message: 'Review and provide feedback.',
+            resolution: 'feedback',
+            resolvedAt: '2026-04-20T10:00:00.000Z',
           },
           loop_user_input: 'approved',
         },
@@ -4544,15 +4547,18 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
       const mockDeps = createMockDeps();
       const platform = createMockPlatform();
-      // Simulate a resumed run: metadata has loop gate state and user input
+      // Simulate a resumed run: metadata keeps the resolved gate in lastApproval.
       const workflowRun = makeWorkflowRun('resumed-run-id', {
+        status: 'running',
         metadata: {
-          approval: {
+          lastApproval: {
             type: 'interactive_loop',
             nodeId: 'refine',
             iteration: 1,
             sessionId: 'loop-session-1',
             message: 'Review the plan.',
+            resolution: 'feedback',
+            resolvedAt: '2026-04-20T10:00:00.000Z',
           },
           loop_user_input: 'Add error handling',
         },
@@ -4596,6 +4602,65 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // Should have resumed with stored session ID
       const sessionArg = mockSendQueryDag.mock.calls[0][2] as string | undefined;
       expect(sessionArg).toBe('loop-session-1');
+    });
+
+    it('interactive loop resumes from legacy failed-row approval metadata', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Updated plan. <promise>APPROVED</promise>' };
+        yield { type: 'result', sessionId: 'legacy-loop-session-2' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('legacy-resume-run-id', {
+        status: 'failed',
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'legacy-loop-session-1',
+            message: 'Review the plan.',
+          },
+          loop_user_input: 'Legacy feedback',
+        },
+      });
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'interactive-loop-legacy-resume',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt: 'User said: $LOOP_USER_INPUT. Refine the plan.',
+                until: 'APPROVED',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review the plan.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      const promptArg = mockSendQueryDag.mock.calls[0][0] as string;
+      expect(promptArg).toContain('Legacy feedback');
+      const sessionArg = mockSendQueryDag.mock.calls[0][2] as string | undefined;
+      expect(sessionArg).toBe('legacy-loop-session-1');
     });
 
     it('loop iteration fails loudly when SDK returns error_during_execution', async () => {
@@ -5306,13 +5371,16 @@ describe('executeDagWorkflow -- approval node', () => {
 
     // Simulate a rejection resume — metadata has rejection_reason set by reject handler
     const workflowRun = makeWorkflowRun('reject-resume-run', {
+      status: 'running',
       metadata: {
-        approval: {
+        lastApproval: {
           type: 'approval',
           nodeId: 'review',
           message: 'Approve this plan?',
           onRejectPrompt: 'Fix based on: $REJECTION_REASON',
           onRejectMaxAttempts: 3,
+          resolution: 'rejected',
+          resolvedAt: '2026-04-20T10:00:00.000Z',
         },
         rejection_reason: 'Missing edge case handling',
         rejection_count: 1,
@@ -5613,13 +5681,16 @@ describe('executeDagWorkflow -- approval node', () => {
 
     // rejection_count already at max_attempts
     const workflowRun = makeWorkflowRun('reject-exhausted-run', {
+      status: 'running',
       metadata: {
-        approval: {
+        lastApproval: {
           type: 'approval',
           nodeId: 'review',
           message: 'Approve this plan?',
           onRejectPrompt: 'Fix based on: $REJECTION_REASON',
           onRejectMaxAttempts: 3,
+          resolution: 'rejected',
+          resolvedAt: '2026-04-20T10:00:00.000Z',
         },
         rejection_reason: 'Still not right',
         rejection_count: 3,
@@ -5673,13 +5744,16 @@ describe('executeDagWorkflow -- approval node', () => {
     const platform = createMockPlatform();
 
     const workflowRun = makeWorkflowRun('reject-max1-run', {
+      status: 'running',
       metadata: {
-        approval: {
+        lastApproval: {
           type: 'approval',
           nodeId: 'review',
           message: 'Approve?',
           onRejectPrompt: 'Fix: $REJECTION_REASON',
           onRejectMaxAttempts: 1,
+          resolution: 'rejected',
+          resolvedAt: '2026-04-20T10:00:00.000Z',
         },
         rejection_reason: 'Bad',
         rejection_count: 1,

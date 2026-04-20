@@ -9,6 +9,7 @@ import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
+import { getResumeApprovalContext } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
@@ -365,11 +366,10 @@ export async function executeWorkflow(
           '⚠️ Could not load prior node outputs for resume (database error). Starting a fresh run instead.'
         );
       }
-      // Resume if there are completed nodes OR if the run has interactive loop state
-      // (a paused interactive loop may have no completed nodes yet — just the loop itself pausing)
-      const hasInteractiveLoopState =
-        resumableRun.metadata?.approval &&
-        (resumableRun.metadata.approval as Record<string, unknown>).type === 'interactive_loop';
+      // Resume if there are completed nodes OR if the failed run carries
+      // interactive-loop state in archived approval metadata.
+      const resumeApproval = getResumeApprovalContext(resumableRun);
+      const hasInteractiveLoopState = resumeApproval?.type === 'interactive_loop';
       if (priorNodes.size > 0 || hasInteractiveLoopState) {
         try {
           // Capture the orphan BEFORE replacing workflowRun. The orchestrator's

@@ -584,6 +584,121 @@ describe('executeWorkflow', () => {
       expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
     });
 
+    it('resumes failed interactive-loop run from lastApproval when 0 completed nodes exist', async () => {
+      const failedRun = makeRun({
+        id: 'prior-run',
+        status: 'failed',
+        metadata: {
+          lastApproval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            message: 'Review the plan.',
+            iteration: 1,
+            sessionId: 'loop-session-1',
+            resolution: 'feedback',
+            resolvedAt: '2026-04-20T10:00:00.000Z',
+          },
+        },
+      });
+      const store = makeStore({
+        findResumableRun: mock(async () => failedRun),
+        getCompletedDagNodeOutputs: mock(async () => new Map()),
+        resumeWorkflowRun: mock(async () =>
+          makeRun({ id: 'resumed-prior-run', status: 'running' })
+        ),
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-run');
+      expect(store.createWorkflowRun).not.toHaveBeenCalled();
+      expect(result.workflowRunId).toBe('resumed-prior-run');
+    });
+
+    it('resumes failed interactive-loop run from legacy approval metadata when 0 completed nodes exist', async () => {
+      const failedRun = makeRun({
+        id: 'prior-run',
+        status: 'failed',
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            message: 'Review the plan.',
+            iteration: 1,
+            sessionId: 'legacy-loop-session-1',
+          },
+        },
+      });
+      const store = makeStore({
+        findResumableRun: mock(async () => failedRun),
+        getCompletedDagNodeOutputs: mock(async () => new Map()),
+        resumeWorkflowRun: mock(async () =>
+          makeRun({ id: 'legacy-resumed-run', status: 'running' })
+        ),
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-run');
+      expect(store.createWorkflowRun).not.toHaveBeenCalled();
+      expect(result.workflowRunId).toBe('legacy-resumed-run');
+    });
+
+    it('does not treat paused interactive-loop state as resumable', async () => {
+      const pausedRun = makeRun({
+        id: 'paused-prior-run',
+        status: 'paused',
+        metadata: {
+          lastApproval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            message: 'Review the plan.',
+            iteration: 1,
+            sessionId: 'loop-session-1',
+            resolution: 'feedback',
+            resolvedAt: '2026-04-20T10:00:00.000Z',
+          },
+        },
+      });
+      const store = makeStore({
+        findResumableRun: mock(async () => pausedRun),
+        getCompletedDagNodeOutputs: mock(async () => new Map()),
+      });
+      const deps = makeDeps(store);
+
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(result.workflowRunId).toBe('run-123');
+    });
+
     it('returns error when resumeWorkflowRun throws', async () => {
       const failedRun = makeRun({ id: 'prior-run', status: 'failed' });
       const priorNodes = new Map([['node1', 'output1']]);
