@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { workflowSSEHandlers } from '@/stores/workflow-store';
+import { SSE_BASE_URL } from '@/lib/api';
 import type {
   WorkflowStatusEvent,
   DagNodeEvent,
@@ -10,7 +11,9 @@ import type {
 /** Connects to the multiplexed dashboard SSE stream and routes events to the Zustand store. */
 export function useDashboardSSE(): void {
   useEffect(() => {
-    const es = new EventSource('/api/stream/__dashboard__');
+    // Use SSE_BASE_URL to bypass the Vite dev proxy (which buffers SSE responses).
+    // Mirrors the same pattern used in useSSE.ts for conversation streams.
+    const es = new EventSource(`${SSE_BASE_URL}/api/stream/__dashboard__`);
 
     es.onmessage = (e: MessageEvent<string>): void => {
       let event: { type: string };
