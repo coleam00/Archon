@@ -1,6 +1,6 @@
 ---
-title: Your First Five Minutes
-description: Get your first Archon workflow running in under five minutes against your own codebase.
+title: 처음 5분
+description: 5분 안에 내 코드베이스에서 첫 Archon workflow를 실행합니다.
 category: book
 part: orientation
 audience: [user]
@@ -8,24 +8,24 @@ sidebar:
   order: 2
 ---
 
-Let's skip the theory and get you to a win. By the end of this chapter, you'll have run two real Archon workflows against your own codebase.
+이론은 잠시 미루고 바로 성과를 만들어 봅시다. 이 장이 끝날 때쯤이면 여러분의 코드베이스에서 실제 Archon workflow 두 개를 실행해 보게 됩니다.
 
 ---
 
-## Prerequisites
+## 준비 사항
 
-Before you start, make sure you have:
+시작하기 전에 다음이 준비되어 있는지 확인하세요.
 
-- [ ] **Git** installed (`git --version` should work)
-- [ ] **Bun** installed — get it at [bun.sh](https://bun.sh) if you don't have it (`bun --version`)
-- [ ] **Claude Code** installed and authenticated — run `claude /login` if you haven't
-- [ ] **A git repository** to run workflows against — any project works
+- [ ] **Git** 설치됨 (`git --version`이 동작해야 합니다)
+- [ ] **Bun** 설치됨 — 없다면 [bun.sh](https://bun.sh)에서 설치하세요 (`bun --version`)
+- [ ] **Claude Code** 설치 및 인증 완료 — 아직이라면 `claude /login`을 실행하세요
+- [ ] workflow를 실행할 **git repository** — 어떤 프로젝트든 괜찮습니다
 
-> **Already using Claude Code?** You're already authenticated. No API keys or extra setup needed — Archon uses the same credentials.
+> **이미 Claude Code를 쓰고 있나요?** 그렇다면 이미 인증되어 있습니다. API key나 추가 설정은 필요 없습니다. Archon은 같은 인증 정보를 사용합니다.
 
 ---
 
-## Install Archon (60 seconds)
+## Archon 설치하기 (60초)
 
 ```bash
 # Clone and install
@@ -40,15 +40,15 @@ cd packages/cli && bun link && cd ../..
 archon version
 ```
 
-You should see something like `archon v0.2.12`. That's it — Archon is installed.
+`archon v0.2.12` 같은 출력이 보이면 됩니다. 이것으로 Archon 설치가 끝났습니다.
 
-> **If `archon` isn't found after `bun link`:** Your shell may need to reload. Run `source ~/.zshrc` (or `~/.bashrc`), then try again. Alternatively, use `bun run cli` from inside the `Archon` directory for this session.
+> **`bun link` 후에도 `archon`을 찾지 못한다면:** shell을 다시 로드해야 할 수 있습니다. `source ~/.zshrc` 또는 `~/.bashrc`를 실행한 뒤 다시 시도하세요. 또는 이번 세션에서는 `Archon` 디렉터리 안에서 `bun run cli`를 사용할 수 있습니다.
 
 ---
 
-## Your First Win: Ask a Question (90 seconds)
+## 첫 성과: 질문하기 (90초)
 
-Navigate to any git repository on your machine, then run:
+내 컴퓨터의 아무 git repository로 이동한 뒤 실행합니다.
 
 ```bash
 cd /path/to/your/project
@@ -56,37 +56,37 @@ cd /path/to/your/project
 archon workflow run archon-assist "What's the entry point for this application?"
 ```
 
-Archon will analyze your codebase and answer the question with full context. You'll see it thinking through your files in real time, streamed to your terminal.
+Archon은 코드베이스를 분석하고 전체 맥락을 바탕으로 질문에 답합니다. 터미널에는 파일을 살펴보며 생각하는 과정이 실시간으로 스트리밍됩니다.
 
-**You just ran your first Archon workflow.** It's a single-step workflow — one command, one AI call, one answer. Simple, but useful.
+**방금 첫 Archon workflow를 실행했습니다.** 단일 단계 workflow입니다. 하나의 command, 하나의 AI 호출, 하나의 답변. 단순하지만 유용합니다.
 
-> **Tip:** `archon-assist` works for any question. "How does auth work?", "Where is the database configured?", "What does this function do?" — it's your always-available codebase expert.
+> **팁:** `archon-assist`는 어떤 질문에도 사용할 수 있습니다. "How does auth work?", "Where is the database configured?", "What does this function do?"처럼 물어보세요. 언제든 부를 수 있는 코드베이스 전문가입니다.
 
 ---
 
-## Your Second Win: Fix an Issue (2 minutes)
+## 두 번째 성과: issue 수정하기 (2분)
 
-If your repository has a GitHub issue open, try this:
+repository에 열린 GitHub issue가 있다면 다음을 시도해 보세요.
 
 ```bash
 archon workflow run archon-fix-github-issue --branch fix/my-first-run "Fix #<issue-number>"
 ```
 
-Replace `<issue-number>` with a real issue number from your repo. Then watch what happens:
+`<issue-number>`를 실제 issue 번호로 바꿉니다. 그리고 어떤 일이 일어나는지 보세요.
 
-1. **Investigate** — Archon reads the issue, explores relevant code, and documents its findings
-2. **Implement** — It makes the fix based on the investigation
-3. **Validate** — It runs your tests to confirm nothing broke
-4. **Create PR** — It opens a pull request with a full description
+1. **조사** — Archon이 issue를 읽고 관련 코드를 탐색한 뒤 발견 내용을 문서화합니다.
+2. **구현** — 조사 결과를 바탕으로 수정합니다.
+3. **검증** — 테스트를 실행해 깨진 부분이 없는지 확인합니다.
+4. **PR 생성** — 자세한 설명이 포함된 pull request를 엽니다.
 
-**You just ran a four-step automated workflow.** Each step ran a separate command, passing artifacts to the next step. The PR is ready for your review.
+**방금 네 단계 자동화 workflow를 실행했습니다.** 각 단계는 별도 command로 실행되고, artifact를 다음 단계로 넘깁니다. PR은 이제 여러분의 리뷰를 기다립니다.
 
-> **No GitHub issues handy?** Try `archon workflow run archon-feature-development --branch feat/test "Add a simple hello world endpoint"` on any web project — it'll implement and create a PR.
+> **마땅한 GitHub issue가 없나요?** 아무 웹 프로젝트에서 `archon workflow run archon-feature-development --branch feat/test "Add a simple hello world endpoint"`를 실행해 보세요. 기능을 구현하고 PR을 만듭니다.
 
 ---
 
-## What Just Happened?
+## 방금 무슨 일이 일어났나?
 
-Those two commands did more than they appeared to. Archon loaded a workflow definition, created an isolated git workspace, ran multiple AI steps in sequence, and connected them through files called **artifacts**.
+방금 실행한 두 명령은 겉보기보다 많은 일을 했습니다. Archon은 workflow 정의를 로드하고, 격리된 git workspace를 만들고, 여러 AI 단계를 순서대로 실행하고, **artifacts**라는 파일을 통해 단계들을 연결했습니다.
 
-In [Chapter 3: How Archon Actually Works →](/book/how-it-works/), we'll trace exactly what happened — step by step, file by file — so you understand the system you're working with.
+[3장: Archon은 실제로 어떻게 동작하나 →](/book/how-it-works/)에서는 방금 일어난 일을 단계별, 파일별로 추적합니다. 여러분이 다루는 시스템을 정확히 이해하게 될 것입니다.

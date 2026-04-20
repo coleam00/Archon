@@ -1,6 +1,6 @@
 ---
-title: Authoring Commands
-description: Write prompt templates that serve as building blocks for AI workflow nodes.
+title: 명령 작성
+description: AI workflow node의 구성 요소가 되는 prompt template을 작성합니다.
 category: guides
 area: workflows
 audience: [user]
@@ -9,28 +9,28 @@ sidebar:
   order: 2
 ---
 
-This guide explains how to write effective commands for Archon's AI workflow system. Commands are the building blocks of workflows - each command is a prompt template that instructs the AI agent what to do.
+이 가이드는 Archon의 AI workflow system에서 효과적인 command를 작성하는 방법을 설명합니다. HarnessLab은 Archon fork로서 반복 가능한 agent workflow를 학습하고 실험하기 쉽게 다루며, command는 그 workflow의 구성 요소입니다. 각 command는 AI agent에게 무엇을 해야 하는지 지시하는 prompt template입니다.
 
-## What is a Command?
+## Command란 무엇인가요?
 
-A command is a **markdown file** that serves as a detailed instruction set for an AI agent. When a workflow executes a step like `- command: investigate-issue`, Archon:
+command는 AI agent를 위한 상세 instruction set 역할을 하는 **markdown file**입니다. workflow가 `- command: investigate-issue` 같은 step을 실행하면 Archon은 다음을 수행합니다.
 
-1. Loads the command file from `.archon/commands/investigate-issue.md`
-2. Substitutes variables like `$ARGUMENTS` with actual values
-3. Sends the entire document as a prompt to the AI
-4. The AI follows the instructions and produces output
+1. `.archon/commands/investigate-issue.md`에서 command file을 로드합니다
+2. `$ARGUMENTS` 같은 변수를 실제 값으로 치환합니다
+3. 전체 문서를 AI에 prompt로 보냅니다
+4. AI가 instructions를 따르고 output을 생성합니다
 
-**Commands are prompts, not code.** They guide AI behavior through clear instructions.
+**Command는 code가 아니라 prompt입니다.** 명확한 instructions로 AI behavior를 안내합니다.
 
 ---
 
-## File Format
+## 파일 형식
 
-Commands live in `.archon/commands/` relative to the working directory and are loaded at runtime.
+command는 working directory 기준 `.archon/commands/`에 있으며 runtime에 로드됩니다.
 
-> **CLI vs Server:** The CLI reads commands from wherever you run it (sees uncommitted changes). The server reads from `~/.archon/workspaces/owner/repo/`, which only syncs from the remote before worktree creation — so changes must be committed and pushed for the server to pick them up.
+> **CLI vs Server:** CLI는 실행한 위치에서 command를 읽습니다(uncommitted changes도 보임). server는 `~/.archon/workspaces/owner/repo/`에서 읽으며, 이 경로는 worktree creation 전에 remote에서만 sync됩니다. 따라서 server가 변경을 인식하려면 commit과 push가 필요합니다.
 
-Commands use this structure:
+command는 다음 구조를 사용합니다.
 
 ```markdown
 ---
@@ -51,16 +51,16 @@ argument-hint: <expected-input-format>
 
 | Field | Required | Purpose |
 |-------|----------|---------|
-| `description` | Recommended | Shown in `/commands` list and workflow routing |
-| `argument-hint` | Optional | Tells users what input to provide |
+| `description` | Recommended | `/commands` list와 workflow routing에 표시됩니다 |
+| `argument-hint` | Optional | 사용자가 어떤 input을 제공해야 하는지 알려줍니다 |
 
 ---
 
-## The Golden Rule: Artifacts Are Everything
+## 황금률: Artifacts가 전부입니다
 
-> **The artifact you produce IS the specification for the next step.**
+> **생성한 artifact가 다음 step의 specification입니다.**
 
-In multi-step workflows, agents don't share memory. The ONLY way to pass information between steps is through **artifacts** - files saved to disk.
+multi-step workflow에서 agents는 memory를 공유하지 않습니다. step 사이에 정보를 전달하는 **유일한** 방법은 disk에 저장된 file인 **artifacts**입니다.
 
 ```
 Step 1: investigate-issue    Step 2: implement-issue
@@ -77,29 +77,29 @@ Step 1: investigate-issue    Step 2: implement-issue
   issues/issue-123.md ◄──────────────┘
 ```
 
-### Why This Matters
+### 이것이 중요한 이유
 
-- **No shared context**: Each workflow node can run with `context: fresh`
-- **Resumability**: If a step fails, the artifact preserves progress
-- **Auditability**: Artifacts create a paper trail of AI decisions
-- **Handoff quality**: The artifact determines if the next step succeeds
+- **shared context 없음**: 각 workflow node는 `context: fresh`로 실행될 수 있습니다
+- **Resumability**: step이 실패해도 artifact가 진행 상황을 보존합니다
+- **Auditability**: artifacts는 AI decision의 paper trail을 만듭니다
+- **Handoff quality**: artifact가 다음 step의 성공 여부를 결정합니다
 
-### What Makes a Good Artifact
+### 좋은 Artifact의 조건
 
-The artifact must contain **everything the next agent needs**:
+artifact에는 **다음 agent가 필요한 모든 것**이 들어 있어야 합니다.
 
 | Include | Why |
 |---------|-----|
-| Problem statement | Next agent needs context |
-| Specific file paths + line numbers | No guessing where to look |
-| Actual code snippets | Not summaries - real code |
-| Step-by-step implementation plan | Actionable without questions |
-| Validation commands | How to verify success |
-| Edge cases and risks | What to watch out for |
+| Problem statement | 다음 agent에게 context가 필요합니다 |
+| Specific file paths + line numbers | 어디를 봐야 할지 추측하지 않게 합니다 |
+| Actual code snippets | summary가 아니라 실제 code가 필요합니다 |
+| Step-by-step implementation plan | 질문 없이 실행 가능해야 합니다 |
+| Validation commands | 성공 여부를 검증하는 방법입니다 |
+| Edge cases and risks | 주의해야 할 항목입니다 |
 
-**Bad artifact**: "Fix the authentication bug in the login handler"
+**나쁜 artifact**: "Fix the authentication bug in the login handler"
 
-**Good artifact**:
+**좋은 artifact**:
 ````markdown
 ## Problem
 Users get 401 errors when token refresh races with API calls.
@@ -148,14 +148,14 @@ bun test src/auth/
 
 ---
 
-## Command Structure
+## Command 구조
 
-### Phase-Based Organization
+### Phase 기반 구성
 
-Break commands into clear phases. This helps the AI:
-- Know where it is in the process
-- Self-verify before proceeding
-- Recover if something fails
+command를 명확한 phase로 나누세요. 이렇게 하면 AI가 다음을 할 수 있습니다.
+- process의 어느 지점에 있는지 파악
+- 진행 전에 self-verify
+- 실패 시 복구
 
 ```markdown
 ## Phase 1: LOAD - Get Context
@@ -178,30 +178,30 @@ Break commands into clear phases. This helps the AI:
 [...]
 ```
 
-### Why Phases Work
+### phase가 효과적인 이유
 
-1. **Chunked reasoning**: AI handles complex tasks better in pieces
-2. **Self-verification**: Checkpoints force the AI to validate progress
-3. **Debugging**: When something fails, you know which phase
-4. **Consistency**: Similar structure across commands = predictable behavior
+1. **Chunked reasoning**: AI는 복잡한 작업을 조각으로 나눴을 때 더 잘 처리합니다
+2. **Self-verification**: checkpoint가 AI에게 progress 검증을 강제합니다
+3. **Debugging**: 실패 시 어느 phase에서 실패했는지 알 수 있습니다
+4. **Consistency**: command 간 구조가 비슷하면 behavior를 예측하기 쉽습니다
 
-### Common Phase Patterns
+### 흔한 Phase Patterns
 
 | Phase Name | Purpose | Example Actions |
 |------------|---------|-----------------|
-| LOAD | Gather inputs and context | Read files, fetch from GitHub, parse arguments |
-| EXPLORE | Understand the codebase | Search for patterns, trace code flow |
-| ANALYZE | Form conclusions | Root cause analysis, design decisions |
-| GENERATE | Produce output | Write artifact, create files |
-| VALIDATE | Verify correctness | Run tests, check types, review output |
-| COMMIT | Save to git | Stage, commit, push |
-| REPORT | Communicate results | Output summary to user |
+| LOAD | input과 context 수집 | file 읽기, GitHub에서 fetch, arguments parse |
+| EXPLORE | codebase 이해 | pattern 검색, code flow 추적 |
+| ANALYZE | 결론 도출 | root cause analysis, design decisions |
+| GENERATE | output 생성 | artifact 작성, file 생성 |
+| VALIDATE | correctness 검증 | test 실행, type 확인, output review |
+| COMMIT | git에 저장 | stage, commit, push |
+| REPORT | 결과 전달 | user에게 summary output |
 
 ---
 
 ## Checkpoints
 
-End each phase with a checkpoint:
+각 phase를 checkpoint로 끝내세요.
 
 ```markdown
 **PHASE_2_CHECKPOINT:**
@@ -210,34 +210,34 @@ End each phase with a checkpoint:
 - [ ] Implementation approach determined
 ```
 
-### Why Checkpoints Matter
+### checkpoint가 중요한 이유
 
-- **Self-regulation**: AI verifies it completed all steps
-- **Quality gate**: Prevents rushing to next phase
-- **Debugging aid**: Shows where process broke down
-- **Documentation**: Records what was accomplished
+- **Self-regulation**: AI가 모든 step을 완료했는지 검증합니다
+- **Quality gate**: 다음 phase로 성급히 넘어가는 것을 막습니다
+- **Debugging aid**: process가 어디서 깨졌는지 보여줍니다
+- **Documentation**: 무엇이 완료됐는지 기록합니다
 
 ---
 
 ## Variable Substitution
 
-Archon replaces variables in command text before sending to the AI. The most commonly used variables in commands:
+Archon은 command text를 AI에 보내기 전에 변수를 치환합니다. command에서 가장 자주 쓰는 변수는 다음과 같습니다.
 
 | Variable | Value |
 |----------|-------|
-| `$ARGUMENTS` / `$USER_MESSAGE` | User's input message |
-| `$1`, `$2`, `$3` | Positional arguments (direct invocation only) |
-| `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
-| `$BASE_BRANCH` | Base branch (auto-detected or configured) |
-| `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
-| `$WORKFLOW_ID` | Unique workflow run ID |
-| `$CONTEXT` | GitHub issue/PR context (if available) |
+| `$ARGUMENTS` / `$USER_MESSAGE` | user의 input message |
+| `$1`, `$2`, `$3` | positional arguments(direct invocation only) |
+| `$ARTIFACTS_DIR` | 이 workflow run을 위해 미리 생성된 artifacts directory |
+| `$BASE_BRANCH` | base branch(auto-detected 또는 configured) |
+| `$DOCS_DIR` | documentation directory path(기본값: `docs/`) |
+| `$WORKFLOW_ID` | unique workflow run ID |
+| `$CONTEXT` | GitHub issue/PR context(사용 가능한 경우) |
 
-See the [Variable Reference](/reference/variables/) for the complete list, including `$LOOP_USER_INPUT`, `$REJECTION_REASON`, node output references, substitution order, and context variable behavior.
+`$LOOP_USER_INPUT`, `$REJECTION_REASON`, node output references, substitution order, context variable behavior를 포함한 전체 목록은 [Variable Reference](/reference/variables/)를 참고하세요.
 
-### Usage Pattern
+### 사용 패턴
 
-Always show the input at the top:
+항상 input을 맨 위에 표시하세요.
 
 ```markdown
 # Investigate Issue
@@ -250,21 +250,21 @@ Always show the input at the top:
 [...]
 ```
 
-This ensures the AI knows exactly what it's working with.
+이렇게 하면 AI가 무엇을 다루고 있는지 정확히 알 수 있습니다.
 
 ---
 
 ## Artifact Conventions
 
-### Where Artifacts Live
+### Artifacts 위치
 
-Artifacts are stored **outside the repository** in the Archon workspace directory. Use the `$ARTIFACTS_DIR` variable to reference the pre-created artifacts directory for each workflow run:
+artifacts는 Archon workspace directory의 **repository 밖**에 저장됩니다. 각 workflow run을 위해 미리 생성된 artifacts directory를 참조하려면 `$ARTIFACTS_DIR` 변수를 사용하세요.
 
 ```
 ~/.archon/workspaces/owner/repo/artifacts/runs/{workflow-id}/
 ```
 
-This keeps artifacts out of git and avoids polluting the working tree.
+이렇게 하면 artifacts가 git에 들어가지 않고 working tree를 오염시키지 않습니다.
 
 ### Naming Conventions
 
@@ -275,9 +275,9 @@ This keeps artifacts out of git and avoids polluting the working tree.
 | PR review scope | `$ARTIFACTS_DIR/reviews/pr-{number}/scope.md` |
 | Code review findings | `$ARTIFACTS_DIR/reviews/pr-{number}/code-review-findings.md` |
 
-### Instructing the AI to Save
+### AI에게 저장을 지시하기
 
-Be explicit about artifact creation:
+artifact creation에 대해 명시적으로 지시하세요.
 
 ```markdown
 ## Phase 4: GENERATE - Create Artifact
@@ -314,11 +314,11 @@ The implementing agent will work ONLY from this artifact.
 
 ---
 
-## Writing Effective Instructions
+## 효과적인 Instructions 작성
 
-### Be Explicit About Tools
+### Tool 사용을 명확히 지시하기
 
-Tell the AI which tools to use:
+AI에게 어떤 tool을 사용해야 하는지 알려주세요.
 
 ```markdown
 ### 2.1 Search for Relevant Code
@@ -340,9 +340,9 @@ git blame -L {start},{end} {affected-file}
 ```
 ```
 
-### Provide Decision Trees
+### Decision Tree 제공
 
-Help the AI handle different scenarios:
+AI가 다양한 scenario를 처리할 수 있게 도와주세요.
 
 ```markdown
 ### 3.2 Handle Git State
@@ -360,9 +360,9 @@ Help the AI handle different scenarios:
 ```
 ```
 
-### Include Error Handling
+### Error Handling 포함
 
-Tell the AI what to do when things go wrong:
+문제가 생겼을 때 무엇을 해야 하는지 AI에게 알려주세요.
 
 ```markdown
 ## Handling Edge Cases
@@ -392,7 +392,7 @@ Options:
 
 ## Success Criteria
 
-End every command with clear success criteria:
+모든 command는 명확한 success criteria로 끝내세요.
 
 ```markdown
 ## Success Criteria
@@ -403,10 +403,10 @@ End every command with clear success criteria:
 - **COMMITTED**: Artifact saved in git
 ```
 
-These serve as:
-- Final checklist for the AI
-- Definition of "done"
-- Quality bar for the command
+이는 다음 역할을 합니다.
+- AI를 위한 final checklist
+- "done"의 정의
+- command의 quality bar
 
 ---
 
@@ -546,16 +546,16 @@ Run `/{next-command}` to continue.
 
 ---
 
-## Anti-Patterns to Avoid
+## 피해야 할 Anti-Patterns
 
-### 1. Vague Instructions
+### 1. 모호한 Instructions
 
-Bad:
+나쁜 예:
 ```markdown
 Analyze the code and find the problem.
 ```
 
-Good:
+좋은 예:
 ```markdown
 ### 2.1 Trace the Error Path
 
@@ -572,16 +572,16 @@ Good:
 3. Document the call chain leading to the error.
 ```
 
-### 2. Missing Artifact Instructions
+### 2. Artifact Instructions 누락
 
-Bad:
+나쁜 예:
 ```markdown
 ## Results
 
 Output your findings.
 ```
 
-Good:
+좋은 예:
 ```markdown
 ## Phase 4: GENERATE - Create Artifact
 
@@ -592,14 +592,14 @@ Write to `$ARTIFACTS_DIR/issues/issue-{number}.md`:
 **CRITICAL**: This artifact is the handoff to the implementing agent.
 ```
 
-### 3. No Error Handling
+### 3. Error Handling 없음
 
-Bad:
+나쁜 예:
 ```markdown
 Create the PR.
 ```
 
-Good:
+좋은 예:
 ```markdown
 ### Create PR
 
@@ -616,14 +616,14 @@ gh pr create --title "..." --body "..."
 ```
 ```
 
-### 4. Assuming Context
+### 4. Context를 가정함
 
-Bad:
+나쁜 예:
 ```markdown
 Fix the bug in the file we discussed.
 ```
 
-Good:
+좋은 예:
 ```markdown
 ### 1.1 Load Artifact
 
@@ -639,19 +639,19 @@ Extract:
 
 ---
 
-## Testing Your Command
+## Command 테스트
 
-1. **Run it manually**: `bun run cli workflow run {workflow} "test input"`
-2. **Check artifact output**: Does it contain everything needed?
-3. **Simulate next step**: Can another agent work from just the artifact?
-4. **Edge cases**: What happens with bad input? Missing files?
+1. **수동 실행**: `bun run cli workflow run {workflow} "test input"`
+2. **artifact output 확인**: 필요한 모든 내용이 들어 있나요?
+3. **다음 step 시뮬레이션**: 다른 agent가 artifact만 보고 작업할 수 있나요?
+4. **edge cases**: 잘못된 input이나 missing files에서는 어떻게 되나요?
 
 ---
 
 ## Summary
 
-1. **Commands are prompts** - Write clear instructions for AI agents
-2. **Artifacts are the handoff** - The ONLY way to pass data between steps
-3. **Use phases** - Break work into verifiable chunks
-4. **Be explicit** - Tell the AI exactly what to do, where, and how
-5. **Include everything** - The next agent works ONLY from your artifact
+1. **Command는 prompt입니다** - AI agent를 위한 명확한 instructions를 작성하세요
+2. **Artifacts는 handoff입니다** - step 사이에 data를 전달하는 유일한 방법입니다
+3. **phase를 사용하세요** - 작업을 검증 가능한 chunk로 나누세요
+4. **명시적으로 쓰세요** - AI에게 무엇을, 어디서, 어떻게 해야 하는지 정확히 알려주세요
+5. **모든 것을 포함하세요** - 다음 agent는 오직 artifact만 보고 작업합니다

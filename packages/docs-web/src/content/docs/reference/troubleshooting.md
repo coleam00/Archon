@@ -1,6 +1,6 @@
 ---
-title: Troubleshooting
-description: Common issues and solutions when running Archon locally or in Docker.
+title: 문제 해결
+description: Archon을 로컬 또는 Docker에서 실행할 때 자주 발생하는 문제와 해결책입니다.
 category: reference
 audience: [user, operator]
 status: current
@@ -8,26 +8,26 @@ sidebar:
   order: 7
 ---
 
-Common issues and their solutions when running Archon.
+Archon 실행 중 자주 발생하는 문제와 해결책입니다.
 
-## Bot Not Responding
+## Bot이 응답하지 않음
 
-**Check if the application is running:**
+**애플리케이션이 실행 중인지 확인:**
 
-If running locally:
+로컬에서 실행 중인 경우:
 ```bash
 # Check the server process
 curl http://localhost:3090/health
 # Expected: {"status":"ok"}
 ```
 
-If running via Docker:
+Docker로 실행 중인 경우:
 ```bash
 docker compose ps
 # Should show 'app' with state 'Up'
 ```
 
-**Check application logs:**
+**애플리케이션 로그 확인:**
 
 Local:
 ```bash
@@ -39,31 +39,31 @@ Docker:
 docker compose logs -f app
 ```
 
-**Verify bot token:**
+**Bot token 확인:**
 ```bash
 # In your .env file
 cat .env | grep TELEGRAM_BOT_TOKEN
 ```
 
-**Test with health check:**
+**Health check로 테스트:**
 ```bash
 curl http://localhost:3090/health
 # Expected: {"status":"ok"}
 ```
 
-## Database Connection Errors
+## Database connection error
 
-**Check database health:**
+**Database health 확인:**
 ```bash
 curl http://localhost:3090/health/db
 # Expected: {"status":"ok","database":"connected"}
 ```
 
-**For SQLite (default):**
+**SQLite(기본값)의 경우:**
 
-SQLite requires no setup. The database is created automatically at `~/.archon/archon.db`. If you see errors, check that the `~/.archon/` directory exists and is writable.
+SQLite는 별도 설정이 필요 없습니다. Database는 `~/.archon/archon.db`에 자동 생성됩니다. 오류가 보이면 `~/.archon/` directory가 존재하고 writable인지 확인하세요.
 
-**For remote PostgreSQL:**
+**원격 PostgreSQL의 경우:**
 ```bash
 # Verify DATABASE_URL
 echo $DATABASE_URL
@@ -72,7 +72,7 @@ echo $DATABASE_URL
 psql $DATABASE_URL -c "SELECT 1"
 ```
 
-**Verify tables exist (PostgreSQL):**
+**Table 존재 확인(PostgreSQL):**
 ```bash
 psql $DATABASE_URL -c "\dt"
 
@@ -81,51 +81,51 @@ psql $DATABASE_URL -c "\dt"
 # remote_agent_messages
 ```
 
-## Clone Command Fails
+## Clone command 실패
 
-**Verify GitHub token:**
+**GitHub token 확인:**
 ```bash
 cat .env | grep GH_TOKEN
 # Should have both GH_TOKEN and GITHUB_TOKEN set
 ```
 
-**Test token validity:**
+**Token 유효성 테스트:**
 ```bash
 # Test GitHub API access
 curl -H "Authorization: token $GH_TOKEN" https://api.github.com/user
 ```
 
-**Check workspace permissions:**
+**Workspace permission 확인:**
 
-The workspace directory is `~/.archon/workspaces/` by default (or `/.archon/workspaces/` in Docker). Make sure it exists and is writable.
+Workspace directory는 기본적으로 `~/.archon/workspaces/`입니다(Docker에서는 `/.archon/workspaces/`). 이 directory가 존재하고 writable인지 확인하세요.
 
-**Try manual clone:**
+**수동 clone 시도:**
 ```bash
 git clone https://github.com/user/repo ~/.archon/workspaces/test-repo
 ```
 
-## GitHub Webhook Not Triggering
+## GitHub webhook이 트리거되지 않음
 
-**Verify webhook delivery:**
-1. Go to your webhook settings in GitHub
-2. Click on the webhook
-3. Check "Recent Deliveries" tab
-4. Look for successful deliveries (green checkmark)
+**Webhook delivery 확인:**
+1. GitHub의 webhook setting으로 이동
+2. Webhook 클릭
+3. "Recent Deliveries" tab 확인
+4. 성공 delivery(green checkmark) 확인
 
-**Check webhook secret:**
+**Webhook secret 확인:**
 ```bash
 cat .env | grep WEBHOOK_SECRET
 # Must match exactly what you entered in GitHub
 ```
 
-**Verify ngrok is running (local dev):**
+**ngrok 실행 확인(local dev):**
 ```bash
 # Check ngrok status
 curl http://localhost:4040/api/tunnels
 # Or visit http://localhost:4040 in browser
 ```
 
-**Check application logs for webhook processing:**
+**Webhook processing 관련 application log 확인:**
 
 Local:
 ```bash
@@ -137,9 +137,9 @@ Docker:
 docker compose logs -f app | grep GitHub
 ```
 
-## Port Conflicts
+## Port conflict
 
-**Check if port 3090 is already in use:**
+**Port 3090이 이미 사용 중인지 확인:**
 
 macOS/Linux:
 ```bash
@@ -151,40 +151,40 @@ Windows:
 netstat -ano | findstr :3090
 ```
 
-You can override the port with the `PORT` environment variable:
+`PORT` 환경 변수로 port를 override할 수 있습니다.
 ```bash
 PORT=4000 bun run dev
 ```
 
-When running in a git worktree, Archon automatically allocates a unique port (3190-4089 range) so you don't need to worry about conflicts with the main instance.
+Git worktree에서 실행하면 Archon이 unique port(range 3190-4089)를 자동 할당하므로 main instance와 충돌을 걱정할 필요가 없습니다.
 
-### Stale Processes (Windows)
+### Stale process(Windows)
 
-**Symptom:** The Web UI shows a spinning indicator with no response, and the terminal shows no activity — even though you've started `bun run dev`.
+**증상:** Web UI에 spinner만 보이고 응답이 없으며, `bun run dev`를 시작했는데도 terminal에 활동이 없습니다.
 
-**Cause:** A previous `bun` or `node` process is still holding the port. This is common on Windows when the terminal is closed without stopping the server.
+**원인:** 이전 `bun` 또는 `node` process가 여전히 port를 잡고 있습니다. Windows에서 server를 중지하지 않고 terminal을 닫을 때 흔합니다.
 
-**Diagnose:**
+**진단:**
 
 ```powershell
 netstat -ano | findstr :3090
 ```
 
-Note the PID in the last column, then verify which process it is:
+마지막 column의 PID를 확인한 뒤 어떤 process인지 확인합니다.
 
 ```powershell
 tasklist | findstr 12345
 ```
 
-(Replace `12345` with the actual PID.)
+(`12345`를 실제 PID로 바꾸세요.)
 
-**Fix — kill by PID** (preferred):
+**수정 - PID로 종료**(권장):
 
 ```powershell
 taskkill /F /PID 12345
 ```
 
-If multiple stale processes are present:
+Stale process가 여러 개 있으면:
 
 ```powershell
 taskkill /F /IM bun.exe
@@ -192,29 +192,29 @@ taskkill /F /IM node.exe
 ```
 
 :::caution
-Do not kill `claude.exe` processes — those are active Claude Code sessions.
+`claude.exe` process는 종료하지 마세요. 이는 active Claude Code session입니다.
 :::
 
-See also: [Windows Setup](/deployment/windows/) for more Windows-specific guidance.
+Windows별 추가 지침은 [Windows Setup](/deployment/windows/)도 참고하세요.
 
 ## E2E Testing / agent-browser
 
 **`agent-browser: command not found`:**
 
-`agent-browser` is an optional external dependency -- see the [E2E Testing Guide](/deployment/e2e-testing/) for installation.
+`agent-browser`는 optional external dependency입니다. 설치는 [E2E Testing Guide](/deployment/e2e-testing/)를 참고하세요.
 
 ```bash
 npm install -g agent-browser
 agent-browser install
 ```
 
-**agent-browser daemon fails to start (Windows):**
+**agent-browser daemon fails to start(Windows):**
 
-agent-browser has a [known Windows bug](https://github.com/vercel-labs/agent-browser/issues/56). Use WSL as a workaround -- see [E2E Testing on WSL](/deployment/e2e-testing-wsl/).
+agent-browser에는 [known Windows bug](https://github.com/vercel-labs/agent-browser/issues/56)가 있습니다. WSL을 workaround로 사용하세요. [E2E Testing on WSL](/deployment/e2e-testing-wsl/)을 참고하세요.
 
-**agent-browser daemon fails to start (macOS/Linux):**
+**agent-browser daemon fails to start(macOS/Linux):**
 
-Kill stale daemons and retry:
+Stale daemon을 종료하고 다시 시도합니다.
 ```bash
 pkill -f daemon.js
 agent-browser open http://localhost:3090
@@ -222,32 +222,32 @@ agent-browser open http://localhost:3090
 
 ## Docker
 
-These issues are specific to running Archon inside Docker containers.
+다음 문제들은 Docker container 안에서 Archon을 실행할 때 해당합니다.
 
-### Container Won't Start
+### Container가 시작되지 않음
 
-**Check logs for specific errors:**
+**구체적 error를 logs에서 확인:**
 ```bash
 docker compose logs app
 ```
 
-**Verify environment variables:**
+**환경 변수 확인:**
 ```bash
 # Check if .env is properly formatted
 docker compose config
 ```
 
-**Rebuild without cache:**
+**Cache 없이 rebuild:**
 ```bash
 docker compose build --no-cache
 docker compose up -d
 ```
 
-If using the `with-db` profile, add `--profile with-db` to the above commands.
+`with-db` profile을 사용한다면 위 command에 `--profile with-db`를 추가하세요.
 
-### Docker Database Issues
+### Docker database 문제
 
-**For local PostgreSQL (`with-db` profile):**
+**로컬 PostgreSQL(`with-db` profile)의 경우:**
 ```bash
 # Check if postgres container is running
 docker compose --profile with-db ps postgres
@@ -259,7 +259,7 @@ docker compose logs -f postgres
 docker compose exec postgres psql -U postgres -c "SELECT 1"
 ```
 
-**Verify tables exist (Docker PostgreSQL):**
+**Table 존재 확인(Docker PostgreSQL):**
 ```bash
 docker compose exec postgres psql -U postgres -d remote_coding_agent -c "\dt"
 
@@ -268,30 +268,30 @@ docker compose exec postgres psql -U postgres -d remote_coding_agent -c "\dt"
 # remote_agent_messages
 ```
 
-### Docker Clone Issues
+### Docker clone 문제
 
-**Check workspace permissions inside the container:**
+**Container 내부 workspace permission 확인:**
 ```bash
 docker compose exec app ls -la /.archon/workspaces
 ```
 
-**Try manual clone inside the container:**
+**Container 내부에서 수동 clone 시도:**
 ```bash
 docker compose exec app git clone https://github.com/user/repo /.archon/workspaces/test-repo
 ```
 
-## "Claude Code not found" When Running Compiled Binary
+## Compiled binary 실행 시 "Claude Code not found"
 
-**Symptom:** A workflow that uses Claude fails with:
+**증상:** Claude를 사용하는 workflow가 다음 오류로 실패합니다.
 
 ```
 Claude Code not found. Archon requires the Claude Code executable to be
 reachable at a configured path in compiled builds.
 ```
 
-**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They need an explicit path to the Claude Code executable. Source/dev mode (`bun run`) auto-resolves via `node_modules` and is unaffected.
+**원인:** Compiled Archon binary(curl/PowerShell installer 또는 Homebrew의 `archon`)에는 Claude Code가 bundle되어 있지 않습니다. Claude Code executable에 대한 명시적 path가 필요합니다. Source/dev mode(`bun run`)는 `node_modules`를 통해 auto-resolve되며 영향을 받지 않습니다.
 
-**Fix:** Install Claude Code separately and point Archon at it.
+**수정:** Claude Code를 별도로 설치하고 Archon이 해당 경로를 보게 합니다.
 
 ```bash
 # macOS / Linux / WSL — Anthropic's recommended native installer
@@ -303,7 +303,7 @@ irm https://claude.ai/install.ps1 | iex
 $env:CLAUDE_BIN_PATH = "$env:USERPROFILE\.local\bin\claude.exe"
 ```
 
-For a durable setup, set the path in `~/.archon/config.yaml` instead:
+영구 설정은 대신 `~/.archon/config.yaml`에 path를 설정하세요.
 
 ```yaml
 assistants:
@@ -311,44 +311,44 @@ assistants:
     claudeBinaryPath: /absolute/path/to/claude
 ```
 
-`archon setup` auto-detects and writes `CLAUDE_BIN_PATH` for you. Docker users do not need to do anything — the image pre-sets the variable.
+`archon setup`은 `CLAUDE_BIN_PATH`를 자동 감지하고 써 줍니다. Docker 사용자는 아무것도 할 필요가 없습니다. Image가 variable을 미리 설정합니다.
 
-See the [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) guide for the full install matrix.
+전체 install matrix는 [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) guide를 참고하세요.
 
-## Workflows Hang Silently When Run Inside Claude Code
+## Claude Code 안에서 workflow 실행 시 조용히 멈춤
 
-**Symptom:** Workflows started from within a Claude Code session (e.g., via the Terminal tool) produce no output, or the CLI emits a warning about `CLAUDECODE=1` before the workflow hangs.
+**증상:** Claude Code session 내부(예: Terminal tool)에서 시작한 workflow가 output을 내지 않거나, CLI가 workflow hang 전에 `CLAUDECODE=1` 관련 warning을 출력합니다.
 
-**Cause:** Nested Claude Code sessions can deadlock — the outer session waits for tool results that the inner session never delivers.
+**원인:** Nested Claude Code session은 deadlock될 수 있습니다. 바깥 session은 tool result를 기다리지만 안쪽 session은 이를 전달하지 못합니다.
 
-**Fix:** Run `archon serve` from a regular shell outside Claude Code and use the Web UI or HTTP API instead.
+**수정:** Claude Code 밖의 일반 shell에서 `archon serve`를 실행하고 Web UI 또는 HTTP API를 사용하세요.
 
-**Suppress the warning:** If you have a non-deadlocking setup and want to silence the warning:
+**Warning 숨기기:** Deadlock이 발생하지 않는 setup이고 warning만 숨기고 싶다면:
 
 ```bash
 ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1 archon workflow run ...
 ```
 
-**Adjust the timeout:** If your environment is slow and hitting the 60-second first-event timeout:
+**Timeout 조정:** 환경이 느려 60초 first-event timeout에 걸린다면:
 
 ```bash
 ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 ```
 
-## Worktree Belongs to a Different Clone
+## Worktree가 다른 clone에 속함
 
-**Symptom:** Running a workflow (especially with `--branch <name>`) from one local clone surfaces one of these errors:
+**증상:** 한 local clone에서 workflow를 실행할 때(특히 `--branch <name>` 사용) 다음 오류 중 하나가 표시됩니다.
 
 - `Worktree at <path> belongs to a different clone (<other-clone-path>). Remove it from that clone or use a different codebase registration.`
 - `Cannot verify worktree ownership at <path>: <reason>`
 - `Cannot adopt <path>: path contains a full git checkout, not a worktree.`
 - `Cannot adopt <path>: .git pointer is not a git-worktree reference.`
 
-**Cause:** Archon derives codebase identity from the remote URL (`owner/repo`), so two local clones of the same remote share one `codebase_id`. Worktrees are stored under a shared path (`~/.archon/workspaces/<owner>/<repo>/worktrees/`), which means a worktree created by clone A is visible on disk from clone B. The isolation system refuses to silently adopt across clones because it would operate on the wrong filesystem state.
+**원인:** Archon은 remote URL(`owner/repo`)에서 codebase identity를 도출하므로 같은 remote의 두 local clone은 하나의 `codebase_id`를 공유합니다. Worktree는 shared path(`~/.archon/workspaces/<owner>/<repo>/worktrees/`) 아래 저장되기 때문에 clone A가 만든 worktree가 clone B에서도 disk에 보입니다. Isolation system은 잘못된 filesystem state에서 작업하지 않도록 clone 간 silent adoption을 거부합니다.
 
-**Fix — pick one:**
+**수정 - 하나를 선택하세요:**
 
-1. **Remove the other clone's worktree.** If you no longer need the other clone's in-progress work:
+1. **다른 clone의 worktree 제거.** 다른 clone의 in-progress 작업이 더 이상 필요 없다면:
 
    ```bash
    # From the other clone's directory, find and remove the conflicting worktree
@@ -358,16 +358,16 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
    git worktree remove <path> --force
    ```
 
-2. **Use a different branch name** for this run so the two clones don't compete for the same worktree path:
+2. **다른 branch name 사용.** 두 clone이 같은 worktree path를 두고 경쟁하지 않도록 이번 run에 다른 branch name을 사용합니다.
 
    ```bash
    archon workflow run <name> --branch <different-name> "task"
    ```
 
-3. **Work from a single clone.** If both local checkouts are for the same project, consolidate to one. Archon's codebase registration currently assumes one local path per remote; true multi-clone support is tracked in [#1192](https://github.com/coleam00/Archon/issues/1192).
+3. **하나의 clone에서 작업.** 두 local checkout이 같은 project라면 하나로 통합하세요. Archon의 codebase registration은 현재 remote당 하나의 local path를 가정합니다. 진짜 multi-clone support는 [#1192](https://github.com/coleam00/Archon/issues/1192)에서 추적 중입니다.
 
-**Other variants:**
+**다른 변형:**
 
-- `path contains a full git checkout, not a worktree`: something non-Archon created a full git repo at the worktree path. Remove or move it.
-- `.git pointer is not a git-worktree reference`: the `.git` file at that path points somewhere unexpected (submodule, malformed). Inspect it with `cat <path>/.git` and clean up manually.
-- `Cannot verify worktree ownership`: filesystem permission or I/O error reading `<path>/.git`. Check `ls -la <path>` and file permissions on `~/.archon/workspaces`.
+- `path contains a full git checkout, not a worktree`: Archon이 아닌 다른 무언가가 worktree path에 full git repo를 만들었습니다. 제거하거나 이동하세요.
+- `.git pointer is not a git-worktree reference`: 해당 path의 `.git` file이 예상 밖의 위치(submodule, malformed)를 가리킵니다. `cat <path>/.git`으로 확인하고 수동 정리하세요.
+- `Cannot verify worktree ownership`: `<path>/.git` 읽기 중 filesystem permission 또는 I/O error입니다. `ls -la <path>`와 `~/.archon/workspaces`의 file permission을 확인하세요.

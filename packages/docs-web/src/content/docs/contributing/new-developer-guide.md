@@ -1,6 +1,6 @@
 ---
-title: New Developer Guide
-description: Codebase orientation for new Archon developers — architecture overview, workflows, platforms, and first steps.
+title: 새 개발자 가이드
+description: 새 Archon 개발자를 위한 코드베이스 안내 — 아키텍처 개요, workflow, platform, 첫 단계.
 category: contributing
 audience: [developer]
 status: current
@@ -8,11 +8,11 @@ sidebar:
   order: 1
 ---
 
-> **TL;DR**: Archon lets you control AI coding assistants (Claude Code, Codex) from your phone via Telegram, Slack, Discord, or GitHub. Think of it as a remote control for AI pair programming.
+> **TL;DR**: Archon은 Telegram, Slack, Discord, GitHub를 통해 휴대폰에서 AI coding assistant(Claude Code, Codex)를 제어하게 해 줍니다. AI pair programming용 remote control이라고 보면 됩니다.
 
 ---
 
-## The Problem We Solve
+## 우리가 해결하는 문제
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -51,7 +51,7 @@ sidebar:
 
 ---
 
-## Core Concept: Message → AI → Code → Response
+## 핵심 개념: Message → AI → Code → Response
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -73,11 +73,11 @@ sidebar:
 
 ---
 
-## The Four Ways to Use Archon
+## Archon을 사용하는 네 가지 방식
 
 ### 1. Command Line (Local Execution)
 
-Run workflows directly from your terminal without needing the server:
+Server 없이 terminal에서 workflow를 직접 실행합니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -105,11 +105,11 @@ Run workflows directly from your terminal without needing the server:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Good for:** Running workflows locally, testing, automation scripts, CI/CD
+**적합한 용도:** local workflow 실행, testing, automation script, CI/CD
 
-### 2. Direct Chat (Simple Questions)
+### 2. Direct Chat (간단한 질문)
 
-Just talk to the AI like you would in Claude Code terminal:
+Claude Code terminal에서처럼 AI와 바로 대화합니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -132,9 +132,9 @@ Just talk to the AI like you would in Claude Code terminal:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3. Slash Commands (Specific Operations)
+### 3. Slash Commands (특정 작업)
 
-Deterministic commands that don't involve AI:
+AI를 거치지 않는 deterministic command입니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -153,7 +153,7 @@ Deterministic commands that don't involve AI:
 
 ### 4. Workflows (Multi-Step Automation)
 
-This is where Archon shines - automated multi-step AI workflows:
+Archon이 가장 빛나는 부분입니다. 자동화된 multi-step AI workflow를 실행합니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -191,9 +191,9 @@ This is where Archon shines - automated multi-step AI workflows:
 
 ---
 
-## How Workflows Work (The Magic)
+## Workflow가 동작하는 방식
 
-A workflow is a YAML file that chains AI prompts together:
+Workflow는 AI prompt를 이어 붙이는 YAML file입니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -237,9 +237,9 @@ A workflow is a YAML file that chains AI prompts together:
 
 ---
 
-## The Router: How Archon Picks Workflows
+## Router: Archon이 Workflow를 고르는 방식
 
-When you send a message, an AI "router" decides what to do:
+메시지를 보내면 AI "router"가 무엇을 할지 결정합니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -270,9 +270,9 @@ When you send a message, an AI "router" decides what to do:
 
 ---
 
-## Available Workflows
+## 사용 가능한 Workflow
 
-The table below lists the key bundled workflows. All bundled workflows are prefixed with `archon-`. Run `bun run cli workflow list` to see the full current list.
+아래 표는 주요 bundled workflow를 보여줍니다. 모든 bundled workflow는 `archon-` prefix를 사용합니다. 현재 전체 목록을 보려면 `bun run cli workflow list`를 실행하세요.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -311,9 +311,9 @@ The table below lists the key bundled workflows. All bundled workflows are prefi
 
 ---
 
-## Parallel Agents: The PR Review Example
+## Parallel Agents: PR Review 예시
 
-The `archon-comprehensive-pr-review` workflow runs 5 AI agents simultaneously:
+`archon-comprehensive-pr-review` workflow는 5개의 AI agent를 동시에 실행합니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -368,9 +368,9 @@ The `archon-comprehensive-pr-review` workflow runs 5 AI agents simultaneously:
 
 ---
 
-## The Ralph Loop: Autonomous PRD Implementation
+## Ralph Loop: 자율 PRD 구현
 
-For larger features, Ralph executes user stories one-by-one until complete. The workflow is `archon-ralph-dag`:
+큰 feature에서는 Ralph가 user story를 완료될 때까지 하나씩 실행합니다. Workflow는 `archon-ralph-dag`입니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -422,7 +422,7 @@ For larger features, Ralph executes user stories one-by-one until complete. The 
 
 ---
 
-## Platform Integration
+## Platform 통합
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -486,7 +486,7 @@ For larger features, Ralph executes user stories one-by-one until complete. The 
 
 ## Isolation: Git Worktrees
 
-Each conversation gets its own isolated copy of the repo:
+각 conversation은 repo의 독립된 copy를 하나씩 받습니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -514,7 +514,7 @@ Each conversation gets its own isolated copy of the repo:
 
 ---
 
-## Configuration Hierarchy
+## Configuration 계층
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -554,7 +554,7 @@ Each conversation gets its own isolated copy of the repo:
 
 ---
 
-## Directory Structure
+## 디렉터리 구조
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -582,7 +582,7 @@ Each conversation gets its own isolated copy of the repo:
 
 ---
 
-## Quick Reference: Common Interactions
+## 빠른 참조: 자주 쓰는 상호작용
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -611,7 +611,7 @@ Each conversation gets its own isolated copy of the repo:
 
 ---
 
-## Summary
+## 요약
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -650,11 +650,11 @@ Each conversation gets its own isolated copy of the repo:
 
 ---
 
-## Next Steps
+## 다음 단계
 
-1. **Read**: [Getting Started](/getting-started/) - Set up your first instance
-2. **Explore**: `.archon/workflows/` - See example workflows
-3. **Customize**: `.archon/commands/` - Create your own prompts
-4. **Configure**: `.archon/config.yaml` - Tweak settings
+1. **읽기**: [Getting Started](/getting-started/) - 첫 instance 설정
+2. **탐색**: `.archon/workflows/` - 예시 workflow 확인
+3. **커스터마이즈**: `.archon/commands/` - 직접 prompt 만들기
+4. **설정**: `.archon/config.yaml` - 설정 조정
 
-Welcome to remote agentic coding!
+Remote agentic coding에 오신 것을 환영합니다.

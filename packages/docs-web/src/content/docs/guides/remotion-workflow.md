@@ -1,6 +1,6 @@
 ---
-title: Remotion Video Generation Workflow
-description: Use AI to generate Remotion video compositions with per-node skills and bash render nodes.
+title: Remotion 비디오 생성 워크플로
+description: 노드별 skills와 bash render node를 사용해 AI로 Remotion video composition을 생성합니다.
 category: guides
 area: workflows
 audience: [user]
@@ -9,13 +9,11 @@ sidebar:
   order: 9
 ---
 
-The `archon-remotion-generate` workflow uses AI to create Remotion video compositions.
-It generates React/TypeScript code, renders preview stills, renders the full video,
-and summarizes the output — all as a DAG workflow with per-node skills.
+`archon-remotion-generate` workflow는 AI를 사용해 Remotion video composition을 만듭니다. React/TypeScript code를 생성하고, preview stills를 render하고, full video를 render한 뒤 output을 요약합니다. 이 모든 과정은 노드별 skills를 사용하는 DAG workflow로 실행됩니다.
 
-## Quick Start
+## 빠른 시작
 
-### 1. Create a Remotion project
+### 1. Remotion project 생성
 
 ```bash
 npx create-video@latest my-video
@@ -23,28 +21,26 @@ cd my-video
 npm install
 ```
 
-### 2. Install the Remotion skill (recommended)
+### 2. Remotion skill 설치(권장)
 
 ```bash
 npx skills add remotion-dev/skills
 ```
 
-This installs the official `remotion-best-practices` skill (35 rule files covering
-animations, audio, transitions, charts, 3D, and more). The workflow's generate node
-preloads this skill to produce higher-quality Remotion code.
+이 명령은 official `remotion-best-practices` skill을 설치합니다(animations, audio, transitions, charts, 3D 등을 다루는 35개 rule files). workflow의 generate node는 더 높은 품질의 Remotion code를 만들기 위해 이 skill을 미리 로드합니다.
 
-### 3. Run the workflow
+### 3. workflow 실행
 
 ```bash
 # From your Remotion project directory:
 bun run cli workflow run archon-remotion-generate "Create a 5-second countdown from 5 to 1 with bouncy spring animations and a glowing effect"
 ```
 
-Output lands in `out/video.mp4`.
+output은 `out/video.mp4`에 생성됩니다.
 
-## How It Works
+## 동작 방식
 
-The workflow is a 5-node DAG:
+이 workflow는 5-node DAG입니다.
 
 ```
 [check-project] → [generate] → [render-preview] → [render-video] → [summary]
@@ -54,43 +50,40 @@ The workflow is a 5-node DAG:
 
 | Node | Type | What It Does |
 |------|------|-------------|
-| `check-project` | bash | Verifies Remotion project structure exists (`src/index.ts`, `src/Root.tsx`) |
-| `generate` | agentic + skill | AI writes/modifies the composition code. Preloads `remotion-best-practices` skill. |
-| `render-preview` | bash | Renders 3 preview stills (early, mid, late frames) via `npx remotion still` |
-| `render-video` | bash | Renders the full MP4 via `npx remotion render` with H.264 codec |
-| `summary` | agentic (haiku) | Reads code + stills, describes what was created |
+| `check-project` | bash | Remotion project structure(`src/index.ts`, `src/Root.tsx`)가 있는지 확인 |
+| `generate` | agentic + skill | AI가 composition code를 작성/수정합니다. `remotion-best-practices` skill을 미리 로드합니다. |
+| `render-preview` | bash | `npx remotion still`로 preview still 3개(early, mid, late frames)를 render |
+| `render-video` | bash | H.264 codec으로 `npx remotion render`를 사용해 full MP4 render |
+| `summary` | agentic (haiku) | code + stills를 읽고 무엇이 생성됐는지 설명 |
 
-### Why per-node skills matter here
+### 여기서 노드별 skills가 중요한 이유
 
-The `generate` node has `skills: [remotion-best-practices]`. This preloads the official
-Remotion skill into the agent's context, teaching it:
+`generate` node에는 `skills: [remotion-best-practices]`가 있습니다. 이 설정은 official Remotion skill을 agent context에 미리 로드해 다음 내용을 알려줍니다.
 
-- Use `useCurrentFrame()` + `interpolate()`/`spring()` for all animations
-- Never use CSS transitions, `Math.random()`, `setTimeout`
-- Use `<Img>` from `remotion` instead of native `<img>`
-- Use `<Sequence>` for scene timing, `<Series>` for auto-stacking
-- Use `<TransitionSeries>` with `fade()`, `slide()` for transitions
-- Animation recipes for text, charts, Ken Burns zoom, staggered lists
-- Audio integration patterns with `<Audio>` from `@remotion/media`
+- 모든 animation에 `useCurrentFrame()` + `interpolate()`/`spring()` 사용
+- CSS transitions, `Math.random()`, `setTimeout` 사용 금지
+- native `<img>` 대신 `remotion`의 `<Img>` 사용
+- scene timing에는 `<Sequence>`, auto-stacking에는 `<Series>` 사용
+- transition에는 `fade()`, `slide()`와 함께 `<TransitionSeries>` 사용
+- text, charts, Ken Burns zoom, staggered lists용 animation recipes
+- `@remotion/media`의 `<Audio>`를 사용하는 audio integration patterns
 
-Without the skill, the agent would write generic React code that may not render
-correctly in Remotion (CSS animations don't work, `Math.random()` causes flickering, etc.).
+skill이 없으면 agent가 Remotion에서 제대로 render되지 않을 수 있는 generic React code를 작성할 수 있습니다(CSS animations가 동작하지 않거나, `Math.random()`이 flickering을 유발하는 등).
 
-### Why bash nodes for rendering
+### rendering에 bash node를 쓰는 이유
 
-Render nodes are deterministic bash nodes, not agentic. This means:
+render node는 agentic node가 아니라 deterministic bash node입니다. 즉:
 
-- The LLM cannot skip or fake the render step
-- Render errors are real errors, not hallucinated
-- Render time is predictable (no token cost)
-- The output file either exists or it doesn't — no ambiguity
+- LLM이 render step을 skip하거나 fake할 수 없습니다
+- render errors는 hallucinated error가 아니라 실제 error입니다
+- render time을 예측할 수 있습니다(token cost 없음)
+- output file은 존재하거나 존재하지 않습니다. 모호함이 없습니다
 
-This is the "blueprint pattern" from Stripe Minions — interleave deterministic gates
-with agentic nodes to keep the pipeline reliable.
+이는 Stripe Minions의 "blueprint pattern"입니다. deterministic gate와 agentic node를 교차 배치해 pipeline을 안정적으로 유지합니다.
 
 ## Project Structure
 
-The workflow expects a standard Remotion project:
+workflow는 표준 Remotion project를 기대합니다.
 
 ```
 my-video/
@@ -109,7 +102,7 @@ my-video/
 
 ## Prompt Tips
 
-Good prompts describe the visual result, not the code:
+좋은 prompt는 code가 아니라 시각적 결과를 설명합니다.
 
 ```bash
 # Good — describes what to see
@@ -122,10 +115,9 @@ bun run cli workflow run archon-remotion-generate "Dark background, white text. 
 bun run cli workflow run archon-remotion-generate "make a video"
 ```
 
-## Adding MCP Servers
+## MCP Servers 추가
 
-Combine skills with MCP for richer workflows. For example, add the Remotion docs
-MCP server so the agent can look up API details:
+더 풍부한 workflow를 위해 skills와 MCP를 결합하세요. 예를 들어 agent가 API details를 조회할 수 있도록 Remotion docs MCP server를 추가할 수 있습니다.
 
 ```json
 // .archon/mcp/remotion.json
@@ -137,7 +129,7 @@ MCP server so the agent can look up API details:
 }
 ```
 
-Then create a custom workflow that adds both skill and MCP:
+그런 다음 skill과 MCP를 모두 추가한 custom workflow를 만듭니다.
 
 ```yaml
 name: remotion-with-docs
@@ -158,9 +150,9 @@ nodes:
 
 ## Customization
 
-### Change output format
+### output format 변경
 
-Fork the default workflow and modify the `render-video` bash node:
+default workflow를 fork하고 `render-video` bash node를 수정하세요.
 
 ```yaml
   - id: render-video
@@ -174,10 +166,9 @@ Fork the default workflow and modify the `render-video` bash node:
       npx remotion render src/index.ts "$COMP_ID" out/video.webm --codec=vp9
 ```
 
-### Add a review+refine loop
+### review+refine loop 추가
 
-Extend the workflow with a review node that checks the stills and conditionally
-loops back for refinement:
+stills를 확인하고 필요하면 refinement로 되돌아가는 review node로 workflow를 확장합니다.
 
 ```yaml
   - id: review
@@ -220,21 +211,16 @@ loops back for refinement:
       - Edit
 ```
 
-## Limitations
+## 제한사항
 
-- **Requires a Remotion project** — the workflow modifies existing files, it doesn't
-  scaffold a project from scratch. Run `npx create-video@latest` first.
-- **Local rendering only** — uses `npx remotion render` (headless Chromium). For
-  serverless rendering, use Lambda directly.
-- **No audio generation** — the workflow generates visual compositions. For AI-generated
-  voiceover or music, add the `remotion-media-mcp` server.
-- **Skill must be installed** — the `remotion-best-practices` skill must be installed
-  via `npx skills add remotion-dev/skills`. Without it, the workflow still runs but
-  code quality may be lower.
+- **Remotion project 필요** — workflow는 기존 file을 수정하며 project를 처음부터 scaffold하지 않습니다. 먼저 `npx create-video@latest`를 실행하세요.
+- **Local rendering only** — `npx remotion render`(headless Chromium)를 사용합니다. serverless rendering에는 Lambda를 직접 사용하세요.
+- **audio generation 없음** — workflow는 visual composition을 생성합니다. AI-generated voiceover나 music이 필요하면 `remotion-media-mcp` server를 추가하세요.
+- **Skill 설치 필요** — `remotion-best-practices` skill은 `npx skills add remotion-dev/skills`로 설치되어 있어야 합니다. 없어도 workflow는 실행되지만 code quality가 낮아질 수 있습니다.
 
-## Related
+## 관련 문서
 
-- [Per-Node Skills](/guides/skills/) — how `skills:` works on DAG nodes
-- [Per-Node MCP Servers](/guides/mcp-servers/) — how `mcp:` works on DAG nodes
+- [노드별 Skills](/guides/skills/) — DAG node에서 `skills:`가 동작하는 방식
+- [노드별 MCP Servers](/guides/mcp-servers/) — DAG node에서 `mcp:`가 동작하는 방식
 - [Remotion Documentation](https://www.remotion.dev/docs) — official Remotion docs
 - [Remotion Skills](https://github.com/remotion-dev/skills) — official skill repository

@@ -1,6 +1,6 @@
 ---
-title: Docker Guide
-description: Deploy Archon with Docker, including automatic HTTPS, PostgreSQL, and the Web UI.
+title: Docker 가이드
+description: 자동 HTTPS, PostgreSQL, Web UI를 포함해 Docker로 Archon을 배포합니다.
 category: deployment
 area: infra
 audience: [operator]
@@ -9,40 +9,37 @@ sidebar:
   order: 2
 ---
 
-Deploy Archon on a server with Docker. Includes automatic HTTPS, PostgreSQL, and the Web UI.
+Docker로 server에 Archon을 배포합니다. 자동 HTTPS, PostgreSQL, Web UI 구성이 포함됩니다. HarnessLab은 Archon fork이므로 같은 Docker 배포 방식을 그대로 사용할 수 있습니다.
 
-> **Claude Code is pre-installed in the image.** The official `ghcr.io/coleam00/archon` image
-> ships with Claude Code installed via npm and `CLAUDE_BIN_PATH` pre-set — no extra configuration
-> required. If you build a custom image that omits the npm install, set `CLAUDE_BIN_PATH` yourself
-> to point at a mounted `cli.js` (see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)).
+> **Claude Code는 image에 미리 설치되어 있습니다.** 공식 `ghcr.io/coleam00/archon` image에는 npm으로 설치된 Claude Code와 미리 설정된 `CLAUDE_BIN_PATH`가 포함되어 있어 추가 설정이 필요 없습니다. npm install을 생략한 custom image를 build하는 경우에는 mounted `cli.js`를 가리키도록 `CLAUDE_BIN_PATH`를 직접 설정하세요([AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) 참고).
 
 ---
 
-## Cloud-Init (Fastest Setup)
+## Cloud-Init(가장 빠른 설정)
 
-The fastest way to deploy. Paste the cloud-init config into your VPS provider's **User Data** field when creating a server — it installs everything automatically.
+가장 빠른 배포 방법입니다. server를 만들 때 VPS provider의 **User Data** field에 cloud-init config를 붙여 넣으면 필요한 항목이 자동으로 설치됩니다.
 
 **File:** `deploy/cloud-init.yml`
 
-### How to use
+### 사용 방법
 
-1. **Create a VPS** (Ubuntu 22.04+ recommended) at DigitalOcean, AWS, Linode, Hetzner, etc.
-2. **Paste** the contents of `deploy/cloud-init.yml` into the "User Data" / "Cloud-Init" field
-3. **Add your SSH key** via the provider's UI
-4. **Create the server** and wait ~5-8 minutes for setup to complete
+1. DigitalOcean, AWS, Linode, Hetzner 등에서 **VPS를 생성**합니다(Ubuntu 22.04+ 권장).
+2. `deploy/cloud-init.yml` 내용을 "User Data" / "Cloud-Init" field에 **붙여 넣습니다**.
+3. provider UI에서 **SSH key를 추가**합니다.
+4. **server를 생성**하고 setup이 끝날 때까지 약 5-8분 기다립니다.
 
-### What it installs
+### 설치되는 항목
 
 - Docker + Docker Compose
-- UFW firewall (ports 22, 80, 443)
-- Clones the repo to `/opt/archon`
-- Copies `.env.example` -> `.env` and `Caddyfile.example` -> `Caddyfile`
-- Pre-pulls PostgreSQL and Caddy images
-- Builds the Archon Docker image
+- UFW firewall(port 22, 80, 443)
+- repo를 `/opt/archon`에 clone
+- `.env.example` -> `.env`, `Caddyfile.example` -> `Caddyfile` 복사
+- PostgreSQL 및 Caddy image pre-pull
+- Archon Docker image build
 
-### After boot
+### Boot 이후
 
-SSH into the server and finish configuration:
+server에 SSH로 접속해 설정을 마무리합니다.
 
 ```bash
 # Check setup completed
@@ -65,11 +62,11 @@ cd /opt/archon
 docker compose --profile with-db --profile cloud up -d
 ```
 
-> **Don't forget DNS**: Before starting, point your domain's A record to the server's IP.
+> **DNS를 잊지 마세요.** 시작하기 전에 domain의 A record가 server IP를 가리키도록 설정해야 합니다.
 
-### Provider-specific notes
+### Provider별 참고 사항
 
-| Provider | Where to paste cloud-init |
+| Provider | cloud-init 붙여넣는 위치 |
 |----------|--------------------------|
 | **DigitalOcean** | Create Droplet -> Advanced Options -> User Data |
 | **AWS EC2** | Launch Instance -> Advanced Details -> User Data |
@@ -79,11 +76,11 @@ docker compose --profile with-db --profile cloud up -d
 
 ---
 
-## Local Docker Desktop (Windows / macOS)
+## Local Docker Desktop(Windows / macOS)
 
-Run Archon locally with Docker Desktop — no domain, no VPS required. Uses SQLite and the Web UI only.
+Docker Desktop으로 Archon을 로컬에서 실행합니다. domain이나 VPS가 필요 없으며, SQLite와 Web UI만 사용합니다.
 
-### Quick start
+### 빠른 시작
 
 ```bash
 git clone https://github.com/coleam00/Archon.git
@@ -93,52 +90,53 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Access the Web UI at **http://localhost:3000**.
+Web UI는 **http://localhost:3000**에서 열 수 있습니다.
 
-### Windows-specific notes
+### Windows 참고 사항
 
-**Build from WSL, not PowerShell.** Docker Desktop on Windows cannot follow Bun workspace symlinks during the build context transfer. If you see `The file cannot be accessed by the system`, open a WSL terminal:
+**PowerShell이 아니라 WSL에서 build하세요.** Windows의 Docker Desktop은 build context transfer 중 Bun workspace symlink를 따라가지 못합니다. `The file cannot be accessed by the system`이 보이면 WSL terminal을 열고 실행하세요.
 
 ```bash
 cd /mnt/c/Users/YourName/path/to/Archon
 docker compose up -d
 ```
 
-**Line endings:** The repo uses `.gitattributes` to force LF endings for shell scripts. If you cloned before this was added and see `exec docker-entrypoint.sh: no such file or directory`, re-clone or run:
+**Line endings:** 이 repo는 shell script에 LF ending을 강제하도록 `.gitattributes`를 사용합니다. 이 설정이 추가되기 전에 clone했고 `exec docker-entrypoint.sh: no such file or directory`가 보이면 다시 clone하거나 다음을 실행하세요.
 
 ```bash
 git rm --cached -r .
 git reset --hard
 ```
 
-### What you get
+### 실행 후 제공되는 것
 
 | Feature | Status |
 |---------|--------|
 | Web UI | http://localhost:3000 |
-| Database | SQLite (automatic, zero setup) |
-| HTTPS / Caddy | Not needed locally |
-| Auth | None (single-user, localhost only) |
-| Platform adapters | Optional (Telegram, Slack, etc.) |
+| Database | SQLite(자동, zero setup) |
+| HTTPS / Caddy | 로컬에서는 필요 없음 |
+| Auth | 없음(single-user, localhost only) |
+| Platform adapters | 선택 사항(Telegram, Slack 등) |
 
-### Using PostgreSQL locally (optional)
+### 로컬에서 PostgreSQL 사용(선택)
 
 ```bash
 docker compose --profile with-db up -d
 ```
 
-Then add to `.env`:
+그다음 `.env`에 추가합니다.
+
 ```env
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
 ---
 
-## Manual Server Setup
+## Manual server 설정
 
-Step-by-step alternative if you prefer not to use cloud-init, or need more control.
+cloud-init을 사용하지 않거나 더 세밀하게 제어하고 싶을 때 쓰는 단계별 대안입니다.
 
-### 1. Install Docker
+### 1. Docker 설치
 
 ```bash
 # On Ubuntu/Debian
@@ -154,14 +152,14 @@ docker --version
 docker compose version
 ```
 
-### 2. Clone the repo
+### 2. Repo clone
 
 ```bash
 git clone https://github.com/coleam00/Archon.git
 cd Archon
 ```
 
-### 3. Configure environment
+### 3. Environment 설정
 
 ```bash
 cp .env.example .env
@@ -169,7 +167,7 @@ cp Caddyfile.example Caddyfile
 nano .env
 ```
 
-Set these values in `.env`:
+`.env`에 다음 값을 설정합니다.
 
 ```ini
 # AI Assistant — at least one is required
@@ -198,21 +196,21 @@ DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 # GITHUB_TOKEN=ghp_...
 ```
 
-> **Docker does not support `CLAUDE_USE_GLOBAL_AUTH=true`** — there is no local `claude` CLI inside the container. You must provide either `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
+> **Docker는 `CLAUDE_USE_GLOBAL_AUTH=true`를 지원하지 않습니다.** container 안에는 local `claude` CLI가 없습니다. `CLAUDE_CODE_OAUTH_TOKEN` 또는 `CLAUDE_API_KEY`를 명시적으로 제공해야 합니다.
 >
-> **If you use `--profile with-db` without setting `DATABASE_URL`**, the app will fall back to SQLite and log a warning. The PostgreSQL container runs but is unused.
+> **`DATABASE_URL` 없이 `--profile with-db`를 사용하면**, app은 SQLite로 fallback하고 warning을 log에 남깁니다. PostgreSQL container는 실행되지만 사용되지 않습니다.
 
-### 4. Point your domain to the server
+### 4. Domain을 server에 연결
 
-Create a DNS **A record** at your domain registrar:
+domain registrar에서 DNS **A record**를 생성합니다.
 
 | Type | Name | Value |
 |------|------|-------|
-| A | `archon` (or `@` for root domain) | Your server's public IP |
+| A | `archon`(root domain이면 `@`) | server의 public IP |
 
-Wait for DNS propagation (usually 5-60 minutes). Verify with `dig archon.example.com`.
+DNS propagation을 기다립니다(보통 5-60분). `dig archon.example.com`으로 확인합니다.
 
-### 5. Open firewall ports
+### 5. Firewall port 열기
 
 ```bash
 sudo ufw allow 22/tcp
@@ -221,18 +219,19 @@ sudo ufw allow 443
 sudo ufw --force enable
 ```
 
-### 6. Start
+### 6. 시작
 
 ```bash
 docker compose --profile with-db --profile cloud up -d
 ```
 
-This starts three containers:
-- **app** — Archon server + Web UI
-- **postgres** — PostgreSQL 17 database (auto-initialized)
-- **caddy** — Reverse proxy with automatic HTTPS (Let's Encrypt)
+세 개의 container가 시작됩니다.
 
-### 7. Verify
+- **app** — Archon server + Web UI
+- **postgres** — PostgreSQL 17 database(자동 초기화)
+- **caddy** — 자동 HTTPS를 제공하는 reverse proxy(Let's Encrypt)
+
+### 7. 확인
 
 ```bash
 # Check all containers are running
@@ -246,105 +245,106 @@ docker compose logs -f caddy
 curl https://archon.example.com/api/health
 ```
 
-Open **https://archon.example.com** in your browser — you should see the Archon Web UI.
+browser에서 **https://archon.example.com**을 열면 Archon Web UI가 보여야 합니다.
 
 ---
 
-## Profiles
+## Profile
 
-Archon uses Docker Compose profiles to optionally add PostgreSQL and/or HTTPS. Mix and match:
+Archon은 Docker Compose profile로 PostgreSQL 또는 HTTPS를 선택적으로 추가합니다. 필요에 따라 조합해서 사용합니다.
 
 | Command | What runs |
 |---------|-----------|
-| `docker compose up -d` | App with SQLite |
+| `docker compose up -d` | SQLite를 사용하는 App |
 | `docker compose --profile with-db up -d` | App + PostgreSQL |
-| `docker compose --profile cloud up -d` | App + Caddy (HTTPS) |
+| `docker compose --profile cloud up -d` | App + Caddy(HTTPS) |
 | `docker compose --profile with-db --profile cloud up -d` | App + PostgreSQL + Caddy |
 
 :::note
-There is no `external-db` profile. When using an external PostgreSQL database (Supabase, Neon, etc.), just set `DATABASE_URL` in `.env` and run `docker compose up -d` without any profile. The base `app` service always starts.
+`external-db` profile은 없습니다. 외부 PostgreSQL database(Supabase, Neon 등)를 사용할 때는 `.env`에 `DATABASE_URL`만 설정하고 profile 없이 `docker compose up -d`를 실행하세요. 기본 `app` service는 항상 시작됩니다.
 :::
 
-### No profile (SQLite)
+### No profile(SQLite)
 
-Zero-config default. No database container needed — SQLite file is stored in the `archon_data` volume.
+zero-config 기본값입니다. database container가 필요 없으며, SQLite file은 `archon_data` volume에 저장됩니다.
 
-### `--profile with-db` (PostgreSQL)
+### `--profile with-db`(PostgreSQL)
 
-Starts a PostgreSQL 17 container. Set the connection URL in `.env`:
+PostgreSQL 17 container를 시작합니다. `.env`에 connection URL을 설정합니다.
 
 ```ini
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
-The schema is auto-initialized on first startup. PostgreSQL is exposed on `${POSTGRES_PORT:-5432}` for external tools.
+schema는 첫 startup 때 자동으로 초기화됩니다. PostgreSQL은 외부 tool에서 접근할 수 있도록 `${POSTGRES_PORT:-5432}`에 노출됩니다.
 
-### `--profile cloud` (Caddy HTTPS)
+### `--profile cloud`(Caddy HTTPS)
 
-Adds a [Caddy](https://caddyserver.com/) reverse proxy with automatic TLS certificates from Let's Encrypt.
+Let's Encrypt에서 TLS certificate을 자동으로 발급하는 [Caddy](https://caddyserver.com/) reverse proxy를 추가합니다.
 
-**Requires before starting:**
+**시작 전 필요 항목:**
 
-1. `Caddyfile` created: `cp Caddyfile.example Caddyfile`
-2. `DOMAIN` set in `.env`
-3. DNS A record pointing to your server's IP
-4. Ports 80 and 443 open
+1. `Caddyfile` 생성: `cp Caddyfile.example Caddyfile`
+2. `.env`에 `DOMAIN` 설정
+3. server IP를 가리키는 DNS A record
+4. port 80 및 443 open
 
-Caddy handles HTTPS certificates, HTTP->HTTPS redirect, HTTP/3, and SSE streaming.
+Caddy는 HTTPS certificate, HTTP->HTTPS redirect, HTTP/3, SSE streaming을 처리합니다.
 
-### Authentication (Optional Basic Auth)
+### Authentication(Optional Basic Auth)
 
-Caddy can enforce HTTP Basic Auth on all routes except webhooks (`/webhooks/*`) and the health check (`/api/health`). This is optional — skip it if you use IP-based firewall rules or other network-level access control.
+Caddy는 webhook(`/webhooks/*`)과 health check(`/api/health`)를 제외한 모든 route에 HTTP Basic Auth를 적용할 수 있습니다. 선택 사항이므로 IP 기반 firewall rule 또는 다른 network-level access control을 사용한다면 생략해도 됩니다.
 
-**To enable:**
+**활성화 방법:**
 
-1. Generate a bcrypt password hash:
+1. bcrypt password hash를 생성합니다.
 
    ```bash
    docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
    ```
 
-2. Set `CADDY_BASIC_AUTH` in `.env` (use `$$` to escape `$` in bcrypt hashes):
+2. `.env`에 `CADDY_BASIC_AUTH`를 설정합니다(bcrypt hash의 `$`는 `$$`로 escape).
 
    ```ini
    CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$abc123... }
    ```
 
-3. Restart: `docker compose --profile cloud restart caddy`
+3. restart합니다: `docker compose --profile cloud restart caddy`
 
-Your browser will prompt for username/password when accessing the Archon URL. Webhook endpoints bypass auth since they use HMAC signature verification.
+Archon URL에 접근하면 browser가 username/password를 요청합니다. Webhook endpoint는 HMAC signature verification을 사용하므로 auth를 우회합니다.
 
-To disable, leave `CADDY_BASIC_AUTH` empty or unset — the Caddyfile expands it to nothing.
+비활성화하려면 `CADDY_BASIC_AUTH`를 비우거나 설정하지 않습니다. Caddyfile은 이를 빈 값으로 확장합니다.
 
-> **Important:** Always use the `docker run caddy caddy hash-password` command to generate hashes — never put plaintext passwords in `.env`.
+> **중요:** hash 생성에는 항상 `docker run caddy caddy hash-password` command를 사용하세요. `.env`에 plaintext password를 넣지 마세요.
 
-### Form-Based Authentication (HTML Login Page)
+### Form-Based Authentication(HTML Login Page)
 
-An alternative to basic auth that serves a styled HTML login form instead of the browser's credential popup. Uses a lightweight `auth-service` sidecar and Caddy's `forward_auth` directive.
+browser의 credential popup 대신 styled HTML login form을 제공하는 basic auth의 대안입니다. lightweight `auth-service` sidecar와 Caddy의 `forward_auth` directive를 사용합니다.
 
-**When to use form auth vs basic auth:**
-- **Form auth**: Styled dark-mode login page, 24h session cookie, logout support. Requires an extra container.
-- **Basic auth**: Zero extra containers, simpler setup. Browser shows a native credential dialog.
+**form auth와 basic auth 중 선택 기준:**
 
-**Setup:**
+- **Form auth**: styled dark-mode login page, 24h session cookie, logout support가 필요할 때. 추가 container가 필요합니다.
+- **Basic auth**: 추가 container 없이 더 단순한 설정. browser가 native credential dialog를 표시합니다.
 
-1. Generate a bcrypt password hash:
+**설정:**
+
+1. bcrypt password hash를 생성합니다.
 
    ```bash
    docker compose --profile auth run --rm auth-service \
      node -e "require('bcryptjs').hash('YOUR_PASSWORD', 12).then(h => console.log(h))"
    ```
 
-   > First run builds the auth-service image. Save the output hash (starts with `$2b$12$...`).
+   > 첫 실행에서는 auth-service image를 build합니다. 출력된 hash(`$2b$12$...`로 시작)를 저장해 둡니다.
 
-2. Generate a random cookie signing secret:
+2. random cookie signing secret을 생성합니다.
 
    ```bash
    docker run --rm node:22-alpine \
      node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
 
-3. Set the following in `.env`:
+3. `.env`에 다음을 설정합니다.
 
    ```ini
    AUTH_USERNAME=admin
@@ -352,39 +352,40 @@ An alternative to basic auth that serves a styled HTML login form instead of the
    COOKIE_SECRET=REPLACE_WITH_64_HEX_CHARS
    ```
 
-4. Update `Caddyfile` (copy from `Caddyfile.example` if not done yet):
+4. `Caddyfile`을 update합니다(아직 복사하지 않았다면 `Caddyfile.example`에서 복사).
 
-   - **Uncomment** the "Option A" form auth block (the `handle /login`, `handle /logout`, and `handle { forward_auth ... }` blocks)
-   - **Comment out** the "No auth" default `handle` block (the last `handle { ... }` block near the bottom of the site block)
+   - "Option A" form auth block(`handle /login`, `handle /logout`, `handle { forward_auth ... }` block)을 **uncomment**합니다.
+   - "No auth" default `handle` block(site block 하단 근처의 마지막 `handle { ... }` block)을 **comment out**합니다.
 
-5. Start with both `cloud` and `auth` profiles:
+5. `cloud`와 `auth` profile을 함께 사용해 시작합니다.
 
    ```bash
    docker compose --profile with-db --profile cloud --profile auth up -d
    ```
 
-6. Visit your domain — you should be redirected to `/login`.
+6. domain에 방문하면 `/login`으로 redirect되어야 합니다.
 
-**Logout:** Navigate to `/logout` to clear the session cookie and return to the login form.
+**Logout:** `/logout`으로 이동하면 session cookie가 지워지고 login form으로 돌아갑니다.
 
-**Session duration:** Defaults to 24 hours (`COOKIE_MAX_AGE=86400`). Override in `.env`:
+**Session duration:** 기본값은 24시간(`COOKIE_MAX_AGE=86400`)입니다. `.env`에서 override할 수 있습니다.
+
 ```ini
 COOKIE_MAX_AGE=3600  # 1 hour
 ```
 
-> **Note:** Do not use form auth and basic auth simultaneously. Choose one method and leave the other disabled (either empty `CADDY_BASIC_AUTH` or remove the basic auth `@protected` block from your Caddyfile).
+> **참고:** form auth와 basic auth를 동시에 사용하지 마세요. 둘 중 하나만 선택하고 다른 방식은 disabled 상태로 두세요(`CADDY_BASIC_AUTH`를 비우거나 Caddyfile에서 basic auth `@protected` block 제거).
 
 ---
 
-## Configuration
+## 설정
 
 ### Port Defaults
 
 :::caution
-Docker defaults to port **3000** (`${PORT:-3000}` in docker-compose.yml), while local development defaults to **3090**. Set `PORT` in `.env` to change the Docker port.
+Docker 기본 port는 **3000**입니다(`docker-compose.yml`의 `${PORT:-3000}`). 반면 local development 기본 port는 **3090**입니다. Docker port를 바꾸려면 `.env`에 `PORT`를 설정하세요.
 :::
 
-The Docker healthcheck uses `/api/health` (not `/health`):
+Docker healthcheck는 `/health`가 아니라 `/api/health`를 사용합니다.
 
 ```bash
 # Inside Docker
@@ -395,11 +396,11 @@ curl http://localhost:3090/health
 curl http://localhost:3090/api/health
 ```
 
-### AI Credentials (required)
+### AI Credentials(필수)
 
-Docker containers cannot use `CLAUDE_USE_GLOBAL_AUTH=true` — there is no local `claude` CLI inside the container. You must set credentials explicitly in `.env`:
+Docker container는 `CLAUDE_USE_GLOBAL_AUTH=true`를 사용할 수 없습니다. container 안에는 local `claude` CLI가 없습니다. `.env`에 credential을 명시적으로 설정해야 합니다.
 
-**Claude (choose one):**
+**Claude(하나 선택):**
 
 ```ini
 # OAuth token — run `claude setup-token` on your local machine, copy the token
@@ -409,7 +410,7 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxxxx
 CLAUDE_API_KEY=sk-ant-xxxxx
 ```
 
-**Codex (alternative):**
+**Codex(대안):**
 
 ```ini
 CODEX_ID_TOKEN=eyJhbGc...
@@ -418,7 +419,7 @@ CODEX_REFRESH_TOKEN=rt_...
 CODEX_ACCOUNT_ID=6a6a7ba6-...
 ```
 
-### Platform Tokens (optional)
+### Platform Tokens(선택)
 
 ```ini
 TELEGRAM_BOT_TOKEN=123456789:ABCdef...
@@ -430,7 +431,7 @@ GITHUB_TOKEN=ghp_...
 WEBHOOK_SECRET=...
 ```
 
-### Server Settings (optional)
+### Server Settings(선택)
 
 ```ini
 PORT=3000                          # Default: 3000
@@ -439,31 +440,31 @@ LOG_LEVEL=info                     # fatal|error|warn|info|debug|trace
 MAX_CONCURRENT_CONVERSATIONS=10
 ```
 
-See `.env.example` for the full list with documentation.
+전체 목록과 설명은 `.env.example`을 참고하세요.
 
 ### Data Directory
 
-The container stores all data at `/.archon/` (workspaces, worktrees, artifacts, logs, SQLite DB).
+container는 모든 data를 `/.archon/`에 저장합니다(workspaces, worktrees, artifacts, logs, SQLite DB).
 
-By default this is a Docker-managed volume. To store data at a specific location on the host, set `ARCHON_DATA` in `.env`:
+기본값은 Docker-managed volume입니다. host의 특정 위치에 data를 저장하려면 `.env`에 `ARCHON_DATA`를 설정합니다.
 
 ```ini
 # Store Archon data at a specific host path
 ARCHON_DATA=/opt/archon-data
 ```
 
-The directory is created automatically. Make sure the path is writable by UID 1001 (the container user):
+directory는 자동으로 생성됩니다. container user인 UID 1001이 쓸 수 있는지 확인하세요.
 
 ```bash
 mkdir -p /opt/archon-data
 sudo chown -R 1001:1001 /opt/archon-data
 ```
 
-If `ARCHON_DATA` is not set, Docker manages the volume automatically (`archon_data`) — data persists across restarts and rebuilds but lives inside Docker's storage.
+`ARCHON_DATA`가 설정되어 있지 않으면 Docker가 volume(`archon_data`)을 자동으로 관리합니다. data는 restart와 rebuild 이후에도 유지되지만 Docker storage 안에 저장됩니다.
 
 ### GitHub CLI Authentication
 
-`GH_TOKEN` from `.env` is picked up automatically. Alternatively:
+`.env`의 `GH_TOKEN`은 자동으로 사용됩니다. 또는 다음을 실행할 수 있습니다.
 
 ```bash
 docker compose exec app gh auth login
@@ -471,22 +472,22 @@ docker compose exec app gh auth login
 
 ---
 
-## GitHub Webhooks
+## GitHub Webhook
 
-After the server is reachable via HTTPS:
+server가 HTTPS로 접근 가능해진 뒤 설정합니다.
 
-1. Go to `https://github.com/<owner>/<repo>/settings/hooks`
-2. Add webhook:
+1. `https://github.com/<owner>/<repo>/settings/hooks`로 이동합니다.
+2. webhook을 추가합니다.
    - **Payload URL**: `https://archon.example.com/webhooks/github`
    - **Content type**: `application/json`
-   - **Secret**: Your `WEBHOOK_SECRET` from `.env`
+   - **Secret**: `.env`의 `WEBHOOK_SECRET`
    - **Events**: Issues, Issue comments, Pull requests
 
 ---
 
-## Pre-built Image
+## Pre-built image
 
-For users who don't need to build from source:
+source에서 build할 필요가 없는 사용자를 위한 방식입니다.
 
 ```bash
 mkdir archon && cd archon
@@ -499,56 +500,58 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Uses `ghcr.io/coleam00/archon:latest`. To add PostgreSQL, uncomment the `postgres` service in the compose file and set `DATABASE_URL` in `.env`.
+`ghcr.io/coleam00/archon:latest`를 사용합니다. PostgreSQL을 추가하려면 compose file에서 `postgres` service를 uncomment하고 `.env`에 `DATABASE_URL`을 설정하세요.
 
-To layer custom tools on top of the pre-built image, see [Customizing the Image](#customizing-the-image).
+pre-built image 위에 custom tool을 추가하려면 [Customizing the Image](#customizing-the-image)를 참고하세요.
 
 ---
 
-## Building the Image
+## Image build
 
-The Dockerfile uses three stages:
+Dockerfile은 세 단계로 구성됩니다.
 
-1. **deps** — Installs all dependencies (including devDependencies for the web build)
-2. **web-build** — Builds the React web UI with Vite
-3. **production** — Production image with only production dependencies + pre-built web assets
+1. **deps** — 모든 dependency 설치(web build용 devDependencies 포함)
+2. **web-build** — Vite로 React web UI build
+3. **production** — production dependency와 pre-built web asset만 포함한 production image
 
 ```bash
 docker build -t archon .
 docker run --env-file .env -p 3000:3000 archon
 ```
 
-**What's in the image:**
+**image에 포함되는 것:**
 
-- **Runtime**: Bun 1.2 (runs TypeScript directly, no compile step)
-- **System deps**: git, curl, gh (GitHub CLI), postgresql-client, Chromium
-- **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel Labs) — enables E2E testing workflows via CDP. Uses system Chromium (`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)
-- **App**: All 10 workspace packages (source), pre-built web UI
-- **User**: Non-root `appuser` (UID 1001) — required by Claude Code SDK
+- **Runtime**: Bun 1.2(TypeScript를 직접 실행, compile step 없음)
+- **System deps**: git, curl, gh(GitHub CLI), postgresql-client, Chromium
+- **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser)(Vercel Labs) — CDP를 통한 E2E testing workflow를 활성화합니다. system Chromium(`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)을 사용합니다.
+- **App**: 모든 10개 workspace package(source), pre-built web UI
+- **User**: non-root `appuser`(UID 1001) — Claude Code SDK에 필요
 - **Archon dirs**: `/.archon/workspaces`, `/.archon/worktrees`
 
-The multi-stage build keeps the image lean — no devDependencies, test files, docs, or `.git/`.
+multi-stage build는 image를 가볍게 유지합니다. devDependencies, test file, docs, `.git/`은 포함하지 않습니다.
 
-### Customizing the Image
+<a id="customizing-the-image"></a>
 
-To add extra tools without modifying the tracked Dockerfile:
+### Image 커스터마이징
 
-1. Copy the example:
+tracked Dockerfile을 수정하지 않고 추가 tool을 넣으려면:
+
+1. 예시 file을 복사합니다.
    - **Local/dev**: `cp Dockerfile.user.example Dockerfile.user`
    - **Server/deploy**: `cp deploy/Dockerfile.user.example Dockerfile.user`
-2. Edit `Dockerfile.user` — uncomment and extend the examples as needed.
-3. Copy the override file:
+2. `Dockerfile.user`를 편집합니다. 필요한 예시를 uncomment하고 확장합니다.
+3. override file을 복사합니다.
    - **Local/dev**: `cp docker-compose.override.example.yml docker-compose.override.yml`
    - **Server/deploy**: `cp deploy/docker-compose.override.example.yml docker-compose.override.yml`
-4. Run `docker compose up -d` — Compose merges the override automatically.
+4. `docker compose up -d`를 실행합니다. Compose가 override를 자동으로 merge합니다.
 
-`Dockerfile.user` and `docker-compose.override.yml` are gitignored so your customizations stay local.
+`Dockerfile.user`와 `docker-compose.override.yml`은 gitignored 상태이므로 custom 설정은 로컬에만 남습니다.
 
 ---
 
-## Maintenance
+## 유지보수
 
-### View Logs
+### Log 보기
 
 ```bash
 docker compose logs -f              # All services
@@ -556,7 +559,7 @@ docker compose logs -f app          # App only
 docker compose logs --tail=100 app  # Last 100 lines
 ```
 
-### Update
+### 업데이트
 
 ```bash
 git pull
@@ -570,25 +573,25 @@ docker compose restart         # All
 docker compose restart app     # App only
 ```
 
-### Stop
+### 중지
 
 ```bash
 docker compose down            # Stop containers (data preserved)
 docker compose down -v         # Stop + delete volumes (destructive!)
 ```
 
-### Database Migrations (PostgreSQL)
+### Database Migrations(PostgreSQL)
 
-Migrations run automatically on first startup via `000_combined.sql`. When upgrading to a newer version that adds database tables, you need to apply incremental migrations manually:
+첫 startup에서는 `000_combined.sql`을 통해 migration이 자동으로 실행됩니다. database table을 추가하는 새 version으로 upgrade할 때는 incremental migration을 수동으로 적용해야 합니다.
 
 ```bash
 # Example: apply the env vars migration (required when upgrading to v0.3.x)
 docker compose exec postgres psql -U postgres -d remote_coding_agent -f /migrations/020_codebase_env_vars.sql
 ```
 
-The `migrations/` directory is mounted read-only into the postgres container. Check for any new migration files after pulling updates.
+`migrations/` directory는 postgres container에 read-only로 mounted됩니다. update를 pull한 뒤 새 migration file이 있는지 확인하세요.
 
-### Clean Up Docker Resources
+### Docker Resource 정리
 
 ```bash
 docker system prune -a         # Remove unused images/containers
@@ -598,22 +601,23 @@ docker system df               # Check disk usage
 
 ---
 
-## Troubleshooting
+## 문제 해결
 
-### App won't start: "no_ai_credentials"
+### App이 시작되지 않음: "no_ai_credentials"
 
-No AI assistant configured. Docker does not support `CLAUDE_USE_GLOBAL_AUTH=true`. Set one of these in `.env`:
-- `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...` (run `claude setup-token` locally to get one)
-- `CLAUDE_API_KEY=sk-ant-...` (from console.anthropic.com)
-- Or Codex credentials (`CODEX_ID_TOKEN`, `CODEX_ACCESS_TOKEN`, etc.)
+AI assistant가 설정되지 않았습니다. Docker는 `CLAUDE_USE_GLOBAL_AUTH=true`를 지원하지 않습니다. `.env`에 다음 중 하나를 설정하세요.
 
-### Caddy fails to start: "not a directory"
+- `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...`(로컬에서 `claude setup-token` 실행)
+- `CLAUDE_API_KEY=sk-ant-...`(console.anthropic.com에서 발급)
+- 또는 Codex credential(`CODEX_ID_TOKEN`, `CODEX_ACCESS_TOKEN` 등)
+
+### Caddy 시작 실패: "not a directory"
 
 ```
 error mounting "Caddyfile": not a directory
 ```
 
-The `Caddyfile` doesn't exist — Docker created a directory in its place. Fix:
+`Caddyfile`이 없습니다. Docker가 그 자리에 directory를 만들었습니다. 다음처럼 수정합니다.
 
 ```bash
 rm -rf Caddyfile
@@ -621,7 +625,7 @@ cp Caddyfile.example Caddyfile
 docker compose --profile cloud up -d
 ```
 
-### Caddy not getting SSL certificate
+### Caddy가 SSL certificate을 받지 못함
 
 ```bash
 # Check DNS propagation
@@ -636,11 +640,11 @@ sudo ufw status
 # Ports 80 and 443 must be open
 ```
 
-Common causes: DNS not propagated (wait 5-60min), firewall blocking 80/443, domain typo in `.env`.
+흔한 원인: DNS propagation 미완료(5-60분 대기), firewall이 80/443 차단, `.env`의 domain typo.
 
-### Health check failing
+### Health check 실패
 
-The Docker healthcheck uses `/api/health` (not `/health`):
+Docker healthcheck는 `/health`가 아니라 `/api/health`를 사용합니다.
 
 ```bash
 curl http://localhost:3000/api/health
@@ -648,18 +652,18 @@ curl http://localhost:3000/api/health
 
 ### PostgreSQL connection refused
 
-When using `--profile with-db`, ensure:
+`--profile with-db`를 사용할 때 다음을 확인합니다.
 
-1. `DATABASE_URL` uses `postgres` as hostname (Docker service name), not `localhost`:
+1. `DATABASE_URL`의 hostname은 `localhost`가 아니라 Docker service name인 `postgres`여야 합니다.
    ```ini
    DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
    ```
-2. The postgres container is healthy: `docker compose ps postgres`
-3. Migrations ran: check `docker compose logs postgres` for init script output
+2. postgres container가 healthy 상태인지 확인합니다: `docker compose ps postgres`
+3. migration이 실행되었는지 확인합니다: init script output은 `docker compose logs postgres`에서 볼 수 있습니다.
 
-### Permission errors in `/.archon/`
+### `/.archon/` permission error
 
-The container runs as `appuser` (UID 1001). If using bind mounts instead of Docker volumes:
+container는 `appuser`(UID 1001)로 실행됩니다. Docker volume 대신 bind mount를 사용하는 경우:
 
 ```bash
 sudo chown -R 1001:1001 /path/to/archon-data
@@ -667,17 +671,17 @@ sudo chown -R 1001:1001 /path/to/archon-data
 
 ### Port conflicts
 
-Default Docker port is 3000 (local dev is 3090). Change in `.env`:
+Docker 기본 port는 3000입니다(local dev는 3090). `.env`에서 변경합니다.
 
 ```ini
 PORT=3001
 ```
 
-### Container keeps restarting
+### Container가 계속 restart됨
 
 ```bash
 docker compose ps
 docker compose logs --tail=50 app
 ```
 
-Common causes: missing `.env` file, invalid credentials, database unreachable.
+흔한 원인: `.env` file 누락, invalid credential, database 접근 불가.

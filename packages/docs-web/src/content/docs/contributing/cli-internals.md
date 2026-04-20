@@ -1,6 +1,6 @@
 ---
-title: CLI Internals
-description: Technical reference for the Archon CLI package — entry point flow, command routing, worktree logic, and adapter details.
+title: CLI 내부 구조
+description: Archon CLI 패키지의 기술 reference — entry point 흐름, command routing, worktree logic, adapter 상세.
 category: contributing
 area: cli
 audience: [developer]
@@ -9,9 +9,9 @@ sidebar:
   order: 2
 ---
 
-Technical reference for understanding CLI internals.
+CLI 내부 구조를 이해하기 위한 기술 reference입니다.
 
-## Package Structure
+## 패키지 구조
 
 ```
 packages/cli/
@@ -29,7 +29,7 @@ packages/cli/
 └── package.json            # Defines "archon" binary
 ```
 
-## Entry Point Flow
+## Entry Point 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -70,14 +70,14 @@ packages/cli/
 **Code:** `packages/cli/src/cli.ts`
 
 **Git repository check:**
-- Commands `workflow`, `isolation`, and `complete` require running from a git repository
-- Commands `version`, `help`, `setup`, and `chat` bypass this check
-- When in a subdirectory, automatically resolves to repository root
-- Exit code 1 if not in a git repository
+- `workflow`, `isolation`, `complete` command는 git repository 안에서 실행해야 합니다.
+- `version`, `help`, `setup`, `chat` command는 이 check를 우회합니다.
+- subdirectory에서 실행하면 repository root로 자동 resolve합니다.
+- git repository가 아니면 exit code 1로 종료합니다.
 
 ---
 
-## `workflow list` Flow
+## `workflow list` 흐름
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -111,7 +111,7 @@ packages/cli/
 
 ---
 
-## `workflow run` Flow
+## `workflow run` 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -178,7 +178,7 @@ packages/cli/
 
 ---
 
-## `workflow event emit` Flow
+## `workflow event emit` 흐름
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -200,13 +200,13 @@ packages/cli/
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-**Code:** `packages/cli/src/cli.ts` (case 'event'), `packages/cli/src/commands/workflow.ts:workflowEventEmitCommand`
+**Code:** `packages/cli/src/cli.ts` (`case 'event'`), `packages/cli/src/commands/workflow.ts:workflowEventEmitCommand`
 
-**Contract:** Event persistence is best-effort. `createWorkflowEvent` catches all errors internally -- the CLI prints a confirmation but cannot guarantee the event was stored.
+**Contract:** Event persistence는 best-effort입니다. `createWorkflowEvent`는 내부에서 모든 error를 catch합니다. CLI는 confirmation을 출력하지만, event가 저장됐다고 보장할 수는 없습니다.
 
 ---
 
-## `isolation list` Flow
+## `isolation list` 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -236,7 +236,7 @@ packages/cli/
 
 ---
 
-## `isolation cleanup` Flow
+## `isolation cleanup` 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -269,7 +269,7 @@ packages/cli/
 
 ---
 
-## `isolation cleanup --merged` Flow
+## `isolation cleanup --merged` 흐름
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -303,9 +303,7 @@ packages/cli/
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Signals are evaluated in order — the first positive match short-circuits to avoid
-unnecessary `gh` API calls. The `gh` CLI is a soft dependency: if missing or failing,
-only git signals are used and the result degrades gracefully to `NONE`.
+Signal은 순서대로 평가됩니다. 첫 positive match가 나오면 불필요한 `gh` API call을 피하기 위해 short-circuit합니다. `gh` CLI는 soft dependency입니다. 없거나 실패하면 git signal만 사용하고 결과는 graceful하게 `NONE`으로 degrade됩니다.
 
 **Code:** `packages/core/src/services/cleanup-service.ts` — `isSafeToRemove()`, `cleanupMergedWorktrees()`
 **Code:** `packages/isolation/src/pr-state.ts` — `getPrState()`
@@ -315,7 +313,7 @@ only git signals are used and the result degrades gracefully to `NONE`.
 
 ## CLI Adapter
 
-Implements `IPlatformAdapter` for terminal output.
+Terminal output용 `IPlatformAdapter`를 구현합니다.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -333,60 +331,60 @@ Implements `IPlatformAdapter` for terminal output.
 
 ---
 
-## Key Dependencies
+## 주요 Dependency
 
 | Function | Package | Location | Purpose |
 |----------|---------|----------|---------|
-| `discoverWorkflowsWithConfig(cwd, config)` | `@archon/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | Find and parse workflow YAML |
-| `executeWorkflow(...)` | `@archon/workflows/executor` | `workflows/src/executor.ts` | Run workflow steps |
-| `getIsolationProvider()` | `@archon/isolation` | `isolation/src/factory.ts` | Get WorktreeProvider singleton |
+| `discoverWorkflowsWithConfig(cwd, config)` | `@archon/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | workflow YAML 탐색과 parse |
+| `executeWorkflow(...)` | `@archon/workflows/executor` | `workflows/src/executor.ts` | workflow step 실행 |
+| `getIsolationProvider()` | `@archon/isolation` | `isolation/src/factory.ts` | WorktreeProvider singleton 가져오기 |
 | `conversationDb.*` | `@archon/core` | `core/src/db/conversations.ts` | Conversation CRUD |
 | `codebaseDb.*` | `@archon/core` | `core/src/db/codebases.ts` | Codebase CRUD |
 | `isolationDb.*` | `@archon/core` | `core/src/db/isolation-environments.ts` | Worktree tracking |
-| `git.*` | `@archon/git` | `packages/git/src/` | Git operations |
+| `git.*` | `@archon/git` | `packages/git/src/` | Git operation |
 | `closeDatabase()` | `@archon/core` | `core/src/db/connection.ts` | Clean shutdown |
 
 ---
 
-## Conversation ID Format
+## Conversation ID 형식
 
-CLI conversations use ID format: `cli-{timestamp}-{random}`
+CLI conversation은 `cli-{timestamp}-{random}` 형식의 ID를 사용합니다.
 
-Example: `cli-1705932847321-a7f3b2`
+예: `cli-1705932847321-a7f3b2`
 
-Generated at: `packages/cli/src/commands/workflow.ts`
+생성 위치: `packages/cli/src/commands/workflow.ts`
 
 ---
 
-## Worktree Reuse Logic
+## Worktree 재사용 로직
 
-When `--branch` is provided:
+`--branch`가 제공되면:
 
 1. **Lookup:** `isolationDb.findActiveByWorkflow(codebaseId, 'task', branchName)`
-2. **Health check:** `provider.healthCheck(path)` on existing
-3. **Reuse:** If found and healthy (warns if `--from` was specified but not applied)
-4. **Create:** If not found or unhealthy -- passes `fromBranch` to provider if specified via `--from`
+2. **Health check:** 기존 항목에 `provider.healthCheck(path)` 실행
+3. **Reuse:** 찾았고 healthy하면 재사용합니다. `--from`이 지정됐지만 적용되지 않았으면 warning을 냅니다.
+4. **Create:** 없거나 unhealthy하면 생성합니다. `--from`으로 지정된 경우 `fromBranch`를 provider에 전달합니다.
 
-Worktrees stored at: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug>/`
+Worktree 저장 위치: `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch-slug>/`
 
 **Code:** `packages/cli/src/commands/workflow.ts:177-219`
 
 ---
 
-## Exit Codes
+## Exit Code
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success |
-| 1 | Error (logged to stderr, including not in git repo) |
+| 0 | 성공 |
+| 1 | Error. git repo 밖에서 실행한 경우를 포함해 stderr에 log됩니다. |
 
 ---
 
 ## Database Connection
 
-- Connection opened on first database call
-- Always closed in `finally` block after command completes
-- **Default: SQLite** at `~/.archon/archon.db` (zero setup, auto-initialized)
-- **Optional: PostgreSQL** when `DATABASE_URL` is set (for cloud/advanced deployments)
+- 첫 database call에서 connection을 엽니다.
+- command가 완료된 뒤 `finally` block에서 항상 닫습니다.
+- **Default: SQLite**. 위치는 `~/.archon/archon.db`이며, 별도 setup 없이 자동 초기화됩니다.
+- **Optional: PostgreSQL**. `DATABASE_URL`이 설정된 경우 사용하며 cloud/advanced deployment용입니다.
 
 **Code:** `packages/cli/src/cli.ts`

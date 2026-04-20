@@ -1,6 +1,6 @@
 ---
-title: Global Workflows
-description: Define user-level workflows that apply to every project on your machine.
+title: 전역 워크플로
+description: 이 컴퓨터의 모든 프로젝트에 적용되는 사용자 수준 워크플로를 정의합니다.
 category: guides
 area: workflows
 audience: [user]
@@ -9,42 +9,41 @@ sidebar:
   order: 8
 ---
 
-Workflows placed in `~/.archon/.archon/workflows/` are loaded globally -- they appear in
-every project's `workflow list` and can be invoked from any repository.
+`~/.archon/.archon/workflows/`에 둔 워크플로는 전역으로 로드됩니다. 모든 프로젝트의 `workflow list`에 표시되며 어느 저장소에서든 실행할 수 있습니다.
 
-## Path
+## 경로
 
 ```
 ~/.archon/.archon/workflows/
 ```
 
-Or, if you have set `ARCHON_HOME`:
+또는 `ARCHON_HOME`을 설정했다면 다음 경로를 사용합니다.
 
 ```
 $ARCHON_HOME/.archon/workflows/
 ```
 
-Create the directory if it does not exist:
+디렉터리가 없다면 생성하세요.
 
 ```bash
 mkdir -p ~/.archon/.archon/workflows
 ```
 
-## Load Priority
+## 로드 우선순위
 
-1. **Bundled defaults** (lowest priority)
-2. **Global workflows** -- `~/.archon/.archon/workflows/` (override bundled by filename)
-3. **Repo-specific workflows** -- `.archon/workflows/` (override global by filename)
+1. **기본 제공 워크플로**(가장 낮은 우선순위)
+2. **전역 워크플로** -- `~/.archon/.archon/workflows/`(파일명이 같으면 기본 제공 워크플로를 덮어씀)
+3. **저장소별 워크플로** -- `.archon/workflows/`(파일명이 같으면 전역 워크플로를 덮어씀)
 
-If a global workflow has the same filename as a bundled default, the global version wins. If a repo-specific workflow has the same filename as a global one, the repo-specific version wins.
+전역 워크플로가 기본 제공 워크플로와 같은 파일명을 가지면 전역 버전이 사용됩니다. 저장소별 워크플로가 전역 워크플로와 같은 파일명을 가지면 저장소별 버전이 사용됩니다.
 
-## Practical Examples
+## 실전 예시
 
-Global workflows are useful for personal standards that you want enforced everywhere, regardless of the project.
+전역 워크플로는 프로젝트와 관계없이 항상 적용하고 싶은 개인 기준을 강제할 때 유용합니다.
 
-### Personal Code Review
+### 개인 코드 리뷰
 
-A workflow that runs your preferred review checklist on every project:
+모든 프로젝트에서 선호하는 리뷰 체크리스트를 실행하는 워크플로입니다.
 
 ```yaml
 # ~/.archon/.archon/workflows/my-review.yaml
@@ -60,9 +59,9 @@ nodes:
       and unnecessary complexity. Be direct and specific.
 ```
 
-### Custom Linting or Formatting Check
+### 커스텀 린팅 또는 포맷 검사
 
-A workflow that runs project-agnostic checks:
+프로젝트에 종속되지 않는 검사를 실행하는 워크플로입니다.
 
 ```yaml
 # ~/.archon/.archon/workflows/lint-check.yaml
@@ -79,9 +78,9 @@ nodes:
       Report findings as a prioritized list.
 ```
 
-### Quick Explain
+### 빠른 설명
 
-A simple workflow for understanding unfamiliar codebases:
+익숙하지 않은 코드베이스를 이해하기 위한 간단한 워크플로입니다.
 
 ```yaml
 # ~/.archon/.archon/workflows/explain.yaml
@@ -98,9 +97,9 @@ nodes:
       Topic: $ARGUMENTS
 ```
 
-## Syncing with Dotfiles
+## Dotfiles와 동기화
 
-If you manage your configuration with a dotfiles repository, you can include your global workflows:
+설정을 dotfiles 저장소로 관리한다면 전역 워크플로도 함께 포함할 수 있습니다.
 
 ```bash
 # In your dotfiles repo
@@ -112,24 +111,24 @@ dotfiles/
             └── explain.yaml
 ```
 
-Then symlink during dotfiles setup:
+그런 다음 dotfiles 설정 과정에서 symlink를 만듭니다.
 
 ```bash
 ln -sf ~/dotfiles/archon/.archon/workflows ~/.archon/.archon/workflows
 ```
 
-Or copy them as part of your dotfiles install script:
+또는 dotfiles 설치 스크립트의 일부로 복사할 수도 있습니다.
 
 ```bash
 mkdir -p ~/.archon/.archon/workflows
 cp ~/dotfiles/archon/.archon/workflows/*.yaml ~/.archon/.archon/workflows/
 ```
 
-This way your personal workflows travel with you across machines.
+이렇게 하면 개인 워크플로를 여러 컴퓨터에서 함께 사용할 수 있습니다.
 
-## CLI Support
+## CLI 지원
 
-Both the CLI and the server discover global workflows automatically:
+CLI와 서버는 모두 전역 워크플로를 자동으로 발견합니다.
 
 ```bash
 # Lists bundled + global + repo-specific workflows
@@ -141,22 +140,22 @@ archon workflow run my-review
 
 ## Troubleshooting
 
-### Workflow Not Appearing in List
+### 워크플로가 목록에 표시되지 않음
 
-1. **Check the path** -- The directory must be exactly `~/.archon/.archon/workflows/` (note the double `.archon`). The first `.archon` is the Archon home directory, the second is the standard config directory structure within it.
+1. **경로 확인** -- 디렉터리는 정확히 `~/.archon/.archon/workflows/`여야 합니다(`.archon`이 두 번 나오는 점에 주의). 첫 번째 `.archon`은 Archon home directory이고, 두 번째는 그 안의 표준 config directory structure입니다.
 
    ```bash
    ls ~/.archon/.archon/workflows/
    ```
 
-2. **Check file extension** -- Workflow files must end in `.yaml` or `.yml`.
+2. **파일 확장자 확인** -- Workflow 파일은 `.yaml` 또는 `.yml`로 끝나야 합니다.
 
-3. **Check YAML validity** -- A syntax error in the YAML will cause the workflow to appear in the errors list rather than the workflow list. Run:
+3. **YAML 유효성 확인** -- YAML syntax error가 있으면 workflow list가 아니라 errors list에 표시됩니다. 다음 명령을 실행하세요.
 
    ```bash
    archon validate workflows my-workflow
    ```
 
-4. **Check for name conflicts** -- If a repo-specific workflow has the same filename, it overrides the global one. The global version will not appear when you are in that repo.
+4. **이름 충돌 확인** -- 저장소별 workflow가 같은 파일명을 가지면 전역 workflow를 덮어씁니다. 해당 저장소 안에서는 전역 버전이 표시되지 않습니다.
 
-5. **Check ARCHON_HOME** -- If you have set `ARCHON_HOME` to a custom path, global workflows must be at `$ARCHON_HOME/.archon/workflows/`, not `~/.archon/.archon/workflows/`.
+5. **ARCHON_HOME 확인** -- `ARCHON_HOME`을 커스텀 경로로 설정했다면 전역 workflow는 `~/.archon/.archon/workflows/`가 아니라 `$ARCHON_HOME/.archon/workflows/`에 있어야 합니다.

@@ -1,6 +1,6 @@
 ---
-title: Cloud Deployment
-description: Deploy Archon to a cloud VPS with automatic HTTPS via Caddy and persistent uptime.
+title: Cloud 배포
+description: Caddy의 자동 HTTPS와 지속적인 uptime으로 Archon을 cloud VPS에 배포합니다.
 category: deployment
 area: infra
 audience: [operator]
@@ -9,33 +9,35 @@ sidebar:
   order: 3
 ---
 
-> **See also:** [Docker Guide](/deployment/docker/) for the complete Docker reference (profiles, building, configuration, troubleshooting).
+> **함께 보기:** profile, build, configuration, troubleshooting을 포함한 전체 Docker reference는 [Docker Guide](/deployment/docker/)를 참고하세요.
 
-Deploy Archon to a cloud VPS for 24/7 operation with automatic HTTPS and persistent uptime.
+Archon을 24/7 운영하기 위해 cloud VPS에 배포합니다. Caddy를 사용해 HTTPS certificate을 자동으로 발급하고 갱신하며, 서비스가 계속 실행되도록 구성합니다. HarnessLab은 Archon fork이므로 같은 배포 절차를 그대로 사용할 수 있습니다.
 
-**Navigation:** [Prerequisites](#prerequisites) | [Server Setup](#1-server-provisioning--initial-setup) | [DNS Configuration](#2-dns-configuration) | [Repository Setup](#3-clone-repository) | [Environment Config](#4-environment-configuration) | [Database Migration](#5-database-migration) | [Caddy Setup](#6-caddy-configuration) | [Start Services](#7-start-services) | [Verify](#8-verify-deployment)
+**목차:** [사전 준비](#prerequisites) | [Server 설정](#1-server-provisioning--initial-setup) | [DNS 설정](#2-dns-configuration) | [Repository 설정](#3-clone-repository) | [Environment 설정](#4-environment-configuration) | [Database migration](#5-database-migration) | [Caddy 설정](#6-caddy-configuration) | [Service 시작](#7-start-services) | [확인](#8-verify-deployment)
 
 ---
 
-## Prerequisites
+<a id="prerequisites"></a>
 
-**Required:**
+## 사전 준비
 
-- Cloud VPS account (DigitalOcean, Linode, AWS EC2, Vultr, etc.)
-- Domain name or subdomain (e.g., `archon.yourdomain.com`)
-- SSH client installed on your local machine
-- Basic command-line familiarity
+**필수:**
 
-**Recommended Specs:**
+- Cloud VPS 계정(DigitalOcean, Linode, AWS EC2, Vultr 등)
+- domain name 또는 subdomain(예: `archon.yourdomain.com`)
+- 로컬 머신에 설치된 SSH client
+- 기본적인 command-line 사용 경험
+
+**권장 사양:**
 
 - **CPU:** 1-2 vCPUs
-- **RAM:** 2GB minimum (4GB recommended)
+- **RAM:** 최소 2GB(4GB 권장)
 - **Storage:** 20GB SSD
 - **OS:** Ubuntu 22.04 LTS
 
-### Generate SSH Key (Required)
+### SSH Key 생성(필수)
 
-**Before creating your VPS**, generate an SSH key pair on your local machine:
+**VPS를 만들기 전에**, 로컬 머신에서 SSH key pair를 생성합니다.
 
 ```bash
 # Generate SSH key (ed25519 recommended)
@@ -50,70 +52,72 @@ cat ~/.ssh/id_ed25519.pub
 # Windows: type %USERPROFILE%\.ssh\id_ed25519.pub
 ```
 
-**Copy the public key output** - you'll add this to your VPS during creation.
+**출력된 public key를 복사해 둡니다.** VPS 생성 과정에서 이 값을 추가합니다.
 
 ---
 
-## 1. Server Provisioning & Initial Setup
+<a id="1-server-provisioning--initial-setup"></a>
 
-### Create VPS Instance (Examples)
+## 1. Server 프로비저닝 및 초기 설정
+
+### VPS Instance 생성 예시
 
 <details>
 <summary><b>DigitalOcean Droplet</b></summary>
 
-1. Log in to [DigitalOcean](https://www.digitalocean.com/)
-2. Click "Create" -> "Droplets"
-3. Choose:
+1. [DigitalOcean](https://www.digitalocean.com/)에 로그인합니다.
+2. "Create" -> "Droplets"를 클릭합니다.
+3. 다음을 선택합니다.
    - **Image:** Ubuntu 22.04 LTS
-   - **Plan:** Basic ($12/month - 2GB RAM recommended)
-   - **Datacenter:** Choose closest to your users
-   - **Authentication:** SSH keys -> "New SSH Key" -> Paste your public key from Prerequisites
-4. Click "Create Droplet"
-5. Note the public IP address
+   - **Plan:** Basic($12/month - 2GB RAM 권장)
+   - **Datacenter:** 사용자와 가장 가까운 위치
+   - **Authentication:** SSH keys -> "New SSH Key" -> 사전 준비 단계에서 복사한 public key 붙여넣기
+4. "Create Droplet"을 클릭합니다.
+5. public IP address를 기록해 둡니다.
 
 </details>
 
 <details>
 <summary><b>AWS EC2 Instance</b></summary>
 
-1. Log in to [AWS Console](https://console.aws.amazon.com/)
-2. Navigate to EC2 -> Launch Instance
-3. Choose:
+1. [AWS Console](https://console.aws.amazon.com/)에 로그인합니다.
+2. EC2 -> Launch Instance로 이동합니다.
+3. 다음을 선택합니다.
    - **AMI:** Ubuntu Server 22.04 LTS
-   - **Instance Type:** t3.small (2GB RAM)
-   - **Key Pair:** "Create new key pair" or import your public key from Prerequisites
-   - **Security Group:** Allow SSH (22), HTTP (80), HTTPS (443)
-4. Launch instance
-5. Note the public IP address
+   - **Instance Type:** t3.small(2GB RAM)
+   - **Key Pair:** "Create new key pair" 또는 사전 준비 단계에서 만든 public key import
+   - **Security Group:** SSH(22), HTTP(80), HTTPS(443) 허용
+4. instance를 launch합니다.
+5. public IP address를 기록해 둡니다.
 
 </details>
 
 <details>
 <summary><b>Linode Instance</b></summary>
 
-1. Log in to [Linode](https://www.linode.com/)
-2. Click "Create" -> "Linode"
-3. Choose:
+1. [Linode](https://www.linode.com/)에 로그인합니다.
+2. "Create" -> "Linode"를 클릭합니다.
+3. 다음을 선택합니다.
    - **Image:** Ubuntu 22.04 LTS
-   - **Region:** Choose closest to your users
-   - **Plan:** Nanode 2GB ($12/month)
-   - **SSH Keys:** Add your public key from Prerequisites
-   - **Root Password:** Set strong password (backup access)
-4. Click "Create Linode"
-5. Note the public IP address
+   - **Region:** 사용자와 가장 가까운 위치
+   - **Plan:** Nanode 2GB($12/month)
+   - **SSH Keys:** 사전 준비 단계에서 복사한 public key 추가
+   - **Root Password:** 강한 password 설정(backup access용)
+4. "Create Linode"를 클릭합니다.
+5. public IP address를 기록해 둡니다.
 
 </details>
 
-### Initial Server Configuration
+### 초기 Server 설정
 
-**Connect to your server:**
+**server에 접속합니다.**
 
 ```bash
 # Replace with your server IP (uses SSH key from Prerequisites)
 ssh -i ~/.ssh/id_ed25519 root@your-server-ip
 ```
 
-**Create deployment user:**
+**deployment user를 생성합니다.**
 
 ```bash
 # Create user with sudo privileges
@@ -131,22 +135,22 @@ chmod 600 /home/deploy/.ssh/authorized_keys
 # ssh -i ~/.ssh/id_ed25519 deploy@your-server-ip
 ```
 
-**Disable password authentication for security:**
+**보안을 위해 password authentication을 비활성화합니다.**
 
 ```bash
 # Edit SSH config
 nano /etc/ssh/sshd_config
 ```
 
-Find and change:
+다음 항목을 찾아 변경합니다.
 
 ```
 PasswordAuthentication no
 ```
 
-> To get out of Nano after making changes, press: Ctrl + X -> Y -> enter
+> 변경 후 Nano에서 나오려면 `Ctrl + X` -> `Y` -> `Enter`를 누릅니다.
 
-Restart SSH:
+SSH를 restart합니다.
 
 ```bash
 systemctl restart ssh
@@ -155,7 +159,7 @@ systemctl restart ssh
 su - deploy
 ```
 
-**Configure firewall:**
+**firewall을 설정합니다.**
 
 ```bash
 # Allow SSH, HTTP, HTTPS (including HTTP/3)
@@ -170,9 +174,9 @@ sudo ufw --force enable
 sudo ufw status
 ```
 
-### Install Dependencies
+### Dependency 설치
 
-**Install Docker:**
+**Docker를 설치합니다.**
 
 ```bash
 # Install Docker
@@ -187,7 +191,7 @@ exit
 ssh -i ~/.ssh/id_ed25519 deploy@your-server-ip
 ```
 
-**Install Docker Compose, Git, and PostgreSQL Client:**
+**Docker Compose, Git, PostgreSQL Client를 설치합니다.**
 
 ```bash
 # Update package list
@@ -205,19 +209,21 @@ psql --version
 
 ---
 
-## 2. DNS Configuration
+<a id="2-dns-configuration"></a>
 
-Point your domain to your server's IP address.
+## 2. DNS 설정
 
-**A Record Setup:**
+domain을 server의 IP address로 연결합니다.
 
-1. Go to your domain registrar or DNS provider (Cloudflare, Namecheap, etc.)
-2. Create an **A Record**:
-   - **Name:** `archon` (for `archon.yourdomain.com`) or `@` (for `yourdomain.com`)
-   - **Value:** Your server's public IP address
-   - **TTL:** 300 (5 minutes) or default
+**A Record 설정:**
 
-**Example (Cloudflare):**
+1. domain registrar 또는 DNS provider(Cloudflare, Namecheap 등)로 이동합니다.
+2. **A Record**를 만듭니다.
+   - **Name:** `archon`(`archon.yourdomain.com`용) 또는 `@`(`yourdomain.com`용)
+   - **Value:** server의 public IP address
+   - **TTL:** 300(5분) 또는 기본값
+
+**예시(Cloudflare):**
 
 ```
 Type: A
@@ -229,9 +235,11 @@ TTL: Auto
 
 ---
 
-## 3. Clone Repository
+<a id="3-clone-repository"></a>
 
-**On your server:**
+## 3. Repository clone
+
+**server에서 실행합니다.**
 
 ```bash
 # Create application directory
@@ -245,9 +253,11 @@ git clone https://github.com/coleam00/Archon .
 
 ---
 
-## 4. Environment Configuration
+<a id="4-environment-configuration"></a>
 
-### Create Environment File
+## 4. Environment 설정
+
+### Environment file 생성
 
 ```bash
 # Copy example file
@@ -257,9 +267,9 @@ cp .env.example .env
 nano .env
 ```
 
-### 4.1 Core Configuration
+### 4.1 Core 설정
 
-Set these required variables:
+필수 variable을 설정합니다.
 
 ```ini
 # Database - Use remote managed PostgreSQL
@@ -274,59 +284,59 @@ PORT=3090
 ARCHON_HOME=/tmp/archon  # Override base directory (optional)
 ```
 
-**GitHub Token Setup:**
+**GitHub Token 설정:**
 
-1. Visit [GitHub Settings > Tokens](https://github.com/settings/tokens)
-2. Click "Generate new token (classic)"
-3. Select scope: **`repo`**
-4. Copy token (starts with `ghp_...`)
-5. Set both `GH_TOKEN` and `GITHUB_TOKEN` in `.env`
+1. [GitHub Settings > Tokens](https://github.com/settings/tokens)에 방문합니다.
+2. "Generate new token (classic)"을 클릭합니다.
+3. scope로 **`repo`**를 선택합니다.
+4. token을 복사합니다(`ghp_...`로 시작).
+5. `.env`에 `GH_TOKEN`과 `GITHUB_TOKEN`을 모두 설정합니다.
 
-**Database Options:**
+**Database 옵션:**
 
-> **Note:** SQLite is the default for local development and requires zero setup. For cloud deployments, PostgreSQL is recommended for reliability and network accessibility.
+> **참고:** SQLite는 로컬 개발의 기본값이며 별도 설정이 필요 없습니다. Cloud 배포에서는 안정성과 network 접근성을 위해 PostgreSQL을 권장합니다.
 
 <details>
-<summary><b>Recommended for Cloud: Remote Managed PostgreSQL</b></summary>
+<summary><b>Cloud 권장: Remote Managed PostgreSQL</b></summary>
 
-Use a managed database service for easier backups and scaling.
+backup과 scaling이 쉬운 managed database service를 사용합니다.
 
-**Supabase (Free tier available):**
+**Supabase(무료 tier 제공):**
 
-1. Create project at [supabase.com](https://supabase.com)
-2. Go to Settings -> Database
-3. Copy connection string (Transaction pooler recommended)
-4. Set as `DATABASE_URL`
+1. [supabase.com](https://supabase.com)에서 project를 생성합니다.
+2. Settings -> Database로 이동합니다.
+3. connection string을 복사합니다(Transaction pooler 권장).
+4. `DATABASE_URL`로 설정합니다.
 
 **Neon:**
 
-1. Create project at [neon.tech](https://neon.tech)
-2. Copy connection string from dashboard
-3. Set as `DATABASE_URL`
+1. [neon.tech](https://neon.tech)에서 project를 생성합니다.
+2. dashboard에서 connection string을 복사합니다.
+3. `DATABASE_URL`로 설정합니다.
 
 </details>
 
 <details>
-<summary><b>Alternative: Local PostgreSQL (with-db profile)</b></summary>
+<summary><b>대안: Local PostgreSQL(with-db profile)</b></summary>
 
-To run PostgreSQL in Docker alongside the app:
+app과 함께 Docker에서 PostgreSQL을 실행하려면 다음 값을 사용합니다.
 
 ```ini
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
-Use the `with-db` profile when starting services (see Section 7).
+service를 시작할 때 `with-db` profile을 사용합니다(Section 7 참고).
 
 </details>
 
-### 4.2 AI Assistant Setup
+### 4.2 AI Assistant 설정
 
-**Configure at least one AI assistant.**
+**AI assistant를 최소 1개 설정합니다.**
 
 <details>
 <summary><b>Claude Code</b></summary>
 
-**On your local machine:**
+**로컬 머신에서:**
 
 ```bash
 # Install Claude Code CLI (if not already installed)
@@ -338,31 +348,31 @@ claude setup-token
 # Copy the token (starts with sk-ant-oat01-...)
 ```
 
-**On your server:**
+**server에서:**
 
 ```bash
 nano .env
 ```
 
-Add:
+다음을 추가합니다.
 
 ```ini
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxxxx
 ```
 
-**Alternative: API Key**
+**대안: API Key**
 
-If you prefer pay-per-use:
+pay-per-use 방식을 선호한다면:
 
-1. Visit [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
-2. Create key (starts with `sk-ant-`)
-3. Set in `.env`:
+1. [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)에 방문합니다.
+2. key를 생성합니다(`sk-ant-`로 시작).
+3. `.env`에 설정합니다.
 
 ```ini
 CLAUDE_API_KEY=sk-ant-xxxxx
 ```
 
-**Set as default (optional):**
+**기본값으로 설정(선택):**
 
 ```ini
 DEFAULT_AI_ASSISTANT=claude
@@ -373,7 +383,7 @@ DEFAULT_AI_ASSISTANT=claude
 <details>
 <summary><b>Codex</b></summary>
 
-**On your local machine:**
+**로컬 머신에서:**
 
 ```bash
 # Install Codex CLI (if not already installed)
@@ -389,13 +399,13 @@ cat ~/.codex/auth.json
 # Copy all four values
 ```
 
-**On your server:**
+**server에서:**
 
 ```bash
 nano .env
 ```
 
-Add all four credentials:
+네 가지 credential을 모두 추가합니다.
 
 ```ini
 CODEX_ID_TOKEN=eyJhbGc...
@@ -404,7 +414,7 @@ CODEX_REFRESH_TOKEN=rt_...
 CODEX_ACCOUNT_ID=6a6a7ba6-...
 ```
 
-**Set as default (optional):**
+**기본값으로 설정(선택):**
 
 ```ini
 DEFAULT_AI_ASSISTANT=codex
@@ -412,26 +422,26 @@ DEFAULT_AI_ASSISTANT=codex
 
 </details>
 
-### 4.3 Platform Adapter Setup
+### 4.3 Platform Adapter 설정
 
-**Configure at least one platform.**
+**platform을 최소 1개 설정합니다.**
 
 <details>
 <summary><b>Telegram</b></summary>
 
-**Create bot:**
+**bot 생성:**
 
-1. Message [@BotFather](https://t.me/BotFather) on Telegram
-2. Send `/newbot` and follow prompts
-3. Copy bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+1. Telegram에서 [@BotFather](https://t.me/BotFather)에게 message를 보냅니다.
+2. `/newbot`을 보내고 안내를 따릅니다.
+3. bot token을 복사합니다(format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`).
 
-**On your server:**
+**server에서:**
 
 ```bash
 nano .env
 ```
 
-Add:
+다음을 추가합니다.
 
 ```ini
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHI...
@@ -443,9 +453,9 @@ TELEGRAM_STREAMING_MODE=stream  # stream (default) | batch
 <details>
 <summary><b>GitHub Webhooks</b></summary>
 
-**You'll configure this AFTER deployment** (need public URL first).
+**이 설정은 deployment 이후에 진행합니다.** 먼저 public URL이 필요합니다.
 
-For now, just generate the webhook secret:
+지금은 webhook secret만 생성합니다.
 
 ```bash
 # Generate secret
@@ -454,25 +464,27 @@ openssl rand -hex 32
 # Copy the output
 ```
 
-Add to `.env`:
+`.env`에 추가합니다.
 
 ```ini
 WEBHOOK_SECRET=your_generated_secret_here
 ```
 
-**GitHub webhook configuration happens in Section 9 after services are running.**
+**GitHub webhook 설정은 service가 실행된 뒤 Section 9에서 진행합니다.**
 
 </details>
 
-**Save and exit nano:** `Ctrl+X`, then `Y`, then `Enter`
+**Nano 저장 및 종료:** `Ctrl+X`, `Y`, `Enter`
 
 ---
 
-## 5. Database Migration
+<a id="5-database-migration"></a>
 
-**IMPORTANT: Run this BEFORE starting the application.**
+## 5. Database migration
 
-Initialize the database schema with required tables:
+**중요: application을 시작하기 전에 실행합니다.**
+
+필수 table을 포함한 database schema를 초기화합니다.
 
 ```bash
 # For remote database (Supabase, Neon, etc.)
@@ -484,41 +496,45 @@ psql $DATABASE_URL -c "\dt"
 #              workflow_runs, workflow_events, messages
 ```
 
-**If using local PostgreSQL with `with-db` profile:**
+**local PostgreSQL을 `with-db` profile로 사용하는 경우:**
 
-You'll run migrations after starting the database in Section 7.
+Section 7에서 database를 시작한 뒤 migration을 실행합니다.
 
 ---
 
-## 6. Caddy Configuration
+<a id="6-caddy-configuration"></a>
 
-Caddy provides automatic HTTPS with Let's Encrypt certificates.
+## 6. Caddy 설정
 
-### Create Caddyfile
+Caddy는 Let's Encrypt certificate을 사용해 HTTPS를 자동으로 제공합니다.
+
+### Caddyfile 생성
 
 ```bash
 # Copy the example — no manual editing needed
 cp Caddyfile.example Caddyfile
 ```
 
-The Caddyfile reads `{$DOMAIN}` and `{$PORT}` from your `.env` automatically. Make sure `DOMAIN` is set:
+Caddyfile은 `.env`에서 `{$DOMAIN}`과 `{$PORT}`를 자동으로 읽습니다. `DOMAIN`이 설정되어 있는지 확인합니다.
 
 ```ini
 DOMAIN=archon.yourdomain.com
 ```
 
-### How Caddy Works
+### Caddy 동작 방식
 
-- Automatically obtains SSL certificates from Let's Encrypt
-- Handles HTTPS (443) and HTTP (80) -> HTTPS redirect
-- Proxies requests to app container on port 3090
-- Renews certificates automatically
+- Let's Encrypt에서 SSL certificate을 자동으로 발급합니다.
+- HTTPS(443)와 HTTP(80) -> HTTPS redirect를 처리합니다.
+- request를 port 3090의 app container로 proxy합니다.
+- certificate을 자동으로 갱신합니다.
 
 ---
 
-## 7. Start Services
+<a id="7-start-services"></a>
 
-### Setup Workspace Permissions (Linux Only)
+## 7. Service 시작
+
+### Workspace permission 설정(Linux 전용)
 
 ```bash
 # Create workspace directory and set permissions for container user (UID 1001)
@@ -526,9 +542,9 @@ mkdir -p workspace
 sudo chown -R 1001:1001 workspace
 ```
 
-### Option A: With Remote PostgreSQL (Recommended)
+### Option A: Remote PostgreSQL 사용(권장)
 
-If using managed database:
+managed database를 사용하는 경우:
 
 ```bash
 # Start app with Caddy reverse proxy
@@ -538,9 +554,9 @@ docker compose --profile cloud up -d --build
 docker compose --profile cloud logs -f app
 ```
 
-### Option B: With Local PostgreSQL
+### Option B: Local PostgreSQL 사용
 
-If using `with-db` profile:
+`with-db` profile을 사용하는 경우:
 
 ```bash
 # Start app, postgres, and Caddy
@@ -551,7 +567,7 @@ docker compose --profile with-db --profile cloud logs -f app
 docker compose --profile with-db --profile cloud logs -f postgres
 ```
 
-### Monitor Startup
+### Startup 모니터링
 
 ```bash
 # Watch logs for successful startup (use --profile with-db for local PostgreSQL)
@@ -563,15 +579,17 @@ docker compose --profile cloud logs -f app
 # [App] Archon is ready!
 ```
 
-**Press `Ctrl+C` to exit logs (services keep running).**
+**log 화면을 종료하려면 `Ctrl+C`를 누릅니다(service는 계속 실행됩니다).**
 
 ---
 
-## 8. Verify Deployment
+<a id="8-verify-deployment"></a>
 
-### Check Health Endpoints
+## 8. Deployment 확인
 
-**From your local machine:**
+### Health endpoint 확인
+
+**로컬 머신에서:**
 
 ```bash
 # Basic health check
@@ -587,31 +605,31 @@ curl https://archon.yourdomain.com/api/health/concurrency
 # Expected: {"status":"ok","active":0,"queued":0,"maxConcurrent":10}
 ```
 
-### Check SSL Certificate
+### SSL Certificate 확인
 
-Visit `https://archon.yourdomain.com/api/health` in your browser:
+browser에서 `https://archon.yourdomain.com/api/health`에 방문합니다.
 
-- Should show green padlock
-- Certificate issued by "Let's Encrypt"
-- Auto-redirect from HTTP to HTTPS
+- green padlock이 표시되어야 합니다.
+- certificate issuer가 "Let's Encrypt"여야 합니다.
+- HTTP에서 HTTPS로 자동 redirect되어야 합니다.
 
-### Check Telegram (if configured)
+### Telegram 확인(설정한 경우)
 
-Message your bot on Telegram:
+Telegram에서 bot에게 message를 보냅니다.
 
 ```
 /help
 ```
 
-Should receive bot response with available commands.
+사용 가능한 command와 함께 bot response를 받아야 합니다.
 
 ---
 
-## 9. Configure GitHub Webhooks
+## 9. GitHub Webhook 설정
 
-Now that your app has a public URL, configure GitHub webhooks.
+app에 public URL이 생겼으므로 GitHub webhook을 설정합니다.
 
-### Generate Webhook Secret (if not done earlier)
+### Webhook Secret 생성(앞에서 하지 않은 경우)
 
 ```bash
 # On server
@@ -620,39 +638,39 @@ openssl rand -hex 32
 # Copy output to .env as WEBHOOK_SECRET if not already set
 ```
 
-### Add Webhook to Repository
+### Repository에 Webhook 추가
 
-1. Go to: `https://github.com/owner/repo/settings/hooks`
-2. Click "Add webhook"
+1. `https://github.com/owner/repo/settings/hooks`로 이동합니다.
+2. "Add webhook"을 클릭합니다.
 
-**Webhook Configuration:**
+**Webhook 설정:**
 
 | Field                | Value                                                                        |
 | -------------------- | ---------------------------------------------------------------------------- |
 | **Payload URL**      | `https://archon.yourdomain.com/webhooks/github`                              |
 | **Content type**     | `application/json`                                                           |
-| **Secret**           | Your `WEBHOOK_SECRET` from `.env`                                            |
-| **SSL verification** | Enable SSL verification                                                      |
-| **Events**           | Select individual events: Issues, Issue comments, Pull requests              |
+| **Secret**           | `.env`의 `WEBHOOK_SECRET`                                                    |
+| **SSL verification** | SSL verification 활성화                                                      |
+| **Events**           | individual events 선택: Issues, Issue comments, Pull requests                |
 
-3. Click "Add webhook"
-4. Check "Recent Deliveries" tab for successful delivery (green checkmark)
+3. "Add webhook"을 클릭합니다.
+4. "Recent Deliveries" tab에서 성공한 delivery(green checkmark)를 확인합니다.
 
-**Test webhook:**
+**Webhook 테스트:**
 
-Comment on an issue:
+issue에 comment를 남깁니다.
 
 ```
 @your-bot-name can you analyze this issue?
 ```
 
-Bot should respond with analysis.
+bot이 analysis로 응답해야 합니다.
 
 ---
 
-## 10. Maintenance & Operations
+## 10. Maintenance 및 운영
 
-### View Logs
+### Log 보기
 
 ```bash
 # All services
@@ -666,7 +684,7 @@ docker compose --profile cloud logs -f caddy
 docker compose --profile cloud logs --tail=100 app
 ```
 
-### Update Application
+### Application 업데이트
 
 ```bash
 # Pull latest changes
@@ -680,7 +698,7 @@ docker compose --profile cloud up -d --build
 docker compose --profile cloud logs -f app
 ```
 
-### Restart Services
+### Service restart
 
 ```bash
 # Restart all services
@@ -691,7 +709,7 @@ docker compose --profile cloud restart app
 docker compose --profile cloud restart caddy
 ```
 
-### Stop Services
+### Service 중지
 
 ```bash
 # Stop all services
@@ -703,113 +721,113 @@ docker compose --profile cloud down -v
 
 ---
 
-## Troubleshooting
+## 문제 해결
 
-### Caddy Not Getting SSL Certificate
+### Caddy가 SSL Certificate을 받지 못함
 
-**Check DNS:**
+**DNS 확인:**
 
 ```bash
 dig archon.yourdomain.com
 # Should return your server IP
 ```
 
-**Check firewall:**
+**firewall 확인:**
 
 ```bash
 sudo ufw status
 # Should allow ports 80 and 443
 ```
 
-**Check Caddy logs:**
+**Caddy log 확인:**
 
 ```bash
 docker compose --profile cloud logs caddy
 # Look for certificate issuance attempts
 ```
 
-**Common issues:**
+**흔한 원인:**
 
-- DNS not propagated yet (wait 5-60 minutes)
-- Firewall blocking ports 80/443
-- Domain typo in Caddyfile
-- A record not pointing to correct IP
+- DNS가 아직 전파되지 않음(5-60분 대기)
+- firewall이 80/443 port를 차단
+- Caddyfile의 domain typo
+- A record가 올바른 IP를 가리키지 않음
 
-### App Not Responding
+### App이 응답하지 않음
 
-**Check if running:**
+**실행 중인지 확인:**
 
 ```bash
 docker compose --profile cloud ps
 # Should show 'app' and 'caddy' with state 'Up'
 ```
 
-**Check health endpoint:**
+**health endpoint 확인:**
 
 ```bash
 curl http://localhost:3000/api/health
 # Tests app directly (bypasses Caddy)
 ```
 
-**Check logs:**
+**log 확인:**
 
 ```bash
 docker compose --profile cloud logs -f app
 ```
 
-### Database Connection Errors
+### Database connection error
 
-**For remote database:**
+**remote database의 경우:**
 
 ```bash
 # Test connection from server
 psql $DATABASE_URL -c "SELECT 1"
 ```
 
-**Check environment variable:**
+**environment variable 확인:**
 
 ```bash
 cat .env | grep DATABASE_URL
 ```
 
-**Run migrations if tables missing:**
+**table이 없으면 migration 실행:**
 
 ```bash
 psql $DATABASE_URL < migrations/000_combined.sql
 ```
 
-### GitHub Webhook Not Working
+### GitHub Webhook이 동작하지 않음
 
-**Check webhook deliveries:**
+**webhook delivery 확인:**
 
-1. Go to webhook settings in GitHub
-2. Click "Recent Deliveries"
-3. Look for error messages
+1. GitHub의 webhook settings로 이동합니다.
+2. "Recent Deliveries"를 클릭합니다.
+3. error message를 확인합니다.
 
-**Verify webhook secret:**
+**webhook secret 확인:**
 
 ```bash
 cat .env | grep WEBHOOK_SECRET
 # Must match GitHub webhook configuration
 ```
 
-**Test webhook endpoint:**
+**webhook endpoint 테스트:**
 
 ```bash
 curl https://archon.yourdomain.com/webhooks/github
 # Should return 400 (missing signature) - means endpoint is reachable
 ```
 
-### Out of Disk Space
+### Disk space 부족
 
-**Check disk usage:**
+**disk usage 확인:**
 
 ```bash
 df -h
 docker system df
 ```
 
-**Clean up Docker:**
+**Docker 정리:**
 
 ```bash
 # Remove unused images and containers

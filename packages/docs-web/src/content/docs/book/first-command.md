@@ -1,6 +1,6 @@
 ---
-title: Creating Your First Command
-description: Write your first Archon command file — a focused markdown prompt that the AI executes as a single task.
+title: 첫 명령 만들기
+description: AI가 단일 작업으로 실행하는 집중된 markdown prompt인 첫 Archon command file을 작성합니다.
 category: book
 part: customization
 audience: [user]
@@ -8,27 +8,27 @@ sidebar:
   order: 6
 ---
 
-You've seen commands do real work — investigating issues, writing code, posting reviews. In [Chapter 3](/book/how-it-works/), we traced how `archon-fix-github-issue` stitched seven of them together. Now you're going to write one yourself.
+지금까지 command가 실제 일을 하는 모습을 봤습니다. issue를 조사하고, 코드를 작성하고, 리뷰를 게시했습니다. [3장](/book/how-it-works/)에서는 `archon-fix-github-issue`가 일곱 개 command를 어떻게 이어 붙이는지 추적했습니다. 이제 직접 하나를 작성해 봅니다.
 
-Commands are simpler than they look. They're plain markdown files. The AI reads them as instructions.
-
----
-
-## What Is a Command?
-
-A **command** is a markdown file that tells the AI exactly what to do in one focused task. It's the atomic unit of Archon — the smallest thing that can run independently or be wired into a workflow.
-
-Commands live in your repository at `.archon/commands/`. When Archon runs a step like `command: run-tests`, it finds `.archon/commands/run-tests.md`, substitutes any variables, and sends the whole document to the AI as its task instructions.
-
-That's it. Commands are prompts, not code. You write what you want the AI to do, and it does it.
-
-> **Where to put them**: Create a `.archon/commands/` directory in any git repository you're working with. Archon finds commands there automatically alongside any bundled defaults.
+command는 보기보다 단순합니다. plain markdown 파일입니다. AI는 이를 지시문으로 읽습니다.
 
 ---
 
-## Anatomy of a Command
+## Command란 무엇인가?
 
-Here's the complete structure of a command file, with every part labeled:
+**command**는 하나의 집중된 작업에서 AI가 정확히 무엇을 해야 하는지 알려 주는 markdown 파일입니다. Archon의 원자 단위이며, 독립적으로 실행되거나 workflow에 연결될 수 있는 가장 작은 단위입니다.
+
+command는 repository의 `.archon/commands/`에 위치합니다. Archon이 `command: run-tests` 같은 단계를 실행하면 `.archon/commands/run-tests.md`를 찾고, 변수를 치환한 뒤 문서 전체를 AI에게 작업 지시로 보냅니다.
+
+핵심은 이것입니다. command는 코드가 아니라 prompt입니다. AI가 하길 원하는 일을 작성하면 AI가 실행합니다.
+
+> **어디에 두나**: 작업 중인 git repository에 `.archon/commands/` 디렉터리를 만드세요. Archon은 내장 기본 command와 함께 그곳의 command를 자동으로 찾습니다.
+
+---
+
+## Command의 구조
+
+다음은 각 부분에 설명을 붙인 command file의 전체 구조입니다.
 
 ```markdown
 ---
@@ -49,26 +49,26 @@ Run the tests for the `$ARGUMENTS` module and report what you find.
 [... AI instructions ...]
 ```
 
-**The frontmatter** (the `---` block at the top) is optional but recommended. The `description` field is what appears when someone runs `archon workflow list` or asks the AI which commands are available. The `argument-hint` tells users what they're expected to provide.
+**frontmatter**(맨 위의 `---` block)는 선택 사항이지만 권장됩니다. `description` field는 누군가 `archon workflow list`를 실행하거나 AI에게 사용 가능한 command를 물었을 때 표시됩니다. `argument-hint`는 사용자가 무엇을 넘겨야 하는지 알려 줍니다.
 
-**The body** is the actual instructions for the AI. Write it like you're explaining a task to a capable engineer who has never seen this codebase before. Be specific about what success looks like.
+**body**는 AI에게 전달되는 실제 지시문입니다. 이 코드베이스를 처음 보는 유능한 엔지니어에게 작업을 설명하듯 작성하세요. 성공이 어떤 모습인지 구체적으로 적어야 합니다.
 
-**Variables** get substituted before the AI sees the file. `$ARGUMENTS` becomes whatever the user passed when invoking the command.
+**변수**는 AI가 파일을 보기 전에 치환됩니다. `$ARGUMENTS`는 사용자가 command를 호출할 때 넘긴 값으로 바뀝니다.
 
 ---
 
-## Build It: A Test Runner Command
+## 만들어 보기: test runner command
 
-Let's build a real command. The goal: run tests for a specific module and report results clearly.
+실제 command를 만들어 봅시다. 목표는 특정 module의 테스트를 실행하고 결과를 명확하게 보고하는 것입니다.
 
-### Step 1: Create the File
+### 1단계: 파일 만들기
 
 ```bash
 mkdir -p .archon/commands
 touch .archon/commands/run-tests.md
 ```
 
-### Step 2: Write the Frontmatter
+### 2단계: frontmatter 작성
 
 ```markdown
 ---
@@ -77,7 +77,7 @@ argument-hint: <module-name>
 ---
 ```
 
-### Step 3: Write the Instructions
+### 3단계: 지시문 작성
 
 ```markdown
 # Run Tests
@@ -119,57 +119,57 @@ If you can't find test files for `$ARGUMENTS`, say so clearly and list the files
 - [ ] Clear recommendation for next step
 ```
 
-### Step 4: Test It
+### 4단계: 테스트하기
 
-You can invoke a command directly through `archon-assist`:
+`archon-assist`를 통해 command를 직접 호출할 수 있습니다.
 
 ```bash
 archon workflow run archon-assist "/command-invoke run-tests auth"
 ```
 
-Archon routes the `/command-invoke run-tests` instruction to the AI, which finds your `.archon/commands/run-tests.md`, substitutes `$ARGUMENTS` with `auth`, and runs the task.
+Archon은 `/command-invoke run-tests` 지시를 AI로 라우팅합니다. AI는 `.archon/commands/run-tests.md`를 찾고, `$ARGUMENTS`를 `auth`로 치환한 뒤 작업을 실행합니다.
 
-You should see the AI find your auth module tests, run them, and produce a structured report.
+AI가 auth module 테스트를 찾고 실행한 뒤 구조화된 보고서를 만드는 것을 볼 수 있어야 합니다.
 
 ---
 
-## Variable Reference
+## 변수 참조
 
-| Variable | Contains | Example |
+| 변수 | 포함하는 값 | 예시 |
 |----------|----------|---------|
-| `$ARGUMENTS` | Everything the user passed | `"auth module"` |
-| `$1` | First space-separated argument | `auth` (from `auth module`) |
-| `$2` | Second space-separated argument | `module` (from `auth module`) |
-| `$3` | Third space-separated argument | — |
-| `$ARTIFACTS_DIR` | Absolute path to this run's artifact directory | `/home/user/.archon/workspaces/owner/repo/artifacts/runs/abc123/` |
-| `$WORKFLOW_ID` | Unique ID for the current workflow run | `abc123def456` |
-| `$BASE_BRANCH` | The base branch for the current worktree | `main` |
-| `$DOCS_DIR` | Documentation directory path | `docs/` |
+| `$ARGUMENTS` | 사용자가 넘긴 전체 입력 | `"auth module"` |
+| `$1` | 공백으로 나눈 첫 번째 argument | `auth` (`auth module`에서) |
+| `$2` | 공백으로 나눈 두 번째 argument | `module` (`auth module`에서) |
+| `$3` | 공백으로 나눈 세 번째 argument | — |
+| `$ARTIFACTS_DIR` | 이 실행의 artifact directory 절대 경로 | `/home/user/.archon/workspaces/owner/repo/artifacts/runs/abc123/` |
+| `$WORKFLOW_ID` | 현재 workflow run의 고유 ID | `abc123def456` |
+| `$BASE_BRANCH` | 현재 worktree의 base branch | `main` |
+| `$DOCS_DIR` | 문서 디렉터리 경로 | `docs/` |
 
-Use `$ARTIFACTS_DIR` whenever your command writes output files that a later step needs to read. Use `$1`, `$2`, `$3` when you want to treat arguments as structured positional inputs rather than a single string.
-
----
-
-## Command Design Tips
-
-**Define what success looks like.** End your command with a success criteria checklist. It gives the AI a final verification step and gives you a clear definition of "done."
-
-**Tell the AI what to do when things go wrong.** What should happen if the test file doesn't exist? If a dependency is missing? Commands that handle edge cases explicitly produce much more consistent behavior than ones that leave it up to the AI to improvise.
-
-**Write artifacts for anything the next step needs.** If your command produces information that a downstream step should use, have the AI write it to `$ARTIFACTS_DIR` as a file. Never rely on the AI remembering something across a context-cleared step.
-
-**One task per command.** Resist the urge to make a command that investigates, implements, and creates a PR all at once. Focused commands are reusable, debuggable, and composable. Split work that belongs in separate phases.
+나중 단계가 읽어야 할 output file을 command가 작성한다면 `$ARTIFACTS_DIR`를 사용하세요. argument를 하나의 문자열이 아니라 구조화된 positional input으로 다루고 싶다면 `$1`, `$2`, `$3`를 사용하세요.
 
 ---
 
-## Invoking Commands
+## Command 설계 팁
 
-**From `archon-assist`** (interactive):
+**성공의 모습을 정의하세요.** command 마지막에 success criteria checklist를 두세요. AI에게 마지막 검증 단계를 제공하고, 여러분에게도 "완료"의 명확한 정의를 제공합니다.
+
+**문제가 생겼을 때 무엇을 해야 하는지 AI에게 알려 주세요.** test file이 없으면 어떻게 해야 하나요? dependency가 없으면 어떻게 해야 하나요? edge case를 명시적으로 다루는 command는 AI가 즉흥적으로 판단하게 두는 command보다 훨씬 일관된 동작을 만듭니다.
+
+**다음 단계가 필요한 정보는 artifact로 쓰세요.** command가 downstream step에서 사용할 정보를 만들면 AI가 이를 `$ARTIFACTS_DIR`에 파일로 쓰게 하세요. context가 초기화되는 단계 사이에서 AI가 기억해 주길 기대하지 마세요.
+
+**command 하나에는 작업 하나만 담으세요.** 조사, 구현, PR 생성을 한 번에 하는 command를 만들고 싶은 유혹을 피하세요. 초점이 분명한 command는 재사용 가능하고, 디버깅 가능하고, 조합 가능합니다. 서로 다른 phase에 속하는 작업은 나누세요.
+
+---
+
+## Command 호출하기
+
+**`archon-assist`에서** (interactive):
 ```bash
 archon workflow run archon-assist "/command-invoke run-tests auth"
 ```
 
-**From a workflow** (automated):
+**workflow에서** (automated):
 ```yaml
 nodes:
   - id: validate
@@ -177,13 +177,13 @@ nodes:
     prompt: "Run tests for the auth module"
 ```
 
-**Browse what's available**:
+**사용 가능한 항목 보기**:
 ```bash
 archon workflow run archon-assist "/commands"
 ```
 
-This lists every command available — your custom ones from `.archon/commands/` alongside Archon's bundled defaults. The bundled commands (like `archon-investigate-issue` and `archon-fix-issue`) are good reference material when you're deciding how to structure your own.
+이 명령은 사용 가능한 모든 command를 나열합니다. `.archon/commands/`의 custom command와 Archon의 내장 기본 command가 함께 표시됩니다. `archon-investigate-issue`, `archon-fix-issue` 같은 내장 command는 직접 command 구조를 정할 때 좋은 참고 자료입니다.
 
 ---
 
-In [Chapter 7: Creating Your First Workflow →](/book/first-workflow/), you'll take the command you just built and wire it into a multi-step workflow — combining it with other steps, passing artifacts between them, and building something that runs from start to finish automatically.
+[7장: 첫 워크플로 만들기 →](/book/first-workflow/)에서는 방금 만든 command를 다단계 workflow에 연결합니다. 다른 단계와 조합하고, 단계 사이에 artifact를 전달하며, 처음부터 끝까지 자동으로 실행되는 것을 만들어 봅니다.

@@ -1,6 +1,6 @@
 ---
-title: Releasing
-description: How to create a new release of the Archon CLI — version management, release process, and troubleshooting.
+title: 릴리스
+description: Archon CLI의 새 릴리스를 만드는 방법 — 버전 관리, 릴리스 절차, 문제 해결.
 category: contributing
 area: infra
 audience: [developer]
@@ -9,24 +9,24 @@ sidebar:
   order: 3
 ---
 
-This guide covers how to create a new release of the Archon CLI.
+이 가이드는 Archon CLI의 새 릴리스를 만드는 방법을 다룹니다. HarnessLab은 Archon fork로 운영되므로, upstream 흐름을 유지하면서 릴리스를 준비할 때 이 절차를 기준으로 삼습니다.
 
-## Version Management
+## 버전 관리
 
-Versions follow [Semantic Versioning](https://semver.org/):
-- **Major** (1.0.0): Breaking changes to CLI interface or workflow format
-- **Minor** (0.1.0): New features, new workflows, new commands
-- **Patch** (0.0.1): Bug fixes, documentation updates
+버전은 [Semantic Versioning](https://semver.org/)을 따릅니다.
+- **Major** (1.0.0): CLI interface 또는 workflow format의 breaking change
+- **Minor** (0.1.0): 새 feature, 새 workflow, 새 command
+- **Patch** (0.0.1): bug fix, documentation update
 
-Version is stored in the root `package.json` only -- this is the single source of truth.
+버전은 root `package.json`에만 저장됩니다. 이 값이 single source of truth입니다.
 
-## Release Process
+## 릴리스 절차
 
-Releases are created by merging `dev` into `main`. Never commit directly to `main`.
+릴리스는 `dev`를 `main`에 merge해서 만듭니다. `main`에 직접 commit하지 마세요.
 
-### 1. Prepare the Release
+### 1. 릴리스 준비
 
-Use the `/release` skill (or follow these manual steps):
+`/release` skill을 사용하세요. 또는 다음 manual step을 따릅니다.
 
 ```bash
 # Ensure dev is up to date
@@ -37,15 +37,15 @@ git pull origin dev
 bun run validate
 ```
 
-The `/release` skill automates the following:
-1. Compares `dev` to `main` to generate changelog entries
-2. Bumps the version in root `package.json` (patch by default; use `/release minor` or `/release major` for other increments)
-3. Updates `CHANGELOG.md` following Keep a Changelog format
-4. Creates a PR from `dev` to `main`
+`/release` skill은 다음 작업을 자동화합니다.
+1. `dev`와 `main`을 비교해 changelog entry를 생성합니다.
+2. root `package.json`의 버전을 올립니다. 기본은 patch이며, 다른 증가 단위는 `/release minor` 또는 `/release major`를 사용합니다.
+3. Keep a Changelog format에 맞춰 `CHANGELOG.md`를 업데이트합니다.
+4. `dev`에서 `main`으로 향하는 PR을 생성합니다.
 
-### 2. Merge and Tag
+### 2. Merge와 Tag
 
-Once the release PR is reviewed and merged:
+Release PR이 review되고 merge되면 다음을 실행합니다.
 
 ```bash
 # Create and push the tag from main
@@ -55,14 +55,14 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-This triggers the GitHub Actions release workflow which:
-1. Builds binaries for all platforms (macOS arm64/x64, Linux arm64/x64, Windows x64)
-2. Generates checksums
-3. Creates a GitHub Release with all artifacts
+이 작업은 GitHub Actions release workflow를 trigger하며, workflow는 다음을 수행합니다.
+1. 모든 platform용 binary를 build합니다(macOS arm64/x64, Linux arm64/x64, Windows x64).
+2. checksum을 생성합니다.
+3. 모든 artifact를 포함한 GitHub Release를 생성합니다.
 
-### 3. Update Homebrew Formula (Optional)
+### 3. Homebrew Formula 업데이트(Optional)
 
-After the release workflow completes:
+Release workflow가 완료된 뒤:
 
 ```bash
 # Update checksums in the Homebrew formula
@@ -75,9 +75,9 @@ git commit -m "chore: update Homebrew formula for vX.Y.Z"
 git push origin main
 ```
 
-If you maintain a Homebrew tap (`homebrew-archon`), copy the updated formula there.
+Homebrew tap(`homebrew-archon`)을 운영한다면 업데이트된 formula를 그곳에 복사하세요.
 
-### 4. Verify the Release
+### 4. 릴리스 검증
 
 ```bash
 # Test the install script (only works if repo is public)
@@ -87,10 +87,10 @@ curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/instal
 archon version
 ```
 
-> **Note: Private Repository Installation**
+> **참고: Private Repository 설치**
 >
-> If the repository is private, the curl install script won't work for anonymous users.
-> Use the GitHub CLI instead:
+> repository가 private이면 anonymous user에게는 curl install script가 동작하지 않습니다.
+> 대신 GitHub CLI를 사용하세요.
 >
 > ```bash
 > # Download and install using gh (requires GitHub authentication)
@@ -106,9 +106,9 @@ archon version
 > archon version
 > ```
 
-## Manual Release (When GitHub Actions Unavailable)
+## Manual Release (GitHub Actions를 사용할 수 없을 때)
 
-If GitHub Actions can't run (billing issues, private repo limits), create the release manually:
+GitHub Actions를 실행할 수 없다면(billing issue, private repo limit 등), release를 수동으로 만듭니다.
 
 ```bash
 # 1. Build binaries locally (only builds for your current platform)
@@ -123,12 +123,12 @@ gh release create vX.Y.Z dist/binaries/* \
 gh release view vX.Y.Z
 ```
 
-> **Note:** Local builds only create binaries for your current platform.
-> For cross-platform binaries, you need GitHub Actions or access to each platform.
+> **참고:** Local build는 현재 platform용 binary만 생성합니다.
+> Cross-platform binary가 필요하면 GitHub Actions 또는 각 platform에 대한 접근 권한이 필요합니다.
 
-## Manual Build (for Testing)
+## Manual Build (테스트용)
 
-To build binaries locally without creating a release:
+Release를 만들지 않고 local에서 binary만 build하려면:
 
 ```bash
 # Build all platform binaries
@@ -141,54 +141,54 @@ ls -la dist/binaries/
 ./scripts/checksums.sh
 ```
 
-## Release Workflow Details
+## Release Workflow 상세
 
-The `.github/workflows/release.yml` workflow:
+`.github/workflows/release.yml` workflow는 다음과 같이 동작합니다.
 
-1. **Triggers on**:
-   - Push of tags matching `v*`
-   - Manual workflow dispatch with version input
+1. **Trigger 조건**:
+   - `v*`와 일치하는 tag push
+   - version input을 포함한 manual workflow dispatch
 
-2. **Build job** (runs in parallel for each platform):
-   - Sets up Bun
-   - Installs dependencies
-   - Compiles binary with `bun build --compile`
-   - Uploads as artifact
+2. **Build job**(platform별 parallel 실행):
+   - Bun을 설정합니다.
+   - Dependency를 설치합니다.
+   - `bun build --compile`로 binary를 compile합니다.
+   - Artifact로 upload합니다.
 
-3. **Release job** (runs after all builds complete):
-   - Downloads all artifacts
-   - Generates SHA256 checksums
-   - Creates GitHub Release with:
-     - All binaries attached
+3. **Release job**(모든 build가 완료된 뒤 실행):
+   - 모든 artifact를 download합니다.
+   - SHA256 checksum을 생성합니다.
+   - 다음을 포함한 GitHub Release를 생성합니다.
+     - 모든 binary attachment
      - checksums.txt
-     - Auto-generated release notes
-     - Installation instructions
+     - 자동 생성된 release note
+     - 설치 안내
 
-## Troubleshooting
+## 문제 해결
 
-### Build Fails on GitHub Actions
+### GitHub Actions에서 Build 실패
 
-Check the Actions tab for specific errors. Common issues:
-- Dependency installation failure: Check `bun.lock` is committed
-- Type errors: Run `bun run type-check` locally first
+Actions tab에서 구체적인 error를 확인하세요. 흔한 원인은 다음과 같습니다.
+- Dependency installation failure: `bun.lock`이 commit되어 있는지 확인하세요.
+- Type error: 먼저 local에서 `bun run type-check`를 실행하세요.
 
-### Install Script Fails
+### Install Script 실패
 
-The install script requires:
-- `curl` for downloading
-- `sha256sum` or `shasum` for verification
-- Write access to `/usr/local/bin` (or custom `INSTALL_DIR`)
+Install script에는 다음이 필요합니다.
+- Download용 `curl`
+- Verification용 `sha256sum` 또는 `shasum`
+- `/usr/local/bin`에 대한 write access 또는 custom `INSTALL_DIR`
 
-### Checksums Don't Match
+### Checksum 불일치
 
-If users report checksum failures:
-1. Check the release artifacts are complete
-2. Verify checksums.txt was generated correctly
-3. Ensure binaries weren't modified after checksum generation
+사용자가 checksum failure를 보고하면:
+1. Release artifact가 완전한지 확인합니다.
+2. checksums.txt가 올바르게 생성됐는지 검증합니다.
+3. Checksum 생성 후 binary가 수정되지 않았는지 확인합니다.
 
-## Pre-release Versions
+## Pre-release 버전
 
-For testing releases before public announcement:
+공개 발표 전에 release를 테스트하려면:
 
 ```bash
 # Create a pre-release tag
@@ -196,11 +196,11 @@ git tag v0.3.0-beta.1
 git push origin v0.3.0-beta.1
 ```
 
-Pre-releases (tags containing `-`) are marked as such on GitHub.
+Pre-release(`-`가 포함된 tag)는 GitHub에서 pre-release로 표시됩니다.
 
-## Hotfix Process
+## Hotfix 절차
 
-For urgent fixes to a released version:
+이미 release된 버전에 긴급 fix가 필요하면:
 
 ```bash
 # Create hotfix branch from tag

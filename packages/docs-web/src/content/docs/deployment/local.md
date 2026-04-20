@@ -1,6 +1,6 @@
 ---
-title: Local Development
-description: Run Archon locally with SQLite or PostgreSQL for development and personal use.
+title: 로컬 개발
+description: 개발과 개인 사용을 위해 SQLite 또는 PostgreSQL로 Archon을 로컬 실행합니다.
 category: deployment
 area: infra
 audience: [operator]
@@ -9,25 +9,25 @@ sidebar:
   order: 1
 ---
 
-This guide covers how to run the Archon server locally, with Docker, and in production. For VPS deployment with automatic HTTPS, see the [Cloud Deployment Guide](/deployment/cloud/).
+이 가이드는 Archon server를 로컬, Docker, 프로덕션에서 실행하는 방법을 다룹니다. 자동 HTTPS를 포함한 VPS 배포는 [Cloud 배포 가이드](/deployment/cloud/)를 참고하세요.
 
-**Quick links:** [Local Development](#local-development) | [Docker with Remote DB](#docker-with-remote-postgresql) | [Docker with Local PostgreSQL](#docker-with-local-postgresql) | [Production](#production-deployment)
+**빠른 링크:** [로컬 개발](#local-development) | [Remote DB를 사용하는 Docker](#docker-with-remote-postgresql) | [Local PostgreSQL을 사용하는 Docker](#docker-with-local-postgresql) | [프로덕션](#production-deployment)
 
 ---
 
-## Local Development
+## 로컬 개발
 
-Local development with SQLite is the recommended default. No database setup is needed.
+SQLite를 사용하는 로컬 개발이 권장 기본값입니다. database 설정이 필요 없습니다.
 
-### Prerequisites
+### 사전 준비
 
 - [Bun](https://bun.sh) 1.0+
-- At least one AI assistant installed and configured (Claude Code or Codex — Archon orchestrates them, it does not bundle them)
-- A GitHub token for repository cloning (`GH_TOKEN` / `GITHUB_TOKEN`)
+- 설치 및 설정이 완료된 AI assistant 최소 1개(Claude Code 또는 Codex. Archon은 이를 orchestrate하지만 bundle하지 않습니다)
+- repository cloning용 GitHub token(`GH_TOKEN` / `GITHUB_TOKEN`)
 
-> Source installs (`bun run`) auto-resolve Claude Code's `cli.js` via `node_modules`. Compiled Archon binaries require `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` — see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only).
+> source install(`bun run`)은 `node_modules`를 통해 Claude Code의 `cli.js`를 자동으로 resolve합니다. compiled Archon binary에는 `CLAUDE_BIN_PATH` 또는 `assistants.claude.claudeBinaryPath`가 필요합니다. [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)을 참고하세요.
 
-### Setup
+### 설정
 
 ```bash
 # 1. Clone and install
@@ -46,32 +46,32 @@ bun run dev
 # http://localhost:5173
 ```
 
-In development mode, two servers run simultaneously:
+개발 모드에서는 두 server가 동시에 실행됩니다.
 
-| Service    | URL                    | Purpose                          |
+| Service    | URL                    | 용도                             |
 |------------|------------------------|----------------------------------|
-| Web UI     | http://localhost:5173  | React frontend (Vite dev server) |
+| Web UI     | http://localhost:5173  | React frontend(Vite dev server) |
 | API Server | http://localhost:3090  | Backend API + SSE streaming      |
 
-### Optional: Use PostgreSQL Instead of SQLite
+### 선택: SQLite 대신 PostgreSQL 사용
 
-If you prefer PostgreSQL for local development:
+로컬 개발에서 PostgreSQL을 선호한다면 다음을 실행합니다.
 
 ```bash
 docker compose --profile with-db up -d postgres
 # Set DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent in .env
 ```
 
-> **Note:** The database schema is created automatically on first container startup via the mounted migration file. No manual `psql` step is needed for fresh installs.
+> **참고:** database schema는 첫 container startup 때 mounted migration file을 통해 자동으로 생성됩니다. fresh install에서는 수동 `psql` 단계가 필요 없습니다.
 
-### Production Build (Local)
+### 프로덕션 build(로컬)
 
 ```bash
 bun run build    # Build the frontend
 bun run start    # Server serves both API and Web UI on port 3090
 ```
 
-### Verify It Works
+### 동작 확인
 
 ```bash
 curl http://localhost:3090/health
@@ -80,19 +80,19 @@ curl http://localhost:3090/health
 
 ---
 
-## Docker with Remote PostgreSQL
+## Remote PostgreSQL을 사용하는 Docker
 
-Use this option when your database is hosted externally (Supabase, Neon, AWS RDS, etc.). This starts only the app container.
+database가 외부에서 hosted되는 경우(Supabase, Neon, AWS RDS 등) 이 옵션을 사용합니다. app container만 시작합니다.
 
-### Prerequisites
+### 사전 준비
 
-- Docker & Docker Compose
-- A remote PostgreSQL database with `DATABASE_URL` set in `.env`
-- AI assistant tokens configured in `.env`
+- Docker 및 Docker Compose
+- `.env`에 `DATABASE_URL`이 설정된 remote PostgreSQL database
+- `.env`에 설정된 AI assistant token
 
-### Setup
+### 설정
 
-The app container runs without any profile when using an external database. There is no `external-db` profile — the base `app` service always starts.
+external database를 사용할 때 app container는 profile 없이 실행됩니다. `external-db` profile은 없습니다. 기본 `app` service가 항상 시작됩니다.
 
 ```bash
 # 1. Get the deployment files
@@ -114,18 +114,18 @@ curl http://localhost:3000/api/health
 ```
 
 :::note
-Docker defaults to port **3000** (set via `PORT` in `.env`). Local development defaults to port **3090**. The health endpoint in Docker is `/api/health`, while in local dev mode `/health` also works.
+Docker의 기본 port는 **3000**입니다(`.env`의 `PORT`로 설정). 로컬 개발의 기본 port는 **3090**입니다. Docker의 health endpoint는 `/api/health`이고, local dev mode에서는 `/health`도 동작합니다.
 :::
 
-### Database Migration (First Time)
+### Database migration(최초 1회)
 
-For fresh installations, run the combined migration:
+fresh install에서는 combined migration을 실행합니다.
 
 ```bash
 psql $DATABASE_URL < migrations/000_combined.sql
 ```
 
-### Stop
+### 중지
 
 ```bash
 docker compose down
@@ -133,11 +133,11 @@ docker compose down
 
 ---
 
-## Docker with Local PostgreSQL
+## Local PostgreSQL을 사용하는 Docker
 
-Use this option to run both the app and PostgreSQL in Docker containers. The database schema is created automatically on first startup.
+app과 PostgreSQL을 모두 Docker container에서 실행하려면 이 옵션을 사용합니다. database schema는 첫 startup 때 자동으로 생성됩니다.
 
-### Setup
+### 설정
 
 ```bash
 # 1. Configure .env
@@ -153,11 +153,11 @@ docker compose logs -f app
 curl http://localhost:3000/api/health
 ```
 
-> **Note:** Database tables are created automatically via the init script on first startup. No manual migration step is needed.
+> **참고:** database table은 첫 startup 때 init script로 자동 생성됩니다. 수동 migration 단계는 필요하지 않습니다.
 
-### Updating an Existing Installation
+### 기존 설치 업데이트
 
-When new migrations are added, apply them manually:
+새 migration이 추가되면 수동으로 적용합니다.
 
 ```bash
 # Connect to the running postgres container
@@ -171,7 +171,7 @@ docker compose exec postgres psql -U postgres -d remote_coding_agent
 \q
 ```
 
-### Stop
+### 중지
 
 ```bash
 docker compose --profile with-db down
@@ -179,45 +179,45 @@ docker compose --profile with-db down
 
 ---
 
-## Production Deployment
+## 프로덕션 배포
 
-For deploying to a VPS (DigitalOcean, Linode, AWS EC2, etc.) with automatic HTTPS via Caddy, see the [Cloud Deployment Guide](/deployment/cloud/).
+Caddy를 통한 자동 HTTPS와 함께 VPS(DigitalOcean, Linode, AWS EC2 등)에 배포하려면 [Cloud 배포 가이드](/deployment/cloud/)를 참고하세요.
 
 ---
 
-## Database Options Summary
+## Database 옵션 요약
 
-| Option | Setup | Best For |
+| 옵션 | 설정 | 적합한 용도 |
 |--------|-------|----------|
-| **SQLite** (default) | Zero config, just omit `DATABASE_URL` | Single-user, CLI usage, local development |
-| **Remote PostgreSQL** | Set `DATABASE_URL` to hosted DB | Cloud deployments, shared access |
-| **Local PostgreSQL** | Docker `--profile with-db` | Self-hosted, Docker-based setups |
+| **SQLite**(기본값) | 설정 없음, `DATABASE_URL`만 생략 | single-user, CLI 사용, 로컬 개발 |
+| **Remote PostgreSQL** | hosted DB로 `DATABASE_URL` 설정 | cloud 배포, shared access |
+| **Local PostgreSQL** | Docker `--profile with-db` | self-hosted, Docker 기반 setup |
 
-SQLite stores data at `~/.archon/archon.db` (or `/.archon/archon.db` in Docker). It is auto-initialized on first run.
+SQLite는 데이터를 `~/.archon/archon.db`(Docker에서는 `/.archon/archon.db`)에 저장합니다. 첫 실행 시 자동으로 초기화됩니다.
 
 ---
 
-## Port Configuration
+## Port 설정
 
-| Context | Default Port | Notes |
+| Context | 기본 port | 참고 |
 |---------|-------------|-------|
-| Local dev (`bun run dev`) | 3090 | Default server port |
-| Docker | 3000 | Set via `PORT` in `.env` |
-| Worktrees | 3190-4089 | Auto-allocated, hash-based on path |
-| Override | Any | Set `PORT=4000 bun dev` |
+| Local dev(`bun run dev`) | 3090 | 기본 server port |
+| Docker | 3000 | `.env`의 `PORT`로 설정 |
+| Worktrees | 3190-4089 | path hash 기반 자동 할당 |
+| Override | Any | `PORT=4000 bun dev` 설정 |
 
 :::tip
-The port difference between local dev (3090) and Docker (3000) is intentional. Override with the `PORT` environment variable in either context.
+local dev(3090)와 Docker(3000)의 port 차이는 의도된 것입니다. 어느 context에서든 `PORT` 환경 변수로 override할 수 있습니다.
 :::
 
 ---
 
-## Health Endpoints
+## Health endpoint
 
-| Context | Endpoint | Notes |
+| Context | Endpoint | 참고 |
 |---------|----------|-------|
-| Docker / production | `/api/health` | Used by Docker healthcheck |
-| Local dev | `/health` | Convenience alias (also supports `/api/health`) |
+| Docker / production | `/api/health` | Docker healthcheck에서 사용 |
+| Local dev | `/health` | 편의 alias(`/api/health`도 지원) |
 
 ```bash
 # Docker
@@ -233,9 +233,9 @@ curl http://localhost:3090/health/concurrency  # Concurrency status
 
 ---
 
-## Troubleshooting
+## 문제 해결
 
-### Container Won't Start
+### Container가 시작되지 않음
 
 ```bash
 # Check logs
@@ -250,7 +250,7 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-### Port Conflicts
+### Port 충돌
 
 ```bash
 # Check if port is in use

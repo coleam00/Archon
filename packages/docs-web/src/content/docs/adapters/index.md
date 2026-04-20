@@ -1,6 +1,6 @@
 ---
-title: Platform Adapters
-description: Overview of all platform adapters available for connecting to Archon.
+title: 플랫폼 어댑터
+description: Archon에 연결할 수 있는 모든 플랫폼 어댑터 개요입니다.
 category: adapters
 area: adapters
 audience: [user, operator]
@@ -9,42 +9,42 @@ sidebar:
   order: 0
 ---
 
-Archon supports multiple platform adapters. Each adapter connects Archon to a different communication channel, letting you trigger workflows and interact with AI agents from wherever you work.
+Archon은 여러 플랫폼 어댑터를 지원합니다. 각 어댑터는 Archon을 서로 다른 커뮤니케이션 채널에 연결해, 사용자가 일하는 곳 어디에서든 워크플로를 실행하고 AI 에이전트와 상호작용할 수 있게 합니다.
 
-## Core Adapters
+## 핵심 어댑터
 
-| Adapter | Transport | Auth Required | Setup |
+| 어댑터 | 전송 방식 | 필요한 인증 | 설정 |
 |---------|-----------|---------------|-------|
-| [**Web UI**](/adapters/web/) | SSE streaming | None | Built-in |
-| [**CLI**](/reference/cli/) | stdout | None | Built-in |
-| [**Slack**](/adapters/slack/) | Socket Mode | Bot + App tokens | [Setup guide](/adapters/slack/) |
-| [**Telegram**](/adapters/telegram/) | Bot API polling | Bot token | [Setup guide](/adapters/telegram/) |
-| [**GitHub**](/adapters/github/) | Webhooks | Token + webhook secret | [Setup guide](/adapters/github/) |
+| [**Web UI**](/adapters/web/) | SSE streaming | 없음 | 내장 |
+| [**CLI**](/reference/cli/) | stdout | 없음 | 내장 |
+| [**Slack**](/adapters/slack/) | Socket Mode | Bot + App tokens | [설정 가이드](/adapters/slack/) |
+| [**Telegram**](/adapters/telegram/) | Bot API polling | Bot token | [설정 가이드](/adapters/telegram/) |
+| [**GitHub**](/adapters/github/) | Webhooks | Token + webhook secret | [설정 가이드](/adapters/github/) |
 
-## Community Adapters
+## 커뮤니티 어댑터
 
-Community adapters follow the same `IPlatformAdapter` interface but target platforms outside the core set.
+커뮤니티 어댑터는 동일한 `IPlatformAdapter` 인터페이스를 따르지만, 핵심 지원 범위 밖의 플랫폼을 대상으로 합니다.
 
-| Adapter | Transport | Auth Required | Setup |
+| 어댑터 | 전송 방식 | 필요한 인증 | 설정 |
 |---------|-----------|---------------|-------|
-| [**Discord**](/adapters/community/discord/) | WebSocket | Bot token | [Setup guide](/adapters/community/discord/) |
-| [**Gitea**](/adapters/community/gitea/) | Webhooks | Token + webhook secret | [Setup guide](/adapters/community/gitea/) |
-| [**GitLab**](/adapters/community/gitlab/) | Webhooks | Token + webhook secret | [Setup guide](/adapters/community/gitlab/) |
+| [**Discord**](/adapters/community/discord/) | WebSocket | Bot token | [설정 가이드](/adapters/community/discord/) |
+| [**Gitea**](/adapters/community/gitea/) | Webhooks | Token + webhook secret | [설정 가이드](/adapters/community/gitea/) |
+| [**GitLab**](/adapters/community/gitlab/) | Webhooks | Token + webhook secret | [설정 가이드](/adapters/community/gitlab/) |
 
-## How Adapters Work
+## 어댑터 작동 방식
 
-All adapters implement the `IPlatformAdapter` interface. They handle:
+모든 어댑터는 `IPlatformAdapter` 인터페이스를 구현합니다. 어댑터가 담당하는 일은 다음과 같습니다.
 
-- **Message ingestion** -- receiving messages from the platform and forwarding them to Archon's orchestrator
-- **Response delivery** -- streaming or batching AI responses back to the platform
-- **Authorization** -- optional user whitelists to restrict access
-- **Conversation tracking** -- mapping platform-specific identifiers (thread IDs, chat IDs, issue numbers) to Archon conversations
+- **메시지 수신** -- 플랫폼에서 메시지를 받아 Archon orchestrator로 전달
+- **응답 전달** -- AI 응답을 플랫폼으로 다시 스트리밍하거나 배치로 전송
+- **권한 제어** -- 접근을 제한하기 위한 선택적 사용자 allowlist
+- **대화 추적** -- 플랫폼별 식별자(thread ID, chat ID, issue number)를 Archon 대화에 매핑
 
-## Choosing an Adapter
+## 어댑터 선택
 
-- **Web UI** is the fastest way to get started -- no tokens or external services needed.
-- **Slack** and **Telegram** are ideal for mobile access and team collaboration.
-- **GitHub** integrates directly into your issue and PR workflow.
-- **Discord** works well for community or team servers.
+- **Web UI**는 가장 빠르게 시작할 수 있는 방법입니다. 토큰이나 외부 서비스가 필요 없습니다.
+- **Slack**과 **Telegram**은 모바일 접근과 팀 협업에 적합합니다.
+- **GitHub**는 이슈와 PR 워크플로에 직접 통합됩니다.
+- **Discord**는 커뮤니티 또는 팀 서버에 잘 맞습니다.
 
-You can run multiple adapters simultaneously. Any adapter with the required environment variables set will start automatically when you launch the server.
+여러 어댑터를 동시에 실행할 수 있습니다. 필요한 환경 변수가 설정된 어댑터는 서버를 시작할 때 자동으로 함께 시작됩니다.

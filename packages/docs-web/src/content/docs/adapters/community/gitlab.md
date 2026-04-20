@@ -1,6 +1,6 @@
 ---
 title: GitLab
-description: Connect Archon to GitLab for AI coding assistance in issues and merge requests.
+description: 이슈와 merge request에서 AI 코딩 지원을 받을 수 있도록 Archon을 GitLab에 연결합니다.
 category: adapters
 area: adapters
 audience: [operator]
@@ -9,78 +9,78 @@ sidebar:
 ---
 
 :::note
-GitLab is a **community adapter** — contributed and maintained by the community.
+GitLab은 **커뮤니티 어댑터**입니다. 커뮤니티가 기여하고 유지관리합니다.
 :::
 
-Connect Archon to a GitLab instance (gitlab.com or self-hosted) so you can interact with your AI coding assistant from issues and merge requests.
+Archon을 GitLab instance(gitlab.com 또는 self-hosted)에 연결하면 이슈와 merge request에서 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
 
-## Prerequisites
+## 사전 준비
 
-- Archon server running (see [Getting Started](/getting-started/overview/))
-- GitLab project with issues and merge requests enabled
-- GitLab Personal Access Token or Project Access Token with `api` scope
-- Public endpoint for webhooks (see ngrok setup below for local development)
+- 실행 중인 Archon 서버([시작하기](/getting-started/overview/) 참고)
+- Issues와 merge requests가 활성화된 GitLab project
+- `api` scope가 있는 GitLab Personal Access Token 또는 Project Access Token
+- Webhook을 받을 공개 endpoint(로컬 개발에서는 아래 ngrok 설정 참고)
 
-## Step 1: Create a GitLab Access Token
+## 1단계: GitLab access token 만들기
 
-### Personal Access Token (recommended for getting started)
+### Personal Access Token(처음 시작할 때 권장)
 
-1. Go to **GitLab → User Settings → Access Tokens**
-2. Create a token with:
+1. **GitLab → User Settings → Access Tokens**로 이동합니다.
+2. 다음 설정으로 token을 만듭니다.
    - **Name**: `archon`
    - **Scopes**: `api`
-   - **Expiration**: Set as needed
-3. Copy the token (starts with `glpat-`)
+   - **Expiration**: 필요에 맞게 설정
+3. token을 복사합니다(`glpat-`로 시작).
 
-### Project Access Token (recommended for production)
+### Project Access Token(프로덕션 권장)
 
-1. Go to **Project → Settings → Access Tokens**
-2. Create a token with:
-   - **Role**: Developer or Maintainer
+1. **Project → Settings → Access Tokens**로 이동합니다.
+2. 다음 설정으로 token을 만듭니다.
+   - **Role**: Developer 또는 Maintainer
    - **Scopes**: `api`
-3. This creates a bot user scoped to the project
+3. 이 방식은 project 범위의 bot user를 만듭니다.
 
-## Step 2: Generate Webhook Secret
+## 2단계: Webhook secret 생성
 
 ```bash
 openssl rand -hex 32
 ```
 
-Windows (PowerShell):
+Windows(PowerShell):
 
 ```powershell
 -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
 ```
 
-Save this secret — you'll need it for steps 3 and 4.
+이 secret을 저장해 둡니다. 3단계와 4단계에서 필요합니다.
 
-## Step 3: Expose Local Server (Development Only)
+## 3단계: 로컬 서버 공개(개발용)
 
 ```bash
 ngrok http 3090
 # Copy the HTTPS URL (e.g., https://abc123.ngrok-free.app)
 ```
 
-For production, use your deployed server URL directly.
+프로덕션에서는 배포된 서버 URL을 직접 사용합니다.
 
-## Step 4: Configure GitLab Webhook
+## 4단계: GitLab Webhook 설정
 
-Navigate to **Project → Settings → Webhooks → Add new webhook**:
+**Project → Settings → Webhooks → Add new webhook**으로 이동합니다.
 
-| Field | Value |
+| 필드 | 값 |
 |-------|-------|
 | **URL** | `https://your-domain.com/webhooks/gitlab` |
-| **Secret token** | The secret from Step 2 |
-| **Triggers** | Enable: `Comments`, `Issues events`, `Merge request events` |
-| **SSL verification** | Enable (recommended) |
+| **Secret token** | 2단계에서 만든 secret |
+| **Triggers** | `Comments`, `Issues events`, `Merge request events` 활성화 |
+| **SSL verification** | 활성화(권장) |
 
-Click "Add webhook" and use **Test → Note events** to verify.
+"Add webhook"을 클릭하고 **Test → Note events**로 검증합니다.
 
 :::note
-GitLab uses a plain secret token in the `X-Gitlab-Token` header (not HMAC like GitHub). The token must match your `GITLAB_WEBHOOK_SECRET` exactly.
+GitLab은 `X-Gitlab-Token` header에 plain secret token을 사용합니다(GitHub처럼 HMAC이 아닙니다). token은 `GITLAB_WEBHOOK_SECRET`과 정확히 일치해야 합니다.
 :::
 
-## Step 5: Set Environment Variables
+## 5단계: 환경 변수 설정
 
 ```ini
 GITLAB_URL=https://gitlab.com
@@ -95,11 +95,11 @@ GITLAB_ALLOWED_USERS=alice,bob
 GITLAB_BOT_MENTION=archon
 ```
 
-See the [full environment variable reference](/reference/configuration/) for details.
+자세한 내용은 [전체 환경 변수 reference](/reference/configuration/)를 참고하세요.
 
-## Usage
+## 사용법
 
-Mention your bot in issue or MR comments:
+issue 또는 MR 댓글에서 bot을 mention합니다.
 
 ```
 @archon can you analyze this bug?
@@ -107,30 +107,30 @@ Mention your bot in issue or MR comments:
 @archon review this implementation
 ```
 
-**First mention** automatically clones the repository to `~/.archon/workspaces/<group>/<project>`, detects `.archon/commands/` if present, and injects full issue/MR context.
+**첫 mention**은 repository를 `~/.archon/workspaces/<group>/<project>`로 자동 clone하고, `.archon/commands/`가 있으면 감지하며, 전체 issue/MR context를 주입합니다.
 
-**Subsequent mentions** resume the existing conversation with full context.
+**이후 mention**은 전체 context와 함께 기존 conversation을 재개합니다.
 
-## Conversation ID Format
+## Conversation ID 형식
 
-| Type | Format | Example |
+| 유형 | 형식 | 예시 |
 |------|--------|---------|
 | Issue | `group/project#iid` | `myteam/api#42` |
 | Merge Request | `group/project!iid` | `myteam/api!15` |
 | Nested group | `group/subgroup/project#iid` | `org/team/api#7` |
 
-## Supported Events
+## 지원 event
 
-| GitLab Event | Action |
+| GitLab event | 동작 |
 |-------------|--------|
-| **Note Hook** (comment with @mention) | Triggers AI conversation |
-| **Issue Hook** (close) | Cleans up isolation environment |
-| **MR Hook** (close/merge) | Cleans up isolation environment |
-| Issue/MR opened | Ignored (descriptions are not commands) |
+| **Note Hook**(@mention이 포함된 comment) | AI conversation 트리거 |
+| **Issue Hook**(close) | isolation environment 정리 |
+| **MR Hook**(close/merge) | isolation environment 정리 |
+| Issue/MR opened | 무시됨(description은 command가 아님) |
 
-## Adding Additional Projects
+## 추가 project 연결
 
-Add the same webhook to other projects:
+다른 project에도 동일한 webhook을 추가합니다.
 
 ```bash
 glab api projects/<PROJECT_ID>/hooks \
@@ -142,33 +142,33 @@ glab api projects/<PROJECT_ID>/hooks \
   -f merge_requests_events=true
 ```
 
-Or via GitLab UI with the same secret.
+또는 GitLab UI에서 같은 secret으로 추가합니다.
 
-## Troubleshooting
+## 문제 해결
 
-| Issue | Cause | Fix |
+| 문제 | 원인 | 해결 |
 |-------|-------|-----|
-| `gitlab.invalid_webhook_token` | Secret mismatch | Ensure `GITLAB_WEBHOOK_SECRET` matches the webhook config exactly |
-| Clone hangs | macOS Keychain credential helper | The adapter disables it automatically |
-| `404 Project Not Found` | Token lacks access | Ensure token has `api` scope and project access |
-| `403 You are not allowed` | Insufficient permissions | Use a token with Developer role or higher |
-| No webhook delivery | ngrok URL changed | Update the webhook URL after restarting ngrok |
-| Webhook auto-disabled | 4+ consecutive failures | Fix the issue, then send a test event to re-enable |
+| `gitlab.invalid_webhook_token` | Secret 불일치 | `GITLAB_WEBHOOK_SECRET`이 webhook config와 정확히 일치하는지 확인 |
+| Clone hangs | macOS Keychain credential helper | adapter가 자동으로 비활성화함 |
+| `404 Project Not Found` | token 접근 권한 부족 | token에 `api` scope와 project 접근 권한이 있는지 확인 |
+| `403 You are not allowed` | 권한 부족 | Developer role 이상 token 사용 |
+| webhook delivery 없음 | ngrok URL 변경 | ngrok 재시작 후 webhook URL 업데이트 |
+| webhook 자동 비활성화 | 4회 이상 연속 실패 | 문제를 고친 뒤 test event를 보내 재활성화 |
 
 ## glab CLI Reference
 
-The AI agent uses `glab` CLI commands. Install and authenticate:
+AI agent는 `glab` CLI command를 사용합니다. 설치하고 인증합니다.
 
 ```bash
 brew install glab
 glab auth login
 ```
 
-| Command | Purpose |
+| Command | 용도 |
 |---------|---------|
-| `glab issue view <IID>` | View issue details |
-| `glab issue note <IID> -m "..."` | Comment on issue |
-| `glab mr view <IID>` | View merge request |
-| `glab mr diff <IID>` | View MR diff |
-| `glab mr note <IID> -m "..."` | Comment on MR |
-| `glab mr create --title "..." --description "..."` | Create MR |
+| `glab issue view <IID>` | issue detail 보기 |
+| `glab issue note <IID> -m "..."` | issue에 comment 작성 |
+| `glab mr view <IID>` | merge request 보기 |
+| `glab mr diff <IID>` | MR diff 보기 |
+| `glab mr note <IID> -m "..."` | MR에 comment 작성 |
+| `glab mr create --title "..." --description "..."` | MR 만들기 |
