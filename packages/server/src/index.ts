@@ -52,7 +52,11 @@ if (
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  warmClaudeSubprocess,
+} from '@archon/providers';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
@@ -683,6 +687,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   if (gitlab) activePlatforms.push('GitLab');
 
   getLog().info({ activePlatforms, port }, 'server_ready');
+
+  // Non-blocking: pre-warm Claude subprocess to reduce first-query latency
+  warmClaudeSubprocess().catch((err: unknown) => {
+    getLog().debug({ err }, 'claude.warm_unexpected_error');
+  });
 
   // Non-blocking: warn at startup if gh CLI auth is unavailable
   checkGhAuth().catch((err: unknown) => {

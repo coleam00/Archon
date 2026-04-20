@@ -45,6 +45,7 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 export { resetCodexSingleton } from './codex/provider';
 export { resolveCodexBinaryPath, fileExists as codexFileExists } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
+export { warmClaudeSubprocess } from './claude/warm';
 
 // Community providers
 export {
