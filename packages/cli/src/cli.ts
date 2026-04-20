@@ -10,25 +10,15 @@
 // Must be the very first import — strips Bun-auto-loaded CWD .env keys before
 // any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
 import '@archon/paths/strip-cwd-env-boot';
+// Then load archon-owned env from ~/.archon/.env (user scope) and
+// <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
+// See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
+import { loadArchonEnv } from '@archon/paths/env-loader';
+loadArchonEnv(process.cwd());
+
 import { parseArgs } from 'util';
-import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-
-// Load ~/.archon/.env with override: true — Archon-specific config must win
-// over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
-// CWD .env keys are already gone (stripCwdEnv above), so override only
-// affects shell-inherited values, which is the intended behavior.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
-if (existsSync(globalEnvPath)) {
-  const result = config({ path: globalEnvPath, override: true });
-  if (result.error) {
-    // Logger may not be available yet (early startup), so use console for user-facing error
-    console.error(`Error loading .env from ${globalEnvPath}: ${result.error.message}`);
-    console.error('Hint: Check for syntax errors in your .env file.');
-    process.exit(1);
-  }
-}
 
 // CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
 // BEFORE the marker is deleted from process.env. No duplicate warning here.
@@ -212,6 +202,8 @@ async function main(): Promise<number> {
         'no-context': { type: 'boolean' },
         port: { type: 'string' },
         'download-only': { type: 'boolean' },
+        scope: { type: 'string' },
+        force: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -298,9 +290,17 @@ async function main(): Promise<number> {
         break;
       }
 
-      case 'setup':
-        await setupCommand({ spawn: spawnFlag, repoPath: cwd });
+      case 'setup': {
+        const rawScope = values.scope as string | undefined;
+        if (rawScope !== undefined && rawScope !== 'home' && rawScope !== 'project') {
+          console.error(`Error: Invalid --scope: "${rawScope}". Must be "home" or "project".`);
+          return 1;
+        }
+        const scope: 'home' | 'project' = rawScope ?? 'home';
+        const forceFlag = (values.force as boolean | undefined) ?? false;
+        await setupCommand({ spawn: spawnFlag, repoPath: cwd, scope, force: forceFlag });
         break;
+      }
 
       case 'workflow':
         switch (subcommand) {

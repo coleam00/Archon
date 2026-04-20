@@ -123,7 +123,7 @@ If Bun was just installed in Prerequisites (macOS/Linux), use `~/.bun/bin/bun` i
 
 ## Step 4: Configure Credentials
 
-The CLI loads infrastructure config (database, tokens) from `~/.archon/.env` only. This prevents conflicts with project `.env` files that may contain different database URLs.
+Archon loads infrastructure config (database, tokens) from two archon-owned files — `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, overrides user). The project's own `<cwd>/.env` is stripped at boot so it cannot leak into Archon; `archon setup` never writes to it.
 
 Credential configuration runs in a separate terminal so your API keys stay private — the AI assistant won't see them.
 
@@ -146,7 +146,7 @@ Tell the user:
 > 2. AI assistant configuration (Claude and/or Codex)
 > 3. Platform tokens for any integrations you selected
 >
-> It saves configuration to both `~/.archon/.env` and the repo `.env`."
+> By default it saves to `~/.archon/.env` (user scope). Re-run with `archon setup --scope project` to write `<repo>/.archon/.env` instead (project overrides user for this repo). Existing values are preserved — a timestamped backup is written before every rewrite."
 
 **If the terminal opened automatically**, add:
 > "Complete the wizard in the new terminal window that just opened."

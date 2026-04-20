@@ -97,6 +97,26 @@ export function getArchonConfigPath(): string {
 }
 
 /**
+ * Get the home-scope archon env file path (~/.archon/.env).
+ * This is the archon-owned env location loaded by every entry point.
+ */
+export function getArchonEnvPath(): string {
+  return join(getArchonHome(), '.env');
+}
+
+/**
+ * Get the repo-scope archon env file path (<cwd>/.archon/.env).
+ * This is the archon-owned env location loaded with override: true AFTER the home
+ * env, so per-project values win over user-wide defaults.
+ *
+ * Note: <cwd>/.env (without the .archon/ prefix) is the USER's — it is stripped at
+ * boot by stripCwdEnv() and never loaded by Archon.
+ */
+export function getRepoArchonEnvPath(cwd: string): string {
+  return join(cwd, '.archon', '.env');
+}
+
+/**
  * Get command folder search paths for a repository
  * Returns folders in priority order (first match wins)
  *

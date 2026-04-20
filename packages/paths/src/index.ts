@@ -6,6 +6,8 @@ export {
   getArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
+  getArchonEnvPath,
+  getRepoArchonEnvPath,
   getCommandFolderSearchPaths,
   getWorkflowFolderSearchPaths,
   getAppArchonBasePath,

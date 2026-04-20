@@ -13,7 +13,7 @@ import '@archon/paths/strip-cwd-env-boot';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-import { BUNDLED_IS_BINARY } from '@archon/paths';
+import { BUNDLED_IS_BINARY, getArchonEnvPath } from '@archon/paths';
 
 // In dev/source mode, load the repo root .env (platform tokens, API keys, etc.)
 // import.meta.dir is frozen at build time, so skip in compiled binaries.
@@ -28,17 +28,12 @@ if (envPath) {
   }
 }
 
-// Load ~/.archon/.env with override — Archon's config always wins over any
-// Bun-auto-loaded CWD vars. In binary mode this is the single source of truth.
-// In dev mode it overrides CWD vars for keys like DATABASE_URL.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
-if (existsSync(globalEnvPath)) {
-  const globalResult = config({ path: globalEnvPath, override: true });
-  if (globalResult.error) {
-    console.error(`Failed to load .env from ${globalEnvPath}: ${globalResult.error.message}`);
-    console.error('Hint: Check for syntax errors in your ~/.archon/.env file.');
-  }
-}
+// Load archon-owned env from ~/.archon/.env (user scope) and <cwd>/.archon/.env
+// (repo scope, wins over user) with override: true. Keeps the server in sync
+// with the CLI — see packages/paths/src/env-loader.ts and the three-path model
+// (#1302 / #1303).
+import { loadArchonEnv } from '@archon/paths/env-loader';
+loadArchonEnv(process.cwd());
 
 // CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
 // BEFORE the marker is deleted from process.env. No duplicate warning here.
@@ -178,7 +173,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           'Or set CODEX_ID_TOKEN + CODEX_ACCESS_TOKEN in .env',
           'See .env.example for all options',
         ],
-        envFile: BUNDLED_IS_BINARY ? globalEnvPath : envPath,
+        envFile: BUNDLED_IS_BINARY ? getArchonEnvPath() : envPath,
       },
       'no_ai_credentials'
     );

@@ -12,8 +12,12 @@ import {
   spawnTerminalWithSetup,
   copyArchonSkill,
   detectClaudeExecutablePath,
+  writeScopedEnv,
+  serializeEnv,
+  resolveScopedEnvPath,
 } from './setup';
 import * as setupModule from './setup';
+import { parse as parseDotenv } from 'dotenv';
 
 // Test directory for file operations
 const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());
@@ -534,5 +538,176 @@ describe('detectClaudeExecutablePath probe order', () => {
     const result = detectClaudeExecutablePath();
     expect(result).toBe('/usr/local/bin/claude');
     expect(npmRootSpy).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Tests for the three-path env write model (#1303).
+ *
+ * Invariants:
+ *   - <repo>/.env is NEVER written.
+ *   - Default write targets ~/.archon/.env (home scope) with merge preserving
+ *     existing non-empty values.
+ *   - --scope project writes to <repo>/.archon/.env.
+ *   - --force overwrites the target wholesale, still writes a backup.
+ *   - Merge preserves user-added keys not in the proposed content.
+ */
+describe('writeScopedEnv (#1303)', () => {
+  const ROOT = join(tmpdir(), 'archon-write-scoped-env-test-' + Date.now());
+  const HOME_DIR = join(ROOT, 'archon-home');
+  const REPO_DIR = join(ROOT, 'repo');
+  let originalArchonHome: string | undefined;
+
+  beforeEach(() => {
+    mkdirSync(HOME_DIR, { recursive: true });
+    mkdirSync(REPO_DIR, { recursive: true });
+    originalArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = HOME_DIR;
+  });
+
+  afterEach(() => {
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+    rmSync(ROOT, { recursive: true, force: true });
+  });
+
+  it('fresh home scope writes content with no backup', () => {
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\nPORT=3090\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    expect(result.targetPath).toBe(join(HOME_DIR, '.env'));
+    expect(result.backupPath).toBeNull();
+    expect(result.preservedKeys).toEqual([]);
+    expect(readFileSync(result.targetPath, 'utf-8')).toContain('DATABASE_URL=sqlite:local');
+  });
+
+  it('merge preserves user-added custom keys across re-runs', () => {
+    // First write
+    writeScopedEnv('DATABASE_URL=sqlite:local\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    // User adds a custom var
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, readFileSync(envPath, 'utf-8') + 'MY_CUSTOM_SECRET=preserve-me\n');
+    // Second setup run (proposes a different-shape config)
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\nPORT=3090\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged.MY_CUSTOM_SECRET).toBe('preserve-me');
+    expect(merged.PORT).toBe('3090');
+    expect(result.backupPath).not.toBeNull();
+  });
+
+  it('merge preserves existing PostgreSQL DATABASE_URL when proposed is SQLite', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'DATABASE_URL=postgresql://localhost:5432/mydb\n');
+    const result = writeScopedEnv(
+      '# Using SQLite (default) - no DATABASE_URL needed\nDATABASE_URL=\n',
+      { scope: 'home', repoPath: REPO_DIR, force: false }
+    );
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged.DATABASE_URL).toBe('postgresql://localhost:5432/mydb');
+    expect(result.preservedKeys).toContain('DATABASE_URL');
+  });
+
+  it('merge preserves existing bot tokens', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(
+      envPath,
+      'SLACK_BOT_TOKEN=xoxb-existing\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-existing\n'
+    );
+    // Proposed content has these keys with different/empty values
+    writeScopedEnv('SLACK_BOT_TOKEN=xoxb-new-placeholder\nCLAUDE_CODE_OAUTH_TOKEN=\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(join(HOME_DIR, '.env'), 'utf-8'));
+    expect(merged.SLACK_BOT_TOKEN).toBe('xoxb-existing');
+    expect(merged.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-existing');
+  });
+
+  it('--force overwrites wholesale but writes a timestamped backup', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'OLD_KEY=old\nDATABASE_URL=postgresql://legacy\n');
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\nNEW_KEY=new\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: true,
+    });
+    expect(result.forced).toBe(true);
+    expect(result.backupPath).not.toBeNull();
+    expect(result.backupPath).toMatch(/\.archon-backup-\d{4}-\d{2}-\d{2}T/);
+    // Backup has the old content
+    expect(readFileSync(result.backupPath as string, 'utf-8')).toContain('OLD_KEY=old');
+    // Target has the new content only — OLD_KEY is gone
+    const newContent = readFileSync(result.targetPath, 'utf-8');
+    expect(newContent).toContain('DATABASE_URL=sqlite:local');
+    expect(newContent).toContain('NEW_KEY=new');
+    expect(newContent).not.toContain('OLD_KEY');
+  });
+
+  it('--force on a non-existent target writes cleanly with no backup', () => {
+    const result = writeScopedEnv('PORT=3090\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: true,
+    });
+    expect(result.backupPath).toBeNull();
+    expect(result.forced).toBe(false); // no existing file means force was effectively a no-op
+  });
+
+  it('--scope project writes to <repo>/.archon/.env, creating the directory', () => {
+    expect(existsSync(join(REPO_DIR, '.archon'))).toBe(false);
+    const result = writeScopedEnv('FOO=bar\n', {
+      scope: 'project',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    expect(result.targetPath).toBe(join(REPO_DIR, '.archon', '.env'));
+    expect(existsSync(result.targetPath)).toBe(true);
+    expect(existsSync(join(HOME_DIR, '.env'))).toBe(false);
+  });
+
+  it('<repo>/.env is never touched by writeScopedEnv in any scope/mode', () => {
+    const repoEnvPath = join(REPO_DIR, '.env');
+    const sentinel = 'USER_SECRET=do-not-touch\n';
+    writeFileSync(repoEnvPath, sentinel);
+    // Home scope, merge
+    writeScopedEnv('FOO=bar\n', { scope: 'home', repoPath: REPO_DIR, force: false });
+    // Home scope, force
+    writeScopedEnv('FOO=baz\n', { scope: 'home', repoPath: REPO_DIR, force: true });
+    // Project scope, merge
+    writeScopedEnv('FOO=qux\n', { scope: 'project', repoPath: REPO_DIR, force: false });
+    // Project scope, force
+    writeScopedEnv('FOO=xyz\n', { scope: 'project', repoPath: REPO_DIR, force: true });
+    expect(readFileSync(repoEnvPath, 'utf-8')).toBe(sentinel);
+  });
+
+  it('resolveScopedEnvPath returns the archon-owned path for each scope', () => {
+    expect(resolveScopedEnvPath('home', REPO_DIR)).toBe(join(HOME_DIR, '.env'));
+    expect(resolveScopedEnvPath('project', REPO_DIR)).toBe(join(REPO_DIR, '.archon', '.env'));
+  });
+
+  it('serializeEnv round-trips through dotenv.parse', () => {
+    const entries = {
+      SIMPLE: 'value',
+      WITH_SPACE: 'hello world',
+      WITH_HASH: 'value#not-a-comment',
+      EMPTY: '',
+    };
+    const serialized = serializeEnv(entries);
+    const parsed = parseDotenv(serialized);
+    expect(parsed.SIMPLE).toBe('value');
+    expect(parsed.WITH_SPACE).toBe('hello world');
+    expect(parsed.WITH_HASH).toBe('value#not-a-comment');
+    expect(parsed.EMPTY).toBe('');
   });
 });

@@ -67,15 +67,22 @@ archon chat "What does the orchestrator do?"
 Interactive setup wizard for credentials and configuration.
 
 ```bash
-archon setup
-archon setup --spawn  # Open in a new terminal window
+archon setup                      # writes ~/.archon/.env (home scope, default)
+archon setup --scope project      # writes <cwd>/.archon/.env instead
+archon setup --force              # overwrite instead of merging (backup still written)
+archon setup --spawn              # open in a new terminal window
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--spawn` | Open setup wizard in a new terminal window |
+| `--scope home` | Write to `~/.archon/.env` (default). Applies to every project. |
+| `--scope project` | Write to `<cwd>/.archon/.env`. Overrides user scope for this repo only. |
+| `--force` | Overwrite the target file wholesale instead of merging. A timestamped backup is still written. |
+| `--spawn` | Open setup wizard in a new terminal window. |
+
+**Write safety**: `archon setup` never writes to `<cwd>/.env` — that file belongs to you. The wizard always targets one archon-owned file chosen by `--scope`, merges into existing content (so user-added keys survive), and writes a timestamped backup before every rewrite (e.g. `~/.archon/.env.archon-backup-2026-04-20T09-28-11-000Z`).
 
 ### `workflow list`
 

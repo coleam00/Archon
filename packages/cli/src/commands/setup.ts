@@ -6,7 +6,17 @@
  * - AI assistants (Claude and/or Codex)
  * - Platform connections (GitHub, Telegram, Slack, Discord)
  *
- * Writes configuration to both ~/.archon/.env and <repo>/.env
+ * Writes configuration to one archon-owned env file, chosen by --scope:
+ *   - 'home'    (default)  → ~/.archon/.env
+ *   - 'project'            → <repo>/.archon/.env
+ *
+ * Never writes to <repo>/.env — that file is stripped at boot by stripCwdEnv()
+ * (see #1302 / #1303 three-path model). Writing there would be incoherent
+ * (values would be silently deleted on the next run).
+ *
+ * Writes are merge-only by default: existing non-empty values are preserved,
+ * user-added custom keys survive, and a timestamped backup is written before
+ * every rewrite. `--force` skips the merge (proposed wins) but still backs up.
  */
 import {
   intro,
@@ -22,7 +32,8 @@ import {
   cancel,
   log,
 } from '@clack/prompts';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
+import { parse as parseDotenv } from 'dotenv';
 import { join, dirname } from 'path';
 import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { homedir } from 'os';
@@ -109,6 +120,10 @@ interface ExistingConfig {
 interface SetupOptions {
   spawn?: boolean;
   repoPath: string;
+  /** Which archon-owned file to target. Default: 'home'. */
+  scope?: 'home' | 'project';
+  /** Skip merge and overwrite the target wholesale (backup still written). Default: false. */
+  force?: boolean;
 }
 
 interface SpawnResult {
@@ -1306,28 +1321,106 @@ export function generateEnvContent(config: SetupConfig): string {
 }
 
 /**
- * Write .env files to both global and repo locations
+ * Resolve the target path for the selected scope.
+ *   - 'home'    → ~/.archon/.env
+ *   - 'project' → <repoPath>/.archon/.env
+ * Never resolves to <repoPath>/.env (that path belongs to the user; see the
+ * file-header doc comment).
  */
-function writeEnvFiles(
-  content: string,
-  repoPath: string
-): { globalPath: string; repoEnvPath: string } {
-  const archonHome = getArchonHome();
-  const globalPath = join(archonHome, '.env');
-  const repoEnvPath = join(repoPath, '.env');
+export function resolveScopedEnvPath(scope: 'home' | 'project', repoPath: string): string {
+  if (scope === 'project') return join(repoPath, '.archon', '.env');
+  return join(getArchonHome(), '.env');
+}
 
-  // Create ~/.archon/ if needed
-  if (!existsSync(archonHome)) {
-    mkdirSync(archonHome, { recursive: true });
+/**
+ * Serialize a key/value map back to `KEY=value` lines. Values containing
+ * whitespace, `#`, or newlines are double-quoted (with `"` and newlines
+ * escaped) so round-tripping through dotenv.parse is stable.
+ */
+export function serializeEnv(entries: Record<string, string>): string {
+  const lines: string[] = [];
+  for (const [key, rawValue] of Object.entries(entries)) {
+    const value = rawValue ?? '';
+    const needsQuoting = /[\s#"'\n\r]/.test(value) || value === '';
+    if (needsQuoting) {
+      const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+      lines.push(`${key}="${escaped}"`);
+    } else {
+      lines.push(`${key}=${value}`);
+    }
+  }
+  return lines.join('\n') + (lines.length > 0 ? '\n' : '');
+}
+
+/**
+ * Produce a filesystem-safe ISO timestamp (no `:` or `.` characters).
+ */
+function backupTimestamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+interface WriteScopedEnvResult {
+  targetPath: string;
+  backupPath: string | null;
+  /** Keys present in the existing file that were preserved against the proposed set. */
+  preservedKeys: string[];
+  /** True when `--force` overrode the merge. */
+  forced: boolean;
+}
+
+/**
+ * Write env content to exactly one archon-owned file, selected by scope.
+ * Merge-only by default (existing non-empty values win, user-added keys
+ * survive). Backs up the existing file (if any) before every rewrite, even
+ * when `--force` is set.
+ */
+export function writeScopedEnv(
+  content: string,
+  options: { scope: 'home' | 'project'; repoPath: string; force: boolean }
+): WriteScopedEnvResult {
+  const targetPath = resolveScopedEnvPath(options.scope, options.repoPath);
+  const parentDir = dirname(targetPath);
+  if (!existsSync(parentDir)) {
+    mkdirSync(parentDir, { recursive: true });
   }
 
-  // Write to global location
-  writeFileSync(globalPath, content);
+  const exists = existsSync(targetPath);
+  let backupPath: string | null = null;
+  if (exists) {
+    backupPath = `${targetPath}.archon-backup-${backupTimestamp()}`;
+    copyFileSync(targetPath, backupPath);
+  }
 
-  // Write to repo location
-  writeFileSync(repoEnvPath, content);
+  const proposed = parseDotenv(content);
+  const preservedKeys: string[] = [];
+  let finalContent: string;
 
-  return { globalPath, repoEnvPath };
+  if (options.force || !exists) {
+    finalContent = content;
+    if (options.force && backupPath) {
+      process.stderr.write(
+        `[archon] --force: overwriting ${targetPath} (backup at ${backupPath})\n`
+      );
+    }
+  } else {
+    // Merge: existing non-empty values win; proposed-only keys are added;
+    // existing-only keys (user customizations) are preserved verbatim.
+    const existingRaw = readFileSync(targetPath, 'utf-8');
+    const existing = parseDotenv(existingRaw);
+    const merged: Record<string, string> = { ...existing };
+    for (const [key, value] of Object.entries(proposed)) {
+      const prior = existing[key];
+      if (!(key in existing) || prior === undefined || prior === '') {
+        merged[key] = value;
+      } else {
+        preservedKeys.push(key);
+      }
+    }
+    finalContent = serializeEnv(merged);
+  }
+
+  writeFileSync(targetPath, finalContent);
+  return { targetPath, backupPath, preservedKeys, forced: options.force && exists };
 }
 
 /**
@@ -1520,6 +1613,19 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   // Interactive setup flow
   intro('Archon Setup Wizard');
 
+  // If a pre-existing <repo>/.env is present, tell the operator once that
+  // archon does NOT manage it — avoids confusion for users upgrading from
+  // pre-#1303 versions that used to write there.
+  const legacyRepoEnv = join(options.repoPath, '.env');
+  if (existsSync(legacyRepoEnv)) {
+    log.info(
+      `Note: ${legacyRepoEnv} exists but is not managed by archon.\n` +
+        '      Values there are stripped from the archon process at runtime (safety guard).\n' +
+        '      Put archon env vars in ~/.archon/.env (home scope) or ' +
+        `${join(options.repoPath, '.archon', '.env')} (project scope).`
+    );
+  }
+
   // Check for existing configuration
   const existing = checkExistingConfig();
 
@@ -1644,12 +1750,30 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   // Generate and write configuration
-  s.start('Writing configuration files...');
+  s.start('Writing configuration...');
 
   const envContent = generateEnvContent(config);
-  const { globalPath, repoEnvPath } = writeEnvFiles(envContent, options.repoPath);
+  const scope = options.scope ?? 'home';
+  const force = options.force ?? false;
+  const writeResult = writeScopedEnv(envContent, {
+    scope,
+    repoPath: options.repoPath,
+    force,
+  });
 
-  s.stop('Configuration files written');
+  s.stop('Configuration written');
+
+  // Tell the operator exactly what happened — especially that <repo>/.env was
+  // NOT touched, because prior versions wrote there and this is the biggest
+  // behavior change for returning users.
+  if (writeResult.preservedKeys.length > 0) {
+    log.info(
+      `Preserved ${writeResult.preservedKeys.length} existing value(s) (use --force to overwrite): ${writeResult.preservedKeys.join(', ')}`
+    );
+  }
+  if (writeResult.backupPath) {
+    log.info(`Backup written to ${writeResult.backupPath}`);
+  }
 
   // Offer to install the Archon skill
   const shouldCopySkill = await confirm({
@@ -1750,9 +1874,8 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     `Default: ${config.ai.defaultAssistant}`,
     `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     '',
-    'Files written:',
-    `  ${globalPath}`,
-    `  ${repoEnvPath}`,
+    `File written (${scope} scope):`,
+    `  ${writeResult.targetPath}`,
   ];
 
   if (config.platforms.github && config.github) {

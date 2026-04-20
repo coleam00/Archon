@@ -38,8 +38,19 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ cli.ts  Load environment                                        │
-│         Loads ~/.archon/.env with override: true                │
+│ strip-cwd-env-boot  (first import, side-effect)                 │
+│   stripCwdEnv(): deletes Bun-auto-loaded <cwd>/.env* keys from  │
+│   process.env + CLAUDE_CODE_* session markers. Emits            │
+│   [archon] stripped N keys from <cwd> (...) when N > 0.         │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ loadArchonEnv(cwd)  — both loads use override: true             │
+│   1. ~/.archon/.env        (home scope)                         │
+│   2. <cwd>/.archon/.env    (repo scope, wins over home)         │
+│   Emits one [archon] loaded N keys from <path> line per file    │
+│   when N > 0.                                                   │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼

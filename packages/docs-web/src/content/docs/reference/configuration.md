@@ -294,23 +294,42 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 
 ### `.env` File Locations
 
-Infrastructure configuration (database URL, platform tokens) is stored in `.env` files:
+Archon keys env loading on **directory ownership, not filename**. `.archon/` (at `~/` or `<cwd>/`) is archon-owned. Anything else is yours.
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| **CLI** | `~/.archon/.env` | Global infrastructure config; CWD .env keys stripped first, then loaded with `override: true` (Archon config wins over shell-inherited vars) |
-| **Server (dev)** | `<archon-repo>/.env` + `~/.archon/.env` | Repo `.env` for platform tokens; `~/.archon/.env` loaded with `override: true` |
-| **Server (binary)** | `~/.archon/.env` | Single source of truth (repo `.env` path is not available in compiled binaries) |
+| Path | Stripped at boot? | Archon loads? | `archon setup` writes? |
+| --- | --- | --- | --- |
+| `<cwd>/.env` | **yes** (safety guard) | never | never |
+| `<cwd>/.archon/.env` | no | yes (repo scope, overrides user scope) | yes iff `--scope project` |
+| `~/.archon/.env` | no | yes (user scope) | yes iff `--scope home` (default) |
 
-**How it works**: At startup, the CLI and server strip all keys that Bun auto-loaded from the current working directory (`.env`, `.env.local`, `.env.development`, `.env.production`) and any nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) before loading `~/.archon/.env`. This ensures target repo keys and nested-session guards are fully removed from `process.env` before any application code runs.
+**Load order at boot** (every entry point — CLI and server):
 
-**Best practice**: Use `~/.archon/.env` as the single source of truth:
+1. Strip keys Bun auto-loaded from `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production` (prevents target-repo env from leaking into Archon).
+2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
+3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
+
+**Operator log lines** (stderr, emitted only when there is something to report):
+
+```
+[archon] stripped 2 keys from /path/to/target-repo (.env, .env.local) to prevent target repo env from leaking into Archon processes
+[archon] loaded 3 keys from ~/.archon/.env
+[archon] loaded 2 keys from /path/to/target-repo/.archon/.env (repo scope, overrides user scope)
+```
+
+**Which file should I use?**
+
+- **`~/.archon/.env`** — user-wide defaults (your personal `SLACK_WEBHOOK`, `DATABASE_URL`, etc.). Applies to every project.
+- **`<cwd>/.archon/.env`** — per-project overrides. Different webhook per repo, different DB per environment, etc.
+- **`<cwd>/.env`** — **your app's** env file. Archon does not read this file; it strips the keys at boot so they do not leak into Archon's process.
 
 ```bash
-# Create global config
+# User-wide
 mkdir -p ~/.archon
 cp .env.example ~/.archon/.env
-# Edit with your values
+
+# Per-project override (e.g. a different Slack webhook for this repo)
+mkdir -p /path/to/repo/.archon
+printf 'SLACK_WEBHOOK=https://hooks.slack.com/...\n' > /path/to/repo/.archon/.env
 ```
 
 ## Docker Configuration
