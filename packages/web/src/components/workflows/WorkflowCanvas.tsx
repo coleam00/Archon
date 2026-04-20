@@ -165,9 +165,10 @@ export function WorkflowCanvas({
       };
 
       setNodes(nds => [...nds, newNode]);
+      onNodeSelect(id);
       onDirty();
     },
-    [screenToFlowPosition, setNodes, onDirty]
+    [screenToFlowPosition, setNodes, onNodeSelect, onDirty]
   );
 
   // Track whether we've already pushed a snapshot for the current drag gesture

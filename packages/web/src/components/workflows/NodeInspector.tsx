@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
+import { Trash2 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { DagNodeData } from './DagNodeComponent';
@@ -642,11 +642,9 @@ function JsonTextareaField({
 function AdvancedTab({
   node,
   onUpdate,
-  onDelete,
 }: {
   node: DagNodeData;
   onUpdate: (updates: Partial<DagNodeData>) => void;
-  onDelete: () => void;
 }): React.ReactElement {
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -696,12 +694,6 @@ function AdvancedTab({
           onUpdate({ hooks: v });
         }}
       />
-
-      <div className="border-t border-border pt-3 mt-2">
-        <Button variant="destructive" size="sm" onClick={onDelete} className="w-full">
-          Delete Node
-        </Button>
-      </div>
     </div>
   );
 }
@@ -722,14 +714,24 @@ function DagInspector({
         <span className="text-xs font-semibold text-text-primary truncate">
           {node.label || node.id}
         </span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-text-tertiary hover:text-text-primary text-sm leading-none px-1"
-          title="Close inspector"
-        >
-          x
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onDelete}
+            className="text-error/60 hover:text-error text-sm leading-none px-1"
+            title="Delete node"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-text-tertiary hover:text-text-primary text-sm leading-none px-1"
+            title="Close inspector"
+          >
+            x
+          </button>
+        </div>
       </div>
 
       {/* Tabbed content */}
@@ -770,7 +772,7 @@ function DagInspector({
 
           {!isBash && (
             <TabsContent value="advanced">
-              <AdvancedTab key={node.id} node={node} onUpdate={onUpdate} onDelete={onDelete} />
+              <AdvancedTab key={node.id} node={node} onUpdate={onUpdate} />
             </TabsContent>
           )}
         </ScrollArea>
