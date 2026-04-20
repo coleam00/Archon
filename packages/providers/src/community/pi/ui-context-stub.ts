@@ -35,15 +35,32 @@ const noop = (): void => {
  * (vs Pi's internal `noOpUIContext`) flips `ctx.hasUI` to true so extensions
  * like plannotator surface UI flows. `notify()` forwards to the event stream;
  * interactive prompts resolve to undefined/false; TUI setters no-op; `theme`
- * throws on access so TUI-only extensions fail loudly instead of rendering
- * garbage. Mirrors Pi's own RPC-mode defaults.
+ * returns identity decorators — the styled strings get passed into no-op
+ * setStatus/setWidget sinks anyway, so stripping ANSI styling is safe and
+ * keeps extensions like plannotator from crashing mid-tool-call.
  */
 export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContext {
+  // Pick the last string argument — handles `fg(color, text)`, `bold(text)`,
+  // `strikethrough(text)`, etc. in a single handler.
+  const lastStringArg = (...args: unknown[]): string => {
+    for (let i = args.length - 1; i >= 0; i--) {
+      if (typeof args[i] === 'string') return args[i] as string;
+    }
+    return '';
+  };
+  const passthroughWrap =
+    (_level: unknown): ((s: string) => string) =>
+    (s: string) =>
+      s;
   const themeProxy = new Proxy({} as Theme, {
-    get(_target: Theme, prop: string | symbol): never {
-      throw new Error(
-        `Pi extension accessed ctx.ui.theme.${String(prop)} — Archon's remote UI stub does not expose a terminal theme. Extensions that render to a TUI are unsupported in server-side workflow execution.`
-      );
+    get(_target: Theme, prop: string | symbol): unknown {
+      if (prop === 'getColorMode') return () => 'truecolor';
+      if (prop === 'getFgAnsi' || prop === 'getBgAnsi') return () => '';
+      if (prop === 'getThinkingBorderColor' || prop === 'getBashModeBorderColor') {
+        return passthroughWrap;
+      }
+      if (prop === 'name' || prop === 'sourcePath' || prop === 'sourceInfo') return undefined;
+      return lastStringArg;
     },
   });
 

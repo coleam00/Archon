@@ -111,6 +111,24 @@ export class PiProvider implements IAgentProvider {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const piConfig = parsePiConfig(assistantConfig);
 
+    // 0. Apply config-level env vars to process.env for in-process extensions
+    //    (plannotator reads PLANNOTATOR_REMOTE at session_start, etc.).
+    //    Shell env wins: we only set keys not already present. Request-level
+    //    `requestOptions.env` remains a separate channel — it flows through
+    //    bash spawn hooks for subprocess isolation, not into process.env.
+    if (piConfig.env) {
+      const applied: string[] = [];
+      for (const [key, value] of Object.entries(piConfig.env)) {
+        if (process.env[key] === undefined) {
+          process.env[key] = value;
+          applied.push(key);
+        }
+      }
+      if (applied.length > 0) {
+        getLog().debug({ keys: applied }, 'pi.config_env_applied');
+      }
+    }
+
     // 1. Resolve model ref: request (workflow node / chat) → config default
     const modelRef = requestOptions?.model ?? piConfig.model;
     if (!modelRef) {

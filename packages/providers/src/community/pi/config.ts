@@ -39,5 +39,17 @@ export function parsePiConfig(raw: Record<string, unknown>): PiProviderDefaults 
     }
   }
 
+  if (raw.env && typeof raw.env === 'object' && !Array.isArray(raw.env)) {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw.env as Record<string, unknown>)) {
+      if (typeof value === 'string') {
+        env[key] = value;
+      }
+    }
+    if (Object.keys(env).length > 0) {
+      result.env = env;
+    }
+  }
+
   return result;
 }

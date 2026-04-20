@@ -120,4 +120,44 @@ describe('parsePiConfig', () => {
       extensionFlags: { plan: true },
     });
   });
+
+  test('parses env with string values', () => {
+    expect(parsePiConfig({ env: { PLANNOTATOR_REMOTE: '1', FOO: 'bar' } })).toEqual({
+      env: { PLANNOTATOR_REMOTE: '1', FOO: 'bar' },
+    });
+  });
+
+  test('drops non-string env values silently', () => {
+    expect(
+      parsePiConfig({ env: { GOOD: 'yes', BOOL: true, NUM: 42, NESTED: { x: 1 }, NULLISH: null } })
+    ).toEqual({ env: { GOOD: 'yes' } });
+  });
+
+  test('drops env when all entries are invalid', () => {
+    expect(parsePiConfig({ env: { NUM: 42, NESTED: {} } })).toEqual({});
+  });
+
+  test('drops non-object env silently', () => {
+    expect(parsePiConfig({ env: 'PLANNOTATOR_REMOTE=1' })).toEqual({});
+    expect(parsePiConfig({ env: ['A=1'] })).toEqual({});
+    expect(parsePiConfig({ env: null })).toEqual({});
+  });
+
+  test('combines env with other fields', () => {
+    expect(
+      parsePiConfig({
+        model: 'openai-codex/gpt-5.4-mini',
+        enableExtensions: true,
+        interactive: true,
+        extensionFlags: { plan: true },
+        env: { PLANNOTATOR_REMOTE: '1' },
+      })
+    ).toEqual({
+      model: 'openai-codex/gpt-5.4-mini',
+      enableExtensions: true,
+      interactive: true,
+      extensionFlags: { plan: true },
+      env: { PLANNOTATOR_REMOTE: '1' },
+    });
+  });
 });
