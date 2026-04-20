@@ -3841,9 +3841,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // Verify the prompt contains the user input
       const promptArg = mockSendQueryDag.mock.calls[0][0] as string;
       expect(promptArg).toContain('Add error handling');
-      // Should have resumed with stored session ID
+      // Should use a fresh session (not resume the stale one from before the human wait)
       const sessionArg = mockSendQueryDag.mock.calls[0][2] as string | undefined;
-      expect(sessionArg).toBe('loop-session-1');
+      expect(sessionArg).toBeUndefined();
     });
 
     it('loop iteration fails loudly when SDK returns error_during_execution', async () => {
