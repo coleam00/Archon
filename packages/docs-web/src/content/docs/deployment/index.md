@@ -1,6 +1,6 @@
 ---
 title: 배포 개요
-description: Archon을 로컬, Docker, cloud VPS에서 실행하는 배포 옵션 개요입니다.
+description: HarnessLab을 로컬, Docker, cloud VPS에서 실행하는 배포 옵션 개요입니다.
 category: deployment
 area: infra
 audience: [operator]
@@ -9,7 +9,7 @@ sidebar:
   order: 0
 ---
 
-Archon은 개발용으로 로컬에서 실행하거나, 항상 켜져 있는 운영을 위해 서버에 배포할 수 있습니다. HarnessLab은 Archon fork이므로 같은 배포 방식을 그대로 사용합니다.
+HarnessLab은 개발용으로 로컬에서 실행하거나, 항상 켜져 있는 운영을 위해 서버에 배포할 수 있습니다. HarnessLab은 Archon fork이므로 같은 배포 방식을 그대로 사용합니다.
 
 ## 배포 옵션
 

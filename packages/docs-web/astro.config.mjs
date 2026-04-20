@@ -1,8 +1,8 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-const githubRepository = process.env.GITHUB_REPOSITORY ?? 'NewTurn2017/Archon';
-const [repoOwner = 'NewTurn2017', repoName = 'Archon'] = githubRepository.split('/');
+const githubRepository = process.env.GITHUB_REPOSITORY ?? 'NewTurn2017/HarnessLab';
+const [repoOwner = 'NewTurn2017', repoName = 'HarnessLab'] = githubRepository.split('/');
 const site = process.env.DOCS_SITE_URL ?? `https://${repoOwner}.github.io`;
 const base = process.env.DOCS_BASE_PATH ?? (process.env.DOCS_SITE_URL ? '/' : `/${repoName}`);
 
@@ -30,7 +30,7 @@ export default defineConfig({
       },
       sidebar: [
         {
-          label: 'Archon 북',
+          label: 'HarnessLab 북',
           autogenerate: { directory: 'book' },
         },
         {

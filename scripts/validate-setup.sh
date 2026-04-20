@@ -137,9 +137,9 @@ else
   check_warn "Docker not installed (required for containerized deployment)"
 fi
 
-# Archon paths
+# HarnessLab paths
 echo ""
-echo "Archon Paths"
+echo "HarnessLab Paths"
 echo "---------------"
 
 ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
@@ -148,14 +148,14 @@ echo "  Workspaces: $ARCHON_HOME/workspaces"
 echo "  Worktrees: $ARCHON_HOME/worktrees"
 
 if [ -d "$ARCHON_HOME" ]; then
-  check_pass "Archon home directory exists"
+  check_pass "HarnessLab home directory exists"
   if [ -f "$ARCHON_HOME/config.yaml" ]; then
     check_pass "Global config exists ($ARCHON_HOME/config.yaml)"
   else
     check_warn "Global config will be created on first run"
   fi
 else
-  check_warn "Archon home directory will be created on first run"
+  check_warn "HarnessLab home directory will be created on first run"
 fi
 
 # Summary

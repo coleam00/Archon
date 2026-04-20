@@ -1,5 +1,5 @@
 /**
- * REST API routes for the Archon Web UI.
+ * REST API routes for the HarnessLab Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
@@ -1656,7 +1656,7 @@ export function registerApiRoutes(
   // Serve OpenAPI spec
   app.doc('/api/openapi.json', {
     openapi: '3.0.0',
-    info: { title: 'Archon API', version: '1.0.0' },
+    info: { title: 'HarnessLab API', version: '1.0.0' },
   });
 
   // =========================================================================

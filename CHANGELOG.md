@@ -413,12 +413,12 @@ SQLite as default database and simplified CLI setup.
 
 ## [0.2.3] - 2026-01-31
 
-Archon CLI skill, workflow routing improvements, and configuration fixes.
+HarnessLab CLI skill, workflow routing improvements, and configuration fixes.
 
 ### Added
 
-- **Archon CLI skill** for Claude Code — run workflows from within Claude Code sessions (#331, #332, #333)
-- **Interactive setup wizard** and config editor for the Archon skill
+- **HarnessLab CLI skill** for Claude Code — run workflows from within Claude Code sessions (#331, #332, #333)
+- **Interactive setup wizard** and config editor for the HarnessLab skill
 - **`/workflow run` command** for direct workflow invocation from CLI
 - **`archon-plan-to-merge` workflow** for end-to-end plan execution (#346)
 - **Workflow error visibility** — `/workflow list` and `/workflow reload` show per-file load errors (#260, #263, #264)

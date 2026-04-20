@@ -144,7 +144,7 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).toContain('# Using SQLite (default)');
@@ -172,7 +172,7 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).toContain('DATABASE_URL=postgresql://localhost:5432/archon');
@@ -191,7 +191,7 @@ CODEX_ACCOUNT_ID=account1
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false, discord: false },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).toContain(
@@ -209,7 +209,7 @@ CODEX_ACCOUNT_ID=account1
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false, discord: false },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).not.toContain('CLAUDE_BIN_PATH=');
@@ -240,7 +240,7 @@ CODEX_ACCOUNT_ID=account1
           botToken: '123:ABC',
           allowedUserIds: '111,222',
         },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).toContain('GH_TOKEN=ghp_testtoken');
@@ -273,7 +273,7 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).toContain('CODEX_ID_TOKEN=id-token');
@@ -319,7 +319,7 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).not.toContain('BOT_DISPLAY_NAME=');
@@ -345,7 +345,7 @@ CODEX_ACCOUNT_ID=account1
           appToken: 'xapp-test',
           allowedUserIds: 'U123',
         },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).toContain('SLACK_BOT_TOKEN=xoxb-test');
@@ -373,7 +373,7 @@ CODEX_ACCOUNT_ID=account1
           botToken: 'discord-bot-token-test',
           allowedUserIds: '123456789',
         },
-        botDisplayName: 'Archon',
+        botDisplayName: 'HarnessLab',
       });
 
       expect(content).toContain('DISCORD_BOT_TOKEN=discord-bot-token-test');

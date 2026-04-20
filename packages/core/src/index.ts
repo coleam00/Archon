@@ -1,5 +1,5 @@
 /**
- * @archon/core - Shared business logic for Archon
+ * @archon/core - Shared business logic for HarnessLab
  *
  * This package contains:
  * - AI client adapters (Claude, Codex)

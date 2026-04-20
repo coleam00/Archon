@@ -1,6 +1,6 @@
 ---
 title: Discord
-description: 서버와 DM에서 AI 코딩 지원을 받을 수 있도록 Archon을 Discord에 연결합니다.
+description: 서버와 DM에서 AI 코딩 지원을 받을 수 있도록 HarnessLab을 Discord에 연결합니다.
 category: adapters
 area: adapters
 audience: [user, operator]
@@ -13,11 +13,11 @@ sidebar:
 Discord는 **커뮤니티 어댑터**입니다. 커뮤니티가 기여하고 유지관리합니다.
 :::
 
-Archon을 Discord에 연결하면 어떤 Discord server 또는 DM에서도 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
+HarnessLab을 Discord에 연결하면 어떤 Discord server 또는 DM에서도 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
 
 ## 사전 준비
 
-- 실행 중인 Archon 서버([시작하기](/getting-started/) 참고)
+- 실행 중인 HarnessLab 서버([시작하기](/getting-started/) 참고)
 - Discord 계정
 - bot을 추가하려는 Discord server의 "Manage Server" 권한
 

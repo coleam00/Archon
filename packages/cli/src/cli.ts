@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Archon CLI - Run AI workflows from the command line
+ * HarnessLab CLI - Run AI workflows from the command line
  *
  * Usage:
  *   archon workflow list              List available workflows
@@ -15,7 +15,7 @@ import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// Load ~/.archon/.env with override: true — Archon-specific config must win
+// Load ~/.archon/.env with override: true — HarnessLab-specific config must win
 // over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
 // CWD .env keys are already gone (stripCwdEnv above), so override only
 // affects shell-inherited values, which is the intended behavior.
@@ -97,7 +97,7 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 function printUsage(): void {
   console.log(`
-Archon CLI - 명령줄에서 AI workflow(워크플로)를 실행합니다
+HarnessLab CLI - 명령줄에서 AI workflow(워크플로)를 실행합니다
 
 사용법:
   archon <command> [subcommand] [options] [arguments]
@@ -271,7 +271,7 @@ async function main(): Promise<number> {
       const repoRoot = await git.findRepoRoot(cwd);
       if (!repoRoot) {
         console.error('오류: git repository 안에서 실행해야 합니다.');
-        console.error('Archon CLI는 git repository 내부에서 실행되어야 합니다.');
+        console.error('HarnessLab CLI는 git repository 내부에서 실행되어야 합니다.');
         console.error('git repo로 이동하거나 --cwd로 repo 경로를 지정하세요.');
         return 1;
       }

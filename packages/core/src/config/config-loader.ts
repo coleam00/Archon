@@ -1,5 +1,5 @@
 /**
- * Configuration loader for Archon YAML config files
+ * Configuration loader for HarnessLab YAML config files
  *
  * Loading order (later overrides earlier):
  * 1. Defaults
@@ -142,11 +142,11 @@ let cachedGlobalConfig: GlobalConfig | null = null;
 /**
  * Default config file content
  */
-const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
-# See: https://github.com/coleam00/Archon/blob/main/docs/configuration.md
+const DEFAULT_CONFIG_CONTENT = `# HarnessLab Global Configuration
+# See: https://github.com/NewTurn2017/HarnessLab/blob/dev/packages/docs-web/src/content/docs/reference/configuration.md
 
 # Bot display name (shown in messages)
-# botName: Archon
+# botName: HarnessLab
 
 # Default AI assistant (must match a registered provider, e.g. claude, codex)
 # defaultAssistant: claude
@@ -276,7 +276,7 @@ function getDefaults(): MergedConfig {
   }
 
   return {
-    botName: 'Archon',
+    botName: 'HarnessLab',
     assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
     assistants: registeredAssistants,
     streaming: {

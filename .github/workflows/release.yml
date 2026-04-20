@@ -286,7 +286,7 @@ jobs:
 
             **Docker**
             ```bash
-            docker run --rm -v "$PWD:/workspace" ghcr.io/newturn2017/archon:latest workflow list
+            docker run --rm -v "$PWD:/workspace" ghcr.io/newturn2017/harnesslab:latest workflow list
             ```
 
             ### Manual Installation
@@ -387,5 +387,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$TAP_FORMULA_PATH"
           git diff --cached --quiet && exit 0
-          git commit -m "chore: update Archon formula for ${{ steps.version.outputs.version }}"
+          git commit -m "chore: update HarnessLab formula for ${{ steps.version.outputs.version }}"
           git push origin HEAD

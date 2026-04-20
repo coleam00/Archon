@@ -1,7 +1,7 @@
 #cloud-config
 
 # =============================================================================
-# Archon — Cloud-Init Auto-Setup
+# HarnessLab — Cloud-Init Auto-Setup
 # =============================================================================
 #
 # Paste this into your VPS provider's "User Data" field when creating a server.
@@ -13,7 +13,7 @@
 #   1. Installs Docker + Docker Compose plugin
 #   2. Opens firewall ports (SSH, HTTP, HTTPS)
 #   3. Creates a 2GB swapfile (helps small VPS builds avoid OOM)
-#   4. Clones the repo to /opt/archon
+#   4. Clones the repo to /opt/harnesslab
 #   5. Prepares .env and Caddyfile from examples
 #   6. Creates a dedicated 'archon' user (docker group only, no sudo)
 #   7. Builds the Docker image (~5 min) as the archon user
@@ -24,8 +24,8 @@
 #
 # After the server boots (~5-8 min), SSH in as the archon user:
 #   ssh archon@your-server-ip
-#   1. Edit /opt/archon/.env — set your AI credentials, DOMAIN, DATABASE_URL
-#   2. cd /opt/archon && docker compose --profile with-db --profile cloud up -d
+#   1. Edit /opt/harnesslab/.env — set your AI credentials, DOMAIN, DATABASE_URL
+#   2. cd /opt/harnesslab && docker compose --profile with-db --profile cloud up -d
 #   3. Open https://your-domain.com
 #
 # IMPORTANT: Before starting, point your domain's DNS A record to this server's IP.
@@ -43,7 +43,7 @@ packages:
 users:
   - default
   - name: archon
-    gecos: Archon Service User
+    gecos: HarnessLab Service User
     shell: /bin/bash
     lock_passwd: true
 
@@ -89,23 +89,23 @@ runcmd:
   # --- Clone and configure (fail fast — single shell so set -e applies) ---
   - |
     set -e
-    git clone https://github.com/coleam00/Archon.git /opt/archon
-    cp /opt/archon/.env.example /opt/archon/.env
-    cp /opt/archon/Caddyfile.example /opt/archon/Caddyfile
-    chown -R archon:archon /opt/archon
+    git clone https://github.com/NewTurn2017/HarnessLab.git /opt/harnesslab
+    cp /opt/harnesslab/.env.example /opt/harnesslab/.env
+    cp /opt/harnesslab/Caddyfile.example /opt/harnesslab/Caddyfile
+    chown -R archon:archon /opt/harnesslab
 
   # --- Pre-pull external images (as archon, via docker group) ---
   - sudo -u archon docker pull postgres:17-alpine
   - sudo -u archon docker pull caddy:2-alpine
 
   # --- Build the app image as archon ---
-  - sudo -u archon -H bash -c 'cd /opt/archon && docker compose build'
+  - sudo -u archon -H bash -c 'cd /opt/harnesslab && docker compose build'
 
   # --- Signal completion ---
   - |
-    cat > /opt/archon/SETUP_COMPLETE << 'DONE'
+    cat > /opt/harnesslab/SETUP_COMPLETE << 'DONE'
     ============================================
-    Archon server setup complete!
+    HarnessLab server setup complete!
     ============================================
 
     Log in as the 'archon' user (not root):
@@ -118,7 +118,7 @@ runcmd:
     Next steps:
 
       1. Edit credentials and domain:
-         nano /opt/archon/.env
+         nano /opt/harnesslab/.env
 
          Required:
            CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...  (or CLAUDE_API_KEY)
@@ -132,14 +132,14 @@ runcmd:
          # Skip if using IP-based firewall rules instead.
 
       3. Start all services:
-         cd /opt/archon
+         cd /opt/harnesslab
          docker compose --profile with-db --profile cloud up -d
 
       4. Open https://your-domain.com
 
     Logs:     docker compose logs -f
     Health:   curl https://your-domain.com/api/health
-    Docs:     https://archon.diy/deployment/docker/
+    Docs:     https://harnesslab.codewithgenie.com/deployment/docker/
     ============================================
     DONE
-  - echo "[archon] Setup complete. Edit /opt/archon/.env and run docker compose up."
+  - echo "[harnesslab] Setup complete. Edit /opt/harnesslab/.env and run docker compose up."

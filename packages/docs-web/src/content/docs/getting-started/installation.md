@@ -1,6 +1,6 @@
 ---
 title: 설치
-description: macOS, Linux, Windows에서 Archon을 설치합니다.
+description: macOS, Linux, Windows에서 HarnessLab을 설치합니다.
 category: getting-started
 audience: [user, operator]
 sidebar:
@@ -12,32 +12,32 @@ sidebar:
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://archon.diy/install | bash
+curl -fsSL https://harnesslab.codewithgenie.com/install | bash
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-irm https://archon.diy/install.ps1 | iex
+irm https://harnesslab.codewithgenie.com/install.ps1 | iex
 ```
 
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew install coleam00/archon/archon
+brew install <tap>/archon
 ```
 
 ### Docker
 
 ```bash
-docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
+docker run --rm -v "$PWD:/workspace" ghcr.io/newturn2017/harnesslab:latest workflow list
 ```
 
 ## 소스에서 설치
 
 ```bash
-git clone https://github.com/coleam00/Archon
-cd Archon
+git clone https://github.com/NewTurn2017/HarnessLab
+cd HarnessLab
 bun install
 ```
 
@@ -49,7 +49,7 @@ bun install
 
 ## Claude Code가 필요합니다
 
-Archon은 Claude Code를 orchestration하지만, Claude Code를 함께 포함하지는 않습니다. Claude Code는 별도로 설치해야 합니다.
+HarnessLab은 Claude Code를 orchestration하지만, Claude Code를 함께 포함하지는 않습니다. Claude Code는 별도로 설치해야 합니다.
 
 ```bash
 # macOS / Linux / WSL (Anthropic's recommended installer)
@@ -77,7 +77,7 @@ assistants:
     claudeBinaryPath: /absolute/path/to/claude
 ```
 
-Docker image(`ghcr.io/coleam00/archon`)에는 Claude Code가 미리 설치되어 있고
+Docker image(`ghcr.io/newturn2017/harnesslab`)에는 Claude Code가 미리 설치되어 있고
 `CLAUDE_BIN_PATH`도 미리 설정되어 있으므로 별도 설정이 필요 없습니다.
 
 자세한 내용과 install layout별 경로는 [AI Assistants → Claude Code](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)를 참고하세요.

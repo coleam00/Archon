@@ -1,6 +1,6 @@
 ---
 title: 첫 명령 만들기
-description: AI가 단일 작업으로 실행하는 집중된 markdown prompt인 첫 Archon command file을 작성합니다.
+description: AI가 단일 작업으로 실행하는 집중된 markdown prompt인 첫 HarnessLab command file을 작성합니다.
 category: book
 part: customization
 audience: [user]

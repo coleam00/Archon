@@ -1,6 +1,6 @@
 ---
 title: Slack
-description: Socket Mode로 Archon을 Slack에 연결합니다. 공개 URL 없이 방화벽 뒤에서도 동작합니다.
+description: Socket Mode로 HarnessLab을 Slack에 연결합니다. 공개 URL 없이 방화벽 뒤에서도 동작합니다.
 category: adapters
 area: adapters
 audience: [user, operator]
@@ -9,16 +9,16 @@ sidebar:
   order: 2
 ---
 
-Archon을 Slack에 연결하면 어떤 Slack workspace에서든 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
+HarnessLab을 Slack에 연결하면 어떤 Slack workspace에서든 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
 
 ## 사전 준비
 
-- 실행 중인 Archon 서버([시작하기](/getting-started/) 참고)
+- 실행 중인 HarnessLab 서버([시작하기](/getting-started/) 참고)
 - 앱 설치 권한이 있는 Slack workspace
 
 ## 개요
 
-Archon은 Slack 연동에 **Socket Mode**를 사용합니다. 이는 다음을 의미합니다.
+HarnessLab은 Slack 연동에 **Socket Mode**를 사용합니다. 이는 다음을 의미합니다.
 
 - 공개 HTTP endpoint가 필요 없습니다.
 - 방화벽 뒤에서도 동작합니다.

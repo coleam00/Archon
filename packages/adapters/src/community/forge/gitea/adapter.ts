@@ -66,7 +66,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     this.token = token;
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
-    this.botMention = botMention ?? 'Archon';
+    this.botMention = botMention ?? 'HarnessLab';
 
     // Parse Gitea user whitelist (optional - empty = open access)
     this.allowedUsers = parseAllowedUsers(process.env.GITEA_ALLOWED_USERS);

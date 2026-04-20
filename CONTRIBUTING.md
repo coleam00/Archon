@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to Archon!
+Thank you for your interest in contributing to HarnessLab!
 
 ## Getting Started
 
@@ -59,4 +59,4 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture documentation.
 
 ## Questions?
 
-Open an [issue](https://github.com/coleam00/Archon/issues) or start a [discussion](https://github.com/coleam00/Archon/discussions).
+Open an [issue](https://github.com/NewTurn2017/HarnessLab/issues) or start a [discussion](https://github.com/NewTurn2017/HarnessLab/discussions).

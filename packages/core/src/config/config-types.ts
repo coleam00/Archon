@@ -1,5 +1,5 @@
 /**
- * Configuration types for Archon YAML config files
+ * Configuration types for HarnessLab YAML config files
  *
  * Two levels:
  * - Global: ~/.archon/config.yaml (user preferences)
@@ -62,7 +62,7 @@ export type AssistantDefaults = ProviderDefaultsMap & {
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
-   * @default 'Archon'
+   * @default 'HarnessLab'
    */
   botName?: string;
 

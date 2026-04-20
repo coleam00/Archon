@@ -1,6 +1,6 @@
 ---
 title: 시작하기
-description: 아무것도 없는 상태에서 동작하는 Archon 설정까지 필요한 모든 것.
+description: 아무것도 없는 상태에서 동작하는 HarnessLab 설정까지 필요한 모든 것.
 category: getting-started
 audience: [user]
 status: current
@@ -8,7 +8,7 @@ sidebar:
   order: 0
 ---
 
-아무것도 없는 상태에서 동작하는 Archon 설정까지 필요한 모든 것을 다룹니다. Web UI를 선호하든 CLI를 선호하든 이 문서에서 시작할 수 있습니다.
+아무것도 없는 상태에서 동작하는 HarnessLab 설정까지 필요한 모든 것을 다룹니다. Web UI를 선호하든 CLI를 선호하든 이 문서에서 시작할 수 있습니다.
 
 HarnessLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow harness와 학습 가능한 에이전트 워크플로를 실험하기 위한 문서 사이트입니다. 내부 명령, 패키지명, CLI 이름은 upstream 호환성을 위해 Archon 이름을 그대로 사용합니다.
 
@@ -22,7 +22,7 @@ HarnessLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow ha
 | -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **Git** | `git --version` | [git-scm.com](https://git-scm.com/) |
 | **Bun** (Node.js + npm 대체) | `bun --version` | Linux/macOS: `curl -fsSL https://bun.sh/install \| bash` — Windows: `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-| **Claude Code CLI** | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — compiled Archon binaries에서는 `CLAUDE_BIN_PATH`도 설정하세요([자세히 보기](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
+| **Claude Code CLI** | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — compiled HarnessLab binaries에서는 `CLAUDE_BIN_PATH`도 설정하세요([자세히 보기](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
 | **GitHub account** | — | [github.com](https://github.com/) |
 
 > **root로 실행하지 마세요.** Archon과 Archon이 의존하는 Claude Code CLI는 `root` 사용자로 실행할 때 동작하지 않습니다. VPS나 서버에 root만 있다면 먼저 일반 사용자를 만드세요.
@@ -43,7 +43,7 @@ HarnessLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow ha
 
 ## 1단계: clone 및 설치
 
-먼저 Archon 서버 코드를 둘 위치를 선택합니다.
+먼저 HarnessLab 서버 코드를 둘 위치를 선택합니다.
 
 **옵션 A: Home directory** (개인 사용, 단일 사용자)
 
@@ -51,25 +51,25 @@ Linux/macOS:
 
 ```bash
 cd ~  # or your preferred directory
-git clone https://github.com/coleam00/Archon
-cd Archon
+git clone https://github.com/NewTurn2017/HarnessLab
+cd HarnessLab
 ```
 
 Windows (PowerShell):
 
 ```powershell
 cd $HOME  # or your preferred directory
-git clone https://github.com/coleam00/Archon
-cd Archon
+git clone https://github.com/NewTurn2017/HarnessLab
+cd HarnessLab
 ```
 
 **옵션 B: /opt** (Linux/macOS 서버 설치 — 디렉터리를 깔끔하게 유지)
 
 ```bash
-sudo mkdir -p /opt/archon
-sudo chown $USER:$USER /opt/archon
-git clone https://github.com/coleam00/Archon /opt/archon
-cd /opt/archon
+sudo mkdir -p /opt/harnesslab
+sudo chown $USER:$USER /opt/harnesslab
+git clone https://github.com/NewTurn2017/HarnessLab /opt/harnesslab
+cd /opt/harnesslab
 ```
 
 그런 다음 의존성을 설치합니다.
@@ -173,7 +173,7 @@ bun run dev
 
 **5단계: 동작 확인**
 
-브라우저에서 **http://localhost:5173**을 엽니다. Archon Web UI가 보여야 합니다.
+브라우저에서 **http://localhost:5173**을 엽니다. HarnessLab Web UI가 보여야 합니다.
 
 **빠른 검증 체크리스트:**
 
@@ -464,12 +464,12 @@ workflow는 여러 command를 DAG node로 연결하고, parallel execution과 co
 
 ## Claude Code와 함께 사용하기 (Skill)
 
-Claude Code가 대신 Archon workflow를 호출할 수 있게 하려면 프로젝트에 Archon skill을 설치하세요. setup wizard가 이를 자동으로 처리합니다. `archon setup`을 실행하고 skill installation prompt를 승인하면 됩니다.
+Claude Code가 대신 HarnessLab workflow를 호출할 수 있게 하려면 프로젝트에 HarnessLab skill을 설치하세요. setup wizard가 이를 자동으로 처리합니다. `archon setup`을 실행하고 skill installation prompt를 승인하면 됩니다.
 
 수동으로 설치하려면:
 
 ```bash
-cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
+cp -r HarnessLab/.claude/skills/archon /path/to/your/repo/.claude/skills/
 ```
 
 그런 다음 Claude Code에서 "use archon to fix issue #42"처럼 말하면 적절한 workflow를 호출합니다.
@@ -478,7 +478,7 @@ cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
 
 ## 전체 platform 실행 (Server + Chat Adapters)
 
-CLI는 standalone으로 동작하지만 Telegram, Slack, Discord, GitHub webhooks로도 상호작용하고 싶다면 [README Server Setup](https://github.com/coleam00/Archon#quickstart)을 보거나, Archon repo에서 Claude Code를 열고 "set up archon"이라고 말해 setup wizard를 실행하세요.
+CLI는 standalone으로 동작하지만 Telegram, Slack, Discord, GitHub webhooks로도 상호작용하고 싶다면 [README Server Setup](https://github.com/NewTurn2017/HarnessLab#quickstart)을 보거나, HarnessLab repo에서 Claude Code를 열고 "set up archon"이라고 말해 setup wizard를 실행하세요.
 
 ---
 
@@ -486,7 +486,7 @@ CLI는 standalone으로 동작하지만 Telegram, Slack, Discord, GitHub webhook
 
 ### "Cannot create worktree: not in a git repository" (but the repo exists)
 
-실제 원인은 보통 이전 Archon run에서 다른 path를 사용해 생긴 stale symlink입니다. error output에서 다음 내용을 찾아보세요.
+실제 원인은 보통 이전 HarnessLab run에서 다른 path를 사용해 생긴 stale symlink입니다. error output에서 다음 내용을 찾아보세요.
 
 ```
 Source symlink at ~/.archon/workspaces/.../source already points to <old-path>, expected <new-path>

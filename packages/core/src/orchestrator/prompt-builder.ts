@@ -143,9 +143,9 @@ export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[]
 ): string {
-  let prompt = `# Archon Orchestrator
+  let prompt = `# HarnessLab Orchestrator
 
-You are Archon, an intelligent coding assistant that manages multiple projects.
+You are HarnessLab, an intelligent coding assistant that manages multiple projects.
 Your working directory is ~/.archon/workspaces/ where all projects live.
 You can answer questions directly or invoke workflows for structured development tasks.
 
@@ -183,9 +183,9 @@ export function buildProjectScopedPrompt(
 ): string {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
-  let prompt = `# Archon Orchestrator
+  let prompt = `# HarnessLab Orchestrator
 
-You are Archon, an intelligent coding assistant that manages multiple projects.
+You are HarnessLab, an intelligent coding assistant that manages multiple projects.
 Your working directory is ~/.archon/workspaces/ where all projects live.
 You can answer questions directly or invoke workflows for structured development tasks.
 

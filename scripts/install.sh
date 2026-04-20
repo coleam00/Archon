@@ -3,17 +3,17 @@
 # Install HarnessLab CLI from GitHub releases
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.sh | bash
 #
 # Options (via environment variables):
-#   REPO          - GitHub repository to install from (default: NewTurn2017/Archon)
+#   REPO          - GitHub repository to install from (default: NewTurn2017/HarnessLab)
 #   VERSION       - Specific version to install (default: latest)
 #   INSTALL_DIR   - Installation directory (default: /usr/local/bin)
 #   SKIP_CHECKSUM - Set to "true" to skip checksum verification (not recommended)
 #
 # Examples:
 #   # Install latest
-#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.sh | bash
 #
 #   # Install specific version
 #   VERSION=v0.1.0 curl -fsSL ... | bash
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 # Configuration
-REPO="${REPO:-NewTurn2017/Archon}"
+REPO="${REPO:-NewTurn2017/HarnessLab}"
 BINARY_NAME="archon"
 VERSION="${VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"

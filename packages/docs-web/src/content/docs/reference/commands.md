@@ -1,6 +1,6 @@
 ---
 title: 명령 레퍼런스
-description: Web UI, Telegram, Slack, Discord, GitHub 등 Archon adapter에서 사용할 수 있는 모든 slash command입니다.
+description: Web UI, Telegram, Slack, Discord, GitHub 등 HarnessLab adapter에서 사용할 수 있는 모든 slash command입니다.
 category: reference
 area: handlers
 audience: [user]
