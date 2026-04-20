@@ -199,6 +199,7 @@ describe('PiProvider', () => {
     runtimeOverrides = {};
     delete process.env.GEMINI_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
   });
 
   test('getType returns "pi"', () => {
@@ -329,6 +330,43 @@ describe('PiProvider', () => {
     // Runtime override is priority #1 in Pi's resolution chain, so getApiKey
     // returns 'from-request-env' (via our mock's runtimeOverrides map).
     expect(runtimeOverrides.google).toBe('from-request-env');
+  });
+
+  test('MINIMAX_API_KEY from codebase env is forwarded to setRuntimeApiKey', async () => {
+    // Regression: minimax used to fall through to Pi's internal getEnvApiKey
+    // (process.env only) because it wasn't in PI_PROVIDER_ENV_VARS. Without
+    // a whitelist entry, codebase-scoped env vars (.archon/config.yaml env:)
+    // never reached Pi. Adding 'minimax' to the map fixes that.
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'minimax/MiniMax-M2.7',
+        env: { MINIMAX_API_KEY: 'sk-minimax-from-codebase' },
+      })
+    );
+
+    expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('minimax', 'sk-minimax-from-codebase');
+    expect(runtimeOverrides.minimax).toBe('sk-minimax-from-codebase');
   });
 
   test('env var overrides auth.json api_key entry', async () => {
