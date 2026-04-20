@@ -1724,7 +1724,7 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
         'docs/',
         minimalConfig
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ summary: undefined });
   });
 });
 
@@ -4151,7 +4151,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       minimalConfig
     );
 
-    expect(result).toBe('Final summary text');
+    expect(result.summary).toBe('Final summary text');
   });
 
   it('returns undefined when the single terminal node produces no output', async () => {
@@ -4180,7 +4180,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       minimalConfig
     );
 
-    expect(result).toBeUndefined();
+    expect(result.summary).toBeUndefined();
   });
 
   it('excludes intermediate nodes with dependents from terminal set (fan-in DAG)', async () => {
@@ -4224,7 +4224,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     );
 
     // Only 'c' is terminal (no node depends on it); 'a' and 'b' are not terminal
-    expect(result).toBe('C final output');
+    expect(result.summary).toBe('C final output');
   });
 });
 

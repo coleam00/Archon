@@ -15,6 +15,8 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import { classifyError } from './executor-shared';
+import { evaluateCondition } from './condition-evaluator';
+import type { NodeOutput } from './schemas';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -733,39 +735,122 @@ export async function executeWorkflow(
       // Continue anyway - workflow is already recorded in database
     }
 
-    // Execute the DAG workflow
-    const dagSummary = await executeDagWorkflow(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      workflow,
-      workflowRun,
-      resolvedProvider,
-      resolvedModel,
-      artifactsDir,
-      logDir,
-      baseBranch,
-      docsDir,
-      config,
-      configuredCommandFolder,
-      issueContext,
-      dagPriorCompletedNodes
-    );
+    // Execute the DAG workflow (with optional loop_until iteration)
+    const loopUntil = workflow.loop_until;
+    const maxIterations = loopUntil !== undefined ? (workflow.max_iterations ?? 5) : 1;
 
-    // executeDagWorkflow throws on fatal errors; check DB status for result
-    const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
-    if (finalStatus?.status === 'completed') {
-      return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
-    } else if (finalStatus?.status === 'paused') {
-      return { success: true, paused: true, workflowRunId: workflowRun.id };
-    } else {
-      return {
-        success: false,
-        workflowRunId: workflowRun.id,
-        error: 'Workflow did not complete successfully',
-      };
+    let dagSummary: string | undefined;
+    let lastNodeOutputs: Map<string, NodeOutput> = new Map();
+    let iteration = 1;
+
+    while (iteration <= maxIterations) {
+      if (loopUntil !== undefined) {
+        emitter.emit({
+          type: 'loop_iteration_started',
+          runId: workflowRun.id,
+          iteration,
+          maxIterations,
+        });
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `🔁 **Iteration ${String(iteration)}/${String(maxIterations)}**`,
+          { workflowId: workflowRun.id }
+        );
+      }
+
+      const iterStart = Date.now();
+      const dagResult = await executeDagWorkflow(
+        deps,
+        platform,
+        conversationId,
+        cwd,
+        workflow,
+        workflowRun,
+        resolvedProvider,
+        resolvedModel,
+        artifactsDir,
+        logDir,
+        baseBranch,
+        docsDir,
+        config,
+        configuredCommandFolder,
+        issueContext,
+        iteration === 1 ? dagPriorCompletedNodes : undefined
+      );
+      dagSummary = dagResult.summary;
+      lastNodeOutputs = dagResult.nodeOutputs;
+
+      if (loopUntil !== undefined) {
+        emitter.emit({
+          type: 'loop_iteration_completed',
+          runId: workflowRun.id,
+          iteration,
+          duration: Date.now() - iterStart,
+          completionDetected: false,
+        });
+      }
+
+      // executeDagWorkflow throws on fatal errors; check DB status for result
+      const finalStatus = await deps.store.getWorkflowRun(workflowRun.id);
+      if (finalStatus?.status === 'paused') {
+        return { success: true, paused: true, workflowRunId: workflowRun.id };
+      }
+      if (finalStatus?.status !== 'completed') {
+        return {
+          success: false,
+          workflowRunId: workflowRun.id,
+          error: 'Workflow did not complete successfully',
+        };
+      }
+
+      // No loop_until — single iteration, done.
+      if (loopUntil === undefined) break;
+
+      // Evaluate loop_until condition
+      const { result: conditionMet, parsed } = evaluateCondition(loopUntil, lastNodeOutputs);
+      if (!parsed) {
+        getLog().warn(
+          { workflowId: workflowRun.id, loopUntil, iteration },
+          'workflow.loop_until_condition_parse_error'
+        );
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `⚠️ **Loop condition parse error**: \`${loopUntil}\` could not be parsed — stopping after iteration ${String(iteration)}.`,
+          { workflowId: workflowRun.id }
+        );
+        break;
+      }
+
+      if (conditionMet) {
+        getLog().info(
+          { workflowId: workflowRun.id, loopUntil, iteration },
+          'workflow.loop_until_condition_met'
+        );
+        break;
+      }
+
+      if (iteration === maxIterations) {
+        getLog().warn(
+          { workflowId: workflowRun.id, loopUntil, maxIterations },
+          'workflow.loop_until_max_iterations_reached'
+        );
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `⚠️ **Max iterations reached** (${String(maxIterations)}): loop condition \`${loopUntil}\` was not met. Stopping.`,
+          { workflowId: workflowRun.id }
+        );
+        break;
+      }
+
+      // Reset run to running for the next iteration
+      await deps.store.updateWorkflowRun(workflowRun.id, { status: 'running' });
+      iteration++;
     }
+
+    return { success: true, workflowRunId: workflowRun.id, summary: dagSummary };
   } catch (error) {
     // Top-level error handler: ensure workflow is marked as failed
     const err = error as Error;

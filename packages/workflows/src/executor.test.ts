@@ -33,7 +33,12 @@ mock.module('@archon/git', () => ({
 }));
 
 // --- Mock dag-executor ---
-const mockExecuteDagWorkflow = mock(async (): Promise<string | undefined> => undefined);
+const mockExecuteDagWorkflow = mock(
+  async (): Promise<{ summary: string | undefined; nodeOutputs: Map<string, unknown> }> => ({
+    summary: undefined,
+    nodeOutputs: new Map(),
+  })
+);
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
 }));
@@ -140,7 +145,12 @@ describe('executeWorkflow', () => {
     mockEmitter.registerRun.mockClear();
     mockEmitter.unregisterRun.mockClear();
     mockEmitter.emit.mockClear();
-    mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+    mockExecuteDagWorkflow.mockImplementation(
+      async (): Promise<{ summary: string | undefined; nodeOutputs: Map<string, unknown> }> => ({
+        summary: undefined,
+        nodeOutputs: new Map(),
+      })
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -615,7 +625,10 @@ describe('executeWorkflow', () => {
 
   describe('summary propagation', () => {
     it('passes dag summary from executeDagWorkflow into WorkflowExecutionResult', async () => {
-      mockExecuteDagWorkflow.mockResolvedValueOnce('This is the workflow summary');
+      mockExecuteDagWorkflow.mockResolvedValueOnce({
+        summary: 'This is the workflow summary',
+        nodeOutputs: new Map(),
+      });
       const store = makeStore();
       const deps = makeDeps(store);
       const result = await executeWorkflow(
@@ -633,8 +646,8 @@ describe('executeWorkflow', () => {
       }
     });
 
-    it('passes undefined summary when executeDagWorkflow returns undefined', async () => {
-      mockExecuteDagWorkflow.mockResolvedValueOnce(undefined);
+    it('passes undefined summary when executeDagWorkflow returns undefined summary', async () => {
+      mockExecuteDagWorkflow.mockResolvedValueOnce({ summary: undefined, nodeOutputs: new Map() });
       const store = makeStore();
       const deps = makeDeps(store);
       const result = await executeWorkflow(
@@ -892,6 +905,134 @@ describe('executeWorkflow', () => {
       const msg = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(msg).toContain('running 1m');
       expect(msg).toContain('Wait for it to finish');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // loop_until iteration
+  // -------------------------------------------------------------------------
+
+  describe('loop_until', () => {
+    it('runs once when loop_until condition is met immediately', async () => {
+      // Node output satisfies "$build.output == 'pass'" on first iteration
+      const nodeOutputs = new Map([
+        ['build', { state: 'completed' as const, output: 'pass', sessionId: undefined }],
+      ]);
+      mockExecuteDagWorkflow.mockImplementation(async () => ({ summary: undefined, nodeOutputs }));
+
+      const workflow = makeWorkflow({ loop_until: "$build.output == 'pass'", max_iterations: 5 });
+      const result = await executeWorkflow(
+        makeDeps(),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'test',
+        'db-conv-1'
+      );
+
+      expect(result.success).toBe(true);
+      // Only 1 DAG execution — condition met after first run
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    it('iterates until condition is met (condition met on 2nd iteration)', async () => {
+      let call = 0;
+      mockExecuteDagWorkflow.mockImplementation(async () => {
+        call++;
+        const out = call === 1 ? 'fail' : 'pass';
+        return {
+          summary: undefined,
+          nodeOutputs: new Map([['build', { state: 'completed' as const, output: out }]]),
+        };
+      });
+
+      const store = makeStore({
+        getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
+        updateWorkflowRun: mock(async () => {}),
+      });
+      const workflow = makeWorkflow({ loop_until: "$build.output == 'pass'", max_iterations: 5 });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'test',
+        'db-conv-1'
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops at max_iterations when condition is never met', async () => {
+      // Always returns 'fail'
+      mockExecuteDagWorkflow.mockImplementation(async () => ({
+        summary: undefined,
+        nodeOutputs: new Map([['build', { state: 'completed' as const, output: 'fail' }]]),
+      }));
+
+      const store = makeStore({
+        getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
+        updateWorkflowRun: mock(async () => {}),
+      });
+      const sendSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+
+      const workflow = makeWorkflow({ loop_until: "$build.output == 'pass'", max_iterations: 3 });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        platform,
+        'conv-1',
+        '/tmp',
+        workflow,
+        'test',
+        'db-conv-1'
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(3);
+      // Confirm max-iterations warning was emitted
+      const msgs = (sendSpy.mock.calls as [string, string][]).map(([, m]) => m);
+      expect(msgs.some(m => m.includes('Max iterations reached'))).toBe(true);
+    });
+
+    it('stops on unparseable loop_until condition after first iteration', async () => {
+      mockExecuteDagWorkflow.mockImplementation(async () => ({
+        summary: undefined,
+        nodeOutputs: new Map(),
+      }));
+
+      const store = makeStore({
+        getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
+        updateWorkflowRun: mock(async () => {}),
+      });
+      const sendSpy = mock(async () => {});
+      const platform = {
+        sendMessage: sendSpy,
+        getPlatformType: mock(() => 'test' as const),
+      } as unknown as IWorkflowPlatform;
+
+      // Deliberately malformed condition
+      const workflow = makeWorkflow({ loop_until: '!!!invalid!!!', max_iterations: 5 });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        platform,
+        'conv-1',
+        '/tmp',
+        workflow,
+        'test',
+        'db-conv-1'
+      );
+
+      expect(result.success).toBe(true);
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+      const msgs = (sendSpy.mock.calls as [string, string][]).map(([, m]) => m);
+      expect(msgs.some(m => m.includes('Loop condition parse error'))).toBe(true);
     });
   });
 });

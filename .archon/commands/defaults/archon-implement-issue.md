@@ -132,30 +132,28 @@ git status
 
 ### 3.2 Decision Tree
 
-```text
+```
 ┌─ IN WORKTREE?
-│  └─ YES → Use current branch AS-IS. Do NOT switch branches. Do NOT create
-│           new branches. The isolation system has already set up the correct
-│           branch; any deviation operates on the wrong code.
-│           Log: "Using worktree at {path} on branch {branch}"
+│  └─ YES → Use it (assume it's for this work)
+│           Log: "Using worktree at {path}"
 │
-├─ ON $BASE_BRANCH? (main, master, or configured base branch)
+├─ ON MAIN/MASTER?
 │  └─ Q: Working directory clean?
 │     ├─ YES → Create branch: fix/issue-{number}-{slug}
 │     │        git checkout -b fix/issue-{number}-{slug}
-│     │        (only applies outside a worktree — e.g., manual CLI usage)
-│     └─ NO  → STOP: "Uncommitted changes on $BASE_BRANCH.
-│              Please commit or stash before proceeding."
+│     └─ NO  → Warn user:
+│              "Working directory has uncommitted changes.
+│               Please commit or stash before proceeding."
+│              STOP
 │
-├─ ON OTHER BRANCH?
-│  └─ Use it AS-IS (assume it was set up for this work).
-│     Do NOT switch to another branch (e.g., one shown by `git branch` but
-│     not currently checked out).
+├─ ON FEATURE/FIX BRANCH?
+│  └─ Use it (assume it's for this work)
 │     If branch name doesn't contain issue number:
 │       Warn: "Branch '{name}' may not be for issue #{number}"
 │
 └─ DIRTY STATE?
-   └─ STOP: "Uncommitted changes. Please commit or stash first."
+   └─ Warn and suggest: git stash or git commit
+      STOP
 ```
 
 ### 3.3 Ensure Up-to-Date

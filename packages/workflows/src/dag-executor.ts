@@ -2184,7 +2184,7 @@ export async function executeDagWorkflow(
   configuredCommandFolder?: string,
   issueContext?: string,
   priorCompletedNodes?: Map<string, string>
-): Promise<string | undefined> {
+): Promise<{ summary: string | undefined; nodeOutputs: Map<string, NodeOutput> }> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
     effort: workflow.effort,
@@ -2741,7 +2741,8 @@ export async function executeDagWorkflow(
   );
 
   if (!anyCompleted) {
-    if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (await skipIfStatusChanged('dag.skip_fail_status_changed'))
+      return { summary: undefined, nodeOutputs };
     const failMsg =
       `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
       'Check node conditions, trigger rules, and upstream failures.';
@@ -2768,11 +2769,12 @@ export async function executeDagWorkflow(
       workflowId: workflowRun.id,
     });
     // DO NOT throw — outer executor.ts catch would duplicate workflow_failed events
-    return;
+    return { summary: undefined, nodeOutputs };
   }
 
   if (anyFailed) {
-    if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    if (await skipIfStatusChanged('dag.skip_fail_status_changed'))
+      return { summary: undefined, nodeOutputs };
     const failedNodes = [...nodeOutputs.entries()]
       .filter(([, o]) => o.state === 'failed')
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
@@ -2799,11 +2801,12 @@ export async function executeDagWorkflow(
       workflowId: workflowRun.id,
     });
     // DO NOT throw — outer executor.ts catch would duplicate workflow_failed events
-    return;
+    return { summary: undefined, nodeOutputs };
   }
 
   // Check if status was changed externally (e.g. cancelled) before marking complete.
-  if (await skipIfStatusChanged('dag.skip_complete_status_changed')) return;
+  if (await skipIfStatusChanged('dag.skip_complete_status_changed'))
+    return { summary: undefined, nodeOutputs };
 
   // Update DB and emit completion
   try {
@@ -2856,5 +2859,5 @@ export async function executeDagWorkflow(
     .map(n => nodeOutputs.get(n.id))
     .find(o => o?.state === 'completed' && o.output.trim().length > 0)?.output;
 
-  return terminalOutput;
+  return { summary: terminalOutput, nodeOutputs };
 }
