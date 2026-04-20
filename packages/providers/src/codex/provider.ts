@@ -557,7 +557,7 @@ export class CodexProvider implements IAgentProvider {
       };
     }
 
-    // 3. Build turn options
+    // 3. Build turn options (signal intentionally omitted here — set per-attempt below)
     const { turnOptions, hasOutputFormat } = buildTurnOptions(requestOptions);
     let lastError: Error | undefined;
 
@@ -566,11 +566,30 @@ export class CodexProvider implements IAgentProvider {
         throw new Error('Query aborted');
       }
 
+      // Create a fresh AbortController for each attempt. Reusing the same
+      // AbortSignal across retries is unsafe: if the Codex SDK or Node.js
+      // marks the signal as aborted during a crash, subsequent attempts get
+      // an already-aborted signal wired into spawn(), which instant-kills the
+      // freshly spawned subprocess (Crash Class A described in #1266).
+      const attemptController = new AbortController();
+      const callerSignal = requestOptions?.abortSignal;
+      const forwardAbort = callerSignal
+        ? (): void => {
+            attemptController.abort();
+          }
+        : undefined;
+      if (callerSignal && forwardAbort) {
+        callerSignal.addEventListener('abort', forwardAbort, { once: true });
+      }
+      turnOptions.signal = attemptController.signal;
+
       if (attempt > 0) {
         getLog().debug({ cwd, attempt }, 'starting_new_thread');
         try {
           thread = codex.startThread(threadOptions);
         } catch (startError) {
+          attemptController.abort();
+          if (callerSignal && forwardAbort) callerSignal.removeEventListener('abort', forwardAbort);
           const err = startError as Error;
           if (isModelAccessError(err.message)) {
             throw new Error(buildModelAccessMessage(requestOptions?.model));
@@ -588,10 +607,17 @@ export class CodexProvider implements IAgentProvider {
           result.events as AsyncIterable<Record<string, unknown>>,
           hasOutputFormat,
           thread.id,
-          requestOptions?.abortSignal
+          attemptController.signal
         );
+        // Release the per-attempt controller and its listener on success
+        attemptController.abort();
+        if (callerSignal && forwardAbort) callerSignal.removeEventListener('abort', forwardAbort);
         return;
       } catch (error) {
+        // Release the per-attempt controller and its listener before retry
+        attemptController.abort();
+        if (callerSignal && forwardAbort) callerSignal.removeEventListener('abort', forwardAbort);
+
         const err = error as Error;
 
         if (requestOptions?.abortSignal?.aborted) {
@@ -603,6 +629,10 @@ export class CodexProvider implements IAgentProvider {
           requestOptions?.model
         );
 
+        // Note: `Codex Exec exited with signal SIGTERM: Reading prompt from stdin...`
+        // The "Reading prompt from stdin..." string is Codex CLI's startup stderr banner,
+        // emitted before any stdin read. It does not indicate where in execution the
+        // SIGTERM arrived — the process may have run for seconds or minutes before dying.
         getLog().error(
           { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
           'query_error'

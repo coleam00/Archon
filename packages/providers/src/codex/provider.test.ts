@@ -717,7 +717,11 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', {});
+      // A per-attempt AbortSignal is always injected (even without a caller signal)
+      expect(mockRunStreamed).toHaveBeenCalledWith(
+        'test prompt',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
     });
 
     test('creates a per-call Codex instance when env is provided', async () => {
@@ -1327,4 +1331,65 @@ describe('sendQuery decomposition behaviors', () => {
     expect(systemChunks.length).toBeGreaterThanOrEqual(1);
     expect(systemChunks.some(c => c.type === 'system' && c.content.includes('Task 1'))).toBe(true);
   }, 5_000);
+
+  // ───────────────────────────────────────────────────────────────────
+  // Per-attempt AbortController isolation (#1266 — Crash Class A)
+  // ───────────────────────────────────────────────────────────────────
+  describe('per-attempt AbortController', () => {
+    test('each retry gets a fresh signal — aborted signal from crash does not poison next attempt', async () => {
+      // Simulate Crash Class A: attempt 0 crashes (SIGTERM), attempt 1 succeeds.
+      // The caller's AbortSignal is NOT aborted — only the per-attempt controller is.
+      let attemptCount = 0;
+      mockRunStreamed.mockImplementation(() => {
+        attemptCount++;
+        if (attemptCount === 1) {
+          return Promise.reject(
+            new Error('Codex Exec exited with signal SIGTERM: Reading prompt from stdin...')
+          );
+        }
+        return Promise.resolve({
+          events: (async function* () {
+            yield {
+              type: 'item.completed',
+              item: { type: 'agent_message', id: 'msg-1', text: 'success' },
+            };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+      });
+
+      const chunks: { type: string }[] = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(attemptCount).toBe(2);
+      expect(chunks.some(c => c.type === 'assistant')).toBe(true);
+    }, 5_000);
+
+    test('propagates caller abort to per-attempt controller', async () => {
+      const controller = new AbortController();
+      mockRunStreamed.mockImplementation(
+        () =>
+          new Promise<never>((_, reject) => {
+            // Abort during the runStreamed await
+            setTimeout(() => {
+              controller.abort();
+              reject(new Error('Query aborted by test'));
+            }, 5);
+          })
+      );
+
+      await expect(async () => {
+        for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+          abortSignal: controller.signal,
+        })) {
+          // consume
+        }
+      }).toThrow();
+
+      // Should not have retried after abort
+      expect(mockRunStreamed).toHaveBeenCalledTimes(1);
+    }, 5_000);
+  });
 });
