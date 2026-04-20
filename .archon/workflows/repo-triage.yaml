@@ -51,10 +51,19 @@ nodes:
           - `quality: "good"` = most template sections have real content.
           - `quality: "partial"` = headers present but several sections look blank/placeholder.
           - `quality: "empty"` = body has nothing matching the template shape.
-          - Ignore whitespace / HTML comment placeholders like `<!-- ... -->` as "filled".
+          - A section counts as MISSING when its body is empty, whitespace-only,
+            or contains only HTML-comment placeholders like `<!-- ... -->`.
+            Such sections must go in `sectionsMissing`, NOT `sectionsFilled`.
 
           Be terse. If the issue body is empty, set area='unknown' and
           quality='empty'.
+
+          ERROR HANDLING — if the `gh issue view` call fails (auth,
+          rate limit, network, or non-zero exit), do NOT emit JSON.
+          Instead print exactly one line on stdout:
+              ERROR: <one-line reason>
+          The orchestrator detects the `ERROR:` prefix and handles it
+          (logs, counts, may abort). Never emit partial/fabricated JSON.
     prompt: |
       You are the issue-triage orchestrator for the repository in the
       current working directory.
@@ -117,7 +126,17 @@ nodes:
       ```
       cat .archon/state/triage-state.json 2>/dev/null
       ```
-      Parse as JSON. On ENOENT or empty, start from the default shape above.
+      Parse handling:
+        - ENOENT (file missing) → start from default shape above.
+        - Empty file (zero bytes / whitespace only) → start from default shape.
+        - JSON.parse THROWS (corrupt state) → ABORT the node loudly.
+          Print: `[triage-issues] ABORT: .archon/state/triage-state.json
+          is corrupt — refusing to reset tracked state. Restore from a
+          backup (check git history if tracked, or a local timestamped
+          copy) or delete the file to start fresh.`
+          Then stop the node with a non-zero status. Do NOT fall through
+          to default — that would silently reset `pendingDedupComments`
+          and restart the 3-day auto-close clock indefinitely.
 
       ## 2. Fetch all open issues
       ```
@@ -143,6 +162,18 @@ nodes:
           → needs BRIEF. Otherwise reuse the cached brief.
 
       ## 4. LABEL PASS — parallel fan-out to triage-agent
+
+      PREFLIGHT: verify the on-disk sub-agent definition exists before
+      attempting any Task call:
+
+          test -f .claude/agents/triage-agent.md
+
+      If missing, SKIP the whole label pass (do not attempt Task calls
+      that would fail obscurely at runtime). Log:
+          "[triage-issues] label pass skipped: .claude/agents/triage-agent.md
+           missing — install the skill-adjacent agent file to enable labeling."
+      Continue to the brief pass — labeling is a nice-to-have, not a blocker.
+
       Spawn the existing on-disk `triage-agent` sub-agent in PARALLEL (a
       single assistant turn with multiple Task tool calls — this matters
       for speed). Per-task prompt:
@@ -168,9 +199,20 @@ nodes:
       If `$ARTIFACTS_DIR/issue-templates.md` is empty, omit the template
       block — brief-gen will return `quality: "no-template-context"`.
 
-      Parse each response as JSON. If parsing fails, skip that issue.
-      Merge results into `state.briefs[N]` with a freshly computed sha
-      and `briefedAt = now-iso`. Preserve the `templateAdherence` field.
+      Parse each response as JSON. On parse failure OR when the response
+      starts with `ERROR:` (sub-agent signalling a gh/auth/rate-limit
+      problem — see brief-gen prompt):
+        - Log the failed issue number and the first 200 chars of the
+          raw response.
+        - Track in a `failedBriefs` array for the summary (`failed=N`
+          with the list of numbers).
+        - Do NOT merge into state (keep the previous cached brief).
+      Merge successful results into `state.briefs[N]` with a freshly
+      computed sha and `briefedAt = now-iso`. Preserve `templateAdherence`.
+
+      If `failedBriefs.length > 0` AND the failures look systemic
+      (≥50% of briefs this run failed), ABORT before the cluster pass
+      — a broken briefing run produces bad clusters. Report the counts.
 
       ## 6. CLUSTER PASS — detect duplicates
       Using fresh + cached briefs:
@@ -214,12 +256,20 @@ nodes:
           the cached bot login.
         - If ANY non-bot reply after `postedAt` → drop entry from state
           (humans are engaged).
+        - VALIDATE `postedAt` parses as ISO-8601 first. If it doesn't
+          parse (corrupt state), LOG and SKIP this entry — do NOT close
+          on a bad timestamp, do NOT skip silently. Leave the entry in
+          state for operator review.
         - Else if `now - postedAt >= 3 days`:
             - Post closing comment on #N:
                   "Auto-closing: no reply within 3 days of the duplicate
                    check. Please reopen if this is still relevant."
-            - `gh issue close <N> --reason not_planned`
-            - Drop entry from state.
+            - `gh issue close <N> --reason "not planned"` — capture
+              exit code. If non-zero (network, rate limit, issue
+              already-closed-elsewhere), DO NOT drop state: set
+              `closeAttemptFailed: true` on the entry for retry next
+              run, and log the failure.
+            - ONLY drop entry from state on close success (exit 0).
         - Else → keep the entry as-is (will be revisited next run).
 
       ## 9. SAVE
@@ -293,12 +343,17 @@ nodes:
             "primarySymptom": "one short sentence — the core symptom",
             "area": "single best-guess area tag (same vocabulary as open briefs)",
             "closedAt": "<ISO timestamp>",
-            "stateReason": "completed | not_planned | duplicate | null",
+            "stateReason": "completed | not_planned | duplicate | null (normalize gh CLI's UPPERCASE output to lowercase)",
             "resolvedByPr": "<PR number if identifiable from closing thread, else null>"
           }
 
-          Be terse. If `stateReason` is `not_planned` or `duplicate`, that
-          matters for the match verdict downstream — include it honestly.
+          Be terse. If `stateReason` (normalized to lowercase) is
+          `not_planned` or `duplicate`, that matters for the match
+          verdict downstream — include it honestly.
+
+          ERROR HANDLING — if `gh issue view` fails, print exactly:
+              ERROR: <one-line reason>
+          on a single stdout line. Do NOT emit partial/fabricated JSON.
     prompt: |
       You check whether any currently OPEN issue duplicates a recently
       CLOSED one. A reporter may have filed a bug that was fixed months
@@ -336,9 +391,19 @@ nodes:
             "pendingDedupComments": { ... }
           }
 
-      If the file is missing or `briefs` is empty, print
-          "No open-issue briefs available from triage-issues — skipping."
-      and exit. (This guards against a failed upstream.)
+      Distinguish "upstream didn't run / crashed" from "upstream ran
+      with nothing to process" via `lastRunAt`:
+
+        - File missing OR JSON.parse throws → treat as upstream-crashed.
+          Print: "[closed-dedup-check] SKIP: triage-state.json missing
+          or corrupt — upstream triage-issues node likely failed. Fix
+          that run before retrying."
+        - File present with `lastRunAt == null` → same upstream-crashed
+          message.
+        - File present with `lastRunAt` set AND `briefs` empty → print
+          "No open-issue briefs to cross-match — nothing to do." and exit.
+          (This is a legitimate quiet day.)
+        - Otherwise → proceed.
 
       # State file (this node)
 
@@ -363,7 +428,11 @@ nodes:
 
       ## 1. Read both state files
       - Read `.archon/state/triage-state.json` — grab `briefs` (open-issue briefs).
-      - Read `.archon/state/closed-dedup-state.json` — default on ENOENT.
+      - Read `.archon/state/closed-dedup-state.json`:
+          ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
+          (same rule as triage-issues step 1: never silently reset
+          tracked state; corrupt file means a backup restore or explicit
+          deletion, never a reset).
 
       ## 2. Fetch recently-closed issues (last 90 days)
       Compute cutoff:
@@ -374,8 +443,11 @@ nodes:
             --json number,title,body,labels,stateReason,closedAt \
             --search "closed:>${CUTOFF}" > "$ARTIFACTS_DIR/closed-issues.json"
 
-      Filter out any closed issue whose `stateReason` is `duplicate` — those
-      are noise for our matching (they were already dedup'd against canonical).
+      Filter out any closed issue whose `stateReason` (case-insensitive) matches `duplicate`
+      — those are noise for our matching (they were already dedup'd against canonical).
+      Note: `gh issue view --json stateReason` returns UPPERCASE (`COMPLETED`, `NOT_PLANNED`,
+      `DUPLICATE`), while the `gh issue close --reason` flag wants lowercase with a space
+      (`"completed"`, `"not planned"`). Lowercase-compare downstream.
 
       ## 3. Classify work
       For each closed issue:
@@ -389,8 +461,10 @@ nodes:
 
           "Brief closed issue #<N>."
 
-      Parse each JSON response. On parse failure, skip that issue. Merge
-      into `state.closedBriefs`.
+      Parse each JSON response. On parse failure OR `ERROR:` sentinel:
+      log the issue number + first 200 chars, track in `failedClosedBriefs`,
+      skip. Merge successes into `state.closedBriefs`. Abort the cluster
+      pass if ≥50% failed (same rule as triage-issues).
 
       ## 5. CROSS-CLUSTER PASS — match open vs closed
       For each OPEN issue brief (from triage-state.json):
@@ -439,12 +513,17 @@ nodes:
         - Fetch: `gh issue view <O> --json comments`
         - Find comments AFTER `postedAt` whose author is NOT the bot.
         - If reporter replied → drop entry (engaged).
+        - VALIDATE `postedAt` parses as ISO-8601 first. If not: log and
+          skip this entry; never close on a bad timestamp.
         - Else if `now - postedAt >= 3 days`:
             - Post closing comment:
                   "Auto-closing: no reply within 3 days of the closed-match
                    check. Please reopen if your case is NOT resolved by
                    #<matchedClosed>."
-            - `gh issue close <O> --reason not_planned`
+            - `gh issue close <O> --reason "not planned"` — capture exit
+              code. On non-zero: set `closeAttemptFailed: true` on the
+              entry for retry, log the failure, do NOT drop state.
+            - Only drop entry on exit 0.
             - Drop entry from state.
         - Else → keep as-is.
 
@@ -516,6 +595,15 @@ nodes:
 
           Be terse. Don't quote commit messages verbatim unless they are
           the only information available.
+
+          If the diff was truncated (you hit the 30,000-char limit when
+          reading `gh pr diff`), set `diffTruncated: true` on the brief
+          output so the orchestrator knows to be more conservative about
+          `fully-addresses` claims.
+
+          ERROR HANDLING — if `gh pr view` or `gh pr diff` fails, print:
+              ERROR: <one-line reason>
+          on a single stdout line. Do NOT emit partial/fabricated JSON.
     prompt: |
       You find OPEN PRs that duplicate or supersede a recently-CLOSED PR.
       A contributor may have missed that a similar change was already
@@ -563,7 +651,10 @@ nodes:
       ```
       cat .archon/state/closed-pr-dedup-state.json 2>/dev/null
       ```
-      Parse JSON; default on ENOENT.
+      Parse JSON:
+        ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
+        (never silently reset tracked state; corrupt file means a backup
+        restore or explicit deletion, never a reset).
 
       ## 2. Fetch PRs
       Compute the cutoff:
@@ -597,8 +688,10 @@ nodes:
       Per-task prompt template:
           "Brief PR #<N> — state=<open|closed>."
 
-      Parse each JSON response. Skip on parse failure. Merge into the
-      appropriate `{open,closed}Briefs` bucket.
+      Parse each JSON response. On parse failure OR `ERROR:` sentinel:
+      log the PR number + first 200 chars, track in `failedBriefs`, skip.
+      Merge successes into the appropriate `{open,closed}Briefs` bucket.
+      Abort the cluster pass if ≥50% failed.
 
       ## 5. CROSS-CLUSTER PASS — match open vs closed
       For each OPEN PR brief:
@@ -631,8 +724,11 @@ nodes:
                  closed on <date> (<stateReason>). You may want to read
                  the discussion there before pushing further."
 
-        - Idempotency: fetch `gh pr view <O> --json comments` and skip if
-          a comment with the same body already exists.
+        - Idempotency: fetch `gh pr view <O> --json comments`. If the
+          fetch fails (non-zero exit), SKIP POSTING and log the error —
+          never fall through to post-anyway (that would double-post on
+          every gh hiccup). Only when the fetch succeeds AND no existing
+          comment has the same body do we proceed.
 
         - Post: `gh pr comment <O> --body "..."`. Capture comment ID.
 
@@ -743,6 +839,10 @@ nodes:
 
           Default bias: when the PR description doesn't explicitly claim
           to close the issue, mark it `related`, never `fully-addresses`.
+
+          ERROR HANDLING — if `gh pr view` or `gh pr diff` fails, print:
+              ERROR: <one-line reason>
+          on a single stdout line. Do NOT emit partial/fabricated JSON.
     prompt: |
       You are the PR-to-issue linker for the repository in the current
       working directory.
@@ -819,7 +919,10 @@ nodes:
       ```
       cat .archon/state/pr-state.json 2>/dev/null
       ```
-      Parse JSON; default on ENOENT.
+      Parse JSON:
+        ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
+        (never silently reset tracked state; corrupt file means a backup
+        restore or explicit deletion, never a reset).
 
       ## 2. Fetch
       ```
@@ -863,9 +966,12 @@ nodes:
            PR_TEMPLATE (for templateAdherence scoring):
            <file contents>"
 
-      Keep the issue list compact. Parse each response as JSON. If parsing
-      fails for a given PR, skip it. Preserve the full `templateAdherence`
-      object in `state.linkedPrs[<pr>]` for the digest downstream.
+      Keep the issue list compact. Parse each response as JSON. On parse
+      failure OR `ERROR:` sentinel: log the PR number + first 200 chars,
+      track in `failedMatches`, skip that PR. Preserve the full
+      `templateAdherence` object in `state.linkedPrs[<pr>]` for the
+      digest downstream. Abort the downstream passes if ≥50% of PRs
+      failed matching (same half-failure rule as the briefing passes).
 
       ## 5. VERIFY PASS — confirm any "fully-addresses"
       Haiku is optimistic; Sonnet (you) owns the final judgment. For each
@@ -878,6 +984,12 @@ nodes:
           ambiguous, or only partially addressed → DOWNGRADE to `related`.
 
       When in doubt, downgrade.
+
+      Additional rule for PR-vs-closed-PR matches (`closed-pr-dedup-check`
+      feeds this pattern too): if either side's brief has
+      `diffTruncated: true`, the evidence is partial — downgrade any
+      `fully-addresses`-shaped claim to `related` by default, since we
+      can't be confident about unseen diff regions.
 
       ## 6. ACT PASS — comment + record
       Before posting ANY comment, check idempotency: fetch existing
@@ -979,10 +1091,28 @@ nodes:
       Do NOT nudge PRs with `quality: "good"` or `"no-template-context"`.
 
       ## 7. SAVE
-      For every PR processed this run (success or skip), write/refresh
-      `state.linkedPrs[<pr>]` with:
-          { sha, processedAt: <now-iso>, related: [...], fullyAddresses: [...] }
-      Update `state.lastRunAt`. Write `.archon/state/pr-state.json`.
+      For every PR processed this run (success or skip), MERGE into
+      the existing `state.linkedPrs[<pr>]` entry (do NOT replace — that
+      would lose `commentIds` / `templateNudgedAt` / `templateAdherence`
+      captured earlier in this run AND the baseline grandfather flag).
+
+      Merge semantics (spread existing first, then apply this run's updates):
+
+          const existing = state.linkedPrs[<pr>] ?? {};
+          state.linkedPrs[<pr>] = {
+            ...existing,                              // preserves commentIds, templateNudgedAt,
+                                                       // templateAdherence, any prior sha history
+            sha: <new-sha>,
+            processedAt: <now-iso>,
+            related: <this-run-related-array>,
+            fullyAddresses: <this-run-fullyAddresses-array>,
+            templateAdherence: <this-run-adherence-or-existing>,
+            // any commentIds/templateNudgedAt captured during steps 6 + 6b
+            // are already in `existing` and survive the spread
+          };
+
+      Update `state.lastRunAt`. Write `.archon/state/pr-state.json` in
+      ONE Write call at the end of the node.
 
       ## 8. Summary
           ## PR-issue linker — <now>
@@ -1060,7 +1190,10 @@ nodes:
       ```
       cat .archon/state/stale-nudge-state.json 2>/dev/null
       ```
-      Parse JSON; default on ENOENT.
+      Parse JSON:
+        ENOENT / empty → default shape. JSON.parse throw → ABORT loudly
+        (never silently reset tracked state; corrupt file means a backup
+        restore or explicit deletion, never a reset).
 
       ## 2. Fetch stale items
       Compute cutoff (STALE_DAYS ago):
@@ -1103,7 +1236,10 @@ nodes:
             is needed — just drop a note.
 
       Idempotency: `gh {issue,pr} view <N> --json comments` — skip if any
-      existing comment already starts with "this {issue,pr} has been quiet".
+      existing comment CONTAINS the substring "has been quiet for" (a
+      prefix check fails because the posted body starts with `@<author>`,
+      not the phrase). If the fetch itself fails, SKIP POSTING rather
+      than fall through to post-anyway.
 
       Post: `gh issue comment <N> --body "..."` / `gh pr comment <N> --body "..."`.
       Capture the comment ID from the returned URL (the number after
@@ -1414,7 +1550,14 @@ nodes:
       Otherwise:
           curl -sS -X POST -H 'Content-Type: application/json' \
             --data "@$ARTIFACTS_DIR/slack-payload.json" \
-            "$SLACK_WEBHOOK"
+            -w "\nHTTP_STATUS:%{http_code}\n" \
+            "$SLACK_WEBHOOK" 2>&1
+
+      The `-w "\nHTTP_STATUS:%{http_code}"` appends the HTTP status code
+      so TLS/connection/4xx/5xx errors are visible in the captured output.
+      Redirect stderr to stdout (`2>&1`) so TLS errors land in the same
+      stream. Slack returns `ok` (body) + `HTTP_STATUS:200` on success.
+      Treat anything else as failure.
 
       Capture stdout+stderr. Slack returns `ok` on success, otherwise an
       error body like `invalid_payload` / `channel_not_found`.
