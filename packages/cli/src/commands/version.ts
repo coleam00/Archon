@@ -39,18 +39,18 @@ async function getDevVersion(): Promise<{ name: string; version: string }> {
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') {
-      throw new Error('Failed to read version: package.json not found (bad installation?)');
+      throw new Error('버전 정보를 읽지 못했습니다: package.json을 찾을 수 없습니다');
     } else if (err.code === 'EACCES') {
-      throw new Error('Failed to read version: permission denied reading package.json');
+      throw new Error('버전 정보를 읽지 못했습니다: package.json 읽기 권한이 없습니다');
     }
-    throw new Error(`Failed to read version: ${err.message}`);
+    throw new Error(`버전 정보를 읽지 못했습니다: ${err.message}`);
   }
 
   let pkg: PackageJson;
   try {
     pkg = JSON.parse(content) as PackageJson;
   } catch (_error) {
-    throw new Error('Failed to read version: package.json is malformed');
+    throw new Error('버전 정보를 읽지 못했습니다: package.json 형식이 올바르지 않습니다');
   }
 
   return { name: pkg.name, version: pkg.version };
@@ -94,8 +94,8 @@ export async function versionCommand(): Promise<void> {
   const buildType = BUNDLED_IS_BINARY ? 'binary' : 'source (bun)';
 
   console.log(`Archon CLI v${version}`);
-  console.log(`  Platform: ${platform}-${arch}`);
-  console.log(`  Build: ${buildType}`);
-  console.log(`  Database: ${dbType}`);
+  console.log(`  Platform(플랫폼): ${platform}-${arch}`);
+  console.log(`  Build(빌드): ${buildType}`);
+  console.log(`  Database(데이터베이스): ${dbType}`);
   console.log(`  Git commit: ${gitCommit}`);
 }

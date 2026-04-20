@@ -162,8 +162,10 @@ describe('workflowListCommand', () => {
 
     await workflowListCommand('/test/path');
 
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Discovering workflows'));
-    expect(consoleSpy).toHaveBeenCalledWith('\nNo workflows found.');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('workflow(워크플로)를 찾는 중')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith('\nworkflow(워크플로)를 찾지 못했습니다.');
   });
 
   it('should list workflows with names and descriptions', async () => {
@@ -182,7 +184,9 @@ describe('workflowListCommand', () => {
 
     await workflowListCommand('/test/path');
 
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Found 2 workflow(s)'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('2개 workflow(워크플로)를 찾았습니다')
+    );
     expect(consoleSpy).toHaveBeenCalledWith('  assist');
     expect(consoleSpy).toHaveBeenCalledWith('    General assistance workflow');
     expect(consoleSpy).toHaveBeenCalledWith('  plan');
@@ -254,10 +258,10 @@ describe('workflowListCommand', () => {
 
     await workflowListCommand('/test/path', true);
 
-    // Only one console.log call (the JSON), no "Discovering workflows" text
+    // Only one console.log call (the JSON), no discovery header text
     expect(consoleSpy).toHaveBeenCalledTimes(1);
     const output = consoleSpy.mock.calls[0][0] as string;
-    expect(output).not.toContain('Discovering workflows');
+    expect(output).not.toContain('workflow(워크플로)를 찾는 중');
     // Output must be valid JSON
     expect(() => JSON.parse(output)).not.toThrow();
   });
@@ -306,8 +310,12 @@ describe('workflowListCommand', () => {
 
     await workflowListCommand('/test/path', false);
 
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Discovering workflows'));
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Found 1 workflow(s)'));
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('workflow(워크플로)를 찾는 중')
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('1개 workflow(워크플로)를 찾았습니다')
+    );
   });
 
   it('passes globalSearchPath to discoverWorkflowsWithConfig', async () => {
@@ -333,7 +341,7 @@ describe('workflowListCommand', () => {
     );
 
     await expect(workflowListCommand('/test/path')).rejects.toThrow(
-      'Error loading workflows: Permission denied'
+      'workflow 로드 오류: Permission denied'
     );
   });
 });
@@ -359,7 +367,7 @@ describe('workflowRunCommand', () => {
     });
 
     await expect(workflowRunCommand('/test/path', 'assist', 'hello')).rejects.toThrow(
-      'No workflows found in .archon/workflows/'
+      '.archon/workflows/에서 workflow를 찾지 못했습니다.'
     );
   });
 
@@ -374,7 +382,7 @@ describe('workflowRunCommand', () => {
     });
 
     await expect(workflowRunCommand('/test/path', 'nonexistent', 'hello')).rejects.toThrow(
-      "Workflow 'nonexistent' not found"
+      "Workflow 'nonexistent'을(를) 찾지 못했습니다"
     );
   });
 
@@ -392,7 +400,7 @@ describe('workflowRunCommand', () => {
       await workflowRunCommand('/test/path', 'nonexistent', 'hello');
     } catch (error) {
       const err = error as Error;
-      expect(err.message).toContain('Available workflows:');
+      expect(err.message).toContain('사용 가능한 workflow:');
       expect(err.message).toContain('- assist');
       expect(err.message).toContain('- plan');
     }
@@ -577,7 +585,7 @@ describe('workflowRunCommand', () => {
     );
 
     await expect(workflowRunCommand('/test/path', 'assist', 'hello')).rejects.toThrow(
-      'Failed to access database: Connection refused'
+      '데이터베이스 접근 실패: Connection refused'
     );
   });
 
@@ -598,7 +606,7 @@ describe('workflowRunCommand', () => {
     );
 
     await expect(workflowRunCommand('/test/path', 'assist', 'hello')).rejects.toThrow(
-      'Cannot create worktree: database lookup failed'
+      'worktree를 만들 수 없습니다: 데이터베이스 조회에 실패했습니다'
     );
   });
 
@@ -656,7 +664,7 @@ describe('workflowRunCommand', () => {
     // Use --no-worktree since no codebase is available (isolation would error)
     await expect(
       workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true })
-    ).rejects.toThrow('Workflow failed: Step failed: assist');
+    ).rejects.toThrow('Workflow 실패: Step failed: assist');
   });
 
   it('should call generateAndSetTitle with workflow name and user message', async () => {
@@ -754,7 +762,7 @@ describe('workflowRunCommand', () => {
         branchName: 'test-branch',
         noWorktree: true,
       })
-    ).rejects.toThrow('--branch and --no-worktree are mutually exclusive');
+    ).rejects.toThrow('--branch와 --no-worktree는 함께 사용할 수 없습니다');
   });
 
   it('throws when --from is used with --no-worktree', async () => {
@@ -771,7 +779,7 @@ describe('workflowRunCommand', () => {
         fromBranch: 'dev',
         noWorktree: true,
       })
-    ).rejects.toThrow('--from/--from-branch has no effect with --no-worktree');
+    ).rejects.toThrow('--from/--from-branch는 --no-worktree와 함께 사용할 수 없습니다');
   });
 
   it('creates worktree with auto-generated branch when no --branch given', async () => {
@@ -886,7 +894,7 @@ describe('workflowRunCommand', () => {
     (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     await expect(workflowRunCommand('/test/path', 'assist', 'hello', {})).rejects.toThrow(
-      'Cannot create worktree: not in a git repository'
+      'worktree를 만들 수 없습니다: git repository 안이 아닙니다'
     );
   });
 
@@ -926,7 +934,9 @@ describe('workflowRunCommand', () => {
     const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { branchName: 'my-feature' });
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("not based on 'dev'"));
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("기준 branch가 'dev'가 아닙니다")
+      );
     } finally {
       consoleWarnSpy.mockRestore();
     }
@@ -968,7 +978,7 @@ describe('workflowRunCommand', () => {
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { branchName: 'my-feature' });
       const baseBranchWarnCalls = consoleWarnSpy.mock.calls.filter(
-        (args: unknown[]) => typeof args[0] === 'string' && args[0].includes('not based on')
+        (args: unknown[]) => typeof args[0] === 'string' && args[0].includes('기준 branch가')
       );
       expect(baseBranchWarnCalls).toHaveLength(0);
     } finally {
@@ -1133,11 +1143,13 @@ describe('workflowRunCommand', () => {
       workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true })
     ).resolves.toBeUndefined();
 
-    // CLIAdapter logs 'cli_message_persist_failed' when addMessage throws internally
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(Error) }),
-      'cli_message_persist_failed'
+    const resultCalls = (messagesDb.addMessage as ReturnType<typeof mock>).mock.calls.filter(
+      (args: unknown[]) => {
+        const meta = args[3] as Record<string, unknown> | undefined;
+        return meta?.category === 'workflow_result';
+      }
     );
+    expect(resultCalls).toHaveLength(1);
   });
 
   it('does not throw and continues to executeWorkflow when dispatch sendMessage fails', async () => {
@@ -1213,7 +1225,9 @@ describe('workflowRunCommand', () => {
       expect(resultCalls).toHaveLength(0);
 
       // Confirm paused message was printed
-      expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow paused — waiting for approval.');
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '\nWorkflow가 일시 중지되었습니다 - 승인을 기다리는 중입니다.'
+      );
     } finally {
       consoleSpy.mockRestore();
     }
@@ -1237,7 +1251,7 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand();
 
-    expect(consoleSpy).toHaveBeenCalledWith('No active workflows.');
+    expect(consoleSpy).toHaveBeenCalledWith('실행 중인 workflow가 없습니다.');
   });
 
   it('should list active runs with ID, name, path, status, and age', async () => {
@@ -1310,7 +1324,7 @@ describe('workflowStatusCommand', () => {
     await workflowStatusCommand(false, true);
 
     const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
-    expect(calls.some(c => c.includes('Nodes:'))).toBe(true);
+    expect(calls.some(c => c.includes('노드:'))).toBe(true);
     expect(calls.some(c => c.includes('✓') && c.includes('plan'))).toBe(true);
     expect(calls.some(c => c.includes('Plan output here'))).toBe(true);
   });
@@ -1377,7 +1391,7 @@ describe('workflowStatusCommand', () => {
     await workflowStatusCommand(false, true);
 
     const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
-    expect(calls.some(c => c.includes('Nodes:'))).toBe(false);
+    expect(calls.some(c => c.includes('노드:'))).toBe(false);
   });
 
   it('should include events in JSON verbose output', async () => {
@@ -1467,8 +1481,8 @@ describe('workflowResumeCommand', () => {
     }
 
     // Printed resume message before delegating to workflowRunCommand
-    expect(consoleSpy).toHaveBeenCalledWith('Resuming workflow: implement');
-    expect(consoleSpy).toHaveBeenCalledWith('Path: /tmp/test-worktree');
+    expect(consoleSpy).toHaveBeenCalledWith('Workflow 재개: implement');
+    expect(consoleSpy).toHaveBeenCalledWith('경로: /tmp/test-worktree');
   });
 
   it('should throw when run has no working path', async () => {
@@ -1481,7 +1495,7 @@ describe('workflowResumeCommand', () => {
     });
 
     await expect(workflowResumeCommand('run-no-path')).rejects.toThrow(
-      'has no working path recorded'
+      '기록된 작업 경로가 없습니다'
     );
   });
 
@@ -1724,7 +1738,7 @@ describe('workflowAbandonCommand', () => {
     await workflowAbandonCommand('run-1');
 
     expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-1');
-    expect(consoleSpy).toHaveBeenCalledWith('Abandoned workflow run: run-1');
+    expect(consoleSpy).toHaveBeenCalledWith('Workflow run 중단: run-1');
   });
 });
 
@@ -1747,7 +1761,7 @@ describe('workflowCleanupCommand', () => {
 
     await workflowCleanupCommand(30);
 
-    expect(consoleSpy).toHaveBeenCalledWith('Deleted 5 workflow run(s) older than 30 days.');
+    expect(consoleSpy).toHaveBeenCalledWith('30일보다 오래된 workflow run 5개를 삭제했습니다.');
   });
 
   it('should print no-op message when count is 0', async () => {
@@ -1758,7 +1772,7 @@ describe('workflowCleanupCommand', () => {
 
     await workflowCleanupCommand(7);
 
-    expect(consoleSpy).toHaveBeenCalledWith('No workflow runs older than 7 days to clean up.');
+    expect(consoleSpy).toHaveBeenCalledWith('7일보다 오래되어 정리할 workflow run이 없습니다.');
   });
 
   it('should throw when deleteOldWorkflowRuns fails', async () => {
@@ -1767,9 +1781,7 @@ describe('workflowCleanupCommand', () => {
       new Error('disk full')
     );
 
-    await expect(workflowCleanupCommand(7)).rejects.toThrow(
-      'Failed to clean up workflow runs: disk full'
-    );
+    await expect(workflowCleanupCommand(7)).rejects.toThrow('workflow run 정리 실패: disk full');
   });
 });
 
@@ -1823,7 +1835,7 @@ describe('workflowRejectCommand', () => {
     await workflowRejectCommand('run-plain', 'not good');
 
     expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-plain');
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('거부 후 취소'));
   });
 
   it('updates metadata and auto-resumes when on_reject configured and under limit', async () => {
@@ -1859,7 +1871,7 @@ describe('workflowRejectCommand', () => {
       status: 'failed',
       metadata: { rejection_reason: 'needs work', rejection_count: 1 },
     });
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected workflow'));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Workflow 거부'));
   });
 
   it('should pass original platform conversation ID through on reject-resume', async () => {
@@ -1946,7 +1958,7 @@ describe('workflowRejectCommand', () => {
     await workflowRejectCommand('run-max', 'still bad');
 
     expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-max');
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('최대 시도 횟수 도달'));
   });
 
   it('throws when on_reject configured but working_path is null', async () => {
@@ -1976,7 +1988,9 @@ describe('workflowRejectCommand', () => {
       .mockResolvedValueOnce(runData);
     (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
 
-    await expect(workflowRejectCommand('run-no-path', 'bad')).rejects.toThrow('no working path');
+    await expect(workflowRejectCommand('run-no-path', 'bad')).rejects.toThrow(
+      '기록된 작업 경로가 없습니다'
+    );
   });
 });
 
@@ -2071,7 +2085,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] Started\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] 시작\n');
   });
 
   it('should write node_completed event with duration to stderr', async () => {
@@ -2093,7 +2107,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] Completed (12.4s)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] 완료 (12.4s)\n');
   });
 
   it('should write node_failed event to stderr', async () => {
@@ -2115,7 +2129,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] Failed: timeout exceeded\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] 실패: timeout exceeded\n');
   });
 
   it('should write node_skipped event to stderr', async () => {
@@ -2137,7 +2151,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith('[deploy] Skipped (when_condition)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[deploy] 건너뜀 (when_condition)\n');
   });
 
   it('should write approval_pending event to stderr', async () => {
@@ -2158,9 +2172,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith(
-      '[review] Waiting for approval: Please review the changes\n'
-    );
+    expect(stderrSpy).toHaveBeenCalledWith('[review] 승인 대기: Please review the changes\n');
   });
 
   it('should not write tool_started without verbose', async () => {
@@ -2209,7 +2221,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (started)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (시작)\n');
     expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms)\n');
   });
 
@@ -2247,7 +2259,7 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith('[fast] Completed (500ms)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[fast] 완료 (500ms)\n');
   });
 
   it('should write node_completed with minutes duration to stderr', async () => {
@@ -2269,6 +2281,6 @@ describe('workflowRunCommand — progress rendering', () => {
 
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(stderrSpy).toHaveBeenCalledWith('[slow] Completed (1m30s)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[slow] 완료 (1m30s)\n');
   });
 });

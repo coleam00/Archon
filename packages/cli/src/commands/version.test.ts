@@ -32,15 +32,15 @@ describe('versionCommand', () => {
 
     // Second call should contain platform info
     const secondCall = consoleSpy.mock.calls[1][0] as string;
-    expect(secondCall).toContain('Platform:');
+    expect(secondCall).toContain('Platform(플랫폼):');
 
     // Third call should contain build type
     const thirdCall = consoleSpy.mock.calls[2][0] as string;
-    expect(thirdCall).toContain('Build:');
+    expect(thirdCall).toContain('Build(빌드):');
 
     // Fourth call should contain database type
     const fourthCall = consoleSpy.mock.calls[3][0] as string;
-    expect(fourthCall).toContain('Database:');
+    expect(fourthCall).toContain('Database(데이터베이스):');
 
     // Fifth call should contain git commit with the mocked SHA
     const fifthCall = consoleSpy.mock.calls[4][0] as string;
