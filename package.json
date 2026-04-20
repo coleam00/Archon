@@ -50,7 +50,8 @@
     "flatted": "^3.4.2",
     "axios": "^1.15.0",
     "follow-redirects": "^1.16.0",
-    "lodash": "^4.18.0"
+    "lodash": "^4.18.0",
+    "path-to-regexp": "^8.4.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.74"
