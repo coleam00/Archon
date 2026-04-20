@@ -37,7 +37,7 @@ bun install
 
 # 2. Configure environment
 cp .env.example .env
-nano .env  # Add your AI assistant tokens (Claude or Codex)
+nano .env  # Add your AI assistant tokens (Claude, Codex, or Pi)
 
 # 3. Start server + Web UI (SQLite auto-detected, no database setup needed)
 bun run dev

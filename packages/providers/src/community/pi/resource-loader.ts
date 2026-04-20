@@ -32,7 +32,9 @@ export interface NoopResourceLoaderOptions {
    * (https://shittycodingagent.ai/packages) — ~540 npm packages registering
    * custom tools and lifecycle hooks via `pi.registerTool()` / `pi.on()`.
    * Tools and hooks work fully in programmatic sessions; TUI-only features
-   * (renderers, keybindings, slash commands) silently no-op.
+   * (renderers, keybindings, slash commands) silently no-op. Extensions that
+   * gate on `ctx.hasUI` additionally need `interactive: true` — see
+   * `PiProviderDefaults.interactive`.
    *
    * Trust boundary: enabling this loads arbitrary JS code with the Archon
    * server's OS permissions. Only flip this on when the operator trusts both

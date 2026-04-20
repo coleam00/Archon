@@ -21,6 +21,7 @@ import { parsePiModelRef } from './model-ref';
 import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
 import { createNoopResourceLoader } from './resource-loader';
 import { resolvePiSession } from './session-resolver';
+import { createArchonUIBridge, createArchonUIContext } from './ui-context-stub';
 
 /**
  * Map Pi provider id → env var name used by pi-ai's getEnvApiKey().
@@ -109,6 +110,24 @@ export class PiProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const piConfig = parsePiConfig(assistantConfig);
+
+    // 0. Apply config-level env vars to process.env for in-process extensions
+    //    (plannotator reads PLANNOTATOR_REMOTE at session_start, etc.).
+    //    Shell env wins: we only set keys not already present. Request-level
+    //    `requestOptions.env` remains a separate channel — it flows through
+    //    bash spawn hooks for subprocess isolation, not into process.env.
+    if (piConfig.env) {
+      const applied: string[] = [];
+      for (const [key, value] of Object.entries(piConfig.env)) {
+        if (process.env[key] === undefined) {
+          process.env[key] = value;
+          applied.push(key);
+        }
+      }
+      if (applied.length > 0) {
+        getLog().debug({ keys: applied }, 'pi.config_env_applied');
+      }
+    }
 
     // 1. Resolve model ref: request (workflow node / chat) → config default
     const modelRef = requestOptions?.model ?? piConfig.model;
@@ -248,12 +267,26 @@ export class PiProvider implements IAgentProvider {
     // packages installed via `pi install npm:<pkg>`).
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const settingsManager = SettingsManager.inMemory();
-    const enableExtensions = piConfig.enableExtensions === true;
+    // Default ON: extensions (community packages like @plannotator/pi-extension
+    // or your own local ones) are a core reason users run Pi. Opt out with
+    // `assistants.pi.enableExtensions: false` (or `interactive: false`) in
+    // `.archon/config.yaml`. Previously default-off, which silently broke
+    // users who installed or built an extension and expected it to fire.
+    const enableExtensions = piConfig.enableExtensions !== false;
+    // Clamp to false without extensions: nothing consumes hasUI without a runner.
+    const interactive = enableExtensions && piConfig.interactive !== false;
     const resourceLoader = createNoopResourceLoader(cwd, {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
       ...(enableExtensions ? { enableExtensions: true } : {}),
     });
+
+    // Required: without reload(), session.extensionRunner is undefined and
+    // setFlagValue silently no-ops. createAgentSession skips this when a
+    // custom resource loader is supplied.
+    if (enableExtensions) {
+      await resourceLoader.reload();
+    }
 
     getLog().info(
       {
@@ -266,6 +299,7 @@ export class PiProvider implements IAgentProvider {
         skillCount: skillPaths.length,
         missingSkillCount: missingSkills.length,
         extensionsEnabled: enableExtensions,
+        interactive,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'pi.session_started'
@@ -287,6 +321,28 @@ export class PiProvider implements IAgentProvider {
       yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
     }
 
+    // 4e. Extension flag pass-through. Must happen before bindExtensions
+    //     below — extensions read flags inside their session_start handler.
+    if (enableExtensions && piConfig.extensionFlags) {
+      const runner = session.extensionRunner;
+      if (runner) {
+        for (const [name, value] of Object.entries(piConfig.extensionFlags)) {
+          runner.setFlagValue(name, value);
+        }
+      }
+    }
+
+    // 4f. Bind UI context (so ctx.hasUI is true and ctx.ui.notify() forwards
+    //     into the chunk stream) or fire session_start with no UI. Must run
+    //     after flag pass-through above.
+    const uiBridge = interactive ? createArchonUIBridge() : undefined;
+    if (uiBridge) {
+      const uiContext = createArchonUIContext(uiBridge);
+      await session.bindExtensions({ uiContext });
+    } else if (enableExtensions) {
+      await session.bindExtensions({});
+    }
+
     // 5. Structured output (best-effort). Pi has no SDK-level JSON schema
     //    mode the way Claude and Codex do, so we implement it via prompt
     //    engineering: append the schema + "JSON only, no fences" instruction,
@@ -299,13 +355,16 @@ export class PiProvider implements IAgentProvider {
       : prompt;
 
     // 6. Bridge callback-based events to the async generator contract.
-    //    bridgeSession owns dispose() and abort wiring.
+    //    bridgeSession owns dispose() and abort wiring. When `interactive`
+    //    is on, it also binds/unbinds the UI stub's emitter so extension
+    //    notifications land on the same queue as Pi events.
     try {
       yield* bridgeSession(
         session,
         effectivePrompt,
         requestOptions?.abortSignal,
-        outputFormat?.schema
+        outputFormat?.schema,
+        uiBridge
       );
       getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
     } catch (err) {

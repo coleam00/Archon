@@ -52,6 +52,34 @@ export interface PiProviderDefaults {
    * @default false
    */
   enableExtensions?: boolean;
+  /**
+   * Bind an `ExtensionUIContext` so extensions see `ctx.hasUI === true` and
+   * `ctx.ui.notify()` forwards into the chunk stream. Ignored unless
+   * `enableExtensions` is true.
+   * @default false
+   */
+  interactive?: boolean;
+  /**
+   * Flag values passed to Pi's ExtensionRunner before `session_start`,
+   * equivalent to `pi --<name>` / `pi --<name>=<value>` on the CLI.
+   * Unknown keys are ignored. Only applied when `enableExtensions` is true.
+   * @default undefined
+   */
+  extensionFlags?: Record<string, boolean | string>;
+  /**
+   * Environment variables injected into `process.env` at session start so
+   * in-process extensions (which read `process.env` directly) pick them up.
+   * Existing `process.env` entries are NOT overridden — shell env wins over
+   * config. Use for extension-config vars like `PLANNOTATOR_REMOTE=1` that
+   * must be present before the extension's `session_start` hook runs.
+   *
+   * Note: this differs from `requestOptions.env` (codebase-scoped env vars),
+   * which is per-request and only injected into bash subprocesses. Use
+   * codebase env vars for secrets that vary per project; use `assistants.pi.env`
+   * for extension wiring that's global to the Pi provider.
+   * @default undefined
+   */
+  env?: Record<string, string>;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */
@@ -75,7 +103,15 @@ export interface TokenUsage {
  * Discriminated union with per-type required fields for type safety.
  */
 export type MessageChunk =
-  | { type: 'assistant'; content: string }
+  | {
+      type: 'assistant';
+      content: string;
+      /** When true, batch-mode adapters flush pending content and this chunk
+       *  to the platform immediately. Used by Pi's `notify()` so URLs the
+       *  user must act on (e.g. plannotator review) surface before the node
+       *  blocks for input. */
+      flush?: boolean;
+    }
   | { type: 'system'; content: string }
   | { type: 'thinking'; content: string }
   | {

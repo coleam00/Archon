@@ -656,7 +656,19 @@ async function executeNodeInternal(
 
       if (msg.type === 'assistant' && msg.content) {
         nodeOutputText += msg.content; // ALWAYS capture for $node_id.output
-        if (streamingMode === 'stream') {
+        if (streamingMode === 'stream' || msg.flush) {
+          // `flush` chunks (e.g. Pi notify() emitting a plannotator review URL)
+          // must reach the user before the node blocks. Drain any queued batch
+          // content first so order is preserved.
+          if (streamingMode === 'batch' && batchMessages.length > 0) {
+            await safeSendMessage(
+              platform,
+              conversationId,
+              batchMessages.join('\n\n'),
+              nodeContext
+            );
+            batchMessages.length = 0;
+          }
           await safeSendMessage(platform, conversationId, msg.content, nodeContext);
         } else {
           batchMessages.push(msg.content);

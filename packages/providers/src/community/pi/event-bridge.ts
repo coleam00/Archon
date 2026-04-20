@@ -267,13 +267,22 @@ export type BridgeQueueItem =
   | { kind: 'done' }
   | { kind: 'error'; error: Error };
 
+/** Lets the UI stub push notifications into the session's chunk queue. */
+export interface BridgeNotifier {
+  setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
+}
+
 export async function* bridgeSession(
   session: AgentSession,
   prompt: string,
   abortSignal?: AbortSignal,
-  jsonSchema?: Record<string, unknown>
+  jsonSchema?: Record<string, unknown>,
+  uiBridge?: BridgeNotifier
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
+  uiBridge?.setEmitter(chunk => {
+    queue.push({ kind: 'chunk', chunk });
+  });
   // Best-effort structured-output buffer. Only accumulates when the caller
   // requested a JSON schema; otherwise stays empty and the terminal chunk
   // passes through untouched.
@@ -358,6 +367,7 @@ export async function* bridgeSession(
     // a no-op and pending iterate() waiters resolve — otherwise a consumer
     // abort mid-iteration would leak this generator on the promise forever.
     queue.close();
+    uiBridge?.setEmitter(undefined);
     unsubscribe();
     if (abortSignal) {
       abortSignal.removeEventListener('abort', onAbort);
