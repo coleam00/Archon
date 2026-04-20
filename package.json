@@ -47,7 +47,8 @@
   },
   "overrides": {
     "test-exclude": "^7.0.1",
-    "flatted": "^3.4.2"
+    "flatted": "^3.4.2",
+    "picomatch": "^4.0.4"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.74"
