@@ -161,6 +161,9 @@ export function WorkflowRunCard({
   }, [run.status, run.started_at]);
 
   const chatId = run.parent_platform_id ?? run.worker_platform_id;
+  const hasOnReject =
+    (run.metadata.approval as { onRejectPrompt?: string } | undefined)?.onRejectPrompt !==
+    undefined;
   const [messageExpanded, setMessageExpanded] = useState(false);
   const longMessage = (run.user_message?.length ?? 0) > 80;
   const displayMessage = run.user_message
@@ -323,17 +326,24 @@ export function WorkflowRunCard({
               trigger={
                 <button className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors">
                   <XCircle className="h-3.5 w-3.5" />
-                  Reject
+                  {hasOnReject ? 'Request Changes' : 'Cancel'}
                 </button>
               }
-              title="Reject workflow?"
+              title={hasOnReject ? 'Request changes?' : 'Cancel workflow?'}
               description={
-                <>
-                  Reject the paused workflow <strong>{run.workflow_name}</strong>. The run will be
-                  marked as failed and any pending iterations will not continue.
-                </>
+                hasOnReject ? (
+                  <>
+                    Send change request for <strong>{run.workflow_name}</strong>. The workflow will
+                    retry with your feedback.
+                  </>
+                ) : (
+                  <>
+                    Cancel the paused workflow <strong>{run.workflow_name}</strong>. The run will be
+                    marked as cancelled and will not continue.
+                  </>
+                )
               }
-              confirmLabel="Reject"
+              confirmLabel={hasOnReject ? 'Request Changes' : 'Cancel'}
               onConfirm={(): void => {
                 onReject(run.id);
               }}
