@@ -125,7 +125,7 @@ interactive: true                # Web only: run in foreground instead of backgr
 nodes:
   - id: classify                 # Unique node ID (used for dependency refs and $id.output)
     command: classify-issue      # Loads from .archon/commands/classify-issue.md
-    output_format:               # Optional: enforce structured JSON output (Claude + Codex)
+    output_format:               # Optional: structured JSON output. SDK-enforced on Claude/Codex; best-effort (prompt + JSON extraction) on Pi.
       type: object
       properties:
         type:
@@ -190,7 +190,7 @@ nodes:
 |-------|------|---------|-------------|
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
-| `output_format` | object | — | JSON Schema for structured output (Claude and Codex) |
+| `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude and Codex; best-effort on Pi (schema appended to prompt, JSON extracted from result text) |
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |

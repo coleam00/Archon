@@ -313,7 +313,7 @@ nodes:
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
 | MCP servers | ❌ | Pi rejects MCP by design |
 | Claude-SDK hooks | ❌ | Claude-specific format |
-| Structured output | ❌ | uneven across Pi backends; v2 follow-up |
+| Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text (bare or ```json```-fenced); degrades cleanly when the model emits prose. Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
 | Fallback model | ❌ | not native in Pi |
 | Sandbox | ❌ | not native in Pi |
