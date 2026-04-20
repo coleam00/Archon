@@ -57,6 +57,7 @@ e2e-screenshots/
 .claude/archon/
 .claude/mockups/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 e2e-testing-findings-session2.md
 
 # Local workspace
