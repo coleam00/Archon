@@ -601,6 +601,6 @@ For always-on access from any device, see the [Docker Deployment Guide](/deploym
 ## Further Reading
 
 - [Configuration](/getting-started/configuration/) — All configuration options
-- [AI Assistants](/getting-started/ai-assistants/) — Claude and Codex setup details
+- [AI Assistants](/getting-started/ai-assistants/) — Claude, Codex, and Pi setup details
 - [CLI Reference](/reference/cli/) — Full CLI documentation
 - [Authoring Workflows](/guides/authoring-workflows/) — Creating custom workflows
