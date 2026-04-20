@@ -300,6 +300,29 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function buildNodeSubprocessEnv(
+  artifactsDir: string,
+  baseBranch: string,
+  envVars?: Record<string, string>
+): NodeJS.ProcessEnv {
+  const runtimeEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ARTIFACTS_DIR: artifactsDir,
+    ARCHON_ARTIFACTS_DIR: artifactsDir,
+  };
+
+  if (baseBranch) {
+    runtimeEnv.BASE_BRANCH = baseBranch;
+    runtimeEnv.ARCHON_BASE_BRANCH = baseBranch;
+  }
+
+  if (!envVars || Object.keys(envVars).length === 0) {
+    return runtimeEnv;
+  }
+
+  return { ...runtimeEnv, ...envVars };
+}
+
 /**
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
@@ -1268,8 +1291,7 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv =
-    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
+  const subprocessEnv = buildNodeSubprocessEnv(artifactsDir, baseBranch, envVars);
 
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
@@ -1422,8 +1444,7 @@ async function executeScriptNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv =
-    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
+  const subprocessEnv = buildNodeSubprocessEnv(artifactsDir, baseBranch, envVars);
 
   // Build the command and args based on runtime and inline vs named
   let cmd = '';

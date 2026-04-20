@@ -1,18 +1,21 @@
 import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps, Node } from '@xyflow/react';
-import type { DagNodeData } from './DagNodeComponent';
 import type { WorkflowStepStatus } from '@/lib/types';
 import { formatDurationMs } from '@/lib/format';
+import type { ExecutionNodeType } from '@/lib/dag-layout';
 import { StatusIcon } from './StatusIcon';
 
-export interface ExecutionNodeData extends DagNodeData {
+export interface ExecutionNodeData {
+  label: string;
+  nodeType: ExecutionNodeType;
   status?: WorkflowStepStatus;
   duration?: number;
   error?: string;
   selected?: boolean;
   currentIteration?: number;
   maxIterations?: number;
+  [key: string]: unknown;
 }
 
 export type ExecutionFlowNode = Node<ExecutionNodeData>;
@@ -30,6 +33,9 @@ const TYPE_COLORS: Record<string, string> = {
   prompt: 'text-accent-bright',
   bash: 'text-amber-400',
   loop: 'text-orange-400',
+  script: 'text-emerald-400',
+  approval: 'text-sky-400',
+  cancel: 'text-red-400',
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -37,6 +43,9 @@ const TYPE_LABELS: Record<string, string> = {
   bash: 'BASH',
   prompt: 'PROMPT',
   loop: 'LOOP',
+  script: 'SCRIPT',
+  approval: 'GATE',
+  cancel: 'STOP',
 };
 
 function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.ReactElement {
