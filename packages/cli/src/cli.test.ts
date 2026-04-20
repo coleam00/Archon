@@ -26,6 +26,8 @@ describe('CLI argument parsing', () => {
         spawn: { type: 'boolean' },
         quiet: { type: 'boolean', short: 'q' },
         verbose: { type: 'boolean', short: 'v' },
+        scope: { type: 'string' },
+        force: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false,
@@ -163,6 +165,35 @@ describe('CLI argument parsing', () => {
       // Typo is ignored, --cwd defaults to process.cwd()
       expect(result.values.cwd).toBe(process.cwd());
       expect(result.positionals).toContain('/path'); // /path becomes positional
+    });
+  });
+
+  describe('setup --scope and --force flags (#1303)', () => {
+    it('parses --scope home', () => {
+      const result = parseCliArgs(['setup', '--scope', 'home']);
+      expect(result.values.scope).toBe('home');
+    });
+
+    it('parses --scope project', () => {
+      const result = parseCliArgs(['setup', '--scope', 'project']);
+      expect(result.values.scope).toBe('project');
+    });
+
+    it('defaults --scope to undefined when not provided', () => {
+      const result = parseCliArgs(['setup']);
+      expect(result.values.scope).toBeUndefined();
+    });
+
+    it('parses --force as boolean', () => {
+      const result = parseCliArgs(['setup', '--force']);
+      expect(result.values.force).toBe(true);
+    });
+
+    it('captures an invalid --scope value verbatim for caller validation', () => {
+      // parseArgs itself does not validate the enum; cli.ts validates and
+      // exits on unknown scope values. The test documents the contract.
+      const result = parseCliArgs(['setup', '--scope', 'nonsense']);
+      expect(result.values.scope).toBe('nonsense');
     });
   });
 });

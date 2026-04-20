@@ -67,15 +67,22 @@ archon chat "What does the orchestrator do?"
 Interactive setup wizard for credentials and configuration.
 
 ```bash
-archon setup
-archon setup --spawn  # Open in a new terminal window
+archon setup                      # writes ~/.archon/.env (home scope, default)
+archon setup --scope project      # writes <cwd>/.archon/.env instead
+archon setup --force              # overwrite instead of merging (backup still written)
+archon setup --spawn              # open in a new terminal window
 ```
 
 **Flags:**
 
 | Flag | Effect |
 |------|--------|
-| `--spawn` | Open setup wizard in a new terminal window |
+| `--scope home` | Write to `~/.archon/.env` (default). Applies to every project. |
+| `--scope project` | Write to `<cwd>/.archon/.env`. Overrides user scope for this repo only. |
+| `--force` | Overwrite the target file wholesale instead of merging. A timestamped backup is still written. |
+| `--spawn` | Open setup wizard in a new terminal window. |
+
+**Write safety**: `archon setup` never writes to `<cwd>/.env` — that file belongs to you. The wizard always targets one archon-owned file chosen by `--scope`, merges into existing content (so user-added keys survive), and writes a timestamped backup before every rewrite (e.g. `~/.archon/.env.archon-backup-2026-04-20T09-28-11-000Z`).
 
 ### `workflow list`
 
@@ -361,12 +368,15 @@ When using `--branch`, workflows run inside the worktree directory.
 
 ## Environment
 
-At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads `~/.archon/.env` as the sole trusted source. All keys you set in `~/.archon/.env` pass through to AI subprocesses — no allowlist filtering.
+At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads two archon-owned env files with `override: true`. Keys in archon-owned files pass through to AI subprocesses — no allowlist filtering.
 
 On startup, the CLI:
-1. Strips CWD `.env` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`)
-2. Loads `~/.archon/.env` (all keys trusted)
-3. Auto-enables global Claude auth if no explicit tokens are set
+1. Strips `<cwd>/.env*` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
+2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys from ~/.archon/.env` when N > 0.
+3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Emits `[archon] loaded N keys from <path> (repo scope, overrides user scope)` when N > 0.
+4. Auto-enables global Claude auth if no explicit tokens are set.
+
+`<cwd>/.env` is never loaded — it belongs to the target project. See [Configuration Reference: `.env` File Locations](/reference/configuration/#env-file-locations) for the full three-path model.
 
 ## Database
 

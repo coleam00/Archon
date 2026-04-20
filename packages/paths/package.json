@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./strip-cwd-env": "./src/strip-cwd-env.ts",
-    "./strip-cwd-env-boot": "./src/strip-cwd-env-boot.ts"
+    "./strip-cwd-env-boot": "./src/strip-cwd-env-boot.ts",
+    "./env-loader": "./src/env-loader.ts"
   },
   "scripts": {
     "test": "bun test src/",

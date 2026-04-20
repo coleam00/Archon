@@ -114,15 +114,15 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 ## Secrets Handling
 
 **Environment files:**
-- All secrets (API keys, tokens, webhook secrets) belong in `.env` files, never in source control.
-- The `.env.example` file in the repository contains placeholder values -- copy it and fill in real values.
-- Never commit `.env` files to git. The repository's `.gitignore` excludes them.
+- All secrets (API keys, tokens, webhook secrets) belong in archon-owned `.env` files (`~/.archon/.env` or `<cwd>/.archon/.env`), never in source control.
+- Never put archon secrets in `<cwd>/.env` — that file is stripped at boot (see below) and `archon setup` never writes to it. Put them in `~/.archon/.env` (home scope) or `<cwd>/.archon/.env` (project scope).
+- Archon's `.gitignore` excludes `.env` files. `<cwd>/.archon/.env` should also be gitignored (project-local secrets).
 
 **Subprocess env isolation:**
-- At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files, plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
-- `~/.archon/.env` is then loaded as the trusted source of Archon configuration. All keys the user sets there pass through to subprocesses — there is no allowlist filtering. The user controls this file and all keys are intentional.
+- At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files (`.env`, `.env.local`, `.env.development`, `.env.production`), plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
+- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
-- CWD `.env` keys are the **only** untrusted source. They belong to the target project, not to Archon.
+- `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 
 ### Target repo `.env` isolation
 
