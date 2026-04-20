@@ -159,29 +159,45 @@ describe('handleWorkflowArtifact', () => {
 });
 
 describe('handleWorkflowStatus — approval field', () => {
-  test('stores approval on new paused entry', () => {
+  test('stores approval with lastOutput on new paused entry', () => {
     useWorkflowStore.getState().handleWorkflowStatus(
       statusEvent({
         runId: 'run-ap1',
         status: 'paused',
-        approval: { nodeId: 'gate', message: 'Please review' },
+        approval: {
+          nodeId: 'gate',
+          message: 'Please review',
+          lastOutput: 'Latest workflow output',
+        },
       })
     );
     const wf = useWorkflowStore.getState().workflows.get('run-ap1');
-    expect(wf!.approval).toEqual({ nodeId: 'gate', message: 'Please review' });
+    expect(wf!.approval).toEqual({
+      nodeId: 'gate',
+      message: 'Please review',
+      lastOutput: 'Latest workflow output',
+    });
   });
 
-  test('sets approval when existing workflow transitions to paused', () => {
+  test('sets approval with lastOutput when existing workflow transitions to paused', () => {
     useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-ap2' }));
     useWorkflowStore.getState().handleWorkflowStatus(
       statusEvent({
         runId: 'run-ap2',
         status: 'paused',
-        approval: { nodeId: 'gate', message: 'Please review' },
+        approval: {
+          nodeId: 'gate',
+          message: 'Please review',
+          lastOutput: 'Latest workflow output',
+        },
       })
     );
     const wf = useWorkflowStore.getState().workflows.get('run-ap2');
-    expect(wf!.approval).toEqual({ nodeId: 'gate', message: 'Please review' });
+    expect(wf!.approval).toEqual({
+      nodeId: 'gate',
+      message: 'Please review',
+      lastOutput: 'Latest workflow output',
+    });
   });
 
   test('clears approval when workflow transitions out of paused', () => {
@@ -189,7 +205,11 @@ describe('handleWorkflowStatus — approval field', () => {
       statusEvent({
         runId: 'run-ap3',
         status: 'paused',
-        approval: { nodeId: 'gate', message: 'Please review' },
+        approval: {
+          nodeId: 'gate',
+          message: 'Please review',
+          lastOutput: 'Latest workflow output',
+        },
       })
     );
     useWorkflowStore
