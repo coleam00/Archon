@@ -261,6 +261,37 @@ export async function workflowRunCommand(
     );
   }
 
+  // Reconcile workflow-level worktree policy with invocation flags.
+  // The workflow YAML's `worktree.enabled` pins isolation regardless of caller —
+  // a mismatch between policy and flags is a user error we surface loudly
+  // rather than silently applying one side and ignoring the other.
+  const pinnedEnabled = workflow.worktree?.enabled;
+  if (pinnedEnabled === false) {
+    if (options.branchName !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --branch requires an isolated worktree.\n' +
+          "  Drop --branch or change the workflow's worktree.enabled."
+      );
+    }
+    if (options.fromBranch !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --from/--from-branch only applies when a worktree is created.\n' +
+          "  Drop --from or change the workflow's worktree.enabled."
+      );
+    }
+    // --no-worktree is redundant but not contradictory — silently accept.
+  } else if (pinnedEnabled === true) {
+    if (options.noWorktree) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: true (requires a worktree).\n` +
+          '  --no-worktree conflicts with the workflow policy.\n' +
+          "  Drop --no-worktree or change the workflow's worktree.enabled."
+      );
+    }
+  }
+
   console.log(`Running workflow: ${workflowName}`);
   console.log(`Working directory: ${cwd}`);
   console.log('');
@@ -403,8 +434,14 @@ export async function workflowRunCommand(
     console.log('');
   }
 
-  // Default to worktree isolation unless --no-worktree or --resume
-  const wantsIsolation = !options.resume && !options.noWorktree;
+  // Default to worktree isolation unless --no-worktree or --resume.
+  // Workflow YAML `worktree.enabled` pins the decision — mismatches with CLI
+  // flags are rejected above, so by this point the policy (if set) and flags
+  // agree. `--resume` reuses an existing worktree and takes precedence over
+  // the pinned policy to avoid disturbing a paused run.
+  const flagWantsIsolation = !options.resume && !options.noWorktree;
+  const wantsIsolation =
+    !options.resume && pinnedEnabled !== undefined ? pinnedEnabled : flagWantsIsolation;
 
   if (wantsIsolation && codebase) {
     // Auto-generate branch identifier from workflow name + timestamp when --branch not provided

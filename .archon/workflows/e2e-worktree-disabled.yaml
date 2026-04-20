@@ -1,0 +1,34 @@
+# E2E smoke test — workflow-level worktree.enabled: false
+# Verifies: when a workflow pins worktree.enabled: false, runs happen in the
+# live repo checkout (no worktree created, cwd == repo root). Zero AI calls.
+name: e2e-worktree-disabled
+description: "Pinned-isolation-off smoke. Asserts cwd is the repo root rather than a worktree path, regardless of how the workflow is invoked."
+
+worktree:
+  enabled: false
+
+nodes:
+  # Print cwd so the operator can eyeball it, and capture for the assertion node.
+  - id: print-cwd
+    bash: "pwd"
+
+  # Assertion: cwd must NOT contain '/.archon/workspaces/' — if it does, the
+  # policy was ignored and a worktree was created anyway. We also assert the
+  # cwd ends with a git repo (has a .git directory or file visible).
+  - id: assert-live-checkout
+    bash: |
+      cwd="$(pwd)"
+      echo "assert-live-checkout cwd=$cwd"
+      case "$cwd" in
+        */.archon/workspaces/*/worktrees/*)
+          echo "FAIL: workflow ran inside a worktree ($cwd) despite worktree.enabled: false"
+          exit 1
+          ;;
+      esac
+      if [ ! -e "$cwd/.git" ]; then
+        echo "FAIL: cwd $cwd is not a git checkout root (.git missing)"
+        exit 1
+      fi
+      echo "PASS: ran in live checkout (no worktree created by policy)"
+    depends_on: [print-cwd]
+    trigger_rule: all_success

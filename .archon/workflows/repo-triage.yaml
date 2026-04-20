@@ -8,6 +8,12 @@ description: >-
   runs; safe to re-run; idempotent.
 interactive: false
 
+# Read-only triage runs directly in the live checkout. Creating a worktree
+# every run would be wasted work (nothing is mutated) and would scatter stale
+# branches under ~/.archon/workspaces/<owner>/<repo>/worktrees/.
+worktree:
+  enabled: false
+
 nodes:
   # ---------------------------------------------------------------------------
   # Issue triage — runs concurrently with pr-link (no depends_on between them).

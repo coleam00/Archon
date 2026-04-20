@@ -120,6 +120,12 @@ model: sonnet
 modelReasoningEffort: medium     # Codex only
 webSearchMode: live              # Codex only
 interactive: true                # Web only: run in foreground instead of background
+worktree:                        # Optional: pin isolation behavior regardless of caller
+  enabled: false                 #   false = always run in the live checkout (CLI --no-worktree
+                                 #           and web both honor it). Use for read-only workflows
+                                 #           like triage/reporting. true = must use a worktree;
+                                 #           CLI --no-worktree hard-errors. Omit to let the
+                                 #           caller decide (current default = worktree).
 
 # Required for DAG-based
 nodes:
