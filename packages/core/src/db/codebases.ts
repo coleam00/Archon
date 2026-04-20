@@ -59,9 +59,12 @@ export async function getCodebaseCommands(
   if (typeof raw === 'string') {
     try {
       parsed = JSON.parse(raw);
-    } catch {
-      getLog().error({ codebaseId: id, raw }, 'db.codebase_commands_json_parse_failed');
-      return {};
+    } catch (err) {
+      getLog().error({ codebaseId: id, raw, err }, 'db.codebase_commands_json_parse_failed');
+      throw new Error(
+        `Corrupt commands JSON for codebase ${id}: unable to parse stored data. ` +
+          `Run UPDATE remote_agent_codebases SET commands = '{}' WHERE id = '${id}' to reset.`
+      );
     }
   } else {
     parsed = raw ?? {};

@@ -189,6 +189,22 @@ describe('codebases', () => {
       // Original frozen object should be unchanged
       expect(frozenCommands).not.toHaveProperty('new-command');
     });
+
+    test('throws on corrupt JSON string (SQLite TEXT column)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: '{not valid json' }]));
+
+      await expect(getCodebaseCommands('codebase-123')).rejects.toThrow(
+        /Corrupt commands JSON for codebase codebase-123/
+      );
+    });
+
+    test('parses valid JSON string from SQLite TEXT column', async () => {
+      const commands = { plan: { path: 'plan.md', description: 'Plan' } };
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: JSON.stringify(commands) }]));
+
+      const result = await getCodebaseCommands('codebase-123');
+      expect(result).toEqual(commands);
+    });
   });
 
   describe('registerCommand', () => {
