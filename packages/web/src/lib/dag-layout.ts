@@ -6,6 +6,15 @@ import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
 export const NODE_WIDTH = 180;
 export const NODE_HEIGHT = 80;
 
+export type ExecutionNodeType =
+  | 'command'
+  | 'prompt'
+  | 'bash'
+  | 'loop'
+  | 'script'
+  | 'approval'
+  | 'cancel';
+
 export function layoutWithDagre(
   nodes: DagFlowNode[],
   edges: Edge[]
@@ -66,6 +75,34 @@ export function resolveNodeDisplay(dn: DagNode): {
     nodeType: 'prompt',
     promptText: dn.prompt,
   };
+}
+
+export function resolveExecutionNodeDisplay(dn: DagNode): {
+  label: string;
+  nodeType: ExecutionNodeType;
+} {
+  if ('command' in dn && dn.command) {
+    return { label: dn.id, nodeType: 'command' };
+  }
+  if ('prompt' in dn && dn.prompt) {
+    return { label: dn.id, nodeType: 'prompt' };
+  }
+  if ('bash' in dn && dn.bash) {
+    return { label: dn.id, nodeType: 'bash' };
+  }
+  if ('loop' in dn && dn.loop) {
+    return { label: dn.id, nodeType: 'loop' };
+  }
+  if ('script' in dn && dn.script) {
+    return { label: dn.id, nodeType: 'script' };
+  }
+  if ('approval' in dn && dn.approval) {
+    return { label: dn.id, nodeType: 'approval' };
+  }
+  if ('cancel' in dn && dn.cancel) {
+    return { label: dn.id, nodeType: 'cancel' };
+  }
+  return { label: dn.id, nodeType: 'prompt' };
 }
 
 export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {

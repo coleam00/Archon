@@ -10,7 +10,11 @@ import {
 import type { Edge, NodeTypes } from '@xyflow/react';
 import type { DagNodeState, WorkflowStepStatus } from '@/lib/types';
 import type { DagNode } from '@/lib/api';
-import { dagNodesToReactFlow, resolveNodeDisplay } from '@/lib/dag-layout';
+import {
+  dagNodesToReactFlow,
+  resolveExecutionNodeDisplay,
+  type ExecutionNodeType,
+} from '@/lib/dag-layout';
 import { formatDurationMs } from '@/lib/format';
 import {
   executionDagNode,
@@ -78,12 +82,18 @@ export function WorkflowDagViewer({
       const live = statusMap.get(node.id);
       // baseNodes is derived from dagNodes, so this find should always succeed
       const dagNode = dagNodes.find(dn => dn.id === node.id);
-      const display = dagNode ? resolveNodeDisplay(dagNode) : node.data;
+      const display = dagNode
+        ? resolveExecutionNodeDisplay(dagNode)
+        : {
+            label: typeof node.data.label === 'string' ? node.data.label : node.id,
+            nodeType: (typeof node.data.nodeType === 'string'
+              ? node.data.nodeType
+              : 'prompt') as ExecutionNodeType,
+          };
       return {
         ...node,
         type: 'executionNode',
         data: {
-          ...node.data,
           ...display,
           status: live?.status,
           duration: live?.duration,
@@ -147,7 +157,7 @@ export function WorkflowDagViewer({
           <Controls showInteractive={false} className="!bg-surface !border-border" />
           <MiniMap
             nodeColor={(node): string => {
-              const data = node.data as ExecutionNodeData;
+              const data = node.data as unknown as ExecutionNodeData;
               return (data.status && STATUS_MINIMAP_COLORS[data.status]) ?? DEFAULT_MINIMAP_COLOR;
             }}
             className="!bg-surface !border-border"
