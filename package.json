@@ -49,7 +49,8 @@
     "test-exclude": "^7.0.1",
     "flatted": "^3.4.2",
     "axios": "^1.15.0",
-    "follow-redirects": "^1.16.0"
+    "follow-redirects": "^1.16.0",
+    "lodash": "^4.18.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.74"
