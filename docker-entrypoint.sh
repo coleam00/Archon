@@ -19,6 +19,17 @@ else
   RUNNER=""
 fi
 
+# Register all git repositories under /.archon as safe directories.
+# Git 2.35.2+ (CVE-2022-24765) rejects repos owned by a different UID.
+# On macOS bind mounts (VirtioFS), host UIDs don't map to appuser (1001),
+# so git prints "dubious ownership" and refuses all operations.
+# The Dockerfile RUN-layer registers fixed paths, but that gitconfig lives
+# in the image layer — bind mounts don't inherit it on restart, and
+# worktrees are nested at arbitrary depths unknown at build time.
+find /.archon -name ".git" 2>/dev/null | while read -r git_dir; do
+  $RUNNER git config --global --add safe.directory "$(dirname "$git_dir")"
+done
+
 # Configure git to use GH_TOKEN for HTTPS clones via credential helper
 # Uses a helper function so the token stays in the environment, not in ~/.gitconfig
 if [ -n "$GH_TOKEN" ]; then
