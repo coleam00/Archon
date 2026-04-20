@@ -18,9 +18,13 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
-mock.module('@archon/paths', () => ({ createLogger: mock(() => mockLogger) }));
+let mockHomeScriptsPath = '/home/scripts';
+mock.module('@archon/paths', () => ({
+  createLogger: mock(() => mockLogger),
+  getHomeScriptsPath: mock(() => mockHomeScriptsPath),
+}));
 
-import { discoverScripts, getDefaultScripts } from './script-discovery';
+import { discoverScripts, discoverScriptsForCwd, getDefaultScripts } from './script-discovery';
 
 describe('discoverScripts', () => {
   beforeEach(() => {
@@ -156,6 +160,96 @@ describe('discoverScripts', () => {
 
     const script = result.get('prices');
     expect(script!.path).toBe('/my/scripts/prices.ts');
+  });
+});
+
+describe('scanScriptDir depth cap', () => {
+  // Scripts are discovered 1 level deep (matches the workflows/commands
+  // convention). `defaults/` style subfolders are fine; nested subfolders are not.
+  beforeEach(() => {
+    mockReaddir.mockReset();
+    mockStat.mockReset();
+  });
+
+  test('allows files in a 1-level subfolder', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      if (path === '/scripts') return ['triage', 'top.ts'];
+      if (path === '/scripts/triage') return ['helper.py'];
+      return [];
+    });
+    mockStat.mockImplementation(async (path: string) => ({
+      isDirectory: () => path === '/scripts/triage',
+    }));
+
+    const result = await discoverScripts('/scripts');
+    expect(result.has('top')).toBe(true);
+    expect(result.has('helper')).toBe(true);
+  });
+
+  test('does NOT descend into nested subfolders (cap at depth 1)', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      if (path === '/scripts') return ['level-one'];
+      if (path === '/scripts/level-one') return ['level-two'];
+      if (path === '/scripts/level-one/level-two') return ['too-deep.ts'];
+      return [];
+    });
+    mockStat.mockImplementation(async (path: string) => ({
+      isDirectory: () => path === '/scripts/level-one' || path === '/scripts/level-one/level-two',
+    }));
+
+    const result = await discoverScripts('/scripts');
+    expect(result.has('too-deep')).toBe(false);
+    expect(result.size).toBe(0);
+  });
+});
+
+describe('discoverScriptsForCwd — merge repo + home with repo winning', () => {
+  beforeEach(() => {
+    mockReaddir.mockReset();
+    mockStat.mockReset();
+    mockHomeScriptsPath = '/home/scripts';
+  });
+
+  test('merges scripts from ~/.archon/scripts and <cwd>/.archon/scripts', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      if (path === '/home/scripts') return ['home-only.ts'];
+      if (path === '/repo/.archon/scripts') return ['repo-only.py'];
+      return [];
+    });
+    mockStat.mockResolvedValue({ isDirectory: () => false });
+
+    const result = await discoverScriptsForCwd('/repo');
+    expect(result.has('home-only')).toBe(true);
+    expect(result.has('repo-only')).toBe(true);
+    expect(result.size).toBe(2);
+  });
+
+  test('repo-scoped script overrides same-named home script', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      if (path === '/home/scripts') return ['shared.ts'];
+      if (path === '/repo/.archon/scripts') return ['shared.ts'];
+      return [];
+    });
+    mockStat.mockResolvedValue({ isDirectory: () => false });
+
+    const result = await discoverScriptsForCwd('/repo');
+    expect(result.size).toBe(1);
+    expect(result.get('shared')!.path).toBe('/repo/.archon/scripts/shared.ts');
+  });
+
+  test('tolerates missing home dir (new user, no personal scripts yet)', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      if (path === '/home/scripts') {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+      if (path === '/repo/.archon/scripts') return ['only-repo.ts'];
+      return [];
+    });
+    mockStat.mockResolvedValue({ isDirectory: () => false });
+
+    const result = await discoverScriptsForCwd('/repo');
+    expect(result.size).toBe(1);
+    expect(result.has('only-repo')).toBe(true);
   });
 });
 

@@ -95,7 +95,7 @@ archon workflow list --cwd /path/to/repo
 archon workflow list --cwd /path/to/repo --json
 ```
 
-Discovers workflows from `.archon/workflows/` (recursive), `~/.archon/.archon/workflows/` (global), and bundled defaults. See [Global Workflows](/guides/global-workflows/).
+Discovers workflows from `.archon/workflows/` (recursive), `~/.archon/workflows/` (global, home-scoped), and bundled defaults. See [Global Workflows](/guides/global-workflows/).
 
 **Flags:**
 

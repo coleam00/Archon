@@ -2348,7 +2348,7 @@ export interface components {
       nodes: components['schemas']['DagNode'][];
     };
     /** @enum {string} */
-    WorkflowSource: 'project' | 'bundled';
+    WorkflowSource: 'project' | 'bundled' | 'global';
     WorkflowListEntry: {
       workflow: components['schemas']['WorkflowDefinition'];
       source: components['schemas']['WorkflowSource'];

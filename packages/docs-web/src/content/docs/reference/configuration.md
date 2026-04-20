@@ -22,9 +22,14 @@ Archon supports a layered configuration system with sensible defaults, optional 
 │   ├── worktrees/          # Git worktrees for this project
 │   ├── artifacts/          # Workflow artifacts
 │   └── logs/               # Workflow execution logs
+├── workflows/              # Home-scoped workflows (source: 'global')
+├── commands/               # Home-scoped commands (source: 'global')
+├── scripts/                # Home-scoped scripts (runtime: bun | uv)
 ├── archon.db               # SQLite database (when DATABASE_URL not set)
 └── config.yaml             # Global configuration (optional)
 ```
+
+Home-scoped `workflows/`, `commands/`, and `scripts/` apply to every project on the machine. Repo-local files at `<repoRoot>/.archon/{workflows,commands,scripts}/` override them by filename (or script name). Each directory supports one level of subfolders for grouping; deeper nesting is ignored. See [Global Workflows](/guides/global-workflows/) for details and dotfiles-sync examples.
 
 ### Repository-Level (.archon/)
 

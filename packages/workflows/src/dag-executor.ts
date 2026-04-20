@@ -5,9 +5,8 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { resolve } from 'path';
 import { execFileAsync } from '@archon/git';
-import { discoverScripts } from './script-discovery';
+import { discoverScriptsForCwd } from './script-discovery';
 import type {
   IWorkflowPlatform,
   WorkflowMessageMetadata,
@@ -1317,13 +1316,13 @@ async function executeScriptNode(
         args = ['run', ...withFlags, 'python', '-c', finalScript];
       }
     } else {
-      // Named script — look up in .archon/scripts/ directory
-      const scriptsDir = resolve(cwd, '.archon', 'scripts');
-      const scripts = await discoverScripts(scriptsDir);
+      // Named script — look up across repo and home scopes.
+      // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
+      const scripts = await discoverScriptsForCwd(cwd);
       const scriptDef = scripts.get(finalScript);
 
       if (!scriptDef) {
-        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/`;
+        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`;
         getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
         await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
         await logNodeError(logDir, workflowRun.id, node.id, errorMsg);

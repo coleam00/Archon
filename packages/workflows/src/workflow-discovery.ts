@@ -6,6 +6,15 @@
  * full discoverWorkflows entry point.
  *
  * Imports parseWorkflow from loader.ts (parsing concern stays there).
+ *
+ * Scopes (precedence lowest → highest):
+ *   1. `bundled` — embedded in the Archon binary (or read from the app's
+ *      defaults folder in source mode).
+ *   2. `global`  — home-scoped at `~/.archon/workflows/`. Applies to every
+ *      repo; discovered automatically (no caller option needed).
+ *   3. `project` — repo-local at `<cwd>/.archon/workflows/`.
+ *
+ * Same-named files at a higher scope override those at lower scopes.
  */
 import { readFile, readdir, access, stat } from 'fs/promises';
 import { join } from 'path';
@@ -27,16 +36,63 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * One-time deprecation warning for the pre-refactor `~/.archon/.archon/workflows/`
+ * location. Scoped to the process so the warning fires exactly once regardless
+ * of how many times discovery runs.
+ *
+ * The legacy path is ONLY probed for detection — workflows placed there are not
+ * read. Users migrate manually via the `mv` command printed in the warning.
+ * Exported so tests can reset it between cases.
+ */
+let hasWarnedLegacyHomePath = false;
+export function resetLegacyHomeWarningForTests(): void {
+  hasWarnedLegacyHomePath = false;
+}
+
+async function maybeWarnLegacyHomePath(): Promise<void> {
+  if (hasWarnedLegacyHomePath) return;
+  const legacyPath = archonPaths.getLegacyHomeWorkflowsPath();
+  const newPath = archonPaths.getHomeWorkflowsPath();
+  try {
+    await access(legacyPath);
+  } catch (error) {
+    // ENOENT is the happy path — the legacy location isn't in use.
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      hasWarnedLegacyHomePath = true; // no work to do on subsequent calls
+      return;
+    }
+    getLog().debug({ err, legacyPath }, 'workflow.legacy_home_path_probe_error');
+    return;
+  }
+  // Legacy directory exists — surface an actionable migration hint exactly once.
+  const moveCommand = `mv "${legacyPath}" "${newPath}" && rmdir "${join(archonPaths.getArchonHome(), '.archon')}"`;
+  getLog().warn({ legacyPath, newPath, moveCommand }, 'workflow.legacy_home_path_detected');
+  hasWarnedLegacyHomePath = true;
+}
+
 interface DirLoadResult {
   workflows: Map<string, WorkflowDefinition>;
   errors: WorkflowLoadError[];
 }
 
 /**
- * Load workflows from a directory (recursively includes subdirectories).
+ * Maximum subfolder depth we descend into when discovering workflows/commands/scripts.
+ *
+ * `0` = only files at the root. `1` = allow one level of grouping (e.g.
+ * `.archon/workflows/defaults/foo.yaml`). We stop at 1 deliberately — deeper
+ * nesting has never been part of the documented convention and adds no
+ * organizational value, just routing ambiguity.
+ */
+const MAX_DISCOVERY_DEPTH = 1;
+
+/**
+ * Load workflows from a directory, descending at most `MAX_DISCOVERY_DEPTH`
+ * folders deep. Files deeper than the cap are silently skipped.
  * Failures are per-file: one broken file does not abort loading the rest.
  */
-async function loadWorkflowsFromDir(dirPath: string): Promise<DirLoadResult> {
+async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoadResult> {
   const workflows = new Map<string, WorkflowDefinition>();
   const errors: WorkflowLoadError[] = [];
 
@@ -50,8 +106,11 @@ async function loadWorkflowsFromDir(dirPath: string): Promise<DirLoadResult> {
         const entryStat = await stat(entryPath);
 
         if (entryStat.isDirectory()) {
-          // Recursively load from subdirectories
-          const subResult = await loadWorkflowsFromDir(entryPath);
+          // Only descend if we're still within the depth cap. Past the cap,
+          // subdirectories are ignored (same convention as the paths-package
+          // `findMarkdownFilesRecursive` depth cap).
+          if (depth >= MAX_DISCOVERY_DEPTH) continue;
+          const subResult = await loadWorkflowsFromDir(entryPath, depth + 1);
           for (const [filename, workflow] of subResult.workflows) {
             workflows.set(filename, workflow);
           }
@@ -125,17 +184,24 @@ function loadBundledWorkflows(): DirLoadResult {
 }
 
 /**
- * Discover and load workflows from codebase
- * Loads from both app's bundled defaults and repo's workflow folder.
- * Repo workflows override app defaults by exact filename match.
+ * Discover and load workflows from codebase.
  *
- * When running as a compiled binary, defaults are loaded from the bundled
- * content embedded at compile time. When running with Bun, defaults are
- * loaded from the filesystem.
+ * Loads three scopes in order (later overrides earlier by filename):
+ *   1. Bundled defaults (unless `options.loadDefaults === false`).
+ *   2. Home-scoped `~/.archon/workflows/` — classified as `source: 'global'`.
+ *      No caller option: every caller gets home-scoped discovery for free.
+ *   3. Repo-scoped `<cwd>/.archon/workflows/` — classified as `source: 'project'`.
+ *
+ * When running as a compiled binary, bundled defaults are loaded from embedded
+ * content. In source/dev mode they're loaded from the filesystem.
+ *
+ * Migration: if the retired `~/.archon/.archon/workflows/` path exists, the
+ * first call per process logs a WARN with the exact `mv` command. The legacy
+ * location is not read — users must migrate manually.
  */
 export async function discoverWorkflows(
   cwd: string,
-  options?: { globalSearchPath?: string; loadDefaults?: boolean }
+  options?: { loadDefaults?: boolean }
 ): Promise<WorkflowLoadResult> {
   // Map of filename -> workflow+source for deduplication
   const workflowsByFile = new Map<string, WorkflowWithSource>();
@@ -182,36 +248,32 @@ export async function discoverWorkflows(
     }
   }
 
-  // 2. Load from global search path (e.g., ~/.archon/.archon/workflows/ for orchestrator)
-  if (options?.globalSearchPath) {
-    const [globalWorkflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
-    const globalWorkflowPath = join(options.globalSearchPath, globalWorkflowFolder);
-    getLog().debug({ globalWorkflowPath }, 'searching_global_workflows');
-    try {
-      await access(globalWorkflowPath);
-      const globalResult = await loadWorkflowsFromDir(globalWorkflowPath);
-      for (const [filename, workflow] of globalResult.workflows) {
-        if (workflowsByFile.has(filename)) {
-          getLog().debug({ filename }, 'global_workflow_overrides_default');
-        }
-        // NOTE: Global workflows (~/.archon/.archon/workflows/) are classified as 'project'
-        // rather than a separate 'global' source. This is an intentional scope decision for
-        // the initial source badge feature — a 'global' source variant can be added later.
-        workflowsByFile.set(filename, { workflow, source: 'project' });
+  // 2. Load home-scoped workflows from ~/.archon/workflows/. No caller option —
+  // discovery is responsible for surfacing home-scoped content everywhere.
+  await maybeWarnLegacyHomePath();
+  const homeWorkflowPath = archonPaths.getHomeWorkflowsPath();
+  getLog().debug({ homeWorkflowPath }, 'searching_home_workflows');
+  try {
+    await access(homeWorkflowPath);
+    const homeResult = await loadWorkflowsFromDir(homeWorkflowPath);
+    for (const [filename, workflow] of homeResult.workflows) {
+      if (workflowsByFile.has(filename)) {
+        getLog().debug({ filename }, 'home_workflow_overrides_bundled');
       }
-      allErrors.push(...globalResult.errors);
-      getLog().info({ count: globalResult.workflows.size }, 'global_workflows_loaded');
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') {
-        getLog().warn({ err, globalWorkflowPath }, 'global_workflows_access_error');
-      } else {
-        getLog().debug({ globalWorkflowPath }, 'global_workflows_not_found');
-      }
+      workflowsByFile.set(filename, { workflow, source: 'global' });
+    }
+    allErrors.push(...homeResult.errors);
+    getLog().info({ count: homeResult.workflows.size }, 'home_workflows_loaded');
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code !== 'ENOENT') {
+      getLog().warn({ err, homeWorkflowPath }, 'home_workflows_access_error');
+    } else {
+      getLog().debug({ homeWorkflowPath }, 'home_workflows_not_found');
     }
   }
 
-  // 3. Load from repo's workflow folder (overrides app defaults by exact filename)
+  // 3. Load from repo's workflow folder (overrides app defaults AND home scope by exact filename)
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const workflowPath = join(cwd, workflowFolder);
 
@@ -221,7 +283,7 @@ export async function discoverWorkflows(
     await access(workflowPath);
     const repoResult = await loadWorkflowsFromDir(workflowPath);
 
-    // Repo workflows override app defaults by exact filename match.
+    // Repo workflows override bundled AND home scope by exact filename match.
     // Preserve 'bundled' source for workflows loaded from the defaults/ subdirectory
     // that were already registered as bundled in step 1.
     for (const [filename, workflow] of repoResult.workflows) {
@@ -233,7 +295,10 @@ export async function discoverWorkflows(
         workflowsByFile.set(filename, { workflow, source: 'bundled' });
       } else {
         if (existing) {
-          getLog().debug({ filename }, 'repo_workflow_overrides_default');
+          getLog().debug(
+            { filename, overriddenSource: existing.source },
+            'repo_workflow_overrides_lower_scope'
+          );
         }
         workflowsByFile.set(filename, { workflow, source: 'project' });
       }
@@ -290,8 +355,7 @@ export async function discoverWorkflows(
  */
 export async function discoverWorkflowsWithConfig(
   cwd: string,
-  loadConfig: (cwd: string) => Promise<{ defaults?: { loadDefaultWorkflows?: boolean } }>,
-  options?: { globalSearchPath?: string }
+  loadConfig: (cwd: string) => Promise<{ defaults?: { loadDefaultWorkflows?: boolean } }>
 ): Promise<WorkflowLoadResult> {
   let loadDefaults = true;
   try {
@@ -303,5 +367,5 @@ export async function discoverWorkflowsWithConfig(
       'config_load_failed_using_default_workflow_discovery'
     );
   }
-  return discoverWorkflows(cwd, { ...options, loadDefaults });
+  return discoverWorkflows(cwd, { loadDefaults });
 }

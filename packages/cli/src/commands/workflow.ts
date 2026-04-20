@@ -10,7 +10,7 @@ import {
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
-import { createLogger, getArchonHome } from '@archon/paths';
+import { createLogger } from '@archon/paths';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -119,9 +119,9 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
  */
 async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   try {
-    return await discoverWorkflowsWithConfig(cwd, loadConfig, {
-      globalSearchPath: getArchonHome(),
-    });
+    // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically —
+    // no option needed since the discovery helper reads them unconditionally.
+    return await discoverWorkflowsWithConfig(cwd, loadConfig);
   } catch (error) {
     const err = error as Error;
     throw new Error(

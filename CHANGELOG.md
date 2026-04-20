@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Home-scoped commands at `~/.archon/commands/`** — personal command helpers now reusable across every repo. Resolution precedence: `<repoRoot>/.archon/commands/` > `~/.archon/commands/` > bundled defaults. Surfaced in the Web UI workflow-builder node palette under a dedicated "Global (~/.archon/commands/)" section.
+- **Home-scoped scripts at `~/.archon/scripts/`** — personal Bun/uv scripts now reusable across every repo. Script nodes (`script: my-helper`) resolve via `<repoRoot>/.archon/scripts/` first, then `~/.archon/scripts/`. Repo-scoped scripts with the same name override home-scoped ones silently; within a single scope, duplicate basenames across extensions still throw (unchanged from prior behavior).
+- **1-level subfolder support for workflows, commands, and scripts.** Files can live one folder deep under their respective `.archon/` root (e.g. `.archon/workflows/triage/foo.yaml`) and resolve by name or filename regardless of subfolder. Matches the existing `defaults/` convention. Deeper nesting is ignored silently — see docs for the full convention.
+- **`'global'` variant on `WorkflowSource`** — workflows at `~/.archon/workflows/` and commands at `~/.archon/commands/` now render with a distinct source label (no longer coerced to `'project'`). Web UI badges updated.
+- **`getHomeWorkflowsPath()`, `getHomeCommandsPath()`, `getHomeScriptsPath()`, `getLegacyHomeWorkflowsPath()`** helpers in `@archon/paths`, exported for both internal discovery and external callers that want to target the home scope directly.
+- **`discoverScriptsForCwd(cwd)`** in `@archon/workflows/script-discovery` — merges home-scoped + repo-scoped scripts with repo winning on name collisions. Used by the DAG executor and validator; callers no longer need to know about the two-scope shape.
 - **Three-path env model with operator-visible log lines.** The CLI and server now load env vars from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, overrides user) at boot, both with `override: true`. A new `[archon] loaded N keys from <path>` line is emitted per source (only when N > 0). `[archon] stripped N keys from <cwd> (...)` now also prints when stripCwdEnv removes target-repo env keys, replacing the misleading `[dotenv@17.3.1] injecting env (0) from .env` preamble that always reported 0. The `quiet: true` flag suppresses dotenv's own output. (#1302)
 - **`archon setup --scope home|project` and `--force` flags.** Default is `--scope home` (writes `~/.archon/.env`). `--scope project` targets `<cwd>/.archon/.env` instead. `--force` overwrites the target wholesale rather than merging; a timestamped backup is still written. (#1303)
 - **Merge-only setup writes with timestamped backups.** `archon setup` now reads the existing target file, preserves non-empty values, carries user-added custom keys forward, and writes a `<target>.archon-backup-<ISO-ts>` before every rewrite. Fixes silent PostgreSQL→SQLite downgrade and silent token loss on re-run. (#1303)
@@ -28,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Home-scoped workflow location moved to `~/.archon/workflows/`** (was `~/.archon/.archon/workflows/` — a double-nested path left over from reusing the repo-relative discovery helper for home scope). The new path sits next to `~/.archon/workspaces/`, `archon.db`, and `config.yaml`, matching the rest of the `~/.archon/` convention. If Archon detects workflows at the old location, it emits a one-time WARN per process with the exact migration command: `mv ~/.archon/.archon/workflows ~/.archon/workflows && rmdir ~/.archon/.archon`. The old path is no longer read — users must migrate manually (clean cut, no deprecation window). Rollback caveat: if you downgrade after migrating, move the directory back to the old location.
+- **Workflow discovery no longer takes a `globalSearchPath` option.** `discoverWorkflows()` and `discoverWorkflowsWithConfig()` now consult `~/.archon/workflows/` automatically — every caller gets home-scoped discovery for free. Previously-missed call sites in the chat command handler (`command-handler.ts`), the Web UI workflow picker (`api.ts GET /api/workflows`), and the orchestrator's single-codebase resolve path now see home-scoped workflows without needing a maintainer patch at every new call site. Closes #1136; supersedes that PR (credits @jonasvanderhaegen for surfacing the bug class).
 - **Dashboard nav tab** now shows a numeric count of running workflows instead of a binary pulse dot. Reads from the existing `/api/dashboard/runs` `counts.running` field; same 10s polling interval.
 - **Workflow run destructive actions** (Abandon, Cancel, Delete, Reject) now use a proper confirmation dialog matching the codebase-delete UX, replacing the browser's native `window.confirm()` popups. Each dialog includes context-appropriate copy describing what the action does to the run record.
 
@@ -41,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **`globalSearchPath` option** from `discoverWorkflows()` and `discoverWorkflowsWithConfig()`. Callers that previously passed `{ globalSearchPath: getArchonHome() }` should drop the argument; home-scoped discovery is now automatic.
 - **`@anthropic-ai/claude-agent-sdk/embed` import** — the Bun `with { type: 'file' }` asset-embedding path and its `$bunfs` extraction logic. The embed was a bundler-dependent optimization that failed silently when Bun couldn't produce a usable virtual FS path (#1210, #1087); it is replaced by explicit binary-path resolution.
 
 ### Fixed
