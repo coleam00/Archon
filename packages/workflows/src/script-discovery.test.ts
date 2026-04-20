@@ -26,6 +26,12 @@ mock.module('@archon/paths', () => ({
 
 import { discoverScripts, discoverScriptsForCwd, getDefaultScripts } from './script-discovery';
 
+// On Windows, path.join produces backslashes (e.g. `\scripts\triage`). The
+// mocks below key on forward-slash paths for readability, so normalize before
+// comparing. Production paths are stored via normalizeSep(), so assertions on
+// stored paths remain forward-slash on every OS.
+const norm = (p: string): string => p.replaceAll('\\', '/');
+
 describe('discoverScripts', () => {
   beforeEach(() => {
     mockReaddir.mockClear();
@@ -173,12 +179,13 @@ describe('scanScriptDir depth cap', () => {
 
   test('allows files in a 1-level subfolder', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
-      if (path === '/scripts') return ['triage', 'top.ts'];
-      if (path === '/scripts/triage') return ['helper.py'];
+      const p = norm(path);
+      if (p === '/scripts') return ['triage', 'top.ts'];
+      if (p === '/scripts/triage') return ['helper.py'];
       return [];
     });
     mockStat.mockImplementation(async (path: string) => ({
-      isDirectory: () => path === '/scripts/triage',
+      isDirectory: () => norm(path) === '/scripts/triage',
     }));
 
     const result = await discoverScripts('/scripts');
@@ -188,14 +195,18 @@ describe('scanScriptDir depth cap', () => {
 
   test('does NOT descend into nested subfolders (cap at depth 1)', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
-      if (path === '/scripts') return ['level-one'];
-      if (path === '/scripts/level-one') return ['level-two'];
-      if (path === '/scripts/level-one/level-two') return ['too-deep.ts'];
+      const p = norm(path);
+      if (p === '/scripts') return ['level-one'];
+      if (p === '/scripts/level-one') return ['level-two'];
+      if (p === '/scripts/level-one/level-two') return ['too-deep.ts'];
       return [];
     });
-    mockStat.mockImplementation(async (path: string) => ({
-      isDirectory: () => path === '/scripts/level-one' || path === '/scripts/level-one/level-two',
-    }));
+    mockStat.mockImplementation(async (path: string) => {
+      const p = norm(path);
+      return {
+        isDirectory: () => p === '/scripts/level-one' || p === '/scripts/level-one/level-two',
+      };
+    });
 
     const result = await discoverScripts('/scripts');
     expect(result.has('too-deep')).toBe(false);
@@ -212,8 +223,9 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
 
   test('merges scripts from ~/.archon/scripts and <cwd>/.archon/scripts', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
-      if (path === '/home/scripts') return ['home-only.ts'];
-      if (path === '/repo/.archon/scripts') return ['repo-only.py'];
+      const p = norm(path);
+      if (p === '/home/scripts') return ['home-only.ts'];
+      if (p === '/repo/.archon/scripts') return ['repo-only.py'];
       return [];
     });
     mockStat.mockResolvedValue({ isDirectory: () => false });
@@ -226,23 +238,27 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
 
   test('repo-scoped script overrides same-named home script', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
-      if (path === '/home/scripts') return ['shared.ts'];
-      if (path === '/repo/.archon/scripts') return ['shared.ts'];
+      const p = norm(path);
+      if (p === '/home/scripts') return ['shared.ts'];
+      if (p === '/repo/.archon/scripts') return ['shared.ts'];
       return [];
     });
     mockStat.mockResolvedValue({ isDirectory: () => false });
 
     const result = await discoverScriptsForCwd('/repo');
     expect(result.size).toBe(1);
+    // Stored paths are normalized to forward slashes via normalizeSep() in
+    // script-discovery.ts, so this assertion is OS-independent.
     expect(result.get('shared')!.path).toBe('/repo/.archon/scripts/shared.ts');
   });
 
   test('tolerates missing home dir (new user, no personal scripts yet)', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
-      if (path === '/home/scripts') {
+      const p = norm(path);
+      if (p === '/home/scripts') {
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       }
-      if (path === '/repo/.archon/scripts') return ['only-repo.ts'];
+      if (p === '/repo/.archon/scripts') return ['only-repo.ts'];
       return [];
     });
     mockStat.mockResolvedValue({ isDirectory: () => false });
