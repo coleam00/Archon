@@ -49,6 +49,13 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * Ceiling for a single git subprocess in worktree operations (create/fetch/checkout/remove/branch-delete).
+ * Generous enough for repos with heavy post-checkout hooks (lint/install) while still catching genuine
+ * hangs (e.g. credential prompts in non-TTY, stalled network fetches). See #1119, #1029.
+ */
+const GIT_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
+
 export class WorktreeProvider implements IIsolationProvider {
   readonly providerType = 'worktree';
 
@@ -150,7 +157,7 @@ export class WorktreeProvider implements IIsolationProvider {
       gitArgs.push(worktreePath);
 
       try {
-        await execFileAsync('git', gitArgs, { timeout: 30000 });
+        await execFileAsync('git', gitArgs, { timeout: GIT_OPERATION_TIMEOUT_MS });
         result.worktreeRemoved = true;
       } catch (error) {
         if (!this.isWorktreeMissingError(error)) {
@@ -266,7 +273,9 @@ export class WorktreeProvider implements IIsolationProvider {
     result: DestroyResult
   ): Promise<boolean> {
     try {
-      await execFileAsync('git', ['-C', repoPath, 'branch', '-D', branchName], { timeout: 30000 });
+      await execFileAsync('git', ['-C', repoPath, 'branch', '-D', branchName], {
+        timeout: GIT_OPERATION_TIMEOUT_MS,
+      });
       getLog().debug({ repoPath, branchName }, 'branch_deleted');
       return true;
     } catch (error) {
@@ -301,7 +310,7 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<boolean> {
     try {
       await execFileAsync('git', ['-C', repoPath, 'push', 'origin', '--delete', branchName], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
       getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
       return true;
@@ -850,7 +859,7 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<void> {
     // Fetch the PR's actual branch
     await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', prBranch], {
-      timeout: 30000,
+      timeout: GIT_OPERATION_TIMEOUT_MS,
     });
 
     // Try to create worktree with the branch
@@ -859,14 +868,14 @@ export class WorktreeProvider implements IIsolationProvider {
       await execFileAsync(
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `origin/${prBranch}`],
-        { timeout: 30000 }
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
       // Branch already exists locally - use it directly
       if (err.stderr?.includes('already exists')) {
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch], {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         });
       } else {
         throw error;
@@ -878,7 +887,7 @@ export class WorktreeProvider implements IIsolationProvider {
       await execFileAsync(
         'git',
         ['-C', worktreePath, 'branch', '--set-upstream-to', `origin/${prBranch}`],
-        { timeout: 30000 }
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (trackingError) {
       getLog().warn({ err: trackingError, worktreePath, prBranch }, 'upstream_tracking_failed');
@@ -903,11 +912,11 @@ export class WorktreeProvider implements IIsolationProvider {
     if (prSha) {
       // SHA provided: create at specific commit for reproducible reviews
       await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head`], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prSha], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
       // Create a local tracking branch so it's not detached HEAD
@@ -915,7 +924,7 @@ export class WorktreeProvider implements IIsolationProvider {
         repoPath,
         () =>
           execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
-            timeout: 30000,
+            timeout: GIT_OPERATION_TIMEOUT_MS,
           }),
         reviewBranch
       );
@@ -927,13 +936,13 @@ export class WorktreeProvider implements IIsolationProvider {
           execFileAsync(
             'git',
             ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head:${reviewBranch}`],
-            { timeout: 30000 }
+            { timeout: GIT_OPERATION_TIMEOUT_MS }
           ),
         reviewBranch
       );
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, reviewBranch], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
     }
   }
@@ -954,7 +963,7 @@ export class WorktreeProvider implements IIsolationProvider {
       if (err.stderr?.includes('already exists')) {
         getLog().debug({ repoPath, branchName }, 'stale_branch_retry');
         await execFileAsync('git', ['-C', repoPath, 'branch', '-D', branchName], {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         });
         await createCommand();
       } else {
@@ -988,7 +997,7 @@ export class WorktreeProvider implements IIsolationProvider {
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', branchName, startPoint],
         {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         }
       );
     } catch (error) {
@@ -1016,7 +1025,7 @@ export class WorktreeProvider implements IIsolationProvider {
           timeout: 10000,
         });
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         });
       } else {
         throw error;
