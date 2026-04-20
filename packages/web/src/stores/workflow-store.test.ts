@@ -159,45 +159,47 @@ describe('handleWorkflowArtifact', () => {
 });
 
 describe('handleWorkflowStatus — approval field', () => {
-  test('stores approval with lastOutput on new paused entry', () => {
+  test('stores approval with additive paused snapshot fields on new paused entry', () => {
+    const approval = {
+      nodeId: 'gate',
+      message: 'Please review',
+      lastOutput: 'Latest workflow output',
+      lastOutputTruncated: false,
+      finalAssistantOutput: 'Final assistant summary',
+      finalAssistantOutputTruncated: true,
+    };
+
     useWorkflowStore.getState().handleWorkflowStatus(
       statusEvent({
         runId: 'run-ap1',
         status: 'paused',
-        approval: {
-          nodeId: 'gate',
-          message: 'Please review',
-          lastOutput: 'Latest workflow output',
-        },
+        approval,
       })
     );
     const wf = useWorkflowStore.getState().workflows.get('run-ap1');
-    expect(wf!.approval).toEqual({
+    expect(wf!.approval).toEqual(approval);
+  });
+
+  test('preserves additive approval fields when existing workflow transitions to paused', () => {
+    const approval = {
       nodeId: 'gate',
       message: 'Please review',
       lastOutput: 'Latest workflow output',
-    });
-  });
+      lastOutputTruncated: true,
+      finalAssistantOutput: 'Final assistant summary',
+      finalAssistantOutputTruncated: false,
+    };
 
-  test('sets approval with lastOutput when existing workflow transitions to paused', () => {
     useWorkflowStore.getState().handleWorkflowStatus(statusEvent({ runId: 'run-ap2' }));
     useWorkflowStore.getState().handleWorkflowStatus(
       statusEvent({
         runId: 'run-ap2',
         status: 'paused',
-        approval: {
-          nodeId: 'gate',
-          message: 'Please review',
-          lastOutput: 'Latest workflow output',
-        },
+        approval,
       })
     );
     const wf = useWorkflowStore.getState().workflows.get('run-ap2');
-    expect(wf!.approval).toEqual({
-      nodeId: 'gate',
-      message: 'Please review',
-      lastOutput: 'Latest workflow output',
-    });
+    expect(wf!.approval).toEqual(approval);
   });
 
   test('clears approval when workflow transitions out of paused', () => {
@@ -209,6 +211,9 @@ describe('handleWorkflowStatus — approval field', () => {
           nodeId: 'gate',
           message: 'Please review',
           lastOutput: 'Latest workflow output',
+          lastOutputTruncated: false,
+          finalAssistantOutput: 'Final assistant summary',
+          finalAssistantOutputTruncated: false,
         },
       })
     );
