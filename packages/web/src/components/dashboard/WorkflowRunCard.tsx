@@ -137,6 +137,9 @@ function NodeCountsSummary({ counts }: { counts: NodeCounts }): React.ReactEleme
 interface PausedApprovalDetails {
   message: string;
   lastOutput?: string;
+  lastOutputTruncated?: boolean;
+  finalAssistantOutput?: string;
+  finalAssistantOutputTruncated?: boolean;
 }
 
 function parsePausedApproval(value: unknown): PausedApprovalDetails | null {
@@ -152,6 +155,47 @@ function parsePausedApproval(value: unknown): PausedApprovalDetails | null {
   return {
     message: candidate.message,
     lastOutput: typeof candidate.lastOutput === 'string' ? candidate.lastOutput : undefined,
+    lastOutputTruncated:
+      typeof candidate.lastOutput === 'string' && typeof candidate.lastOutputTruncated === 'boolean'
+        ? candidate.lastOutputTruncated
+        : undefined,
+    finalAssistantOutput:
+      typeof candidate.finalAssistantOutput === 'string'
+        ? candidate.finalAssistantOutput
+        : undefined,
+    finalAssistantOutputTruncated:
+      typeof candidate.finalAssistantOutput === 'string' &&
+      typeof candidate.finalAssistantOutputTruncated === 'boolean'
+        ? candidate.finalAssistantOutputTruncated
+        : undefined,
+  };
+}
+
+function getPausedOutputPreview(
+  approval: PausedApprovalDetails | null
+): { text: string; truncated: boolean } | null {
+  if (!approval) {
+    return null;
+  }
+
+  const finalAssistantOutput = approval.finalAssistantOutput?.trim() ?? '';
+  if (finalAssistantOutput.length > 0) {
+    return {
+      text: finalAssistantOutput,
+      truncated:
+        approval.finalAssistantOutputTruncated ??
+        finalAssistantOutput.trimEnd().endsWith('[truncated]'),
+    };
+  }
+
+  const lastOutput = approval.lastOutput?.trim() ?? '';
+  if (lastOutput.length === 0) {
+    return null;
+  }
+
+  return {
+    text: lastOutput,
+    truncated: approval.lastOutputTruncated ?? lastOutput.trimEnd().endsWith('[truncated]'),
   };
 }
 
@@ -190,9 +234,10 @@ export function WorkflowRunCard({
       : run.user_message.slice(0, 80) + '…'
     : null;
   const approval = run.status === 'paused' ? parsePausedApproval(run.metadata?.approval) : null;
-  const latestOutput = approval?.lastOutput?.trim() ?? '';
+  const pausedOutputPreview = getPausedOutputPreview(approval);
+  const latestOutput = pausedOutputPreview?.text ?? '';
   const hasLatestOutput = latestOutput.length > 0;
-  const isLatestOutputClipped = approval?.lastOutput?.trimEnd().endsWith('[truncated]') ?? false;
+  const isLatestOutputClipped = pausedOutputPreview?.truncated ?? false;
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4 space-y-3">
