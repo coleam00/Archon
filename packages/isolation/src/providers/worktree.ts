@@ -6,16 +6,14 @@
 
 import { createHash } from 'crypto';
 import { access, rm } from 'fs/promises';
-import { join, resolve } from 'path';
+import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
-  extractOwnerRepo,
   findWorktreeByBranch,
   getCanonicalRepoPath,
   getWorktreeBase,
-  isProjectScopedWorktreeBase,
   listWorktrees,
   mkdirAsync,
   removeWorktree,
@@ -26,6 +24,7 @@ import {
   toWorktreePath,
   toBranchName,
 } from '@archon/git';
+import type { WorktreeBaseOverride } from '@archon/git';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import type { RepoPath, WorktreeInfo } from '@archon/git';
 import { copyWorktreeFiles } from '../worktree-copy';
@@ -56,18 +55,93 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 const GIT_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
 
+/**
+ * Validate a user-supplied `worktree.path` from `.archon/config.yaml` and return
+ * it as a safe relative path for `getWorktreeBase()`, or `undefined` to fall
+ * through to default path resolution.
+ *
+ * Rules (Fail Fast — malformed values throw; empty/whitespace values are ignored):
+ * - `undefined` / empty-after-trim → `undefined` (no override; default resolution applies)
+ * - Absolute path                  → throw (users must configure globally, not per-repo)
+ * - Contains `..` segment          → throw (escapes repo root)
+ * - Resolved path escapes repoRoot → throw (covers symlink / nested `../` edge cases)
+ *
+ * The path is returned trimmed. The caller composes it via `join(repoRoot, result)`.
+ */
+function resolveRepoLocalOverride(
+  rawPath: string | undefined,
+  repoRoot: string
+): string | undefined {
+  if (rawPath === undefined) return undefined;
+  const trimmed = rawPath.trim();
+  if (!trimmed) return undefined;
+
+  if (isAbsolute(trimmed)) {
+    throw new Error(
+      `.archon/config.yaml worktree.path must be relative to the repo root (got absolute: ${trimmed}). ` +
+        'For an absolute location, set ~/.archon/config.yaml paths.worktrees instead.'
+    );
+  }
+
+  const normalized = normalizePath(trimmed);
+  // A plain `..` or anything that starts with `../` or contains `/../` escapes the repo.
+  if (
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.startsWith('..\\') ||
+    normalized.includes('/../') ||
+    normalized.includes('\\..\\')
+  ) {
+    throw new Error(
+      `.archon/config.yaml worktree.path must stay within the repo (got: ${trimmed}). ` +
+        'Remove any `..` segments.'
+    );
+  }
+
+  // Double-check via resolved absolute paths — catches edge cases like a path that
+  // normalizes clean but still escapes when joined (e.g. leading `./../` on some platforms).
+  const resolved = resolve(repoRoot, normalized);
+  const repoRootResolved = resolve(repoRoot);
+  if (resolved !== repoRootResolved && !resolved.startsWith(repoRootResolved + '/')) {
+    throw new Error(
+      `.archon/config.yaml worktree.path resolves outside the repo root (got: ${trimmed} → ${resolved}).`
+    );
+  }
+
+  return normalized;
+}
+
 export class WorktreeProvider implements IIsolationProvider {
   readonly providerType = 'worktree';
 
   constructor(private loadConfig: RepoConfigLoader = () => Promise.resolve(null)) {}
 
   /**
-   * Create an isolated environment using git worktrees
+   * Create an isolated environment using git worktrees.
+   *
+   * Config is loaded exactly once here and threaded through the rest of the
+   * `create()` call. A malformed `.archon/config.yaml` fails loudly at this
+   * boundary rather than being swallowed — see CLAUDE.md "Fail Fast + Explicit
+   * Errors". Downstream helpers assume they receive either a valid config
+   * object or `null`, never a second chance to reload.
    */
   async create(request: IsolationRequest): Promise<IsolatedEnvironment> {
+    let repoConfig: WorktreeCreateConfig | null;
+    try {
+      repoConfig = await this.loadConfig(request.canonicalRepoPath);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, repoPath: request.canonicalRepoPath }, 'repo_config_load_failed');
+      throw new Error(`Failed to load config: ${err.message}`);
+    }
+
     const branchName = toBranchName(this.generateBranchName(request));
-    const worktreePath = this.getWorktreePath(request, branchName);
-    const envId = this.generateEnvId(request);
+    const worktreePath = this.getWorktreePath(request, branchName, repoConfig);
+    // envId is, by contract, the worktree filesystem path (see `destroy()` docstring).
+    // Assign directly from the resolved path to keep the invariant in sync with
+    // the actual directory created below — computing it via a separate helper would
+    // risk divergence if resolution rules change.
+    const envId = worktreePath;
 
     // Check for existing worktree (adoption)
     const existing = await this.findExisting(request, branchName, worktreePath);
@@ -75,8 +149,8 @@ export class WorktreeProvider implements IIsolationProvider {
       return existing;
     }
 
-    // Create new worktree
-    const { warnings } = await this.createWorktree(request, worktreePath, branchName);
+    // Create new worktree (re-uses the already-loaded repoConfig — no double load).
+    const { warnings } = await this.createWorktree(request, worktreePath, branchName, repoConfig);
 
     return {
       id: envId,
@@ -498,34 +572,29 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Generate unique environment ID
-   */
-  generateEnvId(request: IsolationRequest): string {
-    const branchName = this.generateBranchName(request);
-    return this.getWorktreePath(request, branchName);
-  }
-
-  /**
-   * Get worktree path for request.
+   * Get worktree path for a request, honoring the per-repo override if set.
    *
-   * Path format depends on the worktree base layout:
-   * - Project-scoped: `~/.archon/workspaces/{owner}/{repo}/worktrees/{branch}`
-   * - Legacy global:  `~/.archon/worktrees/{owner}/{repo}/{branch}`
+   * Layouts (see `getWorktreeBase()` in `@archon/git` for resolution):
+   *   - `repo-local`       → `<repoRoot>/<config.path>/{branch}`              (opt-in)
+   *   - `workspace-scoped` → `~/.archon/workspaces/{owner}/{repo}/worktrees/{branch}`  (default)
    *
-   * When the worktree base is project-scoped (under workspaces/owner/repo/worktrees/),
-   * only append the branch name since the base already includes owner/repo.
-   * When using the legacy global worktrees path, append owner/repo/branch to
-   * avoid collisions between repos.
+   * In both layouts the resolved base already carries full repo context, so the
+   * caller simply appends the branch name — no owner/repo namespacing here.
+   *
+   * The per-repo `config.path` is validated via `resolveRepoLocalOverride()`;
+   * unsafe values (absolute, `..` segments, escape-from-repoRoot) throw rather
+   * than silently falling back to the default layout.
    */
-  getWorktreePath(request: IsolationRequest, branchName: string): string {
-    const worktreeBase = getWorktreeBase(request.canonicalRepoPath, request.codebaseName);
-
-    if (isProjectScopedWorktreeBase(request.canonicalRepoPath, request.codebaseName)) {
-      return join(worktreeBase, branchName);
-    }
-
-    const { owner, repo } = this.extractOwnerRepo(request.canonicalRepoPath);
-    return join(worktreeBase, owner, repo, branchName);
+  getWorktreePath(
+    request: IsolationRequest,
+    branchName: string,
+    config?: WorktreeCreateConfig | null
+  ): string {
+    const override: WorktreeBaseOverride = {
+      repoLocal: resolveRepoLocalOverride(config?.path, request.canonicalRepoPath),
+    };
+    const { base } = getWorktreeBase(request.canonicalRepoPath, request.codebaseName, override);
+    return join(base, branchName);
   }
 
   /**
@@ -621,35 +690,30 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Create the actual worktree.
    * Returns warnings that should be surfaced to the user (non-fatal issues).
+   *
+   * `repoConfig` is the already-loaded config from `create()`. Receiving it here
+   * keeps the work of each public entrypoint tied to exactly one config load —
+   * see the "Fail Fast" comment on `create()`.
    */
   private async createWorktree(
     request: IsolationRequest,
     worktreePath: string,
-    branchName: string
+    branchName: string,
+    worktreeConfig: WorktreeCreateConfig | null
   ): Promise<{ warnings: string[] }> {
     const repoPath = request.canonicalRepoPath;
-
-    let worktreeConfig: WorktreeCreateConfig | null;
-    try {
-      worktreeConfig = await this.loadConfig(repoPath);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, repoPath }, 'repo_config_load_failed');
-      throw new Error(`Failed to load config: ${err.message}`);
-    }
 
     // Sync uses only the configured base branch (or auto-detects via getDefaultBranch).
     // request.fromBranch is the start-point for worktree creation, not a sync target.
     const baseBranch = await this.syncWorkspaceBeforeCreate(repoPath, worktreeConfig?.baseBranch);
 
-    const worktreeBase = getWorktreeBase(repoPath, request.codebaseName);
-
-    if (isProjectScopedWorktreeBase(repoPath, request.codebaseName)) {
-      await mkdirAsync(worktreeBase, { recursive: true });
-    } else {
-      const { owner, repo } = this.extractOwnerRepo(repoPath);
-      await mkdirAsync(join(worktreeBase, owner, repo), { recursive: true });
-    }
+    const override: WorktreeBaseOverride = {
+      repoLocal: resolveRepoLocalOverride(worktreeConfig?.path, repoPath),
+    };
+    const { base: worktreeBase } = getWorktreeBase(repoPath, request.codebaseName, override);
+    // In both layouts the base already carries repo context — creating it
+    // recursively is enough.
+    await mkdirAsync(worktreeBase, { recursive: true });
 
     if (isPRIsolationRequest(request)) {
       // For PRs: fetch and checkout the PR branch (actual or synthetic)
@@ -1139,14 +1203,6 @@ export class WorktreeProvider implements IIsolationProvider {
       );
       // Don't throw — the original creation error is more important
     }
-  }
-
-  /**
-   * Extract owner and repo name from a repository path.
-   * Used for legacy global worktree base layout where owner/repo must be appended.
-   */
-  private extractOwnerRepo(repoPath: string): { owner: string; repo: string } {
-    return extractOwnerRepo(toRepoPath(repoPath));
   }
 
   /**

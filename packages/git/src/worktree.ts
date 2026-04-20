@@ -1,11 +1,6 @@
 import { readFile, access } from 'fs/promises';
 import { join, resolve } from 'path';
-import {
-  createLogger,
-  getArchonWorktreesPath,
-  getArchonWorkspacesPath,
-  getProjectWorktreesPath,
-} from '@archon/paths';
+import { createLogger, getArchonWorkspacesPath, getProjectWorktreesPath } from '@archon/paths';
 import { execFileAsync } from './exec';
 import type { RepoPath, BranchName, WorktreePath, WorktreeInfo } from './types';
 import { toRepoPath, toBranchName, toWorktreePath } from './types';
@@ -18,60 +13,111 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Get the base directory for worktrees.
+ * Layout of a worktree base relative to the repository.
  *
- * Resolution order:
- * 1. If `codebaseName` is provided in "owner/repo" format, returns the project-scoped
- *    path directly: ~/.archon/workspaces/owner/repo/worktrees/
- * 2. For paths under ~/.archon/workspaces/owner/repo/..., extracts owner/repo from path
- *    and returns the project-scoped path.
- * 3. Otherwise, returns the legacy global path: ~/.archon/worktrees/
+ * Two layouts only — worktrees live either co-located with the repo (opt-in)
+ * or inside the user's archon workspace area (default for every repo):
+ *
+ * - `repo-local`       — `<repoRoot>/<override.repoLocal>/`  (opt-in per repo config)
+ * - `workspace-scoped` — `~/.archon/workspaces/<owner>/<repo>/worktrees/`  (default)
+ *
+ * In both layouts the base already includes all repo context, so callers append
+ * only the branch name to compose the final worktree path — there is no layout
+ * where owner/repo gets tacked on as a separate path segment.
  */
-export function getWorktreeBase(repoPath: RepoPath, codebaseName?: string): string {
-  // If codebase name is known, use project-scoped path directly
+export type WorktreeLayout = 'repo-local' | 'workspace-scoped';
+
+/**
+ * Override inputs for `getWorktreeBase()`. All fields are optional.
+ */
+export interface WorktreeBaseOverride {
+  /**
+   * Repo-relative path where worktrees should live (e.g. `.worktrees`).
+   * Only supported override today. Must be validated as a safe relative path
+   * by the caller before reaching this layer.
+   */
+  repoLocal?: string;
+}
+
+/**
+ * Resolve the `{ owner, repo }` identity used to scope archon-managed worktrees.
+ *
+ * Precedence:
+ *   1. Explicit `codebaseName` in `owner/repo` format (from the database / web UI)
+ *   2. Path segments when `repoPath` is already under `~/.archon/workspaces/owner/repo/`
+ *   3. Last two path segments of `repoPath` (works for any local checkout)
+ *
+ * The third fallback is what lets non-cloned / locally-registered repos still
+ * land in the workspace-scoped layout — every repo gets a stable owner/repo
+ * identity derived from its filesystem path.
+ */
+function resolveOwnerRepo(
+  repoPath: RepoPath,
+  codebaseName?: string
+): { owner: string; repo: string } {
   if (codebaseName) {
     const parts = codebaseName.split('/');
     if (parts.length === 2 && parts[0] && parts[1]) {
-      return getProjectWorktreesPath(parts[0], parts[1]);
+      return { owner: parts[0], repo: parts[1] };
     }
-    // codebaseName present but not "owner/repo" format — fall through to path detection.
-    // This is intentional: safe degradation to legacy global path.
     getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
   }
-  // Existing path-prefix detection (cloned repos under workspaces/)
   const workspacesPath = getArchonWorkspacesPath();
   if (repoPath.startsWith(workspacesPath)) {
     const relative = repoPath.substring(workspacesPath.length + 1);
     const parts = relative.split(/[/\\]/).filter(p => p.length > 0);
     if (parts.length >= 2) {
-      return getProjectWorktreesPath(parts[0], parts[1]);
+      return { owner: parts[0], repo: parts[1] };
     }
   }
-  // Legacy global fallback (no codebase name, no workspace path match)
-  return getArchonWorktreesPath();
+  // Fallback: derive from path basename/parent-basename — covers local-registered
+  // repos that never lived under workspaces/. Delegates to extractOwnerRepo()
+  // which throws on pathologically short paths.
+  return extractOwnerRepo(repoPath);
 }
 
 /**
- * Check if the worktree base for a given repo path is project-scoped
- * (under ~/.archon/workspaces/owner/repo/worktrees/) vs legacy global.
+ * Get the base directory for worktrees and the resolved layout.
  *
- * When project-scoped, the worktree base already includes the owner/repo context,
- * so callers should NOT append owner/repo again.
+ * Resolution (highest to lowest priority):
+ *   1. `override.repoLocal` → `<repoRoot>/<repoLocal>/` (layout: `repo-local`)
+ *   2. Otherwise             → `~/.archon/workspaces/<owner>/<repo>/worktrees/`
+ *                              (layout: `workspace-scoped`)
  *
- * Resolution order mirrors `getWorktreeBase`: codebaseName → path detection → legacy.
+ * The `<owner>/<repo>` identity is resolved via `resolveOwnerRepo()` — see its
+ * docstring for the precedence. Every repo ends up with a stable workspace-scoped
+ * base; there is no `~/.archon/worktrees/owner/repo/` fallback layout.
+ */
+export function getWorktreeBase(
+  repoPath: RepoPath,
+  codebaseName?: string,
+  override?: WorktreeBaseOverride
+): { base: string; layout: WorktreeLayout } {
+  if (override?.repoLocal) {
+    return { base: join(repoPath, override.repoLocal), layout: 'repo-local' };
+  }
+  const { owner, repo } = resolveOwnerRepo(repoPath, codebaseName);
+  return {
+    base: getProjectWorktreesPath(owner, repo),
+    layout: 'workspace-scoped',
+  };
+}
+
+/**
+ * Check if the worktree base for a given repo path is workspace-scoped.
+ *
+ * Kept for backward compatibility with callers outside this package; prefer
+ * reading `layout` from `getWorktreeBase()` in new code. This helper is unaware
+ * of `override.repoLocal`, so it does not reflect per-repo overrides — use
+ * `getWorktreeBase(...).layout === 'workspace-scoped'` in override-aware code.
+ *
+ * @deprecated Use `getWorktreeBase(...).layout === 'workspace-scoped'` instead.
+ *   This helper returned `false` for pre-workspace registered repos in the old
+ *   two-layout model; in the current model every repo resolves to workspace-scoped
+ *   when no override is set, so this always returns `true`.
  */
 export function isProjectScopedWorktreeBase(repoPath: RepoPath, codebaseName?: string): boolean {
-  // If codebase name is known, it's always project-scoped
-  if (codebaseName) {
-    const parts = codebaseName.split('/');
-    if (parts.length === 2 && parts[0] && parts[1]) return true;
-    // Invalid format — fall through to path detection (same safe degradation as getWorktreeBase).
-  }
-  const workspacesPath = getArchonWorkspacesPath();
-  if (!repoPath.startsWith(workspacesPath)) return false;
-  const relative = repoPath.substring(workspacesPath.length + 1);
-  const parts = relative.split(/[/\\]/).filter(p => p.length > 0);
-  return parts.length >= 2;
+  return getWorktreeBase(repoPath, codebaseName).layout === 'workspace-scoped';
 }
 
 /**

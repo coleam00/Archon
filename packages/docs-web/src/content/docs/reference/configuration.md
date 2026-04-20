@@ -127,6 +127,10 @@ worktree:
     - .vscode               # Copy entire directory
   initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
                         # `git submodule update --init --recursive`. Set false to opt out.
+  path: .worktrees      # Optional: co-locate worktrees with the repo at
+                        # <repoRoot>/.worktrees/<branch> instead of under
+                        # ~/.archon/workspaces/<owner>/<repo>/worktrees/.
+                        # Must be relative; no absolute, no `..` segments.
 
 # Documentation directory
 docs:
@@ -179,6 +183,8 @@ This is useful when you maintain coding style or identity preferences in `~/.cla
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
+
+**Worktree path behavior:** By default, every repo's worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>` — outside the repo, invisible to the IDE. Set `worktree.path` to opt in to a **repo-local** layout instead: worktrees are created at `<repoRoot>/<worktree.path>/<branch>` so they show up in the file tree and editor workspace. A common choice is `.worktrees`. Because worktrees now live inside the repository tree, you should add the directory to your `.gitignore` (Archon does not modify user-owned files). The configured path must be relative to the repo root; absolute paths and paths containing `..` segments fail loudly at worktree creation rather than silently falling back.
 
 ## Environment Variables
 
