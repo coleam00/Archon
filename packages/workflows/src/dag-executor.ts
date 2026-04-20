@@ -2322,10 +2322,12 @@ async function executeWorkflowNode(
   const parentCancelController = new AbortController();
   const parentCancelPoll = setInterval(() => {
     void (async (): Promise<void> => {
+      if (parentCancelController.signal.aborted) return;
       try {
         const parentStatus = await deps.store.getWorkflowRunStatus(parentWorkflowRun.id);
         if (parentStatus !== 'running' && parentStatus !== 'paused') {
           clearInterval(parentCancelPoll);
+          if (parentCancelController.signal.aborted) return;
           getLog().info(
             { parentRunId: parentWorkflowRun.id, parentStatus, childRunId: childRun.id },
             'dag.workflow_node_parent_cancelled'
@@ -2453,6 +2455,35 @@ async function executeWorkflowNode(
       output,
       ...(childCostUsd !== undefined ? { costUsd: childCostUsd } : {}),
     };
+  }
+
+  // Child paused at an approval gate — emit a distinct paused event so the
+  // parent run can be resumed once the child finishes.
+  if (childFinalStatus === 'paused') {
+    const pauseMsg = `Node '${node.id}': child workflow '${node.workflow}' is paused awaiting approval (run: ${childRun.id})`;
+    getLog().warn({ nodeId: node.id, childRunId: childRun.id }, 'dag.workflow_node_child_paused');
+    await logNodeError(logDir, parentWorkflowRun.id, node.id, pauseMsg);
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: parentWorkflowRun.id,
+        event_type: 'node_paused',
+        step_name: node.id,
+        data: { child_run_id: childRun.id, child_workflow: node.workflow },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: parentWorkflowRun.id, eventType: 'node_paused' },
+          'workflow_event_persist_failed'
+        );
+      });
+    emitter.emit({
+      type: 'node_paused',
+      runId: parentWorkflowRun.id,
+      nodeId: node.id,
+      nodeName: `workflow:${node.workflow}`,
+      childRunId: childRun.id,
+    });
+    return { state: 'failed', output: '', error: pauseMsg };
   }
 
   // Child failed, was cancelled, or status is unknown
@@ -2586,6 +2617,30 @@ export async function executeDagWorkflow(
   let loopFailureMeta: Record<string, unknown> = {};
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
+    const iterationStartTime = Date.now();
+
+    // Emit loop iteration started event (only when loop_until is defined — single-pass runs don't iterate).
+    if (workflow.loop_until !== undefined) {
+      getWorkflowEventEmitter().emit({
+        type: 'loop_iteration_started',
+        runId: workflowRun.id,
+        iteration: iteration + 1,
+        maxIterations,
+      });
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'loop_iteration_started',
+          data: { iteration: iteration + 1, maxIterations, loop_until: workflow.loop_until },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'loop_iteration_started' },
+            'workflow_event_persist_failed'
+          );
+        });
+    }
+
     // Fresh execution scope per iteration.
     const nodeOutputs = new Map<string, NodeOutput>();
     // Session threading: for sequential single-node layers, thread the session forward.
@@ -3230,6 +3285,29 @@ export async function executeDagWorkflow(
         await safeSendMessage(platform, conversationId, `⚠️ ${parseErrMsg}`, {
           workflowId: workflowRun.id,
         });
+        getWorkflowEventEmitter().emit({
+          type: 'loop_iteration_failed',
+          runId: workflowRun.id,
+          iteration: iteration + 1,
+          error: parseErrMsg,
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'loop_iteration_failed',
+            data: {
+              iteration: iteration + 1,
+              maxIterations,
+              loop_until: workflow.loop_until,
+              error: parseErrMsg,
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'loop_iteration_failed' },
+              'workflow_event_persist_failed'
+            );
+          });
         loopFailureMsg = parseErrMsg;
         loopFailureMeta = { loop_until_parse_error: true, loop_until_expr: workflow.loop_until };
         break;
@@ -3237,11 +3315,59 @@ export async function executeDagWorkflow(
       if (result) {
         // Condition satisfied — stop looping.
         getLog().info({ iteration: iteration + 1, maxIterations }, 'dag.loop_until_condition_met');
+        getWorkflowEventEmitter().emit({
+          type: 'loop_iteration_completed',
+          runId: workflowRun.id,
+          iteration: iteration + 1,
+          duration: Date.now() - iterationStartTime,
+          completionDetected: true,
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'loop_iteration_completed',
+            data: {
+              iteration: iteration + 1,
+              maxIterations,
+              loop_until: workflow.loop_until,
+              completionDetected: true,
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'loop_iteration_completed' },
+              'workflow_event_persist_failed'
+            );
+          });
         break;
       }
       // Condition not yet met.
       if (iteration < maxIterations - 1) {
         getLog().info({ iteration: iteration + 1, maxIterations }, 'dag.loop_iteration_continuing');
+        getWorkflowEventEmitter().emit({
+          type: 'loop_iteration_completed',
+          runId: workflowRun.id,
+          iteration: iteration + 1,
+          duration: Date.now() - iterationStartTime,
+          completionDetected: false,
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'loop_iteration_completed',
+            data: {
+              iteration: iteration + 1,
+              maxIterations,
+              loop_until: workflow.loop_until,
+              completionDetected: false,
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'loop_iteration_completed' },
+              'workflow_event_persist_failed'
+            );
+          });
         await safeSendMessage(
           platform,
           conversationId,
@@ -3259,6 +3385,29 @@ export async function executeDagWorkflow(
         `⚠️ Reached max iterations (${String(maxIterations)}) — \`loop_until\` condition was never satisfied.`,
         { workflowId: workflowRun.id }
       );
+      getWorkflowEventEmitter().emit({
+        type: 'loop_iteration_failed',
+        runId: workflowRun.id,
+        iteration: iteration + 1,
+        error: maxIterErrMsg,
+      });
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'loop_iteration_failed',
+          data: {
+            iteration: iteration + 1,
+            maxIterations,
+            loop_until: workflow.loop_until,
+            error: maxIterErrMsg,
+          },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'loop_iteration_failed' },
+            'workflow_event_persist_failed'
+          );
+        });
       loopFailureMsg = maxIterErrMsg;
       loopFailureMeta = { loop_until_max_iterations_exceeded: true, max_iterations: maxIterations };
     }
@@ -3269,14 +3418,15 @@ export async function executeDagWorkflow(
   // If the loop exited due to a parse error or max-iterations exhaustion, fail the run.
   if (loopFailureMsg !== null) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
-    await deps.store
-      .updateWorkflowRun(workflowRun.id, {
+    try {
+      await deps.store.updateWorkflowRun(workflowRun.id, {
         status: 'failed',
         metadata: { error: loopFailureMsg, ...loopFailureMeta },
-      })
-      .catch((dbErr: Error) => {
-        getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
       });
+    } catch (dbErr) {
+      getLog().error({ err: dbErr as Error, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+      throw dbErr;
+    }
     await logWorkflowError(logDir, workflowRun.id, loopFailureMsg).catch((logErr: Error) => {
       getLog().error(
         { err: logErr, workflowRunId: workflowRun.id },

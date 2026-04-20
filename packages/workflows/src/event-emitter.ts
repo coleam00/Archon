@@ -105,6 +105,14 @@ interface NodeFailedEvent {
   error: string;
 }
 
+interface NodePausedEvent {
+  type: 'node_paused';
+  runId: string;
+  nodeId: string;
+  nodeName: string;
+  childRunId: string;
+}
+
 interface NodeSkippedEvent {
   type: 'node_skipped';
   runId: string;
@@ -152,6 +160,7 @@ export type WorkflowEmitterEvent =
   | NodeStartedEvent
   | NodeCompletedEvent
   | NodeFailedEvent
+  | NodePausedEvent
   | NodeSkippedEvent
   | WorkflowArtifactEvent
   | ToolStartedEvent
