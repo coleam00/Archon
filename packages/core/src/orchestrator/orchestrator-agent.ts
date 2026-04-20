@@ -469,9 +469,10 @@ function buildFullPrompt(
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
+  const workspacesPath = getArchonWorkspacesPath();
   const systemPrompt = scopedCodebase
-    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
-    : buildOrchestratorPrompt(codebases, workflows);
+    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows, workspacesPath)
+    : buildOrchestratorPrompt(codebases, workflows, workspacesPath);
 
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
 

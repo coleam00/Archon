@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'bun:test';
-import { buildRoutingRulesWithProject, formatWorkflowContextSection } from './prompt-builder';
+import {
+  buildRoutingRulesWithProject,
+  buildOrchestratorPrompt,
+  buildProjectScopedPrompt,
+  formatWorkflowContextSection,
+} from './prompt-builder';
+import type { Codebase } from '../types';
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -68,5 +74,42 @@ describe('formatWorkflowContextSection', () => {
       { workflowName: 'assist', runId: 'r-1', summary: 'Done.' },
     ]);
     expect(result).toBe(result.trimEnd());
+  });
+});
+
+// ─── Docker path injection ────────────────────────────────────────────────────
+
+const makeCb = (overrides: Partial<Codebase> = {}): Codebase => ({
+  id: 'cb-1',
+  name: 'my-project',
+  default_cwd: '/path',
+  ai_assistant_type: 'claude',
+  commands: {},
+  repository_url: null,
+  ...overrides,
+});
+
+describe('workspacesPath injection (Docker path fix, #1237)', () => {
+  test('buildRoutingRulesWithProject uses provided workspacesPath in clone instructions', () => {
+    const rules = buildRoutingRulesWithProject(undefined, '/.archon/workspaces');
+    expect(rules).toContain('/.archon/workspaces/{owner}/{repo}/source');
+    expect(rules).not.toContain('~/.archon/workspaces');
+  });
+
+  test('buildOrchestratorPrompt defaults to ~/.archon/workspaces when path omitted', () => {
+    const prompt = buildOrchestratorPrompt([], []);
+    expect(prompt).toContain('~/.archon/workspaces/');
+  });
+
+  test('buildOrchestratorPrompt uses injected Docker path', () => {
+    const prompt = buildOrchestratorPrompt([], [], '/.archon/workspaces');
+    expect(prompt).toContain('/.archon/workspaces/');
+    expect(prompt).not.toContain('~/.archon/workspaces');
+  });
+
+  test('buildProjectScopedPrompt uses injected Docker path', () => {
+    const prompt = buildProjectScopedPrompt(makeCb(), [], [], '/.archon/workspaces');
+    expect(prompt).toContain('/.archon/workspaces/');
+    expect(prompt).not.toContain('~/.archon/workspaces');
   });
 });
