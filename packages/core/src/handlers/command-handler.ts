@@ -897,7 +897,7 @@ export async function handleCommand(
     case 'help':
       return {
         success: true,
-        message: `## Archon Orchestrator
+        message: `## HarnessLab Orchestrator
 
 Talk naturally — the orchestrator routes your requests to the right workflow and project automatically.
 
@@ -1094,8 +1094,8 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         await import('fs/promises').then(fs => fs.mkdir(commandsDir, { recursive: true }));
 
         // Create default config.yaml
-        const defaultConfig = `# Archon repository configuration
-# See: https://github.com/coleam00/Archon
+        const defaultConfig = `# HarnessLab repository configuration
+# See: https://github.com/NewTurn2017/HarnessLab
 
 # AI assistant preference (optional - overrides global default)
 # assistant: claude

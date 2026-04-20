@@ -1,6 +1,6 @@
 ---
 title: 핵심 워크플로
-description: 모든 내장 Archon workflow의 목록과 사용 예시, 언제 어떤 workflow를 써야 하는지에 대한 가이드.
+description: 모든 내장 HarnessLab workflow의 목록과 사용 예시, 언제 어떤 workflow를 써야 하는지에 대한 가이드.
 category: book
 part: core-workflows
 audience: [user]

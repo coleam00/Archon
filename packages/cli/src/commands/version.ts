@@ -93,7 +93,7 @@ export async function versionCommand(): Promise<void> {
   const dbType = getDatabaseType();
   const buildType = BUNDLED_IS_BINARY ? 'binary' : 'source (bun)';
 
-  console.log(`Archon CLI v${version}`);
+  console.log(`HarnessLab CLI v${version}`);
   console.log(`  Platform(플랫폼): ${platform}-${arch}`);
   console.log(`  Build(빌드): ${buildType}`);
   console.log(`  Database(데이터베이스): ${dbType}`);

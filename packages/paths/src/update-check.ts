@@ -21,7 +21,7 @@ export interface UpdateCheckResult {
 const CACHE_FILE = 'update-check.json';
 const STALENESS_MS = 60 * 60 * 1000; // 1 hour
 const FETCH_TIMEOUT_MS = 3000; // 3 seconds
-const GITHUB_API_URL = 'https://api.github.com/repos/coleam00/Archon/releases/latest';
+const GITHUB_API_URL = 'https://api.github.com/repos/NewTurn2017/HarnessLab/releases/latest';
 
 function getCachePath(): string {
   return join(getArchonHome(), CACHE_FILE);

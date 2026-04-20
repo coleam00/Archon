@@ -1,6 +1,6 @@
 ---
 title: CLI 레퍼런스
-description: Archon command-line interface와 사용 가능한 모든 명령에 대한 전체 레퍼런스입니다.
+description: HarnessLab command-line interface와 사용 가능한 모든 명령에 대한 전체 레퍼런스입니다.
 category: reference
 area: cli
 audience: [user]
@@ -15,8 +15,8 @@ sidebar:
 
 1. Repository를 clone하고 dependency를 설치합니다.
    ```bash
-   git clone https://github.com/coleam00/Archon
-   cd Archon
+   git clone https://github.com/NewTurn2017/HarnessLab
+   cd HarnessLab
    bun install
    ```
 

@@ -1,6 +1,6 @@
 ---
 title: E2E Testing
-description: Archon workflow에서 end-to-end browser testing을 위해 agent-browser를 설정합니다.
+description: HarnessLab workflow에서 end-to-end browser testing을 위해 agent-browser를 설정합니다.
 category: deployment
 area: infra
 audience: [developer, operator]
@@ -9,7 +9,7 @@ sidebar:
   order: 5
 ---
 
-Archon은 `archon-validate-pr` 같은 workflow의 end-to-end browser testing에 Vercel Labs의 [agent-browser](https://github.com/vercel-labs/agent-browser)를 사용합니다. 이는 **선택적** external dependency이며, 핵심 Archon 기능은 agent-browser 없이도 동작합니다.
+HarnessLab은 `archon-validate-pr` 같은 workflow의 end-to-end browser testing에 Vercel Labs의 [agent-browser](https://github.com/vercel-labs/agent-browser)를 사용합니다. 이는 **선택적** external dependency이며, 핵심 HarnessLab 기능은 agent-browser 없이도 동작합니다.
 
 ## 설치
 
@@ -48,7 +48,7 @@ agent-browser close
 
 ### Docker
 
-Archon Docker image에는 agent-browser가 **미리 설치**되어 있습니다. 별도 작업은 필요하지 않습니다.
+HarnessLab Docker image에는 agent-browser가 **미리 설치**되어 있습니다. 별도 작업은 필요하지 않습니다.
 
 ### macOS / Linux
 

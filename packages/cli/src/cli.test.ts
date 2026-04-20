@@ -342,7 +342,7 @@ describe('CLI git repo check', () => {
     const ERROR_MESSAGES = {
       notGitRepo: [
         '오류: git repository 안에서 실행해야 합니다.',
-        'Archon CLI는 git repository 내부에서 실행되어야 합니다.',
+        'HarnessLab CLI는 git repository 내부에서 실행되어야 합니다.',
         'git repo로 이동하거나 --cwd로 repo 경로를 지정하세요.',
       ],
       dirNotExist: (path: string) => `오류: 디렉터리가 없습니다: ${path}`,

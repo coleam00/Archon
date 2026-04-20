@@ -489,7 +489,7 @@ describe('CommandHandler', () => {
       test('should return help message', async () => {
         const result = await handleCommand(baseConversation, '/help');
         expect(result.success).toBe(true);
-        expect(result.message).toContain('Archon Orchestrator');
+        expect(result.message).toContain('HarnessLab Orchestrator');
         expect(result.message).toContain('/workflow list');
         expect(result.message).toContain('/status');
       });

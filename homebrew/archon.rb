@@ -3,32 +3,32 @@
 #
 # This formula downloads pre-built binaries from GitHub releases and is updated
 # automatically by .github/workflows/release.yml after stable releases.
-# For development, see: https://github.com/NewTurn2017/Archon
+# For development, see: https://github.com/NewTurn2017/HarnessLab
 
 class Archon < Formula
-  desc "Remote agentic coding platform - control AI assistants from anywhere"
-  homepage "https://github.com/NewTurn2017/Archon"
+  desc "HarnessLab CLI for repeatable AI coding workflows"
+  homepage "https://github.com/NewTurn2017/HarnessLab"
   version "0.1.0"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/NewTurn2017/Archon/releases/download/v#{version}/archon-darwin-arm64"
+      url "https://github.com/NewTurn2017/HarnessLab/releases/download/v#{version}/archon-darwin-arm64"
       sha256 "PLACEHOLDER_SHA256_DARWIN_ARM64"
     end
     on_intel do
-      url "https://github.com/NewTurn2017/Archon/releases/download/v#{version}/archon-darwin-x64"
+      url "https://github.com/NewTurn2017/HarnessLab/releases/download/v#{version}/archon-darwin-x64"
       sha256 "PLACEHOLDER_SHA256_DARWIN_X64"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/NewTurn2017/Archon/releases/download/v#{version}/archon-linux-arm64"
+      url "https://github.com/NewTurn2017/HarnessLab/releases/download/v#{version}/archon-linux-arm64"
       sha256 "PLACEHOLDER_SHA256_LINUX_ARM64"
     end
     on_intel do
-      url "https://github.com/NewTurn2017/Archon/releases/download/v#{version}/archon-linux-x64"
+      url "https://github.com/NewTurn2017/HarnessLab/releases/download/v#{version}/archon-linux-x64"
       sha256 "PLACEHOLDER_SHA256_LINUX_X64"
     end
   end

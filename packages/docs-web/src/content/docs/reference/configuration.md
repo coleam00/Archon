@@ -1,6 +1,6 @@
 ---
 title: 설정 레퍼런스
-description: YAML config, 환경 변수, streaming mode를 포함한 Archon의 계층형 설정 시스템 전체 레퍼런스입니다.
+description: YAML config, 환경 변수, streaming mode를 포함한 HarnessLab의 계층형 설정 시스템 전체 레퍼런스입니다.
 category: reference
 area: config
 audience: [user, operator]
@@ -9,7 +9,7 @@ sidebar:
   order: 6
 ---
 
-Archon은 합리적인 기본값, 선택적 YAML config file, 환경 변수 override를 갖춘 계층형 설정 시스템을 지원합니다. 빠른 소개는 [시작하기: 설정](/getting-started/)을 참고하세요.
+HarnessLab은 합리적인 기본값, 선택적 YAML config file, 환경 변수 override를 갖춘 계층형 설정 시스템을 지원합니다. 빠른 소개는 [시작하기: 설정](/getting-started/)을 참고하세요.
 
 ## 디렉터리 구조
 
@@ -61,7 +61,7 @@ assistants:
       - project       # Project-level CLAUDE.md (always recommended)
       - user          # Also load ~/.claude/CLAUDE.md (global preferences)
     # Optional: absolute path to the Claude Code executable.
-    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Required in compiled HarnessLab binaries when CLAUDE_BIN_PATH is not set.
     # Accepts the native binary (~/.local/bin/claude from the curl installer)
     # or the npm-installed cli.js. Source/dev mode auto-resolves.
     # claudeBinaryPath: /absolute/path/to/claude
@@ -160,7 +160,7 @@ assistants:
       - user
 ```
 
-`~/.claude/CLAUDE.md`에 coding style이나 identity preference를 관리하고 Archon session이 이를 따르길 원할 때 유용합니다.
+`~/.claude/CLAUDE.md`에 coding style이나 identity preference를 관리하고 HarnessLab session이 이를 따르길 원할 때 유용합니다.
 
 **기본 동작:** `.archon/` directory는 항상 worktree에 자동 복사됩니다(artifact, plan, workflow 포함). `.env`나 `.vscode` 같은 추가 파일에만 `copyFiles`를 사용하세요.
 
@@ -183,10 +183,10 @@ assistants:
 
 | Variable | 설명 | Default |
 | --- | --- | --- |
-| `ARCHON_HOME` | Archon-managed file의 base directory | `~/.archon` |
+| `ARCHON_HOME` | HarnessLab-managed file의 base directory | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090`(worktree에서는 auto-allocated) |
 | `LOG_LEVEL` | Logging verbosity(`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
-| `BOT_DISPLAY_NAME` | batch-mode "starting" message에 표시할 bot name | `Archon` |
+| `BOT_DISPLAY_NAME` | batch-mode "starting" message에 표시할 bot name | `HarnessLab` |
 | `DEFAULT_AI_ASSISTANT` | 기본 AI assistant(registered provider와 일치해야 함) | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | 최대 동시 AI conversation 수 | `10` |
 | `SESSION_RETENTION_DAYS` | N일보다 오래된 inactive session 삭제 | `30` |
@@ -202,7 +202,7 @@ assistants:
 | `TITLE_GENERATION_MODEL` | conversation title 생성용 lightweight model | SDK default |
 | `ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS` | Claude subprocess가 hung으로 간주되기 전 timeout(ms, diagnostic log와 함께 throw) | `60000` |
 
-`CLAUDE_USE_GLOBAL_AUTH`가 설정되지 않으면 Archon은 자동 감지합니다. 명시적 token이 있으면 이를 사용하고, 없으면 global auth로 fallback합니다.
+`CLAUDE_USE_GLOBAL_AUTH`가 설정되지 않으면 HarnessLab은 자동 감지합니다. 명시적 token이 있으면 이를 사용하고, 없으면 global auth로 fallback합니다.
 
 ### AI Providers -- Codex
 
@@ -283,7 +283,7 @@ assistants:
 
 | Variable | 설명 | Default |
 | --- | --- | --- |
-| `ARCHON_DATA` | Archon data(workspaces, worktrees, artifacts)의 host path | Docker-managed volume |
+| `ARCHON_DATA` | HarnessLab data(workspaces, worktrees, artifacts)의 host path | Docker-managed volume |
 | `DOMAIN` | Caddy reverse proxy용 public domain(TLS auto-provisioned) | -- |
 | `CADDY_BASIC_AUTH` | Web UI와 API 보호용 Caddy basicauth directive | Disabled |
 | `AUTH_USERNAME` | form-based auth(Caddy forward_auth) username | -- |
@@ -298,7 +298,7 @@ Infrastructure configuration(database URL, platform token)은 `.env` file에 저
 
 | Component | 위치 | 목적 |
 |-----------|----------|---------|
-| **CLI** | `~/.archon/.env` | Global infrastructure config; CWD .env key를 먼저 strip한 뒤 `override: true`로 로드(Archon config가 shell-inherited var보다 우선) |
+| **CLI** | `~/.archon/.env` | Global infrastructure config; CWD .env key를 먼저 strip한 뒤 `override: true`로 로드(HarnessLab config가 shell-inherited var보다 우선) |
 | **Server (dev)** | `<archon-repo>/.env` + `~/.archon/.env` | Repo `.env`는 platform token용; `~/.archon/.env`는 `override: true`로 로드 |
 | **Server (binary)** | `~/.archon/.env` | 단일 source of truth(compiled binary에서는 repo `.env` path 사용 불가) |
 
@@ -331,7 +331,7 @@ Docker container에서는 path가 자동으로 설정됩니다.
 
 ## Command folder 감지
 
-Repository를 clone하거나 전환할 때 Archon은 다음 우선순위로 command를 찾습니다.
+Repository를 clone하거나 전환할 때 HarnessLab은 다음 우선순위로 command를 찾습니다.
 
 1. `.archon/commands/` - 항상 먼저 검색
 2. `.archon/config.yaml`의 `commands.folder`에서 설정한 folder(지정된 경우)
@@ -347,7 +347,7 @@ commands:
 
 ### 최소 설정(기본값 사용)
 
-설정이 필요 없습니다. Archon은 기본적으로 다음으로 동작합니다.
+설정이 필요 없습니다. HarnessLab은 기본적으로 다음으로 동작합니다.
 
 - 모든 managed file은 `~/.archon/` 사용
 - 기본 AI assistant는 Claude
@@ -372,7 +372,7 @@ commands:
 ### Custom volume을 사용하는 Docker
 
 ```bash
-docker run -v /my/data:/.archon ghcr.io/coleam00/archon
+docker run -v /my/data:/.archon ghcr.io/newturn2017/harnesslab
 ```
 
 ## Streaming mode

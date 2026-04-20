@@ -11,7 +11,7 @@ sidebar:
 
 > **함께 보기:** profile, build, configuration, troubleshooting을 포함한 전체 Docker reference는 [Docker Guide](/deployment/docker/)를 참고하세요.
 
-Archon을 24/7 운영하기 위해 cloud VPS에 배포합니다. Caddy를 사용해 HTTPS certificate을 자동으로 발급하고 갱신하며, 서비스가 계속 실행되도록 구성합니다. HarnessLab은 Archon fork이므로 같은 배포 절차를 그대로 사용할 수 있습니다.
+HarnessLab을 24/7 운영하기 위해 cloud VPS에 배포합니다. Caddy를 사용해 HTTPS certificate을 자동으로 발급하고 갱신하며, 서비스가 계속 실행되도록 구성합니다. HarnessLab은 Archon fork이므로 같은 배포 절차를 그대로 사용할 수 있습니다.
 
 **목차:** [사전 준비](#prerequisites) | [Server 설정](#1-server-provisioning--initial-setup) | [DNS 설정](#2-dns-configuration) | [Repository 설정](#3-clone-repository) | [Environment 설정](#4-environment-configuration) | [Database migration](#5-database-migration) | [Caddy 설정](#6-caddy-configuration) | [Service 시작](#7-start-services) | [확인](#8-verify-deployment)
 
@@ -243,12 +243,12 @@ TTL: Auto
 
 ```bash
 # Create application directory
-sudo mkdir -p /opt/archon
-sudo chown deploy:deploy /opt/archon
+sudo mkdir -p /opt/harnesslab
+sudo chown deploy:deploy /opt/harnesslab
 
 # Clone repository into the directory
-cd /opt/archon
-git clone https://github.com/coleam00/Archon .
+cd /opt/harnesslab
+git clone https://github.com/NewTurn2017/HarnessLab .
 ```
 
 ---
@@ -574,9 +574,9 @@ docker compose --profile with-db --profile cloud logs -f postgres
 docker compose --profile cloud logs -f app
 
 # Look for:
-# [App] Starting Archon
+# [App] Starting HarnessLab
 # [Database] Connected successfully
-# [App] Archon is ready!
+# [App] HarnessLab is ready!
 ```
 
 **log 화면을 종료하려면 `Ctrl+C`를 누릅니다(service는 계속 실행됩니다).**
@@ -688,7 +688,7 @@ docker compose --profile cloud logs --tail=100 app
 
 ```bash
 # Pull latest changes
-cd /opt/archon
+cd /opt/harnesslab
 git pull
 
 # Rebuild and restart

@@ -8,7 +8,7 @@ sidebar:
   order: 7
 ---
 
-Archon 실행 중 자주 발생하는 문제와 해결책입니다.
+HarnessLab 실행 중 자주 발생하는 문제와 해결책입니다.
 
 ## Bot이 응답하지 않음
 
@@ -285,11 +285,11 @@ docker compose exec app git clone https://github.com/user/repo /.archon/workspac
 **증상:** Claude를 사용하는 workflow가 다음 오류로 실패합니다.
 
 ```
-Claude Code not found. Archon requires the Claude Code executable to be
+Claude Code not found. HarnessLab requires the Claude Code executable to be
 reachable at a configured path in compiled builds.
 ```
 
-**원인:** Compiled Archon binary(curl/PowerShell installer 또는 Homebrew의 `archon`)에는 Claude Code가 bundle되어 있지 않습니다. Claude Code executable에 대한 명시적 path가 필요합니다. Source/dev mode(`bun run`)는 `node_modules`를 통해 auto-resolve되며 영향을 받지 않습니다.
+**원인:** Compiled HarnessLab binary(curl/PowerShell installer 또는 Homebrew의 `archon`)에는 Claude Code가 bundle되어 있지 않습니다. Claude Code executable에 대한 명시적 path가 필요합니다. Source/dev mode(`bun run`)는 `node_modules`를 통해 auto-resolve되며 영향을 받지 않습니다.
 
 **수정:** Claude Code를 별도로 설치하고 Archon이 해당 경로를 보게 합니다.
 
@@ -364,7 +364,7 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
    archon workflow run <name> --branch <different-name> "task"
    ```
 
-3. **하나의 clone에서 작업.** 두 local checkout이 같은 project라면 하나로 통합하세요. Archon의 codebase registration은 현재 remote당 하나의 local path를 가정합니다. 진짜 multi-clone support는 [#1192](https://github.com/coleam00/Archon/issues/1192)에서 추적 중입니다.
+3. **하나의 clone에서 작업.** 두 local checkout이 같은 project라면 하나로 통합하세요. HarnessLab의 codebase registration은 현재 remote당 하나의 local path를 가정합니다. 진짜 multi-clone support는 [#1192](https://github.com/coleam00/Archon/issues/1192)에서 추적 중입니다.
 
 **다른 변형:**
 

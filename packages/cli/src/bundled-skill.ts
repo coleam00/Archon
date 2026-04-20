@@ -1,5 +1,5 @@
 /**
- * Bundled Archon skill files for binary distribution
+ * Bundled HarnessLab skill files for binary distribution
  *
  * These static imports are resolved at compile time and embedded into the binary.
  * When running as a standalone binary (without Bun), these provide the skill files

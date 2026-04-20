@@ -1,5 +1,5 @@
 /**
- * API client functions for the Archon Web UI.
+ * API client functions for the HarnessLab Web UI.
  * Uses relative URLs - Vite proxy handles routing in dev.
  * SSE streams bypass the proxy in dev mode (Vite proxy buffers SSE responses).
  */

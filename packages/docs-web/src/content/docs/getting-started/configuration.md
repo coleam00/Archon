@@ -14,7 +14,7 @@ sidebar:
 
 | 변수 | 필수 | 설명 |
 |----------|----------|-------------|
-| `CLAUDE_BIN_PATH` | 예(binary builds) | Claude Code SDK의 `cli.js`에 대한 절대 경로입니다. `assistants.claude.claudeBinaryPath`가 설정되지 않은 compiled Archon binary에서는 필수입니다. Dev mode(`bun run`)에서는 `node_modules`를 통해 자동으로 해석됩니다. |
+| `CLAUDE_BIN_PATH` | 예(binary builds) | Claude Code SDK의 `cli.js`에 대한 절대 경로입니다. `assistants.claude.claudeBinaryPath`가 설정되지 않은 compiled HarnessLab binary에서는 필수입니다. Dev mode(`bun run`)에서는 `node_modules`를 통해 자동으로 해석됩니다. |
 | `CLAUDE_USE_GLOBAL_AUTH` | 아니요 | `claude /login`의 credential을 사용하려면 `true`로 설정합니다(다른 Claude token이 없을 때 기본값) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | 아니요 | `claude setup-token`에서 받은 OAuth token입니다(global auth의 대안) |
 | `CLAUDE_API_KEY` | 아니요 | pay-per-use 방식으로 사용할 Anthropic API key입니다(global auth의 대안) |

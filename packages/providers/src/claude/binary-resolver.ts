@@ -47,7 +47,7 @@ const INSTALL_INSTRUCTIONS =
   '    assistants:\n' +
   '      claude:\n' +
   '        claudeBinaryPath: /absolute/path/to/claude\n\n' +
-  'See: https://archon.diy/docs/reference/configuration#claude';
+  'See: https://harnesslab.codewithgenie.com/reference/configuration/#claude';
 
 /**
  * Resolve the path to the Claude Code SDK's cli.js.

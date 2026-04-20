@@ -23,7 +23,7 @@ HarnessLab은 **Archon fork**입니다. 원본 Archon을 그대로 따라가는 
 ## Git 전략
 
 - **upstream**: `coleam00/Archon`
-- **origin**: `NewTurn2017/Archon`
+- **origin**: `NewTurn2017/HarnessLab`
 - **작업 기준 브랜치**: `dev`
 - **한국어 브랜치 권장 규칙**: `ko/*`
 

@@ -45,7 +45,7 @@ fi
 
 # Remove 'v' prefix for formula version because Homebrew adds it in URLs.
 FORMULA_VERSION="${RELEASE_TAG#v}"
-REPO="${REPO:-${GITHUB_REPOSITORY:-$(derive_repo_from_origin || echo 'NewTurn2017/Archon')}}"
+REPO="${REPO:-${GITHUB_REPOSITORY:-$(derive_repo_from_origin || echo 'NewTurn2017/HarnessLab')}}"
 FORMULA_FILE="${FORMULA_FILE:-homebrew/archon.rb}"
 
 if [ ! -f "$FORMULA_FILE" ]; then

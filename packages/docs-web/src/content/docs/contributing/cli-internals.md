@@ -1,6 +1,6 @@
 ---
 title: CLI 내부 구조
-description: Archon CLI 패키지의 기술 reference — entry point 흐름, command routing, worktree logic, adapter 상세.
+description: HarnessLab CLI 패키지의 기술 reference — entry point 흐름, command routing, worktree logic, adapter 상세.
 category: contributing
 area: cli
 audience: [developer]

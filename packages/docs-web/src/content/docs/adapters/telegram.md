@@ -1,6 +1,6 @@
 ---
 title: Telegram
-description: Bot API를 사용해 Archon을 Telegram에 연결하고 모바일과 데스크톱에서 접근합니다.
+description: Bot API를 사용해 HarnessLab을 Telegram에 연결하고 모바일과 데스크톱에서 접근합니다.
 category: adapters
 area: adapters
 audience: [user, operator]
@@ -9,11 +9,11 @@ sidebar:
   order: 3
 ---
 
-Archon을 Telegram에 연결하면 어떤 Telegram 클라이언트에서든 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
+HarnessLab을 Telegram에 연결하면 어떤 Telegram 클라이언트에서든 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
 
 ## 사전 준비
 
-- 실행 중인 Archon 서버([시작하기](/getting-started/) 참고)
+- 실행 중인 HarnessLab 서버([시작하기](/getting-started/) 참고)
 - Telegram 계정
 
 ## Telegram Bot 만들기

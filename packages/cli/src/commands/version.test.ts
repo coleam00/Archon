@@ -25,9 +25,9 @@ describe('versionCommand', () => {
     // Should have called console.log 5 times (version, platform, build, database, git commit)
     expect(consoleSpy).toHaveBeenCalledTimes(5);
 
-    // First call should contain "Archon CLI" and version
+    // First call should contain "HarnessLab CLI" and version
     const firstCall = consoleSpy.mock.calls[0][0] as string;
-    expect(firstCall).toContain('Archon CLI');
+    expect(firstCall).toContain('HarnessLab CLI');
     expect(firstCall).toMatch(/v\d+\.\d+\.\d+/);
 
     // Second call should contain platform info
@@ -61,8 +61,8 @@ describe('versionCommand', () => {
     await versionCommand();
 
     const firstCall = consoleSpy.mock.calls[0][0] as string;
-    // Format: "Archon CLI v0.2.0"
-    expect(firstCall).toMatch(/^Archon CLI v\d+\.\d+\.\d+$/);
+    // Format: "HarnessLab CLI v0.2.0"
+    expect(firstCall).toMatch(/^HarnessLab CLI v\d+\.\d+\.\d+$/);
   });
 
   it('should show source (bun) build type in development', async () => {

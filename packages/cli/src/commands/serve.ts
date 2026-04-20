@@ -4,7 +4,7 @@ import { createLogger, getWebDistDir, BUNDLED_IS_BINARY, BUNDLED_VERSION } from 
 
 const log = createLogger('cli.serve');
 
-const GITHUB_REPO = 'coleam00/Archon';
+const GITHUB_REPO = 'NewTurn2017/HarnessLab';
 
 function toError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));

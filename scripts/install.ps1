@@ -1,23 +1,23 @@
 # scripts/install.ps1
 # Install HarnessLab CLI from GitHub Releases on Windows
 #
-# Usage: irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.ps1 | iex
 #
 # Options (via environment variables):
-#   $env:REPO          - GitHub repository to install from (default: NewTurn2017/Archon)
+#   $env:REPO          - GitHub repository to install from (default: NewTurn2017/HarnessLab)
 #   $env:VERSION       - Specific version to install (default: latest)
 #   $env:INSTALL_DIR   - Installation directory (default: $env:USERPROFILE\.archon\bin)
 #   $env:SKIP_CHECKSUM - Set to "true" to skip checksum verification (not recommended)
 #
 # Examples:
 #   # Install latest
-#   irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.ps1 | iex
 #
 #   # Install specific version
-#   $env:VERSION = "v0.1.0"; irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
+#   $env:VERSION = "v0.1.0"; irm https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.ps1 | iex
 #
 #   # Install to custom directory
-#   $env:INSTALL_DIR = "C:\tools\archon"; irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
+#   $env:INSTALL_DIR = "C:\tools\archon"; irm https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.ps1 | iex
 
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
@@ -26,7 +26,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-$REPO         = if ($env:REPO)         { $env:REPO }         else { "NewTurn2017/Archon" }
+$REPO         = if ($env:REPO)         { $env:REPO }         else { "NewTurn2017/HarnessLab" }
 $BINARY_NAME  = "archon"
 $VERSION      = if ($env:VERSION)     { $env:VERSION }     else { "latest" }
 $INSTALL_DIR  = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { "$env:USERPROFILE\.archon\bin" }
@@ -71,7 +71,7 @@ function Get-Arch {
     switch ($procArch.ToUpper()) {
         "ARM64"  {
             Write-Warn "ARM64 architecture detected."
-            Write-Warn "Windows ARM64 binaries are not yet available for Archon."
+            Write-Warn "Windows ARM64 binaries are not yet available for HarnessLab."
             Write-Warn "You can try running the x64 binary under emulation, or build from source:"
             Write-Warn "  https://github.com/$REPO"
             throw "Unsupported architecture: ARM64 (no binary available yet)"

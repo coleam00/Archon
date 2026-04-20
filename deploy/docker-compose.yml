@@ -1,5 +1,5 @@
 # =============================================================================
-# Archon - Docker Compose for End Users (pre-built image)
+# HarnessLab - Docker Compose for End Users (pre-built image)
 # =============================================================================
 #
 # Usage:
@@ -8,11 +8,11 @@
 #   3. Run: docker compose up -d
 #
 # For full documentation, see:
-# https://github.com/coleam00/Archon
+# https://github.com/NewTurn2017/HarnessLab
 
 services:
   app:
-    image: ghcr.io/coleam00/archon:latest
+    image: ghcr.io/newturn2017/harnesslab:latest
     restart: unless-stopped
     env_file: .env
     environment:

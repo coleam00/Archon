@@ -104,7 +104,7 @@ mock.module('../workflows/store-adapter', () => ({
 // Config mock
 const mockLoadConfig = mock(() =>
   Promise.resolve({
-    botName: 'Archon',
+    botName: 'HarnessLab',
     assistant: 'claude',
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
@@ -701,7 +701,7 @@ describe('orchestrator-agent handleMessage', () => {
   describe('assistantConfig forwarding', () => {
     test('passes assistantConfig with settingSources for claude', async () => {
       mockLoadConfig.mockResolvedValueOnce({
-        botName: 'Archon',
+        botName: 'HarnessLab',
         assistant: 'claude',
         assistants: {
           claude: { settingSources: ['project', 'user'] },
@@ -737,7 +737,7 @@ describe('orchestrator-agent handleMessage', () => {
       };
       mockGetOrCreateConversation.mockResolvedValueOnce(codexConversation);
       mockLoadConfig.mockResolvedValueOnce({
-        botName: 'Archon',
+        botName: 'HarnessLab',
         assistant: 'codex',
         assistants: {
           claude: { settingSources: ['project', 'user'] },

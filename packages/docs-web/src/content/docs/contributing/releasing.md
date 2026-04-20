@@ -95,7 +95,7 @@ stable tag(`v0.1.0`처럼 `-`가 없는 tag)가 release되면 `release.yml`의 `
 
 ```bash
 # Test the install script (only works if repo is public)
-curl -fsSL https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.sh | bash
 
 # Verify version
 archon version
@@ -108,7 +108,7 @@ archon version
 >
 > ```bash
 > # Download and install using gh (requires GitHub authentication)
-> gh release download v0.1.0 --repo NewTurn2017/Archon \
+> gh release download v0.1.0 --repo NewTurn2017/HarnessLab \
 >   --pattern "archon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')" \
 >   --dir /tmp/archon-install
 >
