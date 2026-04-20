@@ -382,6 +382,7 @@ async function applyNodeConfig(
     if (Object.keys(builtHooks).length > 0) {
       // Merge with existing hooks (PostToolUse capture hook)
       const existingHooks = options.hooks as SDKHooksMap | undefined;
+      options.hooks ??= {};
       for (const [event, matchers] of Object.entries(builtHooks)) {
         if (!matchers) continue;
         const existing = existingHooks?.[event] as HookCallbackMatcher[] | undefined;

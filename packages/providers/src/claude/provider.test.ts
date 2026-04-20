@@ -866,6 +866,34 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.sandbox).toEqual(sandbox);
     });
 
+    test('initializes options.hooks when nodeConfig provides hooks and options.hooks is undefined', async () => {
+      // Regression: applyNodeConfig previously assumed options.hooks was
+      // already an object when per-node hooks were declared, causing
+      // "undefined is not an object" at runtime for any workflow using
+      // per-node hooks (e.g. archon-architect, archon-refactor-safely).
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        nodeConfig: {
+          hooks: {
+            PostToolUse: [{ matcher: 'Write', response: { continue: true } }],
+          },
+        },
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: { hooks?: Record<string, Array<{ matcher?: string }>> };
+      };
+      expect(callArgs.options.hooks).toBeDefined();
+      expect(callArgs.options.hooks?.PostToolUse).toBeDefined();
+      expect(callArgs.options.hooks?.PostToolUse?.[0]?.matcher).toBe('Write');
+    });
+
     test('ignores empty text blocks', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
