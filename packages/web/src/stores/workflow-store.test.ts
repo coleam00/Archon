@@ -202,10 +202,29 @@ describe('handleWorkflowStatus — approval field', () => {
     expect(wf!.approval).toEqual(approval);
   });
 
-  test('clears approval when workflow transitions out of paused', () => {
+  test('ignores approval payload on non-paused status events', () => {
     useWorkflowStore.getState().handleWorkflowStatus(
       statusEvent({
         runId: 'run-ap3',
+        status: 'running',
+        approval: {
+          nodeId: 'gate',
+          message: 'Historical gate context',
+          lastOutput: 'Archived workflow output',
+          lastOutputTruncated: false,
+          finalAssistantOutput: 'Archived assistant summary',
+          finalAssistantOutputTruncated: false,
+        },
+      })
+    );
+    const wf = useWorkflowStore.getState().workflows.get('run-ap3');
+    expect(wf!.approval).toBeUndefined();
+  });
+
+  test('clears approval when workflow transitions out of paused', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(
+      statusEvent({
+        runId: 'run-ap4',
         status: 'paused',
         approval: {
           nodeId: 'gate',
@@ -219,8 +238,42 @@ describe('handleWorkflowStatus — approval field', () => {
     );
     useWorkflowStore
       .getState()
-      .handleWorkflowStatus(statusEvent({ runId: 'run-ap3', status: 'running' }));
-    const wf = useWorkflowStore.getState().workflows.get('run-ap3');
+      .handleWorkflowStatus(statusEvent({ runId: 'run-ap4', status: 'running' }));
+    const wf = useWorkflowStore.getState().workflows.get('run-ap4');
+    expect(wf!.approval).toBeUndefined();
+  });
+
+  test('keeps approval cleared when paused workflow transitions to failed with stale approval payload', () => {
+    useWorkflowStore.getState().handleWorkflowStatus(
+      statusEvent({
+        runId: 'run-ap5',
+        status: 'paused',
+        approval: {
+          nodeId: 'gate',
+          message: 'Please review',
+          lastOutput: 'Latest workflow output',
+          lastOutputTruncated: false,
+          finalAssistantOutput: 'Final assistant summary',
+          finalAssistantOutputTruncated: false,
+        },
+      })
+    );
+    useWorkflowStore.getState().handleWorkflowStatus(
+      statusEvent({
+        runId: 'run-ap5',
+        status: 'failed',
+        error: 'Gate resolved already',
+        approval: {
+          nodeId: 'gate',
+          message: 'Historical gate context',
+          lastOutput: 'Archived workflow output',
+          lastOutputTruncated: false,
+          finalAssistantOutput: 'Archived assistant summary',
+          finalAssistantOutputTruncated: false,
+        },
+      })
+    );
+    const wf = useWorkflowStore.getState().workflows.get('run-ap5');
     expect(wf!.approval).toBeUndefined();
   });
 });
