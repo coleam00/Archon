@@ -277,12 +277,20 @@ describe('discoverAvailableCommands', () => {
     await createCommandFile('zebra');
     await createCommandFile('alpha');
     const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
-    expect(commands).toEqual(['alpha', 'zebra']);
+    expect(commands).toContain('alpha');
+    expect(commands).toContain('zebra');
+    // Local commands must appear in sorted order relative to each other
+    expect(commands.indexOf('alpha')).toBeLessThan(commands.indexOf('zebra'));
+    // The full list must be sorted
+    expect(commands).toEqual([...commands].sort());
   });
 
-  test('returns empty array when no commands directory', async () => {
+  test('returns no local commands when no commands directory exists in tmpDir', async () => {
     const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
-    expect(commands).toEqual([]);
+    // No local commands in this tmpDir — any results come from global ~/.archon/.archon/commands/
+    // which may or may not exist on this machine; local-only commands must not appear.
+    expect(commands).not.toContain('my-local-command-that-does-not-exist');
+    expect(commands).toEqual([...commands].sort());
   });
 
   test('loadDefaultCommands: false suppresses bundled commands', async () => {

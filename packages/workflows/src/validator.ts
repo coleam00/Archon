@@ -142,9 +142,10 @@ export async function discoverAvailableCommands(
   const names = new Set<string>();
 
   // Repo search paths (findMarkdownFilesRecursive returns [] for ENOENT)
+  // Absolute paths (e.g. global ~/.archon/.archon/commands/) are used directly.
   const searchPaths = getCommandFolderSearchPaths(config?.commandFolder);
   for (const folder of searchPaths) {
-    const dirPath = join(cwd, folder);
+    const dirPath = isAbsolute(folder) ? folder : join(cwd, folder);
     const files = await findMarkdownFilesRecursive(dirPath);
     for (const { commandName } of files) {
       names.add(commandName);
@@ -179,10 +180,12 @@ async function resolveCommand(
   cwd: string,
   config?: ValidationConfig
 ): Promise<string | null> {
-  // Repo search paths
+  // Repo search paths (absolute paths such as global ~/.archon/.archon/commands/ used directly)
   const searchPaths = getCommandFolderSearchPaths(config?.commandFolder);
   for (const folder of searchPaths) {
-    const filePath = join(cwd, folder, `${commandName}.md`);
+    const filePath = isAbsolute(folder)
+      ? join(folder, `${commandName}.md`)
+      : join(cwd, folder, `${commandName}.md`);
     if (await fileExists(filePath)) {
       return filePath;
     }

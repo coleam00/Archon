@@ -108,15 +108,18 @@ export function getArchonConfigPath(): string {
  * @param configuredFolder - Optional additional folder from config
  */
 export function getCommandFolderSearchPaths(configuredFolder?: string): string[] {
-  const paths = ['.archon/commands', '.archon/commands/defaults'];
+  // Global commands directory (~/.archon/.archon/commands/) — absolute path so callers
+  // can distinguish it from relative repo-local paths and skip the cwd join.
+  const globalCommandsPath = join(getArchonHome(), '.archon', 'commands');
+  const paths = ['.archon/commands', '.archon/commands/defaults', globalCommandsPath];
 
-  // Add configured folder if specified (and not already in paths)
-  if (
-    configuredFolder &&
-    configuredFolder !== '.archon/commands' &&
-    configuredFolder !== '.archon/commands/defaults'
-  ) {
-    paths.push(configuredFolder);
+  // Add configured folder if specified (and not already covered).
+  // expandTilde handles paths like "~/.archon/commands" that users put in config.
+  if (configuredFolder) {
+    const expanded = expandTilde(configuredFolder);
+    if (expanded !== '.archon/commands' && expanded !== '.archon/commands/defaults') {
+      paths.push(expanded);
+    }
   }
 
   return paths;

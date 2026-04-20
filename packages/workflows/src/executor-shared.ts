@@ -6,7 +6,7 @@
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, isAbsolute } from 'path';
 import type { WorkflowDeps } from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
@@ -152,9 +152,12 @@ export async function loadCommandPrompt(
   // Use command folder paths with optional configured folder
   const searchPaths = archonPaths.getCommandFolderSearchPaths(configuredFolder);
 
-  // Search repo paths first
+  // Search repo paths first (absolute paths such as the global ~/.archon/.archon/commands/
+  // are used directly; relative paths are resolved against cwd)
   for (const folder of searchPaths) {
-    const filePath = join(cwd, folder, `${commandName}.md`);
+    const filePath = isAbsolute(folder)
+      ? join(folder, `${commandName}.md`)
+      : join(cwd, folder, `${commandName}.md`);
     try {
       const content = await readFile(filePath, 'utf-8');
       if (!content.trim()) {
