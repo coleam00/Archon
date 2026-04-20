@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
-    "test": "bun test src/routes/api.workflows.test.ts && bun test src/routes/api.conversations.test.ts && bun test src/routes/api.codebases.test.ts && bun test src/routes/api.messages.test.ts && bun test src/routes/api.health.test.ts && bun test src/routes/api.workflow-runs.test.ts && bun test src/routes/api.providers.test.ts && bun test src/adapters/web/transport.test.ts && bun test src/adapters/web/persistence.test.ts",
+    "test": "bun test src/routes/api.workflows.test.ts && bun test src/routes/api.conversations.test.ts && bun test src/routes/api.codebases.test.ts && bun test src/routes/api.messages.test.ts && bun test src/routes/api.health.test.ts && bun test src/routes/api.workflow-runs.test.ts && bun test src/routes/api.providers.test.ts && bun test src/adapters/web/workflow-bridge.test.ts && bun test src/adapters/web/transport.test.ts && bun test src/adapters/web/persistence.test.ts",
     "type-check": "bun x tsc --noEmit",
     "setup-auth": "bun src/scripts/setup-auth.ts"
   },
