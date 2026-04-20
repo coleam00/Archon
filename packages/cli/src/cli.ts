@@ -24,8 +24,8 @@ if (existsSync(globalEnvPath)) {
   const result = config({ path: globalEnvPath, override: true });
   if (result.error) {
     // Logger may not be available yet (early startup), so use console for user-facing error
-    console.error(`Error loading .env from ${globalEnvPath}: ${result.error.message}`);
-    console.error('Hint: Check for syntax errors in your .env file.');
+    console.error(`.env 로드 실패 (${globalEnvPath}): ${result.error.message}`);
+    console.error('힌트: .env 파일의 문법 오류를 확인하세요.');
     process.exit(1);
   }
 }
@@ -97,44 +97,44 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 function printUsage(): void {
   console.log(`
-Archon CLI - Run AI workflows from the command line
+Archon CLI - 명령줄에서 AI workflow(워크플로)를 실행합니다
 
-Usage:
+사용법:
   archon <command> [subcommand] [options] [arguments]
 
-Commands:
-  chat <message>             Send a message to the orchestrator
-  setup                      Interactive setup wizard for credentials and config
-  workflow list              List available workflows in current directory
-  workflow run <name> [msg]  Run a workflow with optional message
-  workflow status            Show status of running workflows
-  isolation list             List all active worktrees/environments
-  isolation cleanup [days]   Remove stale environments (default: 7 days)
-  isolation cleanup --merged Remove environments with branches merged into main
-  continue <branch> [msg]    Continue work on an existing worktree with prior context
-  complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
-  serve                      Start the web UI server (downloads web UI on first run)
-  validate workflows [name]  Validate workflow definitions and their references
-  validate commands [name]   Validate command files
-  version                    Show version info
-  help                       Show this help message
+명령:
+  chat <message>             orchestrator에 메시지를 보냅니다
+  setup                      자격 증명과 설정을 대화형으로 구성합니다
+  workflow list              현재 디렉터리의 사용 가능한 workflow 목록을 표시합니다
+  workflow run <name> [msg]  선택 메시지와 함께 workflow를 실행합니다
+  workflow status            실행 중인 workflow 상태를 표시합니다
+  isolation list             활성 작업공간/워크트리 목록을 표시합니다
+  isolation cleanup [days]   오래된 작업공간을 삭제합니다 (기본값: 7일)
+  isolation cleanup --merged main에 merge된 branch의 작업공간을 삭제합니다
+  continue <branch> [msg]    기존 worktree에서 이전 context로 작업을 이어갑니다
+  complete <branch> [...]    branch 수명주기를 완료합니다 (worktree + branch 삭제)
+  serve                      web UI 서버를 시작합니다 (처음 실행 시 web UI 다운로드)
+  validate workflows [name]  workflow 정의와 참조를 검증합니다
+  validate commands [name]   command 파일을 검증합니다
+  version                    버전 정보를 표시합니다
+  help                       이 도움말을 표시합니다
 
-Options:
-  --cwd <path>               Override working directory (default: current directory)
-  --branch, -b <name>        Create worktree for branch (or reuse existing)
-  --from, --from-branch <name> Create new branch from specific start point
-  --no-worktree              Run on branch directly without worktree isolation
-  --resume                   Resume the most recent failed run of the workflow (mutually exclusive with --branch)
-  --spawn                    Open setup wizard in a new terminal window (for setup command)
-  --quiet, -q                Reduce log verbosity to warnings and errors only
-  --verbose, -v              Show debug-level output
-  --json                     Output machine-readable JSON (for workflow list)
-  --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
-  --no-context               Skip context injection for 'continue'
-  --port <port>              Override server port for 'serve' (default: 3090)
-  --download-only            Download web UI without starting the server
+옵션:
+  --cwd <path>               작업 디렉터리를 지정합니다 (기본값: 현재 디렉터리)
+  --branch, -b <name>        branch용 worktree를 만들거나 기존 worktree를 재사용합니다
+  --from, --from-branch <name> 지정한 시작점에서 새 branch를 만듭니다
+  --no-worktree              worktree 격리 없이 현재 branch에서 직접 실행합니다
+  --resume                   가장 최근 실패한 workflow run을 재개합니다 (--branch와 함께 사용 불가)
+  --spawn                    새 터미널 창에서 setup 마법사를 엽니다 (setup command용)
+  --quiet, -q                경고와 오류만 출력합니다
+  --verbose, -v              디버그 수준 출력을 표시합니다
+  --json                     기계가 읽을 수 있는 JSON을 출력합니다 (workflow list용)
+  --workflow <name>          'continue'에서 실행할 workflow (기본값: archon-assist)
+  --no-context               'continue'에서 context 주입을 건너뜁니다
+  --port <port>              'serve'의 서버 port를 지정합니다 (기본값: 3090)
+  --download-only            서버를 시작하지 않고 web UI만 다운로드합니다
 
-Examples:
+예시:
   archon chat "What does the orchestrator do?"
   archon workflow list
   archon workflow run investigate-issue "Fix the login bug"
@@ -164,7 +164,7 @@ async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
     const result = await checkForUpdate(BUNDLED_VERSION);
     if (result?.updateAvailable) {
       process.stderr.write(
-        `Update available: v${result.currentVersion} → v${result.latestVersion} — ${result.releaseUrl}\n`
+        `업데이트 가능: v${result.currentVersion} → v${result.latestVersion} - ${result.releaseUrl}\n`
       );
     }
   } catch (err) {
@@ -218,7 +218,7 @@ async function main(): Promise<number> {
     });
   } catch (error) {
     const err = error as Error;
-    console.error(`Error parsing arguments: ${err.message}`);
+    console.error(`인수 파싱 오류: ${err.message}`);
     printUsage();
     return 1;
   }
@@ -263,16 +263,16 @@ async function main(): Promise<number> {
     let effectiveCwd = cwd;
     if (requiresGitRepo) {
       if (!existsSync(cwd)) {
-        console.error(`Error: Directory does not exist: ${cwd}`);
+        console.error(`오류: 디렉터리가 없습니다: ${cwd}`);
         return 1;
       }
 
       // Validate git repository and resolve to root
       const repoRoot = await git.findRepoRoot(cwd);
       if (!repoRoot) {
-        console.error('Error: Not in a git repository.');
-        console.error('The Archon CLI must be run from within a git repository.');
-        console.error('Either navigate to a git repo or use --cwd to specify one.');
+        console.error('오류: git repository 안에서 실행해야 합니다.');
+        console.error('Archon CLI는 git repository 내부에서 실행되어야 합니다.');
+        console.error('git repo로 이동하거나 --cwd로 repo 경로를 지정하세요.');
         return 1;
       }
       // Use repo root as working directory (handles subdirectory case)
@@ -291,7 +291,7 @@ async function main(): Promise<number> {
       case 'chat': {
         const chatMessage = positionals.slice(1).join(' ');
         if (!chatMessage) {
-          console.error('Usage: archon chat <message>');
+          console.error('사용법: archon chat <message>');
           return 1;
         }
         await chatCommand(chatMessage);
@@ -311,31 +311,31 @@ async function main(): Promise<number> {
           case 'run': {
             const workflowName = positionals[2];
             if (!workflowName) {
-              console.error('Usage: archon workflow run <name> [message]');
+              console.error('사용법: archon workflow run <name> [message]');
               return 1;
             }
             const userMessage = positionals.slice(3).join(' ') || '';
             if (branchName !== undefined && noWorktree) {
               console.error(
-                'Error: --branch and --no-worktree are mutually exclusive.\n' +
-                  '  --branch creates an isolated worktree (safe).\n' +
-                  '  --no-worktree runs directly in your repo (no isolation).\n' +
-                  'Use one or the other.'
+                '오류: --branch와 --no-worktree는 함께 사용할 수 없습니다.\n' +
+                  '  --branch는 격리된 worktree를 만듭니다.\n' +
+                  '  --no-worktree는 현재 repo에서 직접 실행합니다.\n' +
+                  '둘 중 하나만 사용하세요.'
               );
               return 1;
             }
             if (noWorktree && fromBranch !== undefined) {
               console.error(
-                'Error: --from/--from-branch has no effect with --no-worktree.\n' +
-                  'Remove --from or drop --no-worktree.'
+                '오류: --from/--from-branch는 --no-worktree와 함께 사용할 수 없습니다.\n' +
+                  '--from을 제거하거나 --no-worktree를 빼세요.'
               );
               return 1;
             }
             if (resumeFlag && branchName !== undefined) {
               console.error(
-                'Error: --resume and --branch are mutually exclusive.\n' +
-                  '  --resume reuses the existing worktree from the failed run.\n' +
-                  '  Remove --branch when using --resume.'
+                '오류: --resume과 --branch는 함께 사용할 수 없습니다.\n' +
+                  '  --resume은 실패한 run의 기존 worktree를 재사용합니다.\n' +
+                  '  --resume을 사용할 때는 --branch를 제거하세요.'
               );
               return 1;
             }
@@ -358,7 +358,7 @@ async function main(): Promise<number> {
           case 'resume': {
             const resumeRunId = positionals[2];
             if (!resumeRunId) {
-              console.error('Usage: archon workflow resume <run-id>');
+              console.error('사용법: archon workflow resume <run-id>');
               return 1;
             }
             await workflowResumeCommand(resumeRunId);
@@ -368,7 +368,7 @@ async function main(): Promise<number> {
           case 'abandon': {
             const abandonRunId = positionals[2];
             if (!abandonRunId) {
-              console.error('Usage: archon workflow abandon <run-id>');
+              console.error('사용법: archon workflow abandon <run-id>');
               return 1;
             }
             await workflowAbandonCommand(abandonRunId);
@@ -378,7 +378,7 @@ async function main(): Promise<number> {
           case 'approve': {
             const approveRunId = positionals[2];
             if (!approveRunId) {
-              console.error('Usage: archon workflow approve <run-id> [comment]');
+              console.error('사용법: archon workflow approve <run-id> [comment]');
               return 1;
             }
             // Accept comment as positional args (everything after run ID) or --comment flag
@@ -391,7 +391,7 @@ async function main(): Promise<number> {
           case 'reject': {
             const rejectRunId = positionals[2];
             if (!rejectRunId) {
-              console.error('Usage: archon workflow reject <run-id> [reason]');
+              console.error('사용법: archon workflow reject <run-id> [reason]');
               return 1;
             }
             const rejectReason =
@@ -403,8 +403,8 @@ async function main(): Promise<number> {
           case 'cleanup': {
             const days = positionals[2] ? Number(positionals[2]) : 7;
             if (Number.isNaN(days) || days < 0) {
-              console.error('Usage: archon workflow cleanup [days]');
-              console.error('  days: delete terminal runs older than N days (default: 7)');
+              console.error('사용법: archon workflow cleanup [days]');
+              console.error('  days: N일보다 오래된 종료된 run을 삭제합니다 (기본값: 7)');
               return 1;
             }
             await workflowCleanupCommand(days);
@@ -415,32 +415,32 @@ async function main(): Promise<number> {
             const action = positionals[2];
             if (action !== 'emit') {
               if (action === undefined) {
-                console.error('Missing workflow event subcommand');
+                console.error('workflow event 하위 명령이 필요합니다.');
               } else {
-                console.error(`Unknown workflow event subcommand: ${action}`);
+                console.error(`알 수 없는 workflow event 하위 명령: ${action}`);
               }
-              console.error('Available: emit');
+              console.error('사용 가능: emit');
               return 1;
             }
             const runId = values['run-id'] as string | undefined;
             const eventType = values.type as string | undefined;
             if (!runId) {
               console.error(
-                'Usage: archon workflow event emit --run-id <uuid> --type <event-type>'
+                '사용법: archon workflow event emit --run-id <uuid> --type <event-type>'
               );
-              console.error('Error: --run-id is required');
+              console.error('오류: --run-id가 필요합니다.');
               return 1;
             }
             if (!eventType) {
               console.error(
-                'Usage: archon workflow event emit --run-id <uuid> --type <event-type>'
+                '사용법: archon workflow event emit --run-id <uuid> --type <event-type>'
               );
-              console.error('Error: --type is required');
+              console.error('오류: --type이 필요합니다.');
               return 1;
             }
             if (!isValidEventType(eventType)) {
-              console.error(`Error: unknown event type: ${eventType}`);
-              console.error(`Valid types: ${WORKFLOW_EVENT_TYPES.join(', ')}`);
+              console.error(`오류: 알 수 없는 event type: ${eventType}`);
+              console.error(`유효한 type: ${WORKFLOW_EVENT_TYPES.join(', ')}`);
               return 1;
             }
             let eventData: Record<string, unknown> | undefined;
@@ -450,7 +450,7 @@ async function main(): Promise<number> {
                 eventData = JSON.parse(rawData) as Record<string, unknown>;
               } catch {
                 console.warn(
-                  `Warning: --data is not valid JSON — event will be emitted without data payload: ${rawData}`
+                  `경고: --data가 유효한 JSON이 아니어서 data payload 없이 event를 보냅니다: ${rawData}`
                 );
               }
             }
@@ -460,12 +460,12 @@ async function main(): Promise<number> {
 
           default:
             if (subcommand === undefined) {
-              console.error('Missing workflow subcommand');
+              console.error('workflow 하위 명령이 필요합니다.');
             } else {
-              console.error(`Unknown workflow subcommand: ${subcommand}`);
+              console.error(`알 수 없는 workflow 하위 명령: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event'
+              '사용 가능: list, run, status, resume, abandon, approve, reject, cleanup, event'
             );
             return 1;
         }
@@ -492,11 +492,11 @@ async function main(): Promise<number> {
 
           default:
             if (subcommand === undefined) {
-              console.error('Missing isolation subcommand');
+              console.error('isolation 하위 명령이 필요합니다.');
             } else {
-              console.error(`Unknown isolation subcommand: ${subcommand}`);
+              console.error(`알 수 없는 isolation 하위 명령: ${subcommand}`);
             }
-            console.error('Available: list, cleanup');
+            console.error('사용 가능: list, cleanup');
             return 1;
         }
         break;
@@ -515,18 +515,18 @@ async function main(): Promise<number> {
 
           default:
             if (subcommand === undefined) {
-              console.error('Missing validate target');
+              console.error('validate 대상이 필요합니다.');
             } else {
-              console.error(`Unknown validate target: ${subcommand}`);
+              console.error(`알 수 없는 validate 대상: ${subcommand}`);
             }
-            console.error('Available: workflows, commands');
+            console.error('사용 가능: workflows, commands');
             return 1;
         }
 
       case 'complete': {
         const branches = positionals.slice(1);
         if (branches.length === 0) {
-          console.error('Usage: archon complete <branch-name> [branch2 ...]');
+          console.error('사용법: archon complete <branch-name> [branch2 ...]');
           return 1;
         }
         const forceFlag = args.includes('--force');
@@ -537,7 +537,7 @@ async function main(): Promise<number> {
       case 'continue': {
         const continueBranch = positionals[1];
         if (!continueBranch) {
-          console.error('Usage: archon continue <branch> [--workflow <name>] "instruction"');
+          console.error('사용법: archon continue <branch> [--workflow <name>] "instruction"');
           return 1;
         }
         const continueMessage = positionals.slice(2).join(' ') || '';
@@ -558,9 +558,9 @@ async function main(): Promise<number> {
 
       default:
         if (command === undefined) {
-          console.error('Missing command');
+          console.error('명령이 필요합니다.');
         } else {
-          console.error(`Unknown command: ${command}`);
+          console.error(`알 수 없는 명령: ${command}`);
         }
         printUsage();
         return 1;
@@ -569,7 +569,7 @@ async function main(): Promise<number> {
     return 0;
   } catch (error) {
     const err = error as Error;
-    console.error(`Error: ${err.message}`);
+    console.error(`오류: ${err.message}`);
     if (process.env.DEBUG) {
       console.error(err.stack);
     }
@@ -590,6 +590,6 @@ main()
   })
   .catch((error: unknown) => {
     const err = error as Error;
-    console.error('Fatal error:', err.message);
+    console.error('치명적 오류:', err.message);
     process.exit(1);
   });

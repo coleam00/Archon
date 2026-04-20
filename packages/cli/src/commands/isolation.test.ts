@@ -150,8 +150,8 @@ describe('isolationCompleteCommand', () => {
       force: false,
       deleteRemoteBranch: true,
     });
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 0 failed, 0 not found');
+    expect(consoleLogSpy).toHaveBeenCalledWith('  완료: feature-branch');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 1개 완료, 0개 실패, 0개 찾지 못함');
   });
 
   it('prints not found when env does not exist', async () => {
@@ -161,9 +161,9 @@ describe('isolationCompleteCommand', () => {
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      '  Not found: nonexistent-branch (no active isolation environment)'
+      '  찾지 못함: nonexistent-branch (활성 isolation 작업공간 없음)'
     );
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 0 failed, 1 not found');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 0개 실패, 1개 찾지 못함');
   });
 
   it('blocks when env has uncommitted changes without --force', async () => {
@@ -173,10 +173,10 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['dirty-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: dirty-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ uncommitted changes in worktree');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  차단됨: dirty-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ worktree에 커밋되지 않은 변경사항이 있음');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('blocks when there is a running workflow on the branch', async () => {
@@ -189,10 +189,12 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ running workflow: implement (id: run-abc)');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  차단됨: feature-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '    ✗ 실행 중인 workflow: implement (id: run-abc)'
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('blocks when there is an open PR on the branch', async () => {
@@ -211,12 +213,12 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  차단됨: feature-branch');
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      '    ✗ open PR #140 — "fix: add metrics session_id"'
+      '    ✗ 열린 PR #140 - "fix: add metrics session_id"'
     );
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('blocks when there are unmerged commits', async () => {
@@ -237,10 +239,10 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 2 commit(s) not merged into main');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  차단됨: feature-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 2개 commit이 main에 merge되지 않음');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('blocks when there are unpushed commits', async () => {
@@ -258,10 +260,10 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 1 commit(s) not pushed to remote');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  차단됨: feature-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 1개 commit이 remote에 push되지 않음');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('blocks with "never pushed" when origin/<branch> does not exist', async () => {
@@ -279,10 +281,10 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ branch has never been pushed to remote');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  차단됨: feature-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ branch가 remote에 한 번도 push되지 않음');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('reports all blockers together when multiple checks fail', async () => {
@@ -305,12 +307,14 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(mockRemoveEnvironment).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Blocked: feature-branch');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ uncommitted changes in worktree');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ running workflow: implement (id: run-abc)');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ open PR #140 — "fix: metrics"');
-    expect(consoleErrorSpy).toHaveBeenCalledWith('  Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  차단됨: feature-branch');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ worktree에 커밋되지 않은 변경사항이 있음');
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '    ✗ 실행 중인 workflow: implement (id: run-abc)'
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    ✗ 열린 PR #140 - "fix: metrics"');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('  무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('skips PR check with warning when gh CLI is not available', async () => {
@@ -331,11 +335,11 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      '  Warning: gh CLI not available — skipping open PR check'
+      '  경고: gh CLI를 사용할 수 없음 - open PR 확인을 건너뜁니다'
     );
     // Should still complete since gh check is non-fatal
     expect(mockRemoveEnvironment).toHaveBeenCalled();
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
+    expect(consoleLogSpy).toHaveBeenCalledWith('  완료: feature-branch');
   });
 
   it('proceeds despite all checks when --force is set', async () => {
@@ -361,7 +365,7 @@ describe('isolationCompleteCommand', () => {
       force: true,
       deleteRemoteBranch: true,
     });
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: dirty-branch');
+    expect(consoleLogSpy).toHaveBeenCalledWith('  완료: dirty-branch');
   });
 
   it('counts failed when removeEnvironment throws', async () => {
@@ -371,9 +375,9 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['bad-branch'], { force: false, deleteRemote: true });
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      '  Failed: bad-branch — git error: cannot remove worktree'
+      '  실패: bad-branch - git error: cannot remove worktree'
     );
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('handles multiple branches with mixed results', async () => {
@@ -390,7 +394,7 @@ describe('isolationCompleteCommand', () => {
       deleteRemote: true,
     });
 
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 1 failed, 1 not found');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 1개 완료, 1개 실패, 1개 찾지 못함');
   });
   it('counts as failed when removeEnvironment returns skippedReason (ghost worktree)', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
@@ -404,10 +408,10 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['ghost-branch'], { force: true, deleteRemote: true });
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      '  Blocked: ghost-branch — has uncommitted changes'
+      '  차단됨: ghost-branch - 커밋되지 않은 변경사항이 있음'
     );
-    expect(consoleErrorSpy).toHaveBeenCalledWith('    Use --force to override.');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleErrorSpy).toHaveBeenCalledWith('    무시하고 진행하려면 --force를 사용하세요.');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('counts as failed when removeEnvironment returns partial (worktree not removed, branch deleted)', async () => {
@@ -422,10 +426,10 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['partial-branch'], { force: true, deleteRemote: true });
 
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      '  Partial: partial-branch — worktree was not removed from disk (branch deleted, DB updated)'
+      '  부분 완료: partial-branch - worktree가 디스크에서 제거되지 않았습니다 (branch 삭제됨, DB 업데이트됨)'
     );
     expect(consoleErrorSpy).toHaveBeenCalledWith('    ⚠ Some warning');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 0 completed, 1 failed, 0 not found');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 0개 완료, 1개 실패, 0개 찾지 못함');
   });
 
   it('surfaces warnings from removeEnvironment result', async () => {
@@ -439,11 +443,11 @@ describe('isolationCompleteCommand', () => {
     await isolationCompleteCommand(['feature-branch'], { force: true, deleteRemote: true });
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      "  Warning: Cannot delete branch 'feature-branch': checked out elsewhere"
+      "  경고: Cannot delete branch 'feature-branch': checked out elsewhere"
     );
     // Should still count as completed since worktree was removed
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Completed: feature-branch');
-    expect(consoleLogSpy).toHaveBeenCalledWith('\nComplete: 1 completed, 0 failed, 0 not found');
+    expect(consoleLogSpy).toHaveBeenCalledWith('  완료: feature-branch');
+    expect(consoleLogSpy).toHaveBeenCalledWith('\n완료: 1개 완료, 0개 실패, 0개 찾지 못함');
   });
 });
 

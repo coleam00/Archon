@@ -341,22 +341,22 @@ describe('CLI git repo check', () => {
     // Verify the exact error messages used in cli.ts for documentation purposes
     const ERROR_MESSAGES = {
       notGitRepo: [
-        'Error: Not in a git repository.',
-        'The Archon CLI must be run from within a git repository.',
-        'Either navigate to a git repo or use --cwd to specify one.',
+        '오류: git repository 안에서 실행해야 합니다.',
+        'Archon CLI는 git repository 내부에서 실행되어야 합니다.',
+        'git repo로 이동하거나 --cwd로 repo 경로를 지정하세요.',
       ],
-      dirNotExist: (path: string) => `Error: Directory does not exist: ${path}`,
+      dirNotExist: (path: string) => `오류: 디렉터리가 없습니다: ${path}`,
     };
 
     it('should have actionable git repo error message', () => {
       // Verify the messages include guidance
-      expect(ERROR_MESSAGES.notGitRepo[0]).toContain('Not in a git repository');
+      expect(ERROR_MESSAGES.notGitRepo[0]).toContain('git repository');
       expect(ERROR_MESSAGES.notGitRepo[2]).toContain('--cwd');
     });
 
     it('should have clear directory error message', () => {
       const msg = ERROR_MESSAGES.dirNotExist('/nonexistent');
-      expect(msg).toContain('Directory does not exist');
+      expect(msg).toContain('디렉터리가 없습니다');
       expect(msg).toContain('/nonexistent');
     });
   });

@@ -81,23 +81,23 @@ function generateConversationId(): string {
 function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): void {
   switch (event.type) {
     case 'node_started':
-      process.stderr.write(`[${event.nodeName}] Started\n`);
+      process.stderr.write(`[${event.nodeName}] 시작\n`);
       break;
     case 'node_completed':
-      process.stderr.write(`[${event.nodeName}] Completed (${formatDuration(event.duration)})\n`);
+      process.stderr.write(`[${event.nodeName}] 완료 (${formatDuration(event.duration)})\n`);
       break;
     case 'node_failed':
-      process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
+      process.stderr.write(`[${event.nodeName}] 실패: ${event.error}\n`);
       break;
     case 'node_skipped':
-      process.stderr.write(`[${event.nodeName}] Skipped (${event.reason})\n`);
+      process.stderr.write(`[${event.nodeName}] 건너뜀 (${event.reason})\n`);
       break;
     case 'approval_pending':
-      process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
+      process.stderr.write(`[${event.nodeId}] 승인 대기: ${event.message}\n`);
       break;
     case 'tool_started':
       if (verbose) {
-        process.stderr.write(`[${event.stepName}] tool: ${event.toolName} (started)\n`);
+        process.stderr.write(`[${event.stepName}] tool: ${event.toolName} (시작)\n`);
       }
       break;
     case 'tool_completed':
@@ -125,7 +125,7 @@ async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   } catch (error) {
     const err = error as Error;
     throw new Error(
-      `Error loading workflows: ${err.message}\nHint: Check permissions on .archon/workflows/ directory.`
+      `workflow 로드 오류: ${err.message}\n힌트: .archon/workflows/ 디렉터리 권한을 확인하세요.`
     );
   }
 }
@@ -169,16 +169,16 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
     return;
   }
 
-  console.log(`Discovering workflows in: ${cwd}`);
+  console.log(`workflow(워크플로)를 찾는 중: ${cwd}`);
 
   if (workflowEntries.length === 0 && errors.length === 0) {
-    console.log('\nNo workflows found.');
-    console.log('Workflows should be in .archon/workflows/ directory.');
+    console.log('\nworkflow(워크플로)를 찾지 못했습니다.');
+    console.log('workflow 파일은 .archon/workflows/ 디렉터리에 있어야 합니다.');
     return;
   }
 
   if (workflowEntries.length > 0) {
-    console.log(`\nFound ${workflowEntries.length} workflow(s):\n`);
+    console.log(`\n${workflowEntries.length}개 workflow(워크플로)를 찾았습니다:\n`);
 
     for (const { workflow } of workflowEntries) {
       console.log(`  ${workflow.name}`);
@@ -191,7 +191,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
   }
 
   if (errors.length > 0) {
-    console.log(`\n${errors.length} workflow(s) failed to load:\n`);
+    console.log(`\n${errors.length}개 workflow(워크플로)를 로드하지 못했습니다:\n`);
     for (const e of errors) {
       console.log(`  ${e.filename}: ${e.error}`);
     }
@@ -211,7 +211,7 @@ export async function workflowRunCommand(
   const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
 
   if (workflowEntries.length === 0 && errors.length === 0) {
-    throw new Error('No workflows found in .archon/workflows/');
+    throw new Error('.archon/workflows/에서 workflow를 찾지 못했습니다.');
   }
 
   const workflows = workflowEntries.map(ws => ws.workflow);
@@ -228,12 +228,12 @@ export async function workflowRunCommand(
     );
     if (loadError) {
       throw new Error(
-        `Workflow '${workflowName}' failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
+        `Workflow '${workflowName}' 로드 실패: ${loadError.error}\n\nYAML 파일을 수정한 뒤 다시 시도하세요.`
       );
     }
     const availableWorkflows = workflows.map(w => `  - ${w.name}`).join('\n');
     throw new Error(
-      `Workflow '${workflowName}' not found.\n\nAvailable workflows:\n${availableWorkflows}`
+      `Workflow '${workflowName}'을(를) 찾지 못했습니다.\n\n사용 가능한 workflow:\n${availableWorkflows}`
     );
   }
 
@@ -241,28 +241,28 @@ export async function workflowRunCommand(
   // workflowRunCommand is the authoritative boundary for programmatic callers)
   if (options.branchName !== undefined && options.noWorktree) {
     throw new Error(
-      '--branch and --no-worktree are mutually exclusive.\n' +
-        '  --branch creates an isolated worktree (safe).\n' +
-        '  --no-worktree runs directly in your repo (no isolation).\n' +
-        'Use one or the other.'
+      '--branch와 --no-worktree는 함께 사용할 수 없습니다.\n' +
+        '  --branch는 격리된 worktree를 만듭니다.\n' +
+        '  --no-worktree는 현재 repo에서 직접 실행합니다.\n' +
+        '둘 중 하나만 사용하세요.'
     );
   }
   if (options.noWorktree && options.fromBranch !== undefined) {
     throw new Error(
-      '--from/--from-branch has no effect with --no-worktree.\n' +
-        'Remove --from or drop --no-worktree.'
+      '--from/--from-branch는 --no-worktree와 함께 사용할 수 없습니다.\n' +
+        '--from을 제거하거나 --no-worktree를 빼세요.'
     );
   }
   if (options.resume && options.branchName !== undefined) {
     throw new Error(
-      '--resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.'
+      '--resume과 --branch는 함께 사용할 수 없습니다.\n' +
+        '  --resume은 실패한 run의 기존 worktree를 재사용합니다.\n' +
+        '  --resume을 사용할 때는 --branch를 제거하세요.'
     );
   }
 
-  console.log(`Running workflow: ${workflowName}`);
-  console.log(`Working directory: ${cwd}`);
+  console.log(`Workflow 실행: ${workflowName}`);
+  console.log(`작업 디렉터리: ${cwd}`);
   console.log('');
 
   // Create CLI adapter
@@ -278,7 +278,7 @@ export async function workflowRunCommand(
   } catch (error) {
     const err = error as Error;
     throw new Error(
-      `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
+      `데이터베이스 접근 실패: ${err.message}\n힌트: DATABASE_URL 설정과 데이터베이스 실행 상태를 확인하세요.`
     );
   }
 
@@ -349,21 +349,23 @@ export async function workflowRunCommand(
     if (!codebase) {
       if (codebaseLookupError) {
         throw new Error(
-          'Cannot resume: Database lookup failed.\n' +
-            `Error: ${codebaseLookupError.message}\n` +
-            'Hint: Check your database connection before using --resume.'
+          '재개할 수 없습니다: 데이터베이스 조회에 실패했습니다.\n' +
+            `오류: ${codebaseLookupError.message}\n` +
+            '힌트: --resume을 사용하기 전에 데이터베이스 연결을 확인하세요.'
         );
       }
       throw new Error(
-        'Cannot resume: Not in a git repository.\n' +
-          'Either run from a git repo or use /clone first.'
+        '재개할 수 없습니다: git repository 안이 아닙니다.\n' +
+          'git repo에서 실행하거나 먼저 /clone을 사용하세요.'
       );
     }
 
     const resumable = await workflowDb.findResumableRun(workflowName, cwd);
 
     if (!resumable) {
-      throw new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
+      throw new Error(
+        `경로 '${cwd}'에서 workflow '${workflowName}'의 재개 가능한 run을 찾지 못했습니다.`
+      );
     }
 
     getLog().info(
@@ -380,8 +382,8 @@ export async function workflowRunCommand(
       const { existsSync } = await import('fs');
       if (!existsSync(resumable.working_path)) {
         throw new Error(
-          `Cannot resume: the working path from the run no longer exists: ${resumable.working_path}\n` +
-            'The worktree may have been cleaned up. Start a fresh run with --branch instead.'
+          `재개할 수 없습니다: run에 기록된 작업 경로가 더 이상 없습니다: ${resumable.working_path}\n` +
+            'worktree가 정리되었을 수 있습니다. 대신 --branch로 새 run을 시작하세요.'
         );
       }
       workingCwd = resumable.working_path;
@@ -398,8 +400,8 @@ export async function workflowRunCommand(
       );
     }
 
-    console.log(`Resuming workflow run: ${resumable.id}`);
-    console.log(`Working path: ${workingCwd}`);
+    console.log(`Workflow run 재개: ${resumable.id}`);
+    console.log(`작업 경로: ${workingCwd}`);
     console.log('');
   }
 
@@ -430,8 +432,8 @@ export async function workflowRunCommand(
           'worktree.reuse_from_branch_ignored'
         );
         console.warn(
-          `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
-            `--from ${options.fromBranch} was not applied (worktree already exists).`
+          `경고: 기존 worktree를 재사용합니다: ${existingEnv.working_path}. ` +
+            `--from ${options.fromBranch}는 적용되지 않았습니다 (worktree가 이미 있음).`
         );
       }
       // Validate base branch before reuse (warning-only — non-blocking)
@@ -451,8 +453,8 @@ export async function workflowRunCommand(
             'worktree.reuse_base_branch_mismatch'
           );
           console.warn(
-            `Warning: Worktree '${existingEnv.branch_name}' is not based on '${configuredBase}'. ` +
-              `Recreate with: bun run cli complete ${existingEnv.branch_name} --force`
+            `경고: Worktree '${existingEnv.branch_name}'의 기준 branch가 '${configuredBase}'가 아닙니다. ` +
+              `다음 명령으로 다시 만드세요: bun run cli complete ${existingEnv.branch_name} --force`
           );
         }
       } catch (e) {
@@ -502,14 +504,14 @@ export async function workflowRunCommand(
     // Isolation was expected (default) but codebase is unavailable — fail fast
     if (codebaseLookupError) {
       throw new Error(
-        'Cannot create worktree: database lookup failed.\n' +
-          `Error: ${codebaseLookupError.message}\n` +
-          'Hint: Check your database connection, or use --no-worktree to skip isolation.'
+        'worktree를 만들 수 없습니다: 데이터베이스 조회에 실패했습니다.\n' +
+          `오류: ${codebaseLookupError.message}\n` +
+          '힌트: 데이터베이스 연결을 확인하거나 --no-worktree로 격리를 건너뛰세요.'
       );
     }
     throw new Error(
-      'Cannot create worktree: not in a git repository.\n' +
-        'Run from within a git repo, or use --no-worktree to skip isolation.'
+      'worktree를 만들 수 없습니다: git repository 안이 아닙니다.\n' +
+        'git repo 안에서 실행하거나 --no-worktree로 격리를 건너뛰세요.'
     );
   }
 
@@ -522,7 +524,7 @@ export async function workflowRunCommand(
     });
   } catch (error) {
     const err = error as Error;
-    throw new Error(`Failed to update conversation: ${err.message}`);
+    throw new Error(`conversation 업데이트 실패: ${err.message}`);
   }
 
   // Wire adapter for assistant message persistence
@@ -626,7 +628,7 @@ export async function workflowRunCommand(
 
   // Check result and exit appropriately
   if (result.success && 'paused' in result && result.paused) {
-    console.log('\nWorkflow paused — waiting for approval.');
+    console.log('\nWorkflow가 일시 중지되었습니다 - 승인을 기다리는 중입니다.');
   } else if (result.success) {
     // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
     // Paused workflows are handled in the branch above and intentionally do not get a result card.
@@ -644,9 +646,9 @@ export async function workflowRunCommand(
         );
       }
     }
-    console.log('\nWorkflow completed successfully.');
+    console.log('\nWorkflow가 성공적으로 완료되었습니다.');
   } else {
-    throw new Error(`Workflow failed: ${result.error}`);
+    throw new Error(`Workflow 실패: ${result.error}`);
   }
 }
 
@@ -659,7 +661,7 @@ function formatAge(startedAt: Date | string): string {
     startedAt instanceof Date
       ? startedAt
       : new Date(startedAt.endsWith('Z') ? startedAt : startedAt + 'Z');
-  if (Number.isNaN(date.getTime())) return 'unknown';
+  if (Number.isNaN(date.getTime())) return '알 수 없음';
   const ms = Date.now() - date.getTime();
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;
@@ -734,7 +736,7 @@ function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           nodeId,
           state: 'failed',
           durationMs: started !== undefined ? endTime - started : undefined,
-          error: typeof event.data.error === 'string' ? event.data.error : 'Unknown error',
+          error: typeof event.data.error === 'string' ? event.data.error : '알 수 없는 오류',
         });
         break;
       }
@@ -760,7 +762,7 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'cli.workflow_status_failed');
-    throw new Error(`Failed to list workflow runs: ${err.message}`);
+    throw new Error(`workflow run 목록 조회 실패: ${err.message}`);
   }
 
   if (json) {
@@ -778,18 +780,18 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
   }
 
   if (runs.length === 0) {
-    console.log('No active workflows.');
+    console.log('실행 중인 workflow가 없습니다.');
     return;
   }
 
-  console.log(`\nActive workflows (${runs.length}):\n`);
+  console.log(`\n실행 중인 workflow (${runs.length}개):\n`);
   for (const run of runs) {
     const age = formatAge(run.started_at);
     console.log(`  ID:     ${run.id}`);
-    console.log(`  Name:   ${run.workflow_name}`);
-    console.log(`  Path:   ${run.working_path ?? '(none)'}`);
-    console.log(`  Status: ${run.status}`);
-    console.log(`  Age:    ${age}`);
+    console.log(`  이름:   ${run.workflow_name}`);
+    console.log(`  경로:   ${run.working_path ?? '(없음)'}`);
+    console.log(`  상태:   ${run.status}`);
+    console.log(`  경과:   ${age}`);
 
     if (verbose) {
       let events: WorkflowEventRow[];
@@ -800,7 +802,7 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
       }
       const nodes = buildNodeSummaries(events);
       if (nodes.length > 0) {
-        console.log('  Nodes:');
+        console.log('  노드:');
         for (const node of nodes) {
           const iconMap: Record<string, string> = {
             completed: '✓',
@@ -811,13 +813,13 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
           const icon = iconMap[node.state] ?? '◌';
           const duration =
             node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-          const stateLabel = node.state === 'running' ? ' (running)' : '';
+          const stateLabel = node.state === 'running' ? ' (실행 중)' : '';
           console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}`);
           if (node.outputPreview !== undefined) {
-            console.log(`        Output: ${node.outputPreview}`);
+            console.log(`        출력: ${node.outputPreview}`);
           }
           if (node.error !== undefined) {
-            console.log(`        Error:  ${node.error}`);
+            console.log(`        오류:  ${node.error}`);
           }
         }
       }
@@ -837,12 +839,12 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
   const run = await resumeWorkflowOp(runId);
   if (!run.working_path) {
     throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
-        'Cannot determine where to resume. The run may be too old.'
+      `Workflow run '${runId}'에 기록된 작업 경로가 없습니다.\n` +
+        '어디서 재개해야 할지 알 수 없습니다. run이 너무 오래되었을 수 있습니다.'
     );
   }
-  console.log(`Resuming workflow: ${run.workflow_name}`);
-  console.log(`Path: ${run.working_path}`);
+  console.log(`Workflow 재개: ${run.workflow_name}`);
+  console.log(`경로: ${run.working_path}`);
   console.log('');
 
   // Re-execute via workflowRunCommand with --resume.
@@ -859,7 +861,7 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
       { err, runId, workflowName: run.workflow_name },
       'cli.workflow_resume_run_failed'
     );
-    throw new Error(`Failed to resume workflow '${run.workflow_name}': ${err.message}`);
+    throw new Error(`Workflow '${run.workflow_name}' 재개 실패: ${err.message}`);
   }
 }
 
@@ -868,7 +870,7 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
  */
 export async function workflowAbandonCommand(runId: string): Promise<void> {
   const run = await abandonWorkflow(runId);
-  console.log(`Abandoned workflow run: ${runId}`);
+  console.log(`Workflow run 중단: ${runId}`);
   console.log(`Workflow: ${run.workflow_name}`);
 }
 
@@ -882,14 +884,14 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
   // CLI auto-resumes after approval (unlike chat, which defers to next user message)
   if (!result.workingPath) {
     throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
-        'Cannot determine where to resume.'
+      `Workflow run '${runId}'에 기록된 작업 경로가 없습니다.\n` +
+        '어디서 재개해야 할지 알 수 없습니다.'
     );
   }
-  console.log(`Approved workflow: ${result.workflowName}`);
-  console.log(`Path: ${result.workingPath}`);
+  console.log(`Workflow 승인: ${result.workflowName}`);
+  console.log(`경로: ${result.workingPath}`);
   console.log('');
-  console.log('Resuming workflow...');
+  console.log('Workflow 재개 중...');
 
   // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;
@@ -923,8 +925,8 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
       'cli.workflow_approve_resume_failed'
     );
     throw new Error(
-      `Approved but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The approval was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
+      `승인은 기록했지만 workflow '${result.workflowName}' 재개에 실패했습니다: ${err.message}\n` +
+        `승인은 기록되었습니다. 다시 시도하려면 'bun run cli workflow resume ${runId}'를 실행하세요.`
     );
   }
 }
@@ -936,20 +938,20 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
   const result = await rejectWorkflow(runId, reason);
 
   if (result.cancelled) {
-    const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
-    console.log(`Rejected and cancelled${suffix}: ${result.workflowName}`);
+    const suffix = result.maxAttemptsReached ? ' (최대 시도 횟수 도달)' : '';
+    console.log(`거부 후 취소${suffix}: ${result.workflowName}`);
     return;
   }
 
   // Not cancelled = has onRejectPrompt, CLI auto-resumes with rejection feedback
   if (!result.workingPath) {
     throw new Error(
-      `Workflow run '${runId}' has no working path recorded.\n` +
-        'Cannot determine where to resume.'
+      `Workflow run '${runId}'에 기록된 작업 경로가 없습니다.\n` +
+        '어디서 재개해야 할지 알 수 없습니다.'
     );
   }
-  console.log(`Rejected workflow: ${result.workflowName}`);
-  console.log('Resuming with on_reject prompt...');
+  console.log(`Workflow 거부: ${result.workflowName}`);
+  console.log('on_reject prompt로 재개 중...');
 
   // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;
@@ -983,8 +985,8 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
       'cli.workflow_reject_resume_failed'
     );
     throw new Error(
-      `Rejected but failed to resume workflow '${result.workflowName}': ${err.message}\n` +
-        `The rejection was recorded. Run 'bun run cli workflow resume ${runId}' to retry.`
+      `거부는 기록했지만 workflow '${result.workflowName}' 재개에 실패했습니다: ${err.message}\n` +
+        `거부는 기록되었습니다. 다시 시도하려면 'bun run cli workflow resume ${runId}'를 실행하세요.`
     );
   }
 }
@@ -996,14 +998,14 @@ export async function workflowCleanupCommand(days: number): Promise<void> {
   try {
     const { count } = await workflowDb.deleteOldWorkflowRuns(days);
     if (count === 0) {
-      console.log(`No workflow runs older than ${days} days to clean up.`);
+      console.log(`${days}일보다 오래되어 정리할 workflow run이 없습니다.`);
     } else {
-      console.log(`Deleted ${count} workflow run(s) older than ${days} days.`);
+      console.log(`${days}일보다 오래된 workflow run ${count}개를 삭제했습니다.`);
     }
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, days }, 'cli.workflow_cleanup_failed');
-    throw new Error(`Failed to clean up workflow runs: ${err.message}`);
+    throw new Error(`workflow run 정리 실패: ${err.message}`);
   }
 }
 
@@ -1028,5 +1030,5 @@ export async function workflowEventEmitCommand(
   });
   // createWorkflowEvent is non-throwing (fire-and-forget) — the event may not
   // have been persisted if the DB was unavailable. Check server logs if missing.
-  console.log(`Event submitted (best-effort): ${eventType} for run ${runId}`);
+  console.log(`event 제출됨(최선 시도): ${eventType} for run ${runId}`);
 }
