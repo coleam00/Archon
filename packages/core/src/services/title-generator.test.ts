@@ -1,24 +1,34 @@
-import { mock, describe, test, expect, beforeEach, type Mock } from 'bun:test';
+import { describe, test, expect, mock, spyOn, beforeEach, afterEach, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import type { MessageChunk } from '../types';
 
-// ─── Mock setup (BEFORE importing module under test) ─────────────────────────
+// ---------------------------------------------------------------------------
+// Import namespace modules for spyOn (must come before module under test)
+// ---------------------------------------------------------------------------
+
+import * as archonPaths from '@archon/paths';
+import * as dbConversations from '../db/conversations';
+import * as providers from '@archon/providers';
+
+// ---------------------------------------------------------------------------
+// Import module under test (static import)
+// ---------------------------------------------------------------------------
+
+import { generateAndSetTitle } from './title-generator';
+
+// ---------------------------------------------------------------------------
+// Spy variables
+// ---------------------------------------------------------------------------
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
 
-// DB mock
-const mockUpdateConversationTitle = mock(() => Promise.resolve()) as Mock<
-  (id: string, title: string) => Promise<void>
->;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateLogger: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateConversationTitle: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetAgentProvider: any;
 
-mock.module('../db/conversations', () => ({
-  updateConversationTitle: mockUpdateConversationTitle,
-}));
-
-// AI client mock — sendQuery returns an AsyncGenerator<MessageChunk>
 const mockSendQuery = mock(async function* (): AsyncGenerator<MessageChunk> {
   yield { type: 'assistant', content: 'Summarize Project README' };
   yield { type: 'result' };
@@ -31,49 +41,44 @@ const mockSendQuery = mock(async function* (): AsyncGenerator<MessageChunk> {
   ) => AsyncGenerator<MessageChunk>
 >;
 
-const mockGetAgentProvider = mock(() => ({
-  sendQuery: mockSendQuery,
-  getType: () => 'claude',
-}));
+beforeEach(() => {
+  spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+  spyUpdateConversationTitle = spyOn(dbConversations, 'updateConversationTitle').mockResolvedValue(
+    undefined
+  );
+  spyGetAgentProvider = spyOn(providers, 'getAgentProvider').mockReturnValue({
+    sendQuery: mockSendQuery,
+    getType: () => 'claude',
+  } as never);
 
-mock.module('@archon/providers', () => ({
-  getAgentProvider: mockGetAgentProvider,
-}));
+  mockSendQuery.mockClear();
 
-// ─── Import module under test (AFTER all mocks) ─────────────────────────────
-
-import { generateAndSetTitle } from './title-generator';
-
-// ─── Tests ──────────────────────────────────────────────────────────────────
-
-describe('title-generator', () => {
-  beforeEach(() => {
-    mockUpdateConversationTitle.mockClear();
-    mockSendQuery.mockClear();
-    mockGetAgentProvider.mockClear();
-
-    // Reset to default happy-path behavior
-    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: 'Summarize Project README' };
-      yield { type: 'result' };
-    });
-
-    mockGetAgentProvider.mockImplementation(() => ({
-      sendQuery: mockSendQuery,
-      getType: () => 'claude',
-    }));
-
-    mockUpdateConversationTitle.mockImplementation(() => Promise.resolve());
-
-    // Clean env
-    delete process.env.TITLE_GENERATION_MODEL;
+  // Reset to default happy-path behavior
+  mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
+    yield { type: 'assistant', content: 'Summarize Project README' };
+    yield { type: 'result' };
   });
 
+  // Clean env
+  delete process.env.TITLE_GENERATION_MODEL;
+});
+
+afterEach(() => {
+  spyCreateLogger.mockRestore();
+  spyUpdateConversationTitle.mockRestore();
+  spyGetAgentProvider.mockRestore();
+});
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('title-generator', () => {
   test('happy path: generates and saves a clean title', async () => {
     await generateAndSetTitle('conv-1', 'Summarize the README of this project', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledTimes(1);
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-1', 'Summarize Project README');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledTimes(1);
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-1', 'Summarize Project README');
   });
 
   test('strips surrounding quotes from AI response', async () => {
@@ -84,7 +89,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-2', 'Summarize the README', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-2', 'Summarize Project README');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-2', 'Summarize Project README');
   });
 
   test('strips "Title: " prefix from AI response', async () => {
@@ -95,7 +100,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-3', 'Debug the auth module', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-3', 'Debug Auth Module');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-3', 'Debug Auth Module');
   });
 
   test('handles empty AI response with fallback to truncated message', async () => {
@@ -105,7 +110,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-4', 'Help me debug this issue', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-4', 'Help me debug this issue');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-4', 'Help me debug this issue');
   });
 
   test('handles AI client error with fallback to truncated message', async () => {
@@ -116,7 +121,7 @@ describe('title-generator', () => {
     await generateAndSetTitle('conv-5', 'Fix the login bug', 'claude', '/tmp');
 
     // Should not throw — fire-and-forget safe
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-5', 'Fix the login bug');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-5', 'Fix the login bug');
   });
 
   test('includes workflow name in prompt when provided', async () => {
@@ -143,7 +148,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-8', 'Some message', 'claude', '/tmp');
 
-    const savedTitle = mockUpdateConversationTitle.mock.calls[0][1] as string;
+    const savedTitle = spyUpdateConversationTitle.mock.calls[0][1] as string;
     expect(savedTitle.length).toBeLessThanOrEqual(100);
     expect(savedTitle).toEndWith('...');
   });
@@ -182,15 +187,13 @@ describe('title-generator', () => {
       throw new Error('AI failure');
     });
 
-    mockUpdateConversationTitle.mockImplementation(() =>
-      Promise.reject(new Error('DB write failure'))
-    );
+    spyUpdateConversationTitle.mockRejectedValueOnce(new Error('DB write failure'));
 
     // Should NOT throw despite both failures
     await generateAndSetTitle('conv-12', 'Some message', 'claude', '/tmp');
 
     // Verify it attempted the fallback write
-    expect(mockUpdateConversationTitle).toHaveBeenCalled();
+    expect(spyUpdateConversationTitle).toHaveBeenCalled();
   });
 
   test('collects text from multiple streaming chunks', async () => {
@@ -203,7 +206,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-13', 'Debug the auth module', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-13', 'Debug Auth Module');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-13', 'Debug Auth Module');
   });
 
   test('strips trailing punctuation from title', async () => {
@@ -214,7 +217,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-14', 'Fix the login bug', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-14', 'Fix Login Bug');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-14', 'Fix Login Bug');
   });
 
   test('takes only first line of multi-line response', async () => {
@@ -225,7 +228,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-15', 'Fix the login bug', 'claude', '/tmp');
 
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-15', 'Fix Login Bug');
+    expect(spyUpdateConversationTitle).toHaveBeenCalledWith('conv-15', 'Fix Login Bug');
   });
 
   test('long user message is truncated in fallback', async () => {
@@ -237,7 +240,7 @@ describe('title-generator', () => {
 
     await generateAndSetTitle('conv-16', longMessage, 'claude', '/tmp');
 
-    const savedTitle = mockUpdateConversationTitle.mock.calls[0][1] as string;
+    const savedTitle = spyUpdateConversationTitle.mock.calls[0][1] as string;
     expect(savedTitle.length).toBeLessThanOrEqual(100);
     expect(savedTitle).toEndWith('...');
   });

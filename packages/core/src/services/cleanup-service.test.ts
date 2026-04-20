@@ -1,12 +1,21 @@
-import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
-// Mock logger to suppress noisy output during tests
-const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
 
-// Mock @archon/git - the cleanup service imports git functions from @archon/git
+// ─── Namespace imports for spyOn (must come before module under test) ─────────
+
+import * as archonPaths from '@archon/paths';
+import * as git from '@archon/git';
+import * as isolation from '@archon/isolation';
+import * as isolationEnvDb from '../db/isolation-environments';
+import * as dbConversations from '../db/conversations';
+import * as dbSessions from '../db/sessions';
+import * as dbCodebases from '../db/codebases';
+
+// ─── Mock functions (used for delegation and direct test assertions) ──────────
+
+const mockLogger = createMockLogger();
+
+// @archon/git mock functions
 const mockExecFileAsync = mock(() => Promise.resolve({ stdout: '', stderr: '' }));
 const mockHasUncommittedChanges = mock(() => Promise.resolve(false));
 const mockWorktreeExists = mock(() => Promise.resolve(false));
@@ -14,20 +23,8 @@ const mockGetDefaultBranch = mock(() => Promise.resolve('main'));
 const mockIsBranchMerged = mock(() => Promise.resolve(false));
 const mockIsPatchEquivalent = mock(() => Promise.resolve(false));
 const mockGetLastCommitDate = mock(() => Promise.resolve(null as Date | null));
-mock.module('@archon/git', () => ({
-  execFileAsync: mockExecFileAsync,
-  hasUncommittedChanges: mockHasUncommittedChanges,
-  worktreeExists: mockWorktreeExists,
-  getDefaultBranch: mockGetDefaultBranch,
-  isBranchMerged: mockIsBranchMerged,
-  isPatchEquivalent: mockIsPatchEquivalent,
-  getLastCommitDate: mockGetLastCommitDate,
-  toRepoPath: (p: string) => p,
-  toBranchName: (b: string) => b,
-  toWorktreePath: (p: string) => p,
-}));
 
-// Mock isolation provider
+// @archon/isolation mock functions
 const mockDestroy = mock(() =>
   Promise.resolve({
     worktreeRemoved: true,
@@ -37,21 +34,10 @@ const mockDestroy = mock(() =>
     warnings: [],
   })
 );
-mock.module('../isolation', () => ({
-  getIsolationProvider: () => ({
-    destroy: mockDestroy,
-  }),
-}));
 type PrStateValue = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
 const mockGetPrState = mock(() => Promise.resolve('NONE' as PrStateValue));
-mock.module('@archon/isolation', () => ({
-  getIsolationProvider: () => ({
-    destroy: mockDestroy,
-  }),
-  getPrState: mockGetPrState,
-}));
 
-// Mock isolation-environments DB
+// isolation-environments DB mock functions
 const mockListAllActiveWithCodebase = mock(() => Promise.resolve([]));
 const mockUpdateStatus = mock(() => Promise.resolve());
 const mockGetConversationsUsingEnv = mock(() => Promise.resolve([]));
@@ -59,39 +45,20 @@ const mockGetById = mock(() => Promise.resolve(null));
 const mockListByCodebase = mock(() => Promise.resolve([]));
 const mockListByCodebaseWithAge = mock(() => Promise.resolve([]));
 const mockCountActiveByCodebase = mock(() => Promise.resolve(0));
-mock.module('../db/isolation-environments', () => ({
-  listAllActiveWithCodebase: mockListAllActiveWithCodebase,
-  updateStatus: mockUpdateStatus,
-  getConversationsUsingEnv: mockGetConversationsUsingEnv,
-  getById: mockGetById,
-  listByCodebase: mockListByCodebase,
-  listByCodebaseWithAge: mockListByCodebaseWithAge,
-  countActiveByCodebase: mockCountActiveByCodebase,
-}));
 
-// Mock conversations DB
+// conversations DB mock functions
 const mockGetConversationByPlatformId = mock(() => Promise.resolve(null));
 const mockUpdateConversation = mock(() => Promise.resolve());
-mock.module('../db/conversations', () => ({
-  getConversationByPlatformId: mockGetConversationByPlatformId,
-  updateConversation: mockUpdateConversation,
-}));
 
-// Mock sessions DB
+// sessions DB mock functions
 const mockGetActiveSession = mock(() => Promise.resolve(null));
 const mockDeactivateSession = mock(() => Promise.resolve());
 const mockDeleteOldSessions = mock(() => Promise.resolve(0));
-mock.module('../db/sessions', () => ({
-  getActiveSession: mockGetActiveSession,
-  deactivateSession: mockDeactivateSession,
-  deleteOldSessions: mockDeleteOldSessions,
-}));
 
-// Mock codebases DB
+// codebases DB mock functions
 const mockGetCodebase = mock(() => Promise.resolve(null));
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-}));
+
+// ─── Import module under test ─────────────────────────────────────────────────
 
 import {
   runScheduledCleanup,
@@ -105,6 +72,169 @@ import {
   onConversationClosed,
   SESSION_RETENTION_DAYS,
 } from './cleanup-service';
+
+// ─── Spy variables ────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateLogger: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyExecFileAsync: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyHasUncommittedChanges: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyWorktreeExists: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetDefaultBranch: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyIsBranchMerged: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyIsPatchEquivalent: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetLastCommitDate: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyToRepoPath: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyToBranchName: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyToWorktreePath: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetIsolationProvider: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetPrState: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyListAllActiveWithCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateStatus: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetConversationsUsingEnv: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetById: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyListByCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyListByCodebaseWithAge: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCountActiveByCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetConversationByPlatformId: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateConversation: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetActiveSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDeactivateSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDeleteOldSessions: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetCodebase: any;
+
+function setupSpies() {
+  spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+
+  spyExecFileAsync = spyOn(git, 'execFileAsync').mockImplementation(mockExecFileAsync as never);
+  spyHasUncommittedChanges = spyOn(git, 'hasUncommittedChanges').mockImplementation(
+    mockHasUncommittedChanges as never
+  );
+  spyWorktreeExists = spyOn(git, 'worktreeExists').mockImplementation(mockWorktreeExists as never);
+  spyGetDefaultBranch = spyOn(git, 'getDefaultBranch').mockImplementation(
+    mockGetDefaultBranch as never
+  );
+  spyIsBranchMerged = spyOn(git, 'isBranchMerged').mockImplementation(mockIsBranchMerged as never);
+  spyIsPatchEquivalent = spyOn(git, 'isPatchEquivalent').mockImplementation(
+    mockIsPatchEquivalent as never
+  );
+  spyGetLastCommitDate = spyOn(git, 'getLastCommitDate').mockImplementation(
+    mockGetLastCommitDate as never
+  );
+  spyToRepoPath = spyOn(git, 'toRepoPath').mockImplementation(((p: string) => p) as never);
+  spyToBranchName = spyOn(git, 'toBranchName').mockImplementation(((b: string) => b) as never);
+  spyToWorktreePath = spyOn(git, 'toWorktreePath').mockImplementation(((p: string) => p) as never);
+
+  spyGetIsolationProvider = spyOn(isolation, 'getIsolationProvider').mockReturnValue({
+    destroy: mockDestroy,
+  } as never);
+  spyGetPrState = spyOn(isolation, 'getPrState').mockImplementation(mockGetPrState as never);
+
+  spyListAllActiveWithCodebase = spyOn(
+    isolationEnvDb,
+    'listAllActiveWithCodebase'
+  ).mockImplementation(mockListAllActiveWithCodebase as never);
+  spyUpdateStatus = spyOn(isolationEnvDb, 'updateStatus').mockImplementation(
+    mockUpdateStatus as never
+  );
+  spyGetConversationsUsingEnv = spyOn(
+    isolationEnvDb,
+    'getConversationsUsingEnv'
+  ).mockImplementation(mockGetConversationsUsingEnv as never);
+  spyGetById = spyOn(isolationEnvDb, 'getById').mockImplementation(mockGetById as never);
+  spyListByCodebase = spyOn(isolationEnvDb, 'listByCodebase').mockImplementation(
+    mockListByCodebase as never
+  );
+  spyListByCodebaseWithAge = spyOn(isolationEnvDb, 'listByCodebaseWithAge').mockImplementation(
+    mockListByCodebaseWithAge as never
+  );
+  spyCountActiveByCodebase = spyOn(isolationEnvDb, 'countActiveByCodebase').mockImplementation(
+    mockCountActiveByCodebase as never
+  );
+
+  spyGetConversationByPlatformId = spyOn(
+    dbConversations,
+    'getConversationByPlatformId'
+  ).mockImplementation(mockGetConversationByPlatformId as never);
+  spyUpdateConversation = spyOn(dbConversations, 'updateConversation').mockImplementation(
+    mockUpdateConversation as never
+  );
+
+  spyGetActiveSession = spyOn(dbSessions, 'getActiveSession').mockImplementation(
+    mockGetActiveSession as never
+  );
+  spyDeactivateSession = spyOn(dbSessions, 'deactivateSession').mockImplementation(
+    mockDeactivateSession as never
+  );
+  spyDeleteOldSessions = spyOn(dbSessions, 'deleteOldSessions').mockImplementation(
+    mockDeleteOldSessions as never
+  );
+
+  spyGetCodebase = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase as never);
+}
+
+function restoreSpies() {
+  spyCreateLogger?.mockRestore();
+  spyExecFileAsync?.mockRestore();
+  spyHasUncommittedChanges?.mockRestore();
+  spyWorktreeExists?.mockRestore();
+  spyGetDefaultBranch?.mockRestore();
+  spyIsBranchMerged?.mockRestore();
+  spyIsPatchEquivalent?.mockRestore();
+  spyGetLastCommitDate?.mockRestore();
+  spyToRepoPath?.mockRestore();
+  spyToBranchName?.mockRestore();
+  spyToWorktreePath?.mockRestore();
+  spyGetIsolationProvider?.mockRestore();
+  spyGetPrState?.mockRestore();
+  spyListAllActiveWithCodebase?.mockRestore();
+  spyUpdateStatus?.mockRestore();
+  spyGetConversationsUsingEnv?.mockRestore();
+  spyGetById?.mockRestore();
+  spyListByCodebase?.mockRestore();
+  spyListByCodebaseWithAge?.mockRestore();
+  spyCountActiveByCodebase?.mockRestore();
+  spyGetConversationByPlatformId?.mockRestore();
+  spyUpdateConversation?.mockRestore();
+  spyGetActiveSession?.mockRestore();
+  spyDeactivateSession?.mockRestore();
+  spyDeleteOldSessions?.mockRestore();
+  spyGetCodebase?.mockRestore();
+}
+
+// Top-level spy setup/restore
+beforeEach(() => {
+  setupSpies();
+});
+
+afterEach(() => {
+  restoreSpies();
+});
 
 describe('cleanup-service', () => {
   beforeEach(() => {

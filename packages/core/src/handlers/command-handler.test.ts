@@ -18,7 +18,17 @@ import * as gitUtils from '@archon/git';
 import * as pathValidation from '../utils/path-validation';
 import * as workflowDiscovery from '@archon/workflows/workflow-discovery';
 
-// Create mock functions for database modules (safe to mock - no standalone tests)
+// Namespace imports for spyOn conversion
+import * as dbConversations from '../db/conversations';
+import * as dbCodebases from '../db/codebases';
+import * as dbSessions from '../db/sessions';
+import * as dbWorkflows from '../db/workflows';
+import * as dbWorkflowEvents from '../db/workflow-events';
+import * as dbIsolationEnvironments from '../db/isolation-environments';
+import * as cleanupServiceModule from '../services/cleanup-service';
+import * as archonPaths from '@archon/paths';
+
+// Create mock functions for database modules
 const mockUpdateConversation = mock(() => Promise.resolve());
 const mockGetCodebase = mock(() => Promise.resolve(null));
 const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
@@ -61,40 +71,69 @@ let spyFsRm: ReturnType<typeof spyOn>;
 // Spies for workflows module
 let spyDiscoverWorkflows: ReturnType<typeof spyOn>;
 
-// Mock database modules (safe - these don't have standalone tests that would be affected)
-mock.module('../db/conversations', () => ({
-  updateConversation: mockUpdateConversation,
-}));
+// Spies for DB modules and services (replaces mock.module to avoid pollution)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbUpdateConversation: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbGetCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbFindCodebaseByDefaultCwd: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbCreateCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbGetCodebaseCommands: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbUpdateCodebaseCommands: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbDeleteCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbGetActiveSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbDeactivateSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbGetActiveWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbCancelWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbListWorkflowRuns: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbGetWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbResumeWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbFailWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbUpdateWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbCreateWorkflowEvent: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationCreate: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationGetById: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationGetByWorkingPath: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationUpdateStatus: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationMarkDestroyed: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationGetActiveByCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationGetActiveEnvironments: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDbIsolationCountActiveByCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCleanupMergedWorktreesSpy: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCleanupStaleWorktreesSpy: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetWorktreeStatusBreakdownSpy: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateLogger: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetArchonWorkspacesPath: any;
 
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-  findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
-  createCodebase: mockCreateCodebase,
-  getCodebaseCommands: mockGetCodebaseCommands,
-  updateCodebaseCommands: mockUpdateCodebaseCommands,
-  deleteCodebase: mockDeleteCodebase,
-}));
-
-mock.module('../db/sessions', () => ({
-  getActiveSession: mockGetActiveSession,
-  deactivateSession: mockDeactivateSession,
-}));
-
-mock.module('../db/workflows', () => ({
-  getActiveWorkflowRun: mockGetActiveWorkflowRun,
-  cancelWorkflowRun: mockCancelWorkflowRun,
-  listWorkflowRuns: mockListWorkflowRuns,
-  getWorkflowRun: mockGetWorkflowRun,
-  resumeWorkflowRun: mockResumeWorkflowRun,
-  failWorkflowRun: mockFailWorkflowRun,
-  updateWorkflowRun: mockUpdateWorkflowRun,
-}));
-
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-}));
-
-// Mock isolation-environments database
+// Mock isolation-environments database mock functions
 const mockIsolationEnvDbCreate = mock(() =>
   Promise.resolve({
     id: 'env-uuid-123',
@@ -111,18 +150,7 @@ const mockIsolationEnvDbCreate = mock(() =>
 );
 const mockIsolationEnvDbGet = mock(() => Promise.resolve(null));
 const mockIsolationEnvDbUpdate = mock(() => Promise.resolve());
-
 const mockCountActiveByCodebase = mock(() => Promise.resolve(0));
-mock.module('../db/isolation-environments', () => ({
-  create: mockIsolationEnvDbCreate,
-  getById: mockIsolationEnvDbGet,
-  getByWorkingPath: mock(() => Promise.resolve(null)),
-  updateStatus: mockIsolationEnvDbUpdate,
-  markDestroyed: mock(() => Promise.resolve()),
-  getActiveByCodebase: mock(() => Promise.resolve([])),
-  getActiveEnvironments: mock(() => Promise.resolve([])),
-  countActiveByCodebase: mockCountActiveByCodebase,
-}));
 
 // Mock isolation provider
 const mockIsolationCreate = mock(() =>
@@ -138,17 +166,6 @@ const mockIsolationCreate = mock(() =>
 );
 const mockIsolationDestroy = mock(() => Promise.resolve());
 
-mock.module('../isolation', () => ({
-  getIsolationProvider: () => ({
-    providerType: 'worktree',
-    create: mockIsolationCreate,
-    destroy: mockIsolationDestroy,
-    get: mock(() => Promise.resolve(null)),
-    list: mock(() => Promise.resolve([])),
-    adopt: mock(() => Promise.resolve(null)),
-    healthCheck: mock(() => Promise.resolve(true)),
-  }),
-}));
 mock.module('@archon/isolation', () => ({
   getIsolationProvider: () => ({
     providerType: 'worktree',
@@ -161,7 +178,7 @@ mock.module('@archon/isolation', () => ({
   }),
 }));
 
-// Mock cleanup service
+// Mock cleanup service mock functions
 const mockCleanupMergedWorktrees = mock(() =>
   Promise.resolve({
     removed: [] as string[],
@@ -174,13 +191,6 @@ const mockCleanupStaleWorktrees = mock(() =>
     skipped: [] as { branchName: string; reason: string }[],
   })
 );
-mock.module('../services/cleanup-service', () => ({
-  cleanupMergedWorktrees: mockCleanupMergedWorktrees,
-  cleanupStaleWorktrees: mockCleanupStaleWorktrees,
-  getWorktreeStatusBreakdown: mock(() =>
-    Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0 })
-  ),
-}));
 
 // Note: We removed mock.module('child_process') because:
 // 1. We already spy on gitUtils.execFileAsync which covers git operations
@@ -191,21 +201,6 @@ mock.module('../services/cleanup-service', () => ({
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  expandTilde: mock((p: string) => p.replace(/^~/, '/home/test')),
-  ensureProjectStructure: mock(() => Promise.resolve()),
-  getProjectSourcePath: mock(
-    (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
-  ),
-  createProjectSourceSymlink: mock(() => Promise.resolve()),
-  parseOwnerRepo: mock((name: string) => {
-    const parts = name.split('/');
-    return parts.length === 2 ? { owner: parts[0], repo: parts[1] } : null;
-  }),
-}));
 
 import { parseCommand, handleCommand } from './command-handler';
 
@@ -274,6 +269,101 @@ function setupSpies(): void {
     workflows: [],
     errors: [],
   });
+
+  // DB module spies (delegate to existing mock functions for backward compat)
+  spyDbUpdateConversation = spyOn(dbConversations, 'updateConversation').mockImplementation(
+    mockUpdateConversation as never
+  );
+  spyDbGetCodebase = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase as never);
+  spyDbFindCodebaseByDefaultCwd = spyOn(dbCodebases, 'findCodebaseByDefaultCwd').mockImplementation(
+    mockFindCodebaseByDefaultCwd as never
+  );
+  spyDbCreateCodebase = spyOn(dbCodebases, 'createCodebase').mockImplementation(
+    mockCreateCodebase as never
+  );
+  spyDbGetCodebaseCommands = spyOn(dbCodebases, 'getCodebaseCommands').mockImplementation(
+    mockGetCodebaseCommands as never
+  );
+  spyDbUpdateCodebaseCommands = spyOn(dbCodebases, 'updateCodebaseCommands').mockImplementation(
+    mockUpdateCodebaseCommands as never
+  );
+  spyDbDeleteCodebase = spyOn(dbCodebases, 'deleteCodebase').mockImplementation(
+    mockDeleteCodebase as never
+  );
+  spyDbGetActiveSession = spyOn(dbSessions, 'getActiveSession').mockImplementation(
+    mockGetActiveSession as never
+  );
+  spyDbDeactivateSession = spyOn(dbSessions, 'deactivateSession').mockImplementation(
+    mockDeactivateSession as never
+  );
+  spyDbGetActiveWorkflowRun = spyOn(dbWorkflows, 'getActiveWorkflowRun').mockImplementation(
+    mockGetActiveWorkflowRun as never
+  );
+  spyDbCancelWorkflowRun = spyOn(dbWorkflows, 'cancelWorkflowRun').mockImplementation(
+    mockCancelWorkflowRun as never
+  );
+  spyDbListWorkflowRuns = spyOn(dbWorkflows, 'listWorkflowRuns').mockImplementation(
+    mockListWorkflowRuns as never
+  );
+  spyDbGetWorkflowRun = spyOn(dbWorkflows, 'getWorkflowRun').mockImplementation(
+    mockGetWorkflowRun as never
+  );
+  spyDbResumeWorkflowRun = spyOn(dbWorkflows, 'resumeWorkflowRun').mockImplementation(
+    mockResumeWorkflowRun as never
+  );
+  spyDbFailWorkflowRun = spyOn(dbWorkflows, 'failWorkflowRun').mockImplementation(
+    mockFailWorkflowRun as never
+  );
+  spyDbUpdateWorkflowRun = spyOn(dbWorkflows, 'updateWorkflowRun').mockImplementation(
+    mockUpdateWorkflowRun as never
+  );
+  spyDbCreateWorkflowEvent = spyOn(dbWorkflowEvents, 'createWorkflowEvent').mockImplementation(
+    mockCreateWorkflowEvent as never
+  );
+  spyDbIsolationCreate = spyOn(dbIsolationEnvironments, 'create').mockImplementation(
+    mockIsolationEnvDbCreate as never
+  );
+  spyDbIsolationGetById = spyOn(dbIsolationEnvironments, 'getById').mockImplementation(
+    mockIsolationEnvDbGet as never
+  );
+  spyDbIsolationGetByWorkingPath = spyOn(
+    dbIsolationEnvironments,
+    'getByWorkingPath'
+  ).mockResolvedValue(null);
+  spyDbIsolationUpdateStatus = spyOn(dbIsolationEnvironments, 'updateStatus').mockImplementation(
+    mockIsolationEnvDbUpdate as never
+  );
+  spyDbIsolationMarkDestroyed = spyOn(dbIsolationEnvironments, 'markDestroyed').mockResolvedValue(
+    undefined
+  );
+  spyDbIsolationGetActiveByCodebase = spyOn(
+    dbIsolationEnvironments,
+    'getActiveByCodebase'
+  ).mockResolvedValue([]);
+  spyDbIsolationGetActiveEnvironments = spyOn(
+    dbIsolationEnvironments,
+    'getActiveEnvironments'
+  ).mockResolvedValue([]);
+  spyDbIsolationCountActiveByCodebase = spyOn(
+    dbIsolationEnvironments,
+    'countActiveByCodebase'
+  ).mockImplementation(mockCountActiveByCodebase as never);
+  spyCleanupMergedWorktreesSpy = spyOn(
+    cleanupServiceModule,
+    'cleanupMergedWorktrees'
+  ).mockImplementation(mockCleanupMergedWorktrees as never);
+  spyCleanupStaleWorktreesSpy = spyOn(
+    cleanupServiceModule,
+    'cleanupStaleWorktrees'
+  ).mockImplementation(mockCleanupStaleWorktrees as never);
+  spyGetWorktreeStatusBreakdownSpy = spyOn(
+    cleanupServiceModule,
+    'getWorktreeStatusBreakdown'
+  ).mockResolvedValue({ total: 0, active: 0, merged: 0, stale: 0 } as never);
+  spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+  spyGetArchonWorkspacesPath = spyOn(archonPaths, 'getArchonWorkspacesPath').mockReturnValue(
+    '/home/test/.archon/workspaces' as never
+  );
 }
 
 // Restore all spies
@@ -292,6 +382,37 @@ function restoreSpies(): void {
   spyFsReaddir?.mockRestore();
   spyFsRm?.mockRestore();
   spyDiscoverWorkflows?.mockRestore();
+  // DB module spies
+  spyDbUpdateConversation?.mockRestore();
+  spyDbGetCodebase?.mockRestore();
+  spyDbFindCodebaseByDefaultCwd?.mockRestore();
+  spyDbCreateCodebase?.mockRestore();
+  spyDbGetCodebaseCommands?.mockRestore();
+  spyDbUpdateCodebaseCommands?.mockRestore();
+  spyDbDeleteCodebase?.mockRestore();
+  spyDbGetActiveSession?.mockRestore();
+  spyDbDeactivateSession?.mockRestore();
+  spyDbGetActiveWorkflowRun?.mockRestore();
+  spyDbCancelWorkflowRun?.mockRestore();
+  spyDbListWorkflowRuns?.mockRestore();
+  spyDbGetWorkflowRun?.mockRestore();
+  spyDbResumeWorkflowRun?.mockRestore();
+  spyDbFailWorkflowRun?.mockRestore();
+  spyDbUpdateWorkflowRun?.mockRestore();
+  spyDbCreateWorkflowEvent?.mockRestore();
+  spyDbIsolationCreate?.mockRestore();
+  spyDbIsolationGetById?.mockRestore();
+  spyDbIsolationGetByWorkingPath?.mockRestore();
+  spyDbIsolationUpdateStatus?.mockRestore();
+  spyDbIsolationMarkDestroyed?.mockRestore();
+  spyDbIsolationGetActiveByCodebase?.mockRestore();
+  spyDbIsolationGetActiveEnvironments?.mockRestore();
+  spyDbIsolationCountActiveByCodebase?.mockRestore();
+  spyCleanupMergedWorktreesSpy?.mockRestore();
+  spyCleanupStaleWorktreesSpy?.mockRestore();
+  spyGetWorktreeStatusBreakdownSpy?.mockRestore();
+  spyCreateLogger?.mockRestore();
+  spyGetArchonWorkspacesPath?.mockRestore();
 }
 
 describe('CommandHandler', () => {

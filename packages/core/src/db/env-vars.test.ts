@@ -1,29 +1,35 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import * as archonPaths from '@archon/paths';
+import * as connectionModule from './connection';
+import { createMockLogger } from '../test/mocks/logger';
 
+const mockLogger = createMockLogger();
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
-
-mock.module('./connection', () => ({
-  pool: { query: mockQuery },
-  getDialect: () => mockPostgresDialect,
-}));
-
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => ({
-    info: mock(() => {}),
-    warn: mock(() => {}),
-    error: mock(() => {}),
-    debug: mock(() => {}),
-    trace: mock(() => {}),
-    fatal: mock(() => {}),
-  })),
-}));
 
 import { getCodebaseEnvVars, setCodebaseEnvVar, deleteCodebaseEnvVar } from './env-vars';
 
 describe('env-vars', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyCreateLogger: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyPoolQuery: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyGetDialect: any;
+
   beforeEach(() => {
+    spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+    spyPoolQuery = spyOn(connectionModule.pool, 'query').mockImplementation(mockQuery as never);
+    spyGetDialect = spyOn(connectionModule, 'getDialect').mockReturnValue(
+      mockPostgresDialect as never
+    );
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyCreateLogger?.mockRestore();
+    spyPoolQuery?.mockRestore();
+    spyGetDialect?.mockRestore();
   });
 
   describe('getCodebaseEnvVars', () => {

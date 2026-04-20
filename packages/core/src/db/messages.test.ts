@@ -1,36 +1,43 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { MessageRow } from './messages';
+import * as archonPaths from '@archon/paths';
+import * as connectionModule from './connection';
+import { createMockLogger } from '../test/mocks/logger';
 
+const mockLogger = createMockLogger();
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 const mockGetDatabaseType = mock(() => 'postgresql' as const);
-
-// Mock the connection module before importing the module under test
-mock.module('./connection', () => ({
-  pool: {
-    query: mockQuery,
-  },
-  getDialect: () => mockPostgresDialect,
-  getDatabaseType: mockGetDatabaseType,
-}));
-
-// Mock @archon/paths to avoid lazy logger initialization issues in tests
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => ({
-    fatal: mock(() => undefined),
-    error: mock(() => undefined),
-    warn: mock(() => undefined),
-    info: mock(() => undefined),
-    debug: mock(() => undefined),
-    trace: mock(() => undefined),
-  })),
-}));
 
 import { addMessage, listMessages, getRecentWorkflowResultMessages } from './messages';
 
 describe('messages', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyCreateLogger: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyPoolQuery: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyGetDialect: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyGetDatabaseType: any;
+
   beforeEach(() => {
+    spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+    spyPoolQuery = spyOn(connectionModule.pool, 'query').mockImplementation(mockQuery as never);
+    spyGetDialect = spyOn(connectionModule, 'getDialect').mockReturnValue(
+      mockPostgresDialect as never
+    );
+    spyGetDatabaseType = spyOn(connectionModule, 'getDatabaseType').mockImplementation(
+      mockGetDatabaseType as never
+    );
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyCreateLogger?.mockRestore();
+    spyPoolQuery?.mockRestore();
+    spyGetDialect?.mockRestore();
+    spyGetDatabaseType?.mockRestore();
   });
 
   const mockMessage: MessageRow = {

@@ -1,4 +1,4 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { MockPlatformAdapter } from '../test/mocks/platform';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflow, makeTestWorkflowList } from '@archon/workflows/test-utils';
@@ -6,37 +6,34 @@ import type { Conversation, Codebase, Session } from '../types';
 import { ConversationNotFoundError } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
+// ─── Namespace imports for spyOn (must come before module under test) ─────────
+
+import * as archonPaths from '@archon/paths';
+import * as dbConversations from '../db/conversations';
+import * as dbCodebases from '../db/codebases';
+import * as dbSessions from '../db/sessions';
+import * as commandHandlerModule from '../handlers/command-handler';
+import * as providers from '@archon/providers';
+import * as storeAdapter from '../workflows/store-adapter';
+import * as configLoader from '../config/config-loader';
+import * as worktreeSync from '../utils/worktree-sync';
+import * as promptBuilder from './prompt-builder';
+import * as errorFormatter from '../utils/error-formatter';
+import * as titleGenerator from '../services/title-generator';
+import * as orchestratorModule from './orchestrator';
+import * as dbMessages from '../db/messages';
+
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
-const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getArchonHome: mock(() => '/home/test/.archon'),
-}));
-
-// DB mocks
+// DB mock functions — used in spyOn delegation and test assertions
 const mockGetOrCreateConversation = mock(() => Promise.resolve(null));
 const mockGetConversationByPlatformId = mock(() => Promise.resolve(null));
 const mockUpdateConversation = mock(() => Promise.resolve());
 const mockTouchConversation = mock(() => Promise.resolve());
 
-mock.module('../db/conversations', () => ({
-  getOrCreateConversation: mockGetOrCreateConversation,
-  getConversationByPlatformId: mockGetConversationByPlatformId,
-  updateConversation: mockUpdateConversation,
-  touchConversation: mockTouchConversation,
-}));
-
 const mockGetCodebase = mock(() => Promise.resolve(null));
 const mockListCodebases = mock(() => Promise.resolve([]));
 const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
-
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-  listCodebases: mockListCodebases,
-  createCodebase: mockCreateCodebase,
-}));
 
 const mockGetActiveSession = mock(() => Promise.resolve(null));
 const mockCreateSession = mock(() => Promise.resolve(null));
@@ -57,15 +54,7 @@ const mockTransitionSession = mock(
   }
 );
 
-mock.module('../db/sessions', () => ({
-  getActiveSession: mockGetActiveSession,
-  createSession: mockCreateSession,
-  updateSession: mockUpdateSession,
-  deactivateSession: mockDeactivateSession,
-  transitionSession: mockTransitionSession,
-}));
-
-// Command handler mock
+// Command handler mock functions
 const mockHandleCommand = mock(() =>
   Promise.resolve({ message: '', modified: false, success: true })
 );
@@ -74,32 +63,15 @@ const mockParseCommand = mock((message: string) => {
   return { command: parts[0].substring(1), args: parts.slice(1) };
 });
 
-mock.module('../handlers/command-handler', () => ({
-  handleCommand: mockHandleCommand,
-  parseCommand: mockParseCommand,
-}));
-
 // AI provider mock
 const mockGetAgentProvider = mock(() => null);
 
-mock.module('@archon/providers', () => ({
-  getAgentProvider: mockGetAgentProvider,
-}));
-
-// Workflow mocks
+// Workflow mock functions
 const mockDiscoverWorkflows = mock(() => Promise.resolve({ workflows: [], errors: [] }));
 const mockExecuteWorkflow = mock(() => Promise.resolve());
 const mockFindWorkflow = mock((name: string, workflows: readonly WorkflowDefinition[]) =>
   workflows.find(w => w.name === name)
 );
-
-mock.module('../workflows/store-adapter', () => ({
-  createWorkflowDeps: mock(() => ({
-    store: {},
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
-  })),
-}));
 
 // Config mock
 const mockLoadConfig = mock(() =>
@@ -115,48 +87,23 @@ const mockLoadConfig = mock(() =>
   })
 );
 
-mock.module('../config/config-loader', () => ({
-  loadConfig: mockLoadConfig,
-}));
-
 // Worktree sync mock
 const mockSyncArchonToWorktree = mock(() => Promise.resolve(false));
 
-mock.module('../utils/worktree-sync', () => ({
-  syncArchonToWorktree: mockSyncArchonToWorktree,
-}));
-
-// Orchestrator (isolation & dispatch) mocks
+// Orchestrator (isolation & dispatch) mock functions — spied per-test in setupSpies()
 const mockValidateAndResolveIsolation = mock(() =>
   Promise.resolve({ status: 'existing', cwd: '/workspace/project', env: null })
 );
 const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
 
-mock.module('./orchestrator', () => ({
-  validateAndResolveIsolation: mockValidateAndResolveIsolation,
-  dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
-  IsolationBlockedError: class IsolationBlockedError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = 'IsolationBlockedError';
-    }
-  },
-}));
+// Messages DB mock function
+const mockGetRecentWorkflowResultMessages = mock(() => Promise.resolve([]));
 
-// Prompt builder mock
+// Prompt builder mock functions
 const mockBuildOrchestratorPrompt = mock(() => 'You are the orchestrator agent.');
 const mockBuildProjectScopedPrompt = mock(() => 'You are scoped to project X.');
 
-mock.module('./prompt-builder', () => ({
-  buildOrchestratorPrompt: mockBuildOrchestratorPrompt,
-  buildProjectScopedPrompt: mockBuildProjectScopedPrompt,
-}));
-
-// Error/tool formatter mocks
-mock.module('../utils/error-formatter', () => ({
-  classifyAndFormatError: mock((err: Error) => `⚠️ Error: ${err.message}`),
-}));
-
+// Workflow mocks — KEPT as mock.module (external workspace packages)
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflows,
 }));
@@ -170,24 +117,238 @@ mock.module('@archon/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock((toolName: string, _toolInput: unknown) => `🔧 ${toolName.toUpperCase()}`),
 }));
 
-// fs mock for existsSync
+// fs mock for existsSync — KEPT as mock.module (node built-in)
 const mockExistsSync = mock(() => true);
 mock.module('fs', () => ({
   existsSync: mockExistsSync,
 }));
 
-// Title generator mock
+// Title generator mock function
 const mockGenerateAndSetTitle = mock(() => Promise.resolve());
-mock.module('../services/title-generator', () => ({
-  generateAndSetTitle: mockGenerateAndSetTitle,
-}));
 
-// ─── Import module under test (AFTER all mocks) ─────────────────────────────
+// ─── Import module under test (AFTER mock.module calls) ──────────────────────
 
-import { handleMessage, parseOrchestratorCommands } from './orchestrator-agent';
+import {
+  handleMessage,
+  parseOrchestratorCommands,
+  resetLogCacheForTest,
+} from './orchestrator-agent';
 
 // Also import wrapCommandForExecution which still lives in orchestrator.ts
 import { wrapCommandForExecution } from './orchestrator';
+
+// ─── Mock logger ──────────────────────────────────────────────────────────────
+
+const mockLogger = createMockLogger();
+
+// ─── Spy variables ────────────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateLogger: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetArchonWorkspacesPath: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetArchonHome: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetOrCreateConversation: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetConversationByPlatformId: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateConversation: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyTouchConversation: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyListCodebases: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateCodebaseDb: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetActiveSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDeactivateSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyTransitionSession: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyHandleCommand: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyParseCommand: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetAgentProvider: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateWorkflowDeps: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyLoadConfig: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spySyncArchonToWorktree: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyBuildOrchestratorPrompt: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyBuildProjectScopedPrompt: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFormatWorkflowContextSection: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyClassifyAndFormatError: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGenerateAndSetTitle: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyValidateAndResolveIsolation: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyDispatchBackgroundWorkflow: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetRecentWorkflowResultMessages: any;
+
+function setupSpies() {
+  // Reset orchestrator-agent's lazy logger cache so it picks up this test's mockLogger
+  resetLogCacheForTest();
+  spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+  spyGetArchonWorkspacesPath = spyOn(archonPaths, 'getArchonWorkspacesPath').mockReturnValue(
+    '/home/test/.archon/workspaces' as never
+  );
+  spyGetArchonHome = spyOn(archonPaths, 'getArchonHome').mockReturnValue(
+    '/home/test/.archon' as never
+  );
+
+  spyGetOrCreateConversation = spyOn(dbConversations, 'getOrCreateConversation').mockImplementation(
+    mockGetOrCreateConversation as never
+  );
+  spyGetConversationByPlatformId = spyOn(
+    dbConversations,
+    'getConversationByPlatformId'
+  ).mockImplementation(mockGetConversationByPlatformId as never);
+  spyUpdateConversation = spyOn(dbConversations, 'updateConversation').mockImplementation(
+    mockUpdateConversation as never
+  );
+  spyTouchConversation = spyOn(dbConversations, 'touchConversation').mockImplementation(
+    mockTouchConversation as never
+  );
+
+  spyGetCodebase = spyOn(dbCodebases, 'getCodebase').mockImplementation(mockGetCodebase as never);
+  spyListCodebases = spyOn(dbCodebases, 'listCodebases').mockImplementation(
+    mockListCodebases as never
+  );
+  spyCreateCodebaseDb = spyOn(dbCodebases, 'createCodebase').mockImplementation(
+    mockCreateCodebase as never
+  );
+
+  spyGetActiveSession = spyOn(dbSessions, 'getActiveSession').mockImplementation(
+    mockGetActiveSession as never
+  );
+  spyCreateSession = spyOn(dbSessions, 'createSession').mockImplementation(
+    mockCreateSession as never
+  );
+  spyUpdateSession = spyOn(dbSessions, 'updateSession').mockImplementation(
+    mockUpdateSession as never
+  );
+  spyDeactivateSession = spyOn(dbSessions, 'deactivateSession').mockImplementation(
+    mockDeactivateSession as never
+  );
+  spyTransitionSession = spyOn(dbSessions, 'transitionSession').mockImplementation(
+    mockTransitionSession as never
+  );
+
+  spyHandleCommand = spyOn(commandHandlerModule, 'handleCommand').mockImplementation(
+    mockHandleCommand as never
+  );
+  spyParseCommand = spyOn(commandHandlerModule, 'parseCommand').mockImplementation(
+    mockParseCommand as never
+  );
+
+  spyGetAgentProvider = spyOn(providers, 'getAgentProvider').mockImplementation(
+    mockGetAgentProvider as never
+  );
+
+  spyCreateWorkflowDeps = spyOn(storeAdapter, 'createWorkflowDeps').mockReturnValue({
+    store: {},
+    getAgentProvider: () => ({}),
+    loadConfig: async () => ({}),
+  } as never);
+
+  spyLoadConfig = spyOn(configLoader, 'loadConfig').mockImplementation(mockLoadConfig as never);
+
+  spySyncArchonToWorktree = spyOn(worktreeSync, 'syncArchonToWorktree').mockImplementation(
+    mockSyncArchonToWorktree as never
+  );
+
+  spyBuildOrchestratorPrompt = spyOn(promptBuilder, 'buildOrchestratorPrompt').mockImplementation(
+    mockBuildOrchestratorPrompt as never
+  );
+  spyBuildProjectScopedPrompt = spyOn(promptBuilder, 'buildProjectScopedPrompt').mockImplementation(
+    mockBuildProjectScopedPrompt as never
+  );
+  spyFormatWorkflowContextSection = spyOn(
+    promptBuilder,
+    'formatWorkflowContextSection'
+  ).mockReturnValue('' as never);
+
+  spyClassifyAndFormatError = spyOn(errorFormatter, 'classifyAndFormatError').mockImplementation(
+    ((err: Error) => `⚠️ Error: ${err.message}`) as never
+  );
+
+  spyGenerateAndSetTitle = spyOn(titleGenerator, 'generateAndSetTitle').mockImplementation(
+    mockGenerateAndSetTitle as never
+  );
+
+  spyValidateAndResolveIsolation = spyOn(
+    orchestratorModule,
+    'validateAndResolveIsolation'
+  ).mockImplementation(mockValidateAndResolveIsolation as never);
+  spyDispatchBackgroundWorkflow = spyOn(
+    orchestratorModule,
+    'dispatchBackgroundWorkflow'
+  ).mockImplementation(mockDispatchBackgroundWorkflow as never);
+
+  spyGetRecentWorkflowResultMessages = spyOn(
+    dbMessages,
+    'getRecentWorkflowResultMessages'
+  ).mockImplementation(mockGetRecentWorkflowResultMessages as never);
+}
+
+function restoreSpies() {
+  spyCreateLogger?.mockRestore();
+  spyGetArchonWorkspacesPath?.mockRestore();
+  spyGetArchonHome?.mockRestore();
+  spyGetOrCreateConversation?.mockRestore();
+  spyGetConversationByPlatformId?.mockRestore();
+  spyUpdateConversation?.mockRestore();
+  spyTouchConversation?.mockRestore();
+  spyGetCodebase?.mockRestore();
+  spyListCodebases?.mockRestore();
+  spyCreateCodebaseDb?.mockRestore();
+  spyGetActiveSession?.mockRestore();
+  spyCreateSession?.mockRestore();
+  spyUpdateSession?.mockRestore();
+  spyDeactivateSession?.mockRestore();
+  spyTransitionSession?.mockRestore();
+  spyHandleCommand?.mockRestore();
+  spyParseCommand?.mockRestore();
+  spyGetAgentProvider?.mockRestore();
+  spyCreateWorkflowDeps?.mockRestore();
+  spyLoadConfig?.mockRestore();
+  spySyncArchonToWorktree?.mockRestore();
+  spyBuildOrchestratorPrompt?.mockRestore();
+  spyBuildProjectScopedPrompt?.mockRestore();
+  spyFormatWorkflowContextSection?.mockRestore();
+  spyClassifyAndFormatError?.mockRestore();
+  spyGenerateAndSetTitle?.mockRestore();
+  spyValidateAndResolveIsolation?.mockRestore();
+  spyDispatchBackgroundWorkflow?.mockRestore();
+  spyGetRecentWorkflowResultMessages?.mockRestore();
+}
+
+// ─── Top-level spy setup/restore ─────────────────────────────────────────────
+
+beforeEach(() => {
+  setupSpies();
+});
+
+afterEach(() => {
+  restoreSpies();
+});
 
 // ─── Test Fixtures ──────────────────────────────────────────────────────────
 
@@ -280,6 +441,7 @@ function clearAllMocks(): void {
   mockSyncArchonToWorktree.mockClear();
   mockValidateAndResolveIsolation.mockClear();
   mockDispatchBackgroundWorkflow.mockClear();
+  mockGetRecentWorkflowResultMessages.mockClear();
   mockBuildOrchestratorPrompt.mockClear();
   mockBuildProjectScopedPrompt.mockClear();
   mockLoadConfig.mockClear();
