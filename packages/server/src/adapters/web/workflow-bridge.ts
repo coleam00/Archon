@@ -140,7 +140,18 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         approval: {
           nodeId: event.nodeId,
           message: event.message,
-          ...(event.lastOutput ? { lastOutput: event.lastOutput } : {}),
+          ...(typeof event.lastOutput === 'string'
+            ? {
+                lastOutput: event.lastOutput,
+                lastOutputTruncated: event.lastOutputTruncated ?? false,
+              }
+            : {}),
+          ...(typeof event.finalAssistantOutput === 'string'
+            ? {
+                finalAssistantOutput: event.finalAssistantOutput,
+                finalAssistantOutputTruncated: event.finalAssistantOutputTruncated ?? false,
+              }
+            : {}),
         },
       });
 
