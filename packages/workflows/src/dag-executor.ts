@@ -2252,6 +2252,9 @@ async function executeLoopNode(
         type: 'interactive_loop',
         iteration: i,
         sessionId: currentSessionId,
+        ...(loop.complete_on_user_input
+          ? { completeOnUserInput: loop.complete_on_user_input }
+          : {}),
       });
       getWorkflowEventEmitter().emit({
         type: 'approval_pending',

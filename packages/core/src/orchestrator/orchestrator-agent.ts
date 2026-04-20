@@ -54,6 +54,7 @@ import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import { matchesInteractiveLoopCompletionInput } from '@archon/workflows/schemas/workflow-run';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -633,28 +634,40 @@ export async function handleMessage(
         );
 
         try {
-          // Write approval events — for interactive loops, do NOT write node_completed
-          // (the executor writes it when the AI emits the completion signal on actual exit).
-          if (approval.type !== 'interactive_loop') {
+          const completesLoop = matchesInteractiveLoopCompletionInput(approval, message);
+          // Write approval events. For interactive loops, only write node_completed when the
+          // workflow explicitly configured exact completion aliases.
+          if (approval.type !== 'interactive_loop' || completesLoop) {
             const nodeOutput = approval.captureResponse === true ? message : '';
             await workflowEventDb.createWorkflowEvent({
               workflow_run_id: pausedRun.id,
               event_type: 'node_completed',
               step_name: approval.nodeId,
-              data: { node_output: nodeOutput, approval_decision: 'approved' },
+              data: {
+                node_output: completesLoop ? (approval.lastOutput ?? '') : nodeOutput,
+                approval_decision: 'approved',
+                ...(completesLoop ? { loop_completion_input: message } : {}),
+              },
             });
           }
           await workflowEventDb.createWorkflowEvent({
             workflow_run_id: pausedRun.id,
             event_type: 'approval_received',
             step_name: approval.nodeId,
-            data: { decision: 'approved', comment: message },
+            data: {
+              decision: 'approved',
+              comment: message,
+              ...(approval.type === 'interactive_loop' ? { iteration: approval.iteration } : {}),
+              ...(completesLoop ? { transition: 'complete_loop' } : {}),
+            },
           });
           // For interactive loops, store user input; for standard approvals, mark as approved
           // and clear any rejection state.
           const metadataUpdate: Record<string, unknown> =
             approval.type === 'interactive_loop'
-              ? { loop_user_input: message }
+              ? completesLoop
+                ? { loop_completion_input: message }
+                : { loop_user_input: message }
               : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
           await workflowDb.updateWorkflowRun(pausedRun.id, {
             status: 'failed',

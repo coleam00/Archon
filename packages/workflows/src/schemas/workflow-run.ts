@@ -119,6 +119,8 @@ export interface ApprovalContext {
   iteration?: number;
   /** Session ID to restore on resume (interactive loops only). */
   sessionId?: string;
+  /** Exact user replies that complete an interactive loop without another AI turn. */
+  completeOnUserInput?: string[];
   /** When true, the user's approval comment is stored as `$nodeId.output`. */
   captureResponse?: boolean;
   /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */
@@ -139,6 +141,25 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
     val !== null &&
     typeof (val as Record<string, unknown>).nodeId === 'string' &&
     typeof (val as Record<string, unknown>).message === 'string'
+  );
+}
+
+/** Normalize human gate replies for exact alias comparison. */
+export function normalizeInteractiveLoopInput(input: string): string {
+  return input.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Return true when a paused interactive loop should complete from the user's reply. */
+export function matchesInteractiveLoopCompletionInput(
+  approval: ApprovalContext,
+  input: string
+): boolean {
+  if (approval.type !== 'interactive_loop') return false;
+  if (!approval.completeOnUserInput?.length) return false;
+  const normalizedInput = normalizeInteractiveLoopInput(input);
+  if (!normalizedInput) return false;
+  return approval.completeOnUserInput.some(
+    alias => normalizeInteractiveLoopInput(alias) === normalizedInput
   );
 }
 

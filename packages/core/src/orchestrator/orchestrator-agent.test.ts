@@ -1211,6 +1211,48 @@ describe('natural-language approval routing', () => {
     expect(mockExecuteWorkflow).toHaveBeenCalled();
   });
 
+  test('natural language completion alias completes interactive loop from last output', async () => {
+    const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: '/repos/test-repo' });
+    const codebase = makeApprovalCodebase();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockGetPausedWorkflowRun.mockReturnValueOnce(
+      Promise.resolve(
+        makePausedRun({
+          metadata: {
+            approval: {
+              type: 'interactive_loop',
+              nodeId: 'explore',
+              iteration: 2,
+              message: 'Say ready when done',
+              lastOutput: 'Exploration summary.',
+              completeOnUserInput: ['ready'],
+            },
+          },
+        })
+      )
+    );
+    mockGetCodebase.mockImplementation(() => Promise.resolve(codebase));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [{ workflow: approvalWorkflow }], errors: [] })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'ready');
+
+    const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls.find(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
+    );
+    expect(nodeCompletedCall?.[0]).toMatchObject({
+      step_name: 'explore',
+      data: {
+        node_output: 'Exploration summary.',
+        approval_decision: 'approved',
+        loop_completion_input: 'ready',
+      },
+    });
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+  });
+
   test('slash command bypasses approval interception — getPausedWorkflowRun not called', async () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));

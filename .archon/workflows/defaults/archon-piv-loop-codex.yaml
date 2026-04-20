@@ -185,6 +185,12 @@ nodes:
       until: PLAN_READY
       max_iterations: 15
       interactive: true
+      complete_on_user_input:
+        - ready
+        - create the plan
+        - let's go
+        - proceed
+        - i'm done
       gate_message: |
         Answer the questions above, ask me to explore specific areas,
         or say "ready" when you're satisfied with the exploration.
@@ -430,6 +436,12 @@ nodes:
       until: PLAN_APPROVED
       max_iterations: 10
       interactive: true
+      complete_on_user_input:
+        - approved
+        - looks good
+        - ship it
+        - let's go
+        - proceed
       gate_message: |
         Review the plan document. Provide specific feedback on what to change,
         or say "approved" to begin implementation.
@@ -976,6 +988,12 @@ nodes:
       until: VALIDATED
       max_iterations: 10
       interactive: true
+      complete_on_user_input:
+        - approved
+        - looks good
+        - ship it
+        - let's go
+        - proceed
       gate_message: |
         Test the implementation yourself and review the code changes.
         Provide specific feedback on what needs fixing, or say "approved" to finalize.
