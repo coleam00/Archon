@@ -267,9 +267,14 @@ export class PiProvider implements IAgentProvider {
     // packages installed via `pi install npm:<pkg>`).
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const settingsManager = SettingsManager.inMemory();
-    const enableExtensions = piConfig.enableExtensions === true;
+    // Default ON: extensions (community packages like @plannotator/pi-extension
+    // or your own local ones) are a core reason users run Pi. Opt out with
+    // `assistants.pi.enableExtensions: false` (or `interactive: false`) in
+    // `.archon/config.yaml`. Previously default-off, which silently broke
+    // users who installed or built an extension and expected it to fire.
+    const enableExtensions = piConfig.enableExtensions !== false;
     // Clamp to false without extensions: nothing consumes hasUI without a runner.
-    const interactive = enableExtensions && piConfig.interactive === true;
+    const interactive = enableExtensions && piConfig.interactive !== false;
     const resourceLoader = createNoopResourceLoader(cwd, {
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),

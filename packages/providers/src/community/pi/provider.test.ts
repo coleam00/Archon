@@ -870,7 +870,7 @@ describe('PiProvider', () => {
       | Record<string, unknown>
       | undefined;
     expect(loaderArgs?.systemPrompt).toBe('You are a careful investigator.');
-    expect(loaderArgs?.noExtensions).toBe(true);
+    expect(loaderArgs?.noExtensions).toBe(false);
     expect(loaderArgs?.noContextFiles).toBe(true);
   });
 
@@ -924,7 +924,7 @@ describe('PiProvider', () => {
     expect(caps.hooks).toBe(false);
   });
 
-  test('extensions are suppressed by default (noExtensions: true)', async () => {
+  test('extensions are enabled by default (noExtensions: false)', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -937,7 +937,15 @@ describe('PiProvider', () => {
     const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
       | Record<string, unknown>
       | undefined;
-    expect(loaderArgs?.noExtensions).toBe(true);
+    // Extensions (community packages and user-authored) are a core reason
+    // users run Pi; off-by-default silently broke users who installed or
+    // authored one and expected it to fire.
+    expect(loaderArgs?.noExtensions).toBe(false);
+    // Skills/prompts/themes/context stay suppressed — only extensions flip on.
+    expect(loaderArgs?.noSkills).toBe(true);
+    expect(loaderArgs?.noPromptTemplates).toBe(true);
+    expect(loaderArgs?.noThemes).toBe(true);
+    expect(loaderArgs?.noContextFiles).toBe(true);
   });
 
   test('assistantConfig.enableExtensions: true flips noExtensions to false', async () => {
@@ -1273,32 +1281,33 @@ describe('PiProvider', () => {
     expect(bindings.uiContext).toBeDefined();
   });
 
-  test('interactive: true without enableExtensions does NOT bind (clamped silently)', async () => {
+  test('enableExtensions: false disables binding even if interactive: true is set', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
     await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        assistantConfig: { interactive: true },
+        assistantConfig: { enableExtensions: false, interactive: true },
       })
     );
 
     expect(mockBindExtensions).not.toHaveBeenCalled();
   });
 
-  test('enableExtensions alone (no interactive) binds empty to fire session_start', async () => {
+  test('interactive: false with extensions on binds empty (session_start fires, no UIContext)', async () => {
     // When extensions are loaded, session_start MUST fire so each extension's
-    // startup handler runs (reads flags, registers tools, etc.). We bind with
-    // no uiContext so Pi's internal noOpUIContext stays active and hasUI
-    // remains false — plannotator and other UI-gated flows still auto-approve.
+    // startup handler runs (reads flags, registers tools, etc.). Binding with
+    // no uiContext keeps Pi's internal noOpUIContext active so hasUI stays
+    // false — extensions that gate UI flows (like plannotator) will auto-approve
+    // in this mode.
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
     await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        assistantConfig: { enableExtensions: true, interactive: false },
+        assistantConfig: { interactive: false },
       })
     );
 
@@ -1307,7 +1316,7 @@ describe('PiProvider', () => {
     expect(bindings.uiContext).toBeUndefined();
   });
 
-  test('default (no enableExtensions) does NOT bind', async () => {
+  test('default (nothing set) binds with UIContext — extensions + interactive both on', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -1317,7 +1326,9 @@ describe('PiProvider', () => {
       })
     );
 
-    expect(mockBindExtensions).not.toHaveBeenCalled();
+    expect(mockBindExtensions).toHaveBeenCalledTimes(1);
+    const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
+    expect(bindings.uiContext).toBeDefined();
   });
 
   // ─── extensionFlags pass-through ──────────────────────────────────────
@@ -1358,14 +1369,14 @@ describe('PiProvider', () => {
     expect(callOrder).toEqual(['setFlagValue', 'setFlagValue', 'bindExtensions']);
   });
 
-  test('extensionFlags is a no-op without enableExtensions', async () => {
+  test('extensionFlags is a no-op when enableExtensions is explicitly false', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
     await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
-        assistantConfig: { extensionFlags: { plan: true } },
+        assistantConfig: { enableExtensions: false, extensionFlags: { plan: true } },
       })
     );
 

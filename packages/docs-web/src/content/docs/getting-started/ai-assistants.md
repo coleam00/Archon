@@ -264,6 +264,54 @@ Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your e
 
 Additional Pi backends exist (Azure, Bedrock, Vertex, etc.) — file an issue if you need them wired.
 
+### Extensions (on by default)
+
+A major reason to pick Pi is its **extension ecosystem**: community packages (installed via `pi install npm:<package>`) and your own local ones that hook into the agent's lifecycle. Extensions can intercept tool calls, gate execution on human review, post to external systems, render UIs — anything the Pi extension API exposes.
+
+Archon turns extensions **on by default**. To opt out in `.archon/config.yaml`:
+
+```yaml
+assistants:
+  pi:
+    enableExtensions: false   # skip extension discovery entirely
+    # interactive: false       # keep extensions loaded, but give them no UI bridge
+```
+
+Most extensions need three config surfaces:
+
+| Surface | Purpose |
+|---|---|
+| `extensionFlags` | Per-extension feature flags (maps 1:1 to Pi's `--flag` CLI switches) |
+| `env` | Env vars the extension reads at runtime (managed via `.archon/config.yaml` or the Web UI codebase env panel) |
+| Workflow-level `interactive: true` | Required for **approval-gate extensions** on the web UI — forces foreground execution so the user can respond |
+
+**Example — [plannotator](https://github.com/dmcglinn/plannotator) (human-in-the-loop plan review):**
+
+```bash
+# One-time install into your Pi home
+pi install npm:@plannotator/pi-extension
+```
+
+```yaml
+# .archon/config.yaml
+assistants:
+  pi:
+    model: anthropic/claude-haiku-4-5
+    extensionFlags:
+      plan: true              # enables the plannotator "plan" flag
+    env:
+      PLANNOTATOR_REMOTE: "1" # exposes the review URL on 127.0.0.1:19432 so you can open it from anywhere
+```
+
+```yaml
+# .archon/workflows/my-piv.yaml
+name: my-piv
+provider: pi
+interactive: true             # plannotator gates the node on human approval — required on web UI
+```
+
+When the node runs, plannotator prints a review URL and blocks until you click approve/deny in the browser. Archon's CLI/SSE batch buffer flushes that URL to you immediately so you never get stuck waiting on a node that silently wants input.
+
 ### Model reference format
 
 Pi models use a `<pi-provider-id>/<model-id>` format:
@@ -304,6 +352,7 @@ nodes:
 
 | Feature | Support | YAML field |
 |---|---|---|
+| Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension |
 | Session resume | ✅ | automatic (Archon persists `sessionId`) |
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
 | Thinking level | ✅ | `effort: low\|medium\|high\|max` (max → xhigh) |
