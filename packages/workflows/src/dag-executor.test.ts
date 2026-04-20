@@ -5291,9 +5291,12 @@ describe('executeDagWorkflow -- approval node', () => {
     expect((pauseCalls[0][1] as Record<string, unknown>).captureResponse).toBeUndefined();
   });
 
-  it('on_reject runs AI prompt and re-pauses on rejection resume', async () => {
+  it('on_reject runs AI prompt and re-pauses on rejection resume with semantic snapshot fields', async () => {
     mockSendQueryDag.mockImplementation(function* () {
-      yield { type: 'assistant', content: 'Fixed based on feedback' };
+      yield { type: 'assistant', content: 'Investigating fix. ' };
+      yield { type: 'tool', toolName: 'search_code' };
+      yield { type: 'assistant', content: 'Applied guard' };
+      yield { type: 'assistant', content: ' and updated handling' };
       yield { type: 'result', sessionId: 'reject-fix-session' };
     });
 
@@ -5356,14 +5359,20 @@ describe('executeDagWorkflow -- approval node', () => {
     ).mock.calls;
     expect(pauseCalls.length).toBe(1);
     expect(pauseCalls[0][1]).toMatchObject({
-      lastOutput: 'Fixed based on feedback',
+      lastOutput: 'Investigating fix. Applied guard and updated handling',
+      lastOutputTruncated: false,
+      finalAssistantOutput: 'Applied guardand updated handling',
+      finalAssistantOutputTruncated: false,
     });
   });
 
-  it('interactive loop bounds large lastOutput before pausing', async () => {
+  it('interactive loop bounds large lastOutput and keeps a shorter final assistant summary', async () => {
     const largeOutput = 'A'.repeat(9000);
+    const finalSummary = 'Short closing summary';
     mockSendQueryDag.mockImplementation(function* () {
       yield { type: 'assistant', content: largeOutput };
+      yield { type: 'tool', toolName: 'search_code' };
+      yield { type: 'assistant', content: finalSummary };
       yield { type: 'result', sessionId: 'loop-session-large' };
     });
 
@@ -5412,6 +5421,189 @@ describe('executeDagWorkflow -- approval node', () => {
     const lastOutput = approvalContext.lastOutput as string;
     expect(lastOutput.length).toBeLessThanOrEqual(8000);
     expect(lastOutput.endsWith('[truncated]')).toBe(true);
+    expect(approvalContext.lastOutputTruncated).toBe(true);
+    expect(approvalContext.finalAssistantOutput).toBe(finalSummary);
+    expect(approvalContext.finalAssistantOutputTruncated).toBe(false);
+  });
+
+  it('interactive loop stores finalAssistantOutput when no tool was used', async () => {
+    const finalResponse = 'Draft section ready for review';
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: finalResponse };
+      yield { type: 'result', sessionId: 'loop-session-no-tool' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'interactive-loop-no-tool-output',
+        nodes: [
+          {
+            id: 'refine',
+            loop: {
+              prompt: 'Refine the plan.',
+              until: 'APPROVED',
+              max_iterations: 10,
+              interactive: true,
+              gate_message: 'Review the plan and provide feedback.',
+            },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const pauseCalls = (
+      mockDeps.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    const approvalContext = pauseCalls[0][1] as Record<string, unknown>;
+    expect(approvalContext).toMatchObject({
+      lastOutput: finalResponse,
+      lastOutputTruncated: false,
+      finalAssistantOutput: finalResponse,
+      finalAssistantOutputTruncated: false,
+    });
+  });
+
+  it('interactive loop omits finalAssistantOutput when no assistant text follows the last tool', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Ran analysis before tool.' };
+      yield { type: 'tool', toolName: 'search_code' };
+      yield { type: 'tool_result', toolName: 'search_code', toolOutput: 'match found' };
+      yield { type: 'result', sessionId: 'loop-session-no-final-assistant' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'interactive-loop-no-trailing-assistant',
+        nodes: [
+          {
+            id: 'refine',
+            loop: {
+              prompt: 'Refine the plan.',
+              until: 'APPROVED',
+              max_iterations: 10,
+              interactive: true,
+              gate_message: 'Review the plan and provide feedback.',
+            },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const pauseCalls = (
+      mockDeps.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    const approvalContext = pauseCalls[0][1] as Record<string, unknown>;
+    expect(approvalContext).toMatchObject({
+      lastOutput: 'Ran analysis before tool.',
+      lastOutputTruncated: false,
+    });
+    expect(approvalContext.finalAssistantOutput).toBeUndefined();
+    expect(approvalContext.finalAssistantOutputTruncated).toBeUndefined();
+  });
+
+  it('interactive loop breaks assistant segments on non-assistant chunks without resetting the tool anchor', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Before tool. ' };
+      yield { type: 'tool', toolName: 'search_code' };
+      yield { type: 'assistant', content: 'After tool first ' };
+      yield { type: 'assistant', content: 'segment' };
+      yield { type: 'thinking', content: 'reasoning' };
+      yield { type: 'assistant', content: ' After thinking' };
+      yield { type: 'system', content: 'system note' };
+      yield { type: 'assistant', content: ' After system' };
+      yield { type: 'tool_result', toolName: 'search_code', toolOutput: 'ok' };
+      yield { type: 'assistant', content: ' After tool result' };
+      yield { type: 'rate_limit', rateLimitInfo: { retry_after_ms: 1000 } };
+      yield { type: 'assistant', content: ' After rate limit' };
+      yield { type: 'result', sessionId: 'loop-session-boundaries' };
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'interactive-loop-boundaries',
+        nodes: [
+          {
+            id: 'refine',
+            loop: {
+              prompt: 'Refine the plan.',
+              until: 'APPROVED',
+              max_iterations: 10,
+              interactive: true,
+              gate_message: 'Review the plan and provide feedback.',
+            },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const pauseCalls = (
+      mockDeps.store.pauseWorkflowRun as Mock<
+        (id: string, ctx: Record<string, unknown>) => Promise<void>
+      >
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    const approvalContext = pauseCalls[0][1] as Record<string, unknown>;
+    expect(approvalContext).toMatchObject({
+      lastOutput:
+        'Before tool.After tool firstsegmentAfter thinkingAfter systemAfter tool resultAfter rate limit',
+      lastOutputTruncated: false,
+      finalAssistantOutput: 'After rate limit',
+      finalAssistantOutputTruncated: false,
+    });
   });
 
   it('on_reject cancels when max_attempts exhausted', async () => {
