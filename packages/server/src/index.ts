@@ -252,6 +252,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   await webAdapter.start();
   persistence.startPeriodicFlush();
 
+  // Mutable — pushed to as each adapter starts, read by the /api/health endpoint.
+  // Must be a live reference because Telegram starts after the HTTP listener begins
+  // accepting requests, so a snapshot taken at registration time would miss it.
+  const activePlatforms: string[] = ['Web'];
+
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
   let gitea: GiteaAdapter | null = null;
@@ -284,6 +289,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         botMention
       );
       await github.start();
+      activePlatforms.push('GitHub');
     } else {
       getLog().info('github_adapter_skipped');
     }
@@ -300,6 +306,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         giteaBotMention
       );
       await gitea.start();
+      activePlatforms.push('Gitea');
     } else {
       getLog().info('gitea_adapter_skipped');
     }
@@ -316,6 +323,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         gitlabBotMention
       );
       await gitlab.start();
+      activePlatforms.push('GitLab');
     } else {
       getLog().info('gitlab_adapter_skipped');
     }
@@ -378,6 +386,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       });
 
       await discord.start();
+      activePlatforms.push('Discord');
     } else {
       getLog().info('discord_adapter_skipped');
     }
@@ -433,6 +442,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       });
 
       await slack.start();
+      activePlatforms.push('Slack');
     } else {
       getLog().info('slack_adapter_skipped');
     }
@@ -451,7 +461,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager);
+  registerApiRoutes(app, webAdapter, lockManager, activePlatforms);
 
   // GitHub webhook endpoint
   if (github) {
@@ -607,6 +617,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     try {
       await telegramAdapter.start();
+      activePlatforms.push('Telegram');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       getLog().error({ err: error, errorType: error.constructor.name }, 'telegram.start_failed');
@@ -667,15 +678,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // because it occurs AFTER the for-await generator loop exits (and thus outside
   // the try/catch in claude.ts). These are SDK cleanup races, not fatal app errors.
   process.on('unhandledRejection', handleUnhandledRejection);
-
-  // Show active platforms
-  const activePlatforms = ['Web'];
-  if (telegram) activePlatforms.push('Telegram');
-  if (discord) activePlatforms.push('Discord');
-  if (slack) activePlatforms.push('Slack');
-  if (github) activePlatforms.push('GitHub');
-  if (gitea) activePlatforms.push('Gitea');
-  if (gitlab) activePlatforms.push('GitLab');
 
   getLog().info({ activePlatforms, port }, 'server_ready');
 

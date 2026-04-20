@@ -56,6 +56,7 @@ export interface HealthResponse {
   runningWorkflows: number;
   version?: string;
   is_docker: boolean;
+  activePlatforms?: string[];
 }
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
