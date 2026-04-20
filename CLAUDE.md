@@ -719,9 +719,15 @@ async function createSession(conversationId: string, codebaseId: string) {
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
 - **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and will fail loudly if the generated file is stale.
 
-**Global workflows** (user-level, applies to every project):
-- Path: `~/.archon/.archon/workflows/` (or `$ARCHON_HOME/.archon/workflows/`)
-- Load priority: bundled < global < repo-specific (repo overrides global by filename)
+**Home-scoped ("global") workflows, commands, and scripts** (user-level, applies to every project):
+- Workflows: `~/.archon/workflows/` (or `$ARCHON_HOME/workflows/`)
+- Commands: `~/.archon/commands/` (or `$ARCHON_HOME/commands/`)
+- Scripts: `~/.archon/scripts/` (or `$ARCHON_HOME/scripts/`)
+- Source label: `source: 'global'` on workflows and commands (scripts don't have a source label)
+- Load priority: bundled < global < project (repo overrides global by filename or script name)
+- Subfolders: supported 1 level deep (e.g. `~/.archon/workflows/triage/foo.yaml`). Deeper nesting is ignored silently.
+- Discovery is automatic — `discoverWorkflowsWithConfig(cwd, loadConfig)` and `discoverScriptsForCwd(cwd)` both read home-scoped paths unconditionally; no caller option needed
+- **Migration from pre-0.x `~/.archon/.archon/workflows/`**: if Archon detects files at the old location it emits a one-time WARN with the exact `mv` command and does NOT load from there. Move with: `mv ~/.archon/.archon/workflows ~/.archon/workflows && rmdir ~/.archon/.archon`
 - See the docs site at `packages/docs-web/` for details
 
 ### Error Handling

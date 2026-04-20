@@ -36,6 +36,7 @@ import {
   getDefaultCommandsPath,
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
+  getHomeCommandsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -139,7 +140,7 @@ if (BUNDLED_IS_BINARY) {
   }
 }
 
-type WorkflowSource = 'project' | 'bundled';
+type WorkflowSource = 'project' | 'bundled' | 'global';
 
 // =========================================================================
 // OpenAPI route configs (module-scope — pure config, no runtime dependencies)
@@ -2298,7 +2299,7 @@ export function registerApiRoutes(
         if (codebases.length > 0) workingDir = codebases[0].default_cwd;
       }
 
-      // Collect commands: project-defined override bundled (same name wins)
+      // Collect commands: precedence bundled < global < project (repo-defined wins).
       const commandMap = new Map<string, WorkflowSource>();
 
       // 1. Seed with bundled defaults
@@ -2306,11 +2307,17 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
+      // maxDepth: 1 matches the executor's resolver (resolveCommand /
+      // loadCommandPrompt) — without this cap, the UI palette would surface
+      // commands buried in deep subfolders that the executor silently can't
+      // resolve at runtime.
+      const COMMAND_LIST_DEPTH = { maxDepth: 1 };
+
       // 2. If not binary build, also check filesystem defaults
       if (!isBinaryBuild()) {
         try {
           const defaultsPath = getDefaultCommandsPath();
-          const files = await findMarkdownFilesRecursive(defaultsPath);
+          const files = await findMarkdownFilesRecursive(defaultsPath, '', COMMAND_LIST_DEPTH);
           for (const { commandName } of files) {
             commandMap.set(commandName, 'bundled');
           }
@@ -2322,13 +2329,27 @@ export function registerApiRoutes(
         }
       }
 
-      // 3. Project-defined commands override bundled
+      // 3. Home-scoped commands (~/.archon/commands/) override bundled
+      try {
+        const homeCommandsPath = getHomeCommandsPath();
+        const files = await findMarkdownFilesRecursive(homeCommandsPath, '', COMMAND_LIST_DEPTH);
+        for (const { commandName } of files) {
+          commandMap.set(commandName, 'global');
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().error({ err }, 'commands.list_home_failed');
+        }
+        // ENOENT: home commands dir not created yet — not an error
+      }
+
+      // 4. Project-defined commands override bundled AND global
       if (workingDir) {
         const searchPaths = getCommandFolderSearchPaths();
         for (const folder of searchPaths) {
           const dirPath = join(workingDir, folder);
           try {
-            const files = await findMarkdownFilesRecursive(dirPath);
+            const files = await findMarkdownFilesRecursive(dirPath, '', COMMAND_LIST_DEPTH);
             for (const { commandName } of files) {
               commandMap.set(commandName, 'project');
             }

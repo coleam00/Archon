@@ -7,11 +7,18 @@ import { join, basename } from 'path';
 /**
  * Recursively find all .md files in a directory and its subdirectories.
  * Skips hidden directories and node_modules.
+ *
+ * `maxDepth` caps how many folders deep the walk descends. Default is
+ * `Infinity` (no cap) so callers that copy arbitrary subtrees (e.g.
+ * `packages/core/src/handlers/clone.ts`) preserve existing behavior.
  */
 export async function findMarkdownFilesRecursive(
   rootPath: string,
-  relativePath = ''
+  relativePath = '',
+  options?: { maxDepth?: number }
 ): Promise<{ commandName: string; relativePath: string }[]> {
+  const maxDepth = options?.maxDepth ?? Infinity;
+  const currentDepth = relativePath ? relativePath.split(/[/\\]/).filter(Boolean).length : 0;
   const results: { commandName: string; relativePath: string }[] = [];
   const fullPath = join(rootPath, relativePath);
 
@@ -23,7 +30,12 @@ export async function findMarkdownFilesRecursive(
     }
 
     if (entry.isDirectory()) {
-      const subResults = await findMarkdownFilesRecursive(rootPath, join(relativePath, entry.name));
+      if (currentDepth >= maxDepth) continue;
+      const subResults = await findMarkdownFilesRecursive(
+        rootPath,
+        join(relativePath, entry.name),
+        options
+      );
       results.push(...subResults);
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       results.push({

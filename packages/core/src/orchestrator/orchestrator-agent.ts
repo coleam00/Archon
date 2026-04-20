@@ -25,7 +25,7 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
-import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths';
+import { getArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
@@ -388,9 +388,9 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   let config: MergedConfig | undefined;
 
   try {
-    const result = await discoverWorkflowsWithConfig(getArchonWorkspacesPath(), loadConfig, {
-      globalSearchPath: getArchonHome(),
-    });
+    // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
+    // by discoverWorkflowsWithConfig — no option needed.
+    const result = await discoverWorkflowsWithConfig(getArchonWorkspacesPath(), loadConfig);
     workflows = [...result.workflows];
     allErrors.push(...result.errors);
   } catch (error) {

@@ -290,6 +290,61 @@ describe('discoverAvailableCommands', () => {
     const without = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
     expect(withDefaults.length).toBeGreaterThanOrEqual(without.length);
   });
+
+  // --- Home-scoped commands (~/.archon/commands/) — new capability
+  describe('home-scoped commands', () => {
+    let homeDir: string;
+    const originalArchonHome = process.env.ARCHON_HOME;
+    const originalArchonDocker = process.env.ARCHON_DOCKER;
+
+    beforeEach(async () => {
+      homeDir = await mkdtemp(join(tmpdir(), 'validator-home-'));
+      process.env.ARCHON_HOME = homeDir;
+      delete process.env.ARCHON_DOCKER;
+    });
+
+    afterEach(async () => {
+      await rm(homeDir, { recursive: true, force: true });
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      if (originalArchonDocker === undefined) {
+        delete process.env.ARCHON_DOCKER;
+      } else {
+        process.env.ARCHON_DOCKER = originalArchonDocker;
+      }
+    });
+
+    async function createHomeCommand(name: string, content = '# Home helper'): Promise<void> {
+      const dir = join(homeDir, 'commands');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, `${name}.md`), content);
+    }
+
+    test('discovers commands placed at ~/.archon/commands/', async () => {
+      await createHomeCommand('my-personal-helper');
+      const commands = await discoverAvailableCommands(tmpDir, { loadDefaultCommands: false });
+      expect(commands).toContain('my-personal-helper');
+    });
+
+    test('resolveCommand (via validateCommand) finds home-scoped commands when repo has none', async () => {
+      await createHomeCommand('only-in-home');
+      const result = await validateCommand('only-in-home', tmpDir, { loadDefaultCommands: false });
+      expect(result.valid).toBe(true);
+    });
+
+    test('repo command overrides home command with the same name', async () => {
+      await createHomeCommand('shared', '# Home version');
+      await createCommandFile('shared', '# Repo version');
+      // Both resolve but the repo wins — validator only asserts existence, so the
+      // strong behavioral assertion lives in the executor-shared loadCommand tests.
+      // Here we just confirm that having both doesn't error.
+      const result = await validateCommand('shared', tmpDir, { loadDefaultCommands: false });
+      expect(result.valid).toBe(true);
+    });
+  });
 });
 
 // =============================================================================

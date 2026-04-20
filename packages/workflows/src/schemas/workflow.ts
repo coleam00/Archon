@@ -92,8 +92,15 @@ export type WorkflowExecutionResult =
 // WorkflowLoadError / WorkflowLoadResult — workflow discovery results
 // ---------------------------------------------------------------------------
 
-/** Workflow origin — bundled default or project-defined. */
-export type WorkflowSource = 'bundled' | 'project';
+/**
+ * Workflow origin:
+ * - `bundled` — embedded in the Archon binary / bundled defaults
+ * - `global`  — user-level, discovered at `~/.archon/workflows/` (applies to every repo)
+ * - `project` — repo-local, discovered at `<repoRoot>/.archon/workflows/`
+ *
+ * Precedence for same-named files: `bundled` < `global` < `project`.
+ */
+export type WorkflowSource = 'bundled' | 'global' | 'project';
 
 /** A workflow definition paired with its discovery source. */
 export interface WorkflowWithSource {

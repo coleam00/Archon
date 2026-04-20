@@ -19,7 +19,7 @@
     "./test-utils": "./src/test-utils.ts"
   },
   "scripts": {
-    "test": "bun test src/dag-executor.test.ts && bun test src/loader.test.ts && bun test src/logger.test.ts && bun test src/condition-evaluator.test.ts && bun test src/event-emitter.test.ts && bun test src/executor-shared.test.ts && bun test src/executor.test.ts && bun test src/executor-preamble.test.ts && bun test src/defaults/ src/model-validation.test.ts src/router.test.ts src/utils/ src/hooks.test.ts && bun test src/validation-parser.test.ts src/schemas.test.ts src/command-validation.test.ts && bun test src/validator.test.ts && bun test src/script-discovery.test.ts && bun test src/runtime-check.test.ts && bun test src/script-node-deps.test.ts",
+    "test": "bun test src/dag-executor.test.ts && bun test src/loader.test.ts && bun test src/logger.test.ts && bun test src/condition-evaluator.test.ts && bun test src/event-emitter.test.ts && bun test src/executor-shared.test.ts && bun test src/load-command-prompt.test.ts && bun test src/executor.test.ts && bun test src/executor-preamble.test.ts && bun test src/defaults/ src/model-validation.test.ts src/router.test.ts src/utils/ src/hooks.test.ts && bun test src/validation-parser.test.ts src/schemas.test.ts src/command-validation.test.ts && bun test src/validator.test.ts && bun test src/script-discovery.test.ts && bun test src/runtime-check.test.ts && bun test src/script-node-deps.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
