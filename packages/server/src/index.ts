@@ -466,8 +466,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     return c.json({ error: 'Internal server error' }, 500);
   });
 
-  // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager);
+  // Register Web UI API routes.
+  // Lazy callback reads adapter variables at health-check time so Telegram
+  // (initialized after server.listen()) is always reflected correctly.
+  registerApiRoutes(app, webAdapter, lockManager, () => {
+    const names: string[] = ['web'];
+    if (slack) names.push('slack');
+    if (discord) names.push('discord');
+    if (github) names.push('github');
+    if (gitea) names.push('gitea');
+    if (gitlab) names.push('gitlab');
+    if (telegram) names.push('telegram');
+    return names;
+  });
 
   // GitHub webhook endpoint
   if (github) {

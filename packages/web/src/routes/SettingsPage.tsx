@@ -36,6 +36,7 @@ function SystemHealthSection({
     | {
         status: string;
         adapter: string;
+        adapters?: string[];
         concurrency: { active: number; queuedTotal: number; maxConcurrent: number };
         runningWorkflows: number;
         version?: string;
@@ -608,15 +609,22 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
 
 function PlatformConnectionsSection({
   adapter,
+  adapters,
 }: {
   adapter: string | undefined;
+  adapters?: string[];
 }): React.ReactElement {
+  const isConnected = (name: string): boolean => {
+    if (adapters !== undefined) return adapters.includes(name);
+    // Fallback to legacy single-adapter field
+    return adapter === name;
+  };
   const platforms = [
-    { name: 'Web', connected: adapter === 'web' },
-    { name: 'Slack', connected: false },
-    { name: 'Telegram', connected: false },
-    { name: 'Discord', connected: false },
-    { name: 'GitHub', connected: false },
+    { name: 'Web', connected: isConnected('web') },
+    { name: 'Slack', connected: isConnected('slack') },
+    { name: 'Telegram', connected: isConnected('telegram') },
+    { name: 'Discord', connected: isConnected('discord') },
+    { name: 'GitHub', connected: isConnected('github') },
   ];
 
   return (
@@ -717,7 +725,7 @@ export function SettingsPage(): React.ReactElement {
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {configData && <AssistantConfigSection config={configData.config} />}
-            <PlatformConnectionsSection adapter={health?.adapter} />
+            <PlatformConnectionsSection adapter={health?.adapter} adapters={health?.adapters} />
           </div>
 
           <ProjectsSection />

@@ -819,6 +819,8 @@ const getHealthRoute = createRoute({
               runningWorkflows: z.number(),
               version: z.string().optional(),
               is_docker: z.boolean(),
+              /** Names of active platform adapters (e.g. 'slack', 'telegram', 'github') */
+              adapters: z.array(z.string()).optional(),
             })
             .openapi('HealthResponse'),
         },
@@ -851,7 +853,13 @@ const getUpdateCheckRoute = createRoute({
 export function registerApiRoutes(
   app: OpenAPIHono,
   webAdapter: WebAdapter,
-  lockManager: ConversationLockManager
+  lockManager: ConversationLockManager,
+  /**
+   * Lazy callback returning the names of currently-active platform adapters.
+   * Called at health-check time (not at registration time) so that adapters
+   * initialized after server.listen() (e.g. Telegram) are reflected correctly.
+   */
+  getActiveAdapters?: () => string[]
 ): void {
   function apiError(
     c: Context,
@@ -2558,6 +2566,7 @@ export function registerApiRoutes(
       runningWorkflows: runningWorkflowRows.length,
       version: appVersion,
       is_docker: isDocker(),
+      adapters: getActiveAdapters?.(),
     });
   });
 
