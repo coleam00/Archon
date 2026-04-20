@@ -16,7 +16,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
-import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
+import { ClaudeProvider, shouldPassNoEnvFile, buildSDKHooksFromYAML } from './provider';
 import * as claudeModule from './provider';
 
 describe('shouldPassNoEnvFile', () => {
@@ -1289,5 +1289,88 @@ describe('sendQuery decomposition behaviors', () => {
       );
       expect(warnCalls).toHaveLength(0);
     });
+  });
+});
+
+describe('buildSDKHooksFromYAML', () => {
+  test('static response hook returns the configured response', async () => {
+    const sdkHooks = buildSDKHooksFromYAML({
+      PostToolUse: [{ response: { systemMessage: 'Run type-check' }, matcher: 'Write' }],
+    });
+
+    const matchers = sdkHooks['PostToolUse'];
+    expect(matchers).toHaveLength(1);
+    expect(matchers![0].matcher).toBe('Write');
+
+    const result = await matchers![0].hooks[0]({ tool_name: 'Write', tool_input: {} }, undefined, {
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({ systemMessage: 'Run type-check' });
+  });
+
+  test('command hook executes shell and parses stdout as JSON', async () => {
+    const sdkHooks = buildSDKHooksFromYAML({
+      PostToolUse: [{ command: 'echo \'{"systemMessage":"type check done"}\'', timeout: 10 }],
+    });
+
+    const matchers = sdkHooks['PostToolUse'];
+    expect(matchers).toHaveLength(1);
+
+    const result = await matchers![0].hooks[0](
+      { tool_name: 'Write', tool_input: { file: 'foo.ts' } },
+      undefined,
+      { signal: new AbortController().signal }
+    );
+    expect(result).toEqual({ systemMessage: 'type check done' });
+  });
+
+  test('command hook receives hook input on stdin', async () => {
+    // The command reads the tool_name from stdin JSON and echoes it back
+    const sdkHooks = buildSDKHooksFromYAML({
+      PreToolUse: [
+        {
+          command:
+            'INPUT=$(cat); TOOL=$(echo "$INPUT" | jq -r \'.tool_name\'); echo "{\\"tool\\":\\"$TOOL\\"}"',
+          timeout: 10,
+        },
+      ],
+    });
+
+    const result = await sdkHooks['PreToolUse']![0].hooks[0](
+      { tool_name: 'Bash', tool_input: { command: 'ls' } },
+      undefined,
+      { signal: new AbortController().signal }
+    );
+    expect(result).toEqual({ tool: 'Bash' });
+  }, 10_000);
+
+  test('command hook with non-zero exit returns empty object and logs warning', async () => {
+    const sdkHooks = buildSDKHooksFromYAML({
+      PostToolUse: [{ command: 'exit 1', timeout: 10 }],
+    });
+
+    const result = await sdkHooks['PostToolUse']![0].hooks[0]({}, undefined, {
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({});
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ exitCode: 1 }),
+      'claude.command_hook_nonzero_exit'
+    );
+  });
+
+  test('command hook with invalid JSON stdout returns empty object and logs warning', async () => {
+    const sdkHooks = buildSDKHooksFromYAML({
+      PostToolUse: [{ command: 'echo "not-json"', timeout: 10 }],
+    });
+
+    const result = await sdkHooks['PostToolUse']![0].hooks[0]({}, undefined, {
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({});
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ stdout: expect.any(String) }),
+      'claude.command_hook_invalid_json'
+    );
   });
 });

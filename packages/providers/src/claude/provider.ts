@@ -38,6 +38,7 @@ import { resolveClaudeBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
+import { spawn } from 'child_process';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -290,10 +291,17 @@ export async function loadMcpConfig(
 
 // ─── SDK Hooks Building (absorbed from dag-executor) ───────────────────────
 
-/** YAML hook matcher shape (matches @archon/workflows/schemas/dag-node WorkflowNodeHooks) */
+/** YAML hook matcher shape (matches @archon/workflows/schemas/hooks WorkflowHookMatcher) */
 interface YAMLHookMatcher {
   matcher?: string;
-  response: unknown;
+  /** Static response — returned as-is when hook fires. */
+  response?: unknown;
+  /**
+   * Dynamic command — shell script receiving hook input on stdin, writing JSON to stdout.
+   * Mutually exclusive with `response`.
+   */
+  command?: string;
+  /** Timeout in seconds. */
   timeout?: number;
 }
 
@@ -313,6 +321,76 @@ type SDKHooksMap = Partial<
 >;
 
 /**
+ * Run a shell command hook: pipe `input` as JSON to stdin, parse stdout as JSON response.
+ * Returns an empty object on non-zero exit or parse failure (logs the error instead of throwing).
+ */
+async function runCommandHook(
+  command: string,
+  input: unknown,
+  timeoutSeconds: number
+): Promise<unknown> {
+  return new Promise(resolve => {
+    const child = spawn('sh', ['-c', command], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      getLog().warn({ command, timeoutSeconds }, 'claude.command_hook_timeout');
+      resolve({});
+    }, timeoutSeconds * 1000);
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (timedOut) return;
+
+      if (code !== 0) {
+        getLog().warn(
+          { command, exitCode: code, stderr: stderr.slice(0, 500) },
+          'claude.command_hook_nonzero_exit'
+        );
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(stdout.trim()));
+      } catch {
+        getLog().warn(
+          { command, stdout: stdout.slice(0, 500) },
+          'claude.command_hook_invalid_json'
+        );
+        resolve({});
+      }
+    });
+
+    child.on('error', err => {
+      clearTimeout(timer);
+      if (timedOut) return;
+      getLog().warn({ command, err }, 'claude.command_hook_spawn_error');
+      resolve({});
+    });
+
+    try {
+      child.stdin.write(JSON.stringify(input));
+      child.stdin.end();
+    } catch {
+      // stdin may already be closed if the process exited immediately
+    }
+  });
+}
+
+/**
  * Convert declarative YAML hook definitions to SDK HookCallbackMatcher arrays.
  */
 export function buildSDKHooksFromYAML(
@@ -322,11 +400,19 @@ export function buildSDKHooksFromYAML(
 
   for (const [event, matchers] of Object.entries(nodeHooks)) {
     if (!matchers) continue;
-    sdkHooks[event] = matchers.map(m => ({
-      ...(m.matcher ? { matcher: m.matcher } : {}),
-      hooks: [async (): Promise<unknown> => m.response],
-      ...(m.timeout ? { timeout: m.timeout } : {}),
-    }));
+    sdkHooks[event] = matchers.map(m => {
+      const timeoutSeconds = m.timeout ?? 60;
+      const cmd = m.command;
+      const hookFn = cmd
+        ? async (input: unknown): Promise<unknown> => runCommandHook(cmd, input, timeoutSeconds)
+        : async (): Promise<unknown> => m.response;
+
+      return {
+        ...(m.matcher ? { matcher: m.matcher } : {}),
+        hooks: [hookFn],
+        ...(m.timeout ? { timeout: m.timeout } : {}),
+      };
+    });
   }
 
   if (Object.keys(sdkHooks).length === 0) {
