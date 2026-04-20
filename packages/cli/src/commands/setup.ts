@@ -1140,7 +1140,7 @@ export function generateEnvContent(config: SetupConfig): string {
 
   // Server
   lines.push('# Server');
-  lines.push('PORT=3000');
+  lines.push('PORT=3090');
   lines.push('');
 
   // Concurrency
@@ -1619,7 +1619,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   // Additional options note
   note(
     'Other settings you can customize in ~/.archon/.env:\n' +
-      '  - PORT (default: 3000)\n' +
+      '  - PORT (default: 3090)\n' +
       '  - MAX_CONCURRENT_CONVERSATIONS (default: 10)\n' +
       '  - *_STREAMING_MODE (stream | batch per platform)\n\n' +
       'These defaults work well for most users.',

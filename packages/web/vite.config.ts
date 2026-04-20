@@ -1,6 +1,6 @@
 import path from 'path';
 import { execSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
@@ -8,7 +8,20 @@ import { defineConfig, loadEnv } from 'vite';
 export default defineConfig(({ mode }) => {
   // Load env from repo root so PORT from .env is available
   const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
-  const apiPort = env.PORT ?? '3090';
+  const globalEnvPath = process.env.HOME ? path.join(process.env.HOME, '.archon', '.env') : null;
+  let globalPort: string | undefined;
+  if (globalEnvPath && existsSync(globalEnvPath)) {
+    const content = readFileSync(globalEnvPath, 'utf-8');
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const match = line.match(/^PORT\s*=\s*(.+)$/);
+      if (!match) continue;
+      globalPort = match[1]?.trim().replace(/^['"]|['"]$/g, '');
+      break;
+    }
+  }
+  const apiPort = globalPort ?? env.PORT ?? '3090';
 
   // Read version from root package.json
   const rootPkgPath = path.resolve(__dirname, '../../package.json');
@@ -45,7 +58,7 @@ export default defineConfig(({ mode }) => {
       ],
     },
     server: {
-      port: 5173,
+      port: 3091,
       proxy: {
         '/api': {
           target: `http://localhost:${apiPort}`,

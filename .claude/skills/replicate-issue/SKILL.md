@@ -49,7 +49,7 @@ echo "Latest commit: $(git log --oneline -1)"
 
 ### 0.2 Kill Existing Archon Processes
 
-Free up ports 3090 (backend) and 5173 (frontend) so Archon starts cleanly.
+Free up ports 3090 (backend) and 3091 (frontend) so Archon starts cleanly.
 
 ```bash
 pkill -f "bun.*dev:server" 2>/dev/null || true
@@ -57,11 +57,11 @@ pkill -f "bun.*dev:web" 2>/dev/null || true
 pkill -f "bun.*packages/server" 2>/dev/null || true
 pkill -f "bun.*packages/web" 2>/dev/null || true
 fuser -k 3090/tcp 2>/dev/null || true
-fuser -k 5173/tcp 2>/dev/null || true
+fuser -k 3091/tcp 2>/dev/null || true
 sleep 2
 
 # Verify ports are free
-! fuser 3090/tcp 2>/dev/null && ! fuser 5173/tcp 2>/dev/null && echo "Ports 3090 and 5173 are free" || echo "WARNING: Ports still in use"
+! fuser 3090/tcp 2>/dev/null && ! fuser 3091/tcp 2>/dev/null && echo "Ports 3090 and 3091 are free" || echo "WARNING: Ports still in use"
 ```
 
 ### 0.3 Start Archon Backend + Frontend
@@ -77,11 +77,11 @@ sleep 8
 curl -s http://localhost:3090/api/health | head -c 200
 echo ""
 
-# Verify frontend is serving (port may vary if 5173 is taken)
-curl -s http://localhost:5173 | head -c 100 || curl -s http://localhost:5174 | head -c 100
+# Verify frontend is serving
+curl -s http://localhost:3091 | head -c 100
 ```
 
-**Note**: If port 5173 is taken, Vite auto-increments (5174, 5175, etc.). Check the `bun run dev` output for the actual frontend port and use that throughout.
+**Note**: The default frontend dev port is 3091. If it is taken, Vite may auto-increment; check the `bun run dev` output and use the actual frontend port throughout.
 
 ---
 
@@ -120,7 +120,7 @@ Use the `agent-browser` CLI (NOT Playwright) for all browser interactions.
 
 ```bash
 # 1. Navigate to the page
-agent-browser open http://localhost:5173
+agent-browser open http://localhost:3091
 
 # 2. Get interactive elements
 agent-browser snapshot -i
@@ -242,7 +242,7 @@ agent-browser close
 
 # Stop Archon (optional — leave running if user wants to continue testing)
 # fuser -k 3090/tcp 2>/dev/null
-# fuser -k 5173/tcp 2>/dev/null
+# fuser -k 3091/tcp 2>/dev/null
 ```
 
 ---

@@ -23,7 +23,7 @@ The Web UI is the built-in interface for interacting with Archon. It requires no
 ```bash
 # Start both backend + frontend with hot reload
 bun run dev
-# Web UI: http://localhost:5173
+# Web UI: http://localhost:3091
 # API server: http://localhost:3090
 ```
 
@@ -33,7 +33,7 @@ You can also start each piece individually:
 # Backend API server only (port 3090)
 bun run dev:server
 
-# Frontend dev server only (port 5173, requires backend running)
+# Frontend dev server only (port 3091, requires backend running)
 bun run dev:web
 ```
 
@@ -54,7 +54,7 @@ The backend binds to `0.0.0.0` by default. The Vite dev server only listens on `
 bun run dev:web -- --host 0.0.0.0
 ```
 
-Then start the backend separately with `bun run dev:server`. The Web UI will be reachable at `http://<server-ip>:5173`. Make sure your firewall allows ports 5173 and 3090.
+Then start the backend separately with `bun run dev:server`. The Web UI will be reachable at `http://<server-ip>:3091`. Make sure your firewall allows ports 3091 and 3090.
 
 ## UI Layout
 

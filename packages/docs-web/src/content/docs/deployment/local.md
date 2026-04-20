@@ -41,14 +41,14 @@ nano .env  # Add your AI assistant tokens (Claude or Codex)
 bun run dev
 
 # 4. Open Web UI
-# http://localhost:5173
+# http://localhost:3091
 ```
 
 In development mode, two servers run simultaneously:
 
 | Service    | URL                    | Purpose                          |
 |------------|------------------------|----------------------------------|
-| Web UI     | http://localhost:5173  | React frontend (Vite dev server) |
+| Web UI     | http://localhost:3091  | React frontend (Vite dev server) |
 | API Server | http://localhost:3090  | Backend API + SSE streaming      |
 
 ### Optional: Use PostgreSQL Instead of SQLite

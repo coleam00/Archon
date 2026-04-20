@@ -66,6 +66,7 @@ import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
+import { devCommand } from './commands/dev';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -102,6 +103,7 @@ Commands:
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into main
+  dev start|stop|status      Manage source dev stack in the background
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
@@ -135,6 +137,8 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
+  archon dev start
+  archon dev stop
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
 `);
 }
@@ -241,7 +245,7 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve'];
+  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve', 'dev'];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
@@ -552,6 +556,19 @@ async function main(): Promise<number> {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
         return await serveCommand({ port: servePort, downloadOnly });
+      }
+
+      case 'dev': {
+        if (subcommand !== 'start' && subcommand !== 'stop' && subcommand !== 'status') {
+          if (subcommand === undefined) {
+            console.error('Missing dev subcommand');
+          } else {
+            console.error(`Unknown dev subcommand: ${subcommand}`);
+          }
+          console.error('Available: start, stop, status');
+          return 1;
+        }
+        return await devCommand({ action: subcommand });
       }
 
       default:

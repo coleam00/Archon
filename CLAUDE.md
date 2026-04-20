@@ -97,7 +97,7 @@ bun run dev
 
 # Or start individually
 bun run dev:server  # Backend only (port 3090)
-bun run dev:web     # Frontend only (port 5173)
+bun run dev:web     # Frontend only (port 3091)
 ```
 
 Regenerating frontend API types (requires server to be running at port 3090):

@@ -1,0 +1,158 @@
+\# =============================================================================
+\# Archon - Docker Compose
+\# =============================================================================
+
+#
+
+\# Usage:
+\# docker compose up -d # App with SQLite (default)
+\# docker compose --profile with-db up -d # App + local PostgreSQL
+\# docker compose --profile cloud up -d # App + Caddy HTTPS reverse proxy
+\# docker compose --profile with-db --profile cloud up -d # All three
+
+#
+
+\# Database:
+\# SQLite is the default (zero config). For PostgreSQL, either:
+\# - Use --profile with-db for a local container, and set in .env:
+\# DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
+\# - Or point DATABASE_URL to an external database (Supabase, Neon, etc.)
+
+#
+
+\# Data:
+\# Set ARCHON_DATA in .env to control where Archon stores data on the host:
+\# ARCHON_DATA=/opt/archon-data # Any absolute path on the host
+\# Default: Docker-managed volume (archon_data)
+
+#
+
+\# Cloud (HTTPS):
+\# 1\. Set DOMAIN=archon.example.com in .env
+\# 2\. Point DNS A record to your server
+\# 3\. Add --profile cloud — Caddy handles TLS automatically via Let's Encrypt
+
+#
+
+services:
+
+# -------------------------------------------------------------------------
+
+# App (always runs)
+
+# -------------------------------------------------------------------------
+
+app:
+build: .
+image: archon
+env_file: .env
+environment:
+ARCHON_DOCKER: "true"
+ports:
+\- "${PORT:-3000}:${PORT:-3000}"
+volumes:
+\- ${ARCHON\_DATA:-archon\_data}:/.archon
+ networks:
+ \- archon-network
+ restart: unless-stopped
+ healthcheck:
+ test: \["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/api/health"\]
+interval: 30s
+timeout: 10s
+retries: 3
+start_period: 15s
+dns:
+\- 8.8.8.8
+\- 8.8.4.4
+sysctls:
+\- net.ipv6.conf.all.disable_ipv6=1
+
+# -------------------------------------------------------------------------
+
+# PostgreSQL (optional: --profile with-db)
+
+# Set DATABASE_URL in .env to connect the app to this container.
+
+# -------------------------------------------------------------------------
+
+postgres:
+image: postgres:17-alpine
+profiles: \["with-db"\]
+environment:
+POSTGRES_DB: remote_coding_agent
+POSTGRES_USER: postgres
+POSTGRES_PASSWORD: ${POSTGRES\_PASSWORD:-postgres}
+ volumes:
+ \- postgres\_data:/var/lib/postgresql/data
+ \- ./migrations/000\_combined.sql:/docker-entrypoint-initdb.d/000\_combined.sql:ro
+ \- ./migrations:/migrations:ro
+ ports:
+ \- "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+networks:
+\- archon-network
+healthcheck:
+test: \["CMD-SHELL", "pg_isready -U postgres"\]
+interval: 5s
+timeout: 5s
+retries: 5
+
+# -------------------------------------------------------------------------
+
+# Caddy reverse proxy with automatic HTTPS (optional: --profile cloud)
+
+# Requires DOMAIN set in .env. See Caddyfile for configuration.
+
+# -------------------------------------------------------------------------
+
+caddy:
+image: caddy:2-alpine
+profiles: \["cloud"\]
+restart: unless-stopped
+env_file: .env
+ports:
+\- "80:80"
+\- "443:443"
+\- "443:443/udp"
+volumes:
+\- ./Caddyfile:/etc/caddy/Caddyfile:ro
+\- caddy_data:/data
+\- caddy_config:/config
+networks:
+\- archon-network
+depends_on:
+app:
+condition: service_healthy
+
+# -------------------------------------------------------------------------
+
+# Auth service — form-based login for Caddy forward_auth (optional: --profile auth)
+
+# Use alongside --profile cloud: docker compose --profile cloud --profile auth up -d
+
+# Requires AUTH_USERNAME, AUTH_PASSWORD_HASH, COOKIE_SECRET in .env.
+
+# See docs/docker.md for setup instructions.
+
+# -------------------------------------------------------------------------
+
+auth-service:
+build: ./auth-service
+profiles: \["auth"\]
+restart: unless-stopped
+env_file: .env
+environment:
+AUTH_PORT: "${AUTH\_SERVICE\_PORT:-9000}"
+ expose:
+ \- "${AUTH_SERVICE_PORT:-9000}"
+networks:
+\- archon-network
+
+volumes:
+archon_data:
+postgres_data:
+caddy_data:
+caddy_config:
+
+networks:
+archon-network:
+driver: bridge

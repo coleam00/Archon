@@ -41,7 +41,7 @@ The Windows host IP for this system is `172.18.64.1`.
 # Backend (Hono on port 3090) - already binds to 0.0.0.0 by default
 bun run dev:server &
 
-# Frontend (Vite on port 5173) - needs --host flag
+# Frontend (Vite on port 3091) - needs --host flag
 cd packages/web && bun x vite --host 0.0.0.0 &
 ```
 
@@ -49,7 +49,7 @@ cd packages/web && bun x vite --host 0.0.0.0 &
 
 ```bash
 wsl -d Ubuntu -- curl -s http://172.18.64.1:3090/api/health
-wsl -d Ubuntu -- curl -s -o /dev/null -w "%{http_code}" http://172.18.64.1:5173
+wsl -d Ubuntu -- curl -s -o /dev/null -w "%{http_code}" http://172.18.64.1:3091
 ```
 
 ## Running agent-browser Commands
@@ -58,7 +58,7 @@ All commands are run from the Windows terminal, prefixed with `wsl -d Ubuntu --`
 
 ```bash
 # Open a page
-wsl -d Ubuntu -- agent-browser open http://172.18.64.1:5173
+wsl -d Ubuntu -- agent-browser open http://172.18.64.1:3091
 
 # Take interactive snapshot (get element refs like @e1, @e2)
 wsl -d Ubuntu -- agent-browser snapshot -i

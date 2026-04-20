@@ -1,0 +1,174 @@
+\# Database (OPTIONAL)
+\# Default: SQLite at ~/.archon/archon.db (no setup required)
+\# Recommended: PostgreSQL for heavy parallel usage (20+ concurrent workflows)
+\# docker compose --profile with-db up -d
+\# Uncomment for PostgreSQL:
+\# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/remote_coding_agent
+
+\# AI Assistants
+\# Claude Auth Options:
+\# - CLAUDE_USE_GLOBAL_AUTH=true: Use global auth from \`claude /login\` (recommended)
+\# - CLAUDE_USE_GLOBAL_AUTH=false: Use explicit tokens below
+\# - Not set: Auto-detect (use tokens if present, otherwise global auth)
+CLAUDE_USE_GLOBAL_AUTH=true
+\# CLAUDE_CODE_OAUTH_TOKEN=...
+\# CLAUDE_API_KEY=...
+
+\# Codex Authentication (get from ~/.codex/auth.json after running 'codex login')
+\# Required if using Codex as AI assistant
+\# On Linux/Mac: cat ~/.codex/auth.json
+\# On Windows: type %USERPROFILE%\\.codex\\auth.json
+CODEX_ID_TOKEN=
+CODEX_ACCESS_TOKEN=
+CODEX_REFRESH_TOKEN=
+CODEX_ACCOUNT_ID=
+
+\# Default AI Assistant (claude \| codex)
+\# Used for new conversations when no codebase specified
+DEFAULT_AI_ASSISTANT=claude
+
+\# Title Generation Model (optional)
+\# Model used for generating conversation titles (lightweight task)
+\# When unset, uses the SDK's default model
+\# Examples: haiku, gpt-4o-mini, claude-haiku-4-5
+\# TITLE_GENERATION_MODEL=haiku
+
+\# GitHub Token (for GitHub CLI and commands)
+GH_TOKEN=
+GITHUB_TOKEN= # Same as GH_TOKEN, used by adapter
+
+\# GitHub Webhooks
+WEBHOOK_SECRET=
+
+\# GitHub User Whitelist (optional - comma-separated usernames)
+\# When set, only listed GitHub users can trigger webhook processing
+\# When empty/unset, webhooks are processed for all users
+\# Usernames are case-insensitive (octocat == Octocat)
+GITHUB_ALLOWED_USERS=
+
+\# GitLab Webhooks (Community Forge Adapter)
+\# GITLAB_URL=https://gitlab.com # Or self-hosted: https://gitlab.example.com
+GITLAB_TOKEN= # Personal/Project Access Token with 'api' scope
+GITLAB_WEBHOOK_SECRET= # Secret token set in GitLab webhook configuration
+\# GITLAB_ALLOWED_USERS= # Optional: comma-separated GitLab usernames
+\# GITLAB_BOT_MENTION=archon # Optional: @mention name for detection (default: BOT_DISPLAY_NAME)
+
+\# Platforms - set the tokens for the ones you want to use
+\# Telegram -
+TELEGRAM_BOT_TOKEN=
+\# Discord -
+DISCORD_BOT_TOKEN=
+
+\# Slack Bot (Socket Mode)
+\# Create app at https://api.slack.com/apps - see docs/slack-setup.md
+SLACK_BOT_TOKEN=
+SLACK_APP_TOKEN=
+
+\# Slack User Whitelist (optional - comma-separated user IDs)
+\# When set, only listed Slack users can interact with the bot
+\# When empty/unset, bot responds to all users
+\# Get user IDs: Slack profile > ... > Copy member ID
+SLACK_ALLOWED_USER_IDS=
+
+\# Discord User Whitelist (optional - comma-separated user IDs)
+\# When set, only listed Discord users can interact with the bot
+\# When empty/unset, bot responds to all users
+\# Get user IDs in Discord: Settings > Advanced > Developer Mode, then right-click user > Copy ID
+DISCORD_ALLOWED_USER_IDS=
+
+\# Telegram User Whitelist (optional - comma-separated user IDs)
+\# When set, only listed Telegram users can interact with the bot
+\# When empty/unset, bot responds to all users
+\# Get your user ID by messaging @userinfobot on Telegram
+TELEGRAM_ALLOWED_USER_IDS=
+
+\# Platform Streaming Mode (stream \| batch)
+TELEGRAM_STREAMING_MODE=stream # stream (default) \| batch
+DISCORD_STREAMING_MODE=batch # batch (default) \| stream
+SLACK_STREAMING_MODE=batch # batch (default) \| stream
+
+\# Bot Display Name (shown in batch mode "starting" message)
+\# Default: Archon
+\# BOT_DISPLAY_NAME=Archon
+
+\# GitHub Bot Mention (optional - for @mention detection in GitHub issues/PRs)
+\# When set, the bot will respond to this @mention in issues/PRs
+\# If not set, falls back to BOT_DISPLAY_NAME
+\# GITHUB_BOT_MENTION=archon
+
+\# ============================================
+\# Gitea (Community Forge Adapter)
+\# ============================================
+\# Self-hosted Gitea instance URL
+GITEA_URL= # e.g. https://gitea.example.com
+
+\# Gitea Token (for API access and authenticated clones)
+GITEA_TOKEN= # Personal access token or bot account token
+
+\# Gitea Webhook Secret (set this in your Gitea webhook configuration)
+GITEA_WEBHOOK_SECRET=
+
+\# Gitea User Whitelist (optional - comma-separated usernames)
+\# When set, only listed Gitea users can trigger webhook processing
+\# When not set, all users can trigger (open access mode)
+GITEA_ALLOWED_USERS=
+
+\# Gitea Bot Mention (optional - for @mention detection in Gitea issues/PRs)
+\# If not set, falls back to BOT_DISPLAY_NAME then config.botName
+\# GITEA_BOT_MENTION=archon
+
+\# Server
+PORT=3000
+\# HOST=0.0.0.0 # Bind address (default: 0.0.0.0). Set to 127.0.0.1 to restrict to localhost only.
+
+\# Cloud Deployment (for --profile cloud with Caddy reverse proxy)
+\# Set your domain and point DNS to your server — Caddy handles TLS automatically
+\# DOMAIN=archon.example.com
+
+\# Basic Auth (optional) — protects the Web UI and API when exposed to the internet
+\# Leave empty to disable (e.g. when using IP-based firewall rules instead).
+\# To enable:
+\# 1\. Generate hash: docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+\# 2\. Set the variable below (replace admin and the hash):
+\# CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$REPLACE_WITH_HASH }
+
+\# Form Auth (optional) — HTML login page via Caddy forward_auth + auth-service
+\# Alternative to CADDY_BASIC_AUTH. Requires: --profile auth in docker compose.
+\# To enable:
+\# 1\. Generate bcrypt hash (requires auth-service container):
+\# docker compose --profile auth run --rm auth-service node -e \
+\# "require('bcryptjs').hash('YOUR_PASSWORD', 12).then(h => console.log(h))"
+\# 2\. Generate a random cookie secret:
+\# docker run --rm node:22-alpine node -e \
+\# "console.log(require('crypto').randomBytes(32).toString('hex'))"
+\# 3\. Set the variables below and uncomment Option A in Caddyfile
+\# AUTH_USERNAME=admin
+\# AUTH_PASSWORD_HASH=$$2b$$12$$REPLACE\_WITH\_BCRYPT\_HASH
+\# ⚠ Escape every $ as $$ — Docker Compose interprets $ as variable substitution
+\# COOKIE_SECRET=REPLACE_WITH_64_HEX_CHARS
+\# AUTH_SERVICE_PORT=9000
+\# COOKIE_MAX_AGE=86400
+
+\# ============================================
+\# Archon Directory Configuration
+\# ============================================
+\# All Archon-managed files go in ~/.archon/ by default
+\# Override with ARCHON_HOME to use a custom location
+\# ARCHON_HOME=~/.archon
+
+\# Docker data directory (host path where Archon stores workspaces, worktrees, artifacts, etc.)
+\# Default: Docker-managed volume (archon_data)
+\# Set to an absolute path on the host for full control over data location:
+\# ARCHON_DATA=/opt/archon-data
+
+\# Logging (optional)
+\# Set log level: fatal \| error \| warn \| info \| debug \| trace
+\# Default: info
+\# CLI can override with --quiet (error) or --verbose (debug)
+\# LOG_LEVEL=info
+
+\# Concurrency
+MAX_CONCURRENT_CONVERSATIONS=10 # Maximum concurrent AI conversations (default: 10)
+
+\# Session Retention
+\# SESSION_RETENTION_DAYS=30 # Delete inactive sessions older than N days (default: 30)

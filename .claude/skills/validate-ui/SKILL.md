@@ -34,17 +34,17 @@ pkill -f "bun.*dev:server" 2>/dev/null || true
 pkill -f "bun.*dev:web" 2>/dev/null || true
 pkill -f "bun.*packages/server" 2>/dev/null || true
 pkill -f "bun.*packages/web" 2>/dev/null || true
-pkill -f "vite.*5173" 2>/dev/null || true
+pkill -f "vite.*3091" 2>/dev/null || true
 
 # Kill any leftover processes on our ports
 lsof -ti:3090 | xargs kill -9 2>/dev/null || true
-lsof -ti:5173 | xargs kill -9 2>/dev/null || true
+lsof -ti:3091 | xargs kill -9 2>/dev/null || true
 
 # Wait for ports to free up
 sleep 2
 
 # Verify ports are free
-! lsof -i:3090 && ! lsof -i:5173 && echo "Ports 3090 and 5173 are free" || echo "WARNING: Ports still in use"
+! lsof -i:3090 && ! lsof -i:3091 && echo "Ports 3090 and 3091 are free" || echo "WARNING: Ports still in use"
 ```
 
 ### 0.2 Install agent-browser (if needed)
@@ -76,16 +76,16 @@ sleep 5  # Wait for server initialization + DB
 # Verify backend is healthy
 curl -s http://localhost:3090/api/health | head -c 200
 
-# Start frontend (port 5173)
+# Start frontend (port 3091)
 cd /path/to/archon && bun run dev:web &
 sleep 5  # Wait for Vite dev server
 
 # Verify frontend is serving
-curl -s http://localhost:5173 | head -c 200
+curl -s http://localhost:3091 | head -c 200
 ```
 
 **URLs:**
-- Frontend: `http://localhost:5173`
+- Frontend: `http://localhost:3091`
 - Backend API: `http://localhost:3090/api`
 - SSE streams: `http://localhost:3090/api/stream/{conversationId}` (bypasses Vite proxy in dev)
 
@@ -123,7 +123,7 @@ Take screenshots at each major test point: `agent-browser screenshot /tmp/archon
 ### Test Suite 1: Dashboard (Route: `/`)
 
 **1.1 Initial Load**
-- Open `http://localhost:5173`
+- Open `http://localhost:3091`
 - Verify dashboard renders: stats cards (Running Workflows, Conversations, System Status)
 - Check system health indicator shows "Healthy" (green)
 - Screenshot the full dashboard

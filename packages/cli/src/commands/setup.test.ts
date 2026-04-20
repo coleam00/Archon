@@ -148,7 +148,7 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('# Using SQLite (default)');
       expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=true');
       expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
-      expect(content).toContain('PORT=3000');
+      expect(content).toContain('PORT=3090');
       expect(content).not.toContain('DATABASE_URL=');
     });
 

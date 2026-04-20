@@ -1,0 +1,250 @@
+name: openmontage-macos-bootstrap
+description: |
+  Use when: You want to analyze, bootstrap, or preflight the OpenMontage repository on macOS.
+  Triggers: "set up openmontage on mac", "bootstrap openmontage", "analyze openmontage",
+            "prepare openmontage on macos", "configure openmontage env", "openmontage preflight".
+  Does: Detects the requested setup profile -> analyzes OpenMontage for macOS-safe local usage ->
+        writes an organized env scaffold -> optionally bootstraps local dependencies -> optionally runs provider preflight.
+  NOT for: General issue work, non-OpenMontage repositories, or rendering final user videos end-to-end.
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: REPO + MACHINE CHECK
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: repo-check
+    bash: |
+      echo "== Repo markers =="
+      [ -f "README.md" ] && echo "README.md: yes" || echo "README.md: no"
+      [ -f "AGENT_GUIDE.md" ] && echo "AGENT_GUIDE.md: yes" || echo "AGENT_GUIDE.md: no"
+      [ -f "Makefile" ] && echo "Makefile: yes" || echo "Makefile: no"
+      [ -f ".env.example" ] && echo ".env.example: yes" || echo ".env.example: no"
+      [ -d "remotion-composer" ] && echo "remotion-composer/: yes" || echo "remotion-composer/: no"
+      echo ""
+      echo "== Machine =="
+      echo "uname: $(uname -s)"
+      echo "arch: $(uname -m)"
+      echo "python3: $(command -v python3 || echo missing)"
+      echo "pip: $(command -v pip || echo missing)"
+      echo "npm: $(command -v npm || echo missing)"
+      echo "ffmpeg: $(command -v ffmpeg || echo missing)"
+      echo "brew: $(command -v brew || echo missing)"
+      echo ""
+      echo "== Environment =="
+      [ -f ".env" ] && echo ".env: present" || echo ".env: absent"
+      echo ""
+      if [ ! -f "AGENT_GUIDE.md" ] || [ ! -f ".env.example" ] || [ ! -d "remotion-composer" ]; then
+        echo "ERROR: This workflow expects to run inside the OpenMontage repository."
+        exit 1
+      fi
+      echo "OPENMONTAGE_REPO_READY"
+    timeout: 30000
+
+  - id: classify-request
+    prompt: |
+      You are classifying an OpenMontage setup request for a macOS-focused workflow.
+
+      ## User Request
+      $ARGUMENTS
+
+      ## Repo + Machine Snapshot
+      $repo-check.output
+
+      Choose the most appropriate values.
+
+      ### action
+      - analyze-only: inspect repo, write setup plan and env guidance, do not install anything
+      - bootstrap: perform safe local bootstrap steps but skip provider preflight
+      - bootstrap-and-preflight: bootstrap local dependencies and run provider capability checks
+
+      ### profile
+      - zero-key-cpu: prioritize FFmpeg + Remotion + Piper, avoid paid/cloud assumptions
+      - api-assisted: local CPU baseline plus optional cloud providers through .env keys
+      - self-hosted-cloud: local baseline plus self-hosted/endpoint-backed video options such as Modal
+      - custom: user is asking for a mixed or unusual setup
+
+      ### env_strategy
+      - scaffold-only: create a grouped env scaffold file, do not edit existing .env beyond normal repo setup copy-if-missing
+      - dry-run: only report env organization guidance
+
+      Prefer `bootstrap-and-preflight` when the user asks to make it runnable, testable, or mac-ready.
+      Prefer `zero-key-cpu` unless the user explicitly asks for cloud-heavy providers.
+    depends_on: [repo-check]
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [analyze-only, bootstrap, bootstrap-and-preflight]
+        profile:
+          type: string
+          enum: [zero-key-cpu, api-assisted, self-hosted-cloud, custom]
+        env_strategy:
+          type: string
+          enum: [scaffold-only, dry-run]
+        reasoning:
+          type: string
+      required: [action, profile, env_strategy, reasoning]
+
+  - id: persist-selection
+    bash: |
+      mkdir -p "$ARTIFACTS_DIR"
+      python3 - <<'PY'
+      from pathlib import Path
+      content = $classify-request.output
+      Path("$ARTIFACTS_DIR/request-profile.json").write_text(content + "\n", encoding="utf-8")
+      print("Wrote selection artifact:", "$ARTIFACTS_DIR/request-profile.json")
+      PY
+    depends_on: [classify-request]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: ANALYZE + ENV SCAFFOLD
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: analyze-openmontage
+    command: openmontage-macos-plan
+    depends_on: [persist-selection]
+    context: fresh
+
+  - id: scaffold-env
+    command: openmontage-macos-env
+    depends_on: [analyze-openmontage]
+    when: "$classify-request.output.env_strategy != 'dry-run'"
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: OPTIONAL LOCAL BOOTSTRAP
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: bootstrap-local
+    bash: |
+      ACTION=$(python3 - <<'PY'
+      import json
+      from pathlib import Path
+      data = json.loads(Path("$ARTIFACTS_DIR/request-profile.json").read_text(encoding="utf-8"))
+      print(data["action"])
+      PY
+      )
+      PROFILE=$(python3 - <<'PY'
+      import json
+      from pathlib import Path
+      data = json.loads(Path("$ARTIFACTS_DIR/request-profile.json").read_text(encoding="utf-8"))
+      print(data["profile"])
+      PY
+      )
+
+      echo "ACTION=$ACTION"
+      echo "PROFILE=$PROFILE"
+
+      if [ ! -f ".env" ] && [ -f ".env.macos.archon.example" ]; then
+        cp ".env.macos.archon.example" ".env"
+        echo "ENV_COPY=created"
+        echo "ENV_SOURCE=.env.macos.archon.example"
+      elif [ ! -f ".env" ] && [ -f ".env.example" ]; then
+        cp ".env.example" ".env"
+        echo "ENV_COPY=created"
+        echo "ENV_SOURCE=.env.example"
+      else
+        echo "ENV_COPY=skipped"
+        if [ -f ".env" ]; then
+          echo "ENV_SOURCE=existing .env"
+        else
+          echo "ENV_SOURCE=none"
+        fi
+      fi
+
+      PY_REQ=ok
+      NPM_REQ=ok
+      PIPER_REQ=ok
+      FFMPEG_STATUS=present
+
+      if ! command -v ffmpeg >/dev/null 2>&1; then
+        FFMPEG_STATUS=missing
+      fi
+
+      python3 -m pip install -r requirements.txt >/tmp/openmontage-python-install.log 2>&1 || PY_REQ=failed
+      npm install --prefix remotion-composer >/tmp/openmontage-npm-install.log 2>&1 || NPM_REQ=failed
+      python3 -m pip install piper-tts >/tmp/openmontage-piper-install.log 2>&1 || PIPER_REQ=failed
+
+      echo "PYTHON_DEPS=$PY_REQ"
+      echo "REMOTION_DEPS=$NPM_REQ"
+      echo "PIPER_TTS=$PIPER_REQ"
+      echo "FFMPEG=$FFMPEG_STATUS"
+      echo "PYTHON_LOG=/tmp/openmontage-python-install.log"
+      echo "NPM_LOG=/tmp/openmontage-npm-install.log"
+      echo "PIPER_LOG=/tmp/openmontage-piper-install.log"
+      echo "BOOTSTRAP_COMPLETE"
+    depends_on: [analyze-openmontage, scaffold-env]
+    trigger_rule: all_done
+    when: "$classify-request.output.action != 'analyze-only'"
+    timeout: 1200000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: OPTIONAL PROVIDER PREFLIGHT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: run-preflight
+    bash: |
+      python3 - <<'PY'
+      import json
+      import traceback
+
+      try:
+          from tools.tool_registry import registry
+
+          registry.discover()
+          print("== support_envelope ==")
+          print(json.dumps(registry.support_envelope(), indent=2, ensure_ascii=False))
+          print("== provider_menu ==")
+          print(json.dumps(registry.provider_menu(), indent=2, ensure_ascii=False))
+          print("PREFLIGHT_STATUS=ok")
+      except Exception as exc:
+          print(f"PREFLIGHT_STATUS=failed: {exc}")
+          traceback.print_exc()
+      PY
+    depends_on: [bootstrap-local]
+    when: "$classify-request.output.action == 'bootstrap-and-preflight'"
+    timeout: 180000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: SUMMARY
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: summary
+    prompt: |
+      Summarize the OpenMontage macOS workflow run for the user.
+
+      ## Request
+      $ARGUMENTS
+
+      ## Selection
+      $classify-request.output
+
+      ## Analysis
+      $analyze-openmontage.output
+
+      ## Env Scaffold
+      $scaffold-env.output
+
+      ## Bootstrap
+      $bootstrap-local.output
+
+      ## Preflight
+      $run-preflight.output
+
+      In the summary:
+      1. State the chosen profile and why it fits macOS
+      2. Call out what was written to the repo and to `$ARTIFACTS_DIR`
+      3. Report bootstrap/preflight status clearly
+      4. Mention missing system dependencies such as FFmpeg separately from API-key gaps
+      5. Tell the user the next safest command or file to review
+    depends_on: [analyze-openmontage, scaffold-env, bootstrap-local, run-preflight]
+    trigger_rule: all_done
+    context: fresh
+    model: haiku
+    allowed_tools: []

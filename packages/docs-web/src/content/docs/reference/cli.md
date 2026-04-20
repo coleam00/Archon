@@ -77,6 +77,23 @@ archon setup --spawn  # Open in a new terminal window
 |------|--------|
 | `--spawn` | Open setup wizard in a new terminal window |
 
+### `dev <start|stop|status>`
+
+Manage the source-checkout development stack in the background.
+
+```bash
+archon dev start
+archon dev status
+archon dev stop
+```
+
+This command is for running Archon from source and works from any directory. It
+stores runtime state in `~/.archon/run/`, starts `bun run dev` from the Archon
+repo root in the background, and lets you stop it later without needing the
+original terminal.
+
+**Not for binary installs:** use `archon serve` there instead.
+
 ### `workflow list`
 
 List workflows available in target directory.

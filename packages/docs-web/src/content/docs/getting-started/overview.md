@@ -131,7 +131,7 @@ CLAUDE_USE_GLOBAL_AUTH=true
 That's it. Everything else has sensible defaults:
 
 - **Database:** SQLite at `~/.archon/archon.db` (auto-created, zero setup)
-- **Port:** 3090 for the API server, 5173 for the Web UI dev server
+- **Port:** 3090 for the API server, 3091 for the Web UI dev server
 - **AI assistant:** Claude (default)
 
 > **Why two GitHub token variables?** `GH_TOKEN` is used by the GitHub CLI (`gh`), and `GITHUB_TOKEN` is used by Archon's GitHub adapter. Set them to the same value.
@@ -151,14 +151,14 @@ bun run dev
 This starts two things simultaneously:
 
 - **Backend API server** on `http://localhost:3090`
-- **Web UI** on `http://localhost:5173`
+- **Web UI** on `http://localhost:3091`
 
 You should see output like:
 
 ```
 [server] Hono server listening on port 3090
 [web] VITE ready in Xms
-[web] Local: http://localhost:5173/
+[web] Local: http://localhost:3091/
 ```
 
 > **Homelab / remote server?** The backend API already binds to `0.0.0.0` by default, so it's reachable from other machines. However, the Vite dev server (Web UI) only listens on `localhost`. To expose the Web UI on your network:
@@ -167,11 +167,11 @@ You should see output like:
 > bun run dev:web -- --host 0.0.0.0
 > ```
 >
-> Then start the backend separately with `bun run dev:server`. The Web UI will be reachable at `http://<server-ip>:5173`. Make sure your firewall allows ports `5173` and `3090`.
+> Then start the backend separately with `bun run dev:server`. The Web UI will be reachable at `http://<server-ip>:3091`. Make sure your firewall allows ports `3091` and `3090`.
 
 **Step 5: Verify It Works**
 
-Open **http://localhost:5173** in your browser. You should see the Archon Web UI.
+Open **http://localhost:3091** in your browser. You should see the Archon Web UI.
 
 **Quick verification checklist:**
 
@@ -560,7 +560,7 @@ bun install
 | Run tests           | `bun run test`                      |
 | Type check          | `bun run type-check`                |
 | Full validation     | `bun run validate`                  |
-| Web UI              | http://localhost:5173               |
+| Web UI              | http://localhost:3091               |
 | API server          | http://localhost:3090               |
 | Health check        | `curl http://localhost:3090/health` |
 
