@@ -922,6 +922,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/register-project <name> <path>\` — Register a local project
 - \`/update-project <name> <new-path>\` — Update a project's path
 - \`/remove-project <name>\` — Remove a registered project
+- \`/setproject <name>\` — Bind this conversation to a registered project
 
 **Session**
 - \`/status\` — Show current session and project info
@@ -1057,6 +1058,54 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         success: true,
         message: 'No active session to reset.',
       };
+    }
+
+    case 'setproject': {
+      const nameArg = args[0];
+      if (!nameArg) {
+        return {
+          success: false,
+          message: 'Usage: /setproject <name>\n\nUse /status to see registered projects.',
+        };
+      }
+
+      const allCodebases = await codebaseDb.listCodebases();
+
+      // 1. Exact match, 2. Case-insensitive match, 3. Case-insensitive prefix, 4. Case-insensitive substring
+      const lowerArg = nameArg.toLowerCase();
+      const codebase =
+        allCodebases.find(c => c.name === nameArg) ??
+        allCodebases.find(c => c.name.toLowerCase() === lowerArg) ??
+        allCodebases.find(c => c.name.toLowerCase().startsWith(lowerArg)) ??
+        allCodebases.find(c => c.name.toLowerCase().includes(lowerArg));
+
+      if (!codebase) {
+        const names = allCodebases.map(c => c.name).join(', ') || 'none';
+        return {
+          success: false,
+          message: `No project found matching "${nameArg}".\n\nRegistered projects: ${names}`,
+        };
+      }
+
+      try {
+        await db.updateConversation(conversation.id, {
+          codebase_id: codebase.id,
+          cwd: codebase.default_cwd,
+        });
+        getLog().info(
+          { conversationId: conversation.id, codebaseId: codebase.id, codebaseName: codebase.name },
+          'cmd.setproject_completed'
+        );
+        return {
+          success: true,
+          message: `Project set to **${codebase.name}**.\n\nWorking directory: \`${codebase.default_cwd}\``,
+          modified: true,
+        };
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, conversationId: conversation.id }, 'cmd.setproject_failed');
+        return { success: false, message: `Failed to set project: ${err.message}` };
+      }
     }
 
     case 'worktree':

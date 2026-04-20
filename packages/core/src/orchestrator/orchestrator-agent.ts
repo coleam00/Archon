@@ -693,6 +693,7 @@ export async function handleMessage(
         'remove-project',
         'commands',
         'init',
+        'setproject',
         'worktree',
       ];
 
