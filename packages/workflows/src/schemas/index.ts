@@ -90,6 +90,9 @@ export {
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
+  isLastApprovalContext,
+  getPausedApprovalContext,
+  getResumeApprovalContext,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -99,6 +102,8 @@ export type {
   WorkflowRun,
   ArtifactType,
   ApprovalContext,
+  ApprovalResolution,
+  LastApprovalContext,
 } from './workflow-run';
 
 // Result types (non-schema hand-written types)
