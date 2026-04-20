@@ -1,0 +1,52 @@
+name: archon-compose-planner
+description: |
+  Child workflow: analyzes the codebase and creates a detailed implementation plan.
+  Designed to be called via a 'workflow:' node from a parent orchestrator workflow.
+
+  Input ($ARGUMENTS): feature description or task, forwarded from the parent's 'input:' field.
+  Output: structured implementation plan text, available as $nodeId.output in the parent.
+
+  Example invocation from a parent workflow:
+    - id: plan
+      workflow: archon-compose-planner
+      input: "$ARGUMENTS"
+
+  NOT for: direct user invocation — start archon-compose-plan-implement-qa instead.
+
+provider: claude
+
+nodes:
+  - id: analyze-and-plan
+    context: fresh
+    allowed_tools: [Read, Write, Glob, Grep, Bash]
+    prompt: |
+      You are a software planning expert. Create a precise implementation plan.
+
+      ## Task
+
+      $ARGUMENTS
+
+      ## Instructions
+
+      1. Explore the relevant parts of the codebase: read key source files, find related patterns
+      2. Identify exactly which files need to change and how (be specific — file paths, function names)
+      3. Note dependencies, risks, and edge cases
+      4. Write the plan to `$ARTIFACTS_DIR/plan.md`
+      5. Output the plan as your final response so downstream nodes can use it via `$plan.output`
+
+      ## Plan Format
+
+      # Implementation Plan: <task summary>
+
+      ## Files to Change
+      - `path/to/file.ts`: <what changes and why>
+
+      ## Implementation Steps
+      1. <concrete step — what to add/change/remove>
+      2. ...
+
+      ## Validation
+      - <how to verify each step succeeded>
+
+      ## Risks and Edge Cases
+      - <risk>: <mitigation>

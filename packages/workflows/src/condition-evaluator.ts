@@ -4,8 +4,11 @@
  * Supports:
  *   String equality:  "$nodeId.output == 'VALUE'"  / "$nodeId.output != 'VALUE'"
  *   Dot notation:     "$nodeId.output.field == 'VALUE'"
+ *   Shorthand path:   "$nodeId.field == 'VALUE'"  (same as $nodeId.output.field)
  *   Numeric ops:      "$nodeId.output > '80'"  / ">=" / "<" / "<="
  *                     (both sides must parse as finite numbers; fail-closed otherwise)
+ *   Unquoted RHS:     "$nodeId.exit_code == 0"  / "$nodeId.passed == true"
+ *                     Unquoted values must be: integer, decimal, `true`, or `false`.
  *   Compound AND/OR:  "$a.output == 'X' && $b.output != 'Y'"
  *                     "$a.output == 'X' || $b.output == 'Y'"
  *                     AND has higher precedence than OR. No parentheses.
@@ -83,9 +86,19 @@ function splitOutsideQuotes(expr: string, sep: string): string[] {
   return parts;
 }
 
-/** Pattern matching a single condition atom: $nodeId.output[.field] OPERATOR 'value' */
+/**
+ * Pattern matching a single condition atom.
+ *
+ * Capture groups:
+ *   1  nodeId        — e.g. `classify`, `test-node`
+ *   2  segment1      — first path segment: `output` (canonical) OR a shorthand field name
+ *   3  segment2      — optional sub-field after `output.` (only valid when segment1 == 'output')
+ *   4  operator      — `==`, `!=`, `<`, `>`, `<=`, `>=`
+ *   5  quotedValue   — present when RHS is a single-quoted string literal
+ *   6  unquotedValue — present when RHS is an unquoted integer, decimal, `true`, or `false`
+ */
 const atomPattern =
-  /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*'([^']*)'$/;
+  /^\$([a-zA-Z_][a-zA-Z0-9_-]*)\.([a-zA-Z_][a-zA-Z0-9_]*)(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?\s*(==|!=|<=|>=|<|>)\s*(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$/;
 
 /**
  * Evaluate a single atomic condition expression against upstream node outputs.
@@ -102,14 +115,28 @@ function evaluateAtom(
     return { result: false, parsed: false };
   }
 
-  const [, nodeId, field, operator, expected] = match;
+  const [, nodeId, segment1, segment2, operator, quotedExpected, unquotedExpected] = match;
 
-  if (nodeId === undefined || operator === undefined || expected === undefined) {
+  if (nodeId === undefined || segment1 === undefined || operator === undefined) {
     getLog().debug({ expr }, 'condition_parse_unexpected_undefined');
     return { result: false, parsed: false };
   }
 
-  const actual = resolveOutputRef(nodeId, field, nodeOutputs);
+  // Shorthand paths ($nodeId.field) cannot have a sub-field segment — only $nodeId.output.field is valid
+  if (segment1 !== 'output' && segment2 !== undefined) {
+    getLog().debug({ expr }, 'condition_parse_failed_invalid_path');
+    return { result: false, parsed: false };
+  }
+
+  // $nodeId.output        → raw output (effectiveField = undefined)
+  // $nodeId.output.field  → JSON subfield (effectiveField = field name)
+  // $nodeId.field         → shorthand for $nodeId.output.field (effectiveField = segment1)
+  const effectiveField: string | undefined = segment1 === 'output' ? segment2 : segment1;
+
+  // Quoted string takes precedence; unquoted covers numeric literals and true/false
+  const expected = quotedExpected ?? unquotedExpected ?? '';
+
+  const actual = resolveOutputRef(nodeId, effectiveField, nodeOutputs);
 
   let result: boolean;
   if (operator === '==' || operator === '!=') {
@@ -129,7 +156,7 @@ function evaluateAtom(
   }
 
   getLog().debug(
-    { nodeId, field: field ?? null, operator, expected, actual, result },
+    { nodeId, field: effectiveField ?? null, operator, expected, actual, result },
     'condition_evaluated'
   );
   return { result, parsed: true };

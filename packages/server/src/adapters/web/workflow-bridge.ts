@@ -89,6 +89,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
     case 'node_started':
     case 'node_completed':
     case 'node_failed':
+    case 'node_paused':
     case 'node_skipped':
       return JSON.stringify({
         type: 'dag_node',
@@ -102,7 +103,9 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
               ? 'completed'
               : event.type === 'node_failed'
                 ? 'failed'
-                : 'skipped',
+                : event.type === 'node_paused'
+                  ? 'paused'
+                  : 'skipped',
         duration: event.type === 'node_completed' ? event.duration : undefined,
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
