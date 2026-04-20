@@ -82,8 +82,9 @@ function normalizeClaudeUsage(usage?: {
  * - ~/.archon/.env loaded with override:true as the trusted source
  */
 function buildSubprocessEnv(): NodeJS.ProcessEnv {
+  // Using || intentionally: empty string should be treated as missing credential
   const hasExplicitTokens = Boolean(
-    process.env.CLAUDE_CODE_OAUTH_TOKEN ?? process.env.CLAUDE_API_KEY
+    process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY
   );
   const authMode = hasExplicitTokens ? 'explicit' : 'global';
   getLog().info(
