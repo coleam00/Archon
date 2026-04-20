@@ -2045,6 +2045,68 @@ nodes:
       }
     });
 
+    it('should accept interactive loop completion aliases', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'completion-aliases.yaml'),
+        `
+name: completion-aliases
+description: Interactive loop with deterministic completion aliases
+interactive: true
+nodes:
+  - id: my-loop
+    loop:
+      prompt: Do something.
+      until: DONE
+      max_iterations: 5
+      interactive: true
+      complete_on_user_input:
+        - ready
+        - create the plan
+      gate_message: Review and respond.
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      if (isLoopNode(result.workflows[0].workflow.nodes[0])) {
+        expect(result.workflows[0].workflow.nodes[0].loop.complete_on_user_input).toEqual([
+          'ready',
+          'create the plan',
+        ]);
+      }
+    });
+
+    it('should reject empty interactive loop completion aliases', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'bad-completion-aliases.yaml'),
+        `
+name: bad-completion-aliases
+description: Interactive loop with empty completion alias
+interactive: true
+nodes:
+  - id: my-loop
+    loop:
+      prompt: Do something.
+      until: DONE
+      max_iterations: 5
+      interactive: true
+      complete_on_user_input:
+        - ""
+      gate_message: Review and respond.
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('complete_on_user_input');
+    });
+
     it('should reject interactive loop without gate_message', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

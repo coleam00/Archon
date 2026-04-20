@@ -9,6 +9,7 @@ import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   isApprovalContext,
+  matchesInteractiveLoopCompletionInput,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
@@ -154,18 +155,38 @@ export async function approveWorkflow(
     // emits the completion signal (meaning the user actually approved). Writing it
     // here would cause the resume to skip the loop node entirely.
     if (approval.type === 'interactive_loop') {
+      const completesLoop = matchesInteractiveLoopCompletionInput(approval, approvalComment);
+      if (completesLoop) {
+        await workflowEventDb.createWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: 'node_completed',
+          step_name: approval.nodeId,
+          data: {
+            node_output: approval.lastOutput ?? '',
+            approval_decision: 'approved',
+            loop_completion_input: approvalComment,
+          },
+        });
+      }
       await workflowEventDb.createWorkflowEvent({
         workflow_run_id: runId,
         event_type: 'approval_received',
         step_name: approval.nodeId,
-        data: { decision: 'approved', comment: approvalComment, iteration: approval.iteration },
+        data: {
+          decision: 'approved',
+          comment: approvalComment,
+          iteration: approval.iteration,
+          ...(completesLoop ? { transition: 'complete_loop' } : {}),
+        },
       });
       // Transition to 'failed' so findResumableRun picks it up.
       // IMPORTANT: metadata is MERGED (not replaced) — the approval context must survive
       // intact so the resumed executor can detect the correct startIteration.
       await workflowDb.updateWorkflowRun(runId, {
         status: 'failed',
-        metadata: { loop_user_input: approvalComment },
+        metadata: completesLoop
+          ? { loop_completion_input: approvalComment }
+          : { loop_user_input: approvalComment },
       });
       return {
         workflowName: run.workflow_name,

@@ -476,7 +476,8 @@ export async function updateWorkflowRun(
     const isApprovalTransition =
       updates.status === 'failed' &&
       (updates.metadata?.approval_response !== undefined ||
-        updates.metadata?.loop_user_input !== undefined);
+        updates.metadata?.loop_user_input !== undefined ||
+        updates.metadata?.loop_completion_input !== undefined);
     if (
       !isApprovalTransition &&
       (updates.status === 'completed' ||

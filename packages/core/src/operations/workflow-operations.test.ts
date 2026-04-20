@@ -129,6 +129,44 @@ describe('approveWorkflow', () => {
     });
   });
 
+  test('approves interactive_loop completion alias — writes node_completed from lastOutput', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'explore',
+          message: 'Say ready when done',
+          type: 'interactive_loop',
+          iteration: 2,
+          lastOutput: 'Exploration summary for the plan.',
+          completeOnUserInput: ['ready', 'create the plan'],
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    const result = await approveWorkflow('run-1', ' Ready ');
+
+    expect(result.type).toBe('interactive_loop');
+    expect(mockCreateWorkflowEvent).toHaveBeenCalledTimes(2);
+    expect(mockCreateWorkflowEvent.mock.calls[0][0]).toMatchObject({
+      event_type: 'node_completed',
+      step_name: 'explore',
+      data: {
+        node_output: 'Exploration summary for the plan.',
+        approval_decision: 'approved',
+        loop_completion_input: ' Ready ',
+      },
+    });
+    expect(mockCreateWorkflowEvent.mock.calls[1][0]).toMatchObject({
+      event_type: 'approval_received',
+      data: { transition: 'complete_loop' },
+    });
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-1', {
+      status: 'failed',
+      metadata: { loop_completion_input: ' Ready ' },
+    });
+  });
+
   test('approves with captureResponse — stores comment as node output', async () => {
     const run = makePausedRun({
       metadata: {

@@ -4356,6 +4356,60 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       });
     });
 
+    it('interactive loop pause stores completion aliases when configured', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Exploration summary.' };
+        yield { type: 'result', sessionId: 'loop-session-aliases' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'interactive-loop-aliases',
+          nodes: [
+            {
+              id: 'explore',
+              loop: {
+                prompt: 'Explore.',
+                until: 'PLAN_READY',
+                max_iterations: 10,
+                interactive: true,
+                complete_on_user_input: ['ready', 'create the plan'],
+                gate_message: 'Review exploration.',
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const pauseCalls = (
+        mockDeps.store.pauseWorkflowRun as Mock<
+          (id: string, ctx: Record<string, unknown>) => Promise<void>
+        >
+      ).mock.calls;
+      expect(pauseCalls.length).toBe(1);
+      expect(pauseCalls[0][1]).toMatchObject({
+        type: 'interactive_loop',
+        nodeId: 'explore',
+        completeOnUserInput: ['ready', 'create the plan'],
+      });
+    });
+
     it('interactive loop first iteration always gates even if AI emits signal', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield {

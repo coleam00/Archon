@@ -21,6 +21,13 @@ export const loopNodeConfigSchema = z
     stuck_after_no_progress_iterations: z.number().int().min(2).optional(),
     /** When true, pause between iterations for user input via /workflow approve. */
     interactive: z.boolean().optional(),
+    /** Exact user replies that complete an interactive loop without another AI turn. */
+    complete_on_user_input: z
+      .array(
+        z.string().trim().min(1, "'loop.complete_on_user_input' entries must be non-empty strings")
+      )
+      .nonempty("'loop.complete_on_user_input' must include at least one entry")
+      .optional(),
     /** Message shown to user when paused (required when interactive is true). */
     gate_message: z.string().optional(),
   })

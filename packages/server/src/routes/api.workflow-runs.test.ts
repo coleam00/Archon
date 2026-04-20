@@ -1251,6 +1251,45 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       data: { node_output: '', approval_decision: 'approved' },
     });
   });
+
+  test('interactive loop completion alias stores last output as node output', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-loop-ready',
+      metadata: {
+        approval: {
+          type: 'interactive_loop',
+          nodeId: 'explore',
+          message: 'Say ready when done',
+          iteration: 3,
+          lastOutput: 'Exploration summary.',
+          completeOnUserInput: ['ready'],
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-loop-ready/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'ready' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    const nodeCompletedCall = mockCreateWorkflowEvent.mock.calls.find(
+      (c: unknown[]) => (c[0] as Record<string, unknown>).event_type === 'node_completed'
+    );
+    expect(nodeCompletedCall?.[0]).toMatchObject({
+      step_name: 'explore',
+      data: {
+        node_output: 'Exploration summary.',
+        approval_decision: 'approved',
+        loop_completion_input: 'ready',
+      },
+    });
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-loop-ready', {
+      status: 'failed',
+      metadata: { loop_completion_input: 'ready' },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

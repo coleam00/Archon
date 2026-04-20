@@ -267,6 +267,21 @@ describe('workflows database', () => {
       expect(query).not.toContain('completed_at = NOW()');
     });
 
+    test('refreshes activity for interactive loop completion handoff without marking completed', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateWorkflowRun('workflow-run-123', {
+        status: 'failed',
+        metadata: { loop_completion_input: 'ready' },
+      });
+
+      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('status = $1');
+      expect(query).toContain('metadata = metadata ||');
+      expect(query).toContain('last_activity_at = NOW()');
+      expect(query).not.toContain('completed_at = NOW()');
+    });
+
     test('does nothing when no updates provided', async () => {
       await updateWorkflowRun('workflow-run-123', {});
 
