@@ -31,6 +31,9 @@ const mockEvent = mock(() => {});
 const mockStart = mock(() => Promise.resolve(undefined));
 const mockStop = mock(() => Promise.resolve(undefined));
 
+const mockAction = mock(() => {});
+const mockView = mock(() => {});
+
 const mockApp = {
   client: {
     chat: {
@@ -44,6 +47,8 @@ const mockApp = {
     },
   },
   event: mockEvent,
+  action: mockAction,
+  view: mockView,
   start: mockStart,
   stop: mockStop,
 };
@@ -486,6 +491,276 @@ describe('SlackAdapter', () => {
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
       await adapter.acknowledgeReceipt(event);
       expect(mockReactionsAdd).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('archon-questions schema rendering', () => {
+    const VALID_QUESTIONS_BLOCK = [
+      '```archon-questions',
+      '- id: scope_of_change',
+      '  type: checkboxes',
+      '  label: "Which states should get the header?"',
+      '  options:',
+      '    - { value: trial_activated, label: "trial_activated" }',
+      '    - { value: waiting_trial_webinar, label: "waiting_trial_webinar" }',
+      '  required: true',
+      '- id: test_expectations',
+      '  type: yes_no_text',
+      '  label: "Are there existing specs to update?"',
+      '  open_text_label: "Known test expectations"',
+      '- id: i18n',
+      '  type: yes_no',
+      '  label: "Is this text subject to i18n?"',
+      '- id: out_of_scope_confirm',
+      '  type: yes_no',
+      '  label: "No other copy changes?"',
+      '```',
+    ].join('\n');
+
+    let adapter: SlackAdapter;
+
+    beforeEach(() => {
+      adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      mockPostMessage.mockClear();
+    });
+
+    test('renders Answer questions button when valid archon-questions block is present with gate', async () => {
+      const message = `I have 4 scoping questions.\n\n${VALID_QUESTIONS_BLOCK}`;
+      await adapter.sendMessage('C123:1234.5678', message, {
+        interactiveGate: { runId: 'run-q1', nodeId: 'spec' },
+      });
+
+      expect(mockPostMessage).toHaveBeenCalledTimes(1);
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+        text: string;
+      };
+      expect(call.blocks).toHaveLength(2);
+
+      // Markdown block should NOT contain the fenced YAML
+      const mdBlock = call.blocks[0] as { type: string; text: string };
+      expect(mdBlock.text).not.toContain('archon-questions');
+      expect(mdBlock.text).toContain('I have 4 scoping questions.');
+
+      // Actions block should have a single "Answer questions" button
+      const actionsBlock = call.blocks[1] as {
+        type: string;
+        elements: Array<{ action_id: string; text: { text: string }; style?: string }>;
+      };
+      expect(actionsBlock.type).toBe('actions');
+      expect(actionsBlock.elements).toHaveLength(1);
+      expect(actionsBlock.elements[0].text.text).toBe('Answer questions');
+      expect(actionsBlock.elements[0].style).toBe('primary');
+      expect(actionsBlock.elements[0].action_id).toContain('gate_answer_questions');
+
+      // Fallback text should also be clean
+      expect(call.text).not.toContain('archon-questions');
+    });
+
+    test('falls back to Approve/Request changes when schema is malformed', async () => {
+      const malformed = '```archon-questions\n- not: valid: yaml: [[\n```';
+      const message = `Some intro.\n\n${malformed}`;
+      await adapter.sendMessage('C123:1234.5678', message, {
+        interactiveGate: { runId: 'run-bad', nodeId: 'spec' },
+      });
+
+      expect(mockPostMessage).toHaveBeenCalledTimes(1);
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+        text: string;
+      };
+      // Should still have 2 blocks: markdown + actions
+      expect(call.blocks).toHaveLength(2);
+
+      // Markdown should not contain the raw fenced block
+      const mdBlock = call.blocks[0] as { text: string };
+      expect(mdBlock.text).not.toContain('archon-questions');
+
+      // Should fall back to approve/request changes
+      const actionsBlock = call.blocks[1] as {
+        elements: Array<{ action_id: string; text: { text: string } }>;
+      };
+      expect(actionsBlock.elements).toHaveLength(2);
+      expect(actionsBlock.elements[0].text.text).toBe('Approve');
+      expect(actionsBlock.elements[1].text.text).toBe('Request changes');
+    });
+
+    test('no-schema message renders existing gate behavior unchanged', async () => {
+      await adapter.sendMessage('C123:1234.5678', 'Please review the spec.', {
+        interactiveGate: { runId: 'run-normal', nodeId: 'refine-plan' },
+      });
+
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+      };
+      expect(call.blocks).toHaveLength(2);
+      const actionsBlock = call.blocks[1] as {
+        elements: Array<{ text: { text: string } }>;
+      };
+      expect(actionsBlock.elements).toHaveLength(2);
+      expect(actionsBlock.elements[0].text.text).toBe('Approve');
+      expect(actionsBlock.elements[1].text.text).toBe('Request changes');
+    });
+
+    test('strips fenced block even without gate metadata', async () => {
+      const message = `Intro text.\n\n${VALID_QUESTIONS_BLOCK}\n\nEnd text.`;
+      await adapter.sendMessage('C123:1234.5678', message);
+
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+      };
+      // Only markdown block, no actions (no gate)
+      expect(call.blocks).toHaveLength(1);
+      const mdBlock = call.blocks[0] as { text: string };
+      expect(mdBlock.text).not.toContain('archon-questions');
+      expect(mdBlock.text).toContain('Intro text.');
+      expect(mdBlock.text).toContain('End text.');
+    });
+
+    test('falls back when schema has unknown question type', async () => {
+      const unknownType = [
+        '```archon-questions',
+        '- id: bad_q',
+        '  type: dropdown',
+        '  label: "Pick one"',
+        '```',
+      ].join('\n');
+      await adapter.sendMessage('C123:1234.5678', unknownType, {
+        interactiveGate: { runId: 'run-unk', nodeId: 'spec' },
+      });
+
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+      };
+      const actionsBlock = call.blocks[1] as {
+        elements: Array<{ text: { text: string } }>;
+      };
+      expect(actionsBlock.elements[0].text.text).toBe('Approve');
+    });
+
+    test('falls back when select type is missing options', async () => {
+      const noOptions = [
+        '```archon-questions',
+        '- id: choose',
+        '  type: select',
+        '  label: "Pick"',
+        '```',
+      ].join('\n');
+      await adapter.sendMessage('C123:1234.5678', noOptions, {
+        interactiveGate: { runId: 'run-no-opt', nodeId: 'spec' },
+      });
+
+      const call = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0] as {
+        blocks: unknown[];
+      };
+      const actionsBlock = call.blocks[1] as {
+        elements: Array<{ text: { text: string } }>;
+      };
+      expect(actionsBlock.elements[0].text.text).toBe('Approve');
+    });
+  });
+
+  describe('question answer formatting', () => {
+    test('formats mixed question types correctly', async () => {
+      // We test the formatting indirectly via the modal submit handler.
+      // To test formatting directly, we trigger the full flow via start() +
+      // simulated view submission.
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+
+      // Capture the view handler callback registered during start()
+      let viewHandler: ((args: Record<string, unknown>) => Promise<void>) | undefined;
+      mockView.mockImplementation(((
+        callbackId: string,
+        handler: (args: Record<string, unknown>) => Promise<void>
+      ) => {
+        if (callbackId === 'gate_questions_modal') {
+          viewHandler = handler;
+        }
+      }) as typeof mockView);
+
+      // Register a message handler so dispatchSyntheticMessage works
+      let capturedText = '';
+      adapter.onMessage(async event => {
+        capturedText = event.text;
+      });
+
+      await adapter.start();
+      expect(viewHandler).toBeDefined();
+
+      const questions = [
+        {
+          id: 'scope_of_change',
+          type: 'checkboxes',
+          label: 'Scope',
+          options: [
+            { value: 'trial_activated', label: 'trial_activated' },
+            { value: 'waiting_trial_webinar', label: 'waiting_trial_webinar' },
+          ],
+        },
+        {
+          id: 'test_expectations',
+          type: 'yes_no_text',
+          label: 'Tests?',
+          open_text_label: 'Known tests',
+        },
+        { id: 'i18n', type: 'yes_no', label: 'i18n?' },
+        { id: 'out_of_scope_confirm', type: 'yes_no', label: 'Out of scope?' },
+      ];
+
+      const privateMetadata = JSON.stringify({
+        channel: 'C123',
+        threadTs: '1234.5678',
+        userId: 'U789',
+        questions,
+      });
+
+      await viewHandler!({
+        ack: async () => {},
+        view: {
+          private_metadata: privateMetadata,
+          state: {
+            values: {
+              scope_of_change: {
+                scope_of_change_input: {
+                  selected_options: [
+                    { value: 'trial_activated' },
+                    { value: 'waiting_trial_webinar' },
+                  ],
+                },
+              },
+              test_expectations: {
+                test_expectations_input: {
+                  selected_option: { value: 'yes' },
+                },
+              },
+              test_expectations_text: {
+                test_expectations_text_input: {
+                  value: 'update welcome_header_spec',
+                },
+              },
+              i18n: {
+                i18n_input: {
+                  selected_option: { value: 'no' },
+                },
+              },
+              out_of_scope_confirm: {
+                out_of_scope_confirm_input: {
+                  selected_option: { value: 'yes' },
+                },
+              },
+            },
+          },
+        },
+        body: { user: { id: 'U789' } },
+      });
+
+      expect(capturedText).toBe(
+        'Answers:\n' +
+          '1. scope_of_change: trial_activated, waiting_trial_webinar\n' +
+          '2. test_expectations: yes \u2014 "update welcome_header_spec"\n' +
+          '3. i18n: no\n' +
+          '4. out_of_scope_confirm: yes'
+      );
     });
   });
 });

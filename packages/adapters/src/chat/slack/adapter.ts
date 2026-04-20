@@ -9,6 +9,7 @@ import { isSlackUserAuthorized } from './auth';
 import { parseAllowedUserIds } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
 import type { SlackMessageEvent } from './types';
+import jsYaml from 'js-yaml';
 
 /**
  * Gate action-id + modal callback-id encoding. runId and nodeId are packed
@@ -19,7 +20,24 @@ import type { SlackMessageEvent } from './types';
 const GATE_SEP = '|';
 const GATE_ACTION_APPROVE = 'gate_approve';
 const GATE_ACTION_REQUEST_CHANGES = 'gate_request_changes';
+const GATE_ACTION_ANSWER_QUESTIONS = 'gate_answer_questions';
 const GATE_MODAL_CALLBACK = 'gate_changes_modal';
+const QUESTIONS_MODAL_CALLBACK = 'gate_questions_modal';
+const QUESTIONS_BLOCK_REGEX = /```archon-questions\n([\s\S]*?)```/m;
+
+type QuestionType = 'yes_no' | 'yes_no_text' | 'select' | 'checkboxes' | 'text';
+interface QuestionOption {
+  value: string;
+  label: string;
+}
+interface QuestionDef {
+  id: string;
+  type: QuestionType;
+  label: string;
+  required?: boolean;
+  options?: QuestionOption[];
+  open_text_label?: string;
+}
 
 function encodeGateActionId(prefix: string, runId: string, nodeId: string): string {
   return `${prefix}${GATE_SEP}${runId}${GATE_SEP}${nodeId}`;
@@ -129,8 +147,11 @@ export class SlackAdapter implements IPlatformAdapter {
     threadTs?: string,
     gate?: { runId: string; nodeId: string }
   ): Promise<void> {
-    const blocks: SlackBlock[] = [{ type: 'markdown', text: message }];
-    if (gate) {
+    const { cleanedMessage, questions } = this.extractQuestionsBlock(message);
+    const blocks: SlackBlock[] = [{ type: 'markdown', text: cleanedMessage }];
+    if (gate && questions) {
+      blocks.push(this.buildQuestionsActionsBlock(gate, questions));
+    } else if (gate) {
       blocks.push(this.buildGateActionsBlock(gate));
     }
     try {
@@ -142,10 +163,14 @@ export class SlackAdapter implements IPlatformAdapter {
         thread_ts: threadTs,
         blocks,
         // Fallback text for notifications/accessibility
-        text: message.substring(0, 150) + (message.length > 150 ? '...' : ''),
+        text: cleanedMessage.substring(0, 150) + (cleanedMessage.length > 150 ? '...' : ''),
       } as unknown as Parameters<typeof this.app.client.chat.postMessage>[0]);
       getLog().debug(
-        { messageLength: message.length, gate: Boolean(gate) },
+        {
+          messageLength: cleanedMessage.length,
+          gate: Boolean(gate),
+          hasQuestions: Boolean(questions),
+        },
         'slack.markdown_block_sent'
       );
     } catch (error) {
@@ -157,7 +182,7 @@ export class SlackAdapter implements IPlatformAdapter {
       await this.app.client.chat.postMessage({
         channel,
         thread_ts: threadTs,
-        text: message,
+        text: cleanedMessage,
       });
     }
   }
@@ -187,6 +212,248 @@ export class SlackAdapter implements IPlatformAdapter {
         },
       ],
     };
+  }
+
+  /**
+   * Extract and strip the `archon-questions` fenced block from a message.
+   * Returns the cleaned message (always stripped) and parsed questions (null if
+   * invalid or absent).
+   */
+  private extractQuestionsBlock(message: string): {
+    cleanedMessage: string;
+    questions: QuestionDef[] | null;
+  } {
+    const match = QUESTIONS_BLOCK_REGEX.exec(message);
+    if (!match) return { cleanedMessage: message, questions: null };
+
+    const cleanedMessage = message.replace(QUESTIONS_BLOCK_REGEX, '').trim();
+    const questions = this.parseQuestionsYaml(match[1]);
+    return { cleanedMessage, questions };
+  }
+
+  private parseQuestionsYaml(raw: string): QuestionDef[] | null {
+    try {
+      const parsed = jsYaml.load(raw);
+      if (!this.isValidQuestionDefArray(parsed)) return null;
+      return parsed;
+    } catch (e) {
+      const err = e as Error;
+      getLog().warn({ reason: err.message }, 'slack.questions_schema_invalid');
+      return null;
+    }
+  }
+
+  private isValidQuestionDefArray(value: unknown): value is QuestionDef[] {
+    if (!Array.isArray(value) || value.length === 0) {
+      getLog().warn({ reason: 'not a non-empty array' }, 'slack.questions_schema_invalid');
+      return false;
+    }
+    const validTypes: QuestionType[] = ['yes_no', 'yes_no_text', 'select', 'checkboxes', 'text'];
+    for (const item of value) {
+      if (typeof item !== 'object' || item === null) {
+        getLog().warn({ reason: 'item is not an object' }, 'slack.questions_schema_invalid');
+        return false;
+      }
+      const q = item as Record<string, unknown>;
+      if (typeof q.id !== 'string' || typeof q.label !== 'string') {
+        getLog().warn({ reason: 'missing id or label' }, 'slack.questions_schema_invalid');
+        return false;
+      }
+      if (!validTypes.includes(q.type as QuestionType)) {
+        getLog().warn(
+          { reason: `unknown type: ${String(q.type)}` },
+          'slack.questions_schema_invalid'
+        );
+        return false;
+      }
+      if ((q.type === 'select' || q.type === 'checkboxes') && !Array.isArray(q.options)) {
+        getLog().warn({ reason: `${q.type} missing options` }, 'slack.questions_schema_invalid');
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Build an actions block with a single "Answer questions" button.
+   * The questions array is encoded in the action value so the click handler
+   * can reconstruct the modal without DB state.
+   */
+  private buildQuestionsActionsBlock(
+    gate: { runId: string; nodeId: string },
+    questions: QuestionDef[]
+  ): SlackBlock {
+    return {
+      type: 'actions',
+      block_id: encodeGateActionId('gate_questions_block', gate.runId, gate.nodeId),
+      elements: [
+        {
+          type: 'button',
+          action_id: encodeGateActionId(GATE_ACTION_ANSWER_QUESTIONS, gate.runId, gate.nodeId),
+          style: 'primary',
+          text: { type: 'plain_text', text: 'Answer questions', emoji: true },
+          value: JSON.stringify(questions),
+        },
+      ],
+    };
+  }
+
+  /**
+   * Build modal input blocks for all supported question types.
+   */
+  private buildQuestionsModalBlocks(questions: QuestionDef[]): SlackBlock[] {
+    const blocks: SlackBlock[] = [];
+    for (const q of questions) {
+      const isRequired = q.required !== false;
+      switch (q.type) {
+        case 'yes_no':
+          blocks.push({
+            type: 'input',
+            block_id: q.id,
+            optional: !isRequired,
+            label: { type: 'plain_text', text: q.label },
+            element: {
+              type: 'radio_buttons',
+              action_id: `${q.id}_input`,
+              options: [
+                { text: { type: 'plain_text', text: 'Yes' }, value: 'yes' },
+                { text: { type: 'plain_text', text: 'No' }, value: 'no' },
+              ],
+            },
+          });
+          break;
+        case 'yes_no_text':
+          blocks.push({
+            type: 'input',
+            block_id: q.id,
+            optional: !isRequired,
+            label: { type: 'plain_text', text: q.label },
+            element: {
+              type: 'radio_buttons',
+              action_id: `${q.id}_input`,
+              options: [
+                { text: { type: 'plain_text', text: 'Yes' }, value: 'yes' },
+                { text: { type: 'plain_text', text: 'No' }, value: 'no' },
+              ],
+            },
+          });
+          blocks.push({
+            type: 'input',
+            block_id: `${q.id}_text`,
+            optional: true,
+            label: {
+              type: 'plain_text',
+              text: q.open_text_label ?? 'Additional details (optional)',
+            },
+            element: {
+              type: 'plain_text_input',
+              action_id: `${q.id}_text_input`,
+              multiline: true,
+            },
+          });
+          break;
+        case 'select':
+          blocks.push({
+            type: 'input',
+            block_id: q.id,
+            optional: !isRequired,
+            label: { type: 'plain_text', text: q.label },
+            element: {
+              type: 'static_select',
+              action_id: `${q.id}_input`,
+              options: (q.options ?? []).map(o => ({
+                text: { type: 'plain_text', text: o.label },
+                value: o.value,
+              })),
+            },
+          });
+          break;
+        case 'checkboxes':
+          blocks.push({
+            type: 'input',
+            block_id: q.id,
+            optional: !isRequired,
+            label: { type: 'plain_text', text: q.label },
+            element: {
+              type: 'checkboxes',
+              action_id: `${q.id}_input`,
+              options: (q.options ?? []).map(o => ({
+                text: { type: 'plain_text', text: o.label },
+                value: o.value,
+              })),
+            },
+          });
+          break;
+        case 'text':
+          blocks.push({
+            type: 'input',
+            block_id: q.id,
+            optional: !isRequired,
+            label: { type: 'plain_text', text: q.label },
+            element: {
+              type: 'plain_text_input',
+              action_id: `${q.id}_input`,
+              multiline: true,
+            },
+          });
+          break;
+      }
+    }
+    return blocks;
+  }
+
+  /**
+   * Format modal submission values into deterministic text for `$LOOP_USER_INPUT`.
+   */
+  private formatQuestionsAnswersForLoop(
+    questions: QuestionDef[],
+    values: Record<
+      string,
+      Record<
+        string,
+        {
+          value?: string | null;
+          selected_option?: { value?: string } | null;
+          selected_options?: { value?: string }[];
+        }
+      >
+    >
+  ): string {
+    const lines: string[] = ['Answers:'];
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      const blockValues = values[q.id];
+      const actionValues = blockValues?.[`${q.id}_input`];
+      let answer: string;
+
+      switch (q.type) {
+        case 'yes_no':
+          answer = actionValues?.selected_option?.value ?? '(no answer)';
+          break;
+        case 'yes_no_text': {
+          const yn = actionValues?.selected_option?.value ?? '(no answer)';
+          const textBlock = values[`${q.id}_text`];
+          const openText = textBlock?.[`${q.id}_text_input`]?.value?.trim();
+          answer = openText ? `${yn} \u2014 "${openText}"` : yn;
+          break;
+        }
+        case 'select':
+          answer = actionValues?.selected_option?.value ?? '(no answer)';
+          break;
+        case 'checkboxes': {
+          const selected = actionValues?.selected_options?.map(o => o.value).filter(Boolean) ?? [];
+          answer = selected.length > 0 ? selected.join(', ') : '(no answer)';
+          break;
+        }
+        case 'text':
+          answer = actionValues?.value?.trim() || '(no answer)';
+          break;
+        default:
+          answer = '(no answer)';
+      }
+      lines.push(`${i + 1}. ${q.id}: ${answer}`);
+    }
+    return lines.join('\n');
   }
 
   /**
@@ -463,10 +730,25 @@ export class SlackAdapter implements IPlatformAdapter {
       }
     );
 
+    // Answer questions button — opens a modal with typed inputs.
+    this.app.action(
+      { type: 'block_actions', action_id: new RegExp(`^${GATE_ACTION_ANSWER_QUESTIONS}\\|`) },
+      async ({ ack, body, action, client }) => {
+        await ack();
+        await this.handleAnswerQuestionsClick({ body, action, client });
+      }
+    );
+
     // Modal submission — feedback text is synthesized as a thread message.
     this.app.view(GATE_MODAL_CALLBACK, async ({ ack, view, body }) => {
       await ack();
       await this.handleGateModalSubmit({ view, body });
+    });
+
+    // Questions modal submission — answers formatted and synthesized as thread message.
+    this.app.view(QUESTIONS_MODAL_CALLBACK, async ({ ack, view, body }) => {
+      await ack();
+      await this.handleQuestionsModalSubmit({ view, body });
     });
   }
 
@@ -629,6 +911,120 @@ export class SlackAdapter implements IPlatformAdapter {
       threadTs: meta.threadTs,
       userId,
       text: feedback,
+    });
+  }
+
+  /**
+   * Handle "Answer questions" click: open a modal with typed inputs built
+   * from the question schema stored in the button's value.
+   */
+  private async handleAnswerQuestionsClick(params: {
+    body: unknown;
+    action: unknown;
+    client: unknown;
+  }): Promise<void> {
+    const { body, action, client } = params;
+    const ctx = this.extractClickContext(body, action);
+    const triggerId = this.extractTriggerId(body);
+    const ids = decodeGateActionId((action as { action_id?: string }).action_id);
+    if (!ctx || !triggerId) {
+      getLog().warn({ ids }, 'slack.questions_click_missing_context');
+      return;
+    }
+
+    let questions: QuestionDef[];
+    try {
+      questions = JSON.parse((action as { value?: string }).value ?? '[]') as QuestionDef[];
+    } catch {
+      getLog().warn({ ids }, 'slack.questions_click_bad_value');
+      return;
+    }
+
+    getLog().info(
+      {
+        runId: ids?.runId,
+        nodeId: ids?.nodeId,
+        userId: ctx.userId,
+        questionCount: questions.length,
+      },
+      'slack.questions_modal_opening'
+    );
+
+    const privateMetadata = JSON.stringify({
+      channel: ctx.channel,
+      threadTs: ctx.threadTs,
+      userId: ctx.userId,
+      questions,
+    });
+
+    const webClient = client as {
+      views: { open: (args: Record<string, unknown>) => Promise<unknown> };
+    };
+    try {
+      await webClient.views.open({
+        trigger_id: triggerId,
+        view: {
+          type: 'modal',
+          callback_id: QUESTIONS_MODAL_CALLBACK,
+          private_metadata: privateMetadata,
+          title: { type: 'plain_text', text: 'Scoping questions' },
+          submit: { type: 'plain_text', text: 'Submit' },
+          close: { type: 'plain_text', text: 'Cancel' },
+          blocks: this.buildQuestionsModalBlocks(questions),
+        },
+      });
+    } catch (error) {
+      getLog().error({ err: error }, 'slack.questions_modal_open_failed');
+    }
+  }
+
+  /**
+   * Handle questions modal submission: format answers and synthesize a thread
+   * message so the workflow loop receives structured input.
+   */
+  private async handleQuestionsModalSubmit(params: {
+    view: unknown;
+    body: unknown;
+  }): Promise<void> {
+    const { view, body } = params;
+    const v = view as {
+      private_metadata?: string;
+      state?: {
+        values?: Record<
+          string,
+          Record<
+            string,
+            {
+              value?: string | null;
+              selected_option?: { value?: string } | null;
+              selected_options?: { value?: string }[];
+            }
+          >
+        >;
+      };
+    };
+
+    let meta: { channel?: string; threadTs?: string; userId?: string; questions?: QuestionDef[] } =
+      {};
+    try {
+      meta = v.private_metadata ? (JSON.parse(v.private_metadata) as typeof meta) : {};
+    } catch {
+      getLog().warn('slack.questions_modal_bad_private_metadata');
+      return;
+    }
+    if (!meta.channel || !meta.threadTs || !meta.questions || !v.state?.values) {
+      getLog().warn('slack.questions_modal_missing_fields');
+      return;
+    }
+
+    const userId = (body as { user?: { id?: string } }).user?.id ?? meta.userId ?? 'unknown';
+    const formattedAnswers = this.formatQuestionsAnswersForLoop(meta.questions, v.state.values);
+
+    await this.dispatchSyntheticMessage({
+      channel: meta.channel,
+      threadTs: meta.threadTs,
+      userId,
+      text: formattedAnswers,
     });
   }
 

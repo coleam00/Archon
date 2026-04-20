@@ -37,10 +37,16 @@ nodes:
         1. Restate your understanding of the request in 1-2 sentences.
         2. Explore the codebase briefly (CLAUDE.md, directory structure,
            files obviously related to the feature).
-        3. Ask a tight set of 3-5 clarifying questions focused on DECISIONS
-           (scope boundaries, which existing code to extend, test
-           expectations, explicit out-of-scope items).
-        4. End with: "Answer the questions and I'll draft a spec."
+        3. Ask 3-5 clarifying questions as a structured form:
+           - Emit a fenced block with language tag `archon-questions`.
+           - Each question must include:
+             - `id` (snake_case)
+             - `type` (one of: `yes_no`, `yes_no_text`, `select`, `checkboxes`, `text`)
+             - `label`
+           - `select` and `checkboxes` must include `options` with `{ value, label }`.
+           - `required` is optional (defaults to true).
+           - `yes_no_text` may include `open_text_label`.
+        4. End with: "Click **Answer questions** to submit your responses, and I'll draft a spec."
         5. Do NOT emit the approval signal yet.
 
         ## If the user has replied:

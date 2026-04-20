@@ -1,6 +1,6 @@
 # Slack Scoping Questions Form Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Convert the first-iteration spec scoping questions in `archon-slack-feature-to-review-app` from free-text bullets into a Slack modal form with typed inputs, then feed submitted answers back into `$LOOP_USER_INPUT` as deterministic text.
 
@@ -31,7 +31,7 @@ No new packages, no DB/schema changes, no workflow-engine API changes.
 - Modify: `.archon/workflows/defaults/archon-slack-feature-to-review-app.yaml` (spec node prompt block)
 - Test: `bun run validate workflows archon-slack-feature-to-review-app --json`
 
-- [ ] **Step 1: Write failing contract assertion test command**
+- [x] **Step 1: Write failing contract assertion test command**
 
 Run:
 ```bash
@@ -40,7 +40,7 @@ bun run validate workflows archon-slack-feature-to-review-app --json
 
 Expected now: PASS (baseline). Keep output for post-change comparison.
 
-- [ ] **Step 2: Update first-iteration instructions to require `archon-questions` fenced YAML**
+- [x] **Step 2: Update first-iteration instructions to require `archon-questions` fenced YAML**
 
 Apply this prompt delta in the `spec.loop.prompt` first-iteration section:
 
@@ -62,7 +62,7 @@ Apply this prompt delta in the `spec.loop.prompt` first-iteration section:
 5. Do NOT emit the approval signal yet.
 ```
 
-- [ ] **Step 3: Re-run workflow validation**
+- [x] **Step 3: Re-run workflow validation**
 
 Run:
 ```bash
@@ -71,7 +71,7 @@ bun run validate workflows archon-slack-feature-to-review-app --json
 
 Expected: PASS with valid YAML parse and no schema errors.
 
-- [ ] **Step 4: Commit prompt-only change**
+- [x] **Step 4: Commit prompt-only change**
 
 Run:
 ```bash
@@ -87,7 +87,7 @@ git commit -m "feat(workflow): require structured archon-questions schema in spe
 - Modify: `packages/adapters/src/chat/slack/adapter.ts`
 - Test: `packages/adapters/src/chat/slack/adapter.test.ts`
 
-- [ ] **Step 1: Add constants and schema types**
+- [x] **Step 1: Add constants and schema types**
 
 Add near existing gate constants:
 
@@ -108,7 +108,7 @@ type QuestionDef = {
 };
 ```
 
-- [ ] **Step 2: Add parse + strip helpers with fail-soft semantics**
+- [x] **Step 2: Add parse + strip helpers with fail-soft semantics**
 
 Implement private helpers:
 
@@ -124,7 +124,7 @@ Behavior requirements:
 - Log `slack.questions_schema_invalid` with reason at `warn`.
 - Never throw from parsing path.
 
-- [ ] **Step 3: Branch gate rendering in `sendWithMarkdownBlock`**
+- [x] **Step 3: Branch gate rendering in `sendWithMarkdownBlock`**
 
 Adjust `sendWithMarkdownBlock(...)`:
 - Call `extractQuestionsBlock(message)` before block creation.
@@ -140,7 +140,7 @@ private buildQuestionsActionsBlock(gate: { runId: string; nodeId: string }): Sla
 
 Button text: `Answer questions`; action id prefix `gate_answer_questions`.
 
-- [ ] **Step 4: Run targeted unit tests (expected fail before Task 3 modal handlers)**
+- [x] **Step 4: Run targeted unit tests (expected fail before Task 3 modal handlers)**
 
 Run:
 ```bash
@@ -149,7 +149,7 @@ bun test packages/adapters/src/chat/slack/adapter.test.ts
 
 Expected at this stage: failing tests for unimplemented action/view handlers (if tests added ahead of implementation), or PASS for existing tests + new parser/render tests.
 
-- [ ] **Step 5: Commit parse/render scaffolding**
+- [x] **Step 5: Commit parse/render scaffolding**
 
 Run:
 ```bash
@@ -165,7 +165,7 @@ git commit -m "feat(slack): render structured question gate when archon-question
 - Modify: `packages/adapters/src/chat/slack/adapter.ts`
 - Test: `packages/adapters/src/chat/slack/adapter.test.ts`
 
-- [ ] **Step 1: Register new Slack action + modal callbacks**
+- [x] **Step 1: Register new Slack action + modal callbacks**
 
 In `registerGateHandlers()` add:
 
@@ -184,7 +184,7 @@ this.app.view(QUESTIONS_MODAL_CALLBACK, async ({ ack, view, body }) => {
 });
 ```
 
-- [ ] **Step 2: Implement modal builder for all supported question types**
+- [x] **Step 2: Implement modal builder for all supported question types**
 
 Add helper:
 
@@ -201,7 +201,7 @@ Mapping:
 
 Store `{ channel, threadTs, userId, questions }` in `private_metadata`.
 
-- [ ] **Step 3: Implement `handleAnswerQuestionsClick`**
+- [x] **Step 3: Implement `handleAnswerQuestionsClick`**
 
 Pattern after `handleRequestChangesClick`:
 - Extract click context and trigger id.
@@ -209,7 +209,7 @@ Pattern after `handleRequestChangesClick`:
 - Open modal with callback id `gate_questions_modal`.
 - On open failure log `slack.questions_modal_open_failed`.
 
-- [ ] **Step 4: Implement `handleQuestionsModalSubmit` + formatter**
+- [x] **Step 4: Implement `handleQuestionsModalSubmit` + formatter**
 
 Add:
 
@@ -243,7 +243,7 @@ Then dispatch:
 await this.dispatchSyntheticMessage({ channel, threadTs, userId, text: formattedAnswers });
 ```
 
-- [ ] **Step 5: Run targeted Slack adapter tests**
+- [x] **Step 5: Run targeted Slack adapter tests**
 
 Run:
 ```bash
@@ -252,7 +252,7 @@ bun test packages/adapters/src/chat/slack/adapter.test.ts
 
 Expected: PASS; includes new questions-button, modal-open, and modal-submit assertions.
 
-- [ ] **Step 6: Commit modal interaction implementation**
+- [x] **Step 6: Commit modal interaction implementation**
 
 Run:
 ```bash
@@ -267,7 +267,7 @@ git commit -m "feat(slack): collect spec scoping answers via question modal and 
 **Files:**
 - Modify: `packages/adapters/src/chat/slack/adapter.test.ts`
 
-- [ ] **Step 1: Add schema-valid render-path test**
+- [x] **Step 1: Add schema-valid render-path test**
 
 Add test:
 - Input message contains prose + valid fenced `archon-questions`.
@@ -276,7 +276,7 @@ Add test:
 - Assert no Approve/Request changes buttons.
 - Assert rendered markdown text excludes fenced YAML.
 
-- [ ] **Step 2: Add malformed-schema fallback test**
+- [x] **Step 2: Add malformed-schema fallback test**
 
 Add test:
 - Input message contains malformed fenced block.
@@ -284,13 +284,13 @@ Add test:
 - Assert fallback actions are Approve + Request changes.
 - Assert cleaned message does not include raw fenced block.
 
-- [ ] **Step 3: Add no-schema regression test**
+- [x] **Step 3: Add no-schema regression test**
 
 Add test:
 - Same message without fenced schema.
 - Assert current gate behavior remains unchanged.
 
-- [ ] **Step 4: Add modal submit formatting test**
+- [x] **Step 4: Add modal submit formatting test**
 
 Mock `view_submission` payload for mixed question types and assert synthetic event text is exactly:
 
@@ -302,7 +302,7 @@ Answers:
 4. out_of_scope_confirm: yes
 ```
 
-- [ ] **Step 5: Run package tests**
+- [x] **Step 5: Run package tests**
 
 Run:
 ```bash
@@ -311,7 +311,7 @@ bun test packages/adapters/src/chat/slack/adapter.test.ts
 
 Expected: PASS for all Slack adapter tests.
 
-- [ ] **Step 6: Commit tests**
+- [x] **Step 6: Commit tests**
 
 Run:
 ```bash
@@ -326,7 +326,7 @@ git commit -m "test(slack): cover question-schema gate rendering, fallback, and 
 **Files:**
 - Verify only modified files from prior tasks
 
-- [ ] **Step 1: Run lint and type-check for touched packages**
+- [x] **Step 1: Run lint and type-check for touched packages**
 
 Run:
 ```bash
@@ -336,7 +336,7 @@ bun run type-check
 
 Expected: PASS with zero warnings/errors.
 
-- [ ] **Step 2: Run full pre-PR validation**
+- [x] **Step 2: Run full pre-PR validation**
 
 Run:
 ```bash
@@ -345,7 +345,7 @@ bun run validate
 
 Expected: PASS (type-check + lint + format check + tests).
 
-- [ ] **Step 3: Manual Slack smoke test**
+- [x] **Step 3: Manual Slack smoke test**
 
 Manual script:
 1. Trigger `archon-slack-feature-to-review-app` with a sample feature request.
@@ -355,7 +355,7 @@ Manual script:
 
 Expected: end-to-end behavior matches spec acceptance criteria 1-5.
 
-- [ ] **Step 4: Final commit (if any uncommitted validation fixes)**
+- [x] **Step 4: Final commit (if any uncommitted validation fixes)**
 
 Run:
 ```bash
