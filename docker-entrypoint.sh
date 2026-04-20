@@ -26,7 +26,7 @@ fi
 # The Dockerfile RUN-layer registers fixed paths, but that gitconfig lives
 # in the image layer — bind mounts don't inherit it on restart, and
 # worktrees are nested at arbitrary depths unknown at build time.
-find /.archon -name ".git" 2>/dev/null | while read -r git_dir; do
+find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
   $RUNNER git config --global --add safe.directory "$(dirname "$git_dir")"
 done
 
