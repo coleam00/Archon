@@ -59,9 +59,11 @@ export async function getCodebaseCommands(
   if (typeof raw === 'string') {
     try {
       parsed = JSON.parse(raw);
-    } catch {
-      getLog().error({ codebaseId: id, raw }, 'db.codebase_commands_json_parse_failed');
-      return {};
+    } catch (err) {
+      getLog().error({ codebaseId: id, err }, 'db.codebase_commands_json_parse_failed');
+      throw new Error(
+        `Corrupt commands JSON for codebase ${id}: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   } else {
     parsed = raw ?? {};

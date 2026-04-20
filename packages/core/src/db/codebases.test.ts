@@ -179,6 +179,14 @@ describe('codebases', () => {
       expect(result).toEqual({});
     });
 
+    test('throws on corrupt JSON string (SQLite TEXT column)', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ commands: 'not-valid-json{' }]));
+
+      await expect(getCodebaseCommands('codebase-123')).rejects.toThrow(
+        'Corrupt commands JSON for codebase codebase-123'
+      );
+    });
+
     test('returns mutable object even when source is frozen (SQLite behavior)', async () => {
       const frozenCommands = Object.freeze({
         plan: { path: '.archon/commands/plan.md', description: 'Plan feature' },

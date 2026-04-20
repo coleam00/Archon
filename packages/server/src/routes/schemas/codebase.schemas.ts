@@ -17,6 +17,8 @@ export const codebaseSchema = z
     default_cwd: z.string(),
     ai_assistant_type: z.string(),
     commands: z.record(codebaseCommandSchema),
+    /** Present when the stored commands JSON could not be parsed. Commands will be empty. */
+    commandsParseError: z.string().optional(),
     created_at: z.string(),
     updated_at: z.string(),
   })

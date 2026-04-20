@@ -1474,15 +1474,19 @@ export function registerApiRoutes(
       return c.json(
         deduped.map(cb => {
           let commands = cb.commands;
+          let commandsParseError: string | undefined;
           if (typeof commands === 'string') {
             try {
               commands = JSON.parse(commands);
             } catch (parseErr) {
               getLog().error({ err: parseErr, codebaseId: cb.id }, 'corrupted_commands_json');
+              commandsParseError = parseErr instanceof Error ? parseErr.message : String(parseErr);
               commands = {};
             }
           }
-          return { ...cb, commands };
+          return commandsParseError !== undefined
+            ? { ...cb, commands, commandsParseError }
+            : { ...cb, commands };
         })
       );
     } catch (error) {
@@ -1499,15 +1503,21 @@ export function registerApiRoutes(
         return apiError(c, 404, 'Codebase not found');
       }
       let commands = codebase.commands;
+      let commandsParseError: string | undefined;
       if (typeof commands === 'string') {
         try {
           commands = JSON.parse(commands);
         } catch (parseErr) {
           getLog().error({ err: parseErr, codebaseId: codebase.id }, 'corrupted_commands_json');
+          commandsParseError = parseErr instanceof Error ? parseErr.message : String(parseErr);
           commands = {};
         }
       }
-      return c.json({ ...codebase, commands });
+      return c.json(
+        commandsParseError !== undefined
+          ? { ...codebase, commands, commandsParseError }
+          : { ...codebase, commands }
+      );
     } catch (error) {
       getLog().error({ err: error }, 'get_codebase_failed');
       return apiError(c, 500, 'Failed to get codebase');
