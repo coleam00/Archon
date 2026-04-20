@@ -1,13 +1,13 @@
 ---
-title: Adding a Community Provider
-description: Step-by-step guide to adding a new AI agent provider under packages/providers/src/community/.
+title: Community Provider 추가하기
+description: packages/providers/src/community/ 아래에 새 AI agent provider를 추가하는 단계별 가이드.
 ---
 
-Archon's provider registry (Phase 2, [#1195](https://github.com/coleam00/Archon/pull/1195)) is designed so community providers can be added with changes localized to a single directory. This guide walks through the pattern using the Pi provider as the reference implementation (`packages/providers/src/community/pi/`).
+Archon의 provider registry(Phase 2, [#1195](https://github.com/coleam00/Archon/pull/1195))는 community provider를 단일 디렉터리 안의 변경만으로 추가할 수 있도록 설계되어 있습니다. 이 가이드는 Pi provider를 reference implementation으로 삼아 그 패턴을 설명합니다(`packages/providers/src/community/pi/`).
 
-## The contract
+## 구현 Contract
 
-Every provider implements `IAgentProvider` from `@archon/providers/types`:
+모든 provider는 `@archon/providers/types`의 `IAgentProvider`를 구현합니다.
 
 ```typescript
 export interface IAgentProvider {
@@ -23,11 +23,11 @@ export interface IAgentProvider {
 }
 ```
 
-The provider yields a stream of `MessageChunk` variants (see `packages/providers/src/types.ts`). Archon normalizes every backend to this shape so platform adapters, the DAG executor, and the orchestrator don't need to know whether they're talking to Claude, Codex, Pi, or your provider.
+Provider는 `MessageChunk` variant stream을 yield합니다(`packages/providers/src/types.ts` 참고). Archon은 모든 backend를 이 shape로 normalize하므로, platform adapter, DAG executor, orchestrator는 상대가 Claude, Codex, Pi, 또는 여러분의 provider인지 알 필요가 없습니다.
 
-## Directory layout
+## 디렉터리 구조
 
-A community provider lives entirely under `packages/providers/src/community/<your-provider-id>/`. The Pi provider uses this layout:
+Community provider는 전체가 `packages/providers/src/community/<your-provider-id>/` 아래에 위치합니다. Pi provider는 다음 구조를 사용합니다.
 
 ```
 packages/providers/src/community/pi/
@@ -44,13 +44,13 @@ packages/providers/src/community/pi/
 └── *.test.ts            # co-located tests
 ```
 
-Each file has one job. Optional files only exist when the translation surface is non-trivial — a minimal provider could fit `provider.ts` + `capabilities.ts` + `registration.ts` + `index.ts` + one test file.
+각 파일은 한 가지 역할만 맡습니다. Optional file은 변환해야 할 surface가 단순하지 않을 때만 둡니다. 최소 provider라면 `provider.ts` + `capabilities.ts` + `registration.ts` + `index.ts` + 테스트 파일 하나로 충분할 수 있습니다.
 
-## Step-by-step
+## 단계별 절차
 
-### 1. Capabilities (start honest)
+### 1. Capabilities (정직하게 시작하기)
 
-Declare only what you've actually wired. The dag-executor emits a warning to the user when a workflow node uses a feature your provider doesn't support — under-declaration is self-correcting via those warnings; over-declaration means Archon silently drops configuration.
+실제로 연결한 기능만 선언하세요. workflow node가 provider가 지원하지 않는 기능을 사용할 때 dag-executor는 사용자에게 warning을 냅니다. 적게 선언하면 warning을 통해 바로잡을 수 있지만, 과하게 선언하면 Archon이 configuration을 조용히 버리게 됩니다.
 
 ```typescript
 // capabilities.ts
@@ -72,11 +72,11 @@ export const YOUR_CAPABILITIES: ProviderCapabilities = {
 };
 ```
 
-Start everything at `false`. Flip to `true` one at a time as you wire each translation, and add a test per flip.
+처음에는 모두 `false`로 시작하세요. 각 translation을 연결할 때마다 하나씩 `true`로 바꾸고, 바꿀 때마다 테스트를 추가합니다.
 
 ### 2. Provider class
 
-Implement `IAgentProvider`. Pattern:
+`IAgentProvider`를 구현합니다. 패턴은 다음과 같습니다.
 
 ```typescript
 // provider.ts
@@ -105,11 +105,11 @@ export class YourProvider implements IAgentProvider {
 }
 ```
 
-See `packages/providers/src/community/pi/provider.ts` for a full reference with retry, fail-fast auth validation, and resume fallback.
+Retry, fail-fast auth validation, resume fallback까지 포함된 전체 reference는 `packages/providers/src/community/pi/provider.ts`를 보세요.
 
 ### 3. Registration
 
-Each community provider exports a `register*Provider()` function. Idempotent — guard with `isRegisteredProvider(id)` so it's safe to call from multiple bootstrap sites.
+각 community provider는 `register*Provider()` 함수를 export합니다. 이 함수는 idempotent해야 합니다. 여러 bootstrap site에서 호출해도 안전하도록 `isRegisteredProvider(id)`로 guard하세요.
 
 ```typescript
 // registration.ts
@@ -130,7 +130,7 @@ export function registerYourProvider(): void {
 }
 ```
 
-Then add one line to the aggregator at `packages/providers/src/registry.ts`:
+그 다음 `packages/providers/src/registry.ts`의 aggregator에 한 줄을 추가합니다.
 
 ```typescript
 export function registerCommunityProviders(): void {
@@ -139,41 +139,41 @@ export function registerCommunityProviders(): void {
 }
 ```
 
-**That is the entire cross-cutting change.** No entrypoint edits, no config-type edits. The aggregator is already called from the CLI, server, and config-loader bootstrap paths.
+**Cross-cutting change는 이것이 전부입니다.** Entrypoint 수정도, config type 수정도 필요 없습니다. Aggregator는 이미 CLI, server, config-loader bootstrap path에서 호출됩니다.
 
 ### 4. Tests
 
-Co-locate tests next to your code. The Pi tests use this isolation pattern:
+테스트는 코드 옆에 co-locate하세요. Pi 테스트는 다음 isolation pattern을 사용합니다.
 
-- Mock the SDK (`mock.module` at the top of the file, before importing your provider).
-- Tests that touch `mock.module` are split into separate `bun test` invocations in `packages/providers/package.json` (see existing entries for the Pi files). Bun's `mock.module` is process-global and irreversible — splitting prevents cross-file pollution.
-- Registry test (`packages/providers/src/registry.test.ts`): add a `describe` block asserting `builtIn: false`, idempotent registration, and `isModelCompatible` behavior.
+- SDK를 mock합니다. 파일 맨 위에서, provider를 import하기 전에 `mock.module`을 호출하세요.
+- `mock.module`을 건드리는 테스트는 `packages/providers/package.json`에서 별도의 `bun test` invocation으로 분리합니다. Pi 파일의 기존 entry를 참고하세요. Bun의 `mock.module`은 process-global이고 되돌릴 수 없으므로, 분리해야 cross-file pollution을 막을 수 있습니다.
+- Registry test(`packages/providers/src/registry.test.ts`): `builtIn: false`, idempotent registration, `isModelCompatible` 동작을 assertion하는 `describe` block을 추가하세요.
 
 ### 5. Capability discipline
 
-When you're ready to wire additional capabilities, each translation gets its own small module. Pi uses:
+추가 capability를 연결할 준비가 되면, 각 translation마다 작은 module을 따로 둡니다. Pi는 다음 파일을 사용합니다.
 
-- `options-translator.ts` for thinking level, tool filters, skills resolution
-- `session-resolver.ts` for session create/open/list
-- `event-bridge.ts` for SDK-event → MessageChunk mapping
+- `options-translator.ts`: thinking level, tool filter, skills resolution
+- `session-resolver.ts`: session create/open/list
+- `event-bridge.ts`: SDK-event -> MessageChunk mapping
 
-This keeps the provider class readable — `provider.ts` orchestrates; the translators are unit-testable without the SDK.
+이렇게 하면 provider class를 읽기 쉽게 유지할 수 있습니다. `provider.ts`는 orchestration만 담당하고, translator들은 SDK 없이 unit test할 수 있습니다.
 
-## What NOT to do
+## 하지 말아야 할 것
 
-- **Don't edit `AssistantDefaultsConfig` or `AssistantDefaults` in `packages/core/src/config/config-types.ts`.** Community provider defaults live behind the generic `[string]` index signature that was designed for this case. Adding a typed slot defeats the Phase 2 contract and forces future providers to follow suit.
-- **Don't call `registerProvider()` from CLI or server entrypoints directly.** Use the `registerCommunityProviders()` aggregator. Entrypoints should never grow per-community-provider calls.
-- **Don't overclaim capabilities.** If a workflow node uses `hooks: [...]` and your provider silently ignores it, the user has no feedback. The dag-executor warns honestly if you declare `hooks: false`.
-- **Don't write session state or credentials outside your provider's SDK-managed directory.** Archon's config, workspaces, and sessions are managed elsewhere — your provider should stay within its own SDK's storage conventions (mirror how Claude writes to `~/.claude/` and Codex uses its thread store).
+- **`packages/core/src/config/config-types.ts`의 `AssistantDefaultsConfig` 또는 `AssistantDefaults`를 수정하지 마세요.** Community provider default는 이 사례를 위해 설계된 generic `[string]` index signature 뒤에 위치합니다. typed slot을 추가하면 Phase 2 contract를 깨고, 이후 provider들도 같은 방식을 따르게 만듭니다.
+- **CLI나 server entrypoint에서 `registerProvider()`를 직접 호출하지 마세요.** `registerCommunityProviders()` aggregator를 사용하세요. Entrypoint는 provider별 호출로 커지면 안 됩니다.
+- **Capability를 과장해서 선언하지 마세요.** workflow node가 `hooks: [...]`를 사용하지만 provider가 이를 조용히 무시하면 사용자는 아무 feedback도 받지 못합니다. `hooks: false`라고 정직하게 선언하면 dag-executor가 warning을 냅니다.
+- **Session state나 credential을 provider의 SDK-managed directory 밖에 쓰지 마세요.** Archon의 config, workspace, session은 다른 곳에서 관리합니다. Provider는 자기 SDK의 storage convention 안에 머물러야 합니다. 예를 들어 Claude는 `~/.claude/`에 쓰고, Codex는 자체 thread store를 사용하는 방식을 참고하세요.
 
 ## Reference implementation
 
-The Pi provider at `packages/providers/src/community/pi/` is the canonical example. It covers:
+`packages/providers/src/community/pi/`의 Pi provider가 표준 예시입니다. 이 구현은 다음을 다룹니다.
 
-- Multi-backend model selection via `<pi-provider>/<model-id>` refs (parse once, validate syntactically)
-- OAuth + API-key passthrough (reads `~/.pi/agent/auth.json`, overrides per-request)
-- Async-queue bridge from callback-based SDK events to `AsyncGenerator<MessageChunk>`
-- Session resume via `SessionManager.list(cwd)` + `SessionManager.open(path)`
-- Capability translations: `effort/thinking`, `allowed_tools/denied_tools`, `skills`, `systemPrompt`
+- `<pi-provider>/<model-id>` ref를 통한 multi-backend model selection. 한 번 parse하고 syntactic validation을 수행합니다.
+- OAuth + API-key passthrough. `~/.pi/agent/auth.json`을 읽고 request별 override를 허용합니다.
+- callback 기반 SDK event에서 `AsyncGenerator<MessageChunk>`로 이어지는 async-queue bridge
+- `SessionManager.list(cwd)` + `SessionManager.open(path)`를 통한 session resume
+- Capability translation: `effort/thinking`, `allowed_tools/denied_tools`, `skills`, `systemPrompt`
 
-Read `packages/providers/src/community/pi/provider.ts` top-to-bottom — the comments call out every design decision and link to the upstream Pi SDK behavior.
+`packages/providers/src/community/pi/provider.ts`를 처음부터 끝까지 읽어보세요. 주석이 각 design decision을 짚고 upstream Pi SDK 동작으로 연결해 줍니다.

@@ -1,6 +1,6 @@
 ---
-title: Per-Node Hooks
-description: Attach Claude Agent SDK hooks to individual workflow nodes for tool control, context injection, and input modification.
+title: 노드별 Hooks
+description: 도구 제어, 컨텍스트 주입, 입력 수정을 위해 개별 workflow node에 Claude Agent SDK hooks를 연결합니다.
 category: guides
 area: workflows
 audience: [user]
@@ -9,13 +9,11 @@ sidebar:
   order: 5
 ---
 
-DAG workflow nodes support a `hooks` field that attaches Claude Agent SDK hooks
-to individual nodes. Hooks fire during the node's AI execution and can control
-tool behavior, inject context, modify inputs, and more.
+DAG workflow node는 개별 node에 Claude Agent SDK hooks를 연결하는 `hooks` 필드를 지원합니다. Hook은 node의 AI 실행 중 발생하며 tool behavior 제어, context 주입, input 수정 등을 수행할 수 있습니다.
 
-**Claude only** — Codex nodes will warn and ignore hooks.
+**Claude 전용** — Codex node는 warning을 출력하고 hooks를 무시합니다.
 
-## Quick Start
+## 빠른 시작
 
 ```yaml
 name: safe-migration
@@ -33,65 +31,61 @@ nodes:
               permissionDecisionReason: "No shell access during SQL generation"
 ```
 
-## How It Works
+## 동작 방식
 
-Each hook matcher has three fields:
-- `matcher` (optional): Regex pattern to filter by tool name. Omit to match all tools.
-- `response` (required): The SDK `SyncHookJSONOutput` returned when the hook fires.
-- `timeout` (optional): Seconds before the hook times out (default: 60).
+각 hook matcher에는 세 가지 필드가 있습니다.
+- `matcher`(optional): tool name으로 필터링하는 regex pattern입니다. 생략하면 모든 tool에 match됩니다.
+- `response`(required): hook이 발생했을 때 반환되는 SDK `SyncHookJSONOutput`입니다.
+- `timeout`(optional): hook timeout까지의 초 단위 시간입니다(기본값: 60).
 
-At runtime, each YAML hook is wrapped in a trivial callback:
+runtime에는 각 YAML hook이 단순 callback으로 감싸집니다.
 ```
 async () => response
 ```
-No custom DSL — `response` IS the SDK type, passed through unchanged.
+custom DSL은 없습니다. `response` 자체가 SDK type이며 그대로 전달됩니다.
 
-**Important**: When using `hookSpecificOutput`, you must include a `hookEventName`
-field that matches the event key (e.g., `hookEventName: PreToolUse` inside a
-`PreToolUse` hook). This is an SDK requirement — it uses this field to determine
-which event-specific fields to process.
+**중요**: `hookSpecificOutput`을 사용할 때는 event key와 일치하는 `hookEventName` 필드를 반드시 포함해야 합니다(예: `PreToolUse` hook 안의 `hookEventName: PreToolUse`). 이는 SDK 요구사항입니다. SDK는 이 필드를 사용해 어떤 event-specific field를 처리할지 결정합니다.
 
-## Supported Hook Events
+## 지원되는 Hook Events
 
 | Event | Fires When | Matcher Filters On |
 |-------|-----------|-------------------|
-| `PreToolUse` | Before a tool executes | Tool name (e.g. `Bash`, `Write`, `Read`) |
-| `PostToolUse` | After a tool succeeds | Tool name |
-| `PostToolUseFailure` | After a tool fails | Tool name |
-| `Notification` | System notification | Notification type |
-| `Stop` | Agent stops | N/A |
-| `SubagentStart` | Subagent spawned | Agent type |
-| `SubagentStop` | Subagent finishes | Agent type |
-| `PreCompact` | Before context compaction | Trigger (`manual`/`auto`) |
-| `SessionStart` | Session begins | Source (`startup`/`resume`/`clear`/`compact`) |
-| `SessionEnd` | Session ends | Exit reason |
-| `UserPromptSubmit` | User prompt submitted | N/A |
-| `PermissionRequest` | Permission prompt would appear | Tool name |
-| `Setup` | SDK initialization | Trigger (`init`/`maintenance`) |
-| `TeammateIdle` | Agent teammate goes idle | N/A |
-| `TaskCompleted` | Background task finishes | N/A |
-| `Elicitation` | MCP server requests user input | N/A |
-| `ElicitationResult` | Elicitation response received | N/A |
-| `ConfigChange` | Settings/config file changed | Source (`user_settings`/`project_settings`/etc.) |
-| `WorktreeCreate` | Git worktree created | Worktree name |
-| `WorktreeRemove` | Git worktree removed | Worktree path |
-| `InstructionsLoaded` | CLAUDE.md/instructions loaded | Memory type (`User`/`Project`/`Local`/`Managed`) |
+| `PreToolUse` | tool 실행 전 | Tool name(예: `Bash`, `Write`, `Read`) |
+| `PostToolUse` | tool 성공 후 | Tool name |
+| `PostToolUseFailure` | tool 실패 후 | Tool name |
+| `Notification` | system notification | Notification type |
+| `Stop` | agent 중지 | N/A |
+| `SubagentStart` | subagent 생성 | Agent type |
+| `SubagentStop` | subagent 종료 | Agent type |
+| `PreCompact` | context compaction 전 | Trigger(`manual`/`auto`) |
+| `SessionStart` | session 시작 | Source(`startup`/`resume`/`clear`/`compact`) |
+| `SessionEnd` | session 종료 | Exit reason |
+| `UserPromptSubmit` | user prompt 제출 | N/A |
+| `PermissionRequest` | permission prompt가 표시될 시점 | Tool name |
+| `Setup` | SDK initialization | Trigger(`init`/`maintenance`) |
+| `TeammateIdle` | agent teammate가 idle 상태가 됨 | N/A |
+| `TaskCompleted` | background task 완료 | N/A |
+| `Elicitation` | MCP server가 user input 요청 | N/A |
+| `ElicitationResult` | elicitation response 수신 | N/A |
+| `ConfigChange` | settings/config file 변경 | Source(`user_settings`/`project_settings`/etc.) |
+| `WorktreeCreate` | Git worktree 생성 | Worktree name |
+| `WorktreeRemove` | Git worktree 제거 | Worktree path |
+| `InstructionsLoaded` | CLAUDE.md/instructions 로드 | Memory type(`User`/`Project`/`Local`/`Managed`) |
 
-Tool names: `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`,
-`Agent`, plus MCP tools as `mcp__<server>__<action>`.
+Tool names: `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `Agent`, 그리고 `mcp__<server>__<action>` 형식의 MCP tools.
 
 ## Response Format (SDK `SyncHookJSONOutput`)
 
-The `response` object supports these fields:
+`response` object는 다음 필드를 지원합니다.
 
 | Field | Type | Effect |
 |-------|------|--------|
-| `hookSpecificOutput` | object | Event-specific response (see below) |
-| `systemMessage` | string | Inject a message visible to the model |
-| `continue` | boolean | `false` stops the agent |
+| `hookSpecificOutput` | object | Event-specific response(아래 참고) |
+| `systemMessage` | string | model에 보이는 message를 주입 |
+| `continue` | boolean | `false`이면 agent 중지 |
 | `decision` | `'approve'` / `'block'` | Top-level approve/block |
-| `stopReason` | string | Reason when stopping |
-| `suppressOutput` | boolean | Suppress output emission |
+| `stopReason` | string | 중지 이유 |
+| `suppressOutput` | boolean | output emission 억제 |
 
 ### PreToolUse `hookSpecificOutput`
 
@@ -140,9 +134,9 @@ hookSpecificOutput:
   content: { ... }                   # Modified response values
 ```
 
-## Examples
+## 예시
 
-### Deny a tool entirely
+### tool을 완전히 거부하기
 
 ```yaml
 hooks:
@@ -155,7 +149,7 @@ hooks:
           permissionDecisionReason: "Shell access not allowed in this node"
 ```
 
-### Deny tools with a reason message
+### reason message와 함께 tool 거부하기
 
 ```yaml
 hooks:
@@ -168,9 +162,9 @@ hooks:
           permissionDecisionReason: "Only read operations are allowed — do not modify files"
 ```
 
-### Inject context before tool use (without blocking)
+### tool 사용 전 context 주입하기(blocking 없음)
 
-Note: this does NOT block the tool — it adds guidance the model sees before the tool runs.
+참고: 이 방식은 tool을 block하지 않습니다. tool 실행 전에 model이 보는 guidance를 추가합니다.
 
 ```yaml
 hooks:
@@ -182,7 +176,7 @@ hooks:
           additionalContext: "Only write to files in the src/ directory"
 ```
 
-### Redirect file writes (modify tool input)
+### file write redirect하기(tool input 수정)
 
 ```yaml
 hooks:
@@ -196,7 +190,7 @@ hooks:
             file_path: "/sandbox/output.ts"
 ```
 
-### Inject steering instructions after every tool call
+### 모든 tool call 뒤에 steering instruction 주입하기
 
 ```yaml
 hooks:
@@ -205,7 +199,7 @@ hooks:
         systemMessage: "Check: is this output relevant to the task? If not, stop and explain why."
 ```
 
-### Inject context after reading files
+### file을 읽은 뒤 context 주입하기
 
 ```yaml
 hooks:
@@ -217,7 +211,7 @@ hooks:
           additionalContext: "You just read a file. Do NOT modify it — analysis only."
 ```
 
-### Emergency stop on shell access
+### shell access 시 긴급 중지
 
 ```yaml
 hooks:
@@ -228,7 +222,7 @@ hooks:
         stopReason: "Emergency halt — shell access attempted"
 ```
 
-### Multiple hooks on one node
+### 하나의 node에 여러 hooks 적용하기
 
 ```yaml
 hooks:
@@ -249,7 +243,7 @@ hooks:
         systemMessage: "Verify output before continuing"
 ```
 
-### Full workflow example
+### 전체 workflow 예시
 
 ```yaml
 name: safe-code-review
@@ -292,29 +286,26 @@ nodes:
 
 | Feature | `allowed_tools`/`denied_tools` | `hooks` |
 |---------|-------------------------------|---------|
-| Block a tool entirely | Yes | Yes |
-| Inject context | No | Yes (`additionalContext`, `systemMessage`) |
-| Modify tool input | No | Yes (`updatedInput`) |
-| Override tool output | No | Yes (`updatedMCPToolOutput`) |
-| Stop the agent | No | Yes (`continue: false`) |
-| React after tool use | No | Yes (`PostToolUse`) |
+| tool을 완전히 block | Yes | Yes |
+| context 주입 | No | Yes (`additionalContext`, `systemMessage`) |
+| tool input 수정 | No | Yes (`updatedInput`) |
+| tool output override | No | Yes (`updatedMCPToolOutput`) |
+| agent 중지 | No | Yes (`continue: false`) |
+| tool use 후 반응 | No | Yes (`PostToolUse`) |
 
-Use `allowed_tools`/`denied_tools` for simple include/exclude. Use `hooks` when you
-need context injection, input modification, or post-tool-use reactions.
+단순 include/exclude에는 `allowed_tools`/`denied_tools`를 사용하세요. context injection, input modification, post-tool-use reaction이 필요하면 `hooks`를 사용합니다.
 
-## Limitations
+## 제한사항
 
-- **Static responses only in YAML** — hooks return the same response every time.
-  For conditional logic, use `when:` conditions on downstream nodes or gate execution with upstream bash nodes that emit structured output.
-- **Claude only** — Codex nodes warn and ignore hooks.
-- **No hook event streaming** — hook lifecycle events (`hook_started`, `hook_progress`)
-  are not forwarded to the Web UI.
+- **YAML에서는 static response만 가능** — hooks는 매번 같은 response를 반환합니다. conditional logic이 필요하면 downstream node의 `when:` condition을 사용하거나 structured output을 내보내는 upstream bash node로 실행을 gate하세요.
+- **Claude 전용** — Codex node는 warning을 출력하고 hooks를 무시합니다.
+- **hook event streaming 없음** — hook lifecycle events(`hook_started`, `hook_progress`)는 Web UI로 전달되지 않습니다.
 
 ## SDK Reference
 
-Refer to the [Anthropic Claude Agent SDK documentation](https://docs.anthropic.com/en/docs/claude-code/sdk) for the authoritative `SyncHookJSONOutput` type, hook event reference, and matcher patterns.
+정확한 `SyncHookJSONOutput` type, hook event reference, matcher pattern은 [Anthropic Claude Agent SDK documentation](https://docs.anthropic.com/en/docs/claude-code/sdk)을 참고하세요.
 
-## Related
+## 관련 문서
 
-- [Per-Node MCP Servers](/guides/mcp-servers/) — `mcp:` field for external tool access
-- [Per-Node Skills](/guides/skills/) — `skills:` field for domain knowledge injection
+- [노드별 MCP Servers](/guides/mcp-servers/) — external tool access를 위한 `mcp:` field
+- [노드별 Skills](/guides/skills/) — domain knowledge injection을 위한 `skills:` field

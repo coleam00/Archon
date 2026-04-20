@@ -1,6 +1,6 @@
 ---
-title: Quick Reference
-description: Every CLI command, variable, and YAML option in one scannable page.
+title: 빠른 참조
+description: 모든 CLI command, variable, YAML option을 한 페이지에서 빠르게 확인합니다.
 category: book
 part: advanced
 audience: [user]
@@ -8,53 +8,53 @@ sidebar:
   order: 10
 ---
 
-This chapter collects every CLI command, variable, and YAML option in one place. No explanations — just the facts. Use it when you know what you need and just need the syntax.
+이 장은 모든 CLI command, variable, YAML option을 한곳에 모읍니다. 긴 설명 없이 필요한 사실만 제공합니다. 무엇이 필요한지 알고 있고 syntax만 빠르게 확인하고 싶을 때 사용하세요.
 
 ---
 
-## CLI Commands
+## CLI command
 
 ### `archon workflow`
 
-| Command | Description |
+| Command | 설명 |
 |---------|-------------|
-| `archon workflow list` | List all available workflows |
-| `archon workflow list --json` | Machine-readable JSON output |
-| `archon workflow run <name> "<prompt>"` | Run a workflow |
-| `archon workflow run <name> --branch <name> "<prompt>"` | Run with an explicit branch |
-| `archon workflow run <name> --no-worktree "<prompt>"` | Run in the live checkout (no isolation) |
-| `archon workflow run <name> --cwd /path "<prompt>"` | Run against a specific directory |
-| `archon workflow status` | Show status of active workflow runs |
-| `archon workflow resume <run-id>` | Resume a failed workflow run |
-| `archon workflow abandon <run-id>` | Abandon a non-terminal workflow run |
-| `archon workflow cleanup [days]` | Delete old workflow run records (default: 7 days) |
+| `archon workflow list` | 사용 가능한 모든 workflow 나열 |
+| `archon workflow list --json` | machine-readable JSON output |
+| `archon workflow run <name> "<prompt>"` | workflow 실행 |
+| `archon workflow run <name> --branch <name> "<prompt>"` | 명시적 브랜치로 실행 |
+| `archon workflow run <name> --no-worktree "<prompt>"` | live checkout에서 실행(isolation 없음) |
+| `archon workflow run <name> --cwd /path "<prompt>"` | 특정 디렉터리를 대상으로 실행 |
+| `archon workflow status` | 활성 workflow run 상태 표시 |
+| `archon workflow resume <run-id>` | 실패한 workflow run 재개 |
+| `archon workflow abandon <run-id>` | terminal 상태가 아닌 workflow run 포기 |
+| `archon workflow cleanup [days]` | 오래된 workflow run record 삭제(기본: 7일) |
 
 ### `archon isolation`
 
-| Command | Description |
+| Command | 설명 |
 |---------|-------------|
-| `archon isolation list` | List all active worktrees |
-| `archon isolation cleanup` | Remove stale worktrees (older than 7 days) |
-| `archon isolation cleanup <days>` | Remove stale worktrees older than N days |
-| `archon isolation cleanup --merged` | Remove worktrees whose branches merged into main |
-| `archon isolation cleanup --merged --include-closed` | Also remove worktrees with closed (abandoned) PRs |
+| `archon isolation list` | 모든 활성 worktree 나열 |
+| `archon isolation cleanup` | 오래된 worktree 제거(7일 초과) |
+| `archon isolation cleanup <days>` | N일보다 오래된 worktree 제거 |
+| `archon isolation cleanup --merged` | main에 merge된 branch의 worktree 제거 |
+| `archon isolation cleanup --merged --include-closed` | 닫힌(abandoned) PR의 worktree도 제거 |
 
 ### `archon complete`
 
-| Command | Description |
+| Command | 설명 |
 |---------|-------------|
-| `archon complete <branch>` | Remove worktree, local branch, and remote branch |
-| `archon complete <branch> --force` | Skip uncommitted-changes check |
+| `archon complete <branch>` | worktree, local branch, remote branch 제거 |
+| `archon complete <branch> --force` | uncommitted-change check 건너뛰기 |
 
 ### `archon validate`
 
-| Command | Description |
+| Command | 설명 |
 |---------|-------------|
-| `archon validate workflows` | Validate all workflow definitions |
-| `archon validate workflows <name>` | Validate a single workflow |
-| `archon validate workflows <name> --json` | Machine-readable validation output |
-| `archon validate commands` | Validate all command files |
-| `archon validate commands <name>` | Validate a single command |
+| `archon validate workflows` | 모든 workflow definition 검증 |
+| `archon validate workflows <name>` | 단일 workflow 검증 |
+| `archon validate workflows <name> --json` | machine-readable validation output |
+| `archon validate commands` | 모든 command file 검증 |
+| `archon validate commands <name>` | 단일 command 검증 |
 
 ### `archon version`
 
@@ -64,21 +64,21 @@ archon version
 
 ---
 
-## Variables
+## 변수
 
-Variables are substituted at runtime in command bodies and workflow `prompt:` fields.
+variable은 command body와 workflow `prompt:` field에서 runtime에 치환됩니다.
 
-| Variable | Available In | Contains |
+| Variable | 사용 위치 | 포함하는 값 |
 |----------|-------------|----------|
-| `$ARGUMENTS` | Commands, prompts | All arguments passed to the command as a single string |
-| `$1`, `$2`, `$3` | Commands, prompts | First, second, third positional arguments |
-| `$ARTIFACTS_DIR` | Commands, prompts | Absolute path to the workflow run's artifact directory |
-| `$WORKFLOW_ID` | Commands, prompts | The current workflow run ID |
-| `$BASE_BRANCH` | Commands, prompts | Base git branch (auto-detected or set via `worktree.baseBranch`) |
-| `$DOCS_DIR` | Commands, prompts | Documentation directory path (default: `docs/`) |
-| `$<nodeId>.output` | DAG `when:` conditions, downstream `prompt:` fields | The text output from a completed node |
+| `$ARGUMENTS` | Commands, prompts | command에 전달된 모든 argument를 하나의 string으로 |
+| `$1`, `$2`, `$3` | Commands, prompts | 첫 번째, 두 번째, 세 번째 positional argument |
+| `$ARTIFACTS_DIR` | Commands, prompts | workflow run의 artifact directory 절대 경로 |
+| `$WORKFLOW_ID` | Commands, prompts | 현재 workflow run ID |
+| `$BASE_BRANCH` | Commands, prompts | base git branch(자동 감지 또는 `worktree.baseBranch`로 설정) |
+| `$DOCS_DIR` | Commands, prompts | 문서 디렉터리 경로(기본: `docs/`) |
+| `$<nodeId>.output` | DAG `when:` condition, downstream `prompt:` field | 완료된 node의 text output |
 
-**Examples:**
+**예시:**
 
 ```bash
 # Pass a module name to a command
@@ -99,71 +99,71 @@ archon workflow run my-workflow "auth refresh-tokens"
 
 ---
 
-## Workflow YAML Schema
+## Workflow YAML schema
 
-### Top-Level Options
+### Top-level option
 
-| Field | Required | Type | Description |
+| Field | 필수 | Type | 설명 |
 |-------|----------|------|-------------|
-| `name` | Yes | string | Identifies the workflow in `archon workflow list` |
-| `description` | Yes | string | Shown in listings and used by the router |
-| `nodes` | Yes | array | DAG nodes (see Node Options below) |
-| `provider` | No | string | Registered provider identifier (e.g. `claude`, `codex`). Default: `claude` |
-| `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
-| `modelReasoningEffort` | No | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
-| `webSearchMode` | No | string | Codex only: `disabled` \| `cached` \| `live` |
-| `additionalDirectories` | No | string[] | Extra directories available to the AI |
+| `name` | 예 | string | `archon workflow list`에서 workflow 식별 |
+| `description` | 예 | string | 목록에 표시되고 router가 사용 |
+| `nodes` | 예 | array | DAG node(아래 Node Options 참조) |
+| `provider` | 아니요 | string | 등록된 provider identifier(예: `claude`, `codex`). 기본: `claude` |
+| `model` | 아니요 | string | 모든 node의 model(`sonnet`, `opus`, `haiku` 또는 full model ID) |
+| `modelReasoningEffort` | 아니요 | string | Codex only: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
+| `webSearchMode` | 아니요 | string | Codex only: `disabled` \| `cached` \| `live` |
+| `additionalDirectories` | 아니요 | string[] | AI가 접근할 수 있는 추가 디렉터리 |
 
-### Node Options (DAG)
+### Node option (DAG)
 
-All nodes share these base fields:
+모든 node는 다음 base field를 공유합니다.
 
-| Field | Required | Type | Description |
+| Field | 필수 | Type | 설명 |
 |-------|----------|------|-------------|
-| `id` | Yes | string | Unique node identifier; used in `depends_on` and `$nodeId.output` |
-| `command` | One of | string | Name of a command file in `.archon/commands/` |
-| `prompt` | One of | string | Inline AI instructions |
-| `bash` | One of | string | Shell script (runs without AI; stdout captured as `$nodeId.output`) |
-| `loop` | One of | object | Loop configuration (see Loop Options below) |
-| `depends_on` | No | string[] | Node IDs that must complete before this node runs |
-| `when` | No | string | Condition expression; node is skipped if false |
-| `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
-| `provider` | No | string | Per-node provider override (any registered provider) |
-| `model` | No | string | Per-node model override |
-| `context` | No | `fresh` \| `shared` | Session context — `fresh` starts a new conversation, `shared` inherits from prior node |
-| `output_format` | No | JSON Schema | Enforce structured JSON output from this node |
-| `allowed_tools` | No | string[] | Restrict available tools to this list (Claude only) |
-| `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude only) |
-| `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 5 minutes) |
-| `retry` | No | object | Retry configuration for transient failures (see Retry Options) |
-| `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
-| `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
-| `skills` | No | string[] | Skill names to preload into this node's context (Claude only) |
+| `id` | 예 | string | 고유 node identifier. `depends_on`과 `$nodeId.output`에서 사용 |
+| `command` | 다음 중 하나 | string | `.archon/commands/`에 있는 command file 이름 |
+| `prompt` | 다음 중 하나 | string | inline AI instructions |
+| `bash` | 다음 중 하나 | string | shell script(AI 없이 실행, stdout은 `$nodeId.output`으로 capture) |
+| `loop` | 다음 중 하나 | object | loop configuration(아래 Loop Options 참조) |
+| `depends_on` | 아니요 | string[] | 이 node가 실행되기 전 완료되어야 하는 node ID |
+| `when` | 아니요 | string | condition expression. false면 node skip |
+| `trigger_rule` | 아니요 | string | multiple upstream이 있을 때 join semantics(Trigger Rules 참조) |
+| `provider` | 아니요 | string | node별 provider override(등록된 provider) |
+| `model` | 아니요 | string | node별 model override |
+| `context` | 아니요 | `fresh` \| `shared` | session context. `fresh`는 새 conversation, `shared`는 이전 node에서 상속 |
+| `output_format` | 아니요 | JSON Schema | 이 node의 structured JSON output 강제 |
+| `allowed_tools` | 아니요 | string[] | 사용 가능한 tool을 이 목록으로 제한(Claude only) |
+| `denied_tools` | 아니요 | string[] | 이 node context에서 특정 tool 제거(Claude only) |
+| `idle_timeout` | 아니요 | number | node별 idle timeout, millisecond 단위(기본: 5분) |
+| `retry` | 아니요 | object | transient failure retry configuration(Retry Options 참조) |
+| `hooks` | 아니요 | object | SDK hook callback(Claude only, Hook Schema 참조) |
+| `mcp` | 아니요 | string | MCP server config JSON file 경로(Claude only) |
+| `skills` | 아니요 | string[] | 이 node context에 미리 로드할 skill 이름(Claude only) |
 
-> **bash node timeout**: The `timeout` field on bash nodes is in **milliseconds** (default: 120000). This differs from hook `timeout`, which is in seconds.
+> **bash node timeout**: bash node의 `timeout` field는 **milliseconds** 단위입니다(기본: 120000). 초 단위인 hook `timeout`과 다릅니다.
 
-### Trigger Rules
+### Trigger rule
 
-| Value | Behavior |
+| 값 | 동작 |
 |-------|----------|
-| `all_success` | Run only if all upstream nodes succeeded (default) |
-| `one_success` | Run if at least one upstream node succeeded |
-| `none_failed_min_one_success` | Run if no upstream failed and at least one succeeded |
-| `all_done` | Run after all upstream nodes complete, regardless of result |
+| `all_success` | 모든 upstream node가 성공한 경우에만 실행(기본값) |
+| `one_success` | upstream node 중 하나 이상 성공하면 실행 |
+| `none_failed_min_one_success` | 실패한 upstream이 없고 하나 이상 성공하면 실행 |
+| `all_done` | 결과와 관계없이 모든 upstream node가 완료된 뒤 실행 |
 
-### Loop Node Options
+### Loop node option
 
-Defined under `loop:` inside a node:
+node 내부의 `loop:` 아래에 정의합니다.
 
-| Field | Required | Type | Description |
+| Field | 필수 | Type | 설명 |
 |-------|----------|------|-------------|
-| `prompt` | Yes | string | AI instructions executed each iteration |
-| `until` | Yes | string | Completion signal string — loop ends when AI output contains this |
-| `max_iterations` | Yes | number | Maximum iterations before the node fails |
-| `fresh_context` | No | boolean | Start a new session each iteration (default: false) |
-| `until_bash` | No | string | Shell script run after each iteration; exit 0 signals completion |
+| `prompt` | 예 | string | 각 iteration에서 실행되는 AI instructions |
+| `until` | 예 | string | completion signal string. AI output에 포함되면 loop 종료 |
+| `max_iterations` | 예 | number | node 실패 전 최대 iteration 수 |
+| `fresh_context` | 아니요 | boolean | 각 iteration마다 새 session 시작(기본: false) |
+| `until_bash` | 아니요 | string | 각 iteration 후 실행되는 shell script. exit 0이면 완료 signal |
 
-**Example:**
+**예시:**
 
 ```yaml
 - id: refine
@@ -173,23 +173,23 @@ Defined under `loop:` inside a node:
     max_iterations: 5
 ```
 
-### Retry Options
+### Retry option
 
-Defined under `retry:` inside a node:
+node 내부의 `retry:` 아래에 정의합니다.
 
-| Field | Required | Default | Description |
+| Field | 필수 | 기본값 | 설명 |
 |-------|----------|---------|-------------|
-| `max_attempts` | Yes | — | Retry attempts after the initial failure (max: 5) |
-| `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
-| `on_error` | No | `transient` | `transient` retries rate limits/network errors; `all` retries everything except fatal errors |
+| `max_attempts` | 예 | — | 최초 실패 후 retry 횟수(최대: 5) |
+| `delay_ms` | 아니요 | 3000 | 초기 delay, millisecond 단위. attempt마다 두 배(1000-60000) |
+| `on_error` | 아니요 | `transient` | `transient`는 rate limit/network error retry. `all`은 fatal error를 제외한 모든 것 retry |
 
-> **Fatal errors are never retried**: auth failures, permission errors, and exhausted credit balances fail immediately regardless of retry config.
+> **Fatal error는 절대 retry하지 않습니다**: auth failure, permission error, credit balance exhausted는 retry config와 관계없이 즉시 실패합니다.
 
 ---
 
-## Hook Schema
+## Hook schema
 
-Hooks are defined per-node under `hooks:`. See [Chapter 9](/book/hooks-and-quality/) for full examples.
+hook은 `hooks:` 아래에 node별로 정의합니다. 전체 예시는 [9장](/book/hooks-and-quality/)을 보세요.
 
 ```yaml
 hooks:
@@ -212,17 +212,17 @@ hooks:
           additionalContext: "This file is read-only. Do not modify it."
 ```
 
-| Hook Event | When it fires |
+| Hook Event | 실행 시점 |
 |------------|--------------|
-| `PreToolUse` | Before a tool executes |
-| `PostToolUse` | After a tool completes successfully |
-| `PostToolUseFailure` | After a tool fails |
-| `SessionStart` / `SessionEnd` | On session lifecycle events |
-| `Stop` | When the agent stops |
+| `PreToolUse` | tool 실행 전 |
+| `PostToolUse` | tool이 성공적으로 완료된 뒤 |
+| `PostToolUseFailure` | tool 실패 후 |
+| `SessionStart` / `SessionEnd` | session lifecycle event 발생 시 |
+| `Stop` | agent가 멈출 때 |
 
 ---
 
-## Directory Structure
+## 디렉터리 구조
 
 ### `~/.archon/` (user-level)
 
@@ -250,7 +250,7 @@ hooks:
     └── my-workflow.yaml
 ```
 
-**Bundled defaults** — built-in commands and workflows ship with Archon and load automatically. Repo-level files with the same name override the bundled version. To disable defaults entirely:
+**Bundled defaults** — 내장 command와 workflow는 Archon에 포함되어 자동으로 로드됩니다. 같은 이름의 repo-level file은 bundled version을 override합니다. 기본값을 완전히 비활성화하려면:
 
 ```yaml
 # .archon/config.yaml
@@ -261,56 +261,56 @@ defaults:
 
 ---
 
-## Troubleshooting
+## 문제 해결
 
-### Common Errors
+### 흔한 error
 
-| Error | Likely Cause | Fix |
+| Error | 가능성 높은 원인 | 해결 |
 |-------|-------------|-----|
-| `Workflow "X" not found` | YAML file not discovered | Check file is in `.archon/workflows/` and `archon workflow list` shows it |
-| `Command "X" not found` | Command file missing | Check `.archon/commands/X.md` exists and `archon validate commands X` passes |
-| `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
-| `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
-| `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
-| `Model X is not valid for provider Y` | Provider/model mismatch | Each provider accepts specific models — check the provider's `isModelCompatible` rules. Claude accepts `sonnet`, `opus`, `haiku`, `claude-*`; Codex accepts other models. |
-| `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
-| Workflow hangs with no output | Node idle timeout hit | Increase `idle_timeout` on the node (milliseconds) |
+| `Workflow "X" not found` | YAML file이 발견되지 않음 | 파일이 `.archon/workflows/`에 있고 `archon workflow list`에 표시되는지 확인 |
+| `Command "X" not found` | Command file 없음 | `.archon/commands/X.md`가 있고 `archon validate commands X`가 통과하는지 확인 |
+| `Routing unclear — falling back to archon-assist` | input과 match되는 workflow 없음 | 명시적 workflow 이름 사용: `archon workflow run my-workflow "..."` |
+| `Worktree already exists for branch X` | 이전 run이 worktree를 남김 | `archon complete X` 또는 `archon isolation cleanup` 실행 |
+| `Not a git repository` | repo 밖에서 실행 중 | 먼저 git repo로 `cd`. workflow와 isolation command에는 git repo가 필요 |
+| `Model X is not valid for provider Y` | provider/model mismatch | 각 provider가 받는 model이 다릅니다. provider의 `isModelCompatible` rule을 확인하세요. Claude는 `sonnet`, `opus`, `haiku`, `claude-*`를 받고 Codex는 다른 model을 받습니다. |
+| `$BASE_BRANCH referenced but could not be detected` | base branch가 설정되지 않았고 auto-detection 실패 | `.archon/config.yaml`에 `worktree.baseBranch`를 설정하거나 `main`/`master`가 있는지 확인 |
+| Workflow hangs with no output | node idle timeout 도달 | node의 `idle_timeout`을 늘림(milliseconds) |
 
-### Debug Techniques
+### Debug technique
 
-**See what Archon found:**
+**Archon이 찾은 항목 보기:**
 ```bash
 archon workflow list          # Are your workflows loaded?
 archon validate workflows     # Any YAML errors?
 archon isolation list         # Any stale worktrees?
 ```
 
-**Enable verbose logging:**
+**verbose logging 활성화:**
 ```bash
 archon --verbose workflow run my-workflow "..."
 ```
 
-**Check execution logs** — each run writes a JSONL log:
+**execution log 확인** — 각 run은 JSONL log를 씁니다.
 ```
 ~/.archon/workspaces/<owner>/<repo>/logs/
 ```
 
-**Run without isolation** to simplify debugging:
+**debugging 단순화를 위해 isolation 없이 실행:**
 ```bash
 archon workflow run my-workflow --no-worktree "..."
 ```
 
-**Test a command directly** before embedding it in a workflow:
+**workflow에 넣기 전에 command 직접 테스트:**
 ```bash
 archon workflow run archon-assist "/command-invoke my-command some-arg"
 ```
 
-### Getting Help
+### 도움 받기
 
-- **Validate your YAML**: `archon validate workflows my-workflow`
-- **Check the logs**: `~/.archon/workspaces/<owner>/<repo>/logs/`
-- **Report issues**: [github.com/anthropics/claude-code/issues](https://github.com/anthropics/claude-code/issues)
+- **YAML 검증**: `archon validate workflows my-workflow`
+- **log 확인**: `~/.archon/workspaces/<owner>/<repo>/logs/`
+- **issue 보고**: [github.com/anthropics/claude-code/issues](https://github.com/anthropics/claude-code/issues)
 
 ---
 
-You've covered the full guide — from mental model to hooks to this reference. When you need to look something up quickly, this is the page to come back to.
+전체 가이드를 모두 다뤘습니다. mental model부터 hook, 이 reference까지 살펴봤습니다. 무언가를 빠르게 찾아봐야 할 때 이 페이지로 돌아오면 됩니다.

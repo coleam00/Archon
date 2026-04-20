@@ -1,6 +1,6 @@
 ---
-title: DX Quirks
-description: Known development experience quirks and workarounds when working on the Archon codebase.
+title: DX 특이사항
+description: Archon 코드베이스에서 작업할 때 알아둘 개발 경험 특이사항과 우회 방법.
 category: contributing
 audience: [developer]
 status: current
@@ -8,11 +8,11 @@ sidebar:
   order: 6
 ---
 
-Development experience notes and workarounds.
+개발 중 자주 마주치는 특이사항과 우회 방법을 정리합니다.
 
-## Bun Log Elision
+## Bun 로그 생략
 
-When running `bun dev` from the repo root, Bun's `--filter` truncates logs:
+repo root에서 `bun dev`를 실행하면 Bun의 `--filter` 때문에 로그가 축약됩니다.
 
 ```
 @archon/server dev $ bun --watch src/index.ts
@@ -21,39 +21,39 @@ When running `bun dev` from the repo root, Bun's `--filter` truncates logs:
 └─ Running...
 ```
 
-**To see full logs**, run directly from the server package:
+**전체 로그를 보려면** server 패키지에서 직접 실행하세요.
 
 ```bash
 cd packages/server && bun --watch src/index.ts
 ```
 
-Or:
+또는 다음처럼 실행합니다.
 
 ```bash
 bun --cwd packages/server run dev
 ```
 
-Note: The root `bun dev` uses `--filter` to fix hot reload path issues, but this comes with log condensing.
+참고: root의 `bun dev`는 hot reload 경로 문제를 해결하기 위해 `--filter`를 사용하며, 그 대신 로그가 압축됩니다.
 
-## `mock.module()` Pollution
+## `mock.module()` 오염
 
-Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it.
+Bun의 `mock.module()`은 process-global이며 되돌릴 수 없습니다. `mock.restore()`로도 원복되지 않습니다.
 
-- Never add `afterAll(() => mock.restore())` for `mock.module()` cleanup — it has no effect
-- Use `spyOn()` for internal modules that other test files import directly (e.g., `spyOn(git, 'checkout')`) — `spy.mockRestore()` DOES work for spies
-- Never `mock.module()` a module path that another test file also `mock.module()`s with a different implementation
-- When adding a new test file with `mock.module()`, ensure its package.json test script runs it in a separate `bun test` invocation from any conflicting files
+- `mock.module()` 정리를 위해 `afterAll(() => mock.restore())`를 추가하지 마세요. 효과가 없습니다.
+- 다른 테스트 파일이 직접 import하는 내부 모듈에는 `spyOn()`을 사용하세요. 예: `spyOn(git, 'checkout')`. spy에는 `spy.mockRestore()`가 동작합니다.
+- 다른 테스트 파일이 서로 다른 구현으로 `mock.module()`하는 module path를 다시 `mock.module()`하지 마세요.
+- `mock.module()`을 쓰는 새 테스트 파일을 추가할 때는, 충돌하는 파일과 별도의 `bun test` 호출로 실행되도록 해당 package.json test script를 구성하세요.
 
-## Worktree Port Allocation
+## Worktree 포트 할당
 
-Worktrees auto-allocate ports (3190–4089 range, hash-based on path). Same worktree always gets same port.
+Worktree는 포트를 자동 할당합니다. 범위는 3190-4089이고, path 기반 hash를 사용합니다. 같은 worktree는 항상 같은 포트를 받습니다.
 
-- Main repo defaults to 3090
+- Main repo 기본값은 3090입니다.
 - Override: `PORT=4000 bun dev`
-- Same worktree always gets same port (deterministic)
+- 같은 worktree는 항상 같은 포트를 받습니다. 즉 deterministic합니다.
 
 ## `bun run test` vs `bun test`
 
-**NEVER run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures.
+**repo root에서 `bun test`를 직접 실행하지 마세요.** 모든 패키지의 테스트 파일을 찾아 한 프로세스에서 실행하므로, mock 오염으로 약 135개의 실패가 발생합니다.
 
-Always use `bun run test` (which uses `bun --filter '*' test` for per-package isolation).
+항상 `bun run test`를 사용하세요. 이 명령은 패키지별 격리를 위해 `bun --filter '*' test`를 사용합니다.

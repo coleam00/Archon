@@ -1,6 +1,6 @@
 ---
-title: Archon Directories
-description: Directory structure, path resolution, and configuration system for Archon.
+title: Archon 디렉터리
+description: Archon의 디렉터리 구조, 경로 해석, 설정 시스템을 설명합니다.
 category: reference
 area: config
 audience: [developer]
@@ -9,19 +9,19 @@ sidebar:
   order: 2
 ---
 
-This document explains the Archon directory structure and configuration system for developers contributing to or extending Archon.
+이 문서는 Archon에 기여하거나 Archon을 확장하는 개발자를 위해 Archon의 디렉터리 구조와 설정 시스템을 설명합니다. HarnessLab은 Archon fork이므로 내부 디렉터리와 package namespace는 Archon 명칭을 유지합니다.
 
-## Overview
+## 개요
 
-Archon provides a unified directory and configuration system with:
+Archon은 다음을 갖춘 통합 디렉터리 및 설정 시스템을 제공합니다.
 
-1. **Consistent paths** across all platforms (Mac, Linux, Windows, Docker)
-2. **Configuration precedence** chain (env > global > repo > defaults)
-3. **Workflow engine integration** with YAML definitions in `.archon/workflows/`
+1. 모든 플랫폼(Mac, Linux, Windows, Docker)에서 **일관된 경로**
+2. **설정 우선순위** 체인(env > global > repo > defaults)
+3. `.archon/workflows/`의 YAML definition과 연동되는 **workflow engine integration**
 
-## Directory Structure
+## 디렉터리 구조
 
-### User-Level: `~/.archon/`
+### 사용자 레벨: `~/.archon/`
 
 ```
 ~/.archon/                    # ARCHON_HOME
@@ -36,13 +36,13 @@ Archon provides a unified directory and configuration system with:
 └── config.yaml               # Global user configuration
 ```
 
-**Purpose:**
-- `workspaces/` - Repositories cloned via `/clone` command or GitHub adapter
-- `workspaces/owner/repo/worktrees/` - Git worktrees for this project (new registrations)
-- `worktrees/` - Legacy fallback for repos not registered under `workspaces/`
-- `config.yaml` - Non-secret user preferences
+**목적:**
+- `workspaces/` - `/clone` command 또는 GitHub adapter로 clone한 repository
+- `workspaces/owner/repo/worktrees/` - 이 project의 git worktree(새 registration)
+- `worktrees/` - `workspaces/` 아래에 등록되지 않은 repo를 위한 legacy fallback
+- `config.yaml` - secret이 아닌 user preference
 
-### Repo-Level: `.archon/`
+### Repo 레벨: `.archon/`
 
 ```
 any-repo/.archon/
@@ -54,22 +54,22 @@ any-repo/.archon/
 └── config.yaml               # Repo-specific configuration
 ```
 
-**Purpose:**
-- `commands/` - Slash commands (auto-loaded on clone)
-- `workflows/` - YAML workflow definitions, discovered recursively at runtime
-- `config.yaml` - Project-specific settings
+**목적:**
+- `commands/` - slash command(clone 시 auto-load)
+- `workflows/` - YAML workflow definition, runtime에 recursive discovery
+- `config.yaml` - project-specific setting
 
 ### Docker: `/.archon/`
 
-In Docker containers, the Archon home is fixed at `/.archon/` (root level). This is:
-- Mounted as a named volume for persistence
-- Not overridable by end users (simplifies container setup)
+Docker container에서는 Archon home이 root level의 `/.archon/`으로 고정됩니다. 이 경로는 다음 특성을 가집니다.
+- 지속성을 위해 named volume으로 mount
+- end user가 override할 수 없음(container setup 단순화)
 
-## Path Resolution
+## 경로 해석
 
-All path resolution is centralized in `packages/paths/src/archon-paths.ts` (`@archon/paths`).
+모든 path resolution은 `packages/paths/src/archon-paths.ts`(`@archon/paths`)에 중앙화되어 있습니다.
 
-### Core Functions
+### 핵심 함수
 
 ```typescript
 // Get the Archon home directory
@@ -97,7 +97,7 @@ getCommandFolderSearchPaths(configuredFolder?: string): string[]
 // Returns: ['.archon/commands'] + configuredFolder if specified
 ```
 
-### Docker Detection
+### Docker 감지
 
 ```typescript
 function isDocker(): boolean {
@@ -109,7 +109,7 @@ function isDocker(): boolean {
 }
 ```
 
-### Platform-Specific Paths
+### 플랫폼별 경로
 
 | Platform | `getArchonHome()` |
 |----------|-------------------|
@@ -118,18 +118,18 @@ function isDocker(): boolean {
 | Windows | `C:\Users\<username>\.archon` |
 | Docker | `/.archon` |
 
-## Configuration System
+## 설정 시스템
 
-### Precedence Chain
+### 우선순위 체인
 
-Configuration is resolved in this order (highest to lowest priority):
+설정은 다음 순서로 해석됩니다(위가 가장 높은 우선순위).
 
-1. **Environment Variables** - Secrets, deployment-specific
-2. **Global Config** (`~/.archon/config.yaml`) - User preferences
-3. **Repo Config** (`.archon/config.yaml`) - Project-specific
-4. **Built-in Defaults** - Hardcoded in `packages/core/src/config/config-types.ts`
+1. **Environment Variables** - Secret, deployment-specific 설정
+2. **Global Config** (`~/.archon/config.yaml`) - User preference
+3. **Repo Config** (`.archon/config.yaml`) - Project-specific 설정
+4. **Built-in Defaults** - `packages/core/src/config/config-types.ts`에 hardcode된 기본값
 
-### Config Loading
+### 설정 로딩
 
 ```typescript
 // Load merged config for a repo
@@ -142,9 +142,9 @@ const globalConfig = await loadGlobalConfig();
 const repoConfig = await loadRepoConfig(repoPath);
 ```
 
-### Configuration Options
+### 설정 옵션
 
-Key configuration options:
+주요 설정 옵션:
 
 | Option | Env Override | Default |
 |--------|--------------|---------|
@@ -154,42 +154,42 @@ Key configuration options:
 | Discord Streaming | `DISCORD_STREAMING_MODE` | `batch` |
 | Slack Streaming | `SLACK_STREAMING_MODE` | `batch` |
 
-## Command Folders
+## Command folder
 
-Command detection searches in priority order:
+Command detection은 다음 우선순위로 검색합니다.
 
-1. `.archon/commands/` - Always searched first
-2. Configured folder from `commands.folder` in `.archon/config.yaml` (if specified)
+1. `.archon/commands/` - 항상 먼저 검색
+2. `.archon/config.yaml`의 `commands.folder`에서 설정한 folder(지정된 경우)
 
-Example configuration:
+설정 예시:
 ```yaml
 # .archon/config.yaml
 commands:
   folder: .claude/commands/archon  # Additional folder to search
 ```
 
-## Extension Points
+## 확장 지점
 
-### Adding New Paths
+### 새 경로 추가
 
-To add a new managed directory:
+새 managed directory를 추가하려면:
 
-1. Add function to `packages/paths/src/archon-paths.ts`:
+1. `packages/paths/src/archon-paths.ts`에 function 추가:
 ```typescript
 export function getArchonNewPath(): string {
   return join(getArchonHome(), 'new-directory');
 }
 ```
 
-2. Update Docker setup in `Dockerfile`
-3. Update volume mounts in `docker-compose.yml`
-4. Add tests in `packages/paths/src/archon-paths.test.ts`
+2. `Dockerfile`의 Docker setup 업데이트
+3. `docker-compose.yml`의 volume mount 업데이트
+4. `packages/paths/src/archon-paths.test.ts`에 test 추가
 
-### Adding Config Options
+### 설정 옵션 추가
 
-To add new configuration options:
+새 configuration option을 추가하려면:
 
-1. Add type to `packages/core/src/config/config-types.ts`:
+1. `packages/core/src/config/config-types.ts`에 type 추가:
 ```typescript
 export interface GlobalConfig {
   // ...existing
@@ -200,42 +200,42 @@ export interface GlobalConfig {
 }
 ```
 
-2. Add default in `getDefaults()` function
-3. Use via `loadConfig()` in your code
+2. `getDefaults()` function에 default 추가
+3. 코드에서 `loadConfig()`를 통해 사용
 
-## Design Decisions
+## 설계 결정
 
-### Why `~/.archon/` instead of `~/.config/archon/`?
+### 왜 `~/.config/archon/` 대신 `~/.archon/`인가?
 
-- Simpler path (fewer nested directories)
-- Follows Claude Code pattern (`~/.claude/`)
-- Cross-platform without XDG complexity
-- Easy to find and manage manually
+- 더 단순한 path(중첩 directory가 적음)
+- Claude Code pattern(`~/.claude/`)을 따름
+- XDG 복잡성 없이 cross-platform 지원
+- 사람이 직접 찾고 관리하기 쉬움
 
-### Why YAML for config?
+### 왜 config에 YAML을 사용하는가?
 
-- Bun has native support (via `yaml` package)
-- Supports comments (unlike JSON)
-- Workflow definitions use YAML
-- Human-readable and editable
+- Bun이 native 지원(`yaml` package 사용)
+- JSON과 달리 comment 지원
+- Workflow definition이 YAML을 사용
+- 사람이 읽고 편집하기 좋음
 
-### Why fixed Docker paths?
+### 왜 Docker path를 고정하는가?
 
-- Simplifies container setup
-- Predictable volume mounts
-- No user confusion about env vars in containers
-- Matches convention (apps use fixed paths in containers)
+- Container setup 단순화
+- 예측 가능한 volume mount
+- Container 환경 변수와 path에 대한 사용자 혼란 감소
+- Convention과 일치(container app은 fixed path를 사용하는 경우가 많음)
 
-### Why config precedence chain?
+### 왜 config precedence chain을 사용하는가?
 
-- Mirrors git config pattern (familiar to developers)
-- Secrets stay in env vars (security)
-- User preferences in global config (portable)
-- Project settings in repo config (version-controlled)
+- git config pattern과 유사해 개발자에게 익숙함
+- Secret은 env var에 유지(보안)
+- User preference는 global config에 유지(portable)
+- Project setting은 repo config에 유지(version-controlled)
 
-## UI Integration
+## UI 통합
 
-The config type system is designed for:
+Config type system은 다음을 위해 설계되었습니다.
 - Web UI configuration
-- API-driven config updates
+- API-driven config update
 - Real-time config validation

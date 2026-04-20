@@ -1,6 +1,6 @@
 ---
-title: API Reference
-description: REST API endpoints for programmatic access to Archon.
+title: API 레퍼런스
+description: Archon에 프로그래밍 방식으로 접근하기 위한 REST API endpoint입니다.
 category: reference
 area: server
 audience: [developer]
@@ -8,39 +8,39 @@ sidebar:
   order: 6
 ---
 
-Archon exposes a REST API via a [Hono](https://hono.dev/) server with OpenAPI spec generation. All endpoints are prefixed with `/api/`.
+Archon은 [Hono](https://hono.dev/) server를 통해 REST API를 제공하며 OpenAPI spec을 생성합니다. 모든 endpoint는 `/api/` prefix를 사용합니다.
 
 ## Base URL
 
-By default, the API server runs at:
+기본적으로 API server는 다음 주소에서 실행됩니다.
 
 ```
 http://localhost:3090/api/
 ```
 
-Override the port with the `PORT` environment variable or let Archon auto-allocate when running inside a worktree (range 3190-4089).
+`PORT` 환경 변수로 port를 override할 수 있습니다. worktree 안에서 실행하면 Archon이 자동으로 port를 할당합니다(range 3190-4089).
 
 ## OpenAPI Specification
 
-A machine-readable OpenAPI 3.0 spec is available at:
+Machine-readable OpenAPI 3.0 spec은 다음에서 사용할 수 있습니다.
 
 ```
 GET /api/openapi.json
 ```
 
-You can feed this into tools like Swagger UI or use it to generate typed API clients.
+Swagger UI 같은 도구에 넣거나 typed API client 생성에 사용할 수 있습니다.
 
-## Authentication
+## 인증
 
-None. Archon is a single-developer tool -- there is no authentication on the API by default. If you expose Archon on a network, use a reverse proxy or firewall to restrict access.
+없습니다. Archon은 단일 개발자 도구이므로 기본 API 인증을 제공하지 않습니다. Archon을 network에 노출한다면 reverse proxy나 firewall로 접근을 제한하세요.
 
 ---
 
 ## Health
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/health` | Basic health check |
+| GET | `/health` | 기본 health check |
 | GET | `/api/health` | API-level health check |
 
 ```bash
@@ -55,27 +55,27 @@ curl http://localhost:3090/api/health
 
 ## Conversations
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/api/conversations` | List conversations |
-| GET | `/api/conversations/{id}` | Get a single conversation |
-| POST | `/api/conversations` | Create a new conversation |
-| PATCH | `/api/conversations/{id}` | Update a conversation (rename) |
-| DELETE | `/api/conversations/{id}` | Soft-delete a conversation |
-| GET | `/api/conversations/{id}/messages` | List messages in a conversation |
-| POST | `/api/conversations/{id}/message` | Send a message to a conversation |
+| GET | `/api/conversations` | conversation 목록 |
+| GET | `/api/conversations/{id}` | 단일 conversation 조회 |
+| POST | `/api/conversations` | 새 conversation 생성 |
+| PATCH | `/api/conversations/{id}` | conversation 업데이트(rename) |
+| DELETE | `/api/conversations/{id}` | conversation soft-delete |
+| GET | `/api/conversations/{id}/messages` | conversation의 message 목록 |
+| POST | `/api/conversations/{id}/message` | conversation에 message 전송 |
 
-### List Conversations
+### Conversation 목록
 
 ```bash
 curl http://localhost:3090/api/conversations
 ```
 
-Query parameters:
-- `codebase_id` (optional) -- Filter by codebase
-- `include_deleted` (optional) -- Include soft-deleted conversations
+Query parameter:
+- `codebase_id`(optional) -- codebase 기준 filter
+- `include_deleted`(optional) -- soft-deleted conversation 포함
 
-### Create a Conversation
+### Conversation 생성
 
 ```bash
 curl -X POST http://localhost:3090/api/conversations \
@@ -83,7 +83,7 @@ curl -X POST http://localhost:3090/api/conversations \
   -d '{}'
 ```
 
-Optionally specify a codebase:
+선택적으로 codebase를 지정할 수 있습니다.
 
 ```bash
 curl -X POST http://localhost:3090/api/conversations \
@@ -91,9 +91,9 @@ curl -X POST http://localhost:3090/api/conversations \
   -d '{"codebase_id": "your-codebase-id"}'
 ```
 
-Returns the created conversation with its `platform_conversation_id`.
+생성된 conversation과 해당 `platform_conversation_id`를 반환합니다.
 
-### Send a Message
+### Message 전송
 
 ```bash
 curl -X POST http://localhost:3090/api/conversations/{id}/message \
@@ -101,19 +101,19 @@ curl -X POST http://localhost:3090/api/conversations/{id}/message \
   -d '{"message": "What does this codebase do?"}'
 ```
 
-The message is dispatched to the orchestrator asynchronously. The response confirms dispatch -- actual AI responses arrive via SSE streaming or can be polled via the messages endpoint.
+Message는 orchestrator에 비동기로 dispatch됩니다. 응답은 dispatch 확인만 의미합니다. 실제 AI 응답은 SSE streaming으로 도착하거나 messages endpoint로 polling할 수 있습니다.
 
-### Get Messages
+### Message 조회
 
 ```bash
 curl http://localhost:3090/api/conversations/{id}/messages
 ```
 
-Query parameters:
-- `limit` (optional) -- Number of messages to return
-- `before` (optional) -- Cursor for pagination
+Query parameter:
+- `limit`(optional) -- 반환할 message 수
+- `before`(optional) -- pagination cursor
 
-### Update a Conversation
+### Conversation 업데이트
 
 ```bash
 curl -X PATCH http://localhost:3090/api/conversations/{id} \
@@ -121,35 +121,35 @@ curl -X PATCH http://localhost:3090/api/conversations/{id} \
   -d '{"title": "My feature discussion"}'
 ```
 
-### Delete a Conversation
+### Conversation 삭제
 
 ```bash
 curl -X DELETE http://localhost:3090/api/conversations/{id}
 ```
 
-Performs a soft delete -- the conversation is hidden but not destroyed.
+Soft delete를 수행합니다. Conversation은 숨겨지지만 파괴되지는 않습니다.
 
 ---
 
 ## Codebases
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/api/codebases` | List registered codebases |
-| GET | `/api/codebases/{id}` | Get a single codebase |
-| POST | `/api/codebases` | Register a codebase (clone or local path) |
-| DELETE | `/api/codebases/{id}` | Delete a codebase and clean up resources |
-| GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
+| GET | `/api/codebases` | 등록된 codebase 목록 |
+| GET | `/api/codebases/{id}` | 단일 codebase 조회 |
+| POST | `/api/codebases` | codebase 등록(clone 또는 local path) |
+| DELETE | `/api/codebases/{id}` | codebase 삭제 및 resource cleanup |
+| GET | `/api/codebases/{id}/environments` | codebase의 isolation environment 목록 |
 
-### List Codebases
+### Codebase 목록
 
 ```bash
 curl http://localhost:3090/api/codebases
 ```
 
-### Register a Codebase
+### Codebase 등록
 
-Clone from a URL:
+URL에서 clone:
 
 ```bash
 curl -X POST http://localhost:3090/api/codebases \
@@ -157,7 +157,7 @@ curl -X POST http://localhost:3090/api/codebases \
   -d '{"url": "https://github.com/user/repo"}'
 ```
 
-Register a local path:
+Local path 등록:
 
 ```bash
 curl -X POST http://localhost:3090/api/codebases \
@@ -165,59 +165,59 @@ curl -X POST http://localhost:3090/api/codebases \
   -d '{"path": "/home/user/projects/my-repo"}'
 ```
 
-### Delete a Codebase
+### Codebase 삭제
 
 ```bash
 curl -X DELETE http://localhost:3090/api/codebases/{id}
 ```
 
-Removes the codebase registration and cleans up associated worktrees and isolation environments.
+Codebase registration을 제거하고 연결된 worktree와 isolation environment를 정리합니다.
 
-### List Environments
+### Environment 목록
 
 ```bash
 curl http://localhost:3090/api/codebases/{id}/environments
 ```
 
-Returns the isolation environments (worktrees) associated with a codebase.
+Codebase와 연결된 isolation environment(worktree)를 반환합니다.
 
 ---
 
 ## Workflows
 
-### Definitions
+### Definition
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/api/workflows` | List available workflows |
-| GET | `/api/workflows/{name}` | Get a single workflow definition |
-| POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
-| PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
-| DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
+| GET | `/api/workflows` | 사용 가능한 workflow 목록 |
+| GET | `/api/workflows/{name}` | 단일 workflow definition 조회 |
+| POST | `/api/workflows/validate` | workflow definition 검증(in-memory, 저장 없음) |
+| PUT | `/api/workflows/{name}` | workflow 저장(create 또는 update) |
+| DELETE | `/api/workflows/{name}` | user-defined workflow 삭제 |
 
-#### List Workflows
+#### Workflow 목록
 
 ```bash
 curl http://localhost:3090/api/workflows
 ```
 
-Query parameters:
-- `cwd` (optional) -- Working directory to discover project-specific workflows
+Query parameter:
+- `cwd`(optional) -- project-specific workflow discovery에 사용할 working directory
 
-Returns `{ workflows: [...], errors?: [...] }`. The `errors` array contains any YAML parsing failures encountered during discovery.
+`{ workflows: [...], errors?: [...] }`를 반환합니다. `errors` array에는 discovery 중 만난 YAML parsing failure가 들어갑니다.
 
-#### Get a Workflow
+#### Workflow 조회
 
 ```bash
 curl http://localhost:3090/api/workflows/archon-assist
 ```
 
-Query parameters:
-- `cwd` (optional) -- Working directory for project-specific lookup
+Query parameter:
+- `cwd`(optional) -- project-specific lookup에 사용할 working directory
 
-Returns `{ workflow, filename, source: "project" | "bundled" }`.
+`{ workflow, filename, source: "project" | "bundled" }`를 반환합니다.
 
-#### Validate a Workflow
+#### Workflow 검증
 
 ```bash
 curl -X POST http://localhost:3090/api/workflows/validate \
@@ -225,9 +225,9 @@ curl -X POST http://localhost:3090/api/workflows/validate \
   -d '{"definition": {"name": "my-wf", "description": "Test", "nodes": [{"id": "a", "prompt": "hello"}]}}'
 ```
 
-Returns `{ valid: true }` or `{ valid: false, errors: ["..."] }`. Does not save anything.
+`{ valid: true }` 또는 `{ valid: false, errors: ["..."] }`를 반환합니다. 아무것도 저장하지 않습니다.
 
-#### Save a Workflow
+#### Workflow 저장
 
 ```bash
 curl -X PUT http://localhost:3090/api/workflows/my-workflow \
@@ -235,35 +235,35 @@ curl -X PUT http://localhost:3090/api/workflows/my-workflow \
   -d '{"definition": {"name": "my-workflow", "description": "My custom workflow", "nodes": [{"id": "plan", "prompt": "Plan the feature"}]}}'
 ```
 
-Query parameters:
-- `cwd` (optional) -- Target directory (must have `.archon/workflows/`)
+Query parameter:
+- `cwd`(optional) -- target directory(`.archon/workflows/`가 있어야 함)
 
-Validates the definition before saving. Returns the saved workflow.
+저장 전에 definition을 검증합니다. 저장된 workflow를 반환합니다.
 
-#### Delete a Workflow
+#### Workflow 삭제
 
 ```bash
 curl -X DELETE http://localhost:3090/api/workflows/my-workflow
 ```
 
-Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
+User-defined workflow만 삭제할 수 있습니다. Bundled default는 제거할 수 없습니다.
 
-### Runs
+### Run
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| POST | `/api/workflows/{name}/run` | Run a workflow |
-| GET | `/api/workflows/runs` | List workflow runs |
-| GET | `/api/workflows/runs/{runId}` | Get run details with events |
-| GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
-| POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
-| POST | `/api/workflows/runs/{runId}/resume` | Resume a failed workflow |
-| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a non-terminal run |
-| POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow |
-| POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow |
-| DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
+| POST | `/api/workflows/{name}/run` | workflow 실행 |
+| GET | `/api/workflows/runs` | workflow run 목록 |
+| GET | `/api/workflows/runs/{runId}` | event 포함 run detail 조회 |
+| GET | `/api/workflows/runs/by-worker/{platformId}` | worker conversation ID로 run lookup |
+| POST | `/api/workflows/runs/{runId}/cancel` | 실행 중인 workflow 취소 |
+| POST | `/api/workflows/runs/{runId}/resume` | 실패한 workflow resume |
+| POST | `/api/workflows/runs/{runId}/abandon` | terminal이 아닌 run abandon |
+| POST | `/api/workflows/runs/{runId}/approve` | paused workflow 승인 |
+| POST | `/api/workflows/runs/{runId}/reject` | paused workflow 거절 |
+| DELETE | `/api/workflows/runs/{runId}` | terminal run과 event 삭제 |
 
-#### Run a Workflow
+#### Workflow 실행
 
 ```bash
 curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
@@ -271,15 +271,15 @@ curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
   -d '{"message": "Explain the auth module", "conversationId": "conv-123"}'
 ```
 
-#### Resume a Failed Run
+#### 실패한 run resume
 
 ```bash
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/resume
 ```
 
-Marks the run for auto-resume. The next invocation re-runs the workflow, skipping already-completed nodes.
+Run을 auto-resume 대상으로 표시합니다. 다음 invocation에서 workflow를 다시 실행하며 이미 완료된 node는 skip합니다.
 
-#### Approve / Reject a Paused Run
+#### Paused run 승인 / 거절
 
 ```bash
 # Approve (optionally with a comment)
@@ -297,37 +297,37 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
 
 ## Commands
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/api/commands` | List available command names |
+| GET | `/api/commands` | 사용 가능한 command name 목록 |
 
 ```bash
 curl http://localhost:3090/api/commands
 ```
 
-Query parameters:
-- `cwd` (optional) -- Working directory for project-specific commands
+Query parameter:
+- `cwd`(optional) -- project-specific command를 위한 working directory
 
-Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
+`{ commands: [{ name, source: "bundled" | "project" }] }`를 반환합니다.
 
 ---
 
 ## Dashboard
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/api/dashboard/runs` | List enriched workflow runs for the dashboard |
+| GET | `/api/dashboard/runs` | dashboard용 enriched workflow run 목록 |
 
-Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
+Query parameter에는 status filter, date range, pagination이 포함됩니다. Command Center UI에서 사용합니다.
 
 ---
 
 ## Configuration
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/api/config` | Get read-only configuration (safe subset) |
-| PATCH | `/api/config/assistants` | Update assistant configuration |
+| GET | `/api/config` | read-only configuration(safe subset) 조회 |
+| PATCH | `/api/config/assistants` | assistant configuration 업데이트 |
 
 ```bash
 # Read current config
@@ -343,35 +343,35 @@ curl -X PATCH http://localhost:3090/api/config/assistants \
 
 ## System
 
-| Method | Path | Description |
+| Method | Path | 설명 |
 |--------|------|-------------|
-| GET | `/api/update-check` | Check for available updates (binary builds only) |
+| GET | `/api/update-check` | 사용 가능한 update 확인(binary build only) |
 
-Returns `{ updateAvailable, currentVersion, latestVersion, releaseUrl }`. For non-binary (source) builds, always returns `updateAvailable: false` without making external requests.
+`{ updateAvailable, currentVersion, latestVersion, releaseUrl }`를 반환합니다. non-binary(source) build에서는 외부 request 없이 항상 `updateAvailable: false`를 반환합니다.
 
 ---
 
 ## SSE Streaming
 
-| Path | Description |
+| Path | 설명 |
 |------|-------------|
-| `/api/stream/{conversationId}` | Real-time events for a conversation |
-| `/api/stream/__dashboard__` | Multiplexed workflow events across all conversations |
+| `/api/stream/{conversationId}` | conversation의 real-time event |
+| `/api/stream/__dashboard__` | 모든 conversation의 multiplexed workflow event |
 
-These are Server-Sent Events (SSE) endpoints -- connect with `EventSource` in a browser or any SSE client.
+이들은 Server-Sent Events(SSE) endpoint입니다. Browser의 `EventSource` 또는 SSE client로 연결합니다.
 
 ```bash
 # Listen to a conversation stream
 curl -N http://localhost:3090/api/stream/your-conversation-id
 ```
 
-Events are JSON-encoded with a `type` field. See the [Web UI documentation](/adapters/web/#sse-streaming) for the full list of event types.
+Event는 `type` field를 가진 JSON으로 encode됩니다. 전체 event type 목록은 [Web UI 문서](/adapters/web/#sse-streaming)를 참고하세요.
 
 ---
 
-## Common Patterns
+## 자주 쓰는 패턴
 
-### Create a Conversation and Send a Message
+### Conversation 생성 후 message 전송
 
 ```bash
 # 1. Create a conversation
@@ -388,7 +388,7 @@ curl -X POST http://localhost:3090/api/conversations/$CONV_ID/message \
 curl http://localhost:3090/api/conversations/$CONV_ID/messages
 ```
 
-### Run a Workflow via the API
+### API로 workflow 실행
 
 ```bash
 # 1. Create a conversation scoped to a codebase

@@ -1,6 +1,6 @@
 ---
 title: GitHub
-description: Connect Archon to GitHub via webhooks to interact from issues and pull requests.
+description: Webhook으로 Archon을 GitHub에 연결해 이슈와 pull request에서 상호작용합니다.
 category: adapters
 area: adapters
 audience: [user, operator]
@@ -9,32 +9,32 @@ sidebar:
   order: 4
 ---
 
-Connect Archon to GitHub so you can interact with your AI coding assistant from issues and pull requests.
+Archon을 GitHub에 연결하면 이슈와 pull request에서 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
 
-## Prerequisites
+## 사전 준비
 
-- Archon server running (see [Getting Started](/getting-started/))
-- GitHub repository with issues enabled
-- `GITHUB_TOKEN` set in your environment (see [Getting Started](/getting-started/))
-- Public endpoint for webhooks (see ngrok setup below for local development)
+- 실행 중인 Archon 서버([시작하기](/getting-started/) 참고)
+- Issues가 활성화된 GitHub repository
+- 환경 변수에 설정된 `GITHUB_TOKEN`([시작하기](/getting-started/) 참고)
+- Webhook을 받을 공개 endpoint(로컬 개발에서는 아래 ngrok 설정 참고)
 
-## Step 1: Generate Webhook Secret
+## 1단계: Webhook secret 생성
 
-On Linux/Mac:
+Linux/Mac:
 ```bash
 openssl rand -hex 32
 ```
 
-On Windows (PowerShell):
+Windows(PowerShell):
 ```powershell
 -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
 ```
 
-Save this secret -- you'll need it for steps 3 and 4.
+이 secret을 저장해 둡니다. 3단계와 4단계에서 필요합니다.
 
-## Step 2: Expose Local Server (Development Only)
+## 2단계: 로컬 서버 공개(개발용)
 
-### Using ngrok (Free Tier)
+### ngrok 사용(무료 티어)
 
 ```bash
 # Install ngrok: https://ngrok.com/download
@@ -48,9 +48,9 @@ ngrok http 3090
 # Free tier URLs change on restart
 ```
 
-Keep this terminal open while testing.
+테스트하는 동안 이 터미널을 열어 둡니다.
 
-### Using Cloudflare Tunnel (Persistent URLs)
+### Cloudflare Tunnel 사용(고정 URL)
 
 ```bash
 # Install: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/
@@ -59,44 +59,45 @@ cloudflared tunnel --url http://localhost:3090
 # Get persistent URL from Cloudflare dashboard
 ```
 
-Persistent URLs survive restarts.
+고정 URL은 재시작해도 유지됩니다.
 
-**For production deployments**, use your deployed server URL (no tunnel needed).
+**프로덕션 배포**에서는 배포된 서버 URL을 사용합니다. 터널은 필요하지 않습니다.
 
-## Step 3: Configure GitHub Webhook
+## 3단계: GitHub Webhook 설정
 
-Go to your repository settings:
-- Navigate to: `https://github.com/owner/repo/settings/hooks`
-- Click "Add webhook"
-- **Note**: For multiple repositories, you'll need to add the webhook to each one individually
+Repository 설정으로 이동합니다.
 
-**Webhook Configuration:**
+- 이동 경로: `https://github.com/owner/repo/settings/hooks`
+- "Add webhook"을 클릭합니다.
+- **참고**: 여러 repository를 연결하려면 각 repository에 webhook을 개별적으로 추가해야 합니다.
 
-| Field | Value |
+**Webhook 설정:**
+
+| 필드 | 값 |
 |-------|-------|
-| **Payload URL** | Local: `https://abc123.ngrok-free.app/webhooks/github`<br>Production: `https://your-domain.com/webhooks/github` |
+| **Payload URL** | 로컬: `https://abc123.ngrok-free.app/webhooks/github`<br>프로덕션: `https://your-domain.com/webhooks/github` |
 | **Content type** | `application/json` |
-| **Secret** | Paste the secret from Step 1 |
-| **SSL verification** | Enable SSL verification (recommended) |
-| **Events** | Select "Let me select individual events":<br>- Issues<br>- Issue comments<br>- Pull requests |
+| **Secret** | 1단계에서 만든 secret 붙여넣기 |
+| **SSL verification** | SSL verification 활성화(권장) |
+| **Events** | "Let me select individual events" 선택:<br>- Issues<br>- Issue comments<br>- Pull requests |
 
-Click "Add webhook" and verify it shows a green checkmark after delivery.
+"Add webhook"을 클릭하고, delivery 이후 초록색 체크 표시가 나타나는지 확인합니다.
 
-## Step 4: Set Environment Variables
+## 4단계: 환경 변수 설정
 
 ```ini
 WEBHOOK_SECRET=your_secret_from_step_1
 ```
 
-**Important**: The `WEBHOOK_SECRET` must match exactly what you entered in GitHub's webhook configuration.
+**중요**: `WEBHOOK_SECRET`은 GitHub webhook 설정에 입력한 값과 정확히 일치해야 합니다.
 
-## Step 5: Configure Streaming (Optional)
+## 5단계: 스트리밍 설정(선택)
 
-The GitHub adapter always uses `batch` mode (hardcoded) since GitHub issues and PRs are best served by single complete comments rather than streaming updates.
+GitHub adapter는 항상 `batch` 모드를 사용합니다(하드코딩). GitHub issues와 PR에서는 스트리밍 업데이트보다 완성된 단일 댓글이 더 적합하기 때문입니다.
 
-## Usage
+## 사용법
 
-Interact by @mentioning your bot in issue or PR **comments**:
+이슈 또는 PR **댓글**에서 bot을 @mention하여 상호작용합니다.
 
 ```
 @archon can you analyze this bug?
@@ -104,30 +105,33 @@ Interact by @mentioning your bot in issue or PR **comments**:
 @archon review this implementation
 ```
 
-**First mention behavior:**
-- Automatically clones the repository to `~/.archon/workspaces/`
-- Detects and loads commands from `.archon/commands/` if present
-- Injects full issue/PR context for the AI assistant
+**첫 mention 동작:**
 
-**Subsequent mentions:**
-- Resumes existing conversation
-- Maintains full context across comments
+- Repository를 `~/.archon/workspaces/`로 자동 clone합니다.
+- `.archon/commands/`가 있으면 감지하고 로드합니다.
+- AI 어시스턴트에 전체 issue/PR context를 주입합니다.
+
+**이후 mention:**
+
+- 기존 대화를 이어서 재개합니다.
+- 댓글을 넘나들며 전체 context를 유지합니다.
 
 :::note
-Only comments trigger the bot. @mentions in issue or PR descriptions are ignored -- descriptions often contain example commands or documentation that are not intended as bot invocations.
+댓글만 bot을 트리거합니다. 이슈나 PR 설명의 @mention은 무시됩니다. 설명에는 bot 호출 의도가 없는 예제 명령이나 문서가 들어가는 경우가 많기 때문입니다.
 :::
 
-## Adding Additional Repositories
+## 추가 repository 연결
 
-Once your server is running, add more repos by creating a webhook with the same secret.
+서버가 실행 중이면 같은 secret으로 webhook을 만들어 repository를 더 추가할 수 있습니다.
 
-**Via GitHub UI:** Repo Settings > Webhooks > Add webhook
-- **Payload URL**: Your server URL + `/webhooks/github`
+**GitHub UI 사용:** Repo Settings > Webhooks > Add webhook
+
+- **Payload URL**: 서버 URL + `/webhooks/github`
 - **Content type**: `application/json`
-- **Secret**: Same `WEBHOOK_SECRET` from your `.env`
+- **Secret**: `.env`의 동일한 `WEBHOOK_SECRET`
 - **Events**: Issues, Issue comments, Pull requests
 
-**Via CLI:**
+**CLI 사용:**
 
 ```bash
 # Get your existing webhook secret
@@ -143,8 +147,8 @@ gh api repos/OWNER/REPO/hooks --method POST \
   -f "events[]=pull_request"
 ```
 
-**Important**: The webhook secret must be identical across all repos.
+**중요**: 모든 repository에서 webhook secret은 동일해야 합니다.
 
-## Further Reading
+## 더 읽기
 
-- [Configuration](/getting-started/configuration/)
+- [설정](/getting-started/configuration/)

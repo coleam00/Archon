@@ -1,6 +1,6 @@
 ---
-title: Architecture
-description: Comprehensive guide to Archon's system architecture, packages, interfaces, and data flow.
+title: 아키텍처
+description: Archon의 시스템 아키텍처, 패키지, 인터페이스, 데이터 흐름을 다루는 종합 가이드입니다.
 category: reference
 audience: [developer]
 status: current
@@ -8,15 +8,15 @@ sidebar:
   order: 1
 ---
 
-Comprehensive guide to understanding and extending Archon.
+Archon을 이해하고 확장하기 위한 종합 가이드입니다. HarnessLab은 Archon fork를 기반으로 하므로, 이 문서는 upstream Archon의 구조를 이해하고 HarnessLab 실험과 운영에 맞게 확장할 때의 기준점으로 사용할 수 있습니다.
 
-**Navigation:** [Overview](#system-overview) | [Platforms](#adding-platform-adapters) | [AI Providers](#adding-ai-agent-providers) | [Isolation](#isolation-providers) | [Commands](#command-system) | [Streaming](#streaming-modes) | [Database](#database-schema)
+**탐색:** [개요](#system-overview) | [플랫폼](#adding-platform-adapters) | [AI Providers](#adding-ai-agent-providers) | [격리](#isolation-providers) | [명령](#command-system) | [스트리밍](#streaming-modes) | [데이터베이스](#database-schema)
 
 ---
 
 ## System Overview
 
-Archon is a **platform-agnostic AI coding assistant orchestrator** that connects messaging platforms (Web UI, Telegram, GitHub, Slack, Discord) to AI coding assistants (Claude Code, Codex) via a unified interface. The built-in Web UI provides a complete standalone experience with real-time streaming, tool call visualization, and workflow management.
+Archon은 메시징 플랫폼(Web UI, Telegram, GitHub, Slack, Discord)을 통합 인터페이스를 통해 AI coding assistant(Claude Code, Codex)에 연결하는 **플랫폼 독립적인 AI 코딩 어시스턴트 오케스트레이터**입니다. 내장 Web UI는 실시간 스트리밍, tool call 시각화, workflow 관리를 포함한 완전한 독립 실행 경험을 제공합니다.
 
 ### Core Architecture
 
@@ -62,21 +62,21 @@ Archon is a **platform-agnostic AI coding assistant orchestrator** that connects
 
 ### Key Design Principles
 
-1. **Interface-driven**: Both platform adapters and AI providers implement strict interfaces for swappability
-2. **Streaming-first**: All AI responses stream through async generators for real-time delivery
-3. **Session persistence**: AI sessions survive container restarts via database storage
-4. **Generic commands**: Users define commands in Git-versioned markdown files, not hardcoded
-5. **Platform-specific streaming**: Each platform controls whether to stream or batch responses
+1. **인터페이스 중심**: 플랫폼 adapter와 AI provider 모두 엄격한 인터페이스를 구현해 교체 가능성을 확보합니다.
+2. **스트리밍 우선**: 모든 AI 응답은 실시간 전달을 위해 async generator를 통해 스트리밍됩니다.
+3. **세션 영속성**: AI 세션은 데이터베이스 저장을 통해 컨테이너 재시작 이후에도 유지됩니다.
+4. **범용 명령**: 명령은 하드코딩하지 않고, 사용자가 Git으로 버전 관리되는 markdown 파일에 정의합니다.
+5. **플랫폼별 스트리밍**: 각 플랫폼은 응답을 스트리밍할지 배치로 보낼지 직접 제어합니다.
 
 ---
 
 ## Adding Platform Adapters
 
-Platform adapters connect messaging platforms to the orchestrator. Implement the `IPlatformAdapter` interface to add new platforms.
+Platform adapter는 메시징 플랫폼을 orchestrator에 연결합니다. 새 플랫폼을 추가하려면 `IPlatformAdapter` 인터페이스를 구현합니다.
 
 ### IPlatformAdapter Interface
 
-**Location:** `packages/core/src/types/index.ts`
+**위치:** `packages/core/src/types/index.ts`
 
 ```typescript
 export interface IPlatformAdapter {
@@ -109,9 +109,9 @@ export interface IPlatformAdapter {
 
 ### Implementation Guide
 
-**1. Create adapter file:** `packages/adapters/src/chat/your-platform/adapter.ts` (or `forge/` / `community/chat/` depending on category)
+**1. Adapter 파일 생성:** `packages/adapters/src/chat/your-platform/adapter.ts`를 만듭니다. 카테고리에 따라 `forge/` 또는 `community/chat/` 아래에 둘 수도 있습니다.
 
-**2. Implement the interface:**
+**2. 인터페이스 구현:**
 
 ```typescript
 import type { IPlatformAdapter } from '@archon/core';
@@ -148,7 +148,7 @@ export class YourPlatformAdapter implements IPlatformAdapter {
 }
 ```
 
-**3. Register in main app:** `packages/server/src/index.ts`
+**3. Main app에 등록:** `packages/server/src/index.ts`
 
 ```typescript
 import { YourPlatformAdapter } from './adapters/your-platform';
@@ -172,7 +172,7 @@ if (yourPlatformToken) {
 }
 ```
 
-**4. Add environment variables:** `.env.example`
+**4. 환경 변수 추가:** `.env.example`
 
 ```ini
 # Your Platform
@@ -184,17 +184,17 @@ YOUR_PLATFORM_STREAMING_MODE=stream  # stream | batch
 
 #### Conversation ID Format
 
-Each platform must provide a unique, stable conversation ID:
+각 플랫폼은 고유하고 안정적인 conversation ID를 제공해야 합니다.
 
-- **Web UI**: User-provided string or auto-generated UUID
-- **Telegram**: `chat_id` (e.g., `"123456789"`)
-- **GitHub**: `owner/repo#issue_number` (e.g., `"user/repo#42"`)
-- **Slack**: `thread_ts` or `channel_id+thread_ts`
-- **CLI**: `cli-{timestamp}-{random}` (e.g., `"cli-1737400000-abc123"`)
+- **Web UI**: 사용자가 제공한 문자열 또는 자동 생성 UUID
+- **Telegram**: `chat_id` 예: `"123456789"`
+- **GitHub**: `owner/repo#issue_number` 예: `"user/repo#42"`
+- **Slack**: `thread_ts` 또는 `channel_id+thread_ts`
+- **CLI**: `cli-{timestamp}-{random}` 예: `"cli-1737400000-abc123"`
 
 #### Message Length Limits
 
-Handle platform-specific message limits in `sendMessage()`:
+`sendMessage()`에서 플랫폼별 메시지 길이 제한을 처리합니다.
 
 ```typescript
 async sendMessage(conversationId: string, message: string): Promise<void> {
@@ -212,11 +212,11 @@ async sendMessage(conversationId: string, message: string): Promise<void> {
 }
 ```
 
-**Reference:** `packages/adapters/src/chat/telegram/adapter.ts`
+**참고:** `packages/adapters/src/chat/telegram/adapter.ts`
 
 #### Server-Sent Events (SSE)
 
-**SSE** (Web UI pattern):
+**SSE**(Web UI 패턴):
 
 ```typescript
 // Web adapter maintains SSE connections per conversation
@@ -243,17 +243,17 @@ async sendStructuredEvent(conversationId: string, event: MessageChunk): Promise<
 }
 ```
 
-**Benefits:**
-- Real-time streaming without polling overhead
-- Automatic reconnection handling in browser
-- Message buffering during disconnections
-- Structured events (tool calls, workflow progress, lock state)
+**장점:**
+- polling 오버헤드 없이 실시간 스트리밍 제공
+- 브라우저의 자동 재연결 처리
+- 연결이 끊긴 동안 메시지 버퍼링
+- 구조화 이벤트(tool call, workflow 진행률, lock 상태)
 
-**Reference:** `packages/server/src/adapters/web/`
+**참고:** `packages/server/src/adapters/web/`
 
 #### Polling vs Webhooks
 
-**Polling** (Telegram pattern):
+**Polling**(Telegram 패턴):
 
 ```typescript
 async start(): Promise<void> {
@@ -267,7 +267,7 @@ async start(): Promise<void> {
 }
 ```
 
-**Webhooks** (GitHub pattern):
+**Webhooks**(GitHub 패턴):
 
 ```typescript
 // In packages/server/src/index.ts, add route
@@ -292,19 +292,19 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
 }
 ```
 
-**Reference:** `packages/adapters/src/forge/github/adapter.ts`
+**참고:** `packages/adapters/src/forge/github/adapter.ts`
 
 ---
 
 ## Adding AI Agent Providers
 
-AI agent providers wrap AI SDKs and provide a unified streaming interface. Implement the `IAgentProvider` interface to add new providers.
+AI agent provider는 AI SDK를 감싸고 통합 스트리밍 인터페이스를 제공합니다. 새 provider를 추가하려면 `IAgentProvider` 인터페이스를 구현합니다.
 
-> **Note:** This section covers built-in providers maintained by the core team (Claude, Codex). For community providers (`builtIn: false`) — which live under `packages/providers/src/community/` and register through `registerCommunityProviders()` — see [Adding a Community Provider](../contributing/adding-a-community-provider/).
+> **참고:** 이 섹션은 core 팀이 유지하는 built-in provider(Claude, Codex)를 다룹니다. `packages/providers/src/community/` 아래에 위치하고 `registerCommunityProviders()`를 통해 등록되는 community provider(`builtIn: false`)는 [Adding a Community Provider](../contributing/adding-a-community-provider/)를 참고하세요.
 
 ### IAgentProvider Interface
 
-**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps)
+**위치:** `packages/providers/src/types.ts`(contract layer, SDK 의존성 없음)
 
 ```typescript
 export interface IAgentProvider {
@@ -323,7 +323,7 @@ export interface IAgentProvider {
 
 ### MessageChunk Types
 
-`MessageChunk` is a discriminated union. Only the fields for each variant are present:
+`MessageChunk`는 discriminated union입니다. 각 variant에 해당하는 필드만 존재합니다.
 
 ```typescript
 export type MessageChunk =
@@ -350,9 +350,9 @@ export type MessageChunk =
 
 ### Implementation Guide
 
-**1. Create provider file:** `packages/providers/src/your-assistant/provider.ts`
+**1. Provider 파일 생성:** `packages/providers/src/your-assistant/provider.ts`
 
-**2. Implement the interface:**
+**2. 인터페이스 구현:**
 
 ```typescript
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
@@ -402,9 +402,9 @@ export class YourAssistantProvider implements IAgentProvider {
 }
 ```
 
-**3. Register via the typed registry:** `packages/providers/src/registry.ts`
+**3. Typed registry를 통해 등록:** `packages/providers/src/registry.ts`
 
-Built-in providers are registered by `registerBuiltinProviders()`:
+Built-in provider는 `registerBuiltinProviders()`에서 등록됩니다.
 
 ```typescript
 export function registerBuiltinProviders(): void {
@@ -425,9 +425,9 @@ export function registerBuiltinProviders(): void {
 }
 ```
 
-Community providers use `registerCommunityProviders()` (same file). See the [community provider guide](../contributing/adding-a-community-provider/) for that path.
+Community provider는 같은 파일의 `registerCommunityProviders()`를 사용합니다. 이 경로는 [community provider guide](../contributing/adding-a-community-provider/)를 참고하세요.
 
-**4. Add environment variables:** `.env.example`
+**4. 환경 변수 추가:** `.env.example`
 
 ```ini
 # Your Assistant
@@ -437,19 +437,19 @@ YOUR_ASSISTANT_MODEL=<model-name>
 
 ### Session Management
 
-**Key concepts:**
+**핵심 개념:**
 
-- **Immutable sessions**: Sessions are never modified; transitions create new linked sessions
-- **Audit trail**: Each session stores `parent_session_id` (previous session) and `transition_reason` (why created)
-- **State machine**: Explicit `TransitionTrigger` types define all transition reasons
-- **Session ID persistence**: Store `assistant_session_id` in database to resume context
+- **불변 세션**: 세션은 수정하지 않습니다. 전환은 새 linked session을 생성합니다.
+- **감사 추적**: 각 세션은 `parent_session_id`(이전 세션)와 `transition_reason`(생성 이유)을 저장합니다.
+- **상태 머신**: 명시적인 `TransitionTrigger` 타입이 모든 전환 이유를 정의합니다.
+- **Session ID 영속성**: 컨텍스트를 이어가기 위해 `assistant_session_id`를 데이터베이스에 저장합니다.
 
-**Transition triggers** (`packages/core/src/state/session-transitions.ts`):
-- `first-message` - No existing session
-- `plan-to-execute` - Plan phase completed, starting execution (creates new session immediately)
-- `isolation-changed`, `codebase-changed`, `reset-requested`, etc. - Deactivate current session
+**전환 트리거**(`packages/core/src/state/session-transitions.ts`):
+- `first-message` - 기존 세션이 없음
+- `plan-to-execute` - 계획 단계가 완료되어 실행을 시작함. 즉시 새 세션 생성
+- `isolation-changed`, `codebase-changed`, `reset-requested` 등 - 현재 세션 비활성화
 
-**Orchestrator logic** (`packages/core/src/orchestrator/orchestrator.ts`):
+**Orchestrator 로직**(`packages/core/src/orchestrator/orchestrator.ts`):
 
 ```typescript
 // Detect plan-to-execute transition
@@ -469,9 +469,9 @@ if (trigger && shouldCreateNewSession(trigger)) {
 
 ### Streaming Event Mapping
 
-Different SDKs use different event types. Map them to MessageChunk types:
+SDK마다 event type이 다릅니다. 이를 `MessageChunk` 타입으로 매핑합니다.
 
-**Claude Code SDK** (`packages/providers/src/claude/provider.ts`):
+**Claude Code SDK**(`packages/providers/src/claude/provider.ts`):
 
 ```typescript
 for await (const msg of query({ prompt, options })) {
@@ -493,7 +493,7 @@ for await (const msg of query({ prompt, options })) {
 }
 ```
 
-**Codex SDK** (`packages/providers/src/codex/provider.ts`):
+**Codex SDK**(`packages/providers/src/codex/provider.ts`):
 
 ```typescript
 for await (const event of result.events) {
@@ -518,7 +518,7 @@ for await (const event of result.events) {
 
 ### Error Handling
 
-**Wrap SDK calls in try-catch:**
+**SDK 호출은 try-catch로 감쌉니다.**
 
 ```typescript
 try {
@@ -531,7 +531,7 @@ try {
 }
 ```
 
-**Handle SDK-specific errors:**
+**SDK별 오류 처리:**
 
 ```typescript
 if (event.type === 'error') {
@@ -549,11 +549,11 @@ if (event.type === 'error') {
 
 ## Isolation Providers
 
-Isolation providers create isolated working environments (worktrees, containers, VMs) for concurrent workflows. The default implementation uses git worktrees.
+Isolation provider는 동시 workflow를 위해 격리된 작업 환경(worktree, container, VM)을 생성합니다. 기본 구현은 git worktree를 사용합니다.
 
 ### IIsolationProvider Interface
 
-**Location:** `packages/isolation/src/types.ts`
+**위치:** `packages/isolation/src/types.ts`
 
 ```typescript
 export interface IIsolationProvider {
@@ -600,7 +600,7 @@ interface DestroyResult {
 
 ### WorktreeProvider Implementation
 
-**Location:** `packages/isolation/src/providers/worktree.ts`
+**위치:** `packages/isolation/src/providers/worktree.ts`
 
 ```typescript
 export class WorktreeProvider implements IIsolationProvider {
@@ -641,13 +641,13 @@ DOCKER:  /.archon/workspaces/<owner>/<repo>/worktrees/<branch>/
 
 **Path resolution:**
 
-1. Project registered under `workspaces/`? -> `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>/`
+1. 프로젝트가 `workspaces/` 아래에 등록되어 있나요? -> `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>/`
 2. Legacy fallback -> `~/.archon/worktrees/<owner>/<repo>/<branch>/`
-3. Docker detected? -> `/.archon/` prefix instead of `~/.archon/`
+3. Docker 감지됨? -> `~/.archon/` 대신 `/.archon/` prefix 사용
 
 ### Usage Pattern
 
-**GitHub adapter** (`packages/adapters/src/forge/github/adapter.ts`):
+**GitHub adapter**(`packages/adapters/src/forge/github/adapter.ts`):
 
 ```typescript
 const provider = getIsolationProvider();
@@ -673,7 +673,7 @@ await db.updateConversation(conv.id, {
 await provider.destroy(isolationEnvId);
 ```
 
-**Command handler** (`/worktree create`):
+**Command handler**(`/worktree create`):
 
 ```typescript
 const provider = getIsolationProvider();
@@ -686,10 +686,10 @@ const env = await provider.create({
 
 ### Worktree Adoption
 
-The provider adopts existing worktrees before creating new ones:
+Provider는 새 worktree를 만들기 전에 기존 worktree를 adopt합니다.
 
-1. **Path match**: If worktree exists at expected path -> adopt
-2. **Branch match**: If PR's branch has existing worktree -> adopt (skill symbiosis)
+1. **Path match**: 예상 경로에 worktree가 있으면 adopt
+2. **Branch match**: PR branch에 기존 worktree가 있으면 adopt(skill symbiosis)
 
 ```typescript
 // Inside create()
@@ -715,7 +715,7 @@ remote_agent_isolation_environments
 └── ...
 ```
 
-**Lookup pattern:**
+**조회 패턴:**
 
 ```typescript
 const envId = conversation.isolation_env_id;
@@ -723,7 +723,7 @@ const envId = conversation.isolation_env_id;
 
 ### Adding a New Isolation Provider
 
-**1. Create provider:** `packages/isolation/src/providers/your-provider.ts`
+**1. Provider 생성:** `packages/isolation/src/providers/your-provider.ts`
 
 ```typescript
 export class ContainerProvider implements IIsolationProvider {
@@ -748,7 +748,7 @@ export class ContainerProvider implements IIsolationProvider {
 }
 ```
 
-**2. Register in factory:** `packages/isolation/src/factory.ts`
+**2. Factory에 등록:** `packages/isolation/src/factory.ts`
 
 ```typescript
 export function getIsolationProvider(type?: string): IIsolationProvider {
@@ -761,13 +761,13 @@ export function getIsolationProvider(type?: string): IIsolationProvider {
 }
 ```
 
-**See also:** The isolation architecture is documented in `.claude/rules/isolation-patterns.md` for design patterns and safety rules.
+**함께 보기:** 격리 아키텍처의 설계 패턴과 안전 규칙은 `.claude/rules/isolation-patterns.md`에도 문서화되어 있습니다.
 
 ---
 
 ## Command System
 
-The command system allows users to define custom workflows in Git-versioned markdown files.
+Command system은 사용자가 Git으로 버전 관리되는 markdown 파일에 custom workflow를 정의할 수 있게 합니다.
 
 ### Architecture
 
@@ -787,7 +787,7 @@ Stream responses back to platform
 
 ### Command Storage
 
-**Database schema** (JSONB in `remote_agent_codebases` table):
+**Database schema**(`remote_agent_codebases` 테이블의 JSONB):
 
 ```json
 {
@@ -802,24 +802,24 @@ Stream responses back to platform
 }
 ```
 
-**File-based**: Commands are markdown files in the repository, **not** stored in database. Only paths and metadata are stored.
+**File-based**: 명령은 repository 안의 markdown 파일이며, 데이터베이스에 저장하지 않습니다. 데이터베이스에는 경로와 metadata만 저장합니다.
 
 ### Command Registration
 
-**Manual registration** (`/command-set`):
+**수동 등록**(`/command-set`):
 
 ```bash
 /command-set analyze .archon/commands/analyze.md
 ```
 
-**Bulk loading** (`/load-commands`):
+**일괄 로딩**(`/load-commands`):
 
 ```bash
 /load-commands .archon/commands
 # Loads all .md files: prime.md -> prime, plan.md -> plan
 ```
 
-**Auto-detection** (on `/clone` or GitHub webhook):
+**자동 감지**(`/clone` 또는 GitHub webhook에서):
 
 ```typescript
 // Get command folders from config
@@ -833,19 +833,19 @@ for (const folder of searchPaths) {
 }
 ```
 
-This registers repo-specific commands. Default commands are loaded at runtime from the app's bundled defaults, not copied to repos.
+이 과정은 repo-specific 명령을 등록합니다. Default command는 repository에 복사되지 않고, 앱에 bundle된 defaults에서 runtime에 로딩됩니다.
 
-**Reference:** `packages/paths/src/archon-paths.ts` (`@archon/paths`)
+**참고:** `packages/paths/src/archon-paths.ts`(`@archon/paths`)
 
 ### Variable Substitution
 
-**Supported variables:**
+**지원 변수:**
 
-- `$1`, `$2`, `$3`, ... - Positional arguments
-- `$ARGUMENTS` - All arguments as single string
-- `\$` - Escaped dollar sign (literal `$`)
+- `$1`, `$2`, `$3`, ... - 위치 인자
+- `$ARGUMENTS` - 모든 인자를 하나의 문자열로 합친 값
+- `\$` - escaped dollar sign, literal `$`
 
-**Implementation** (`packages/core/src/utils/variable-substitution.ts`):
+**구현**(`packages/core/src/utils/variable-substitution.ts`):
 
 ```typescript
 export function substituteVariables(
@@ -870,7 +870,7 @@ export function substituteVariables(
 }
 ```
 
-**Example:**
+**예시:**
 
 ```markdown
 <!-- .archon/commands/analyze.md -->
@@ -893,46 +893,46 @@ User asks: "Analyze the security of authentication and authorization"
 
 ### Slash Command Routing
 
-**Orchestrator logic** (`packages/core/src/orchestrator/`):
+**Orchestrator 로직**(`packages/core/src/orchestrator/`):
 
-All messages starting with `/` are routed to the Command Handler first. If the command is recognized (deterministic), it is handled directly. Non-slash messages go through the AI router, which discovers available workflows and commands, then routes the user's request to the appropriate one.
+`/`로 시작하는 모든 메시지는 먼저 Command Handler로 라우팅됩니다. 인식된 deterministic command는 직접 처리됩니다. Slash command가 아닌 메시지는 AI router를 거치며, AI router는 사용 가능한 workflow와 command를 발견한 뒤 사용자 요청을 적절한 대상으로 라우팅합니다.
 
-**Command categories:**
+**명령 카테고리:**
 
-1. **Deterministic** (handled by Command Handler):
+1. **Deterministic**(Command Handler가 처리):
    - `/help`, `/status`, `/getcwd`, `/setcwd`
    - `/clone`, `/repos`, `/repo`, `/repo-remove`
    - `/command-set`, `/load-commands`, `/commands`
    - `/worktree`, `/workflow`
    - `/reset`, `/reset-context`, `/init`
 
-2. **AI-routed** (handled by Orchestrator):
-   - Natural language messages are routed to workflows and commands via AI
+2. **AI-routed**(Orchestrator가 처리):
+   - 자연어 메시지는 AI를 통해 workflow와 command로 라우팅됩니다.
 
 ### Command Handler Implementation
 
-**Reference:** `packages/core/src/handlers/command-handler.ts`
+**참고:** `packages/core/src/handlers/command-handler.ts`
 
-The handler is split into focused functions per command group:
+Handler는 command group별 focused function으로 나뉩니다.
 
-- `handleCommand()` -- Top-level dispatcher (switch on command name)
-- `handleRepoCommand()` -- `/repo` (switch repos, pull, auto-load commands)
-- `handleRepoRemoveCommand()` -- `/repo-remove` (delete repo + codebase record)
-- `handleWorktreeCommand()` -- `/worktree` subcommands (create, list, remove, cleanup, orphans)
-- `handleWorkflowCommand()` -- `/workflow` subcommands (list, reload, run, status, cancel, resume, abandon, approve, reject). The status/resume/abandon/approve/reject cases delegate to shared operations in `packages/core/src/operations/workflow-operations.ts`
-- `resolveRepoArg()` -- Shared helper for repo lookup by number or name
+- `handleCommand()` -- 최상위 dispatcher(command name으로 switch)
+- `handleRepoCommand()` -- `/repo`(repo 전환, pull, command auto-load)
+- `handleRepoRemoveCommand()` -- `/repo-remove`(repo와 codebase record 삭제)
+- `handleWorktreeCommand()` -- `/worktree` subcommand(create, list, remove, cleanup, orphans)
+- `handleWorkflowCommand()` -- `/workflow` subcommand(list, reload, run, status, cancel, resume, abandon, approve, reject). status/resume/abandon/approve/reject case는 `packages/core/src/operations/workflow-operations.ts`의 shared operation으로 위임합니다.
+- `resolveRepoArg()` -- 번호 또는 이름으로 repo를 찾는 shared helper
 
-**Important:** `modified: true` flag on `CommandResult` signals orchestrator to reload conversation state.
+**중요:** `CommandResult`의 `modified: true` flag는 orchestrator에게 conversation state를 다시 로딩하라는 신호입니다.
 
 ---
 
 ## Streaming Modes
 
-Streaming modes control how AI responses are delivered to users: real-time (stream) or accumulated (batch).
+Streaming mode는 AI 응답을 사용자에게 실시간으로 전달할지(stream), 누적해서 한 번에 보낼지(batch)를 제어합니다.
 
 ### Configuration
 
-**Environment variables** (per-platform):
+**환경 변수**(platform별):
 
 ```ini
 TELEGRAM_STREAMING_MODE=stream  # Default: stream (real-time chat)
@@ -943,12 +943,12 @@ SLACK_STREAMING_MODE=batch      # Default: batch
 
 | Mode       | Behavior                                    | Pros                                       | Cons                                  | Best For                         |
 | ---------- | ------------------------------------------- | ------------------------------------------ | ------------------------------------- | -------------------------------- |
-| **stream** | Send each chunk immediately as AI generates | Real-time feedback, engaging, see progress | Many API calls, potential rate limits | Chat platforms (Telegram, Slack) |
-| **batch**  | Accumulate all chunks, send final summary   | Single message, no spam, clean             | No progress indication, longer wait   | Issue trackers (GitHub, Jira)    |
+| **stream** | AI가 생성하는 각 chunk를 즉시 전송          | 실시간 피드백, 진행 상황 확인 가능         | API 호출 수 증가, rate limit 가능성   | Chat platforms (Telegram, Slack) |
+| **batch**  | 모든 chunk를 누적한 뒤 최종 요약 전송       | 단일 메시지, spam 없음, 깔끔함             | 진행 상황 표시 없음, 더 긴 대기       | Issue trackers (GitHub, Jira)    |
 
 ### Implementation
 
-**Orchestrator logic** (`packages/core/src/orchestrator/orchestrator.ts`):
+**Orchestrator 로직**(`packages/core/src/orchestrator/orchestrator.ts`):
 
 ```typescript
 const mode = platform.getStreamingMode();
@@ -982,7 +982,7 @@ if (mode === 'stream') {
 
 ### Tool Call Formatting
 
-**Stream mode**: Display tool calls in real-time
+**Stream mode**: Tool call을 실시간으로 표시합니다.
 
 ```
 BASH
@@ -995,13 +995,13 @@ EDIT
 Editing: src/components/Header.tsx
 ```
 
-**Batch mode**: Filter out tool indicators from final response
+**Batch mode**: 최종 응답에서 tool indicator를 필터링합니다.
 
-**Reference:** `packages/core/src/orchestrator/orchestrator.ts`
+**참고:** `packages/core/src/orchestrator/orchestrator.ts`
 
 ### Tool Formatter Utility
 
-**Location:** `packages/core/src/utils/tool-formatter.ts`
+**위치:** `packages/core/src/utils/tool-formatter.ts`
 
 ```typescript
 export function formatToolCall(toolName: string, toolInput?: Record<string, unknown>): string {
@@ -1024,7 +1024,7 @@ export function formatToolCall(toolName: string, toolInput?: Record<string, unkn
 
 ## Database Schema
 
-Archon uses a 7-table schema with `remote_agent_` prefix. SQLite is the default (zero setup); PostgreSQL is optional for cloud/advanced deployments.
+Archon은 `remote_agent_` prefix를 사용하는 7-table schema를 사용합니다. SQLite가 기본값이며 별도 설정이 필요 없습니다. PostgreSQL은 cloud/advanced deployment용 선택지입니다.
 
 ### Schema Overview
 
@@ -1098,36 +1098,36 @@ remote_agent_messages
 
 ### Database Operations
 
-**Location:** `packages/core/src/db/`
+**위치:** `packages/core/src/db/`
 
-**Codebases** (`packages/core/src/db/codebases.ts`):
+**Codebases**(`packages/core/src/db/codebases.ts`):
 
-- `createCodebase()` - Create codebase record
-- `getCodebase(id)` - Get by ID
-- `findCodebaseByRepoUrl(url)` - Find by repository URL
-- `registerCommand(id, name, def)` - Add single command
-- `updateCodebaseCommands(id, commands)` - Bulk update commands
-- `getCodebaseCommands(id)` - Get all commands
+- `createCodebase()` - codebase record 생성
+- `getCodebase(id)` - ID로 조회
+- `findCodebaseByRepoUrl(url)` - repository URL로 조회
+- `registerCommand(id, name, def)` - 단일 command 추가
+- `updateCodebaseCommands(id, commands)` - command 일괄 업데이트
+- `getCodebaseCommands(id)` - 모든 command 조회
 
-**Conversations** (`packages/core/src/db/conversations.ts`):
+**Conversations**(`packages/core/src/db/conversations.ts`):
 
-- `getOrCreateConversation(platform, id)` - Idempotent get/create
-- `updateConversation(id, data)` - Update fields (throws if conversation not found)
+- `getOrCreateConversation(platform, id)` - idempotent get/create
+- `updateConversation(id, data)` - 필드 업데이트(conversation이 없으면 throw)
 
-**Sessions** (`packages/core/src/db/sessions.ts`):
+**Sessions**(`packages/core/src/db/sessions.ts`):
 
-- `createSession(data)` - Create new session (supports `parent_session_id` and `transition_reason`)
-- `transitionSession(conversationId, reason, data)` - Create new session linked to previous (immutable sessions)
-- `getActiveSession(conversationId)` - Get active session for conversation
-- `getSessionHistory(conversationId)` - Get all sessions for conversation (audit trail)
-- `getSessionChain(sessionId)` - Walk session chain back to root
-- `updateSession(id, sessionId)` - Update `assistant_session_id`
-- `updateSessionMetadata(id, metadata)` - Update metadata JSONB
-- `deactivateSession(id)` - Mark session inactive
+- `createSession(data)` - 새 session 생성(`parent_session_id`와 `transition_reason` 지원)
+- `transitionSession(conversationId, reason, data)` - 이전 session에 연결된 새 session 생성(immutable sessions)
+- `getActiveSession(conversationId)` - conversation의 active session 조회
+- `getSessionHistory(conversationId)` - conversation의 모든 session 조회(audit trail)
+- `getSessionChain(sessionId)` - session chain을 root까지 추적
+- `updateSession(id, sessionId)` - `assistant_session_id` 업데이트
+- `updateSessionMetadata(id, metadata)` - metadata JSONB 업데이트
+- `deactivateSession(id)` - session을 inactive로 표시
 
 **Error Handling:**
 
-All UPDATE operations verify `rowCount` and throw errors if no rows were affected. This prevents silent failures when attempting to update non-existent records.
+모든 UPDATE operation은 `rowCount`를 확인하고, 영향받은 row가 없으면 오류를 던집니다. 존재하지 않는 record를 업데이트하려 할 때 조용히 실패하지 않도록 하기 위함입니다.
 
 ```typescript
 // Example: updateConversation throws if conversation not found
@@ -1137,7 +1137,7 @@ await updateConversation(id, { codebase_id: '...' });
 
 ### Session Lifecycle
 
-**Normal flow:**
+**일반 흐름:**
 
 ```
 1. User sends message
@@ -1160,7 +1160,7 @@ await updateConversation(id, { codebase_id: '...' });
    -> Next message creates new session via transitionSession()
 ```
 
-**Plan-to-Execute transition (immutable sessions):**
+**Plan-to-Execute transition(immutable sessions):**
 
 ```
 1. User: "Plan adding dark mode" -> routed to plan-feature workflow
@@ -1174,7 +1174,7 @@ await updateConversation(id, { codebase_id: '...' });
    -> Fresh context for implementation with full audit trail
 ```
 
-**Reference:** `packages/core/src/orchestrator/orchestrator.ts`, `packages/core/src/state/session-transitions.ts`
+**참고:** `packages/core/src/orchestrator/orchestrator.ts`, `packages/core/src/state/session-transitions.ts`
 
 ---
 
@@ -1258,48 +1258,48 @@ Post single comment on issue with summary
 
 ### Adding a New Platform Adapter
 
-- [ ] Create `packages/adapters/src/chat/your-platform/adapter.ts`
-- [ ] Implement `IPlatformAdapter` interface
-- [ ] Handle message length limits in `sendMessage()`
-- [ ] Implement conversation ID extraction
-- [ ] Set up polling or webhook handling
-- [ ] Add to `packages/server/src/index.ts` with environment variable check
-- [ ] Add environment variables to `.env.example`
-- [ ] Test with both stream and batch modes
+- [ ] `packages/adapters/src/chat/your-platform/adapter.ts` 생성
+- [ ] `IPlatformAdapter` interface 구현
+- [ ] `sendMessage()`에서 message length limit 처리
+- [ ] conversation ID extraction 구현
+- [ ] polling 또는 webhook handling 설정
+- [ ] 환경 변수 check와 함께 `packages/server/src/index.ts`에 추가
+- [ ] `.env.example`에 환경 변수 추가
+- [ ] stream mode와 batch mode 모두 테스트
 
 ### Adding a New AI Agent Provider
 
-This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the folder layout, registration, and capability discipline are covered there in depth.
+이 checklist는 **built-in** provider 전용입니다. Community provider(`builtIn: false`)는 [Adding a Community Provider](../contributing/adding-a-community-provider/)를 참고하세요. 해당 문서에서 folder layout, registration, capability discipline을 자세히 다룹니다.
 
-- [ ] Create `packages/providers/src/your-assistant/provider.ts`
-- [ ] Implement `IAgentProvider` interface (sendQuery + getType + getCapabilities)
-- [ ] Map SDK events to `MessageChunk` discriminated union
-- [ ] Handle session creation and resumption
-- [ ] Declare `ProviderCapabilities` honestly — under-declare rather than over-promise
-- [ ] Implement error handling and retry classification (see Claude/Codex patterns)
-- [ ] Register in `registerBuiltinProviders()` at `packages/providers/src/registry.ts`
-- [ ] Add environment variables to `.env.example`
-- [ ] Test session persistence across restarts
-- [ ] Test plan-to-execute transition (new session)
+- [ ] `packages/providers/src/your-assistant/provider.ts` 생성
+- [ ] `IAgentProvider` interface 구현(sendQuery + getType + getCapabilities)
+- [ ] SDK event를 `MessageChunk` discriminated union으로 매핑
+- [ ] session creation과 resumption 처리
+- [ ] `ProviderCapabilities`를 정직하게 선언합니다. 과도하게 약속하기보다 보수적으로 선언하세요.
+- [ ] error handling과 retry classification 구현(Claude/Codex pattern 참고)
+- [ ] `packages/providers/src/registry.ts`의 `registerBuiltinProviders()`에 등록
+- [ ] `.env.example`에 환경 변수 추가
+- [ ] restart 이후 session persistence 테스트
+- [ ] plan-to-execute transition 테스트(new session)
 
 ### Adding a New Isolation Provider
 
-- [ ] Create `packages/isolation/src/providers/your-provider.ts`
-- [ ] Implement `IIsolationProvider` interface
-- [ ] Handle `create()`, `destroy()`, `get()`, `list()`, `healthCheck()`
-- [ ] Optional: implement `adopt()` for existing environment discovery
-- [ ] Register in `packages/isolation/src/factory.ts`
-- [ ] Update database columns if needed (`isolation_provider` type)
-- [ ] Test creation and cleanup lifecycle
-- [ ] Test concurrent environments (multiple conversations)
+- [ ] `packages/isolation/src/providers/your-provider.ts` 생성
+- [ ] `IIsolationProvider` interface 구현
+- [ ] `create()`, `destroy()`, `get()`, `list()`, `healthCheck()` 처리
+- [ ] 선택 사항: existing environment discovery를 위한 `adopt()` 구현
+- [ ] `packages/isolation/src/factory.ts`에 등록
+- [ ] 필요하면 database column 업데이트(`isolation_provider` type)
+- [ ] creation과 cleanup lifecycle 테스트
+- [ ] concurrent environments 테스트(multiple conversations)
 
 ### Modifying Command System
 
-- [ ] Update `substituteVariables()` for new variable types
-- [ ] Add command to Command Handler for deterministic logic
-- [ ] Update `/help` command output
-- [ ] Add example command file to `.archon/commands/`
-- [ ] Test variable substitution with edge cases
+- [ ] 새 variable type을 위해 `substituteVariables()` 업데이트
+- [ ] deterministic logic용 command를 Command Handler에 추가
+- [ ] `/help` command output 업데이트
+- [ ] `.archon/commands/`에 example command file 추가
+- [ ] edge case와 함께 variable substitution 테스트
 
 ---
 
@@ -1367,35 +1367,35 @@ Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
 await handleMessage(adapter, conversationId, finalMessage, contextToAppend);
 ```
 
-Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, keeping it separate from the user's message. For workflows, context is injected via `$CONTEXT` / `$ISSUE_CONTEXT` variable substitution in `buildPromptWithContext()`.
+Context는 `handleMessage()`의 별도 `issueContext` parameter로 전달되며, 사용자 메시지와 분리됩니다. Workflow에서는 `buildPromptWithContext()` 안의 `$CONTEXT` / `$ISSUE_CONTEXT` variable substitution을 통해 context가 주입됩니다.
 
-**Reference:** `packages/adapters/src/forge/github/adapter.ts`, `packages/core/src/orchestrator/orchestrator.ts`
+**참고:** `packages/adapters/src/forge/github/adapter.ts`, `packages/core/src/orchestrator/orchestrator.ts`
 
 ---
 
 ## Key Takeaways
 
-1. **Interfaces enable extensibility**: `IPlatformAdapter`, `IAgentProvider`, and `IIsolationProvider` allow adding platforms, AI providers, and isolation strategies without modifying core logic
+1. **Interface는 확장성을 가능하게 합니다**: `IPlatformAdapter`, `IAgentProvider`, `IIsolationProvider`를 통해 core logic을 수정하지 않고 platform, AI provider, isolation strategy를 추가할 수 있습니다.
 
-2. **Async generators for streaming**: All AI providers return `AsyncGenerator<MessageChunk>` for unified streaming across different SDKs
+2. **Streaming에는 async generator를 사용합니다**: 모든 AI provider는 서로 다른 SDK를 통합하기 위해 `AsyncGenerator<MessageChunk>`를 반환합니다.
 
-3. **Session persistence is critical**: Store `assistant_session_id` in database to maintain context across restarts
+3. **Session persistence는 핵심입니다**: restart 이후에도 context를 유지하려면 `assistant_session_id`를 데이터베이스에 저장합니다.
 
-4. **Platform-specific streaming**: Each platform controls its own streaming mode via environment variables
+4. **Platform-specific streaming**: 각 플랫폼은 환경 변수를 통해 자체 streaming mode를 제어합니다.
 
-5. **Commands are file-based**: Store only paths in database, actual commands in Git-versioned files
+5. **Command는 file-based입니다**: 데이터베이스에는 path만 저장하고, 실제 command는 Git으로 버전 관리되는 file에 둡니다.
 
-6. **Plan-to-execute is special**: Only transition requiring new session (prevents token bloat during implementation)
+6. **Plan-to-execute는 특별합니다**: 새 session이 필요한 유일한 transition이며, implementation 중 token bloat를 방지합니다.
 
-7. **Factory pattern**: `getAgentProvider()` and `getIsolationProvider()` instantiate correct implementations based on configuration
+7. **Factory pattern**: `getAgentProvider()`와 `getIsolationProvider()`는 configuration에 따라 올바른 구현을 instantiate합니다.
 
-8. **Error recovery**: Always provide `/reset` escape hatch for users when sessions get stuck
+8. **Error recovery**: session이 막혔을 때 사용자가 빠져나갈 수 있도록 항상 `/reset` escape hatch를 제공합니다.
 
-9. **Isolation adoption**: Providers check for existing environments before creating new ones (enables skill symbiosis)
+9. **Isolation adoption**: Provider는 새 environment를 만들기 전에 기존 environment를 확인합니다. 이를 통해 skill symbiosis가 가능합니다.
 
 ---
 
-**For detailed implementation examples, see:**
+**자세한 구현 예시는 다음 파일을 참고하세요.**
 
 - Platform adapter: `packages/adapters/src/chat/telegram/adapter.ts`, `packages/adapters/src/forge/github/adapter.ts`
 - AI provider: `packages/providers/src/claude/provider.ts`, `packages/providers/src/codex/provider.ts`

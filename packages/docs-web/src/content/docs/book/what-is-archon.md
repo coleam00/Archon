@@ -1,6 +1,6 @@
 ---
-title: What Is Archon?
-description: Archon makes your AI coding assistant predictable by giving it a deterministic process to follow.
+title: Archon이란 무엇인가?
+description: Archon은 AI 코딩 어시스턴트가 따를 결정적 프로세스를 제공해 결과를 예측 가능하게 만듭니다.
 category: book
 part: orientation
 audience: [user]
@@ -8,84 +8,84 @@ sidebar:
   order: 1
 ---
 
-Archon makes your AI coding assistant predictable. Not by limiting it — by giving it a process to follow.
+Archon은 AI 코딩 어시스턴트를 예측 가능하게 만듭니다. 능력을 제한해서가 아니라, 따라야 할 프로세스를 제공해서입니다. HarnessLab은 이 Archon을 기반으로 한국어 학습, 강의, 실험, 실무 적용에 맞게 발전시키는 Archon fork입니다.
 
 ---
 
-## The Problem: Unpredictable AI
+## 문제: 예측하기 어려운 AI
 
-You've probably experienced this: you ask an AI coding assistant to fix a bug. Sometimes it investigates first, sometimes it dives straight into editing. Sometimes it runs tests, sometimes it doesn't. Sometimes it creates a branch, sometimes it just modifies your working directory.
+아마 이런 경험이 있을 겁니다. AI 코딩 어시스턴트에게 버그 수정을 맡겼는데, 어떤 때는 먼저 조사하고 어떤 때는 곧바로 파일을 고칩니다. 어떤 때는 테스트를 실행하고, 어떤 때는 실행하지 않습니다. 어떤 때는 브랜치를 만들고, 어떤 때는 현재 작업 디렉터리를 바로 수정합니다.
 
-The AI is capable. But its behavior changes run to run, and your development process lives inside the model's head — not yours.
+AI의 능력이 부족한 것은 아닙니다. 문제는 실행할 때마다 행동이 달라지고, 개발 프로세스가 여러분이 통제하는 곳이 아니라 모델의 머릿속에 들어 있다는 점입니다.
 
-This inconsistency has real costs:
+이 일관성 부족에는 실제 비용이 따릅니다.
 
-- You can't trust the output without reviewing every step
-- You can't hand off a task and walk away
-- You can't build on the AI's work reliably because the process differs each time
+- 모든 단계를 검토하지 않으면 결과를 신뢰하기 어렵습니다.
+- 작업을 맡겨 놓고 안심하고 자리를 비우기 어렵습니다.
+- 매번 프로세스가 달라지기 때문에 AI의 작업 위에 안정적으로 다음 작업을 쌓기 어렵습니다.
 
-The problem isn't intelligence — it's process. The AI doesn't know *your* process, and even if you tell it, it might not follow it consistently.
+문제는 지능이 아니라 프로세스입니다. AI는 *여러분의* 프로세스를 알지 못하고, 알려 주더라도 항상 일관되게 따르지는 않습니다.
 
 ---
 
-## The Solution: Deterministic Workflows
+## 해결책: 결정적 워크플로
 
-Archon separates **what happens** from **how the AI thinks**.
+Archon은 **무엇이 일어나는지**와 **AI가 어떻게 생각하는지**를 분리합니다.
 
-You define the process. A **workflow** specifies the exact sequence of steps: investigate first, then implement, then validate, then create a PR. The AI brings intelligence to each step — reading code, making decisions, writing changes — but the structure is yours.
+프로세스는 여러분이 정의합니다. **워크플로**는 정확한 단계 순서를 지정합니다. 먼저 조사하고, 구현하고, 검증하고, PR을 만듭니다. AI는 각 단계에서 코드를 읽고, 판단하고, 변경을 작성하는 지능을 발휘하지만, 구조는 여러분이 소유합니다.
 
-Think of it like a recipe and a chef. The recipe (workflow) defines the steps, the order, and the success criteria. The chef (AI) applies skill and judgment to execute each step. You get consistent results *and* creative execution.
+레시피와 요리사로 생각하면 쉽습니다. 레시피(워크플로)는 단계, 순서, 성공 기준을 정의합니다. 요리사(AI)는 기술과 판단으로 각 단계를 실행합니다. 그래서 일관된 결과와 창의적인 실행을 동시에 얻습니다.
 
 ```
-Recipe (Workflow) + Chef (AI) = Consistent Quality
+레시피(Workflow) + 요리사(AI) = 일관된 품질
 ```
 
-Structure is deterministic. Intelligence is not constrained. You get both.
+구조는 결정적입니다. 지능은 제한하지 않습니다. 둘 다 얻을 수 있습니다.
 
 ---
 
-## The Three Core Concepts
+## 세 가지 핵심 개념
 
-Everything in Archon builds on three ideas:
+Archon의 모든 것은 세 가지 아이디어 위에 세워집니다.
 
-| Concept | What It Is | Think of It Like |
+| 개념 | 의미 | 비유 |
 |---------|-----------|-----------------|
-| **Command** | A markdown file containing instructions for the AI to execute a single task | A function |
-| **Workflow** | A YAML file that orchestrates multiple commands into an automated pipeline | A script |
-| **Isolation** | The system of using worktrees to run tasks in separate directories | A sandbox |
+| **Command** | AI가 단일 작업을 실행하도록 지시하는 markdown 파일 | 함수 |
+| **Workflow** | 여러 command를 자동화 파이프라인으로 오케스트레이션하는 YAML 파일 | 스크립트 |
+| **Isolation** | worktree를 사용해 작업을 별도 디렉터리에서 실행하는 시스템 | 샌드박스 |
 
-Here's how they relate:
+세 개념은 이렇게 연결됩니다.
 
 ```
-Command (single task)
+Command (단일 작업)
     ↓
-Workflow (sequence of commands)
+Workflow (command의 순서)
     ↓
-Isolation (each workflow run gets its own workspace)
+Isolation (각 workflow 실행은 고유 workspace를 가짐)
 ```
 
-A **command** is the atomic unit. It's a markdown file with instructions: "Investigate this GitHub issue. Read the relevant code. Write your findings to a file." One task, one command.
+**command**는 원자 단위입니다. "이 GitHub issue를 조사하세요. 관련 코드를 읽으세요. 발견 내용을 파일에 작성하세요." 같은 지시가 들어 있는 markdown 파일입니다. 하나의 작업, 하나의 command입니다.
 
-A **workflow** chains commands together. It's a YAML file that says: "Run investigate-issue, then run fix-issue, then run validate, then run create-pr." The workflow owns the sequence; each command owns its step.
+**workflow**는 command를 연결합니다. "investigate-issue를 실행하고, fix-issue를 실행하고, validate를 실행하고, create-pr을 실행하라"라고 말하는 YAML 파일입니다. 순서는 workflow가 소유하고, 각 단계의 내용은 command가 소유합니다.
 
-**Isolation** means each workflow run happens in its own git worktree — a separate working directory with its own branch. You can run three workflows in parallel without them stepping on each other.
+**Isolation**은 각 workflow 실행이 자기만의 git worktree에서 일어난다는 뜻입니다. 각 worktree는 고유 브랜치를 가진 별도 작업 디렉터리입니다. 서로의 작업을 덮어쓰지 않고 세 개의 workflow를 병렬로 실행할 수 있습니다.
 
-That's it. Everything else in Archon builds on these three ideas.
+핵심은 이것입니다. Archon의 나머지 기능은 모두 이 세 가지 아이디어 위에 쌓입니다.
 
 ---
 
-## What Can You Do With Archon?
+## Archon으로 무엇을 할 수 있나?
 
-Archon ships with workflows for the most common development tasks:
+Archon에는 자주 쓰는 개발 작업용 workflow가 기본으로 포함되어 있습니다.
 
-- **Fix a GitHub issue** — Investigate, implement, validate, and open a PR automatically
-- **Build a feature from an idea** — Go from a description to a working, reviewed PR
-- **Review a pull request** — Multi-perspective code review with structured feedback
-- **Answer questions about your codebase** — Ask anything, get contextually-aware answers
-- **Resolve merge conflicts** — Analyze and fix conflicts with full context
+- **GitHub issue 수정** — 조사, 구현, 검증, PR 생성을 자동으로 수행합니다.
+- **아이디어에서 기능 만들기** — 설명에서 시작해 동작하고 리뷰된 PR까지 진행합니다.
+- **Pull request 리뷰** — 여러 관점의 코드 리뷰와 구조화된 피드백을 제공합니다.
+- **코드베이스 질문 답변** — 무엇이든 물어보고 맥락을 이해한 답변을 받습니다.
+- **Merge conflict 해결** — 전체 맥락을 바탕으로 conflict를 분석하고 수정합니다.
 
-And when the built-in workflows don't fit your process? You build your own. In [Chapter 4](/book/essential-workflows/), you'll see the full catalog of built-in workflows. In [Chapter 7](/book/first-workflow/), you'll build one yourself.
+기본 workflow가 여러분의 프로세스와 맞지 않으면 직접 만들 수 있습니다. [4장](/book/essential-workflows/)에서는 내장 workflow 전체 목록을 살펴보고, [7장](/book/first-workflow/)에서는 직접 하나를 만들어 봅니다.
 
 ---
 
-Ready to see it in action? Let's get you to your first win in five minutes. Continue to [Chapter 2: Your First Five Minutes →](/book/first-five-minutes/)
+실제로 실행해 볼 준비가 됐나요? 5분 안에 첫 성과를 만들어 봅시다. [2장: 처음 5분 →](/book/first-five-minutes/)으로 이어집니다.

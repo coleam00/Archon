@@ -1,6 +1,6 @@
 ---
-title: Per-Node MCP Servers
-description: Attach MCP (Model Context Protocol) servers to individual workflow nodes for external tool access.
+title: 노드별 MCP Servers
+description: 외부 도구 접근을 위해 개별 workflow node에 MCP(Model Context Protocol) servers를 연결합니다.
 category: guides
 area: workflows
 audience: [user]
@@ -9,15 +9,13 @@ sidebar:
   order: 6
 ---
 
-DAG workflow nodes support a `mcp` field that attaches MCP (Model Context Protocol)
-servers to individual nodes. Each node gets exactly the external tools it needs —
-GitHub, Linear, Postgres, etc. — without over-provisioning.
+DAG workflow node는 개별 node에 MCP(Model Context Protocol) servers를 연결하는 `mcp` 필드를 지원합니다. 각 node는 over-provisioning 없이 GitHub, Linear, Postgres 등 필요한 외부 도구만 받습니다.
 
-**Claude only** — Codex nodes will warn and ignore the `mcp` field.
+**Claude 전용** — Codex node는 warning을 출력하고 `mcp` 필드를 무시합니다.
 
-## Quick Start
+## 빠른 시작
 
-1. Create an MCP config file (e.g., `.archon/mcp/github.json`):
+1. MCP config file을 만듭니다(예: `.archon/mcp/github.json`).
 
 ```json
 {
@@ -31,7 +29,7 @@ GitHub, Linear, Postgres, etc. — without over-provisioning.
 }
 ```
 
-2. Reference it in your workflow:
+2. workflow에서 이 파일을 참조합니다.
 
 ```yaml
 name: triage-issues
@@ -42,17 +40,15 @@ nodes:
     mcp: .archon/mcp/github.json
 ```
 
-That's it. The MCP server starts when the node runs, its tools become available
-to the AI, and it shuts down when the node completes.
+이것으로 끝입니다. node가 실행될 때 MCP server가 시작되고, 해당 tools가 AI에 제공되며, node가 완료되면 종료됩니다.
 
 ## Config File Format
 
-MCP config files are JSON objects where each key is a server name and the value
-is a server configuration. Three transport types are supported:
+MCP config file은 각 key가 server name이고 value가 server configuration인 JSON object입니다. 세 가지 transport type을 지원합니다.
 
 ### stdio (default)
 
-Runs a local process. This is the most common type.
+local process를 실행합니다. 가장 흔한 type입니다.
 
 ```json
 {
@@ -68,14 +64,14 @@ Runs a local process. This is the most common type.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `'stdio'` | No | Default when omitted |
-| `command` | string | Yes | Executable to run |
+| `type` | `'stdio'` | No | 생략 시 기본값 |
+| `command` | string | Yes | 실행할 executable |
 | `args` | string[] | No | Command arguments |
-| `env` | Record<string, string> | No | Environment variables for the process |
+| `env` | Record<string, string> | No | process용 environment variables |
 
 ### HTTP
 
-Connects to a remote HTTP endpoint.
+remote HTTP endpoint에 연결합니다.
 
 ```json
 {
@@ -91,13 +87,13 @@ Connects to a remote HTTP endpoint.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `'http'` | Yes | Must be `'http'` |
+| `type` | `'http'` | Yes | 반드시 `'http'`여야 함 |
 | `url` | string | Yes | HTTP endpoint URL |
 | `headers` | Record<string, string> | No | Request headers |
 
 ### SSE (Server-Sent Events)
 
-Connects to an SSE endpoint.
+SSE endpoint에 연결합니다.
 
 ```json
 {
@@ -113,14 +109,13 @@ Connects to an SSE endpoint.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `'sse'` | Yes | Must be `'sse'` |
+| `type` | `'sse'` | Yes | 반드시 `'sse'`여야 함 |
 | `url` | string | Yes | SSE endpoint URL |
 | `headers` | Record<string, string> | No | Request headers |
 
 ## Environment Variable Expansion
 
-Values in `env` and `headers` fields support `$VAR_NAME` references that are
-expanded from `process.env` at execution time.
+`env`와 `headers` 필드의 값은 실행 시 `process.env`에서 확장되는 `$VAR_NAME` references를 지원합니다.
 
 ```json
 {
@@ -135,20 +130,18 @@ expanded from `process.env` at execution time.
 }
 ```
 
-**Rules:**
-- Pattern: `$UPPER_CASE_VAR` (matches `[A-Z_][A-Z0-9_]*`)
-- Only `env` and `headers` values are expanded — `command`, `args`, `url` are left untouched
-- Undefined vars are replaced with empty string and a warning is shown:
+**규칙:**
+- Pattern: `$UPPER_CASE_VAR` (`[A-Z_][A-Z0-9_]*`와 match)
+- `env`와 `headers` 값만 확장됩니다. `command`, `args`, `url`은 그대로 둡니다
+- 정의되지 않은 var는 빈 문자열로 대체되고 warning이 표시됩니다.
   `Warning: Node 'X' MCP config references undefined env vars: VAR_NAME`
-- Expansion happens at execution time, not when the workflow YAML is loaded
+- Expansion은 workflow YAML이 로드될 때가 아니라 실행 시점에 일어납니다
 
-**Why file-based?** MCP configs often contain secrets (API tokens, database URLs).
-Workflow YAML files are committed to git. By keeping configs in separate JSON files,
-you can gitignore them or rely on env var references so secrets never appear in source.
+**왜 file-based인가요?** MCP config에는 secrets(API token, database URL)가 들어가는 경우가 많습니다. Workflow YAML file은 git에 commit됩니다. config를 별도 JSON file로 유지하면 gitignore하거나 env var reference에 의존할 수 있어 secrets가 source에 나타나지 않습니다.
 
-## Multiple Servers Per Node
+## node 하나에 여러 server 사용
 
-A single config file can define multiple servers:
+하나의 config file에 여러 server를 정의할 수 있습니다.
 
 ```json
 {
@@ -167,19 +160,16 @@ A single config file can define multiple servers:
 
 ## Automatic Tool Wildcards
 
-When a node loads MCP servers, tool wildcards are automatically added to `allowedTools`.
-For servers named `github` and `postgres`, the node gets:
+node가 MCP servers를 로드하면 tool wildcard가 `allowedTools`에 자동으로 추가됩니다. `github`, `postgres`라는 server가 있으면 node는 다음을 받습니다.
 
 - `mcp__github__*`
 - `mcp__postgres__*`
 
-This means all tools from those servers are immediately available without manually
-listing them. The wildcards merge with any existing `allowed_tools` on the node.
+즉, 해당 server의 모든 tool을 수동으로 나열하지 않아도 즉시 사용할 수 있습니다. wildcard는 node의 기존 `allowed_tools`와 merge됩니다.
 
 ## MCP-Only Nodes
 
-Combine `mcp` with `allowed_tools: []` to create nodes that can only use MCP tools
-and have no access to built-in tools (Bash, Read, Write, etc.):
+`mcp`와 `allowed_tools: []`를 결합하면 MCP tools만 사용할 수 있고 built-in tools(Bash, Read, Write 등)에는 접근하지 못하는 node를 만들 수 있습니다.
 
 ```yaml
 nodes:
@@ -189,22 +179,19 @@ nodes:
     allowed_tools: []
 ```
 
-This is useful for sandboxing — the AI can only interact through the MCP server
-and cannot touch the filesystem or run shell commands.
+sandboxing에 유용합니다. AI는 MCP server를 통해서만 상호작용할 수 있고 filesystem을 건드리거나 shell command를 실행할 수 없습니다.
 
 ## Connection Failure Handling
 
-MCP server connections are established when the node starts executing. If a server
-fails to connect, you'll see a message like:
+MCP server connection은 node 실행이 시작될 때 설정됩니다. server 연결에 실패하면 다음과 같은 메시지를 보게 됩니다.
 
 ```
 MCP server connection failed: github (failed)
 ```
 
-The node continues executing but without the tools from the failed server.
-Check your config file path, server command, and environment variables if this happens.
+node는 계속 실행되지만 실패한 server의 tools 없이 실행됩니다. 이런 일이 발생하면 config file path, server command, environment variables를 확인하세요.
 
-## Workflow Examples
+## Workflow 예시
 
 ### GitHub Issue Triage
 
@@ -223,7 +210,7 @@ nodes:
     mcp: .archon/mcp/github.json
 ```
 
-### Database-Informed Code Changes
+### Database 기반 Code Changes
 
 ```yaml
 name: schema-aware-feature
@@ -261,10 +248,9 @@ nodes:
     allowed_tools: []
 ```
 
-### Read-Only Analysis with Hooks
+### Hooks를 사용한 Read-Only Analysis
 
-Combine MCP with [hooks](/guides/hooks/) to create nodes that can query external
-services but cannot modify the codebase:
+MCP와 [hooks](/guides/hooks/)를 결합하면 external services를 query할 수 있지만 codebase를 수정할 수는 없는 node를 만들 수 있습니다.
 
 ```yaml
 nodes:
@@ -281,19 +267,15 @@ nodes:
               permissionDecisionReason: "Analysis only — no code changes"
 ```
 
-## Push Notifications (ntfy)
+## Push Notifications(ntfy)
 
-Some built-in workflows (like `archon-smart-pr-review`) include an optional
-notification node that sends a push notification to your phone when the workflow
-completes. It's gated behind a `when:` condition — if you haven't configured ntfy,
-the node is silently skipped.
+일부 built-in workflow(`archon-smart-pr-review` 등)에는 workflow가 완료되면 휴대폰으로 push notification을 보내는 optional notification node가 포함되어 있습니다. 이 node는 `when:` condition 뒤에 gate되어 있습니다. ntfy를 설정하지 않았다면 node는 조용히 skip됩니다.
 
-### Setup (30 seconds)
+### 설정(30초)
 
-1. Install the [ntfy app](https://ntfy.sh/) on your phone (iOS / Android)
-2. Open the app, tap "+", subscribe to a topic name (e.g. `archon-yourname-a8f3x`).
-   Treat the topic name like a password — anyone who knows it can send you notifications.
-3. Create `.archon/mcp/ntfy.json` in your repo:
+1. 휴대폰(iOS / Android)에 [ntfy app](https://ntfy.sh/)을 설치합니다
+2. app을 열고 "+"를 탭한 뒤 topic name(예: `archon-yourname-a8f3x`)을 subscribe합니다. topic name은 password처럼 취급하세요. 이를 아는 사람은 누구나 notification을 보낼 수 있습니다.
+3. repo에 `.archon/mcp/ntfy.json`을 만듭니다.
 
 ```json
 {
@@ -307,12 +289,11 @@ the node is silently skipped.
 }
 ```
 
-That's it. The file is gitignored (`.archon/mcp/` is in `.gitignore`), so your
-topic stays local.
+이것으로 끝입니다. 해당 file은 gitignored됩니다(`.archon/mcp/`가 `.gitignore`에 있음). 따라서 topic은 local에만 남습니다.
 
-### How it works in workflows
+### workflow에서 동작하는 방식
 
-Workflows use a bash node to check if the config file exists:
+workflow는 bash node를 사용해 config file 존재 여부를 확인합니다.
 
 ```yaml
   - id: check-ntfy
@@ -329,16 +310,13 @@ Workflows use a bash node to check if the config file exists:
       Keep it under 2 sentences. Use priority 3.
 ```
 
-If `.archon/mcp/ntfy.json` doesn't exist, `check-ntfy` outputs `false`, the
-`when:` condition skips the notify node, and the workflow runs exactly as before.
+`.archon/mcp/ntfy.json`이 없으면 `check-ntfy`가 `false`를 output하고, `when:` condition이 notify node를 skip하며, workflow는 이전과 동일하게 실행됩니다.
 
-### Adding notifications to your own workflows
+### 내 workflow에 notification 추가하기
 
-Add the two nodes above (check-ntfy + notify) to the end of any DAG workflow.
-The notify node's prompt should reference upstream node outputs (e.g. `$synthesize.output`)
-to generate a meaningful summary.
+위의 두 node(check-ntfy + notify)를 DAG workflow 끝에 추가하세요. notify node의 prompt는 의미 있는 summary를 생성하기 위해 upstream node output(예: `$synthesize.output`)을 참조해야 합니다.
 
-### Quick test
+### 빠른 테스트
 
 ```bash
 # Verify your phone receives notifications
@@ -352,38 +330,34 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 
 | Feature | `mcp` | `allowed_tools`/`denied_tools` | `hooks` |
 |---------|-------|-------------------------------|---------|
-| Add external tools | Yes | No | No |
-| Remove built-in tools | No | Yes | Yes |
-| Inject context | No | No | Yes |
-| Modify tool input | No | No | Yes |
-| Sandbox to MCP only | `mcp` + `allowed_tools: []` | — | — |
+| external tools 추가 | Yes | No | No |
+| built-in tools 제거 | No | Yes | Yes |
+| context 주입 | No | No | Yes |
+| tool input 수정 | No | No | Yes |
+| MCP only로 sandbox | `mcp` + `allowed_tools: []` | — | — |
 
-## Limitations
+## 제한사항
 
-- **Claude only** — Codex nodes warn and ignore the `mcp` field. Configure MCP
-  servers globally in the Codex CLI config instead.
-- **Haiku model** — Tool search (lazy loading for many tools) is not supported on
-  Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
-- **No load-time validation** — The MCP config file is read at execution time, not
-  when the workflow YAML is loaded. A typo in the path won't surface until the node runs.
-- **No inline config** — MCP configs must be in a separate JSON file, not inline in YAML.
-  This is intentional — it keeps secrets out of version-controlled workflow files.
+- **Claude 전용** — Codex node는 warning을 출력하고 `mcp` 필드를 무시합니다. 대신 Codex CLI config에서 MCP servers를 전역으로 설정하세요.
+- **Haiku model** — Tool search(많은 tool의 lazy loading)는 Haiku에서 지원되지 않습니다. warning이 표시됩니다. MCP node에는 Sonnet 또는 Opus 사용을 고려하세요.
+- **load-time validation 없음** — MCP config file은 workflow YAML이 로드될 때가 아니라 실행 시점에 읽힙니다. path typo는 node가 실행될 때까지 드러나지 않습니다.
+- **inline config 없음** — MCP config는 YAML 안에 inline으로 넣을 수 없고 별도 JSON file이어야 합니다. 이는 의도된 설계입니다. version-controlled workflow file에서 secrets를 분리하기 위함입니다.
 
 ## Troubleshooting
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `MCP config file not found` | Wrong path or file doesn't exist | Check the path relative to your repo root (cwd) |
-| `MCP config file is not valid JSON` | Syntax error in JSON | Validate with `cat .archon/mcp/config.json \| python3 -m json.tool` |
-| `MCP config must be a JSON object` | Top-level value is array or string | Wrap in `{ "server-name": { ... } }` |
-| `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |
-| `MCP server connection failed` | Server process crashed or URL unreachable | Check command/URL, test the server standalone |
-| `mcp config but uses Codex` | Node resolved to Codex provider | Set `provider: claude` on the node or switch default |
-| `Haiku model with MCP servers` | Haiku doesn't support tool search | Use `model: sonnet` or `model: opus` instead |
+| `MCP config file not found` | path가 잘못됐거나 file이 없음 | repo root(cwd) 기준 path를 확인하세요 |
+| `MCP config file is not valid JSON` | JSON syntax error | `cat .archon/mcp/config.json \| python3 -m json.tool`로 검증하세요 |
+| `MCP config must be a JSON object` | top-level value가 array 또는 string | `{ "server-name": { ... } }`로 감싸세요 |
+| `undefined env vars: VAR_NAME` | environment variable 미설정 | 변수를 export하거나 `.env`에 추가하세요 |
+| `MCP server connection failed` | server process crash 또는 URL unreachable | command/URL을 확인하고 server를 standalone으로 테스트하세요 |
+| `mcp config but uses Codex` | node가 Codex provider로 resolve됨 | node에 `provider: claude`를 설정하거나 default를 바꾸세요 |
+| `Haiku model with MCP servers` | Haiku가 tool search를 지원하지 않음 | 대신 `model: sonnet` 또는 `model: opus`를 사용하세요 |
 
-## Finding MCP Servers
+## MCP Servers 찾기
 
-Popular MCP servers for common integrations:
+자주 쓰는 integration용 popular MCP servers:
 
 - **GitHub**: `@modelcontextprotocol/server-github`
 - **PostgreSQL**: `@modelcontextprotocol/server-postgres`
@@ -392,4 +366,4 @@ Popular MCP servers for common integrations:
 - **Google Drive**: `@modelcontextprotocol/server-gdrive`
 - **Brave Search**: `@modelcontextprotocol/server-brave-search`
 
-Browse the full directory at [modelcontextprotocol.io/servers](https://modelcontextprotocol.io/servers).
+전체 directory는 [modelcontextprotocol.io/servers](https://modelcontextprotocol.io/servers)에서 볼 수 있습니다.

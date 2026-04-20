@@ -1,21 +1,21 @@
 ---
-title: Quick Start
-description: Run your first Archon workflow in minutes.
+title: 빠른 시작
+description: 몇 분 안에 첫 Archon workflow를 실행합니다.
 category: getting-started
 audience: [user]
 sidebar:
   order: 2
 ---
 
-## Prerequisites
+## 사전 요구사항
 
-1. [Install Archon](/getting-started/installation/)
-2. [Install Claude Code](/getting-started/ai-assistants/#claude-code) — Archon orchestrates it but does not bundle it
-3. Authenticate with Claude: run `claude /login` (uses your existing Claude Pro/Max subscription)
-4. In compiled Archon binaries, set `CLAUDE_BIN_PATH` (see [Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only))
-5. Navigate to any git repository
+1. [Archon 설치](/getting-started/installation/)
+2. [Claude Code 설치](/getting-started/ai-assistants/#claude-code) — Archon은 Claude Code를 orchestration하지만 함께 포함하지는 않습니다
+3. Claude 인증을 진행합니다: `claude /login` 실행(기존 Claude Pro/Max subscription 사용)
+4. compiled Archon binary에서는 `CLAUDE_BIN_PATH`를 설정합니다([Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) 참고)
+5. 임의의 git repository로 이동합니다
 
-## Run Your First Workflow
+## 첫 Workflow 실행
 
 ```bash
 # List available workflows
@@ -28,12 +28,12 @@ archon workflow run assist "What does this codebase do?"
 archon workflow run smart-pr-review
 ```
 
-## What's Next?
+## 다음 단계
 
-For the full getting started guide -- installation, authentication, Web UI setup, CLI setup, and troubleshooting -- see the [Overview](/getting-started/overview/).
+설치, 인증, Web UI 설정, CLI 설정, troubleshooting까지 포함한 전체 시작 가이드는 [Overview](/getting-started/overview/)를 참고하세요.
 
-- [Overview](/getting-started/overview/) — Complete onboarding guide
-- [Core Concepts](/getting-started/concepts/) — Understand workflows, nodes, commands, and isolation
-- [Configuration](/getting-started/configuration/) — Customize Archon for your project
-- [Authoring Workflows](/guides/authoring-workflows/) — Create your own workflows
-- [GitHub Repository](https://github.com/coleam00/Archon) — Source code, issues, and discussions
+- [개요](/getting-started/overview/) — 전체 onboarding guide
+- [핵심 개념](/getting-started/concepts/) — workflow, node, command, isolation 이해하기
+- [설정](/getting-started/configuration/) — 프로젝트에 맞게 Archon 설정하기
+- [Workflow 작성](/guides/authoring-workflows/) — 나만의 workflow 만들기
+- [GitHub Repository](https://github.com/coleam00/Archon) — source code, issue, discussion

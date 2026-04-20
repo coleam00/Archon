@@ -1,6 +1,6 @@
 ---
-title: Getting Started
-description: Everything you need to go from zero to a working Archon setup.
+title: 시작하기
+description: 아무것도 없는 상태에서 동작하는 Archon 설정까지 필요한 모든 것.
 category: getting-started
 audience: [user]
 status: current
@@ -8,22 +8,24 @@ sidebar:
   order: 0
 ---
 
-Everything you need to go from zero to a working Archon setup — whether you prefer the Web UI or the CLI.
+아무것도 없는 상태에서 동작하는 Archon 설정까지 필요한 모든 것을 다룹니다. Web UI를 선호하든 CLI를 선호하든 이 문서에서 시작할 수 있습니다.
+
+HarnessLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow harness와 학습 가능한 에이전트 워크플로를 실험하기 위한 문서 사이트입니다. 내부 명령, 패키지명, CLI 이름은 upstream 호환성을 위해 Archon 이름을 그대로 사용합니다.
 
 ---
 
-## Prerequisites
+## 사전 준비
 
-Before you start, make sure you have:
+시작하기 전에 다음이 준비되어 있는지 확인하세요.
 
-| Requirement                      | How to check       | How to install                                                                                                      |
+| 요구 사항 | 확인 방법 | 설치 방법 |
 | -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| **Git**                          | `git --version`    | [git-scm.com](https://git-scm.com/)                                                                                 |
-| **Bun** (replaces Node.js + npm) | `bun --version`    | Linux/macOS: `curl -fsSL https://bun.sh/install \| bash` — Windows: `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-| **Claude Code CLI**              | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — in compiled Archon binaries, also set `CLAUDE_BIN_PATH` ([details](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
-| **GitHub account**               | —                  | [github.com](https://github.com/)                                                                                   |
+| **Git** | `git --version` | [git-scm.com](https://git-scm.com/) |
+| **Bun** (Node.js + npm 대체) | `bun --version` | Linux/macOS: `curl -fsSL https://bun.sh/install \| bash` — Windows: `powershell -c "irm bun.sh/install.ps1 \| iex"` |
+| **Claude Code CLI** | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — compiled Archon binaries에서는 `CLAUDE_BIN_PATH`도 설정하세요([자세히 보기](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
+| **GitHub account** | — | [github.com](https://github.com/) |
 
-> **Do not run as root.** Archon (and the Claude Code CLI it depends on) does not work when run as the `root` user. If you're on a VPS or server that only has root, create a regular user first:
+> **root로 실행하지 마세요.** Archon과 Archon이 의존하는 Claude Code CLI는 `root` 사용자로 실행할 때 동작하지 않습니다. VPS나 서버에 root만 있다면 먼저 일반 사용자를 만드세요.
 >
 > ```bash
 > adduser archon          # create user (Debian/Ubuntu)
@@ -31,19 +33,19 @@ Before you start, make sure you have:
 > su - archon             # switch to the new user
 > ```
 >
-> Then follow this guide from within that user's session.
+> 그런 다음 새 사용자 세션 안에서 이 가이드를 이어가세요.
 
-> **Windows users:** Archon runs natively on Windows — no WSL2 required. Install [Git for Windows](https://git-scm.com/) (which includes Git Bash) and [Bun for Windows](https://bun.sh/docs/installation#windows). One caveat: DAG workflow `bash:` nodes need a bash executable — Git Bash provides this automatically.
+> **Windows 사용자:** Archon은 Windows에서 네이티브로 실행됩니다. WSL2는 필요하지 않습니다. Git Bash가 포함된 [Git for Windows](https://git-scm.com/)와 [Bun for Windows](https://bun.sh/docs/installation#windows)를 설치하세요. 한 가지 주의할 점은 DAG workflow의 `bash:` 노드에는 bash 실행 파일이 필요하다는 것입니다. Git Bash가 이를 자동으로 제공합니다.
 
-> **Bun replaces Node.js** — you do not need Node.js or npm installed. Bun is the runtime, package manager, and test runner for this project. If you already have Node.js, that's fine, but Archon won't use it.
+> **Bun은 Node.js를 대체합니다.** Node.js나 npm을 별도로 설치할 필요가 없습니다. 이 프로젝트에서 Bun은 런타임, 패키지 매니저, 테스트 러너 역할을 모두 합니다. 이미 Node.js가 있어도 괜찮지만 Archon은 사용하지 않습니다.
 
 ---
 
-## Step 1: Clone and Install
+## 1단계: clone 및 설치
 
-First, pick where to put the Archon server code:
+먼저 Archon 서버 코드를 둘 위치를 선택합니다.
 
-**Option A: Home directory** (personal use, single user)
+**옵션 A: Home directory** (개인 사용, 단일 사용자)
 
 Linux/macOS:
 
@@ -61,7 +63,7 @@ git clone https://github.com/coleam00/Archon
 cd Archon
 ```
 
-**Option B: /opt** (Linux/macOS server installs — keeps things tidy)
+**옵션 B: /opt** (Linux/macOS 서버 설치 — 디렉터리를 깔끔하게 유지)
 
 ```bash
 sudo mkdir -p /opt/archon
@@ -70,54 +72,54 @@ git clone https://github.com/coleam00/Archon /opt/archon
 cd /opt/archon
 ```
 
-Then install dependencies:
+그런 다음 의존성을 설치합니다.
 
 ```bash
 bun install
 ```
 
-This installs all dependencies across the monorepo. Takes about 30 seconds.
+monorepo 전체의 의존성이 설치됩니다. 보통 약 30초가 걸립니다.
 
 ---
 
-## Step 2: Set Up Authentication
+## 2단계: 인증 설정
 
-You need two things: a GitHub token (for cloning repos) and Claude authentication (for the AI assistant).
+GitHub token(저장소 clone용)과 Claude authentication(AI assistant용) 두 가지가 필요합니다.
 
 ### GitHub Token
 
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
-2. Click **"Generate new token (classic)"**
-3. Select scope: **`repo`**
-4. Copy the token (starts with `ghp_...`)
+1. [github.com/settings/tokens](https://github.com/settings/tokens)로 이동합니다.
+2. **"Generate new token (classic)"**을 클릭합니다.
+3. scope로 **`repo`**를 선택합니다.
+4. token을 복사합니다(`ghp_...`로 시작).
 
-### Claude Authentication
+### Claude 인증
 
-If you already use Claude Code, you're probably already authenticated. Check with:
+이미 Claude Code를 사용하고 있다면 대부분 인증이 끝난 상태입니다. 다음으로 확인하세요.
 
 ```bash
 claude --version
 ```
 
-If not authenticated:
+인증되어 있지 않다면:
 
 ```bash
 claude /login
 ```
 
-Follow the browser flow to log in. This stores credentials globally — no API keys needed.
+브라우저 흐름을 따라 로그인하세요. 자격 증명은 전역으로 저장되므로 API key가 필요하지 않습니다.
 
 ---
 
-## Step 3: Create Your .env File
+## 3단계: .env 파일 만들기
 
-> **Required for Web UI / server mode. Optional for CLI-only usage** — the CLI uses your existing Claude authentication by default.
+> **Web UI / server mode에서는 필수, CLI-only 사용에서는 선택 사항입니다.** CLI는 기본적으로 기존 Claude authentication을 사용합니다.
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` in your editor and set these two values:
+에디터에서 `.env`를 열고 다음 두 값을 설정합니다.
 
 ```ini
 # Paste your GitHub token in both (they serve different parts of the system)
@@ -128,32 +130,32 @@ GITHUB_TOKEN=ghp_your_token_here
 CLAUDE_USE_GLOBAL_AUTH=true
 ```
 
-That's it. Everything else has sensible defaults:
+여기까지면 충분합니다. 나머지는 합리적인 기본값이 있습니다.
 
-- **Database:** SQLite at `~/.archon/archon.db` (auto-created, zero setup)
-- **Port:** 3090 for the API server, 5173 for the Web UI dev server
-- **AI assistant:** Claude (default)
+- **Database:** `~/.archon/archon.db`의 SQLite(자동 생성, 추가 설정 없음)
+- **Port:** API server는 3090, Web UI dev server는 5173
+- **AI assistant:** Claude(기본값)
 
-> **Why two GitHub token variables?** `GH_TOKEN` is used by the GitHub CLI (`gh`), and `GITHUB_TOKEN` is used by Archon's GitHub adapter. Set them to the same value.
+> **GitHub token 변수가 왜 두 개인가요?** `GH_TOKEN`은 GitHub CLI(`gh`)가 사용하고, `GITHUB_TOKEN`은 Archon의 GitHub adapter가 사용합니다. 둘 다 같은 값으로 설정하세요.
 
 ---
 
-## Choose Your Path
+## 실행 방식 선택
 
-### Path A: Web UI (Server)
+### 경로 A: Web UI (Server)
 
-**Step 4: Start the Server**
+**4단계: server 시작**
 
 ```bash
 bun run dev
 ```
 
-This starts two things simultaneously:
+이 명령은 두 가지를 동시에 시작합니다.
 
-- **Backend API server** on `http://localhost:3090`
-- **Web UI** on `http://localhost:5173`
+- **Backend API server**: `http://localhost:3090`
+- **Web UI**: `http://localhost:5173`
 
-You should see output like:
+다음과 비슷한 출력이 보여야 합니다.
 
 ```
 [server] Hono server listening on port 3090
@@ -161,21 +163,21 @@ You should see output like:
 [web] Local: http://localhost:5173/
 ```
 
-> **Homelab / remote server?** The backend API already binds to `0.0.0.0` by default, so it's reachable from other machines. However, the Vite dev server (Web UI) only listens on `localhost`. To expose the Web UI on your network:
+> **Homelab / remote server인가요?** backend API는 기본적으로 이미 `0.0.0.0`에 bind되므로 다른 머신에서 접근할 수 있습니다. 하지만 Vite dev server(Web UI)는 `localhost`에서만 listen합니다. 네트워크에서 Web UI를 노출하려면:
 >
 > ```bash
 > bun run dev:web -- --host 0.0.0.0
 > ```
 >
-> Then start the backend separately with `bun run dev:server`. The Web UI will be reachable at `http://<server-ip>:5173`. Make sure your firewall allows ports `5173` and `3090`.
+> 그런 다음 `bun run dev:server`로 backend를 별도로 시작하세요. Web UI는 `http://<server-ip>:5173`에서 접근할 수 있습니다. 방화벽에서 `5173`과 `3090` 포트를 허용했는지 확인하세요.
 
-**Step 5: Verify It Works**
+**5단계: 동작 확인**
 
-Open **http://localhost:5173** in your browser. You should see the Archon Web UI.
+브라우저에서 **http://localhost:5173**을 엽니다. Archon Web UI가 보여야 합니다.
 
-**Quick verification checklist:**
+**빠른 검증 체크리스트:**
 
-1. **Health check** — In a new terminal:
+1. **Health check** — 새 터미널에서:
 
    ```bash
    curl http://localhost:3090/health
@@ -189,57 +191,57 @@ Open **http://localhost:5173** in your browser. You should see the Archon Web UI
    # Expected: {"status":"ok","database":"connected"}
    ```
 
-3. **Send a test message** — In the Web UI, create a new conversation and type:
+3. **테스트 메시지 보내기** — Web UI에서 새 conversation을 만들고 다음을 입력합니다.
    ```
    /status
    ```
-   You should see a status response showing the platform type and session info.
+   platform type과 session info가 포함된 status response가 보여야 합니다.
 
-If all three work, you're up and running.
+세 가지가 모두 동작하면 실행 준비가 끝난 것입니다.
 
-**Step 6: Clone a Repository and Start Coding**
+**6단계: repository clone 후 coding 시작**
 
-In the Web UI chat, clone a repo to work with:
+Web UI chat에서 작업할 repo를 clone합니다.
 
 ```
 /clone https://github.com/user/your-repo
 ```
 
-Then just talk to the AI:
+그다음 AI에게 자연어로 말하면 됩니다.
 
 ```
 What's the structure of this repo?
 ```
 
-The AI will analyze the codebase and respond. You can also use workflows:
+AI가 codebase를 분석하고 응답합니다. workflow도 사용할 수 있습니다.
 
 ```
 /workflow list
 ```
 
-This shows all available workflows. Try one:
+사용 가능한 모든 workflow가 표시됩니다. 하나를 시도해 보세요.
 
 ```
 Help me understand the authentication module
 ```
 
-The AI router automatically picks the right workflow based on your message.
+AI router가 메시지에 맞는 workflow를 자동으로 선택합니다.
 
 ---
 
-### Path B: CLI (No Server)
+### 경로 B: CLI (No Server)
 
-**Step 4: Install the CLI globally**
+**4단계: CLI를 전역 설치**
 
 ```bash
 cd packages/cli && bun link && cd ../..
 ```
 
-This registers the `archon` command globally so you can run it from any repository.
+이 명령은 어느 repository에서나 실행할 수 있도록 `archon` 명령을 전역 등록합니다.
 
-You'll see output like `Success! Registered "@archon/cli"` followed by a message about `bun link @archon/cli` — **ignore that second part**, it's for adding Archon as a dependency in another project.
+`Success! Registered "@archon/cli"` 출력 뒤에 `bun link @archon/cli`에 관한 메시지가 보일 수 있습니다. **그 두 번째 부분은 무시하세요.** 다른 프로젝트에서 Archon을 dependency로 추가할 때 쓰는 안내입니다.
 
-Bun installs linked binaries to `~/.bun/bin/`. If the `archon` command isn't found, that directory is not in your `PATH` yet. Fix it:
+Bun은 linked binary를 `~/.bun/bin/`에 설치합니다. `archon` 명령을 찾을 수 없다면 아직 그 디렉터리가 `PATH`에 없는 것입니다. 다음처럼 고치세요.
 
 ```bash
 # Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
@@ -247,13 +249,13 @@ echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-Verify it works:
+동작을 확인합니다.
 
 ```bash
 archon version
 ```
 
-**Step 5: Run workflows from your repository**
+**5단계: repository에서 workflow 실행**
 
 ```bash
 cd /path/to/your/repository
@@ -271,15 +273,15 @@ archon workflow run archon-feature-development --branch feat/dark-mode "Add dark
 archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42"
 ```
 
-That's it. The CLI auto-detects the git repo, uses SQLite for state tracking (`~/.archon/archon.db`), and streams output to stdout.
+여기까지입니다. CLI는 git repo를 자동 감지하고, 상태 추적에는 SQLite(`~/.archon/archon.db`)를 사용하며, 출력은 stdout으로 streaming합니다.
 
-> **The target directory must be a git repository.** Archon uses git worktrees for isolation, so it needs a `.git` folder. If your project isn't a git repo yet, run `git init && git add . && git commit -m "initial commit"` first.
+> **대상 디렉터리는 git repository여야 합니다.** Archon은 격리를 위해 git worktree를 사용하므로 `.git` 폴더가 필요합니다. 프로젝트가 아직 git repo가 아니라면 먼저 `git init && git add . && git commit -m "initial commit"`을 실행하세요.
 
 ---
 
-## CLI Reference
+## CLI 참고 자료
 
-### Workflows
+### workflow 실행 예
 
 ```bash
 # List all available workflows
@@ -298,31 +300,31 @@ archon workflow run <name> --no-worktree "<message>"
 archon workflow run <name> --cwd /path/to/repo "<message>"
 ```
 
-### CLI Commands
+### CLI 명령
 
-| Command | What It Does |
+| Command | 기능 |
 |---------|-------------|
-| `archon chat <message>` | Send a message to the orchestrator |
-| `archon setup` | Interactive setup wizard for credentials and config |
-| `archon workflow list` | List available workflows |
-| `archon workflow run <name> [msg]` | Run a workflow |
-| `archon workflow status` | Show running workflows |
-| `archon workflow resume <id>` | Resume a failed workflow |
-| `archon workflow abandon <id>` | Abandon a non-terminal run |
-| `archon workflow approve <id> [comment]` | Approve an interactive loop gate |
-| `archon workflow reject <id> [--reason "..."]` | Reject an approval gate |
-| `archon workflow cleanup [days]` | Delete old run records (default: 7 days) |
-| `archon workflow event emit` | Emit a workflow event |
-| `archon isolation list` | List active worktrees |
-| `archon isolation cleanup [days]` | Remove stale environments |
-| `archon isolation cleanup --merged` | Remove merged branches |
-| `archon isolation cleanup --merged --include-closed` | Also remove closed (abandoned) PR branches |
-| `archon complete <branch>` | Complete branch lifecycle |
-| `archon validate workflows [name]` | Validate workflow definitions |
-| `archon validate commands [name]` | Validate command files |
-| `archon version` | Show version info |
+| `archon chat <message>` | orchestrator에 message를 보냅니다 |
+| `archon setup` | credentials와 config를 위한 interactive setup wizard를 실행합니다 |
+| `archon workflow list` | 사용 가능한 workflow 목록을 표시합니다 |
+| `archon workflow run <name> [msg]` | workflow를 실행합니다 |
+| `archon workflow status` | 실행 중인 workflow를 표시합니다 |
+| `archon workflow resume <id>` | 실패한 workflow를 재개합니다 |
+| `archon workflow abandon <id>` | terminal 상태가 아닌 run을 abandon합니다 |
+| `archon workflow approve <id> [comment]` | interactive loop gate를 승인합니다 |
+| `archon workflow reject <id> [--reason "..."]` | approval gate를 거절합니다 |
+| `archon workflow cleanup [days]` | 오래된 run record를 삭제합니다(기본: 7일) |
+| `archon workflow event emit` | workflow event를 emit합니다 |
+| `archon isolation list` | active worktree 목록을 표시합니다 |
+| `archon isolation cleanup [days]` | stale environment를 제거합니다 |
+| `archon isolation cleanup --merged` | merge된 branch를 제거합니다 |
+| `archon isolation cleanup --merged --include-closed` | closed(abandoned) PR branch도 함께 제거합니다 |
+| `archon complete <branch>` | branch lifecycle을 완료합니다 |
+| `archon validate workflows [name]` | workflow definition을 검증합니다 |
+| `archon validate commands [name]` | command file을 검증합니다 |
+| `archon version` | version info를 표시합니다 |
 
-### Worktree Management
+### Worktree 관리
 
 ```bash
 archon isolation list              # show active worktrees
@@ -334,39 +336,41 @@ archon complete <branch>           # complete branch lifecycle (worktree + branc
 archon complete <branch> --force   # skip uncommitted-changes check
 ```
 
-### Available Workflows
+<a id="available-workflows"></a>
 
-| Workflow | What It Does |
+### 사용 가능한 Workflows
+
+| Workflow | 기능 |
 |----------|-------------|
-| `archon-assist` | General Q&A, debugging, exploration, CI failures — catch-all |
-| `archon-fix-github-issue` | Investigate, root cause analysis, implement fix, validate, PR |
-| `archon-idea-to-pr` | Feature idea, plan, implement, validate, PR, parallel reviews, self-fix |
-| `archon-plan-to-pr` | Execute existing plan, implement, validate, PR, review |
-| `archon-feature-development` | Implement feature from plan, validate, create PR |
-| `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) with automatic fixes |
-| `archon-smart-pr-review` | Complexity-adaptive PR review — routes to relevant agents only |
-| `archon-create-issue` | Classify problem, gather context, investigate, create GitHub issue |
-| `archon-validate-pr` | Thorough PR validation testing both main and feature branches |
-| `archon-resolve-conflicts` | Detect, analyze, and resolve merge conflicts in PRs |
-| `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
-| `archon-architect` | Architectural sweep, complexity reduction, codebase health |
-| `archon-ralph-dag` | PRD implementation loop (iterate through stories until done) |
-| `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |
-| `archon-test-loop-dag` | Iterative test-fix cycle until all tests pass |
-| `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
-| `archon-interactive-prd` | Create a PRD through guided conversation |
-| `archon-piv-loop` | Guided Plan-Implement-Validate development with human-in-the-loop |
-| `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
+| `archon-assist` | 일반 Q&A, debugging, 탐색, CI failure 등을 처리하는 범용 workflow |
+| `archon-fix-github-issue` | 조사, root cause analysis, fix 구현, validation, PR 생성 |
+| `archon-idea-to-pr` | feature idea를 plan, implement, validate하고 PR과 parallel review, self-fix까지 수행 |
+| `archon-plan-to-pr` | 기존 plan을 실행하고 implement, validate, PR, review까지 진행 |
+| `archon-feature-development` | plan에서 feature를 구현하고 validate한 뒤 PR 생성 |
+| `archon-comprehensive-pr-review` | automatic fix를 포함한 multi-agent PR review(5개 parallel reviewer) |
+| `archon-smart-pr-review` | 복잡도에 맞춰 관련 agent만 route하는 PR review |
+| `archon-create-issue` | 문제를 classify하고 context 수집, investigate 후 GitHub issue 생성 |
+| `archon-validate-pr` | main과 feature branch 양쪽을 테스트하는 철저한 PR validation |
+| `archon-resolve-conflicts` | PR의 merge conflict를 detect, analyze, resolve |
+| `archon-refactor-safely` | type-check hook과 behavior verification을 포함한 안전한 refactoring |
+| `archon-architect` | architecture sweep, complexity reduction, codebase health 점검 |
+| `archon-ralph-dag` | PRD implementation loop(story가 끝날 때까지 반복) |
+| `archon-issue-review-full` | GitHub issue를 위한 comprehensive fix와 full multi-agent review |
+| `archon-test-loop-dag` | 모든 test가 통과할 때까지 반복하는 test-fix cycle |
+| `archon-remotion-generate` | AI로 Remotion video composition 생성 또는 수정 |
+| `archon-interactive-prd` | guided conversation을 통해 PRD 생성 |
+| `archon-piv-loop` | human-in-the-loop 방식의 guided Plan-Implement-Validate development |
+| `archon-adversarial-dev` | adversarial development로 완전한 application을 처음부터 구축 |
 
-These bundled workflows work for most projects. To customize, copy one from `.archon/workflows/defaults/` into `.archon/workflows/` and modify it — same-named files override the defaults.
+이 bundled workflow들은 대부분의 프로젝트에서 바로 사용할 수 있습니다. 커스터마이즈하려면 `.archon/workflows/defaults/`에서 하나를 `.archon/workflows/`로 복사해 수정하세요. 같은 이름의 파일은 기본값을 override합니다.
 
-> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-fix-github-issue`, while "review this PR" routes to `archon-smart-pr-review`. If nothing matches clearly, it falls back to `archon-assist`.
+> **Auto-selection:** workflow 이름을 외울 필요가 없습니다. 원하는 일을 설명하기만 하면 router가 모든 workflow description을 읽고 가장 적합한 것을 선택합니다. 예를 들어 "fix issue #42"는 `archon-fix-github-issue`로 route되고, "review this PR"은 `archon-smart-pr-review`로 route됩니다. 명확히 맞는 것이 없으면 `archon-assist`로 fallback합니다.
 
 ---
 
-## Customize Your Target Repo
+## 대상 repo 커스터마이즈
 
-Add an `.archon/` directory to your target repo for repo-specific behavior:
+대상 repo에 `.archon/` 디렉터리를 추가해 repo-specific 동작을 정의할 수 있습니다.
 
 ```
 your-repo/
@@ -388,11 +392,11 @@ worktree:
     - .env
 ```
 
-Without any `.archon/` config, the platform uses sensible defaults (bundled commands and workflows).
+`.archon/` config가 없어도 platform은 합리적인 기본값(bundled commands와 workflows)을 사용합니다.
 
-### Custom Commands
+### custom command
 
-Place `.md` files in your repo's `.archon/commands/`:
+repo의 `.archon/commands/`에 `.md` 파일을 두세요.
 
 ```markdown
 ---
@@ -405,11 +409,11 @@ argument-hint: <module>
 Run tests for: $ARGUMENTS
 ```
 
-Variables available: `$1`, `$2`, `$3` (positional), `$ARGUMENTS` (all args), `$ARTIFACTS_DIR` (workflow artifacts directory), `$WORKFLOW_ID` (run ID), `$BASE_BRANCH` (base branch), `$nodeId.output` (DAG node output).
+사용 가능한 변수: `$1`, `$2`, `$3`(positional), `$ARGUMENTS`(전체 args), `$ARTIFACTS_DIR`(workflow artifacts directory), `$WORKFLOW_ID`(run ID), `$BASE_BRANCH`(base branch), `$nodeId.output`(DAG node output).
 
-### Custom Workflows
+### custom workflow
 
-Place `.yaml` files in your repo's `.archon/workflows/`:
+repo의 `.archon/workflows/`에 `.yaml` 파일을 두세요.
 
 ```yaml
 name: my-workflow
@@ -426,22 +430,22 @@ nodes:
     context: fresh
 ```
 
-Workflows chain multiple commands as DAG nodes, support parallel execution, conditional branching, and carry context between nodes via `$nodeId.output` substitution.
+workflow는 여러 command를 DAG node로 연결하고, parallel execution과 conditional branching을 지원하며, `$nodeId.output` substitution으로 node 간 context를 전달합니다.
 
-> **Where are commands and workflows loaded from?**
+> **commands와 workflows는 어디에서 load되나요?**
 >
-> Commands and workflows are loaded at runtime from the current working directory — not from a fixed global location.
+> commands와 workflows는 runtime에 현재 working directory에서 load됩니다. 고정된 global location에서 load되지 않습니다.
 >
-> - **CLI:** Reads from wherever you run the `archon` command. If you run from your local repo, it picks up uncommitted changes immediately.
-> - **Server (Telegram/Slack/GitHub):** Reads from the workspace clone at `~/.archon/workspaces/owner/repo/`. This clone only syncs from the remote before worktree creation, so you need to **commit and push** changes for the server to see them.
+> - **CLI:** `archon` 명령을 실행한 위치에서 읽습니다. local repo에서 실행하면 uncommitted change도 즉시 반영됩니다.
+> - **Server (Telegram/Slack/GitHub):** `~/.archon/workspaces/owner/repo/`의 workspace clone에서 읽습니다. 이 clone은 worktree 생성 전에만 remote에서 sync되므로 server가 변경 사항을 보려면 **commit and push**가 필요합니다.
 >
-> In short: the CLI sees your local files, the server sees what's been pushed.
+> 요약하면 CLI는 local files를 보고, server는 push된 내용을 봅니다.
 
 ---
 
-## Isolation (Worktrees)
+## 격리 (Worktrees)
 
-When you use the `--branch` flag, the CLI creates a git worktree so your work happens in an isolated directory. This prevents parallel tasks from conflicting with each other or your main branch.
+`--branch` flag를 사용하면 CLI가 git worktree를 만들어 격리된 디렉터리에서 작업합니다. 이렇게 하면 parallel task끼리 또는 main branch와 충돌하지 않습니다.
 
 ```
 ~/.archon/
@@ -458,55 +462,53 @@ When you use the `--branch` flag, the CLI creates a git worktree so your work ha
 
 ---
 
-## Using With Claude Code (Skill)
+## Claude Code와 함께 사용하기 (Skill)
 
-If you want Claude Code to be able to invoke Archon workflows on your behalf, install the
-Archon skill into your project. The setup wizard handles this automatically — just run
-`archon setup` and accept the skill installation prompt.
+Claude Code가 대신 Archon workflow를 호출할 수 있게 하려면 프로젝트에 Archon skill을 설치하세요. setup wizard가 이를 자동으로 처리합니다. `archon setup`을 실행하고 skill installation prompt를 승인하면 됩니다.
 
-To install manually instead:
+수동으로 설치하려면:
 
 ```bash
 cp -r Archon/.claude/skills/archon /path/to/your/repo/.claude/skills/
 ```
 
-Then in Claude Code, say things like "use archon to fix issue #42" and it will invoke the appropriate workflow.
+그런 다음 Claude Code에서 "use archon to fix issue #42"처럼 말하면 적절한 workflow를 호출합니다.
 
 ---
 
-## Running the Full Platform (Server + Chat Adapters)
+## 전체 platform 실행 (Server + Chat Adapters)
 
-The CLI is standalone, but if you also want to interact via Telegram, Slack, Discord, or GitHub webhooks, see the [README Server Setup](https://github.com/coleam00/Archon#quickstart) or run the setup wizard by opening Claude Code in the Archon repo and saying "set up archon".
+CLI는 standalone으로 동작하지만 Telegram, Slack, Discord, GitHub webhooks로도 상호작용하고 싶다면 [README Server Setup](https://github.com/coleam00/Archon#quickstart)을 보거나, Archon repo에서 Claude Code를 열고 "set up archon"이라고 말해 setup wizard를 실행하세요.
 
 ---
 
-## Troubleshooting
+## 문제 해결
 
 ### "Cannot create worktree: not in a git repository" (but the repo exists)
 
-The real cause is usually a stale symlink from a previous Archon run with a different path. Look for this in the error output:
+실제 원인은 보통 이전 Archon run에서 다른 path를 사용해 생긴 stale symlink입니다. error output에서 다음 내용을 찾아보세요.
 
 ```
 Source symlink at ~/.archon/workspaces/.../source already points to <old-path>, expected <new-path>
 ```
 
-Fix it by manually deleting the stale workspace folder at `~/.archon/workspaces/<github-user>/<repo-name>` and retrying the command.
+`~/.archon/workspaces/<github-user>/<repo-name>`의 stale workspace folder를 수동으로 삭제한 뒤 명령을 다시 실행하면 해결됩니다.
 
-> In the future, `archon isolation cleanup` will handle this automatically.
+> 앞으로는 `archon isolation cleanup`이 이를 자동으로 처리할 예정입니다.
 
 ---
 
 ### "command not found: bun"
 
-Install Bun: `curl -fsSL https://bun.sh/install | bash`, then restart your terminal (or `source ~/.bashrc`).
+Bun을 설치하세요: `curl -fsSL https://bun.sh/install | bash`. 그런 다음 터미널을 재시작하거나 `source ~/.bashrc`를 실행하세요.
 
 ### "command not found: claude"
 
-Install Claude Code CLI: see [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation).
+Claude Code CLI를 설치하세요. [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation)을 참고하세요.
 
 ### Port 3090 already in use
 
-Something else is using the port. Either stop it or override:
+다른 프로세스가 포트를 사용 중입니다. 해당 프로세스를 중지하거나 port를 override하세요.
 
 ```bash
 PORT=4000 bun run dev
@@ -514,22 +516,22 @@ PORT=4000 bun run dev
 
 ### Web UI shows "disconnected"
 
-Make sure the backend is running (`bun run dev` starts both). Check the terminal for errors. Try refreshing the browser.
+backend가 실행 중인지 확인하세요(`bun run dev`는 backend와 frontend를 모두 시작합니다). terminal에서 error를 확인하고, browser를 새로고침해 보세요.
 
 ### Clone command fails with 401/403
 
-Your GitHub token is missing or invalid. Verify:
+GitHub token이 없거나 유효하지 않습니다. 다음을 확인하세요.
 
 ```bash
 # Test your token
 curl -H "Authorization: token $(grep GH_TOKEN .env | cut -d= -f2)" https://api.github.com/user
 ```
 
-If it returns your GitHub profile, the token works. If not, regenerate it.
+GitHub profile이 반환되면 token이 동작하는 것입니다. 아니라면 새로 발급하세요.
 
 ### AI doesn't respond
 
-Check that Claude authentication is working:
+Claude authentication이 동작하는지 확인하세요.
 
 ```bash
 claude --version   # Should show version
@@ -542,7 +544,7 @@ claude /login      # Re-authenticate if needed
 bun install
 ```
 
-If that doesn't fix it, delete the `node_modules` folder and reinstall:
+그래도 해결되지 않으면 `node_modules` 폴더를 삭제한 뒤 다시 설치하세요.
 
 ```bash
 bun install
@@ -550,38 +552,38 @@ bun install
 
 ---
 
-## Quick Reference
+## 빠른 참고표
 
-| Action              | Command                             |
+| 작업 | 명령 |
 | ------------------- | ----------------------------------- |
-| Start everything    | `bun run dev`                       |
-| Start backend only  | `bun run dev:server`                |
-| Start frontend only | `bun run dev:web`                   |
-| Run tests           | `bun run test`                      |
-| Type check          | `bun run type-check`                |
-| Full validation     | `bun run validate`                  |
-| Web UI              | http://localhost:5173               |
-| API server          | http://localhost:3090               |
-| Health check        | `curl http://localhost:3090/health` |
+| 전체 시작 | `bun run dev` |
+| backend만 시작 | `bun run dev:server` |
+| frontend만 시작 | `bun run dev:web` |
+| test 실행 | `bun run test` |
+| type check | `bun run type-check` |
+| 전체 validation | `bun run validate` |
+| Web UI | http://localhost:5173 |
+| API server | http://localhost:3090 |
+| Health check | `curl http://localhost:3090/health` |
 
 ---
 
-## What's Next?
+## 다음 단계
 
-### Add a chat platform (optional)
+### chat platform 추가 (선택)
 
-Want to message Archon from your phone? Pick one:
+휴대폰에서 Archon에 message를 보내고 싶다면 다음 중 하나를 선택하세요.
 
-| Platform            | Difficulty      | Guide                                                                 |
+| Platform | 난이도 | Guide |
 | ------------------- | --------------- | --------------------------------------------------------------------- |
-| **Telegram**        | Easy (5 min)    | [Adapter Setup](/adapters/telegram/) |
-| **Discord**         | Easy (5 min)    | [Adapter Setup](/adapters/community/discord/)  |
-| **Slack**           | Medium (15 min) | [Adapter Setup](/adapters/slack/)                                 |
-| **GitHub Webhooks** | Medium (15 min) | [Adapter Setup](/adapters/github/)   |
+| **Telegram** | 쉬움(5분) | [adapter 설정](/adapters/telegram/) |
+| **Discord** | 쉬움(5분) | [adapter 설정](/adapters/community/discord/) |
+| **Slack** | 중간(15분) | [adapter 설정](/adapters/slack/) |
+| **GitHub Webhooks** | 중간(15분) | [adapter 설정](/adapters/github/) |
 
-### Create custom commands and workflows
+### custom command와 workflow 만들기
 
-Add AI prompts to your repo that Archon can execute:
+Archon이 실행할 수 있는 AI prompt를 repo에 추가하세요.
 
 ```
 your-repo/
@@ -590,17 +592,17 @@ your-repo/
     └── workflows/       # YAML files chaining commands together
 ```
 
-See [Authoring Workflows](/guides/authoring-workflows/) and [Authoring Commands](/guides/authoring-commands/).
+[workflow 작성](/guides/authoring-workflows/)과 [command 작성](/guides/authoring-commands/)을 참고하세요.
 
-### Deploy to a server
+### server에 배포
 
-For always-on access from any device, see the [Docker Deployment Guide](/deployment/docker/).
+어느 device에서나 항상 접근하려면 [Docker 배포 가이드](/deployment/docker/)를 참고하세요.
 
 ---
 
-## Further Reading
+## 더 읽을거리
 
-- [Configuration](/getting-started/configuration/) — All configuration options
-- [AI Assistants](/getting-started/ai-assistants/) — Claude and Codex setup details
-- [CLI Reference](/reference/cli/) — Full CLI documentation
-- [Authoring Workflows](/guides/authoring-workflows/) — Creating custom workflows
+- [설정](/getting-started/configuration/) — 모든 configuration option
+- [AI 어시스턴트](/getting-started/ai-assistants/) — Claude와 Codex setup 상세
+- [CLI 참고 자료](/reference/cli/) — 전체 CLI documentation
+- [workflow 작성](/guides/authoring-workflows/) — custom workflow 만들기

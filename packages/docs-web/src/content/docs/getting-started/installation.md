@@ -1,13 +1,13 @@
 ---
-title: Installation
-description: Install Archon on macOS, Linux, or Windows.
+title: 설치
+description: macOS, Linux, Windows에서 Archon을 설치합니다.
 category: getting-started
 audience: [user, operator]
 sidebar:
   order: 0
 ---
 
-## Quick Install
+## 빠른 설치
 
 ### macOS / Linux
 
@@ -33,7 +33,7 @@ brew install coleam00/archon/archon
 docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
 ```
 
-## From Source
+## 소스에서 설치
 
 ```bash
 git clone https://github.com/coleam00/Archon
@@ -41,15 +41,15 @@ cd Archon
 bun install
 ```
 
-### Prerequisites (Source Install)
+### 사전 요구사항(Source Install)
 
 - [Bun](https://bun.sh) >= 1.0.0
 - [GitHub CLI](https://cli.github.com/) (`gh`)
 - [Claude Code](https://claude.ai/code) (`claude`)
 
-## Claude Code is required
+## Claude Code가 필요합니다
 
-Archon orchestrates Claude Code; it does not bundle it. Install Claude Code separately:
+Archon은 Claude Code를 orchestration하지만, Claude Code를 함께 포함하지는 않습니다. Claude Code는 별도로 설치해야 합니다.
 
 ```bash
 # macOS / Linux / WSL (Anthropic's recommended installer)
@@ -59,7 +59,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 irm https://claude.ai/install.ps1 | iex
 ```
 
-Source installs (`bun run`) find the executable automatically via `node_modules`. Compiled binaries (quick install, Homebrew) must point at the Claude Code executable:
+source install(`bun run`)은 `node_modules`를 통해 실행 파일을 자동으로 찾습니다. compiled binary(quick install, Homebrew)는 Claude Code 실행 파일 위치를 직접 지정해야 합니다.
 
 ```bash
 # After the native installer:
@@ -69,7 +69,7 @@ export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
 export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
 ```
 
-Or set it durably in `~/.archon/config.yaml`:
+또는 `~/.archon/config.yaml`에 지속 설정으로 저장할 수 있습니다.
 
 ```yaml
 assistants:
@@ -77,20 +77,19 @@ assistants:
     claudeBinaryPath: /absolute/path/to/claude
 ```
 
-Docker images (`ghcr.io/coleam00/archon`) ship with Claude Code pre-installed and
-`CLAUDE_BIN_PATH` pre-set — no configuration needed.
+Docker image(`ghcr.io/coleam00/archon`)에는 Claude Code가 미리 설치되어 있고
+`CLAUDE_BIN_PATH`도 미리 설정되어 있으므로 별도 설정이 필요 없습니다.
 
-See [AI Assistants → Claude Code](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)
-for full details and install-layout paths.
+자세한 내용과 install layout별 경로는 [AI Assistants → Claude Code](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)를 참고하세요.
 
-## Verify Installation
+## 설치 확인
 
 ```bash
 archon version
 ```
 
-## Next Steps
+## 다음 단계
 
-- [Core Concepts](/getting-started/concepts/) — Understand workflows, nodes, commands, and isolation
-- [Quick Start](/getting-started/quick-start/) — Run your first workflow
-- [Configuration](/getting-started/configuration/) — Set up API keys and preferences
+- [핵심 개념](/getting-started/concepts/) — workflow, node, command, isolation 이해하기
+- [빠른 시작](/getting-started/quick-start/) — 첫 workflow 실행하기
+- [설정](/getting-started/configuration/) — API key와 preference 설정하기

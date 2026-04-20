@@ -1,6 +1,6 @@
 ---
-title: Hooks and Quality Loops
-description: Intercept tool calls during node execution to inject guidance, block actions, or create feedback loops.
+title: 훅과 품질 루프
+description: node 실행 중 tool call을 가로채 guidance를 주입하거나 action을 차단하거나 feedback loop를 만듭니다.
 category: book
 part: advanced
 audience: [user]
@@ -8,22 +8,22 @@ sidebar:
   order: 9
 ---
 
-In [Chapter 8](/book/dag-workflows/) you learned to route work through a graph — classify, branch, parallelize. But routing only controls *which* nodes run and in *what order*. Once a node is running, the AI is on its own: it reads files, writes code, runs commands, and you see the results after the fact.
+[8장](/book/dag-workflows/)에서는 graph를 통해 작업을 routing하는 법을 배웠습니다. 분류하고, branch를 나누고, 병렬화했습니다. 하지만 routing은 *어떤* node가 *어떤 순서*로 실행되는지만 제어합니다. node가 실행되기 시작하면 AI는 혼자 움직입니다. 파일을 읽고, 코드를 쓰고, command를 실행하고, 여러분은 결과를 사후에 보게 됩니다.
 
-**Hooks** change that. A hook intercepts tool calls *while a node is executing* — before or after — and lets you inject guidance, block actions, or create feedback loops. You're not rewriting the prompt; you're standing next to the AI as it works and whispering corrections in real time.
+**Hook**은 이것을 바꿉니다. hook은 *node가 실행되는 동안* tool call을 전후로 가로채 guidance를 주입하거나 action을 차단하거나 feedback loop를 만들 수 있게 합니다. prompt를 다시 쓰는 것이 아닙니다. AI가 일하는 옆에 서서 실시간으로 교정 신호를 주는 방식입니다.
 
-> **Claude only** — hooks are a Claude Agent SDK feature. Codex nodes will warn and skip any hooks you define.
+> **Claude only** — hook은 Claude Agent SDK 기능입니다. Codex node는 warning을 내고 정의된 hook을 건너뜁니다.
 
 ---
 
-## What Hooks Do
+## Hook이 하는 일
 
-Every time the AI uses a tool — `Read`, `Write`, `Edit`, `Bash`, or any MCP tool — hooks can fire. There are two moments to intercept:
+AI가 `Read`, `Write`, `Edit`, `Bash` 또는 MCP tool 같은 도구를 사용할 때마다 hook이 실행될 수 있습니다. 가로챌 수 있는 시점은 두 가지입니다.
 
-- **PreToolUse**: Runs before the tool executes. You can allow it, deny it, modify its inputs, or inject context the model sees before proceeding.
-- **PostToolUse**: Runs after the tool completes successfully. You can inject context the model sees as it processes the result.
+- **PreToolUse**: tool 실행 전에 동작합니다. 허용, 거부, input 수정, 진행 전 model이 볼 context 주입을 할 수 있습니다.
+- **PostToolUse**: tool이 성공적으로 완료된 뒤 동작합니다. model이 결과를 처리할 때 볼 context를 주입할 수 있습니다.
 
-Hooks are defined per-node in your workflow YAML. They only apply during that node's execution:
+hook은 workflow YAML에서 node별로 정의합니다. 해당 node 실행 중에만 적용됩니다.
 
 ```yaml
 nodes:
@@ -38,17 +38,17 @@ nodes:
               additionalContext: "Only write to files in src/. Do not modify tests."
 ```
 
-The `matcher` is a regex against the tool name. `Write|Edit` matches either. Omit the matcher to fire on every tool call.
+`matcher`는 tool name에 대해 적용되는 regex입니다. `Write|Edit`는 둘 중 하나에 match합니다. matcher를 생략하면 모든 tool call에서 실행됩니다.
 
 ---
 
-## Hook Types
+## Hook type
 
 ### PreToolUse
 
-Runs before the tool. Supports three response styles:
+tool 전에 실행됩니다. 세 가지 response style을 지원합니다.
 
-**Inject context** — Add guidance the model sees before the tool runs. Doesn't block the tool:
+**context 주입** — tool 실행 전에 model이 볼 guidance를 추가합니다. tool을 차단하지는 않습니다.
 
 ```yaml
 PreToolUse:
@@ -59,7 +59,7 @@ PreToolUse:
         additionalContext: "Before running any command, confirm it's read-only"
 ```
 
-**Deny the tool** — Stop this tool call entirely:
+**tool 거부** — 이 tool call을 완전히 중단합니다.
 
 ```yaml
 PreToolUse:
@@ -71,7 +71,7 @@ PreToolUse:
         permissionDecisionReason: "Shell access not allowed in this node"
 ```
 
-**Modify the input** — Redirect where the tool operates:
+**input 수정** — tool이 동작하는 위치를 바꿉니다.
 
 ```yaml
 PreToolUse:
@@ -86,7 +86,7 @@ PreToolUse:
 
 ### PostToolUse
 
-Runs after a tool completes. Use it to add context the model sees as it processes the result:
+tool이 완료된 뒤 실행됩니다. model이 결과를 처리할 때 볼 context를 추가하는 데 사용합니다.
 
 ```yaml
 PostToolUse:
@@ -99,21 +99,21 @@ PostToolUse:
 
 ### Matchers
 
-The `matcher` field is a regex matched against tool names. Common patterns:
+`matcher` field는 tool name에 match되는 regex입니다. 자주 쓰는 pattern은 다음과 같습니다.
 
-| Matcher | Matches |
+| Matcher | match 대상 |
 |---------|---------|
-| `"Write"` | The `Write` tool only |
-| `"Write\|Edit"` | Either `Write` or `Edit` |
-| `"Bash"` | The `Bash` tool |
-| `"Read"` | The `Read` tool |
-| *(omitted)* | Every tool call |
+| `"Write"` | `Write` tool만 |
+| `"Write\|Edit"` | `Write` 또는 `Edit` |
+| `"Bash"` | `Bash` tool |
+| `"Read"` | `Read` tool |
+| *(생략)* | 모든 tool call |
 
 ---
 
-## Example: Self-Review Loop
+## 예시: self-review loop
 
-Here's a pattern that creates quality pressure without changing your commands. After every file write or edit, the hook forces the model to see a reminder to re-read the result and verify it:
+command를 바꾸지 않고 품질 압력을 만드는 pattern입니다. 파일 write나 edit가 일어날 때마다 hook이 model에게 결과를 다시 읽고 검증하라는 reminder를 보게 합니다.
 
 ```yaml
 name: implement-with-self-review
@@ -139,15 +139,15 @@ nodes:
     depends_on: [implement]
 ```
 
-Every time the `implement` node writes or edits a file, the model sees that reminder as part of the tool result. It doesn't guarantee the model complies — but it consistently applies quality pressure without you needing to encode it in the command itself.
+`implement` node가 파일을 쓰거나 수정할 때마다 model은 tool result의 일부로 이 reminder를 봅니다. model이 반드시 따르리라는 보장은 없지만, command 자체에 이를 인코딩하지 않아도 일관된 품질 압력을 줍니다.
 
-This is what "quality loop" means: each write triggers a review prompt, which may trigger another write, which triggers another review. The loop runs inside a single node until the model is satisfied or the step completes.
+이것이 "quality loop"의 의미입니다. 각 write가 review prompt를 촉발하고, 그 review가 다른 write를 촉발할 수 있으며, 다시 review가 이어집니다. loop는 model이 만족하거나 step이 완료될 때까지 단일 node 안에서 실행됩니다.
 
 ---
 
-## Example: Permission Denial
+## 예시: permission denial
 
-Some nodes shouldn't be allowed to do certain things. A PR creation node shouldn't modify code. A code review node shouldn't run shell commands or write files — it should read and report.
+일부 node는 특정 일을 하면 안 됩니다. PR creation node가 코드를 수정하면 안 됩니다. code review node는 shell command를 실행하거나 파일을 쓰면 안 되고, 읽고 보고해야 합니다.
 
 ```yaml
 name: safe-code-review
@@ -176,65 +176,65 @@ nodes:
               permissionDecisionReason: "Code review is read-only — do not modify files"
 ```
 
-The `review` node can read files to understand context, but it can't run commands or write anything. If it tries, the tool call is blocked and the model sees the reason. You've defined the node's operating envelope in the YAML, not buried in a prompt.
+`review` node는 context 이해를 위해 파일을 읽을 수 있지만 command를 실행하거나 무언가를 쓸 수는 없습니다. 시도하면 tool call이 차단되고 model은 이유를 봅니다. node의 operating envelope을 prompt 어딘가에 묻어 둔 것이 아니라 YAML에 정의한 것입니다.
 
 ---
 
-## Design Patterns
+## 설계 pattern
 
-**Quality gates** — After writes, inject a reminder to verify correctness (type check, lint, re-read). Creates a self-correcting loop inside a single node.
+**Quality gate** — write 후 정확성을 검증하라는 reminder(type check, lint, re-read)를 주입합니다. 단일 node 안에 self-correcting loop를 만듭니다.
 
-**Guardrails** — Deny tools that shouldn't be used in this node. A planning node has no business running `Bash`. A summarization node has no business calling `Write`. Encode these constraints explicitly.
+**Guardrail** — 해당 node에서 사용하면 안 되는 tool을 거부합니다. planning node가 `Bash`를 실행할 이유는 없습니다. summarization node가 `Write`를 호출할 이유도 없습니다. 이런 제약을 명시적으로 인코딩하세요.
 
-**Context injection** — Before a tool runs, inject relevant guidance. "You're about to read a migration file — note that column renames must be additive." The model sees this at the right moment, not buried at the top of a long prompt.
+**Context injection** — tool 실행 전에 관련 guidance를 주입합니다. "migration file을 읽으려 합니다. column rename은 additive해야 함을 기억하세요." 같은 내용입니다. 긴 prompt의 맨 위에 묻히지 않고 적절한 순간에 model이 보게 됩니다.
 
-**Audit trail** — Use a `systemMessage` in `PostToolUse` to prompt the model to justify its action: "Explain what you just changed and why." The justification becomes part of the conversation history.
+**Audit trail** — `PostToolUse`의 `systemMessage`를 사용해 model이 action을 정당화하도록 요청합니다. "방금 무엇을 왜 바꿨는지 설명하세요." 같은 방식입니다. 이 정당화는 conversation history의 일부가 됩니다.
 
 ---
 
-## Reference: Hook Schema
+## 참조: hook schema
 
-A hook entry has three fields:
+hook entry에는 세 field가 있습니다.
 
-| Field | Required | Description |
+| Field | 필수 | 설명 |
 |-------|----------|-------------|
-| `matcher` | No | Regex matched against tool name. Omit to match all tools. |
-| `response` | Yes | The hook response object (see below). |
-| `timeout` | No | Seconds before hook times out. Default: 60. |
+| `matcher` | 아니요 | tool name에 match되는 regex. 생략하면 모든 tool에 match합니다. |
+| `response` | 예 | hook response object(아래 참조). |
+| `timeout` | 아니요 | hook timeout까지의 초. 기본값: 60. |
 
-The `response` object (top-level fields):
+`response` object의 top-level field:
 
-| Field | Type | Effect |
+| Field | Type | 효과 |
 |-------|------|--------|
-| `hookSpecificOutput` | object | Event-specific response (PreToolUse, PostToolUse, etc.) |
-| `systemMessage` | string | Inject a message visible to the model |
-| `continue` | boolean | `false` stops the agent entirely |
-| `decision` | `'approve'` / `'block'` | Top-level approve/block |
-| `stopReason` | string | Reason shown when stopping |
+| `hookSpecificOutput` | object | event별 response(PreToolUse, PostToolUse 등) |
+| `systemMessage` | string | model이 볼 수 있는 message 주입 |
+| `continue` | boolean | `false`면 agent를 완전히 중단 |
+| `decision` | `'approve'` / `'block'` | top-level approve/block |
+| `stopReason` | string | 중단 시 표시되는 이유 |
 
 `PreToolUse` hook-specific output:
 
-| Field | Effect |
+| Field | 효과 |
 |-------|--------|
-| `hookEventName: PreToolUse` | Required — identifies the event type |
-| `permissionDecision: deny\|allow\|ask` | Control whether the tool runs |
-| `permissionDecisionReason` | Reason shown in logs and to the model |
-| `additionalContext` | Text injected into model context (doesn't block) |
-| `updatedInput` | Override tool arguments (e.g., redirect a file path) |
+| `hookEventName: PreToolUse` | 필수. event type을 식별 |
+| `permissionDecision: deny\|allow\|ask` | tool 실행 여부 제어 |
+| `permissionDecisionReason` | log와 model에 표시되는 이유 |
+| `additionalContext` | model context에 주입되는 text(차단하지 않음) |
+| `updatedInput` | tool argument override(예: file path redirect) |
 
 `PostToolUse` hook-specific output:
 
-| Field | Effect |
+| Field | 효과 |
 |-------|--------|
 | `hookEventName: PostToolUse` | Required |
-| `additionalContext` | Text injected after the tool result |
+| `additionalContext` | tool result 후 주입되는 text |
 
-> **Multiple hooks**: You can define multiple matchers under the same event. They all fire if their matcher matches. A node can have both `PreToolUse` and `PostToolUse` hooks active simultaneously.
+> **여러 hook**: 같은 event 아래에 여러 matcher를 정의할 수 있습니다. matcher가 match되면 모두 실행됩니다. 한 node에 `PreToolUse`와 `PostToolUse` hook을 동시에 활성화할 수 있습니다.
 
-> **Hooks vs `allowed_tools`**: Use `allowed_tools`/`denied_tools` for simple include/exclude. Use hooks when you need context injection, input modification, or reactions after a tool runs.
+> **Hook vs `allowed_tools`**: 단순 include/exclude에는 `allowed_tools`/`denied_tools`를 사용하세요. context injection, input modification, tool 실행 후 reaction이 필요하면 hook을 사용하세요.
 
 ---
 
-You now have the full toolkit: commands that define tasks, workflows that orchestrate them, DAG graphs that route conditionally, and hooks that steer behavior in real time.
+이제 전체 toolkit을 갖췄습니다. 작업을 정의하는 command, 이를 오케스트레이션하는 workflow, 조건부 routing을 담당하는 DAG graph, 실시간으로 행동을 조정하는 hook까지 다뤘습니다.
 
-[Chapter 10: Quick Reference →](/book/quick-reference/) collects every CLI command, variable, and YAML option in one scannable place.
+[10장: 빠른 참조 →](/book/quick-reference/)는 모든 CLI command, variable, YAML option을 한눈에 볼 수 있게 모아 둔 페이지입니다.

@@ -1,6 +1,6 @@
 ---
-title: Configuration
-description: Configure Archon with API keys, assistants, and project settings.
+title: 설정
+description: API key, assistant, project setting으로 Archon을 설정합니다.
 category: getting-started
 area: config
 audience: [user, operator]
@@ -8,25 +8,25 @@ sidebar:
   order: 3
 ---
 
-## Environment Variables
+## 환경 변수
 
-Set these in your shell or `.env` file:
+아래 값들은 shell 또는 `.env` 파일에 설정합니다.
 
-| Variable | Required | Description |
+| 변수 | 필수 | 설명 |
 |----------|----------|-------------|
-| `CLAUDE_BIN_PATH` | Yes (binary builds) | Absolute path to the Claude Code SDK's `cli.js`. Required in compiled Archon binaries unless `assistants.claude.claudeBinaryPath` is set. Dev mode (`bun run`) auto-resolves via `node_modules`. |
-| `CLAUDE_USE_GLOBAL_AUTH` | No | Set to `true` to use credentials from `claude /login` (default when no other Claude token is set) |
-| `CLAUDE_CODE_OAUTH_TOKEN` | No | OAuth token from `claude setup-token` (alternative to global auth) |
-| `CLAUDE_API_KEY` | No | Anthropic API key for pay-per-use (alternative to global auth) |
-| `CODEX_BIN_PATH` | No | Absolute path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. |
-| `CODEX_ACCESS_TOKEN` | Yes (for Codex) | Codex access token (see [AI Assistants](/getting-started/ai-assistants/)) |
-| `DATABASE_URL` | No | PostgreSQL connection string (default: SQLite) |
-| `LOG_LEVEL` | No | `debug`, `info` (default), `warn`, `error` |
-| `PORT` | No | Server port (default: 3090, Docker: 3000) |
+| `CLAUDE_BIN_PATH` | 예(binary builds) | Claude Code SDK의 `cli.js`에 대한 절대 경로입니다. `assistants.claude.claudeBinaryPath`가 설정되지 않은 compiled Archon binary에서는 필수입니다. Dev mode(`bun run`)에서는 `node_modules`를 통해 자동으로 해석됩니다. |
+| `CLAUDE_USE_GLOBAL_AUTH` | 아니요 | `claude /login`의 credential을 사용하려면 `true`로 설정합니다(다른 Claude token이 없을 때 기본값) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | 아니요 | `claude setup-token`에서 받은 OAuth token입니다(global auth의 대안) |
+| `CLAUDE_API_KEY` | 아니요 | pay-per-use 방식으로 사용할 Anthropic API key입니다(global auth의 대안) |
+| `CODEX_BIN_PATH` | 아니요 | Codex CLI binary의 절대 경로입니다. compiled Archon build에서 auto-detection을 override합니다. |
+| `CODEX_ACCESS_TOKEN` | 예(Codex 사용 시) | Codex access token입니다([AI Assistants](/getting-started/ai-assistants/) 참고) |
+| `DATABASE_URL` | 아니요 | PostgreSQL connection string입니다(기본값: SQLite) |
+| `LOG_LEVEL` | 아니요 | `debug`, `info`(기본값), `warn`, `error` |
+| `PORT` | 아니요 | server port입니다(기본값: 3090, Docker: 3000) |
 
-## Project Configuration
+## 프로젝트 설정
 
-Create `.archon/config.yaml` in your repository:
+저장소에 `.archon/config.yaml`을 만듭니다.
 
 ```yaml
 assistants:
@@ -42,4 +42,4 @@ assistants:
 #   path: packages/docs-web/src/content/docs  # Optional: default is docs/
 ```
 
-See the [full configuration reference](/reference/configuration/) for all options.
+전체 옵션은 [설정 레퍼런스](/reference/configuration/)를 참고하세요.
