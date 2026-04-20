@@ -7,8 +7,13 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ApprovalContext,
+  ApprovalResolution,
 } from '@archon/workflows/schemas/workflow-run';
-import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import {
+  TERMINAL_WORKFLOW_STATUSES,
+  getPausedApprovalContext,
+  isLastApprovalContext,
+} from '@archon/workflows/schemas/workflow-run';
 import { createLogger } from '@archon/paths';
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
@@ -38,6 +43,142 @@ function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
     }
   }
   return row;
+}
+
+function cloneWorkflowRunMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(metadata)) as Record<string, unknown>;
+}
+
+interface ReplaceWorkflowRunMetadataOptions {
+  status: WorkflowRunStatus;
+  metadata: Record<string, unknown>;
+  refreshStartedAt?: boolean;
+  keepIncompleteFailure?: boolean;
+}
+
+async function selectWorkflowRunOrThrow(id: string): Promise<WorkflowRun> {
+  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
+  try {
+    selectResult = await pool.query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+      [id]
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_select_failed');
+    throw new Error(`Failed to read workflow run: ${err.message}`);
+  }
+
+  const row = selectResult.rows[0];
+  if (!row) {
+    getLog().warn({ workflowRunId: id }, 'db.workflow_run_select_not_found');
+    throw new Error(`Workflow run not found (id: ${id})`);
+  }
+
+  return normalizeWorkflowRun(row);
+}
+
+async function replaceWorkflowRunMetadata(
+  id: string,
+  options: ReplaceWorkflowRunMetadataOptions
+): Promise<WorkflowRun> {
+  const dialect = getDialect();
+  const setClauses = ['status = $1', 'metadata = $2'];
+  const values: unknown[] = [options.status, JSON.stringify(options.metadata), id];
+
+  if (options.status === 'running') {
+    setClauses.push('completed_at = NULL');
+  } else if (
+    !(options.status === 'failed' && options.keepIncompleteFailure) &&
+    TERMINAL_WORKFLOW_STATUSES.includes(options.status)
+  ) {
+    setClauses.push(`completed_at = ${dialect.now()}`);
+  }
+
+  if (options.refreshStartedAt) {
+    setClauses.push(`started_at = ${dialect.now()}`);
+  }
+
+  setClauses.push(`last_activity_at = ${dialect.now()}`);
+
+  let updateResult: Awaited<ReturnType<typeof pool.query>>;
+  try {
+    updateResult = await pool.query(
+      `UPDATE remote_agent_workflow_runs
+       SET ${setClauses.join(', ')}
+       WHERE id = $3`,
+      values
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_replace_metadata_failed');
+    throw new Error(`Failed to update workflow run: ${err.message}`);
+  }
+
+  if (updateResult.rowCount === 0) {
+    getLog().warn({ workflowRunId: id }, 'db.workflow_run_replace_metadata_no_match');
+    throw new Error(`Workflow run not found (id: ${id})`);
+  }
+
+  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
+  try {
+    selectResult = await pool.query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+      [id]
+    );
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_replace_metadata_select_failed');
+    throw new Error(`Failed to read workflow run after update: ${err.message}`);
+  }
+
+  const row = selectResult.rows[0];
+  if (!row) {
+    getLog().error({ workflowRunId: id }, 'db.workflow_run_replace_metadata_vanished');
+    throw new Error(`Workflow run vanished after update (id: ${id})`);
+  }
+
+  return normalizeWorkflowRun(row);
+}
+
+export interface ResolveWorkflowRunApprovalOptions {
+  status: 'failed' | 'completed' | 'cancelled';
+  resolution: ApprovalResolution;
+  metadata?: Record<string, unknown>;
+  decisionText?: string;
+}
+
+export async function resolveWorkflowRunApproval(
+  id: string,
+  options: ResolveWorkflowRunApprovalOptions
+): Promise<WorkflowRun> {
+  const currentRun = await selectWorkflowRunOrThrow(id);
+  const approval = getPausedApprovalContext(currentRun);
+  if (!approval) {
+    getLog().warn(
+      { workflowRunId: id, status: currentRun.status },
+      'db.workflow_run_resolve_no_approval'
+    );
+    throw new Error(`Workflow run is not paused with approval metadata (id: ${id})`);
+  }
+
+  const nextMetadata = cloneWorkflowRunMetadata(currentRun.metadata);
+  delete nextMetadata.approval;
+  nextMetadata.lastApproval = {
+    ...approval,
+    resolution: options.resolution,
+    resolvedAt: new Date().toISOString(),
+    ...(options.decisionText !== undefined ? { decisionText: options.decisionText } : {}),
+  };
+  if (options.metadata) {
+    Object.assign(nextMetadata, options.metadata);
+  }
+
+  return replaceWorkflowRunMetadata(id, {
+    status: options.status,
+    metadata: nextMetadata,
+    keepIncompleteFailure: options.status === 'failed',
+  });
 }
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -307,19 +448,15 @@ export async function findResumableRun(
   workflowName: string,
   workingPath: string
 ): Promise<WorkflowRun | null> {
-  const dialect = getDialect();
   try {
     const result = await pool.query<WorkflowRun>(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND working_path = $2
-         AND (
-           status IN ('failed', 'paused')
-           OR (status = 'running' AND (last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(3)}))
-         )
+         AND status = 'failed'
        ORDER BY started_at DESC
        LIMIT 1`,
-      [workflowName, workingPath, 1]
+      [workflowName, workingPath]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
@@ -334,7 +471,7 @@ export async function findResumableRun(
 }
 
 /**
- * Find a resumable (failed/paused) run for a workflow by parent conversation ID.
+ * Find the most recent failed run for a workflow by parent conversation ID.
  * Used by the web orchestrator to detect approved runs that need foreground resume
  * (background dispatch would create a new worktree and lose the resumable run).
  */
@@ -347,7 +484,7 @@ export async function findResumableRunByParentConversation(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND parent_conversation_id = $2
-         AND status IN ('failed', 'paused')
+         AND status = 'failed'
        ORDER BY started_at DESC
        LIMIT 1`,
       [workflowName, parentConversationId]
@@ -365,63 +502,49 @@ export async function findResumableRunByParentConversation(
 }
 
 export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
-  const dialect = getDialect();
+  const currentRun = await selectWorkflowRunOrThrow(id);
+  const nextMetadata = cloneWorkflowRunMetadata(currentRun.metadata);
+  delete nextMetadata.approval;
 
-  // Split into UPDATE + SELECT to support both PostgreSQL and SQLite
-  // (SQLite does not support RETURNING on UPDATE statements)
-  // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
-  let updateResult: Awaited<ReturnType<typeof pool.query>>;
+  if (isLastApprovalContext(nextMetadata.lastApproval)) {
+    nextMetadata.lastApproval = {
+      ...nextMetadata.lastApproval,
+      resumedAt: new Date().toISOString(),
+    };
+  }
+
+  // Refresh started_at to NOW so the resumed row competes fairly with
+  // currently-active rows in getActiveWorkflowRunByPath's older-wins
+  // tiebreaker. Without this, a resumed row carries its original
+  // (potentially hours-old) started_at and would sort ahead of any
+  // currently-running holder, slipping past the path lock and causing
+  // two active workflows on the same working_path.
+  //
+  // We accept losing the original creation time here — `started_at` for
+  // an active row semantically means "when did this active phase start."
+  // The original creation time can be recovered from workflow_events
+  // history if needed for analytics.
   try {
-    // Refresh started_at to NOW so the resumed row competes fairly with
-    // currently-active rows in getActiveWorkflowRunByPath's older-wins
-    // tiebreaker. Without this, a resumed row carries its original
-    // (potentially hours-old) started_at and would sort ahead of any
-    // currently-running holder, slipping past the path lock and causing
-    // two active workflows on the same working_path.
-    //
-    // We accept losing the original creation time here — `started_at` for
-    // an active row semantically means "when did this active phase start."
-    // The original creation time can be recovered from workflow_events
-    // history if needed for analytics.
-    updateResult = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'running',
-           completed_at = NULL,
-           started_at = ${dialect.now()},
-           last_activity_at = ${dialect.now()}
-       WHERE id = $1`,
-      [id]
-    );
+    return await replaceWorkflowRunMetadata(id, {
+      status: 'running',
+      metadata: nextMetadata,
+      refreshStartedAt: true,
+    });
   } catch (error) {
     const err = error as Error;
+    if (
+      err.message.startsWith('Workflow run not found') ||
+      err.message.startsWith('Failed to read workflow run after update') ||
+      err.message.startsWith('Workflow run vanished after update')
+    ) {
+      throw err;
+    }
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_failed');
-    throw new Error(`Failed to resume workflow run: ${err.message}`);
+    const message = err.message.startsWith('Failed to update workflow run: ')
+      ? err.message.slice('Failed to update workflow run: '.length)
+      : err.message;
+    throw new Error(`Failed to resume workflow run: ${message}`);
   }
-
-  if (updateResult.rowCount === 0) {
-    // Logical race: run was deleted or already activated between find and resume
-    getLog().warn({ workflowRunId: id }, 'db.workflow_run_resume_not_found');
-    throw new Error(`Workflow run not found (id: ${id})`);
-  }
-
-  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
-  try {
-    selectResult = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_select_failed');
-    throw new Error(`Failed to read workflow run after update: ${err.message}`);
-  }
-
-  const row = selectResult.rows[0];
-  if (!row) {
-    getLog().error({ workflowRunId: id }, 'db.workflow_run_resume_vanished');
-    throw new Error(`Workflow run vanished after update (id: ${id})`);
-  }
-  return normalizeWorkflowRun(row);
 }
 
 /**
