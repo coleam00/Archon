@@ -86,8 +86,15 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
       // Emit as `assistant` (not `system`) so the content is captured into
       // `$nodeId.output` for downstream bash/script nodes. System chunks are
       // filtered to ⚠️/MCP-prefix only by the DAG executor.
+      // `flush: true` forces batch-mode adapters to surface this immediately —
+      // extensions like plannotator print review URLs the user must act on
+      // before the node unblocks, so we can't wait for node completion.
       const icon = type === 'error' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️';
-      bridge.emit({ type: 'assistant', content: `\n[pi extension ${icon}] ${message}\n` });
+      bridge.emit({
+        type: 'assistant',
+        content: `\n[pi extension ${icon}] ${message}\n`,
+        flush: true,
+      });
     },
     onTerminalInput(_handler: TerminalInputHandler): () => void {
       return noop;

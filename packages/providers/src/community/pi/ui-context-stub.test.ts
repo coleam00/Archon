@@ -37,13 +37,14 @@ describe('createArchonUIContext', () => {
     return { ui, chunks };
   }
 
-  test('notify("info") forwards as assistant chunk with info glyph (captured in nodeOutput)', () => {
+  test('notify("info") forwards as assistant chunk with info glyph and flush:true (captured in nodeOutput, surfaces before node blocks)', () => {
     const { ui, chunks } = mk();
     ui.notify('Remote session. Open: http://host:8080/', 'info');
     expect(chunks).toHaveLength(1);
     expect(chunks[0]).toEqual({
       type: 'assistant',
       content: '\n[pi extension ℹ️] Remote session. Open: http://host:8080/\n',
+      flush: true,
     });
   });
 

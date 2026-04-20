@@ -103,7 +103,15 @@ export interface TokenUsage {
  * Discriminated union with per-type required fields for type safety.
  */
 export type MessageChunk =
-  | { type: 'assistant'; content: string }
+  | {
+      type: 'assistant';
+      content: string;
+      /** When true, batch-mode adapters flush pending content and this chunk
+       *  to the platform immediately. Used by Pi's `notify()` so URLs the
+       *  user must act on (e.g. plannotator review) surface before the node
+       *  blocks for input. */
+      flush?: boolean;
+    }
   | { type: 'system'; content: string }
   | { type: 'thinking'; content: string }
   | {
