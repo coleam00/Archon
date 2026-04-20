@@ -51,10 +51,9 @@ import {
 } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
 import * as workflowDb from '../db/workflows';
-import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
-import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
-import { matchesInteractiveLoopCompletionInput } from '@archon/workflows/schemas/workflow-run';
+import { getPausedApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import { approveWorkflow } from '../operations/workflow-operations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -604,14 +603,8 @@ export async function handleMessage(
     if (!message.startsWith('/')) {
       const pausedRun = await workflowDb.getPausedWorkflowRun(conversation.id);
       if (pausedRun) {
-        const approvalRaw = pausedRun.metadata.approval;
-        const hasValidApproval =
-          approvalRaw != null &&
-          typeof approvalRaw === 'object' &&
-          'nodeId' in approvalRaw &&
-          typeof (approvalRaw as Record<string, unknown>).nodeId === 'string';
-
-        if (!hasValidApproval) {
+        const approval = getPausedApprovalContext(pausedRun);
+        if (!approval) {
           // Paused run exists but approval context is missing or corrupt —
           // tell the user so they can use explicit commands instead.
           await platform.sendMessage(
@@ -622,7 +615,6 @@ export async function handleMessage(
           return;
         }
 
-        const approval = approvalRaw as ApprovalContext;
         getLog().info(
           {
             conversationId,
@@ -634,60 +626,22 @@ export async function handleMessage(
         );
 
         try {
-          const completesLoop = matchesInteractiveLoopCompletionInput(approval, message);
-          // Write approval events. For interactive loops, only write node_completed when the
-          // workflow explicitly configured exact completion aliases.
-          if (approval.type !== 'interactive_loop' || completesLoop) {
-            const nodeOutput = approval.captureResponse === true ? message : '';
-            await workflowEventDb.createWorkflowEvent({
-              workflow_run_id: pausedRun.id,
-              event_type: 'node_completed',
-              step_name: approval.nodeId,
-              data: {
-                node_output: completesLoop ? (approval.lastOutput ?? '') : nodeOutput,
-                approval_decision: 'approved',
-                ...(completesLoop ? { loop_completion_input: message } : {}),
-              },
-            });
-          }
-          await workflowEventDb.createWorkflowEvent({
-            workflow_run_id: pausedRun.id,
-            event_type: 'approval_received',
-            step_name: approval.nodeId,
-            data: {
-              decision: 'approved',
-              comment: message,
-              ...(approval.type === 'interactive_loop' ? { iteration: approval.iteration } : {}),
-              ...(completesLoop ? { transition: 'complete_loop' } : {}),
-            },
-          });
-          // For interactive loops, store user input; for standard approvals, mark as approved
-          // and clear any rejection state.
-          const metadataUpdate: Record<string, unknown> =
-            approval.type === 'interactive_loop'
-              ? completesLoop
-                ? { loop_completion_input: message }
-                : { loop_user_input: message }
-              : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
-          await workflowDb.updateWorkflowRun(pausedRun.id, {
-            status: 'failed',
-            metadata: metadataUpdate,
-          });
+          const approvalResult = await approveWorkflow(pausedRun.id, message);
 
           // Discover workflow and resume
           const { workflows: discoveredWorkflows } = await discoverAllWorkflows(conversation);
           const allWorkflows: WorkflowDefinition[] = discoveredWorkflows.map(w => w.workflow);
-          const workflow = findWorkflow(pausedRun.workflow_name, allWorkflows);
+          const workflow = findWorkflow(approvalResult.workflowName, allWorkflows);
           if (!workflow) {
             await platform.sendMessage(
               conversationId,
-              `Approved, but workflow \`${pausedRun.workflow_name}\` not found. ` +
+              `Approved, but workflow \`${approvalResult.workflowName}\` not found. ` +
                 'The approval was recorded — use `/workflow list` to check available workflows.'
             );
             return;
           }
-          const codebase = conversation.codebase_id
-            ? await codebaseDb.getCodebase(conversation.codebase_id)
+          const codebase = approvalResult.codebaseId
+            ? await codebaseDb.getCodebase(approvalResult.codebaseId)
             : null;
           if (!codebase) {
             await platform.sendMessage(
@@ -704,11 +658,15 @@ export async function handleMessage(
             conversation,
             codebase,
             workflow,
-            pausedRun.user_message,
+            approvalResult.userMessage ?? pausedRun.user_message,
             isolationHints
           );
           getLog().info(
-            { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
+            {
+              conversationId,
+              workflowRunId: pausedRun.id,
+              workflowName: approvalResult.workflowName,
+            },
             'orchestrator.natural_language_approval_completed'
           );
         } catch (error) {
