@@ -1,22 +1,23 @@
 # scripts/install.ps1
-# Install Archon CLI from GitHub Releases on Windows
+# Install HarnessLab CLI from GitHub Releases on Windows
 #
-# Usage: irm https://archon.diy/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
 #
 # Options (via environment variables):
+#   $env:REPO          - GitHub repository to install from (default: NewTurn2017/Archon)
 #   $env:VERSION       - Specific version to install (default: latest)
 #   $env:INSTALL_DIR   - Installation directory (default: $env:USERPROFILE\.archon\bin)
 #   $env:SKIP_CHECKSUM - Set to "true" to skip checksum verification (not recommended)
 #
 # Examples:
 #   # Install latest
-#   irm https://archon.diy/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
 #
 #   # Install specific version
-#   $env:VERSION = "v0.2.0"; irm https://archon.diy/install.ps1 | iex
+#   $env:VERSION = "v0.1.0"; irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
 #
 #   # Install to custom directory
-#   $env:INSTALL_DIR = "C:\tools\archon"; irm https://archon.diy/install.ps1 | iex
+#   $env:INSTALL_DIR = "C:\tools\archon"; irm https://raw.githubusercontent.com/NewTurn2017/Archon/dev/scripts/install.ps1 | iex
 
 #Requires -Version 5.1
 Set-StrictMode -Version Latest
@@ -25,7 +26,7 @@ $ErrorActionPreference = 'Stop'
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-$REPO         = "coleam00/Archon"
+$REPO         = if ($env:REPO)         { $env:REPO }         else { "NewTurn2017/Archon" }
 $BINARY_NAME  = "archon"
 $VERSION      = if ($env:VERSION)     { $env:VERSION }     else { "latest" }
 $INSTALL_DIR  = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { "$env:USERPROFILE\.archon\bin" }
@@ -45,7 +46,7 @@ function Write-Ok      { param([string]$Msg) Write-Host "[OK]    $Msg" -Foregrou
 function Show-Banner {
     Write-Host ""
     Write-Host "  +---------------------------------------+" -ForegroundColor Cyan
-    Write-Host "  |      Archon CLI Installer             |" -ForegroundColor Cyan
+    Write-Host "  |      HarnessLab CLI Installer         |" -ForegroundColor Cyan
     Write-Host "  |      Windows (PowerShell)             |" -ForegroundColor Cyan
     Write-Host "  +---------------------------------------+" -ForegroundColor Cyan
     Write-Host ""

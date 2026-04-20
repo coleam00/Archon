@@ -1,6 +1,6 @@
 {
   "name": "archon",
-  "version": "0.3.6",
+  "version": "0.1.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -14,6 +14,8 @@
     "build": "bun --filter '*' build",
     "build:binaries": "bash scripts/build-binaries.sh",
     "build:checksums": "bash scripts/checksums.sh",
+    "version:harnesslab": "bun scripts/harnesslab-version.ts",
+    "version:sync": "bash scripts/sync-versions.sh",
     "generate:bundled": "bun run scripts/generate-bundled-defaults.ts",
     "check:bundled": "bun run scripts/generate-bundled-defaults.ts --check",
     "test": "bun --filter '*' --parallel test",

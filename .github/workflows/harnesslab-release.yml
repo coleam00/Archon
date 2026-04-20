@@ -1,0 +1,104 @@
+name: HarnessLab Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'Branch to release from'
+        required: true
+        default: dev
+        type: string
+      version:
+        description: 'Exact SemVer to release, for example 0.1.0. Overrides bump.'
+        required: false
+        type: string
+      bump:
+        description: 'Version bump to apply when version is empty'
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harnesslab-release-${{ inputs.target_branch }}
+  cancel-in-progress: false
+
+jobs:
+  tag-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          if [ -n "$REQUESTED_VERSION" ]; then
+            VERSION="$(bun scripts/harnesslab-version.ts set "$REQUESTED_VERSION")"
+          elif [ "$BUMP" != "none" ]; then
+            VERSION="$(bun scripts/harnesslab-version.ts bump "$BUMP")"
+          else
+            VERSION="$(bun scripts/harnesslab-version.ts current)"
+          fi
+
+          TAG="$(bun scripts/harnesslab-version.ts tag "$VERSION")"
+
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package.json packages/*/package.json; then
+            echo "Package versions already match ${{ steps.version.outputs.version }}"
+            exit 0
+          fi
+
+          git add package.json packages/*/package.json
+          git commit -m "chore: release ${{ steps.version.outputs.tag }}"
+          git push origin "HEAD:${{ inputs.target_branch }}"
+
+      - name: Push release tag
+        run: |
+          git tag -a "${{ steps.version.outputs.tag }}" -m "HarnessLab ${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Write summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## HarnessLab release started
+
+          Created tag `${{ steps.version.outputs.tag }}` from `${{ inputs.target_branch }}`.
+
+          The `Release CLI Binaries` workflow will build binaries, create the GitHub Release, and update the Homebrew formula after assets and checksums are available.
+          EOF

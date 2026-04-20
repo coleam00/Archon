@@ -19,7 +19,7 @@ GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unkn
 TARGET="${TARGET:-}"
 OUTFILE="${OUTFILE:-}"
 
-echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
+echo "Building HarnessLab CLI v${VERSION} (commit: ${GIT_COMMIT})"
 
 # Regenerate bundled defaults from .archon/{commands,workflows}/defaults/ so the
 # compiled binary always embeds the current on-disk contents. CI also runs
