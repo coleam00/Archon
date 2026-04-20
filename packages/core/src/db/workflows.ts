@@ -11,6 +11,7 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import {
   TERMINAL_WORKFLOW_STATUSES,
+  isApprovalContext,
   getPausedApprovalContext,
   isLastApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
@@ -146,6 +147,54 @@ export interface ResolveWorkflowRunApprovalOptions {
   resolution: ApprovalResolution;
   metadata?: Record<string, unknown>;
   decisionText?: string;
+}
+
+function inferLegacyApprovalResolution(metadata: Record<string, unknown>): ApprovalResolution {
+  if (
+    typeof metadata.loop_completion_input === 'string' &&
+    metadata.loop_completion_input.length > 0
+  ) {
+    return 'completed';
+  }
+  if (typeof metadata.loop_user_input === 'string' && metadata.loop_user_input.length > 0) {
+    return 'feedback';
+  }
+  if (typeof metadata.rejection_reason === 'string' && metadata.rejection_reason.length > 0) {
+    return 'rejected';
+  }
+  return 'approved';
+}
+
+function inferLegacyApprovalDecisionText(metadata: Record<string, unknown>): string | undefined {
+  if (
+    typeof metadata.loop_completion_input === 'string' &&
+    metadata.loop_completion_input.length > 0
+  ) {
+    return metadata.loop_completion_input;
+  }
+  if (typeof metadata.loop_user_input === 'string' && metadata.loop_user_input.length > 0) {
+    return metadata.loop_user_input;
+  }
+  if (typeof metadata.rejection_reason === 'string' && metadata.rejection_reason.length > 0) {
+    return metadata.rejection_reason;
+  }
+  return undefined;
+}
+
+function inferLegacyApprovalResolvedAt(run: WorkflowRun): string {
+  if (run.last_activity_at instanceof Date) {
+    return run.last_activity_at.toISOString();
+  }
+  if (typeof run.last_activity_at === 'string') {
+    return run.last_activity_at;
+  }
+  if (run.completed_at instanceof Date) {
+    return run.completed_at.toISOString();
+  }
+  if (typeof run.completed_at === 'string') {
+    return run.completed_at;
+  }
+  return new Date().toISOString();
 }
 
 export async function resolveWorkflowRunApproval(
@@ -504,14 +553,26 @@ export async function findResumableRunByParentConversation(
 export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   const currentRun = await selectWorkflowRunOrThrow(id);
   const nextMetadata = cloneWorkflowRunMetadata(currentRun.metadata);
-  delete nextMetadata.approval;
+  const legacyApproval = currentRun.metadata.approval;
 
   if (isLastApprovalContext(nextMetadata.lastApproval)) {
     nextMetadata.lastApproval = {
       ...nextMetadata.lastApproval,
       resumedAt: new Date().toISOString(),
     };
+  } else if (isApprovalContext(legacyApproval)) {
+    const decisionText = inferLegacyApprovalDecisionText(currentRun.metadata);
+    // Legacy failed rows predate `lastApproval`. Migrate them on resume so the
+    // running row still carries the gate context the DAG resume readers expect.
+    nextMetadata.lastApproval = {
+      ...legacyApproval,
+      resolution: inferLegacyApprovalResolution(currentRun.metadata),
+      resolvedAt: inferLegacyApprovalResolvedAt(currentRun),
+      resumedAt: new Date().toISOString(),
+      ...(decisionText !== undefined ? { decisionText } : {}),
+    };
   }
+  delete nextMetadata.approval;
 
   // Refresh started_at to NOW so the resumed row competes fairly with
   // currently-active rows in getActiveWorkflowRunByPath's older-wins

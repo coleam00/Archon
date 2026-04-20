@@ -953,6 +953,69 @@ describe('workflows database', () => {
       expect(updateQuery).toContain('started_at = NOW()');
     });
 
+    test('migrates legacy failed-row approval metadata into lastApproval before resuming', async () => {
+      const failedRun: WorkflowRun = {
+        ...mockWorkflowRun,
+        status: 'failed',
+        completed_at: null,
+        last_activity_at: new Date('2025-01-01T01:15:00Z'),
+        metadata: {
+          approval: {
+            nodeId: 'refine',
+            message: 'Review the plan',
+            type: 'interactive_loop',
+            iteration: 2,
+            sessionId: 'legacy-loop-session-1',
+          },
+          loop_user_input: 'Need stronger error handling',
+          preserved: { nested: true },
+        },
+      };
+      const updatedRun: WorkflowRun = {
+        ...failedRun,
+        status: 'running',
+        metadata: {
+          loop_user_input: 'Need stronger error handling',
+          preserved: { nested: true },
+          lastApproval: {
+            nodeId: 'refine',
+            message: 'Review the plan',
+            type: 'interactive_loop',
+            iteration: 2,
+            sessionId: 'legacy-loop-session-1',
+            resolution: 'feedback',
+            resolvedAt: '2025-01-01T01:15:00.000Z',
+            resumedAt: '2025-01-01T01:16:00.000Z',
+            decisionText: 'Need stronger error handling',
+          },
+        },
+      };
+      mockQuery.mockResolvedValueOnce(createQueryResult([failedRun]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockQuery.mockResolvedValueOnce(createQueryResult([updatedRun]));
+
+      const result = await resumeWorkflowRun('workflow-run-123');
+
+      expect(result.status).toBe('running');
+      const [, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const metadata = JSON.parse(updateParams[1] as string) as Record<string, unknown>;
+      expect(metadata.approval).toBeUndefined();
+      expect(metadata.preserved).toEqual({ nested: true });
+      expect(metadata.lastApproval).toEqual(
+        expect.objectContaining({
+          nodeId: 'refine',
+          message: 'Review the plan',
+          type: 'interactive_loop',
+          iteration: 2,
+          sessionId: 'legacy-loop-session-1',
+          resolution: 'feedback',
+          resolvedAt: '2025-01-01T01:15:00.000Z',
+          decisionText: 'Need stronger error handling',
+        })
+      );
+      expect(typeof (metadata.lastApproval as Record<string, unknown>).resumedAt).toBe('string');
+    });
+
     test('throws when no row matched (run not found)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 

@@ -163,11 +163,12 @@ export function isApprovalContext(val: unknown): val is ApprovalContext {
 
 /** Type guard for the archived latest-gate metadata used by resume paths. */
 export function isLastApprovalContext(val: unknown): val is LastApprovalContext {
-  return (
-    isApprovalContext(val) &&
-    typeof (val as Record<string, unknown>).resolution === 'string' &&
-    typeof (val as Record<string, unknown>).resolvedAt === 'string'
-  );
+  if (!isApprovalContext(val)) {
+    return false;
+  }
+
+  const record = val as { resolution?: unknown; resolvedAt?: unknown };
+  return typeof record.resolution === 'string' && typeof record.resolvedAt === 'string';
 }
 
 type WorkflowRunApprovalMetadata = Pick<WorkflowRun, 'metadata' | 'status'>;

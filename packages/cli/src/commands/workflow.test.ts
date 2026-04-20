@@ -4,16 +4,6 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import {
-  workflowListCommand,
-  workflowRunCommand,
-  workflowStatusCommand,
-  workflowResumeCommand,
-  workflowAbandonCommand,
-  workflowApproveCommand,
-  workflowRejectCommand,
-  workflowCleanupCommand,
-} from './workflow';
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -143,6 +133,7 @@ mock.module('@archon/core/db/workflows', () => ({
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
   updateWorkflowRun: mock(() => Promise.resolve()),
+  resolveWorkflowRunApproval: mock(() => Promise.resolve()),
   listWorkflowRuns: mock(() => Promise.resolve([])),
   deleteOldWorkflowRuns: mock(() => Promise.resolve({ count: 0 })),
 }));
@@ -151,6 +142,17 @@ mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   createWorkflowEvent: mock(() => Promise.resolve()),
 }));
+
+const {
+  workflowListCommand,
+  workflowRunCommand,
+  workflowStatusCommand,
+  workflowResumeCommand,
+  workflowAbandonCommand,
+  workflowApproveCommand,
+  workflowRejectCommand,
+  workflowCleanupCommand,
+} = await import('./workflow');
 
 describe('workflowListCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -1825,7 +1827,6 @@ describe('workflowRejectCommand', () => {
 
   it('cancels immediately when no on_reject configured', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
-    const core = await import('@archon/core');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-plain',
@@ -1836,13 +1837,14 @@ describe('workflowRejectCommand', () => {
       codebase_id: null,
       metadata: { approval: { type: 'approval', nodeId: 'gate', message: 'Approve?' } },
     });
-    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
-      createWorkflowEvent: mock(() => Promise.resolve()),
-    });
 
     await workflowRejectCommand('run-plain', 'not good');
 
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-plain');
+    expect(workflowDb.resolveWorkflowRunApproval).toHaveBeenCalledWith('run-plain', {
+      status: 'cancelled',
+      resolution: 'rejected',
+      decisionText: 'not good',
+    });
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
 
@@ -1874,9 +1876,11 @@ describe('workflowRejectCommand', () => {
 
     await workflowRejectCommand('run-on-reject', 'needs work');
 
-    expect(workflowDb.updateWorkflowRun).toHaveBeenCalledWith('run-on-reject', {
+    expect(workflowDb.resolveWorkflowRunApproval).toHaveBeenCalledWith('run-on-reject', {
       status: 'failed',
+      resolution: 'rejected',
       metadata: { rejection_reason: 'needs work', rejection_count: 1 },
+      decisionText: 'needs work',
     });
     expect(consoleSpy).toHaveBeenCalledWith('Rejected workflow: my-wf');
     expect(consoleSpy).toHaveBeenCalledWith(
@@ -1892,7 +1896,6 @@ describe('workflowRejectCommand', () => {
 
   it('cancels when max attempts reached', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
-    const core = await import('@archon/core');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-max',
@@ -1912,13 +1915,15 @@ describe('workflowRejectCommand', () => {
         rejection_count: 2,
       },
     });
-    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
-      createWorkflowEvent: mock(() => Promise.resolve()),
-    });
 
     await workflowRejectCommand('run-max', 'still bad');
 
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-max');
+    expect(workflowDb.resolveWorkflowRunApproval).toHaveBeenCalledWith('run-max', {
+      status: 'cancelled',
+      resolution: 'rejected',
+      metadata: { rejection_reason: 'still bad', rejection_count: 3 },
+      decisionText: 'still bad',
+    });
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });
 

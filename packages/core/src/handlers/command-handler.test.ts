@@ -37,6 +37,7 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-id', status: 'running' }));
 const mockFailWorkflowRun = mock(() => Promise.resolve());
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
+const mockResolveWorkflowRunApproval = mock(() => Promise.resolve());
 
 // Workflow events database mocks
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -88,6 +89,7 @@ mock.module('../db/workflows', () => ({
   resumeWorkflowRun: mockResumeWorkflowRun,
   failWorkflowRun: mockFailWorkflowRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
+  resolveWorkflowRunApproval: mockResolveWorkflowRunApproval,
 }));
 
 mock.module('../db/workflow-events', () => ({
@@ -228,6 +230,7 @@ function clearAllMocks(): void {
   mockResumeWorkflowRun.mockClear();
   mockFailWorkflowRun.mockClear();
   mockUpdateWorkflowRun.mockClear();
+  mockResolveWorkflowRunApproval.mockClear();
   mockCreateWorkflowEvent.mockClear();
   // Isolation mocks
   mockIsolationCreate.mockClear();
@@ -1835,9 +1838,11 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('loop input received');
         expect(result.message).toContain('my-loop-wf');
-        expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-123', {
+        expect(mockResolveWorkflowRunApproval).toHaveBeenCalledWith('run-123', {
           status: 'failed',
+          resolution: 'feedback',
           metadata: { loop_user_input: 'Add error handling' },
+          decisionText: 'Add error handling',
         });
       });
 
@@ -2038,9 +2043,11 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Reworking');
-        expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-reject-1', {
+        expect(mockResolveWorkflowRunApproval).toHaveBeenCalledWith('run-reject-1', {
           status: 'failed',
+          resolution: 'rejected',
           metadata: { rejection_reason: 'needs work', rejection_count: 1 },
+          decisionText: 'needs work',
         });
       });
 
@@ -2073,7 +2080,12 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('max attempts reached');
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-reject-max');
+        expect(mockResolveWorkflowRunApproval).toHaveBeenCalledWith('run-reject-max', {
+          status: 'cancelled',
+          resolution: 'rejected',
+          metadata: { rejection_reason: 'bad', rejection_count: 3 },
+          decisionText: 'bad',
+        });
       });
 
       test('cancels immediately without on_reject', async () => {
@@ -2104,7 +2116,11 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-reject-plain');
+        expect(mockResolveWorkflowRunApproval).toHaveBeenCalledWith('run-reject-plain', {
+          status: 'cancelled',
+          resolution: 'rejected',
+          decisionText: 'reason',
+        });
       });
     });
   });
