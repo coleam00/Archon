@@ -6274,6 +6274,63 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 
+  it('named bun scripts receive workflow runtime env aliases', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-env-alias-run-id', {
+      workflow_name: 'script-env-alias-test',
+      conversation_id: 'conv-env-alias',
+      user_message: 'env alias test',
+    });
+
+    const artifactsDir = join(testDir, 'artifacts');
+    const scriptsDir = join(testDir, '.archon', 'scripts');
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(scriptsDir, { recursive: true });
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(
+      join(scriptsDir, 'show-env.ts'),
+      [
+        'console.log(JSON.stringify({',
+        '  artifactsDir: process.env.ARTIFACTS_DIR ?? "",',
+        '  archonArtifactsDir: process.env.ARCHON_ARTIFACTS_DIR ?? "",',
+        '  baseBranch: process.env.BASE_BRANCH ?? "",',
+        '  archonBaseBranch: process.env.ARCHON_BASE_BRANCH ?? ""',
+        '}));',
+      ].join('\n')
+    );
+    await writeFile(join(commandsDir, 'use-env.md'), 'Captured env: $show-env.output');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-env-alias',
+      testDir,
+      {
+        name: 'named-script-env-alias-test',
+        nodes: [
+          { id: 'show-env', script: 'show-env', runtime: 'bun' },
+          { id: 'use-env', command: 'use-env', depends_on: ['show-env'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    const prompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(prompt).toContain(`"artifactsDir":"${artifactsDir}"`);
+    expect(prompt).toContain(`"archonArtifactsDir":"${artifactsDir}"`);
+    expect(prompt).toContain('"baseBranch":"main"');
+    expect(prompt).toContain('"archonBaseBranch":"main"');
+  });
+
   it('named bun script executes from Archon default scripts when repo script is absent', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
