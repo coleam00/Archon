@@ -298,7 +298,20 @@ async function main(): Promise<number> {
         }
         const scope: 'home' | 'project' = rawScope ?? 'home';
         const forceFlag = (values.force as boolean | undefined) ?? false;
-        await setupCommand({ spawn: spawnFlag, repoPath: cwd, scope, force: forceFlag });
+        // For --scope project, resolve to the git repo root so running from a
+        // subdirectory writes to <repo-root>/.archon/.env (what loadArchonEnv
+        // reads at boot) — not <subdir>/.archon/.env.
+        let repoPath = cwd;
+        if (scope === 'project') {
+          const repoRoot = await git.findRepoRoot(cwd);
+          if (!repoRoot) {
+            console.error('Error: --scope project requires running from inside a git repository.');
+            console.error('Run from the repo root, pass --cwd <repo>, or use --scope home.');
+            return 1;
+          }
+          repoPath = repoRoot;
+        }
+        await setupCommand({ spawn: spawnFlag, repoPath, scope, force: forceFlag });
         break;
       }
 

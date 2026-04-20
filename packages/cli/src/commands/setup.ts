@@ -32,7 +32,7 @@ import {
   cancel,
   log,
 } from '@clack/prompts';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { parse as parseDotenv } from 'dotenv';
 import { join, dirname } from 'path';
 import { BUNDLED_SKILL_FILES } from '../bundled-skill';
@@ -40,6 +40,10 @@ import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import { getRegisteredProviders } from '@archon/providers';
+import {
+  getArchonEnvPath as pathsGetArchonEnvPath,
+  getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
+} from '@archon/paths';
 
 // =============================================================================
 // Types
@@ -324,16 +328,19 @@ After installation, run 'codex' to authenticate.`,
 };
 
 /**
- * Check for existing configuration at ~/.archon/.env
+ * Check for existing configuration at the selected scope's archon-owned env
+ * file. Defaults to home scope for backward compatibility — callers writing to
+ * project scope must pass a path so the Add/Update/Fresh decision reflects the
+ * actual target.
  */
-export function checkExistingConfig(): ExistingConfig | null {
-  const envPath = join(getArchonHome(), '.env');
+export function checkExistingConfig(envPath?: string): ExistingConfig | null {
+  const path = envPath ?? join(getArchonHome(), '.env');
 
-  if (!existsSync(envPath)) {
+  if (!existsSync(path)) {
     return null;
   }
 
-  const content = readFileSync(envPath, 'utf-8');
+  const content = readFileSync(path, 'utf-8');
 
   return {
     hasDatabase: hasEnvValue(content, 'DATABASE_URL'),
@@ -1321,29 +1328,32 @@ export function generateEnvContent(config: SetupConfig): string {
 }
 
 /**
- * Resolve the target path for the selected scope.
- *   - 'home'    → ~/.archon/.env
- *   - 'project' → <repoPath>/.archon/.env
- * Never resolves to <repoPath>/.env (that path belongs to the user; see the
- * file-header doc comment).
+ * Resolve the target path for the selected scope. Delegates to `@archon/paths`
+ * so Docker (`/.archon`), the `ARCHON_HOME` override, and the "undefined"
+ * literal guard behave identically to the loader. Never resolves to
+ * `<repoPath>/.env` — that path belongs to the user.
  */
 export function resolveScopedEnvPath(scope: 'home' | 'project', repoPath: string): string {
-  if (scope === 'project') return join(repoPath, '.archon', '.env');
-  return join(getArchonHome(), '.env');
+  if (scope === 'project') return pathsGetRepoArchonEnvPath(repoPath);
+  return pathsGetArchonEnvPath();
 }
 
 /**
- * Serialize a key/value map back to `KEY=value` lines. Values containing
- * whitespace, `#`, or newlines are double-quoted (with `"` and newlines
- * escaped) so round-tripping through dotenv.parse is stable.
+ * Serialize a key/value map back to `KEY=value` lines. Values with whitespace,
+ * `#`, `"`, `'`, `\n`, or `\r` are double-quoted with `\\`, `"`, `\n`, `\r`
+ * escaped so round-tripping through dotenv.parse is stable.
  */
 export function serializeEnv(entries: Record<string, string>): string {
   const lines: string[] = [];
   for (const [key, rawValue] of Object.entries(entries)) {
-    const value = rawValue ?? '';
+    const value = rawValue;
     const needsQuoting = /[\s#"'\n\r]/.test(value) || value === '';
     if (needsQuoting) {
-      const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+      const escaped = value
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
       lines.push(`${key}="${escaped}"`);
     } else {
       lines.push(`${key}=${value}`);
@@ -1389,9 +1399,10 @@ export function writeScopedEnv(
   if (exists) {
     backupPath = `${targetPath}.archon-backup-${backupTimestamp()}`;
     copyFileSync(targetPath, backupPath);
+    // Backups carry tokens/secrets — match the 0o600 we set on the live file.
+    chmodSync(backupPath, 0o600);
   }
 
-  const proposed = parseDotenv(content);
   const preservedKeys: string[] = [];
   let finalContent: string;
 
@@ -1407,10 +1418,15 @@ export function writeScopedEnv(
     // existing-only keys (user customizations) are preserved verbatim.
     const existingRaw = readFileSync(targetPath, 'utf-8');
     const existing = parseDotenv(existingRaw);
+    const proposed = parseDotenv(content);
     const merged: Record<string, string> = { ...existing };
     for (const [key, value] of Object.entries(proposed)) {
       const prior = existing[key];
-      if (!(key in existing) || prior === undefined || prior === '') {
+      // Treat whitespace-only existing values as empty — otherwise a
+      // copy-paste stray `   ` would silently defeat the wizard's update for
+      // that key forever.
+      const priorIsEmpty = prior === undefined || prior.trim() === '';
+      if (!(key in existing) || priorIsEmpty) {
         merged[key] = value;
       } else {
         preservedKeys.push(key);
@@ -1419,7 +1435,12 @@ export function writeScopedEnv(
     finalContent = serializeEnv(merged);
   }
 
-  writeFileSync(targetPath, finalContent);
+  // 0o600 — env files hold secrets. Prevents group/world-readable writes on a
+  // permissive umask. writeFileSync's default mode is 0o666 & ~umask.
+  writeFileSync(targetPath, finalContent, { mode: 0o600 });
+  // writeFileSync preserves mode for existing files; chmod guarantees 0o600
+  // even when overwriting a file that pre-existed with looser permissions.
+  chmodSync(targetPath, 0o600);
   return { targetPath, backupPath, preservedKeys, forced: options.force && exists };
 }
 
@@ -1613,9 +1634,15 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   // Interactive setup flow
   intro('Archon Setup Wizard');
 
+  // Resolve scope + target path up-front so everything downstream (existing-
+  // config check, merge, write) agrees on which file we're touching.
+  const scope: 'home' | 'project' = options.scope ?? 'home';
+  const force = options.force ?? false;
+  const targetEnvPath = resolveScopedEnvPath(scope, options.repoPath);
+
   // If a pre-existing <repo>/.env is present, tell the operator once that
   // archon does NOT manage it — avoids confusion for users upgrading from
-  // pre-#1303 versions that used to write there.
+  // versions that used to write there.
   const legacyRepoEnv = join(options.repoPath, '.env');
   if (existsSync(legacyRepoEnv)) {
     log.info(
@@ -1626,8 +1653,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     );
   }
 
-  // Check for existing configuration
-  const existing = checkExistingConfig();
+  // Check for existing configuration at the selected scope (not unconditionally
+  // ~/.archon/.env) so the Add/Update/Fresh decision reflects the actual target.
+  const existing = checkExistingConfig(targetEnvPath);
 
   type SetupMode = 'fresh' | 'add' | 'update';
   let mode: SetupMode = 'fresh';
@@ -1749,17 +1777,27 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     config.botDisplayName = await collectBotDisplayName();
   }
 
-  // Generate and write configuration
+  // Generate and write configuration. Wrap in try/catch so any fs exception
+  // (permission denied, read-only FS, backup copy failure, etc.) stops the
+  // spinner cleanly and surfaces an actionable error instead of a raw stack
+  // trace after the user has filled out the entire wizard.
   s.start('Writing configuration...');
 
   const envContent = generateEnvContent(config);
-  const scope = options.scope ?? 'home';
-  const force = options.force ?? false;
-  const writeResult = writeScopedEnv(envContent, {
-    scope,
-    repoPath: options.repoPath,
-    force,
-  });
+  let writeResult: ReturnType<typeof writeScopedEnv>;
+  try {
+    writeResult = writeScopedEnv(envContent, {
+      scope,
+      repoPath: options.repoPath,
+      force,
+    });
+  } catch (error) {
+    s.stop('Failed to write configuration');
+    const err = error as NodeJS.ErrnoException;
+    const code = err.code ? ` (${err.code})` : '';
+    cancel(`Could not write ${targetEnvPath}${code}: ${err.message}`);
+    process.exit(1);
+  }
 
   s.stop('Configuration written');
 

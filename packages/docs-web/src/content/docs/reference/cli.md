@@ -368,12 +368,15 @@ When using `--branch`, workflows run inside the worktree directory.
 
 ## Environment
 
-At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads `~/.archon/.env` as the sole trusted source. All keys you set in `~/.archon/.env` pass through to AI subprocesses — no allowlist filtering.
+At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads two archon-owned env files with `override: true`. Keys in archon-owned files pass through to AI subprocesses — no allowlist filtering.
 
 On startup, the CLI:
-1. Strips CWD `.env` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`)
-2. Loads `~/.archon/.env` (all keys trusted)
-3. Auto-enables global Claude auth if no explicit tokens are set
+1. Strips `<cwd>/.env*` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
+2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys from ~/.archon/.env` when N > 0.
+3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Emits `[archon] loaded N keys from <path> (repo scope, overrides user scope)` when N > 0.
+4. Auto-enables global Claude auth if no explicit tokens are set.
+
+`<cwd>/.env` is never loaded — it belongs to the target project. See [Configuration Reference: `.env` File Locations](/reference/configuration/#env-file-locations) for the full three-path model.
 
 ## Database
 

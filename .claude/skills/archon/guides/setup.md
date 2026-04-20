@@ -301,16 +301,21 @@ For advanced users — these are not needed for basic setup:
 
 ### Environment Files (`.env`)
 
-Infrastructure config (database URL, platform tokens) is stored in `.env` files:
+Archon's env model is scoped by directory ownership: `.archon/` is archon-owned, anything else belongs to you.
 
-| Location | Used by | Purpose |
-|----------|---------|---------|
-| `~/.archon/.env` | **CLI** | Global infrastructure config — database, AI tokens |
-| `<archon-repo>/.env` | **Server** | Platform tokens for Telegram/Slack/GitHub/Discord |
+| Path | Stripped at boot? | Archon loads? | `archon setup` writes? |
+|------|-------------------|---------------|------------------------|
+| `<cwd>/.env` | **yes** (safety guard) | never | never |
+| `<cwd>/.archon/.env` | no | yes (project scope, overrides user scope) | yes iff `--scope project` |
+| `~/.archon/.env` | no | yes (user scope) | yes iff `--scope home` (default) |
 
-**Best practice**: Use `~/.archon/.env` as the single source of truth. Symlink or copy to `<archon-repo>/.env` if running the server.
+**Which should I use?**
 
-**Note**: The CLI does NOT load `.env` from the current working directory. This prevents conflicts when running Archon from projects that have their own database configurations.
+- `~/.archon/.env` — defaults that apply everywhere (your personal `SLACK_WEBHOOK`, `DATABASE_URL`, bot tokens).
+- `<cwd>/.archon/.env` — per-project overrides (different webhook per repo, different DB per environment).
+- `<cwd>/.env` — your app's env file; archon strips these keys at boot so nothing leaks between your app and archon.
+
+`archon setup` writes to exactly one archon-owned file chosen by `--scope` (default `home`), merges into existing content so user-added keys survive, and writes a timestamped backup before every rewrite. Use `--force` to opt into wholesale overwrite (backup still written).
 
 ### Config Files (YAML)
 

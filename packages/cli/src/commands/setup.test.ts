@@ -710,4 +710,29 @@ describe('writeScopedEnv (#1303)', () => {
     expect(parsed.WITH_HASH).toBe('value#not-a-comment');
     expect(parsed.EMPTY).toBe('');
   });
+
+  it('serializeEnv escapes \\r so bare CRs survive round-trip', () => {
+    const entries = { WITH_CR: 'line1\rline2', WITH_CRLF: 'a\r\nb' };
+    const serialized = serializeEnv(entries);
+    const parsed = parseDotenv(serialized);
+    expect(parsed.WITH_CR).toBe('line1\rline2');
+    expect(parsed.WITH_CRLF).toBe('a\r\nb');
+  });
+
+  it('merge treats whitespace-only existing values as empty (replaces them)', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'API_KEY=   \nNORMAL=keep-me\n');
+    const result = writeScopedEnv('API_KEY=real-token\nNORMAL=from-wizard\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    // Whitespace-only API_KEY was replaced by the proposed value.
+    expect(merged.API_KEY).toBe('real-token');
+    // Non-empty NORMAL was preserved and reported.
+    expect(merged.NORMAL).toBe('keep-me');
+    expect(result.preservedKeys).toContain('NORMAL');
+    expect(result.preservedKeys).not.toContain('API_KEY');
+  });
 });
