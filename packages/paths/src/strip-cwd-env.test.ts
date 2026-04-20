@@ -82,6 +82,50 @@ describe('stripCwdEnv', () => {
     expect(process.env.TEST_STRIP_KEY_A).toBeUndefined();
     expect(process.env.TEST_STRIP_KEY_B).toBeUndefined();
   });
+
+  it('emits a single [archon] stripped log line when keys were found', () => {
+    writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_KEY=leaked\n');
+    writeFileSync(join(tmpDir, '.env.local'), 'TEST_STRIP_KEY2=leaked\n');
+    process.env.TEST_STRIP_KEY = 'leaked';
+    process.env.TEST_STRIP_KEY2 = 'leaked';
+
+    const stderrLines: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      if (typeof chunk === 'string') stderrLines.push(chunk);
+      return true;
+    };
+
+    try {
+      stripCwdEnv(tmpDir);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    const strippedLine = stderrLines.find(l => l.includes('[archon] stripped'));
+    expect(strippedLine).toBeDefined();
+    expect(strippedLine).toContain('2 keys');
+    expect(strippedLine).toContain(tmpDir);
+    expect(strippedLine).toContain('.env');
+    expect(strippedLine).toContain('.env.local');
+  });
+
+  it('emits no [archon] stripped line when no CWD env keys exist', () => {
+    const stderrLines: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk: string | Uint8Array): boolean => {
+      if (typeof chunk === 'string') stderrLines.push(chunk);
+      return true;
+    };
+
+    try {
+      stripCwdEnv(tmpDir);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    expect(stderrLines.some(l => l.includes('[archon] stripped'))).toBe(false);
+  });
 });
 
 describe('stripCwdEnv — nested Claude Code marker stripping', () => {

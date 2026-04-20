@@ -42,10 +42,12 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
   // --- Pass 1: CWD .env files ---
   const cwdKeys = new Set<string>();
 
+  const strippedFiles: string[] = [];
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
     const filepath = resolve(cwd, filename);
-    // dotenv.config with processEnv:{} parses without writing to process.env
-    const result = config({ path: filepath, processEnv: {} });
+    // quiet: true suppresses dotenv's per-file "injecting env (N) from …" output;
+    // processEnv:{} parses without writing to process.env — we delete keys manually.
+    const result = config({ path: filepath, processEnv: {}, quiet: true });
     if (result.error) {
       // ENOENT is expected (file simply doesn't exist) — all others are unexpected
       const code = (result.error as NodeJS.ErrnoException).code;
@@ -54,15 +56,24 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
           `[archon] Warning: could not parse ${filepath} for CWD env stripping: ${result.error.message}\n`
         );
       }
-    } else if (result.parsed) {
+    } else if (result.parsed && Object.keys(result.parsed).length > 0) {
       for (const key of Object.keys(result.parsed)) {
         cwdKeys.add(key);
       }
+      strippedFiles.push(filename);
     }
   }
 
   for (const key of cwdKeys) {
     Reflect.deleteProperty(process.env, key);
+  }
+
+  // Emit a single, actionable log line when keys were actually stripped — the
+  // caller's dotenv output was silenced above, so this is the only signal.
+  if (cwdKeys.size > 0) {
+    process.stderr.write(
+      `[archon] stripped ${String(cwdKeys.size)} key${cwdKeys.size === 1 ? '' : 's'} from ${cwd} (${strippedFiles.join(', ')}) to prevent target repo env from leaking into Archon processes\n`
+    );
   }
 
   // --- Pass 2: Nested Claude Code session markers ---

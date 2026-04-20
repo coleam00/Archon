@@ -33,10 +33,17 @@ if (envPath) {
 // In dev mode it overrides CWD vars for keys like DATABASE_URL.
 const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
 if (existsSync(globalEnvPath)) {
-  const globalResult = config({ path: globalEnvPath, override: true });
+  // quiet: true suppresses dotenv's per-file output; we emit our own line below.
+  const globalResult = config({ path: globalEnvPath, override: true, quiet: true });
   if (globalResult.error) {
     console.error(`Failed to load .env from ${globalEnvPath}: ${globalResult.error.message}`);
     console.error('Hint: Check for syntax errors in your ~/.archon/.env file.');
+  }
+  const loadedCount = globalResult.parsed ? Object.keys(globalResult.parsed).length : 0;
+  if (loadedCount > 0) {
+    process.stderr.write(
+      `[archon] loaded ${String(loadedCount)} key${loadedCount === 1 ? '' : 's'} from ~/.archon/.env\n`
+    );
   }
 }
 

@@ -21,12 +21,19 @@ import { existsSync } from 'fs';
 // affects shell-inherited values, which is the intended behavior.
 const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
 if (existsSync(globalEnvPath)) {
-  const result = config({ path: globalEnvPath, override: true });
+  // quiet: true suppresses dotenv's per-file output; we emit our own line below.
+  const result = config({ path: globalEnvPath, override: true, quiet: true });
   if (result.error) {
     // Logger may not be available yet (early startup), so use console for user-facing error
     console.error(`Error loading .env from ${globalEnvPath}: ${result.error.message}`);
     console.error('Hint: Check for syntax errors in your .env file.');
     process.exit(1);
+  }
+  const loadedCount = result.parsed ? Object.keys(result.parsed).length : 0;
+  if (loadedCount > 0) {
+    process.stderr.write(
+      `[archon] loaded ${String(loadedCount)} key${loadedCount === 1 ? '' : 's'} from ~/.archon/.env\n`
+    );
   }
 }
 
