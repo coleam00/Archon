@@ -86,7 +86,7 @@ export interface WorkflowStatusEvent extends BaseSSEEvent {
   workflowName: string;
   status: ActiveWorkflowRunStatus;
   error?: string;
-  approval?: { nodeId: string; message: string };
+  approval?: { nodeId: string; message: string; lastOutput?: string };
 }
 
 // Loop iteration info (per-iteration state stored in DagNodeState)
@@ -271,7 +271,7 @@ export interface WorkflowState {
   completedAt?: number;
   error?: string;
   stale?: boolean;
-  approval?: { nodeId: string; message: string };
+  approval?: { nodeId: string; message: string; lastOutput?: string };
   currentTool?: {
     name: string;
     status: 'running' | 'completed';
