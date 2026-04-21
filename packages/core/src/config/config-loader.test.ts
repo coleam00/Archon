@@ -46,6 +46,7 @@ describe('config-loader', () => {
     'MAX_CONCURRENT_CONVERSATIONS',
     'WORKSPACE_PATH',
     'WORKTREE_BASE',
+    'HARNEESLAB_HOME',
     'ARCHON_HOME',
   ];
 

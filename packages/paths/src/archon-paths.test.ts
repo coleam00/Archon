@@ -34,7 +34,15 @@ import {
 } from './archon-paths';
 
 /** All env vars that path functions depend on */
-const ENV_VARS = ['WORKSPACE_PATH', 'WORKTREE_BASE', 'ARCHON_HOME', 'ARCHON_DOCKER', 'HOME'];
+const ENV_VARS = [
+  'WORKSPACE_PATH',
+  'WORKTREE_BASE',
+  'HARNEESLAB_HOME',
+  'HARNEESLAB_DOCKER',
+  'ARCHON_HOME',
+  'ARCHON_DOCKER',
+  'HOME',
+];
 
 /**
  * Save and restore environment variables around each test.
@@ -47,6 +55,8 @@ function useEnvSnapshot(): void {
     for (const key of ENV_VARS) {
       snapshot[key] = process.env[key];
     }
+    delete process.env.HARNEESLAB_HOME;
+    delete process.env.HARNEESLAB_DOCKER;
   });
 
   afterEach(() => {
@@ -91,8 +101,15 @@ describe('archon-paths', () => {
       expect(isDocker()).toBe(true);
     });
 
+    test('returns true when HARNEESLAB_DOCKER=true', () => {
+      delete process.env.WORKSPACE_PATH;
+      process.env.HARNEESLAB_DOCKER = 'true';
+      expect(isDocker()).toBe(true);
+    });
+
     test('returns false for local development', () => {
       delete process.env.WORKSPACE_PATH;
+      delete process.env.HARNEESLAB_DOCKER;
       delete process.env.ARCHON_DOCKER;
       process.env.HOME = homedir();
       expect(isDocker()).toBe(false);
@@ -107,23 +124,79 @@ describe('archon-paths', () => {
 
     test('returns ARCHON_HOME when set (local)', () => {
       delete process.env.WORKSPACE_PATH;
+      delete process.env.HARNEESLAB_HOME;
+      delete process.env.HARNEESLAB_DOCKER;
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = '/custom/archon';
       expect(getArchonHome()).toBe('/custom/archon');
     });
 
+    test('returns HARNEESLAB_HOME before ARCHON_HOME when both are set (local)', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.HARNEESLAB_DOCKER;
+      delete process.env.ARCHON_DOCKER;
+      process.env.HARNEESLAB_HOME = '/custom/harneeslab';
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getArchonHome()).toBe('/custom/harneeslab');
+    });
+
     test('expands tilde in ARCHON_HOME', () => {
       delete process.env.WORKSPACE_PATH;
+      delete process.env.HARNEESLAB_HOME;
+      delete process.env.HARNEESLAB_DOCKER;
       delete process.env.ARCHON_DOCKER;
       process.env.ARCHON_HOME = '~/my-archon';
       expect(getArchonHome()).toBe(join(homedir(), 'my-archon'));
     });
 
+    test('expands tilde in HARNEESLAB_HOME', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.HARNEESLAB_DOCKER;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      process.env.HARNEESLAB_HOME = '~/my-harneeslab';
+      expect(getArchonHome()).toBe(join(homedir(), 'my-harneeslab'));
+    });
+
     test('returns ~/.archon by default (local)', () => {
       delete process.env.WORKSPACE_PATH;
+      delete process.env.HARNEESLAB_HOME;
+      delete process.env.HARNEESLAB_DOCKER;
       delete process.env.ARCHON_HOME;
       delete process.env.ARCHON_DOCKER;
       expect(getArchonHome()).toBe(join(homedir(), '.archon'));
+    });
+
+    test('returns /.harneeslab when HARNEESLAB_DOCKER=true', () => {
+      process.env.HARNEESLAB_DOCKER = 'true';
+      delete process.env.HARNEESLAB_HOME;
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getArchonHome()).toBe('/.harneeslab');
+    });
+
+    test('allows HARNEESLAB_HOME to override Docker home', () => {
+      process.env.HARNEESLAB_DOCKER = 'true';
+      process.env.HARNEESLAB_HOME = '/data/harneeslab';
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getArchonHome()).toBe('/data/harneeslab');
+    });
+
+    test('uses ARCHON_HOME fallback in Docker when HARNEESLAB_HOME is not set', () => {
+      process.env.HARNEESLAB_DOCKER = 'true';
+      process.env.ARCHON_HOME = '/data/archon';
+      delete process.env.HARNEESLAB_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getArchonHome()).toBe('/data/archon');
+    });
+
+    test('throws for literal undefined HARNEESLAB_HOME', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.HARNEESLAB_DOCKER;
+      delete process.env.ARCHON_DOCKER;
+      process.env.HARNEESLAB_HOME = 'undefined';
+      expect(() => getArchonHome()).toThrow('HARNEESLAB_HOME is set to the literal string');
     });
   });
 

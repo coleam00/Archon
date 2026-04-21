@@ -26,12 +26,16 @@ function getDefaultWorkspacesPath(): string {
 
 describe('path-validation', () => {
   const originalWorkspacePath = process.env.WORKSPACE_PATH;
+  const originalHarneesLabHome = process.env.HARNEESLAB_HOME;
+  const originalHarneesLabDocker = process.env.HARNEESLAB_DOCKER;
   const originalArchonHome = process.env.ARCHON_HOME;
   const originalArchonDocker = process.env.ARCHON_DOCKER;
 
   beforeEach(() => {
     // Reset to default for consistent test behavior (clear Docker detection too)
     delete process.env.WORKSPACE_PATH;
+    delete process.env.HARNEESLAB_HOME;
+    delete process.env.HARNEESLAB_DOCKER;
     delete process.env.ARCHON_HOME;
     delete process.env.ARCHON_DOCKER;
   });
@@ -48,10 +52,20 @@ describe('path-validation', () => {
     } else {
       delete process.env.ARCHON_HOME;
     }
+    if (originalHarneesLabHome !== undefined) {
+      process.env.HARNEESLAB_HOME = originalHarneesLabHome;
+    } else {
+      delete process.env.HARNEESLAB_HOME;
+    }
     if (originalArchonDocker !== undefined) {
       process.env.ARCHON_DOCKER = originalArchonDocker;
     } else {
       delete process.env.ARCHON_DOCKER;
+    }
+    if (originalHarneesLabDocker !== undefined) {
+      process.env.HARNEESLAB_DOCKER = originalHarneesLabDocker;
+    } else {
+      delete process.env.HARNEESLAB_DOCKER;
     }
   });
 
@@ -100,6 +114,14 @@ describe('path-validation', () => {
       expect(isPathWithinWorkspace('/custom/archon/workspaces/repo')).toBe(true);
       const defaultPath = getDefaultWorkspacesPath();
       expect(isPathWithinWorkspace(`${defaultPath}/repo`)).toBe(false); // Default path now rejected
+    });
+
+    test('should prefer HARNEESLAB_HOME over ARCHON_HOME when both are set', async () => {
+      process.env.HARNEESLAB_HOME = '/custom/harneeslab';
+      process.env.ARCHON_HOME = '/custom/archon';
+      const { isPathWithinWorkspace } = await importFresh();
+      expect(isPathWithinWorkspace('/custom/harneeslab/workspaces/repo')).toBe(true);
+      expect(isPathWithinWorkspace('/custom/archon/workspaces/repo')).toBe(false);
     });
   });
 

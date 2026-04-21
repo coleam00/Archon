@@ -6,7 +6,7 @@
  * - AI assistants (Claude and/or Codex)
  * - Platform connections (GitHub, Telegram, Slack, Discord)
  *
- * Writes configuration to both ~/.archon/.env and <repo>/.env
+ * Writes configuration to the HarneesLab global .env and <repo>/.env
  */
 import {
   intro,
@@ -29,6 +29,7 @@ import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import { getRegisteredProviders } from '@harneeslab/providers';
+import { getArchonHome } from '@harneeslab/paths';
 
 // =============================================================================
 // Types
@@ -45,7 +46,7 @@ interface SetupConfig {
     claudeApiKey?: string;
     claudeOauthToken?: string;
     /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
-     *  in ~/.archon/.env. Required in compiled HarneesLab binaries; harmless in dev. */
+     *  in the global .env. Required in compiled HarneesLab binaries; harmless in dev. */
     claudeBinaryPath?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
@@ -119,20 +120,6 @@ interface SpawnResult {
 // =============================================================================
 // Utility Functions
 // =============================================================================
-
-/**
- * Get the Archon home directory (typically ~/.archon)
- */
-function getArchonHome(): string {
-  const envHome = process.env.ARCHON_HOME;
-  if (envHome) {
-    if (envHome.startsWith('~')) {
-      return join(homedir(), envHome.slice(1));
-    }
-    return envHome;
-  }
-  return join(homedir(), '.archon');
-}
 
 /**
  * Generate a cryptographically secure webhook secret
@@ -309,7 +296,7 @@ After installation, run 'codex' to authenticate.`,
 };
 
 /**
- * Check for existing configuration at ~/.archon/.env
+ * Check for existing global configuration.
  */
 export function checkExistingConfig(): ExistingConfig | null {
   const envPath = join(getArchonHome(), '.env');
@@ -1292,8 +1279,8 @@ export function generateEnvContent(config: SetupConfig): string {
   // Server
   // PORT is intentionally omitted: both the Hono server (packages/core/src/utils/port-allocation.ts)
   // and the Vite dev proxy (packages/web/vite.config.ts) default to 3090 when unset, which keeps
-  // them in sync. Writing a fixed PORT here risked a mismatch if ~/.archon/.env leaks a PORT that
-  // the Vite proxy (which only reads repo-local .env) never sees — see #1152.
+  // them in sync. Writing a fixed PORT here risked a mismatch if the global .env leaks a PORT
+  // that the Vite proxy (which only reads repo-local .env) never sees — see #1152.
   lines.push('# Server');
   lines.push('# PORT=3090  # Default: 3090. Uncomment to override.');
   lines.push('');
@@ -1316,7 +1303,7 @@ function writeEnvFiles(
   const globalPath = join(archonHome, '.env');
   const repoEnvPath = join(repoPath, '.env');
 
-  // Create ~/.archon/ if needed
+  // Create the global config directory if needed.
   if (!existsSync(archonHome)) {
     mkdirSync(archonHome, { recursive: true });
   }
@@ -1772,7 +1759,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
   // Additional options note
   note(
-    'Other settings you can customize in ~/.archon/.env:\n' +
+    'Other settings you can customize in the global .env:\n' +
       '  - PORT (default: 3090)\n' +
       '  - MAX_CONCURRENT_CONVERSATIONS (default: 10)\n' +
       '  - *_STREAMING_MODE (stream | batch per platform)\n\n' +

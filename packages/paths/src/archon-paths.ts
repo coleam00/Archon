@@ -1,8 +1,9 @@
 /**
- * Archon path resolution utilities
+ * HarneesLab path resolution utilities
  *
  * Directory structure:
- * ~/.archon/                              # User-level (ARCHON_HOME)
+ * ~/.archon/                              # User-level legacy default (ARCHON_HOME)
+ * ~/.harneeslab/                          # User-level opt-in (HARNEESLAB_HOME)
  * ├── workspaces/owner/repo/             # Project-centric layout
  * │   ├── source/                        # Clone or symlink → local path
  * │   ├── worktrees/                     # Git worktrees for this project
@@ -11,13 +12,21 @@
  * ├── worktrees/                         # Legacy global worktrees (for repos not in workspaces/)
  * └── config.yaml                        # Global config
  *
- * For Docker: /.archon/
+ * For Docker: /.harneeslab/ when HARNEESLAB_DOCKER=true, otherwise legacy /.archon/
  */
 
 import { join, dirname, normalize, basename } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, rm } from 'fs/promises';
 import { createLogger } from './logger';
+
+const HARNEESLAB_HOME_ENV = 'HARNEESLAB_HOME';
+const LEGACY_ARCHON_HOME_ENV = 'ARCHON_HOME';
+const HARNEESLAB_DOCKER_ENV = 'HARNEESLAB_DOCKER';
+const LEGACY_ARCHON_DOCKER_ENV = 'ARCHON_DOCKER';
+const HARNEESLAB_DOCKER_HOME = '/.harneeslab';
+const LEGACY_ARCHON_HOME_DIR = '.archon';
+const LEGACY_ARCHON_DOCKER_HOME = '/.archon';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -44,33 +53,57 @@ export function isDocker(): boolean {
   return (
     process.env.WORKSPACE_PATH === '/workspace' ||
     (process.env.HOME === '/root' && Boolean(process.env.WORKSPACE_PATH)) ||
-    process.env.ARCHON_DOCKER === 'true'
+    process.env[HARNEESLAB_DOCKER_ENV] === 'true' ||
+    process.env[LEGACY_ARCHON_DOCKER_ENV] === 'true'
   );
 }
 
 /**
- * Get the Archon home directory
- * - Docker: /.archon
- * - Local: ~/.archon (or ARCHON_HOME env var)
+ * Get the HarneesLab home directory.
+ *
+ * The function name stays getArchonHome for API compatibility while the fork
+ * migrates runtime naming. HARNEESLAB_HOME is the preferred override;
+ * ARCHON_HOME remains a legacy fallback. The default local directory remains
+ * ~/.archon in this compatibility phase so existing users keep their data.
  */
 export function getArchonHome(): string {
   if (isDocker()) {
-    return '/.archon';
-  }
-
-  const envHome = process.env.ARCHON_HOME;
-  if (envHome) {
-    if (envHome === 'undefined') {
-      throw new Error(
-        'ARCHON_HOME is set to the literal string "undefined". ' +
-          'This indicates a bug where an undefined value was coerced to a string. ' +
-          'Unset ARCHON_HOME or provide a valid path.'
-      );
+    const harneeslabHome = process.env[HARNEESLAB_HOME_ENV];
+    if (harneeslabHome) {
+      return expandTilde(validateHomeEnv(HARNEESLAB_HOME_ENV, harneeslabHome));
     }
-    return expandTilde(envHome);
+    const legacyArchonHome = process.env[LEGACY_ARCHON_HOME_ENV];
+    if (legacyArchonHome) {
+      return expandTilde(validateHomeEnv(LEGACY_ARCHON_HOME_ENV, legacyArchonHome));
+    }
+    if (process.env[HARNEESLAB_DOCKER_ENV] === 'true') {
+      return HARNEESLAB_DOCKER_HOME;
+    }
+    return LEGACY_ARCHON_DOCKER_HOME;
   }
 
-  return join(homedir(), '.archon');
+  const harneeslabHome = process.env[HARNEESLAB_HOME_ENV];
+  if (harneeslabHome) {
+    return expandTilde(validateHomeEnv(HARNEESLAB_HOME_ENV, harneeslabHome));
+  }
+
+  const legacyArchonHome = process.env[LEGACY_ARCHON_HOME_ENV];
+  if (legacyArchonHome) {
+    return expandTilde(validateHomeEnv(LEGACY_ARCHON_HOME_ENV, legacyArchonHome));
+  }
+
+  return join(homedir(), LEGACY_ARCHON_HOME_DIR);
+}
+
+function validateHomeEnv(name: string, value: string): string {
+  if (value === 'undefined') {
+    throw new Error(
+      `${name} is set to the literal string "undefined". ` +
+        'This indicates a bug where an undefined value was coerced to a string. ' +
+        `Unset ${name} or provide a valid path.`
+    );
+  }
+  return value;
 }
 
 /**

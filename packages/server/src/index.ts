@@ -6,13 +6,14 @@
 // Strip CWD .env keys FIRST — before any application imports read process.env.
 // Bun auto-loads .env/.env.local/.env.development/.env.production from CWD;
 // when `bun run dev:server` is run from inside a target repo those keys leak
-// into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
+// into the server process. stripCwdEnv() removes them before the global .env loads.
 import '@harneeslab/paths/strip-cwd-env-boot';
 
 // Load environment variables — after CWD stripping, before application imports.
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
+import { homedir } from 'os';
 import { BUNDLED_IS_BINARY } from '@harneeslab/paths';
 
 // In dev/source mode, load the repo root .env (platform tokens, API keys, etc.)
@@ -28,16 +29,44 @@ if (envPath) {
   }
 }
 
-// Load ~/.archon/.env with override — Archon's config always wins over any
+// Load the global .env with override — HarneesLab config always wins over any
 // Bun-auto-loaded CWD vars. In binary mode this is the single source of truth.
 // In dev mode it overrides CWD vars for keys like DATABASE_URL.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
+const globalEnvPath = getGlobalEnvPath();
 if (existsSync(globalEnvPath)) {
   const globalResult = config({ path: globalEnvPath, override: true });
   if (globalResult.error) {
     console.error(`Failed to load .env from ${globalEnvPath}: ${globalResult.error.message}`);
-    console.error('Hint: Check for syntax errors in your ~/.archon/.env file.');
+    console.error('Hint: Check for syntax errors in your global .env file.');
   }
+}
+
+function getGlobalEnvPath(): string {
+  const harneeslabHome = process.env.HARNEESLAB_HOME;
+  if (harneeslabHome) {
+    return resolve(expandHomeEnv('HARNEESLAB_HOME', harneeslabHome), '.env');
+  }
+
+  const legacyArchonHome = process.env.ARCHON_HOME;
+  if (legacyArchonHome) {
+    return resolve(expandHomeEnv('ARCHON_HOME', legacyArchonHome), '.env');
+  }
+
+  return resolve(process.env.HOME ?? homedir(), '.archon', '.env');
+}
+
+function expandHomeEnv(name: string, value: string): string {
+  if (value === 'undefined') {
+    console.error(`${name} is set to the literal string "undefined".`);
+    console.error(`Unset ${name} or provide a valid path.`);
+    process.exit(1);
+  }
+
+  if (value.startsWith('~')) {
+    return resolve(homedir(), value.slice(1).replace(/^[/\\]/, ''));
+  }
+
+  return value;
 }
 
 // CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)

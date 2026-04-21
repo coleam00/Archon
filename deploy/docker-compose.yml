@@ -16,11 +16,11 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      ARCHON_DOCKER: "true"
+      HARNEESLAB_DOCKER: "true"
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     volumes:
-      - ${ARCHON_DATA:-archon_data}:/.archon
+      - ${HARNEESLAB_DATA:-${ARCHON_DATA:-archon_data}}:/.harneeslab
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/api/health"]
       interval: 30s
@@ -45,5 +45,6 @@ services:
   #     retries: 5
 
 volumes:
+  harneeslab_data:
   archon_data:
   # postgres_data:

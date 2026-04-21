@@ -1,5 +1,5 @@
 # =============================================================================
-# Archon - Docker Compose
+# HarneesLab - Docker Compose
 # =============================================================================
 #
 # Usage:
@@ -15,12 +15,13 @@
 #   - Or point DATABASE_URL to an external database (Supabase, Neon, etc.)
 #
 # Data:
-#   Set ARCHON_DATA in .env to control where Archon stores data on the host:
-#     ARCHON_DATA=/opt/archon-data    # Any absolute path on the host
-#   Default: Docker-managed volume (archon_data)
+#   Set HARNEESLAB_DATA in .env to control where HarneesLab stores data on the host:
+#     HARNEESLAB_DATA=/opt/harneeslab-data    # Any absolute path on the host
+#   Legacy ARCHON_DATA is still accepted by the interpolation fallback.
+#   Default: Docker-managed volume (archon_data, preserved for compatibility)
 #
 # Cloud (HTTPS):
-#   1. Set DOMAIN=archon.example.com in .env
+#   1. Set DOMAIN=harneeslab.example.com in .env
 #   2. Point DNS A record to your server
 #   3. Add --profile cloud — Caddy handles TLS automatically via Let's Encrypt
 #
@@ -31,16 +32,16 @@ services:
   # -------------------------------------------------------------------------
   app:
     build: .
-    image: archon
+    image: harneeslab
     env_file: .env
     environment:
-      ARCHON_DOCKER: "true"
+      HARNEESLAB_DOCKER: "true"
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     volumes:
-      - ${ARCHON_DATA:-archon_data}:/.archon
+      - ${HARNEESLAB_DATA:-${ARCHON_DATA:-archon_data}}:/.harneeslab
     networks:
-      - archon-network
+      - harneeslab-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${PORT:-3000}/api/health"]
@@ -72,7 +73,7 @@ services:
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     networks:
-      - archon-network
+      - harneeslab-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -97,7 +98,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     networks:
-      - archon-network
+      - harneeslab-network
     depends_on:
       app:
         condition: service_healthy
@@ -118,14 +119,15 @@ services:
     expose:
       - "${AUTH_SERVICE_PORT:-9000}"
     networks:
-      - archon-network
+      - harneeslab-network
 
 volumes:
+  harneeslab_data:
   archon_data:
   postgres_data:
   caddy_data:
   caddy_config:
 
 networks:
-  archon-network:
+  harneeslab-network:
     driver: bridge

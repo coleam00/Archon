@@ -14,12 +14,13 @@ import { parseArgs } from 'util';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
+import { homedir } from 'os';
 
-// Load ~/.archon/.env with override: true — HarneesLab-specific config must win
+// Load the HarneesLab global .env with override: true — product-specific config must win
 // over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
 // CWD .env keys are already gone (stripCwdEnv above), so override only
 // affects shell-inherited values, which is the intended behavior.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
+const globalEnvPath = getGlobalEnvPath();
 if (existsSync(globalEnvPath)) {
   const result = config({ path: globalEnvPath, override: true });
   if (result.error) {
@@ -28,6 +29,34 @@ if (existsSync(globalEnvPath)) {
     console.error('힌트: .env 파일의 문법 오류를 확인하세요.');
     process.exit(1);
   }
+}
+
+function getGlobalEnvPath(): string {
+  const harneeslabHome = process.env.HARNEESLAB_HOME;
+  if (harneeslabHome) {
+    return resolve(expandHomeEnv('HARNEESLAB_HOME', harneeslabHome), '.env');
+  }
+
+  const legacyArchonHome = process.env.ARCHON_HOME;
+  if (legacyArchonHome) {
+    return resolve(expandHomeEnv('ARCHON_HOME', legacyArchonHome), '.env');
+  }
+
+  return resolve(process.env.HOME ?? homedir(), '.archon', '.env');
+}
+
+function expandHomeEnv(name: string, value: string): string {
+  if (value === 'undefined') {
+    console.error(`${name}이(가) literal string "undefined"로 설정되어 있습니다.`);
+    console.error(`${name}을(를) unset 하거나 유효한 path로 설정하세요.`);
+    process.exit(1);
+  }
+
+  if (value.startsWith('~')) {
+    return resolve(homedir(), value.slice(1).replace(/^[/\\]/, ''));
+  }
+
+  return value;
 }
 
 // CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
