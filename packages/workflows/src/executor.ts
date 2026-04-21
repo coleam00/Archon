@@ -205,6 +205,11 @@ function resolveInputs(
   return resolved;
 }
 
+const REGEX_META = /[.*+?^${}()|[\]\\]/g;
+function escapeForRegex(s: string): string {
+  return s.replace(REGEX_META, '\\$&');
+}
+
 /**
  * Apply resolved inputs map to a string value (model, provider, etc.).
  * Substitutes $KEY patterns using the same word-boundary rule as substituteWorkflowVariables.
@@ -216,7 +221,7 @@ function applyInputsToString(
   if (!value || Object.keys(inputs).length === 0) return value;
   let result = value;
   for (const [key, val] of Object.entries(inputs)) {
-    result = result.replace(new RegExp(`\\$${key}(?![A-Za-z0-9_])`, 'g'), val);
+    result = result.replace(new RegExp(`\\$${escapeForRegex(key)}(?![A-Za-z0-9_])`, 'g'), val);
   }
   return result;
 }
@@ -329,48 +334,10 @@ export async function executeWorkflow(
   const docsDir = config.docsPath ?? 'docs/';
 
   // Resolve runtime inputs (merge caller values with workflow-declared defaults).
-  // This must happen before model/provider resolution so $INPUT_NAME references work there.
-  // Note: if the run is later found to be a resume (findResumableRun below), inputs may be
-  // re-resolved from the stored prior-run metadata — see the resume block below.
+  // This is done early but may be replaced by stored prior-run metadata if a
+  // resumable run is found — model/provider resolution is deferred until after
+  // the resume block so it always uses the final resolvedInputs value.
   let resolvedInputs = resolveInputs(workflow.inputs, runtimeInputs);
-
-  // Resolve provider and model once (used by all nodes).
-  // Apply runtime inputs first so model/provider can be parameterised via $INPUT_NAME.
-  // When workflow sets a model but not a provider, infer provider from the model.
-  // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
-  const effectiveModel = applyInputsToString(workflow.model, resolvedInputs);
-  const effectiveProvider = applyInputsToString(workflow.provider, resolvedInputs);
-
-  let resolvedProvider: string;
-  let providerSource: string;
-  if (effectiveProvider) {
-    resolvedProvider = effectiveProvider;
-    providerSource = 'workflow definition';
-  } else if (effectiveModel) {
-    resolvedProvider = inferProviderFromModel(effectiveModel, config.assistant);
-    providerSource = 'inferred from workflow model';
-  } else {
-    resolvedProvider = config.assistant;
-    providerSource = 'config';
-  }
-  const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = effectiveModel ?? (assistantDefaults?.model as string | undefined);
-  if (!isModelCompatible(resolvedProvider, resolvedModel)) {
-    throw new Error(
-      `Model "${resolvedModel}" is not compatible with provider "${resolvedProvider}". ` +
-        'Update your workflow or config.'
-    );
-  }
-
-  getLog().info(
-    {
-      workflowName: workflow.name,
-      provider: resolvedProvider,
-      providerSource,
-      model: resolvedModel,
-    },
-    'workflow_provider_resolved'
-  );
 
   if (configuredCommandFolder) {
     getLog().debug({ configuredCommandFolder }, 'command_folder_configured');
@@ -528,6 +495,44 @@ export async function executeWorkflow(
       }
     }
   }
+
+  // Resolve provider and model now that resolvedInputs is final (resume may have updated it).
+  // Apply runtime inputs so model/provider can be parameterised via $INPUT_NAME.
+  // When workflow sets a model but not a provider, infer provider from the model.
+  // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
+  const effectiveModel = applyInputsToString(workflow.model, resolvedInputs);
+  const effectiveProvider = applyInputsToString(workflow.provider, resolvedInputs);
+
+  let resolvedProvider: string;
+  let providerSource: string;
+  if (effectiveProvider) {
+    resolvedProvider = effectiveProvider;
+    providerSource = 'workflow definition';
+  } else if (effectiveModel) {
+    resolvedProvider = inferProviderFromModel(effectiveModel, config.assistant);
+    providerSource = 'inferred from workflow model';
+  } else {
+    resolvedProvider = config.assistant;
+    providerSource = 'config';
+  }
+  const assistantDefaults = config.assistants[resolvedProvider];
+  const resolvedModel = effectiveModel ?? (assistantDefaults?.model as string | undefined);
+  if (!isModelCompatible(resolvedProvider, resolvedModel)) {
+    throw new Error(
+      `Model "${resolvedModel}" is not compatible with provider "${resolvedProvider}". ` +
+        'Update your workflow or config.'
+    );
+  }
+
+  getLog().info(
+    {
+      workflowName: workflow.name,
+      provider: resolvedProvider,
+      providerSource,
+      model: resolvedModel,
+    },
+    'workflow_provider_resolved'
+  );
 
   if (!workflowRun) {
     // Create workflow run record
