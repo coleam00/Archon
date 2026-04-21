@@ -256,7 +256,7 @@ pi
 # then type: /login
 ```
 
-**OAuth subscriptions (run `pi /login` locally):**
+**OAuth subscriptions (run `pi`, then type `/login` locally):**
 - Anthropic Claude Pro/Max
 - OpenAI ChatGPT Plus/Pro
 - GitHub Copilot
