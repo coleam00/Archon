@@ -35,22 +35,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Check Claude API secret
+        id: claude-secret
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::notice::Skipping Claude smoke test because ANTHROPIC_API_KEY is not configured."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.claude-secret.outputs.available == 'true'
 
       - name: Setup Bun
+        if: steps.claude-secret.outputs.available == 'true'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.11
 
       - name: Install Claude Code CLI
+        if: steps.claude-secret.outputs.available == 'true'
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
+        if: steps.claude-secret.outputs.available == 'true'
         run: bun install --frozen-lockfile
 
       - name: Run Claude smoke test
+        if: steps.claude-secret.outputs.available == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_BIN_PATH: ~/.local/bin/claude
@@ -61,25 +78,43 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Check OpenAI API secret
+        id: openai-secret
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::notice::Skipping Codex smoke test because OPENAI_API_KEY is not configured."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.openai-secret.outputs.available == 'true'
 
       - name: Setup Bun
+        if: steps.openai-secret.outputs.available == 'true'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.11
 
       - name: Setup Node.js
+        if: steps.openai-secret.outputs.available == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Install Codex CLI
+        if: steps.openai-secret.outputs.available == 'true'
         run: npm install -g @openai/codex
 
       - name: Install dependencies
+        if: steps.openai-secret.outputs.available == 'true'
         run: bun install --frozen-lockfile
 
       - name: Run Codex smoke test
+        if: steps.openai-secret.outputs.available == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -91,30 +126,50 @@ jobs:
     timeout-minutes: 5
     needs: [e2e-claude, e2e-codex]
     steps:
+      - name: Check provider API secrets
+        id: provider-secrets
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ] || [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::notice::Skipping mixed provider smoke test because ANTHROPIC_API_KEY and OPENAI_API_KEY are both required."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.provider-secrets.outputs.available == 'true'
 
       - name: Setup Bun
+        if: steps.provider-secrets.outputs.available == 'true'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.11
 
       - name: Setup Node.js
+        if: steps.provider-secrets.outputs.available == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Install Claude Code CLI
+        if: steps.provider-secrets.outputs.available == 'true'
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install Codex CLI
+        if: steps.provider-secrets.outputs.available == 'true'
         run: npm install -g @openai/codex
 
       - name: Install dependencies
+        if: steps.provider-secrets.outputs.available == 'true'
         run: bun install --frozen-lockfile
 
       - name: Run mixed providers test
+        if: steps.provider-secrets.outputs.available == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
