@@ -686,12 +686,19 @@ async function executeNodeInternal(
       const tickNow = Date.now();
       const nodeKey = `${workflowRun.id}:${node.id}`;
 
-      // Cancel/pause check — read-only, no write contention in WAL mode (every 10s)
+      // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
+      //
+      // `paused` is tolerated here: an approval node can transition the run to
+      // paused while this concurrent node is mid-stream (same topological layer).
+      // The streaming node should be allowed to finish its own output — the
+      // paused gate owns workflow progression, not individual node lifecycles.
+      // Only truly terminal / unknown states (null, cancelled, failed, completed)
+      // abort the in-flight stream.
       if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
         lastNodeCancelCheck.set(nodeKey, tickNow);
         try {
           const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-          if (streamStatus === null || streamStatus !== 'running') {
+          if (streamStatus === null || (streamStatus !== 'running' && streamStatus !== 'paused')) {
             getLog().info(
               { workflowRunId: workflowRun.id, nodeId: node.id, status: streamStatus ?? 'deleted' },
               'dag.stop_detected_during_streaming'

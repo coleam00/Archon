@@ -52,7 +52,7 @@ import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
-import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -1035,6 +1035,43 @@ export function registerApiRoutes(
     return { accepted: true, status: result.status };
   }
 
+  /**
+   * Re-enter the orchestrator after a paused approval gate is resolved, so a
+   * web-dispatched workflow continues (approve) or runs its on_reject prompt
+   * (reject) without the user having to type a follow-up message. The CLI's
+   * `workflowApproveCommand` / `workflowRejectCommand` already auto-resume via
+   * `workflowRunCommand({ resume: true })`; this is the web-side equivalent.
+   *
+   * Returns `true` when a resume dispatch was initiated, `false` otherwise
+   * (missing parent conversation, parent conversation not found, or dispatch
+   * threw). Failures are non-fatal: the gate was still recorded; the user can
+   * resume manually by sending any message in the conversation.
+   */
+  async function tryAutoResumeAfterGate(run: WorkflowRun, logPrefix: string): Promise<boolean> {
+    if (!run.parent_conversation_id) return false;
+    try {
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      const platformConvId = parentConv?.platform_conversation_id;
+      if (!platformConvId) {
+        getLog().debug(
+          { runId: run.id, parentConversationId: run.parent_conversation_id },
+          `${logPrefix}.skipped_no_platform_conv`
+        );
+        return false;
+      }
+      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      void dispatchToOrchestrator(platformConvId, resumeMessage);
+      getLog().info(
+        { runId: run.id, workflowName: run.workflow_name, platformConvId },
+        `${logPrefix}.dispatched`
+      );
+      return true;
+    } catch (err) {
+      getLog().warn({ err: err as Error, runId: run.id }, `${logPrefix}.failed`);
+      return false;
+    }
+  }
+
   // GET /api/conversations - List conversations
   registerOpenApiRoute(getConversationsRoute, async c => {
     try {
@@ -1894,9 +1931,19 @@ export function registerApiRoutes(
         status: 'failed',
         metadata: metadataUpdate,
       });
+
+      // Auto-resume: dispatch to the orchestrator so the workflow continues
+      // without requiring the user to type a follow-up message. Mirrors what
+      // `workflowApproveCommand` does in the CLI. Requires
+      // `parent_conversation_id` to be set on the run — which orchestrator-agent
+      // now passes for every web-dispatched foreground/interactive workflow.
+      const autoResumed = await tryAutoResumeAfterGate(run, 'api.workflow_approve_auto_resume');
+
       return c.json({
         success: true,
-        message: `Workflow approved: ${run.workflow_name}. Send a message to continue the workflow.`,
+        message: autoResumed
+          ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
+          : `Workflow approved: ${run.workflow_name}. Send a message to continue.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
@@ -1940,9 +1987,17 @@ export function registerApiRoutes(
           status: 'failed',
           metadata: { rejection_reason: reason, rejection_count: currentCount + 1 },
         });
+
+        // Auto-resume: dispatch to the orchestrator so the on_reject prompt runs
+        // without requiring the user to type a follow-up message. Mirrors what
+        // `workflowRejectCommand` does in the CLI.
+        const autoResumed = await tryAutoResumeAfterGate(run, 'api.workflow_reject_auto_resume');
+
         return c.json({
           success: true,
-          message: `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
+          message: autoResumed
+            ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
+            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
         });
       }
 

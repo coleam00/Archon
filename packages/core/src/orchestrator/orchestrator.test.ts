@@ -1081,7 +1081,10 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // workflow
         synthesized, // synthesizedPrompt, not original message
         expect.anything(), // conversation.id
-        expect.anything() // codebase.id
+        expect.anything(), // codebase.id
+        undefined, // issueContext
+        undefined, // isolationContext
+        expect.anything() // parentConversationId — web approval auto-resume
       );
     });
 
@@ -1106,7 +1109,10 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(),
         'fix the login bug', // original message used as fallback
         expect.anything(),
-        expect.anything()
+        expect.anything(),
+        undefined, // issueContext
+        undefined, // isolationContext
+        expect.anything() // parentConversationId — web approval auto-resume
       );
     });
 
