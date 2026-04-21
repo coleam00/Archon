@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # scripts/install.sh
-# Install HarnessLab CLI from GitHub releases
+# Install HarneesLab CLI from GitHub releases
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarneesLab/dev/scripts/install.sh | bash
 #
 # Options (via environment variables):
-#   REPO          - GitHub repository to install from (default: NewTurn2017/HarnessLab)
+#   REPO          - GitHub repository to install from (default: NewTurn2017/HarneesLab)
 #   VERSION       - Specific version to install (default: latest)
 #   INSTALL_DIR   - Installation directory (default: /usr/local/bin)
 #   SKIP_CHECKSUM - Set to "true" to skip checksum verification (not recommended)
 #
 # Examples:
 #   # Install latest
-#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarneesLab/dev/scripts/install.sh | bash
 #
 #   # Install specific version
 #   VERSION=v0.1.0 curl -fsSL ... | bash
@@ -24,8 +24,8 @@
 set -euo pipefail
 
 # Configuration
-REPO="${REPO:-NewTurn2017/HarnessLab}"
-BINARY_NAME="archon"
+REPO="${REPO:-NewTurn2017/HarneesLab}"
+BINARY_NAME="hlab"
 VERSION="${VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 
@@ -164,7 +164,7 @@ verify_checksum() {
 main() {
   echo ""
   echo "  ╔═══════════════════════════════════════╗"
-  echo "  ║      HarnessLab CLI Installer         ║"
+  echo "  ║      HarneesLab CLI Installer         ║"
   echo "  ╚═══════════════════════════════════════╝"
   echo ""
 
@@ -247,8 +247,8 @@ main() {
 
   echo ""
   echo "Get started:"
-  echo "  archon workflow list"
-  echo "  archon workflow run assist \"What workflows are available?\""
+  echo "  hlab workflow list"
+  echo "  hlab workflow run assist \"What workflows are available?\""
   echo ""
 }
 

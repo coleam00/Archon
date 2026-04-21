@@ -1,5 +1,5 @@
 /**
- * Configuration types for HarnessLab YAML config files
+ * Configuration types for HarneesLab YAML config files
  *
  * Two levels:
  * - Global: ~/.archon/config.yaml (user preferences)
@@ -11,14 +11,14 @@
  * Located at ~/.archon/config.yaml
  */
 
-// Provider config defaults — canonical definitions live in @archon/providers/types.
+// Provider config defaults — canonical definitions live in @harneeslab/providers/types.
 // Imported and re-exported here so existing consumers don't break.
 import type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
   PiProviderDefaults,
   ProviderDefaultsMap,
-} from '@archon/providers/types';
+} from '@harneeslab/providers/types';
 
 export type {
   ClaudeProviderDefaults,
@@ -62,7 +62,7 @@ export type AssistantDefaults = ProviderDefaultsMap & {
 export interface GlobalConfig {
   /**
    * Bot display name (shown in messages)
-   * @default 'HarnessLab'
+   * @default 'HarneesLab'
    */
   botName?: string;
 

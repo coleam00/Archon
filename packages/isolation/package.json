@@ -1,5 +1,5 @@
 {
-  "name": "@archon/isolation",
+  "name": "@harneeslab/isolation",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -12,8 +12,8 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "@archon/git": "workspace:*",
-    "@archon/paths": "workspace:*"
+    "@harneeslab/git": "workspace:*",
+    "@harneeslab/paths": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

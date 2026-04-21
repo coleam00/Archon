@@ -1,6 +1,6 @@
 ---
 title: 시작하기
-description: 아무것도 없는 상태에서 동작하는 HarnessLab 설정까지 필요한 모든 것.
+description: 아무것도 없는 상태에서 동작하는 HarneesLab 설정까지 필요한 모든 것.
 category: getting-started
 audience: [user]
 status: current
@@ -8,9 +8,9 @@ sidebar:
   order: 0
 ---
 
-아무것도 없는 상태에서 동작하는 HarnessLab 설정까지 필요한 모든 것을 다룹니다. Web UI를 선호하든 CLI를 선호하든 이 문서에서 시작할 수 있습니다.
+아무것도 없는 상태에서 동작하는 HarneesLab 설정까지 필요한 모든 것을 다룹니다. Web UI를 선호하든 CLI를 선호하든 이 문서에서 시작할 수 있습니다.
 
-HarnessLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow harness와 학습 가능한 에이전트 워크플로를 실험하기 위한 문서 사이트입니다. 내부 명령, 패키지명, CLI 이름은 upstream 호환성을 위해 Archon 이름을 그대로 사용합니다.
+HarneesLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow harness와 학습 가능한 에이전트 워크플로를 실험하기 위한 문서 사이트입니다. 내부 명령, 패키지명, CLI 이름은 upstream 호환성을 위해 Archon 이름을 그대로 사용합니다.
 
 ---
 
@@ -22,7 +22,7 @@ HarnessLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow ha
 | -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **Git** | `git --version` | [git-scm.com](https://git-scm.com/) |
 | **Bun** (Node.js + npm 대체) | `bun --version` | Linux/macOS: `curl -fsSL https://bun.sh/install \| bash` — Windows: `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-| **Claude Code CLI** | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — compiled HarnessLab binaries에서는 `CLAUDE_BIN_PATH`도 설정하세요([자세히 보기](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
+| **Claude Code CLI** | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — compiled HarneesLab binaries에서는 `CLAUDE_BIN_PATH`도 설정하세요([자세히 보기](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
 | **GitHub account** | — | [github.com](https://github.com/) |
 
 > **root로 실행하지 마세요.** Archon과 Archon이 의존하는 Claude Code CLI는 `root` 사용자로 실행할 때 동작하지 않습니다. VPS나 서버에 root만 있다면 먼저 일반 사용자를 만드세요.
@@ -43,7 +43,7 @@ HarnessLab은 Archon fork를 바탕으로 반복 가능한 AI coding workflow ha
 
 ## 1단계: clone 및 설치
 
-먼저 HarnessLab 서버 코드를 둘 위치를 선택합니다.
+먼저 HarneesLab 서버 코드를 둘 위치를 선택합니다.
 
 **옵션 A: Home directory** (개인 사용, 단일 사용자)
 
@@ -51,25 +51,25 @@ Linux/macOS:
 
 ```bash
 cd ~  # or your preferred directory
-git clone https://github.com/NewTurn2017/HarnessLab
-cd HarnessLab
+git clone https://github.com/NewTurn2017/HarneesLab
+cd HarneesLab
 ```
 
 Windows (PowerShell):
 
 ```powershell
 cd $HOME  # or your preferred directory
-git clone https://github.com/NewTurn2017/HarnessLab
-cd HarnessLab
+git clone https://github.com/NewTurn2017/HarneesLab
+cd HarneesLab
 ```
 
 **옵션 B: /opt** (Linux/macOS 서버 설치 — 디렉터리를 깔끔하게 유지)
 
 ```bash
-sudo mkdir -p /opt/harnesslab
-sudo chown $USER:$USER /opt/harnesslab
-git clone https://github.com/NewTurn2017/HarnessLab /opt/harnesslab
-cd /opt/harnesslab
+sudo mkdir -p /opt/harneeslab
+sudo chown $USER:$USER /opt/harneeslab
+git clone https://github.com/NewTurn2017/HarneesLab /opt/harneeslab
+cd /opt/harneeslab
 ```
 
 그런 다음 의존성을 설치합니다.
@@ -173,7 +173,7 @@ bun run dev
 
 **5단계: 동작 확인**
 
-브라우저에서 **http://localhost:5173**을 엽니다. HarnessLab Web UI가 보여야 합니다.
+브라우저에서 **http://localhost:5173**을 엽니다. HarneesLab Web UI가 보여야 합니다.
 
 **빠른 검증 체크리스트:**
 
@@ -239,7 +239,7 @@ cd packages/cli && bun link && cd ../..
 
 이 명령은 어느 repository에서나 실행할 수 있도록 `archon` 명령을 전역 등록합니다.
 
-`Success! Registered "@archon/cli"` 출력 뒤에 `bun link @archon/cli`에 관한 메시지가 보일 수 있습니다. **그 두 번째 부분은 무시하세요.** 다른 프로젝트에서 Archon을 dependency로 추가할 때 쓰는 안내입니다.
+`Success! Registered "@harneeslab/cli"` 출력 뒤에 `bun link @harneeslab/cli`에 관한 메시지가 보일 수 있습니다. **그 두 번째 부분은 무시하세요.** 다른 프로젝트에서 Archon을 dependency로 추가할 때 쓰는 안내입니다.
 
 Bun은 linked binary를 `~/.bun/bin/`에 설치합니다. `archon` 명령을 찾을 수 없다면 아직 그 디렉터리가 `PATH`에 없는 것입니다. 다음처럼 고치세요.
 
@@ -252,7 +252,7 @@ source ~/.bashrc
 동작을 확인합니다.
 
 ```bash
-archon version
+hlab version
 ```
 
 **5단계: repository에서 workflow 실행**
@@ -261,16 +261,16 @@ archon version
 cd /path/to/your/repository
 
 # See available workflows
-archon workflow list
+hlab workflow list
 
 # Ask a question about the codebase
-archon workflow run archon-assist "How does the auth module work?"
+hlab workflow run archon-assist "How does the auth module work?"
 
 # Plan a feature on an isolated branch
-archon workflow run archon-feature-development --branch feat/dark-mode "Add dark mode"
+hlab workflow run archon-feature-development --branch feat/dark-mode "Add dark mode"
 
 # Fix a GitHub issue
-archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42"
+hlab workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42"
 ```
 
 여기까지입니다. CLI는 git repo를 자동 감지하고, 상태 추적에는 SQLite(`~/.archon/archon.db`)를 사용하며, 출력은 stdout으로 streaming합니다.
@@ -285,55 +285,55 @@ archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42
 
 ```bash
 # List all available workflows
-archon workflow list
+hlab workflow list
 
 # Run a workflow
-archon workflow run <name> "<message>"
+hlab workflow run <name> "<message>"
 
 # Run with worktree isolation (recommended for code changes)
-archon workflow run <name> --branch <branch-name> "<message>"
+hlab workflow run <name> --branch <branch-name> "<message>"
 
 # Run directly in the live checkout without worktree isolation
-archon workflow run <name> --no-worktree "<message>"
+hlab workflow run <name> --no-worktree "<message>"
 
 # Run against a different directory
-archon workflow run <name> --cwd /path/to/repo "<message>"
+hlab workflow run <name> --cwd /path/to/repo "<message>"
 ```
 
 ### CLI 명령
 
 | Command | 기능 |
 |---------|-------------|
-| `archon chat <message>` | orchestrator에 message를 보냅니다 |
-| `archon setup` | credentials와 config를 위한 interactive setup wizard를 실행합니다 |
-| `archon workflow list` | 사용 가능한 workflow 목록을 표시합니다 |
-| `archon workflow run <name> [msg]` | workflow를 실행합니다 |
-| `archon workflow status` | 실행 중인 workflow를 표시합니다 |
-| `archon workflow resume <id>` | 실패한 workflow를 재개합니다 |
-| `archon workflow abandon <id>` | terminal 상태가 아닌 run을 abandon합니다 |
-| `archon workflow approve <id> [comment]` | interactive loop gate를 승인합니다 |
-| `archon workflow reject <id> [--reason "..."]` | approval gate를 거절합니다 |
-| `archon workflow cleanup [days]` | 오래된 run record를 삭제합니다(기본: 7일) |
-| `archon workflow event emit` | workflow event를 emit합니다 |
-| `archon isolation list` | active worktree 목록을 표시합니다 |
-| `archon isolation cleanup [days]` | stale environment를 제거합니다 |
-| `archon isolation cleanup --merged` | merge된 branch를 제거합니다 |
-| `archon isolation cleanup --merged --include-closed` | closed(abandoned) PR branch도 함께 제거합니다 |
-| `archon complete <branch>` | branch lifecycle을 완료합니다 |
-| `archon validate workflows [name]` | workflow definition을 검증합니다 |
-| `archon validate commands [name]` | command file을 검증합니다 |
-| `archon version` | version info를 표시합니다 |
+| `hlab chat <message>` | orchestrator에 message를 보냅니다 |
+| `hlab setup` | credentials와 config를 위한 interactive setup wizard를 실행합니다 |
+| `hlab workflow list` | 사용 가능한 workflow 목록을 표시합니다 |
+| `hlab workflow run <name> [msg]` | workflow를 실행합니다 |
+| `hlab workflow status` | 실행 중인 workflow를 표시합니다 |
+| `hlab workflow resume <id>` | 실패한 workflow를 재개합니다 |
+| `hlab workflow abandon <id>` | terminal 상태가 아닌 run을 abandon합니다 |
+| `hlab workflow approve <id> [comment]` | interactive loop gate를 승인합니다 |
+| `hlab workflow reject <id> [--reason "..."]` | approval gate를 거절합니다 |
+| `hlab workflow cleanup [days]` | 오래된 run record를 삭제합니다(기본: 7일) |
+| `hlab workflow event emit` | workflow event를 emit합니다 |
+| `hlab isolation list` | active worktree 목록을 표시합니다 |
+| `hlab isolation cleanup [days]` | stale environment를 제거합니다 |
+| `hlab isolation cleanup --merged` | merge된 branch를 제거합니다 |
+| `hlab isolation cleanup --merged --include-closed` | closed(abandoned) PR branch도 함께 제거합니다 |
+| `hlab complete <branch>` | branch lifecycle을 완료합니다 |
+| `hlab validate workflows [name]` | workflow definition을 검증합니다 |
+| `hlab validate commands [name]` | command file을 검증합니다 |
+| `hlab version` | version info를 표시합니다 |
 
 ### Worktree 관리
 
 ```bash
-archon isolation list              # show active worktrees
-archon isolation cleanup           # remove stale (>7 days)
-archon isolation cleanup 14        # custom staleness threshold
-archon isolation cleanup --merged            # remove merged branches (deletes remote too)
-archon isolation cleanup --merged --include-closed  # also remove closed/abandoned PR branches
-archon complete <branch>           # complete branch lifecycle (worktree + branches)
-archon complete <branch> --force   # skip uncommitted-changes check
+hlab isolation list              # show active worktrees
+hlab isolation cleanup           # remove stale (>7 days)
+hlab isolation cleanup 14        # custom staleness threshold
+hlab isolation cleanup --merged            # remove merged branches (deletes remote too)
+hlab isolation cleanup --merged --include-closed  # also remove closed/abandoned PR branches
+hlab complete <branch>           # complete branch lifecycle (worktree + branches)
+hlab complete <branch> --force   # skip uncommitted-changes check
 ```
 
 <a id="available-workflows"></a>
@@ -464,12 +464,12 @@ workflow는 여러 command를 DAG node로 연결하고, parallel execution과 co
 
 ## Claude Code와 함께 사용하기 (Skill)
 
-Claude Code가 대신 HarnessLab workflow를 호출할 수 있게 하려면 프로젝트에 HarnessLab skill을 설치하세요. setup wizard가 이를 자동으로 처리합니다. `archon setup`을 실행하고 skill installation prompt를 승인하면 됩니다.
+Claude Code가 대신 HarneesLab workflow를 호출할 수 있게 하려면 프로젝트에 HarneesLab skill을 설치하세요. setup wizard가 이를 자동으로 처리합니다. `hlab setup`을 실행하고 skill installation prompt를 승인하면 됩니다.
 
 수동으로 설치하려면:
 
 ```bash
-cp -r HarnessLab/.claude/skills/archon /path/to/your/repo/.claude/skills/
+cp -r HarneesLab/.claude/skills/archon /path/to/your/repo/.claude/skills/
 ```
 
 그런 다음 Claude Code에서 "use archon to fix issue #42"처럼 말하면 적절한 workflow를 호출합니다.
@@ -478,7 +478,7 @@ cp -r HarnessLab/.claude/skills/archon /path/to/your/repo/.claude/skills/
 
 ## 전체 platform 실행 (Server + Chat Adapters)
 
-CLI는 standalone으로 동작하지만 Telegram, Slack, Discord, GitHub webhooks로도 상호작용하고 싶다면 [README Server Setup](https://github.com/NewTurn2017/HarnessLab#quickstart)을 보거나, HarnessLab repo에서 Claude Code를 열고 "set up archon"이라고 말해 setup wizard를 실행하세요.
+CLI는 standalone으로 동작하지만 Telegram, Slack, Discord, GitHub webhooks로도 상호작용하고 싶다면 [README Server Setup](https://github.com/NewTurn2017/HarneesLab#quickstart)을 보거나, HarneesLab repo에서 Claude Code를 열고 "set up archon"이라고 말해 setup wizard를 실행하세요.
 
 ---
 
@@ -486,7 +486,7 @@ CLI는 standalone으로 동작하지만 Telegram, Slack, Discord, GitHub webhook
 
 ### "Cannot create worktree: not in a git repository" (but the repo exists)
 
-실제 원인은 보통 이전 HarnessLab run에서 다른 path를 사용해 생긴 stale symlink입니다. error output에서 다음 내용을 찾아보세요.
+실제 원인은 보통 이전 HarneesLab run에서 다른 path를 사용해 생긴 stale symlink입니다. error output에서 다음 내용을 찾아보세요.
 
 ```
 Source symlink at ~/.archon/workspaces/.../source already points to <old-path>, expected <new-path>
@@ -494,7 +494,7 @@ Source symlink at ~/.archon/workspaces/.../source already points to <old-path>, 
 
 `~/.archon/workspaces/<github-user>/<repo-name>`의 stale workspace folder를 수동으로 삭제한 뒤 명령을 다시 실행하면 해결됩니다.
 
-> 앞으로는 `archon isolation cleanup`이 이를 자동으로 처리할 예정입니다.
+> 앞으로는 `hlab isolation cleanup`이 이를 자동으로 처리할 예정입니다.
 
 ---
 

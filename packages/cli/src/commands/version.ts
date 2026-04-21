@@ -1,21 +1,21 @@
 /**
  * Version command - displays version info
  *
- * For compiled binaries, version and git commit are embedded via `@archon/paths`
+ * For compiled binaries, version and git commit are embedded via `@harneeslab/paths`
  * build-time constants (rewritten by `scripts/build-binaries.sh`).
  * For development (Bun), reads from package.json and retrieves git commit at runtime.
  */
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync } from '@harneeslab/git';
 import {
   BUNDLED_GIT_COMMIT,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   createLogger,
-} from '@archon/paths';
-import { getDatabaseType } from '@archon/core';
+} from '@harneeslab/paths';
+import { getDatabaseType } from '@harneeslab/core';
 
 const log = createLogger('cli:version');
 
@@ -93,7 +93,7 @@ export async function versionCommand(): Promise<void> {
   const dbType = getDatabaseType();
   const buildType = BUNDLED_IS_BINARY ? 'binary' : 'source (bun)';
 
-  console.log(`HarnessLab CLI v${version}`);
+  console.log(`HarneesLab CLI v${version}`);
   console.log(`  Platform(플랫폼): ${platform}-${arch}`);
   console.log(`  Build(빌드): ${buildType}`);
   console.log(`  Database(데이터베이스): ${dbType}`);

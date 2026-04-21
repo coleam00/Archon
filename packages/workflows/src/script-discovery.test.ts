@@ -18,7 +18,7 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
-mock.module('@archon/paths', () => ({ createLogger: mock(() => mockLogger) }));
+mock.module('@harneeslab/paths', () => ({ createLogger: mock(() => mockLogger) }));
 
 import { discoverScripts, getDefaultScripts } from './script-discovery';
 

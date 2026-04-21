@@ -1,4 +1,4 @@
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 import type { AssistantMessage, Usage } from '@mariozechner/pi-ai';
 

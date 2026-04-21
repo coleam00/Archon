@@ -1,4 +1,4 @@
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import {
   AuthStorage,
   ModelRegistry,

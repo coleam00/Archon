@@ -1,5 +1,5 @@
 {
-  "name": "@archon/server",
+  "name": "@harneeslab/server",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,12 +11,12 @@
     "setup-auth": "bun src/scripts/setup-auth.ts"
   },
   "dependencies": {
-    "@archon/adapters": "workspace:*",
-    "@archon/core": "workspace:*",
-    "@archon/git": "workspace:*",
-    "@archon/paths": "workspace:*",
-    "@archon/providers": "workspace:*",
-    "@archon/workflows": "workspace:*",
+    "@harneeslab/adapters": "workspace:*",
+    "@harneeslab/core": "workspace:*",
+    "@harneeslab/git": "workspace:*",
+    "@harneeslab/paths": "workspace:*",
+    "@harneeslab/providers": "workspace:*",
+    "@harneeslab/workflows": "workspace:*",
     "@hono/zod-openapi": "^0.19.6",
     "dotenv": "^17.2.3",
     "hono": "^4.11.4",

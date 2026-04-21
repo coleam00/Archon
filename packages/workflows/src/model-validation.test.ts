@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'bun:test';
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, clearRegistry } from '@harneeslab/providers';
 import { isModelCompatible, inferProviderFromModel } from './model-validation';
 
 // Bootstrap registry once for all tests (idempotent)

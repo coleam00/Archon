@@ -1,6 +1,6 @@
 ---
 title: CLI 내부 구조
-description: HarnessLab CLI 패키지의 기술 reference — entry point 흐름, command routing, worktree logic, adapter 상세.
+description: HarneesLab CLI 패키지의 기술 reference — entry point 흐름, command routing, worktree logic, adapter 상세.
 category: contributing
 area: cli
 audience: [developer]
@@ -18,8 +18,8 @@ packages/cli/
 ├── src/
 │   ├── cli.ts              # Entry point, argument parsing, routing
 │   ├── commands/
-│   │   ├── workflow.ts     # workflow list/run (approve/reject/status/resume/abandon delegate to @archon/core/operations)
-│   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @archon/core/operations)
+│   │   ├── workflow.ts     # workflow list/run (approve/reject/status/resume/abandon delegate to @harneeslab/core/operations)
+│   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @harneeslab/core/operations)
 │   │   ├── setup.ts        # setup command implementation
 │   │   ├── chat.ts         # chat command implementation
 │   │   ├── validate.ts     # validate command implementation
@@ -81,7 +81,7 @@ packages/cli/
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ archon workflow list [--json]                                    │
+│ hlab workflow list [--json]                                    │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
                                ▼
@@ -91,7 +91,7 @@ packages/cli/
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ @archon/workflows/workflow-discovery                              │
+│ @harneeslab/workflows/workflow-discovery                              │
 │ discoverWorkflowsWithConfig(cwd, config)                          │
 │ - Loads bundled defaults                                         │
 │ - Searches .archon/workflows/ recursively                        │
@@ -115,7 +115,7 @@ packages/cli/
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ archon workflow run <name> [message] [--branch X] [--from X] [--no-worktree]│
+│ hlab workflow run <name> [message] [--branch X] [--from X] [--no-worktree]│
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
@@ -182,7 +182,7 @@ packages/cli/
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│ archon workflow event emit --run-id <uuid> --type <type> [...]   │
+│ hlab workflow event emit --run-id <uuid> --type <type> [...]   │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
                                ▼
@@ -210,7 +210,7 @@ packages/cli/
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation list                                           │
+│ hlab isolation list                                           │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
@@ -220,7 +220,7 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ @archon/core isolationDb.listAllActiveWithCodebase()            │
+│ @harneeslab/core isolationDb.listAllActiveWithCodebase()            │
 │ - Joins isolation_environments with codebases                   │
 │ - Returns: path, branch, workflow_type, codebase_name,          │
 │            platform, days_since_activity                        │
@@ -240,7 +240,7 @@ packages/cli/
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation cleanup [days]                                 │
+│ hlab isolation cleanup [days]                                 │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
@@ -251,7 +251,7 @@ packages/cli/
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ @archon/core isolationDb.findStaleEnvironments(days)            │
+│ @harneeslab/core isolationDb.findStaleEnvironments(days)            │
 │ - WHERE last_activity_at < now - days                           │
 │ - Excludes telegram platform                                    │
 └─────────────────────────────────┬───────────────────────────────┘
@@ -273,7 +273,7 @@ packages/cli/
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation cleanup --merged [--include-closed]            │
+│ hlab isolation cleanup --merged [--include-closed]            │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼
@@ -335,14 +335,14 @@ Terminal output용 `IPlatformAdapter`를 구현합니다.
 
 | Function | Package | Location | Purpose |
 |----------|---------|----------|---------|
-| `discoverWorkflowsWithConfig(cwd, config)` | `@archon/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | workflow YAML 탐색과 parse |
-| `executeWorkflow(...)` | `@archon/workflows/executor` | `workflows/src/executor.ts` | workflow step 실행 |
-| `getIsolationProvider()` | `@archon/isolation` | `isolation/src/factory.ts` | WorktreeProvider singleton 가져오기 |
-| `conversationDb.*` | `@archon/core` | `core/src/db/conversations.ts` | Conversation CRUD |
-| `codebaseDb.*` | `@archon/core` | `core/src/db/codebases.ts` | Codebase CRUD |
-| `isolationDb.*` | `@archon/core` | `core/src/db/isolation-environments.ts` | Worktree tracking |
-| `git.*` | `@archon/git` | `packages/git/src/` | Git operation |
-| `closeDatabase()` | `@archon/core` | `core/src/db/connection.ts` | Clean shutdown |
+| `discoverWorkflowsWithConfig(cwd, config)` | `@harneeslab/workflows/workflow-discovery` | `workflows/src/workflow-discovery.ts` | workflow YAML 탐색과 parse |
+| `executeWorkflow(...)` | `@harneeslab/workflows/executor` | `workflows/src/executor.ts` | workflow step 실행 |
+| `getIsolationProvider()` | `@harneeslab/isolation` | `isolation/src/factory.ts` | WorktreeProvider singleton 가져오기 |
+| `conversationDb.*` | `@harneeslab/core` | `core/src/db/conversations.ts` | Conversation CRUD |
+| `codebaseDb.*` | `@harneeslab/core` | `core/src/db/codebases.ts` | Codebase CRUD |
+| `isolationDb.*` | `@harneeslab/core` | `core/src/db/isolation-environments.ts` | Worktree tracking |
+| `git.*` | `@harneeslab/git` | `packages/git/src/` | Git operation |
+| `closeDatabase()` | `@harneeslab/core` | `core/src/db/connection.ts` | Clean shutdown |
 
 ---
 

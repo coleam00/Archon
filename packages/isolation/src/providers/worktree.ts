@@ -8,7 +8,7 @@ import { createHash } from 'crypto';
 import { access, rm } from 'fs/promises';
 import { join, resolve } from 'path';
 
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import {
   execFileAsync,
   extractOwnerRepo,
@@ -25,9 +25,9 @@ import {
   toRepoPath,
   toWorktreePath,
   toBranchName,
-} from '@archon/git';
-import { getArchonWorkspacesPath } from '@archon/paths';
-import type { RepoPath, WorktreeInfo } from '@archon/git';
+} from '@harneeslab/git';
+import { getArchonWorkspacesPath } from '@harneeslab/paths';
+import type { RepoPath, WorktreeInfo } from '@harneeslab/git';
 import { copyWorktreeFiles } from '../worktree-copy';
 import type {
   DestroyResult,

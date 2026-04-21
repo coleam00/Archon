@@ -22,7 +22,7 @@ export async function commandFileExists(path: string): Promise<boolean> {
     throw new Error(`Cannot access command file at ${path}: ${err.message}`);
   }
 }
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -37,19 +37,19 @@ import {
   ConversationNotFoundError,
   isWebAdapter,
 } from '../types';
-import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
+import type { IsolationHints, IsolationEnvironmentRow } from '@harneeslab/isolation';
 import {
   IsolationBlockedError,
   IsolationResolver,
   configureIsolation,
   getIsolationProvider,
-} from '@archon/isolation';
+} from '@harneeslab/isolation';
 import * as db from '../db/conversations';
 import { createIsolationStore } from '../db/isolation-environments';
 import { toError } from '../utils/error';
 import { getCodebase } from '../db/codebases';
-import { executeWorkflow } from '@archon/workflows/executor';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import { executeWorkflow } from '@harneeslab/workflows/executor';
+import type { WorkflowDefinition } from '@harneeslab/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import {
   cleanupToMakeRoom,

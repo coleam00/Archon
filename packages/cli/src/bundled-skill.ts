@@ -1,5 +1,5 @@
 /**
- * Bundled HarnessLab skill files for binary distribution
+ * Bundled HarneesLab skill files for binary distribution
  *
  * These static imports are resolved at compile time and embedded into the binary.
  * When running as a standalone binary (without Bun), these provide the skill files
@@ -12,31 +12,31 @@
 // Skill Files (18 total)
 // =============================================================================
 
-import skillMd from '../../../.claude/skills/archon/SKILL.md' with { type: 'text' };
-import commandTemplate from '../../../.claude/skills/archon/examples/command-template.md' with { type: 'text' };
-import dagWorkflow from '../../../.claude/skills/archon/examples/dag-workflow.yaml' with { type: 'text' };
-import cliGuide from '../../../.claude/skills/archon/guides/cli.md' with { type: 'text' };
-import configGuide from '../../../.claude/skills/archon/guides/config.md' with { type: 'text' };
-import discordGuide from '../../../.claude/skills/archon/guides/discord.md' with { type: 'text' };
-import githubGuide from '../../../.claude/skills/archon/guides/github.md' with { type: 'text' };
-import serverGuide from '../../../.claude/skills/archon/guides/server.md' with { type: 'text' };
-import setupGuide from '../../../.claude/skills/archon/guides/setup.md' with { type: 'text' };
-import slackGuide from '../../../.claude/skills/archon/guides/slack.md' with { type: 'text' };
-import telegramGuide from '../../../.claude/skills/archon/guides/telegram.md' with { type: 'text' };
-import authoringCommands from '../../../.claude/skills/archon/references/authoring-commands.md' with { type: 'text' };
-import cliCommands from '../../../.claude/skills/archon/references/cli-commands.md' with { type: 'text' };
-import dagAdvanced from '../../../.claude/skills/archon/references/dag-advanced.md' with { type: 'text' };
-import interactiveWorkflows from '../../../.claude/skills/archon/references/interactive-workflows.md' with { type: 'text' };
-import repoInit from '../../../.claude/skills/archon/references/repo-init.md' with { type: 'text' };
-import variables from '../../../.claude/skills/archon/references/variables.md' with { type: 'text' };
-import workflowDag from '../../../.claude/skills/archon/references/workflow-dag.md' with { type: 'text' };
+import skillMd from '../../../.claude/skills/hlab/SKILL.md' with { type: 'text' };
+import commandTemplate from '../../../.claude/skills/hlab/examples/command-template.md' with { type: 'text' };
+import dagWorkflow from '../../../.claude/skills/hlab/examples/dag-workflow.yaml' with { type: 'text' };
+import cliGuide from '../../../.claude/skills/hlab/guides/cli.md' with { type: 'text' };
+import configGuide from '../../../.claude/skills/hlab/guides/config.md' with { type: 'text' };
+import discordGuide from '../../../.claude/skills/hlab/guides/discord.md' with { type: 'text' };
+import githubGuide from '../../../.claude/skills/hlab/guides/github.md' with { type: 'text' };
+import serverGuide from '../../../.claude/skills/hlab/guides/server.md' with { type: 'text' };
+import setupGuide from '../../../.claude/skills/hlab/guides/setup.md' with { type: 'text' };
+import slackGuide from '../../../.claude/skills/hlab/guides/slack.md' with { type: 'text' };
+import telegramGuide from '../../../.claude/skills/hlab/guides/telegram.md' with { type: 'text' };
+import authoringCommands from '../../../.claude/skills/hlab/references/authoring-commands.md' with { type: 'text' };
+import cliCommands from '../../../.claude/skills/hlab/references/cli-commands.md' with { type: 'text' };
+import dagAdvanced from '../../../.claude/skills/hlab/references/dag-advanced.md' with { type: 'text' };
+import interactiveWorkflows from '../../../.claude/skills/hlab/references/interactive-workflows.md' with { type: 'text' };
+import repoInit from '../../../.claude/skills/hlab/references/repo-init.md' with { type: 'text' };
+import variables from '../../../.claude/skills/hlab/references/variables.md' with { type: 'text' };
+import workflowDag from '../../../.claude/skills/hlab/references/workflow-dag.md' with { type: 'text' };
 
 // =============================================================================
 // Export
 // =============================================================================
 
 /**
- * Bundled skill files - relative path within .claude/skills/archon/ -> content
+ * Bundled skill files - relative path within .claude/skills/hlab/ -> content
  */
 export const BUNDLED_SKILL_FILES: Record<string, string> = {
   'SKILL.md': skillMd,

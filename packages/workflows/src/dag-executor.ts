@@ -6,7 +6,7 @@
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
 import { resolve } from 'path';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync } from '@harneeslab/git';
 import { discoverScripts } from './script-discovery';
 import type {
   IWorkflowPlatform,
@@ -19,8 +19,8 @@ import type {
   NodeConfig,
   ProviderCapabilities,
   TokenUsage,
-} from '@archon/providers/types';
-import { getProviderCapabilities } from '@archon/providers';
+} from '@harneeslab/providers/types';
+import { getProviderCapabilities } from '@harneeslab/providers';
 import type {
   DagNode,
   ApprovalNode,
@@ -45,7 +45,7 @@ import {
   isApprovalContext,
 } from './schemas';
 import { formatToolCall } from './utils/tool-formatter';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
 import { inferProviderFromModel, isModelCompatible } from './model-validation';
@@ -231,8 +231,8 @@ export function substituteNodeOutputRefs(
   );
 }
 
-// buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
-// loadMcpConfig moved to @archon/providers/src/claude/provider.ts
+// buildSDKHooksFromYAML moved to @harneeslab/providers/src/claude/provider.ts
+// loadMcpConfig moved to @harneeslab/providers/src/claude/provider.ts
 
 /**
  * Resolve per-node provider and model.

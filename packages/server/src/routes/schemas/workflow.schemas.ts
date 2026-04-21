@@ -2,7 +2,7 @@
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@archon/workflows/schemas/workflow';
+import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@harneeslab/workflows/schemas/workflow';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
 export const workflowDefinitionSchema =

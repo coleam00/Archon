@@ -15,7 +15,7 @@ Describe this PR in 2-5 bullets:
 (Draw the user-facing flow BEFORE this PR. Show each step the user takes.)
 
 Example:
-  User                   HarnessLab               AI Client
+  User                   HarneesLab               AI Client
   ────                   ──────                   ─────────
   sends message ──────▶  resolves session
                          loads context

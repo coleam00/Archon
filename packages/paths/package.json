@@ -1,5 +1,5 @@
 {
-  "name": "@archon/paths",
+  "name": "@harneeslab/paths",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",

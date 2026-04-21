@@ -1,5 +1,5 @@
 /**
- * REST API routes for the HarnessLab Web UI.
+ * REST API routes for the HarneesLab Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
@@ -16,7 +16,7 @@ import type {
   AttachedFile,
   HandleMessageContext,
   GlobalConfig,
-} from '@archon/core';
+} from '@harneeslab/core';
 import {
   handleMessage,
   getDatabaseType,
@@ -27,8 +27,8 @@ import {
   registerRepository,
   ConversationNotFoundError,
   generateAndSetTitle,
-} from '@archon/core';
-import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
+} from '@harneeslab/core';
+import { removeWorktree, toRepoPath, toWorktreePath } from '@harneeslab/git';
 import {
   createLogger,
   getWorkflowFolderSearchPaths,
@@ -42,17 +42,17 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
-} from '@archon/paths';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { parseWorkflow } from '@archon/workflows/loader';
-import { isValidCommandName } from '@archon/workflows/command-validation';
-import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
+} from '@harneeslab/paths';
+import { discoverWorkflowsWithConfig } from '@harneeslab/workflows/workflow-discovery';
+import { parseWorkflow } from '@harneeslab/workflows/loader';
+import { isValidCommandName } from '@harneeslab/workflows/command-validation';
+import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@harneeslab/workflows/defaults';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
-} from '@archon/workflows/schemas/workflow-run';
-import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
-import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
+} from '@harneeslab/workflows/schemas/workflow-run';
+import type { ApprovalContext } from '@harneeslab/workflows/schemas/workflow-run';
+import { findMarkdownFilesRecursive } from '@harneeslab/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -60,13 +60,13 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('api');
   return cachedLog;
 }
-import * as conversationDb from '@archon/core/db/conversations';
-import * as codebaseDb from '@archon/core/db/codebases';
-import * as envVarDb from '@archon/core/db/env-vars';
-import * as isolationEnvDb from '@archon/core/db/isolation-environments';
-import * as workflowDb from '@archon/core/db/workflows';
-import * as workflowEventDb from '@archon/core/db/workflow-events';
-import * as messageDb from '@archon/core/db/messages';
+import * as conversationDb from '@harneeslab/core/db/conversations';
+import * as codebaseDb from '@harneeslab/core/db/codebases';
+import * as envVarDb from '@harneeslab/core/db/env-vars';
+import * as isolationEnvDb from '@harneeslab/core/db/isolation-environments';
+import * as workflowDb from '@harneeslab/core/db/workflows';
+import * as workflowEventDb from '@harneeslab/core/db/workflow-events';
+import * as messageDb from '@harneeslab/core/db/messages';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -120,7 +120,7 @@ import {
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
-import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import { getProviderInfoList, isRegisteredProvider } from '@harneeslab/providers';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -1656,7 +1656,7 @@ export function registerApiRoutes(
   // Serve OpenAPI spec
   app.doc('/api/openapi.json', {
     openapi: '3.0.0',
-    info: { title: 'HarnessLab API', version: '1.0.0' },
+    info: { title: 'HarneesLab API', version: '1.0.0' },
   });
 
   // =========================================================================

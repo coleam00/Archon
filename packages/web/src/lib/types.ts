@@ -1,5 +1,5 @@
 /**
- * Frontend-specific types for the HarnessLab Web UI.
+ * Frontend-specific types for the HarneesLab Web UI.
  * SSE event types match what the Web adapter emits.
  */
 

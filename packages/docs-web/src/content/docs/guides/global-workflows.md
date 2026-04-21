@@ -132,10 +132,10 @@ CLI와 서버는 모두 전역 워크플로를 자동으로 발견합니다.
 
 ```bash
 # Lists bundled + global + repo-specific workflows
-archon workflow list
+hlab workflow list
 
 # Run a global workflow from any repo
-archon workflow run my-review
+hlab workflow run my-review
 ```
 
 ## Troubleshooting
@@ -153,7 +153,7 @@ archon workflow run my-review
 3. **YAML 유효성 확인** -- YAML syntax error가 있으면 workflow list가 아니라 errors list에 표시됩니다. 다음 명령을 실행하세요.
 
    ```bash
-   archon validate workflows my-workflow
+   hlab validate workflows my-workflow
    ```
 
 4. **이름 충돌 확인** -- 저장소별 workflow가 같은 파일명을 가지면 전역 workflow를 덮어씁니다. 해당 저장소 안에서는 전역 버전이 표시되지 않습니다.

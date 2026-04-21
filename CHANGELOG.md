@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Inline sub-agent definitions on DAG nodes (`agents:`).** Define Claude Agent SDK `AgentDefinition`s directly in workflow YAML, keyed by kebab-case agent ID. The main agent can spawn them in parallel via the `Task` tool — useful for map-reduce patterns where a cheap model (e.g. Haiku) briefs items and a stronger model reduces. Removes the need to author `.claude/agents/*.md` files for workflow-scoped helpers. Claude only; Codex and community providers that don't support inline agents emit a capability warning and ignore the field. Merges with the internal `dag-node-skills` wrapper set by `skills:` on the same node — user-defined agents win on ID collision (a warning is logged). (#1276)
 - **Pi community provider (`@mariozechner/pi-coding-agent`).** First community provider under the Phase 2 registry (`builtIn: false`). One adapter exposes ~20 LLM backends (Anthropic, OpenAI, Google, Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and more) via a `<pi-provider-id>/<model-id>` model format. Reads credentials from `~/.pi/agent/auth.json` (populated by running `pi /login` for OAuth subscriptions like Claude Pro/Max, ChatGPT Plus, GitHub Copilot) AND from env vars (env vars take priority per-request). Per-node workflow options supported: `effort`/`thinking` → Pi `thinkingLevel`; `allowed_tools`/`denied_tools` → filter Pi's 7 built-in coding tools; `skills` → resolved against `.agents/skills`, `.claude/skills` (project + user-global); `systemPrompt`; codebase env vars; session resume via `sessionId` round-trip. Unsupported fields (MCP, hooks, structured output, cost limits, fallback model, sandbox) trigger an explicit dag-executor warning rather than silently dropping. Use in workflow YAML: `provider: pi` + `model: anthropic/claude-haiku-4-5`. (#1270)
-- **`registerCommunityProviders()` aggregator** in `@archon/providers`. Process entrypoints (CLI, server, config-loader) now call one function to register every bundled community provider. Adding a new community provider is a single-line edit to this aggregator rather than touching each entrypoint — makes the Phase 2 "community providers are a localized addition" promise real.
+- **`registerCommunityProviders()` aggregator** in `@harneeslab/providers`. Process entrypoints (CLI, server, config-loader) now call one function to register every bundled community provider. Adding a new community provider is a single-line edit to this aggregator rather than touching each entrypoint — makes the Phase 2 "community providers are a localized addition" promise real.
 - **`contributing/adding-a-community-provider.md` guide** — contributor-facing walkthrough of the Phase 2 registry pattern using Pi as the reference implementation.
 
 ### Fixed
@@ -51,7 +51,7 @@ Web UI workflow experience improvements, CWD environment leak protection, and bu
 
 ### Changed
 
-- CWD `.env` variables are now stripped from AI subprocess environments at the `@archon/paths` layer, replacing the old `SUBPROCESS_ENV_ALLOWLIST` approach. Prevents accidental credential leaks from target repo `.env` files (#1067, #1030, #1098, #1070)
+- CWD `.env` variables are now stripped from AI subprocess environments at the `@harneeslab/paths` layer, replacing the old `SUBPROCESS_ENV_ALLOWLIST` approach. Prevents accidental credential leaks from target repo `.env` files (#1067, #1030, #1098, #1070)
 - Update check cache TTL reduced from 24 hours to 1 hour
 
 ### Fixed
@@ -150,7 +150,7 @@ Env-leak gate hardening, SSE reliability fixes, isolation cleanup smarter merge 
 
 - **Env-leak gate error messages** are now context-aware: separate remediation copy for Web Add-Project, CLI auto-register, and pre-spawn-of-existing-codebase paths. Previously every error pointed at the Web UI checkbox even from the CLI (#973, #983).
 - **SSE event buffer TTL** raised from 3s to 60s and capacity from 50 to 500 events, fixing dropped `tool_result` events during the 5s reconnect grace window that left tool cards perpetually spinning. Cleanup timer now resets on each new event so the buffer is held for TTL past the most recent event, not the first one. Buffer overflow and TTL expiration now log at `warn` level for observability (#1037).
-- **Binary build detection** moved from runtime env sniffing (`import.meta.dir` / `process.execPath`) to a build-time `BUNDLED_IS_BINARY` constant in `@archon/paths`. Logger uses `pino-pretty` as a destination stream on the main thread instead of a worker-thread transport, eliminating the `require.resolve('pino-pretty')` lookup that crashed inside Bun's `$bunfs` virtual filesystem in compiled binaries. Same code path runs in dev and binaries — no environment detection (#982).
+- **Binary build detection** moved from runtime env sniffing (`import.meta.dir` / `process.execPath`) to a build-time `BUNDLED_IS_BINARY` constant in `@harneeslab/paths`. Logger uses `pino-pretty` as a destination stream on the main thread instead of a worker-thread transport, eliminating the `require.resolve('pino-pretty')` lookup that crashed inside Bun's `$bunfs` virtual filesystem in compiled binaries. Same code path runs in dev and binaries — no environment detection (#982).
 - **Cloud-init deployment script** hardened: dedicated `archon` user (docker group, no sudo) with SSH keys copied from the default cloud user, 2GB swapfile to prevent OOM during docker build on small VPSes, `ufw allow 443/tcp` and `443/udp` for HTTP/3 QUIC, fail-fast on network errors, and clearer setup-complete messaging (#981).
 
 ### Fixed
@@ -315,15 +315,15 @@ Monorepo deep extraction and visual workflow builder.
 - **Visual workflow builder** with React Flow for drag-and-drop workflow creation (#471)
 - **AI-generated conversation titles** + CLI-to-Web UI integration (#515)
 - **Workflow Command Center** — unified dashboard for cross-project workflow observability with pagination and filtering
-- **`@archon/paths` package** extracted from `@archon/core` — path resolution and logger with zero internal deps (#483)
-- **`@archon/git` package** extracted from `@archon/core` — git operations with branded types (#492)
-- **`@archon/isolation` package** extracted from `@archon/core` — worktree isolation with provider abstraction (#492)
-- **`@archon/adapters` package** extracted from `@archon/server` — platform adapters for Slack, Telegram, GitHub, Discord (#499)
-- **`@archon/workflows` package** extracted from `@archon/core` — workflow engine with loader, router, executor, DAG (#507)
+- **`@harneeslab/paths` package** extracted from `@harneeslab/core` — path resolution and logger with zero internal deps (#483)
+- **`@harneeslab/git` package** extracted from `@harneeslab/core` — git operations with branded types (#492)
+- **`@harneeslab/isolation` package** extracted from `@harneeslab/core` — worktree isolation with provider abstraction (#492)
+- **`@harneeslab/adapters` package** extracted from `@harneeslab/server` — platform adapters for Slack, Telegram, GitHub, Discord (#499)
+- **`@harneeslab/workflows` package** extracted from `@harneeslab/core` — workflow engine with loader, router, executor, DAG (#507)
 
 ### Changed
 
-- Backward-compat re-exports removed from `@archon/core` — use direct package imports (#512)
+- Backward-compat re-exports removed from `@harneeslab/core` — use direct package imports (#512)
 
 ### Fixed
 
@@ -413,12 +413,12 @@ SQLite as default database and simplified CLI setup.
 
 ## [0.2.3] - 2026-01-31
 
-HarnessLab CLI skill, workflow routing improvements, and configuration fixes.
+HarneesLab CLI skill, workflow routing improvements, and configuration fixes.
 
 ### Added
 
-- **HarnessLab CLI skill** for Claude Code — run workflows from within Claude Code sessions (#331, #332, #333)
-- **Interactive setup wizard** and config editor for the HarnessLab skill
+- **HarneesLab CLI skill** for Claude Code — run workflows from within Claude Code sessions (#331, #332, #333)
+- **Interactive setup wizard** and config editor for the HarneesLab skill
 - **`/workflow run` command** for direct workflow invocation from CLI
 - **`archon-plan-to-merge` workflow** for end-to-end plan execution (#346)
 - **Workflow error visibility** — `/workflow list` and `/workflow reload` show per-file load errors (#260, #263, #264)
@@ -486,7 +486,7 @@ Monorepo restructure introducing the CLI package for local workflow execution.
 
 ### Added
 
-- **Monorepo structure** with `@archon/core`, `@archon/server`, and `@archon/cli` packages (#311)
+- **Monorepo structure** with `@harneeslab/core`, `@harneeslab/server`, and `@harneeslab/cli` packages (#311)
 - **CLI entry point** with `workflow list`, `workflow run`, and `version` commands (#313)
 - **Database abstraction layer** supporting both PostgreSQL and SQLite (#314)
 - **SQLite auto-detection** - uses `~/.archon/archon.db` when `DATABASE_URL` not set (#314)

@@ -1,6 +1,6 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun } from '@harneeslab/workflows/schemas/workflow-run';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
 

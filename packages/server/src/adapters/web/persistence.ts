@@ -1,5 +1,5 @@
-import { createLogger } from '@archon/paths';
-import type { MessageMetadata } from '@archon/core';
+import { createLogger } from '@harneeslab/paths';
+import type { MessageMetadata } from '@harneeslab/core';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -247,7 +247,7 @@ export class MessagePersistence {
     }
 
     try {
-      const { addMessage } = await import('@archon/core/db/messages');
+      const { addMessage } = await import('@harneeslab/core/db/messages');
       for (const seg of ready) {
         if (!seg.content && seg.toolCalls.length === 0) continue;
         const toolCalls = seg.toolCalls.map(tc => ({

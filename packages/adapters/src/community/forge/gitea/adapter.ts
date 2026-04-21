@@ -7,8 +7,8 @@
 import { createHmac, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
-import type { IsolationHints } from '@archon/isolation';
+import type { IPlatformAdapter, MessageMetadata } from '@harneeslab/core';
+import type { IsolationHints } from '@harneeslab/isolation';
 import {
   ConversationNotFoundError,
   handleMessage,
@@ -16,8 +16,12 @@ import {
   toError,
   onConversationClosed,
   ConversationLockManager,
-} from '@archon/core';
-import { getArchonWorkspacesPath, getCommandFolderSearchPaths, createLogger } from '@archon/paths';
+} from '@harneeslab/core';
+import {
+  getArchonWorkspacesPath,
+  getCommandFolderSearchPaths,
+  createLogger,
+} from '@harneeslab/paths';
 import {
   cloneRepository,
   syncRepository,
@@ -25,9 +29,9 @@ import {
   toRepoPath,
   toBranchName,
   isWorktreePath,
-} from '@archon/git';
-import * as db from '@archon/core/db/conversations';
-import * as codebaseDb from '@archon/core/db/codebases';
+} from '@harneeslab/git';
+import * as db from '@harneeslab/core/db/conversations';
+import * as codebaseDb from '@harneeslab/core/db/codebases';
 import { parseAllowedUsers, isGiteaUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { WebhookEvent } from './types';
@@ -66,7 +70,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     this.token = token;
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
-    this.botMention = botMention ?? 'HarnessLab';
+    this.botMention = botMention ?? 'HarneesLab';
 
     // Parse Gitea user whitelist (optional - empty = open access)
     this.allowedUsers = parseAllowedUsers(process.env.GITEA_ALLOWED_USERS);
@@ -470,7 +474,7 @@ export class GiteaAdapter implements IPlatformAdapter {
 
   /**
    * Ensure repository is cloned and ready.
-   * Uses @archon/git functions for safe, testable git operations.
+   * Uses @harneeslab/git functions for safe, testable git operations.
    *
    * For new codebases: clone (directory won't exist)
    * For existing codebases: sync if shouldSync=true, skip if shouldSync=false

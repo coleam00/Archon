@@ -35,10 +35,10 @@ Archon은 여러 플랫폼 어댑터를 지원합니다. 각 어댑터는 Archon
 
 모든 어댑터는 `IPlatformAdapter` 인터페이스를 구현합니다. 어댑터가 담당하는 일은 다음과 같습니다.
 
-- **메시지 수신** -- 플랫폼에서 메시지를 받아 HarnessLab orchestrator로 전달
+- **메시지 수신** -- 플랫폼에서 메시지를 받아 HarneesLab orchestrator로 전달
 - **응답 전달** -- AI 응답을 플랫폼으로 다시 스트리밍하거나 배치로 전송
 - **권한 제어** -- 접근을 제한하기 위한 선택적 사용자 allowlist
-- **대화 추적** -- 플랫폼별 식별자(thread ID, chat ID, issue number)를 HarnessLab 대화에 매핑
+- **대화 추적** -- 플랫폼별 식별자(thread ID, chat ID, issue number)를 HarneesLab 대화에 매핑
 
 ## 어댑터 선택
 

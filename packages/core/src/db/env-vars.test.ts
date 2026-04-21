@@ -8,7 +8,7 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => ({
     info: mock(() => {}),
     warn: mock(() => {}),

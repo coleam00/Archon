@@ -1,10 +1,10 @@
 /**
- * CLI commands for `archon validate workflows` and `archon validate commands`.
+ * CLI commands for `hlab validate workflows` and `hlab validate commands`.
  *
- * Thin layer over @archon/workflows validator: discovers, validates, formats output.
+ * Thin layer over @harneeslab/workflows validator: discovers, validates, formats output.
  */
 
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { discoverWorkflowsWithConfig } from '@harneeslab/workflows/workflow-discovery';
 import {
   validateWorkflowResources,
   validateCommand,
@@ -13,14 +13,14 @@ import {
   discoverAvailableScripts,
   findSimilar,
   makeWorkflowResult,
-} from '@archon/workflows/validator';
+} from '@harneeslab/workflows/validator';
 import type {
   ValidationIssue,
   WorkflowValidationResult,
   ValidationConfig,
   ScriptValidationResult,
-} from '@archon/workflows/validator';
-import { loadConfig, loadRepoConfig } from '@archon/core';
+} from '@harneeslab/workflows/validator';
+import { loadConfig, loadRepoConfig } from '@harneeslab/core';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml

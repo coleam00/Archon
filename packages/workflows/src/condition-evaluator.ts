@@ -14,7 +14,7 @@
  * Invalid/unparseable expressions default to false (fail-closed = skip the node).
  */
 import type { NodeOutput } from './schemas';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

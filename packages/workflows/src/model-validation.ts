@@ -4,7 +4,11 @@
  * All provider/model compatibility checks delegate to ProviderRegistration entries
  * in the provider registry. No hardcoded provider knowledge lives here.
  */
-import { getRegistration, getRegisteredProviders, isRegisteredProvider } from '@archon/providers';
+import {
+  getRegistration,
+  getRegisteredProviders,
+  isRegisteredProvider,
+} from '@harneeslab/providers';
 
 /**
  * Infer provider from a model name by iterating BUILT-IN registrations only.

@@ -16,7 +16,7 @@
  */
 import { existsSync as _existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
+import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@harneeslab/paths';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {

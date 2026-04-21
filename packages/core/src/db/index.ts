@@ -2,8 +2,8 @@
  * Database module exports
  *
  * Both namespace and direct imports are available:
- *   import { conversationDb, codebaseDb } from '@archon/core/db';  // Namespaced
- *   import { getOrCreateConversation } from '@archon/core/db';     // Direct
+ *   import { conversationDb, codebaseDb } from '@harneeslab/core/db';  // Namespaced
+ *   import { getOrCreateConversation } from '@harneeslab/core/db';     // Direct
  *
  * Namespace imports provide clearer origin when using multiple modules
  * in the same file.

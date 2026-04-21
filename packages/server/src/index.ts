@@ -7,13 +7,13 @@
 // Bun auto-loads .env/.env.local/.env.development/.env.production from CWD;
 // when `bun run dev:server` is run from inside a target repo those keys leak
 // into the server process. stripCwdEnv() removes them before ~/.archon/.env loads.
-import '@archon/paths/strip-cwd-env-boot';
+import '@harneeslab/paths/strip-cwd-env-boot';
 
 // Load environment variables — after CWD stripping, before application imports.
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-import { BUNDLED_IS_BINARY } from '@archon/paths';
+import { BUNDLED_IS_BINARY } from '@harneeslab/paths';
 
 // In dev/source mode, load the repo root .env (platform tokens, API keys, etc.)
 // import.meta.dir is frozen at build time, so skip in compiled binaries.
@@ -52,7 +52,7 @@ if (
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@harneeslab/providers';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
@@ -60,9 +60,9 @@ registerCommunityProviders();
 
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';
-import { TelegramAdapter, GitHubAdapter, DiscordAdapter, SlackAdapter } from '@archon/adapters';
-import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
-import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
+import { TelegramAdapter, GitHubAdapter, DiscordAdapter, SlackAdapter } from '@harneeslab/adapters';
+import { GiteaAdapter } from '@harneeslab/adapters/community/forge/gitea';
+import { GitLabAdapter } from '@harneeslab/adapters/community/forge/gitlab';
 import { WebAdapter } from './adapters/web';
 import { MessagePersistence } from './adapters/web/persistence';
 import { SSETransport } from './adapters/web/transport';
@@ -78,14 +78,14 @@ import {
   loadConfig,
   logConfig,
   getPort,
-} from '@archon/core';
-import type { IPlatformAdapter } from '@archon/core';
+} from '@harneeslab/core';
+import type { IPlatformAdapter } from '@harneeslab/core';
 import {
   createLogger,
   logArchonPaths,
   validateAppDefaultsPaths,
   shutdownTelemetry,
-} from '@archon/paths';
+} from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -695,7 +695,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
  * Helps diagnose expired tokens or missing auth before workflows fail.
  */
 async function checkGhAuth(): Promise<void> {
-  const { execFileAsync } = await import('@archon/git');
+  const { execFileAsync } = await import('@harneeslab/git');
   try {
     await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
     getLog().info('gh_auth.status_ok');

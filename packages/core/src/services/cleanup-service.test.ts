@@ -2,11 +2,11 @@ import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Mock @archon/git - the cleanup service imports git functions from @archon/git
+// Mock @harneeslab/git - the cleanup service imports git functions from @harneeslab/git
 const mockExecFileAsync = mock(() => Promise.resolve({ stdout: '', stderr: '' }));
 const mockHasUncommittedChanges = mock(() => Promise.resolve(false));
 const mockWorktreeExists = mock(() => Promise.resolve(false));
@@ -14,7 +14,7 @@ const mockGetDefaultBranch = mock(() => Promise.resolve('main'));
 const mockIsBranchMerged = mock(() => Promise.resolve(false));
 const mockIsPatchEquivalent = mock(() => Promise.resolve(false));
 const mockGetLastCommitDate = mock(() => Promise.resolve(null as Date | null));
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   execFileAsync: mockExecFileAsync,
   hasUncommittedChanges: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
@@ -44,7 +44,7 @@ mock.module('../isolation', () => ({
 }));
 type PrStateValue = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
 const mockGetPrState = mock(() => Promise.resolve('NONE' as PrStateValue));
-mock.module('@archon/isolation', () => ({
+mock.module('@harneeslab/isolation', () => ({
   getIsolationProvider: () => ({
     destroy: mockDestroy,
   }),

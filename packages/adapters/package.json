@@ -1,5 +1,5 @@
 {
-  "name": "@archon/adapters",
+  "name": "@harneeslab/adapters",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -15,10 +15,10 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "@archon/core": "workspace:*",
-    "@archon/git": "workspace:*",
-    "@archon/isolation": "workspace:*",
-    "@archon/paths": "workspace:*",
+    "@harneeslab/core": "workspace:*",
+    "@harneeslab/git": "workspace:*",
+    "@harneeslab/isolation": "workspace:*",
+    "@harneeslab/paths": "workspace:*",
     "@octokit/rest": "^22.0.0",
     "@slack/bolt": "^4.6.0",
     "discord.js": "^14.16.0",

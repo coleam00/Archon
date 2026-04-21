@@ -97,9 +97,9 @@ export async function* withIdleTimeout<T>(
         await generator.return(undefined as never);
       } catch (e) {
         // Generator cleanup errors are non-fatal but worth logging for diagnostics
-        // Dynamic import to avoid circular deps — this module has zero @archon/* imports
+        // Dynamic import to avoid circular deps — this module has zero @harneeslab/* imports
         try {
-          const { createLogger } = await import('@archon/paths');
+          const { createLogger } = await import('@harneeslab/paths');
           createLogger('idle-timeout').warn(
             { err: e as Error },
             'idle_timeout.generator_cleanup_failed'

@@ -1,5 +1,5 @@
 /**
- * Workflow Store Adapter - bridges @archon/core DB to @archon/workflows IWorkflowStore
+ * Workflow Store Adapter - bridges @harneeslab/core DB to @harneeslab/workflows IWorkflowStore
  */
 
 export { createWorkflowStore, createWorkflowDeps } from './store-adapter';

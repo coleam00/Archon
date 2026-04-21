@@ -1,5 +1,5 @@
 {
-  "name": "@archon/providers",
+  "name": "@harneeslab/providers",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.89",
-    "@archon/paths": "workspace:*",
+    "@harneeslab/paths": "workspace:*",
     "@mariozechner/pi-ai": "^0.67.5",
     "@mariozechner/pi-coding-agent": "^0.67.5",
     "@openai/codex-sdk": "^0.116.0",

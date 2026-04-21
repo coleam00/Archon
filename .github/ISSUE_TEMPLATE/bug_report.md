@@ -29,7 +29,7 @@ assignees: ''
 (Draw the flow that triggers the bug. Mark where it breaks with [X].)
 
 Example:
-  User                   HarnessLab               AI Client
+  User                   HarneesLab               AI Client
   ────                   ──────                   ─────────
   sends /plan ─────────▶ routes to workflow
                          creates worktree

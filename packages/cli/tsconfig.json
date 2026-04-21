@@ -3,16 +3,16 @@
   "compilerOptions": {
     "noEmit": true,
     "paths": {
-      "@archon/adapters": ["../adapters/src"],
-      "@archon/adapters/*": ["../adapters/src/*"],
-      "@archon/core": ["../core/src"],
-      "@archon/core/*": ["../core/src/*"],
-      "@archon/server": ["../server/src"],
-      "@archon/server/*": ["../server/src/*"],
-      "@archon/workflows": ["../workflows/src"],
-      "@archon/workflows/*": ["../workflows/src/*"],
-      "@archon/paths": ["../paths/src"],
-      "@archon/git": ["../git/src"]
+      "@harneeslab/adapters": ["../adapters/src"],
+      "@harneeslab/adapters/*": ["../adapters/src/*"],
+      "@harneeslab/core": ["../core/src"],
+      "@harneeslab/core/*": ["../core/src/*"],
+      "@harneeslab/server": ["../server/src"],
+      "@harneeslab/server/*": ["../server/src/*"],
+      "@harneeslab/workflows": ["../workflows/src"],
+      "@harneeslab/workflows/*": ["../workflows/src/*"],
+      "@harneeslab/paths": ["../paths/src"],
+      "@harneeslab/git": ["../git/src"]
     }
   },
   "include": [

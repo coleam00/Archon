@@ -19,7 +19,7 @@ GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unkn
 TARGET="${TARGET:-}"
 OUTFILE="${OUTFILE:-}"
 
-echo "Building HarnessLab CLI v${VERSION} (commit: ${GIT_COMMIT})"
+echo "Building HarneesLab CLI v${VERSION} (commit: ${GIT_COMMIT})"
 
 # Regenerate bundled defaults from .archon/{commands,workflows}/defaults/ so the
 # compiled binary always embeds the current on-disk contents. CI also runs
@@ -60,10 +60,10 @@ else
   DIST_DIR="dist/binaries"
   mkdir -p "$DIST_DIR"
   TARGETS=(
-    "bun-darwin-arm64:${DIST_DIR}/archon-darwin-arm64"
-    "bun-darwin-x64:${DIST_DIR}/archon-darwin-x64"
-    "bun-linux-x64:${DIST_DIR}/archon-linux-x64"
-    "bun-linux-arm64:${DIST_DIR}/archon-linux-arm64"
+    "bun-darwin-arm64:${DIST_DIR}/hlab-darwin-arm64"
+    "bun-darwin-x64:${DIST_DIR}/hlab-darwin-x64"
+    "bun-linux-x64:${DIST_DIR}/hlab-linux-x64"
+    "bun-linux-arm64:${DIST_DIR}/hlab-linux-arm64"
   )
 fi
 

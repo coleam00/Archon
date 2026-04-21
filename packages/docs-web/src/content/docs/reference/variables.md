@@ -1,6 +1,6 @@
 ---
 title: 변수 레퍼런스
-description: HarnessLab 명령과 workflow에서 사용할 수 있는 모든 변수 치환에 대한 전체 레퍼런스입니다.
+description: HarneesLab 명령과 workflow에서 사용할 수 있는 모든 변수 치환에 대한 전체 레퍼런스입니다.
 category: reference
 area: workflows
 audience: [user]

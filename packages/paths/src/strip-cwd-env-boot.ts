@@ -6,7 +6,7 @@
  *
  * @example
  * // packages/cli/src/cli.ts — must be the very first import
- * import '@archon/paths/strip-cwd-env-boot';
+ * import '@harneeslab/paths/strip-cwd-env-boot';
  */
 import { stripCwdEnv } from './strip-cwd-env';
 

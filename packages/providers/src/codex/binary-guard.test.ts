@@ -1,7 +1,7 @@
 /**
  * Tests for Codex binary resolution in compiled binary mode.
  *
- * Separate file because mock.module('@archon/paths') with BUNDLED_IS_BINARY=true
+ * Separate file because mock.module('@harneeslab/paths') with BUNDLED_IS_BINARY=true
  * conflicts with provider.test.ts which mocks it without BUNDLED_IS_BINARY.
  * Must run in its own bun test invocation (see package.json test script).
  */
@@ -10,8 +10,8 @@ import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
 
-// Mock @archon/paths with BUNDLED_IS_BINARY = true (simulates compiled binary)
-mock.module('@archon/paths', () => ({
+// Mock @harneeslab/paths with BUNDLED_IS_BINARY = true (simulates compiled binary)
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   BUNDLED_IS_BINARY: true,
   getArchonHome: mock(() => '/tmp/test-archon'),

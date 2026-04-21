@@ -1,7 +1,7 @@
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
- * These tests mock @archon/git's execFileAsync to verify command construction
+ * These tests mock @harneeslab/git's execFileAsync to verify command construction
  * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
@@ -10,14 +10,14 @@ import { mkdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-// --- Mock @archon/git BEFORE any imports that depend on it ---
+// --- Mock @harneeslab/git BEFORE any imports that depend on it ---
 
 const mockExecFileAsync = mock(
   async (_cmd: string, _args: string[], _opts?: unknown) =>
     ({ stdout: '', stderr: '' }) as { stdout: string; stderr: string }
 );
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   execFileAsync: mockExecFileAsync,
   mkdirAsync: mock(async () => undefined),
 }));
@@ -34,7 +34,7 @@ const mockLogger = {
   fatal: mockLogFn,
   child: mock(() => mockLogger),
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: (folder?: string) => {
     const paths = ['.archon/commands'];

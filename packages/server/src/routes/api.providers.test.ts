@@ -1,7 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
-import type { ConversationLockManager } from '@archon/core';
+import { registerBuiltinProviders, clearRegistry } from '@harneeslab/providers';
+import type { ConversationLockManager } from '@harneeslab/core';
 import type { WebAdapter } from '../adapters/web';
 import {
   makeDiscoverWorkflowsMock,
@@ -19,7 +19,7 @@ const mockLoadConfig = mock(async () => ({
 }));
 const mockGetDatabaseType = mock(() => 'sqlite' as const);
 
-mock.module('@archon/core', () => ({
+mock.module('@harneeslab/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: mockGetDatabaseType,
   loadConfig: mockLoadConfig,
@@ -51,7 +51,7 @@ mock.module('@archon/core', () => ({
   }),
 }));
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -74,22 +74,22 @@ mock.module('@archon/paths', () => ({
   isDocker: mock(() => false),
 }));
 
-mock.module('@archon/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
-mock.module('@archon/workflows/loader', makeLoaderMock);
-mock.module('@archon/workflows/command-validation', makeCommandValidationMock);
-mock.module('@archon/workflows/defaults', () => ({
+mock.module('@harneeslab/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
+mock.module('@harneeslab/workflows/loader', makeLoaderMock);
+mock.module('@harneeslab/workflows/command-validation', makeCommandValidationMock);
+mock.module('@harneeslab/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {},
   BUNDLED_COMMANDS: {},
   isBinaryBuild: mock(() => false),
 }));
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   removeWorktree: mock(async () => {}),
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
 }));
 
-mock.module('@archon/core/db/conversations', () => ({
+mock.module('@harneeslab/core/db/conversations', () => ({
   findConversationByPlatformId: mock(async () => null),
   listConversations: mock(async () => []),
   getOrCreateConversation: mock(async () => null),
@@ -97,17 +97,17 @@ mock.module('@archon/core/db/conversations', () => ({
   updateConversationTitle: mock(async () => {}),
   getConversationById: mock(async () => null),
 }));
-mock.module('@archon/core/db/codebases', () => ({
+mock.module('@harneeslab/core/db/codebases', () => ({
   listCodebases: mock(async () => []),
   getCodebase: mock(async () => null),
   deleteCodebase: mock(async () => {}),
 }));
-mock.module('@archon/core/db/isolation-environments', () => ({
+mock.module('@harneeslab/core/db/isolation-environments', () => ({
   listByCodebase: mock(async () => []),
   listByCodebaseWithAge: mock(async () => []),
   updateStatus: mock(async () => {}),
 }));
-mock.module('@archon/core/db/workflows', () => ({
+mock.module('@harneeslab/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
   listDashboardRuns: mock(async () => ({ runs: [], total: 0, counts: {} })),
   getWorkflowRun: mock(async () => null),
@@ -115,20 +115,20 @@ mock.module('@archon/core/db/workflows', () => ({
   getWorkflowRunByWorkerPlatformId: mock(async () => null),
   getRunningWorkflows: mock(async () => []),
 }));
-mock.module('@archon/core/db/workflow-events', () => ({
+mock.module('@harneeslab/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(async () => []),
 }));
-mock.module('@archon/core/db/messages', () => ({
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mock(async () => null),
   listMessages: mock(async () => []),
 }));
-mock.module('@archon/core/db/env-vars', () => ({
+mock.module('@harneeslab/core/db/env-vars', () => ({
   getEnvVars: mock(async () => []),
   getEnvVarKeys: mock(async () => []),
   setEnvVar: mock(async () => {}),
   deleteEnvVar: mock(async () => {}),
 }));
-mock.module('@archon/core/utils/commands', () => ({
+mock.module('@harneeslab/core/utils/commands', () => ({
   findMarkdownFilesRecursive: mock(async () => []),
 }));
 

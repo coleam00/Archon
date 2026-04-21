@@ -5,9 +5,9 @@
  * checks miss. The `gh` CLI is a soft dependency — if it's missing or fails,
  * we return 'NONE' and let callers fall back to git-only signals.
  */
-import { execFileAsync } from '@archon/git';
-import type { BranchName, RepoPath } from '@archon/git';
-import { createLogger } from '@archon/paths';
+import { execFileAsync } from '@harneeslab/git';
+import type { BranchName, RepoPath } from '@harneeslab/git';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

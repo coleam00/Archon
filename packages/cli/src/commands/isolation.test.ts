@@ -14,13 +14,13 @@ const mockLogger = {
   child: mock(() => mockLogger),
 };
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
 const mockFindActiveByBranchName = mock(() => Promise.resolve(null));
 
-mock.module('@archon/core/db/isolation-environments', () => ({
+mock.module('@harneeslab/core/db/isolation-environments', () => ({
   findActiveByBranchName: mockFindActiveByBranchName,
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   listAllActiveWithCodebase: mock(() => Promise.resolve([])),
@@ -32,7 +32,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 
 const mockGetActiveWorkflowRunByPath = mock(() => Promise.resolve(null));
 
-mock.module('@archon/core/db/workflows', () => ({
+mock.module('@harneeslab/core/db/workflows', () => ({
   getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
 }));
 
@@ -41,7 +41,7 @@ const mockRemoveEnvironment = mock(() =>
 );
 const mockCleanupMergedWorktrees = mock(() => Promise.resolve({ removed: [], skipped: [] }));
 
-mock.module('@archon/core/services/cleanup-service', () => ({
+mock.module('@harneeslab/core/services/cleanup-service', () => ({
   removeEnvironment: mockRemoveEnvironment,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
 }));
@@ -62,7 +62,7 @@ const mockListEnvironments = mock(() =>
 );
 const mockCleanupMergedEnvironments = mock(() => Promise.resolve({ removed: [], skipped: [] }));
 
-mock.module('@archon/core/operations/isolation-operations', () => ({
+mock.module('@harneeslab/core/operations/isolation-operations', () => ({
   listEnvironments: mockListEnvironments,
   cleanupMergedEnvironments: mockCleanupMergedEnvironments,
 }));
@@ -75,7 +75,7 @@ const mockExecFileAsync = mock((cmd: string) =>
 
 const mockGetDefaultBranch = mock(() => Promise.resolve('main'));
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   hasUncommittedChanges: mockHasUncommittedChanges,
   execFileAsync: mockExecFileAsync,
   toWorktreePath: mock((p: string) => p),
@@ -85,7 +85,7 @@ mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
 }));
 
-mock.module('@archon/isolation', () => ({
+mock.module('@harneeslab/isolation', () => ({
   getIsolationProvider: mock(() => ({
     destroy: mock(() => Promise.resolve({ warnings: [] })),
   })),

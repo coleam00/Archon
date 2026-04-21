@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to HarnessLab!
+Thank you for your interest in contributing to HarneesLab!
 
 ## Getting Started
 
@@ -59,4 +59,4 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture documentation.
 
 ## Questions?
 
-Open an [issue](https://github.com/NewTurn2017/HarnessLab/issues) or start a [discussion](https://github.com/NewTurn2017/HarnessLab/discussions).
+Open an [issue](https://github.com/NewTurn2017/HarneesLab/issues) or start a [discussion](https://github.com/NewTurn2017/HarneesLab/discussions).

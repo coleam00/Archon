@@ -3,8 +3,8 @@
  *
  * CLI and command-handler are thin formatting adapters over these functions.
  */
-import { createLogger } from '@archon/paths';
-import { toWorktreePath, worktreeExists } from '@archon/git';
+import { createLogger } from '@harneeslab/paths';
+import { toWorktreePath, worktreeExists } from '@harneeslab/git';
 import * as isolationDb from '../db/isolation-environments';
 import { cleanupStaleWorktrees, cleanupMergedWorktrees } from '../services/cleanup-service';
 import type { CleanupOperationResult } from '../services/cleanup-service';

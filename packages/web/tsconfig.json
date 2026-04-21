@@ -9,10 +9,10 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@archon/core": ["../core/src"],
-      "@archon/core/*": ["../core/src/*"],
-      "@archon/workflows": ["../workflows/src"],
-      "@archon/workflows/*": ["../workflows/src/*"]
+      "@harneeslab/core": ["../core/src"],
+      "@harneeslab/core/*": ["../core/src/*"],
+      "@harneeslab/workflows": ["../workflows/src"],
+      "@harneeslab/workflows/*": ["../workflows/src/*"]
     }
   },
   "include": ["src/**/*", "../workflows/src/defaults/text-imports.d.ts"],

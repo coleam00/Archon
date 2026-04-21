@@ -5,7 +5,7 @@ import {
   getArchonWorktreesPath,
   getArchonWorkspacesPath,
   getProjectWorktreesPath,
-} from '@archon/paths';
+} from '@harneeslab/paths';
 import { execFileAsync } from './exec';
 import type { RepoPath, BranchName, WorktreePath, WorktreeInfo } from './types';
 import { toRepoPath, toBranchName, toWorktreePath } from './types';
@@ -271,7 +271,7 @@ export async function getCanonicalRepoPath(path: string): Promise<RepoPath> {
  * should register codebases with consistent path forms.
  *
  * Error classification (surfaced via `classifyIsolationError` in
- * `@archon/isolation/errors.ts`):
+ * `@harneeslab/isolation/errors.ts`):
  *   - "path contains a full git checkout" → EISDIR
  *   - "Cannot verify worktree ownership" → ENOENT / EACCES / EIO
  *   - "not a git-worktree reference" → submodule pointer or malformed

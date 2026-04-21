@@ -6,7 +6,7 @@
  * `scripts/build-binaries.sh` before `bun build --compile` is invoked,
  * and restored afterwards via an EXIT trap.
  *
- * Lives in `@archon/paths` (the bottom of the dep graph) so any package
+ * Lives in `@harneeslab/paths` (the bottom of the dep graph) so any package
  * can import these constants without creating dependency cycles.
  *
  * See GitHub issue #979 for the rationale (replaces runtime detection

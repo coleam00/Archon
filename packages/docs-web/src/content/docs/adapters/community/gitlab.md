@@ -1,6 +1,6 @@
 ---
 title: GitLab
-description: 이슈와 merge request에서 AI 코딩 지원을 받을 수 있도록 HarnessLab을 GitLab에 연결합니다.
+description: 이슈와 merge request에서 AI 코딩 지원을 받을 수 있도록 HarneesLab을 GitLab에 연결합니다.
 category: adapters
 area: adapters
 audience: [operator]
@@ -12,11 +12,11 @@ sidebar:
 GitLab은 **커뮤니티 어댑터**입니다. 커뮤니티가 기여하고 유지관리합니다.
 :::
 
-HarnessLab을 GitLab instance(gitlab.com 또는 self-hosted)에 연결하면 이슈와 merge request에서 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
+HarneesLab을 GitLab instance(gitlab.com 또는 self-hosted)에 연결하면 이슈와 merge request에서 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
 
 ## 사전 준비
 
-- 실행 중인 HarnessLab 서버([시작하기](/getting-started/overview/) 참고)
+- 실행 중인 HarneesLab 서버([시작하기](/getting-started/overview/) 참고)
 - Issues와 merge requests가 활성화된 GitLab project
 - `api` scope가 있는 GitLab Personal Access Token 또는 Project Access Token
 - Webhook을 받을 공개 endpoint(로컬 개발에서는 아래 ngrok 설정 참고)
@@ -102,9 +102,9 @@ GITLAB_BOT_MENTION=archon
 issue 또는 MR 댓글에서 bot을 mention합니다.
 
 ```
-@archon can you analyze this bug?
-@archon /status
-@archon review this implementation
+@harneeslab can you analyze this bug?
+@harneeslab /status
+@harneeslab review this implementation
 ```
 
 **첫 mention**은 repository를 `~/.archon/workspaces/<group>/<project>`로 자동 clone하고, `.archon/commands/`가 있으면 감지하며, 전체 issue/MR context를 주입합니다.

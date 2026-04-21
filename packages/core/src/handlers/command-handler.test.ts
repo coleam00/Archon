@@ -10,13 +10,13 @@
  */
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
-import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { makeTestWorkflowWithSource } from '@harneeslab/workflows/test-utils';
 import { Conversation } from '../types';
 import { resolve, join } from 'path';
 import * as fsPromises from 'fs/promises';
-import * as gitUtils from '@archon/git';
+import * as gitUtils from '@harneeslab/git';
 import * as pathValidation from '../utils/path-validation';
-import * as workflowDiscovery from '@archon/workflows/workflow-discovery';
+import * as workflowDiscovery from '@harneeslab/workflows/workflow-discovery';
 
 // Create mock functions for database modules (safe to mock - no standalone tests)
 const mockUpdateConversation = mock(() => Promise.resolve());
@@ -149,7 +149,7 @@ mock.module('../isolation', () => ({
     healthCheck: mock(() => Promise.resolve(true)),
   }),
 }));
-mock.module('@archon/isolation', () => ({
+mock.module('@harneeslab/isolation', () => ({
   getIsolationProvider: () => ({
     providerType: 'worktree',
     create: mockIsolationCreate,
@@ -191,7 +191,7 @@ mock.module('../services/cleanup-service', () => ({
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
@@ -489,7 +489,7 @@ describe('CommandHandler', () => {
       test('should return help message', async () => {
         const result = await handleCommand(baseConversation, '/help');
         expect(result.success).toBe(true);
-        expect(result.message).toContain('HarnessLab Orchestrator');
+        expect(result.message).toContain('HarneesLab Orchestrator');
         expect(result.message).toContain('/workflow list');
         expect(result.message).toContain('/status');
       });

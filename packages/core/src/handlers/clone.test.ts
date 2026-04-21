@@ -2,14 +2,14 @@
  * Unit tests for clone.ts (cloneRepository, registerRepository)
  *
  * Strategy:
- * - mock.module() for DB modules and @archon/paths (safe — no standalone test files for these)
- * - spyOn() for @archon/git (execFileAsync) and fs/promises (access, rm)
+ * - mock.module() for DB modules and @harneeslab/paths (safe — no standalone test files for these)
+ * - spyOn() for @harneeslab/git (execFileAsync) and fs/promises (access, rm)
  *   to avoid process-global mock.module pollution that would break git.test.ts
- * - Lazy logger pattern means @archon/paths mock must be set up before the module import
+ * - Lazy logger pattern means @harneeslab/paths mock must be set up before the module import
  */
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import * as fsPromises from 'fs/promises';
-import * as gitUtils from '@archon/git';
+import * as gitUtils from '@harneeslab/git';
 import { createMockLogger } from '../test/mocks/logger';
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
@@ -42,10 +42,10 @@ mock.module('../db/codebases', () => ({
   updateCodebase: mockUpdateCodebase,
 }));
 
-// ── @archon/paths mock ──────────────────────────────────────────────────────
+// ── @harneeslab/paths mock ──────────────────────────────────────────────────────
 const mockLogger = createMockLogger();
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   expandTilde: mock((p: string) => p.replace(/^~/, '/home/test')),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
@@ -69,7 +69,7 @@ mock.module('../utils/commands', () => ({
 // ── Import module under test AFTER mocks are registered ────────────────────
 import { cloneRepository, registerRepository } from './clone';
 
-// ── Spies for fs/promises and @archon/git ──────────────────────────────────
+// ── Spies for fs/promises and @harneeslab/git ──────────────────────────────────
 let spyFsAccess: ReturnType<typeof spyOn>;
 let spyFsRm: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;

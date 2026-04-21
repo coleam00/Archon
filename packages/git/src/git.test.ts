@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 
 // ---------------------------------------------------------------------------
-// Mock @archon/paths: suppress logger, pass-through path functions
+// Mock @harneeslab/paths: suppress logger, pass-through path functions
 // ---------------------------------------------------------------------------
 // Re-implement the path helpers inline so the mock doesn't depend on the real
 // module (mock.module replaces the *entire* module).  The path functions are
@@ -35,7 +35,7 @@ function createMockLogger(): MockLogger {
 
 const mockLogger = createMockLogger();
 
-/** Mirror of @archon/paths getArchonHome (reads env at call-time) */
+/** Mirror of @harneeslab/paths getArchonHome (reads env at call-time) */
 function getArchonHome(): string {
   if (
     process.env.WORKSPACE_PATH === '/workspace' ||
@@ -47,7 +47,7 @@ function getArchonHome(): string {
   return process.env.ARCHON_HOME ?? join(homedir(), '.archon');
 }
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorktreesPath: () => join(getArchonHome(), 'worktrees'),
   getArchonWorkspacesPath: () => join(getArchonHome(), 'workspaces'),

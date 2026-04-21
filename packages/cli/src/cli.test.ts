@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'bun:test';
 import { parseArgs } from 'util';
-import * as git from '@archon/git';
+import * as git from '@harneeslab/git';
 
 // Test the argument parsing logic used in cli.ts
 describe('CLI argument parsing', () => {
@@ -220,7 +220,7 @@ describe('CLI env isolation', () => {
    */
   it('should clear DATABASE_URL set by Bun auto-load', async () => {
     // Simulate Bun auto-loading a target repo's .env
-    process.env.DATABASE_URL = 'postgresql://target-app:5432/not-archon';
+    process.env.DATABASE_URL = 'postgresql://target-app:5432/not-hlab';
 
     // Re-run the env isolation logic from cli.ts
     delete process.env.DATABASE_URL;
@@ -342,7 +342,7 @@ describe('CLI git repo check', () => {
     const ERROR_MESSAGES = {
       notGitRepo: [
         '오류: git repository 안에서 실행해야 합니다.',
-        'HarnessLab CLI는 git repository 내부에서 실행되어야 합니다.',
+        'HarneesLab CLI는 git repository 내부에서 실행되어야 합니다.',
         'git repo로 이동하거나 --cwd로 repo 경로를 지정하세요.',
       ],
       dirNotExist: (path: string) => `오류: 디렉터리가 없습니다: ${path}`,

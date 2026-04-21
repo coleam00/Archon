@@ -16,7 +16,7 @@
  * normal node_modules lookup.
  */
 import { existsSync as _existsSync } from 'node:fs';
-import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
+import { BUNDLED_IS_BINARY, createLogger } from '@harneeslab/paths';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {
@@ -47,7 +47,7 @@ const INSTALL_INSTRUCTIONS =
   '    assistants:\n' +
   '      claude:\n' +
   '        claudeBinaryPath: /absolute/path/to/claude\n\n' +
-  'See: https://harnesslab.codewithgenie.com/reference/configuration/#claude';
+  'See: https://harneeslab.codewithgenie.com/reference/configuration/#claude';
 
 /**
  * Resolve the path to the Claude Code SDK's cli.js.

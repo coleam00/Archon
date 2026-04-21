@@ -26,7 +26,7 @@
 - Route schemas live in `packages/server/src/routes/schemas/` — one file per domain
 - Engine schemas live in `packages/workflows/src/schemas/` — one file per concern (dag-node, workflow, workflow-run, retry, loop, hooks); `index.ts` re-exports all
 - Engine schema naming: camelCase (e.g., `dagNodeSchema`, `workflowBaseSchema`, `nodeOutputSchema`)
-- `TRIGGER_RULES` and `WORKFLOW_HOOK_EVENTS` are derived from schema `.options` — never duplicate as a plain array (exception: `@archon/web` must define a local constant since `api.generated.d.ts` is type-only and cannot export runtime values)
+- `TRIGGER_RULES` and `WORKFLOW_HOOK_EVENTS` are derived from schema `.options` — never duplicate as a plain array (exception: `@harneeslab/web` must define a local constant since `api.generated.d.ts` is type-only and cannot export runtime values)
 - `loader.ts` uses `dagNodeSchema.safeParse()` for node validation; graph-level checks (cycles, deps, `$nodeId.output` refs) remain as imperative code in `validateDagStructure()`
 
 **Git Workflow and Releases**
@@ -42,7 +42,7 @@
 - Surface git errors to users for actionable issues (conflicts, uncommitted changes)
 - Handle expected failure cases gracefully (missing directories during cleanup)
 - Trust git's natural guardrails (e.g., refuse to remove worktree with uncommitted changes)
-- Use `@archon/git` functions for git operations; use `execFileAsync` (not `exec`) when calling git directly
+- Use `@harneeslab/git` functions for git operations; use `execFileAsync` (not `exec`) when calling git directly
 - Worktrees enable parallel development per conversation without branch conflicts
 - Workspaces automatically sync with origin before worktree creation (ensures latest code)
 - **NEVER run `git clean -fd`** - it permanently deletes untracked files (use `git checkout .` instead)
@@ -110,7 +110,7 @@ Regenerating frontend API types (requires server to be running at port 3090):
 
 ```bash
 bun run dev:server  # must be running first
-bun --filter @archon/web generate:types
+bun --filter @harneeslab/web generate:types
 ```
 
 Optional: Use PostgreSQL instead of SQLite by setting `DATABASE_URL` in `.env`:
@@ -128,7 +128,7 @@ bun test --watch            # Watch mode (single package)
 bun test packages/core/src/handlers/command-handler.test.ts  # Single file
 ```
 
-**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@archon/core` (7 batches), `@archon/workflows` (5), `@archon/adapters` (3), `@archon/isolation` (3). See each package's `package.json` for the exact splits.
+**Test isolation (mock.module pollution):** Bun's `mock.module()` permanently replaces modules in the process-wide cache — `mock.restore()` does NOT undo it ([oven-sh/bun#7823](https://github.com/oven-sh/bun/issues/7823)). To prevent cross-file pollution, packages that have conflicting `mock.module()` calls split their tests into separate `bun test` invocations: `@harneeslab/core` (7 batches), `@harneeslab/workflows` (5), `@harneeslab/adapters` (3), `@harneeslab/isolation` (3). See each package's `package.json` for the exact splits.
 
 **Do NOT run `bun test` from the repo root** — it discovers all test files across all packages and runs them in one process, causing ~135 mock pollution failures. Always use `bun run test` (which uses `bun --filter '*' test` for per-package isolation).
 
@@ -263,12 +263,12 @@ bun run cli version
 
 ```
 packages/
-├── cli/                      # @archon/cli - Command-line interface
+├── cli/                      # @harneeslab/cli - Command-line interface
 │   └── src/
 │       ├── adapters/         # CLI adapter (stdout output)
 │       ├── commands/         # CLI command implementations
 │       └── cli.ts            # CLI entry point
-├── providers/                # @archon/providers - AI agent providers (SDK deps live here)
+├── providers/                # @harneeslab/providers - AI agent providers (SDK deps live here)
 │   └── src/
 │       ├── types.ts          # Contract layer (IAgentProvider, SendQueryOptions, MessageChunk — ZERO SDK deps)
 │       ├── registry.ts       # Typed provider registry (ProviderRegistration records)
@@ -276,7 +276,7 @@ packages/
 │       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
 │       └── index.ts          # Package exports
-├── core/                     # @archon/core - Shared business logic
+├── core/                     # @harneeslab/core - Shared business logic
 │   └── src/
 │       ├── config/           # YAML config loading
 │       ├── db/               # Database connection, queries
@@ -288,7 +288,7 @@ packages/
 │       ├── utils/            # Shared utilities
 │       ├── workflows/        # Store adapter (createWorkflowStore) bridging core DB → IWorkflowStore
 │       └── index.ts          # Package exports
-├── workflows/                # @archon/workflows - Workflow engine (depends on @archon/git + @archon/paths)
+├── workflows/                # @harneeslab/workflows - Workflow engine (depends on @harneeslab/git + @harneeslab/paths)
 │   └── src/
 │       ├── schemas/          # Zod schemas for engine types
 │       ├── loader.ts         # YAML parsing + validation (parseWorkflow)
@@ -298,13 +298,13 @@ packages/
 │       ├── executor.ts       # Workflow execution orchestrator (executeWorkflow)
 │       ├── dag-executor.ts   # DAG-specific execution logic
 │       ├── store.ts          # IWorkflowStore interface (database abstraction)
-│       ├── deps.ts           # WorkflowDeps injection types (IWorkflowPlatform, imports from @archon/providers/types)
+│       ├── deps.ts           # WorkflowDeps injection types (IWorkflowPlatform, imports from @harneeslab/providers/types)
 │       ├── event-emitter.ts  # Workflow observability events
 │       ├── logger.ts         # JSONL file logger
 │       ├── validator.ts      # Resource validation (command files, MCP configs, skill dirs)
 │       ├── defaults/         # Bundled default commands and workflows
 │       └── utils/            # Variable substitution, tool formatting, execution utilities
-├── git/                      # @archon/git - Git operations (no @archon/core dep)
+├── git/                      # @harneeslab/git - Git operations (no @harneeslab/core dep)
 │   └── src/
 │       ├── branch.ts         # Branch operations (checkout, merge detection, etc.)
 │       ├── exec.ts           # execFileAsync and mkdirAsync wrappers
@@ -312,7 +312,7 @@ packages/
 │       ├── types.ts          # Branded types (RepoPath, BranchName, etc.)
 │       ├── worktree.ts       # Worktree operations (create, remove, list)
 │       └── index.ts          # Package exports
-├── isolation/                # @archon/isolation - Worktree isolation (depends on @archon/git + @archon/paths)
+├── isolation/                # @harneeslab/isolation - Worktree isolation (depends on @harneeslab/git + @harneeslab/paths)
 │   └── src/
 │       ├── types.ts          # Isolation types and interfaces
 │       ├── errors.ts         # Error classifiers (classifyIsolationError, IsolationBlockedError)
@@ -323,24 +323,24 @@ packages/
 │       ├── providers/
 │       │   └── worktree.ts   # WorktreeProvider implementation
 │       └── index.ts          # Package exports
-├── paths/                    # @archon/paths - Path resolution and logger (zero @archon/* deps)
+├── paths/                    # @harneeslab/paths - Path resolution and logger (zero @harneeslab/* deps)
 │   └── src/
 │       ├── archon-paths.ts   # Archon directory path utilities
 │       ├── logger.ts         # Pino logger factory
 │       └── index.ts          # Package exports
-├── adapters/                 # @archon/adapters - Platform adapters (Slack, Telegram, GitHub, Discord)
+├── adapters/                 # @harneeslab/adapters - Platform adapters (Slack, Telegram, GitHub, Discord)
 │   └── src/
 │       ├── chat/             # Chat platform adapters (Slack, Telegram)
 │       ├── forge/            # Forge adapters (GitHub)
 │       ├── community/        # Community adapters (Discord)
 │       ├── utils/            # Shared adapter utilities (message splitting)
 │       └── index.ts          # Package exports
-├── server/                   # @archon/server - HTTP server + Web adapter
+├── server/                   # @harneeslab/server - HTTP server + Web adapter
 │   └── src/
 │       ├── adapters/         # Web platform adapter (SSE streaming)
 │       ├── routes/           # API routes (REST + SSE)
 │       └── index.ts          # Hono server entry point
-└── web/                      # @archon/web - React frontend (Web UI)
+└── web/                      # @harneeslab/web - React frontend (Web UI)
     └── src/
         ├── components/       # React components (chat, layout, projects, ui, workflows)
         ├── hooks/            # Custom hooks (useSSE, etc.)
@@ -356,28 +356,28 @@ packages/
 
 ```typescript
 // ✅ CORRECT: Use `import type` for type-only imports
-import type { IPlatformAdapter, Conversation, MergedConfig } from '@archon/core';
+import type { IPlatformAdapter, Conversation, MergedConfig } from '@harneeslab/core';
 
 // ✅ CORRECT: Use specific named imports for values
-import { handleMessage, ConversationLockManager, pool } from '@archon/core';
+import { handleMessage, ConversationLockManager, pool } from '@harneeslab/core';
 
 // ✅ CORRECT: Namespace imports for submodules with many exports
-import * as conversationDb from '@archon/core/db/conversations';
-import * as git from '@archon/git';
+import * as conversationDb from '@harneeslab/core/db/conversations';
+import * as git from '@harneeslab/git';
 
 // ✅ CORRECT: Import workflow engine types/functions from direct subpaths
-import type { WorkflowDeps } from '@archon/workflows/deps';
-import type { IWorkflowStore } from '@archon/workflows/store';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
-import { executeWorkflow } from '@archon/workflows/executor';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { findWorkflow } from '@archon/workflows/router';
+import type { WorkflowDeps } from '@harneeslab/workflows/deps';
+import type { IWorkflowStore } from '@harneeslab/workflows/store';
+import type { WorkflowDefinition } from '@harneeslab/workflows/schemas/workflow';
+import { executeWorkflow } from '@harneeslab/workflows/executor';
+import { discoverWorkflowsWithConfig } from '@harneeslab/workflows/workflow-discovery';
+import { findWorkflow } from '@harneeslab/workflows/router';
 
 // ❌ WRONG: Never use generic import for main package
-import * as core from '@archon/core';  // Don't do this
+import * as core from '@harneeslab/core';  // Don't do this
 
-// ❌ WRONG: In @archon/web, never import from @archon/workflows (it's a server package)
-import type { DagNode } from '@archon/workflows/schemas/dag-node';  // Don't do this from @archon/web
+// ❌ WRONG: In @harneeslab/web, never import from @harneeslab/workflows (it's a server package)
+import type { DagNode } from '@harneeslab/workflows/schemas/dag-node';  // Don't do this from @harneeslab/web
 // ✅ CORRECT: Use re-exports from api.ts (derived from generated OpenAPI spec)
 import type { DagNode, WorkflowDefinition } from '@/lib/api';
 ```
@@ -408,16 +408,16 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 ### Architecture Layers
 
 **Package Split:**
-- **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
-- **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
-- **@archon/providers**: AI agent providers (Claude, Codex) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally.
-- **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
-- **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @archon/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
-- **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
-- **@archon/core**: Business logic, database, orchestration (depends on @archon/providers for AI; provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
-- **@archon/adapters**: Platform adapters for Slack, Telegram, GitHub, Discord (depends on @archon/core)
-- **@archon/server**: OpenAPIHono HTTP server (Zod + OpenAPI spec generation via `@hono/zod-openapi`), Web adapter (SSE), API routes, Web UI static serving (depends on @archon/adapters)
-- **@archon/web**: React frontend (Vite + Tailwind v4 + shadcn/ui + Zustand), SSE streaming to server. `WorkflowRunStatus`, `WorkflowDefinition`, and `DagNode` are all derived from `src/lib/api.generated.d.ts` (generated from the OpenAPI spec via `bun generate:types`; never import from `@archon/workflows`)
+- **@harneeslab/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @harneeslab/* deps; `pino` and `dotenv` are allowed external deps)
+- **@harneeslab/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @harneeslab/paths)
+- **@harneeslab/providers**: AI agent providers (Claude, Codex) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@harneeslab/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@harneeslab/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally.
+- **@harneeslab/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @harneeslab/git + @harneeslab/paths)
+- **@harneeslab/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @harneeslab/git + @harneeslab/paths + @harneeslab/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
+- **@harneeslab/cli**: Command-line interface for running workflows and starting the web UI server (depends on @harneeslab/server + @harneeslab/adapters for the serve command)
+- **@harneeslab/core**: Business logic, database, orchestration (depends on @harneeslab/providers for AI; provides `createWorkflowStore()` adapter bridging core DB → `IWorkflowStore`)
+- **@harneeslab/adapters**: Platform adapters for Slack, Telegram, GitHub, Discord (depends on @harneeslab/core)
+- **@harneeslab/server**: OpenAPIHono HTTP server (Zod + OpenAPI spec generation via `@hono/zod-openapi`), Web adapter (SSE), API routes, Web UI static serving (depends on @harneeslab/adapters)
+- **@harneeslab/web**: React frontend (Vite + Tailwind v4 + shadcn/ui + Zustand), SSE streaming to server. `WorkflowRunStatus`, `WorkflowDefinition`, and `DagNode` are all derived from `src/lib/api.generated.d.ts` (generated from the OpenAPI spec via `bun generate:types`; never import from `@harneeslab/workflows`)
 
 **1. Platform Adapters**
 - Implement `IPlatformAdapter` interface
@@ -553,7 +553,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 │   │   └── uploads/{convId}/     # Web UI file uploads (ephemeral)
 │   └── logs/                     # Workflow execution logs
 ├── vendor/codex/                  # Codex native binary (binary builds, user-placed)
-├── web-dist/<version>/            # Cached web UI dist (archon serve, binary only)
+├── web-dist/<version>/            # Cached web UI dist (hlab serve, binary only)
 ├── update-check.json              # Update check cache (binary builds, 24h TTL)
 ├── archon.db                     # SQLite database (when DATABASE_URL not set)
 └── config.yaml                   # Global configuration (non-secrets)
@@ -636,7 +636,7 @@ This ensures type compatibility with SDK updates and eliminates `as any` casts.
 **Structured logging with Pino** (`packages/paths/src/logger.ts`):
 
 ```typescript
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 const log = createLogger('orchestrator');
 
@@ -756,7 +756,7 @@ try {
 }
 ```
 
-Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git errors (permission denied, timeout, no space, not a git repo) to user-friendly messages. Always log the raw error for debugging and send a classified message to the user.
+Pattern: Use `classifyIsolationError()` (from `@harneeslab/isolation`) to map git errors (permission denied, timeout, no space, not a git repo) to user-friendly messages. Always log the raw error for debugging and send a classified message to the user.
 
 ### API Endpoints
 
@@ -809,6 +809,6 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - Never log or expose tokens in responses
 
 **@Mention Detection:**
-- Parse `@archon` in issue/PR **comments only** (not descriptions)
+- Parse `@harneeslab` in issue/PR **comments only** (not descriptions)
 - Events: `issue_comment` only
 - Note: Descriptions often contain example commands or documentation - these are NOT command invocations (see #96)

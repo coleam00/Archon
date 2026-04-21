@@ -5,7 +5,7 @@
  * Multi-turn conversations happen via the web UI.
  */
 import { CLIAdapter } from '../adapters/cli-adapter';
-import { handleMessage } from '@archon/core';
+import { handleMessage } from '@harneeslab/core';
 
 /**
  * Execute a single-shot orchestrator chat message.

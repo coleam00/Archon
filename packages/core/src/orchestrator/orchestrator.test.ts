@@ -1,15 +1,15 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { MockPlatformAdapter } from '../test/mocks/platform';
 import { createMockLogger } from '../test/mocks/logger';
-import { makeTestWorkflow, makeTestWorkflowList } from '@archon/workflows/test-utils';
+import { makeTestWorkflow, makeTestWorkflowList } from '@harneeslab/workflows/test-utils';
 import type { Conversation, Codebase, Session } from '../types';
 import { ConversationNotFoundError } from '../types';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition } from '@harneeslab/workflows/schemas/workflow';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getArchonHome: mock(() => '/home/test/.archon'),
@@ -82,7 +82,7 @@ mock.module('../handlers/command-handler', () => ({
 // AI provider mock
 const mockGetAgentProvider = mock(() => null);
 
-mock.module('@archon/providers', () => ({
+mock.module('@harneeslab/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
 }));
 
@@ -104,7 +104,7 @@ mock.module('../workflows/store-adapter', () => ({
 // Config mock
 const mockLoadConfig = mock(() =>
   Promise.resolve({
-    botName: 'HarnessLab',
+    botName: 'HarneesLab',
     assistant: 'claude',
     assistants: { claude: {}, codex: {} },
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
@@ -157,16 +157,16 @@ mock.module('../utils/error-formatter', () => ({
   classifyAndFormatError: mock((err: Error) => `⚠️ Error: ${err.message}`),
 }));
 
-mock.module('@archon/workflows/workflow-discovery', () => ({
+mock.module('@harneeslab/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflows,
 }));
-mock.module('@archon/workflows/executor', () => ({
+mock.module('@harneeslab/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
-mock.module('@archon/workflows/router', () => ({
+mock.module('@harneeslab/workflows/router', () => ({
   findWorkflow: mockFindWorkflow,
 }));
-mock.module('@archon/workflows/utils/tool-formatter', () => ({
+mock.module('@harneeslab/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock((toolName: string, _toolInput: unknown) => `🔧 ${toolName.toUpperCase()}`),
 }));
 
@@ -701,7 +701,7 @@ describe('orchestrator-agent handleMessage', () => {
   describe('assistantConfig forwarding', () => {
     test('passes assistantConfig with settingSources for claude', async () => {
       mockLoadConfig.mockResolvedValueOnce({
-        botName: 'HarnessLab',
+        botName: 'HarneesLab',
         assistant: 'claude',
         assistants: {
           claude: { settingSources: ['project', 'user'] },
@@ -737,7 +737,7 @@ describe('orchestrator-agent handleMessage', () => {
       };
       mockGetOrCreateConversation.mockResolvedValueOnce(codexConversation);
       mockLoadConfig.mockResolvedValueOnce({
-        botName: 'HarnessLab',
+        botName: 'HarneesLab',
         assistant: 'codex',
         assistants: {
           claude: { settingSources: ['project', 'user'] },

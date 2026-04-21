@@ -3,10 +3,10 @@ import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
-// ─── Mock @archon/paths logger so provider instantiation is quiet ───────
+// ─── Mock @harneeslab/paths logger so provider instantiation is quiet ───────
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 

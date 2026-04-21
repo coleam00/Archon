@@ -8,7 +8,7 @@ import type { CommandEntry, DagNode } from '@/lib/api';
 import { useProviders } from '@/hooks/useProviders';
 import { t } from '@/lib/i18n';
 
-// Keep in sync with triggerRuleSchema.options in @archon/workflows/schemas/dag-node.ts
+// Keep in sync with triggerRuleSchema.options in @harneeslab/workflows/schemas/dag-node.ts
 // (api.generated.d.ts is type-only and cannot export runtime values)
 type TriggerRule = NonNullable<DagNode['trigger_rule']>;
 const TRIGGER_RULES: readonly TriggerRule[] = [

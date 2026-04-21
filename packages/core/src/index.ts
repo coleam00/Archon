@@ -1,11 +1,11 @@
 /**
- * @archon/core - Shared business logic for HarnessLab
+ * @harneeslab/core - Shared business logic for HarneesLab
  *
  * This package contains:
  * - AI client adapters (Claude, Codex)
  * - Database operations (SQLite/PostgreSQL)
  * - Orchestration logic
- * - Workflow store adapter (bridges core DB to @archon/workflows IWorkflowStore)
+ * - Workflow store adapter (bridges core DB to @harneeslab/workflows IWorkflowStore)
  * - Utility functions
  */
 
@@ -54,7 +54,7 @@ export { SessionNotFoundError } from './db/sessions';
 // Workflows
 // =============================================================================
 
-// Store adapter (bridges core DB to @archon/workflows IWorkflowStore)
+// Store adapter (bridges core DB to @harneeslab/workflows IWorkflowStore)
 export { createWorkflowStore } from './workflows/store-adapter';
 
 // Workflow Events DB

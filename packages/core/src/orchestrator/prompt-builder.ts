@@ -4,7 +4,7 @@
  * registered projects and available workflows.
  */
 import type { Codebase } from '../types';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition } from '@harneeslab/workflows/schemas/workflow';
 
 /**
  * Format a single project for the orchestrator prompt.
@@ -143,9 +143,9 @@ export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
   workflows: readonly WorkflowDefinition[]
 ): string {
-  let prompt = `# HarnessLab Orchestrator
+  let prompt = `# HarneesLab Orchestrator
 
-You are HarnessLab, an intelligent coding assistant that manages multiple projects.
+You are HarneesLab, an intelligent coding assistant that manages multiple projects.
 Your working directory is ~/.archon/workspaces/ where all projects live.
 You can answer questions directly or invoke workflows for structured development tasks.
 
@@ -183,9 +183,9 @@ export function buildProjectScopedPrompt(
 ): string {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
-  let prompt = `# HarnessLab Orchestrator
+  let prompt = `# HarneesLab Orchestrator
 
-You are HarnessLab, an intelligent coding assistant that manages multiple projects.
+You are HarneesLab, an intelligent coding assistant that manages multiple projects.
 Your working directory is ~/.archon/workspaces/ where all projects live.
 You can answer questions directly or invoke workflows for structured development tasks.
 

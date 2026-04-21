@@ -1,5 +1,5 @@
 # =============================================================================
-# HarnessLab - Docker Compose for End Users (pre-built image)
+# HarneesLab - Docker Compose for End Users (pre-built image)
 # =============================================================================
 #
 # Usage:
@@ -8,11 +8,11 @@
 #   3. Run: docker compose up -d
 #
 # For full documentation, see:
-# https://github.com/NewTurn2017/HarnessLab
+# https://github.com/NewTurn2017/HarneesLab
 
 services:
   app:
-    image: ghcr.io/newturn2017/harnesslab:latest
+    image: ghcr.io/newturn2017/harneeslab:latest
     restart: unless-stopped
     env_file: .env
     environment:

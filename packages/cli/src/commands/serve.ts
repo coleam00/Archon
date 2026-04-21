@@ -1,10 +1,10 @@
 import { dirname } from 'path';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'fs';
-import { createLogger, getWebDistDir, BUNDLED_IS_BINARY, BUNDLED_VERSION } from '@archon/paths';
+import { createLogger, getWebDistDir, BUNDLED_IS_BINARY, BUNDLED_VERSION } from '@harneeslab/paths';
 
 const log = createLogger('cli.serve');
 
-const GITHUB_REPO = 'NewTurn2017/HarnessLab';
+const GITHUB_REPO = 'NewTurn2017/HarneesLab';
 
 function toError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));
@@ -27,7 +27,7 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
   }
 
   if (!BUNDLED_IS_BINARY) {
-    console.error('Error: `archon serve` is for compiled binaries only.');
+    console.error('Error: `hlab serve` is for compiled binaries only.');
     console.error('For development, use: bun run dev');
     return 1;
   }
@@ -56,7 +56,7 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
 
   // Import server and start (dynamic import keeps CLI startup fast for other commands)
   try {
-    const { startServer } = await import('@archon/server');
+    const { startServer } = await import('@harneeslab/server');
     await startServer({
       webDistPath: webDistDir,
       port: opts.port,
@@ -79,7 +79,7 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
 }
 
 async function downloadWebDist(version: string, targetDir: string): Promise<void> {
-  const tarballUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/archon-web.tar.gz`;
+  const tarballUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/hlab-web.tar.gz`;
   const checksumsUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/checksums.txt`;
 
   log.info({ version, targetDir }, 'web_dist.download_started');
@@ -111,7 +111,7 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
     checksumsRes.text(),
     tarballRes.arrayBuffer(),
   ]);
-  const expectedHash = parseChecksum(checksumsText, 'archon-web.tar.gz');
+  const expectedHash = parseChecksum(checksumsText, 'hlab-web.tar.gz');
 
   // Verify checksum
   const hasher = new Bun.CryptoHasher('sha256');

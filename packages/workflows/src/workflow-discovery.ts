@@ -15,9 +15,9 @@ import type {
   WorkflowLoadResult,
   WorkflowWithSource,
 } from './schemas';
-import * as archonPaths from '@archon/paths';
+import * as archonPaths from '@harneeslab/paths';
 import { BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import { parseWorkflow } from './loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
