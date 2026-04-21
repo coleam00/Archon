@@ -294,7 +294,7 @@ assistants:
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` (SDK enforces `availableTools` precedence when both are set) |
 | MCP servers | ✅ | `mcp: path/to/servers.json` → `SessionConfig.mcpServers` (env vars `$FOO` expanded; missing vars warned) |
 | Skills | ✅ | `skills: [name]` resolved from `.agents/skills/`, `.claude/skills/` (project or home) → `SessionConfig.skillDirectories` |
-| Structured output | ❌ | no Archon-side JSON-mode shim yet |
+| Structured output | ✅ | best-effort: schema instruction appended to the prompt, assistant transcript parsed as JSON on completion (models that reliably follow instruction succeed; unparseable output degrades to the dag-executor's missing-output warning) |
 | Fallback model | ❌ | not wired |
 | Sandbox | ❌ | Copilot permissions are separate from Archon's sandbox surface |
 

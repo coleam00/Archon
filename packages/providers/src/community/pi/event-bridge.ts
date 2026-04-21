@@ -151,32 +151,11 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
   return chunk;
 }
 
-/**
- * Attempt to parse a Pi assistant transcript as the structured-output JSON
- * requested via `outputFormat`. Handles two common model failure modes:
- *  - trailing/leading whitespace (always stripped)
- *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
- *    emit despite the "no code fences" instruction in the prompt
- *
- * Returns the parsed value on success, `undefined` on any failure. Callers
- * treat `undefined` as "structured output unavailable" and degrade via the
- * dag-executor's existing missing-structured-output warning.
- */
-export function tryParseStructuredOutput(text: string): unknown {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return undefined;
-  // Strip ```json / ``` fences if present. Match only at boundaries so we
-  // don't mangle JSON strings that legitimately contain backticks.
-  const cleaned = trimmed
-    .replace(/^```(?:json)?\s*\n?/i, '')
-    .replace(/\n?\s*```\s*$/, '')
-    .trim();
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    return undefined;
-  }
-}
+// Structured-output parsing is shared across providers. Import once for
+// local use and re-export so Pi's existing tests and callers don't need to
+// change import paths.
+import { tryParseStructuredOutput } from '../../shared/structured-output';
+export { tryParseStructuredOutput };
 
 /**
  * Pure mapper from Pi's `AgentSessionEvent` → zero-or-more Archon `MessageChunk`s.

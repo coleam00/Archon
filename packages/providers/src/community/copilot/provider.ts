@@ -11,6 +11,10 @@ import { createLogger } from '@archon/paths';
 import type { IAgentProvider, MessageChunk, SendQueryOptions } from '../../types';
 import { loadMcpConfig } from '../../claude/provider';
 import { resolveSkillDirectories } from '../../shared/skills';
+import {
+  augmentPromptForJsonSchema,
+  tryParseStructuredOutput,
+} from '../../shared/structured-output';
 import { COPILOT_CAPABILITIES } from './capabilities';
 import { resolveCopilotCliPath } from './binary-resolver';
 import { parseCopilotConfig, type CopilotProviderDefaults } from './config';
@@ -349,6 +353,17 @@ export class CopilotProvider implements IAgentProvider {
       const usage: UsageAccumulator = { input: 0, output: 0 };
       let sawAssistantContent = false;
 
+      // Best-effort structured output: Copilot has no native JSON-mode, so we
+      // augment the prompt with the schema and parse the accumulated assistant
+      // transcript at the end. Parse failure → leave `structuredOutput` unset
+      // and let the dag-executor surface its existing missing-output warning.
+      const outputFormat = requestOptions?.outputFormat;
+      const wantsStructured = outputFormat?.type === 'json_schema';
+      const effectivePrompt = wantsStructured
+        ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
+        : prompt;
+      let assistantBuffer = '';
+
       try {
         session = resumeSessionId
           ? await client.resumeSession(resumeSessionId, sessionConfig)
@@ -372,6 +387,7 @@ export class CopilotProvider implements IAgentProvider {
           streamedMessageIds.add(event.data.messageId);
           if (event.data.deltaContent) {
             sawAssistantContent = true;
+            assistantBuffer += event.data.deltaContent;
             queue.push({ type: 'assistant', content: event.data.deltaContent });
           }
         });
@@ -380,6 +396,7 @@ export class CopilotProvider implements IAgentProvider {
           if (streamedMessageIds.has(event.data.messageId)) return;
           if (event.data.content) {
             sawAssistantContent = true;
+            assistantBuffer += event.data.content;
             queue.push({ type: 'assistant', content: event.data.content });
           }
         });
@@ -422,18 +439,26 @@ export class CopilotProvider implements IAgentProvider {
 
         let finalMessage: AssistantMessageEvent | undefined;
         try {
-          finalMessage = await session.sendAndWait({ prompt }, SEND_AND_WAIT_TIMEOUT_MS);
+          finalMessage = await session.sendAndWait(
+            { prompt: effectivePrompt },
+            SEND_AND_WAIT_TIMEOUT_MS
+          );
         } finally {
           abortSignal?.removeEventListener('abort', onAbort);
         }
 
         if (!sawAssistantContent && finalMessage?.data.content) {
+          assistantBuffer += finalMessage.data.content;
           queue.push({ type: 'assistant', content: finalMessage.data.content });
         }
 
         if (!sawAssistantContent && lastSessionError) {
           queue.push({ type: 'system', content: `⚠️ ${lastSessionError}` });
         }
+
+        const structuredOutput = wantsStructured
+          ? tryParseStructuredOutput(assistantBuffer)
+          : undefined;
 
         queue.push({
           type: 'result',
@@ -448,6 +473,7 @@ export class CopilotProvider implements IAgentProvider {
                 }
               : undefined,
           cost: usage.cost,
+          ...(structuredOutput !== undefined ? { structuredOutput } : {}),
         });
       } catch (error) {
         throw buildFriendlyCopilotError(error, lastSessionError);
