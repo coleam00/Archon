@@ -1,6 +1,6 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager } from '@harneeslab/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
 import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
@@ -22,7 +22,7 @@ const mockSoftDeleteConversation = mock(async (_id: string) => {});
 const mockUpdateConversationTitle = mock(async (_id: string, _title: string) => {});
 
 const mockGenerateAndSetTitle = mock(async () => {});
-mock.module('@archon/core', () => ({
+mock.module('@harneeslab/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),
@@ -59,7 +59,7 @@ mock.module('@archon/core', () => ({
 
 mockAllWorkflowModules();
 
-mock.module('@archon/core/db/conversations', () => ({
+mock.module('@harneeslab/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
   softDeleteConversation: mockSoftDeleteConversation,
   updateConversationTitle: mockUpdateConversationTitle,
@@ -76,16 +76,16 @@ mock.module('@archon/core/db/conversations', () => ({
   })),
 }));
 
-mock.module('@archon/core/db/isolation-environments', () => ({}));
-mock.module('@archon/core/db/workflows', () => ({}));
-mock.module('@archon/core/db/workflow-events', () => ({}));
+mock.module('@harneeslab/core/db/isolation-environments', () => ({}));
+mock.module('@harneeslab/core/db/workflows', () => ({}));
+mock.module('@harneeslab/core/db/workflow-events', () => ({}));
 const mockAddMessage = mock(async (_convId: string, _role: string, _content: string) => ({
   id: 'msg-uuid-1',
 }));
-mock.module('@archon/core/db/messages', () => ({
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mockAddMessage,
 }));
-mock.module('@archon/core/db/codebases', () => ({
+mock.module('@harneeslab/core/db/codebases', () => ({
   listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),
   getCodebase: mock(async () => null),
 }));

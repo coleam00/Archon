@@ -5,7 +5,7 @@ import type { WorkflowEventRow } from './workflow-events';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home/test/.archon'),
   getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),

@@ -5,7 +5,7 @@ import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
 const archonHome = join(homedir(), '.archon');
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => archonHome),
   getArchonConfigPath: mock(() => join(archonHome, 'config.yaml')),

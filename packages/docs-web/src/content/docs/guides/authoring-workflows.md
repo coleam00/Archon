@@ -524,11 +524,11 @@ Workflow fails → next invocation auto-resumes completed nodes
 **Crashed servers / orphaned runs**: Archon은 server startup 시 `running` row를 자동으로 fail 처리하지 **않습니다**. 그렇게 하면 다른 process(CLI, adapter)에서 실제로 실행 중인 workflow를 죽일 수 있기 때문입니다. server crash로 row가 `running`에 stuck되면 dashboard에 계속 표시됩니다(Dashboard nav tab에 running workflow count가 표시됨). 명시적으로 terminal status로 전환하세요.
 
 - **Web UI**: workflow card에서 Abandon 또는 Cancel button을 클릭하세요. Abandon은 run을 `cancelled`로 mark하고 completed-node history를 보존합니다. Cancel은 in-flight subprocess도 종료합니다.
-- **CLI**: `archon workflow abandon <run-id>`를 실행하세요(dashboard의 Abandon button과 동일). Run ID는 `archon workflow status`에서 확인할 수 있습니다.
+- **CLI**: `hlab workflow abandon <run-id>`를 실행하세요(dashboard의 Abandon button과 동일). Run ID는 `hlab workflow status`에서 확인할 수 있습니다.
 
 row가 terminal status에 도달하면 같은 path에서 같은 workflow를 다음에 invocation할 때 위 mechanism으로 completed node부터 auto-resume합니다.
 
-> `archon workflow cleanup [days]`와 혼동하지 마세요. 이 command는 disk hygiene을 위해 오래된 terminal run(`completed`/`failed`/`cancelled`)을 database에서 **삭제**합니다. `running` row를 전환하지는 않습니다.
+> `hlab workflow cleanup [days]`와 혼동하지 마세요. 이 command는 disk hygiene을 위해 오래된 terminal run(`completed`/`failed`/`cancelled`)을 database에서 **삭제**합니다. `running` row를 전환하지는 않습니다.
 
 **Known limitation**: 이전 node의 AI session context는 restore되지 않습니다. downstream node가 artifact가 아니라 prior run session의 in-context knowledge에 의존한다면 해당 artifact를 명시적으로 다시 읽어야 할 수 있습니다.
 
@@ -677,7 +677,7 @@ Model "sonnet" is not compatible with provider "codex"
 참조된 모든 command file, MCP config file, skill directory가 disk에 존재하는지 validate하려면 다음을 실행하세요.
 
 ```bash
-archon validate workflows <name>
+hlab validate workflows <name>
 ```
 
 이는 load-time validation이 다루는 범위를 넘어 resource resolution을 확인합니다. machine-readable output이 필요하면 `--json`을 사용하세요. 자세한 내용은 [CLI Reference](/reference/cli/)를 참고하세요.

@@ -2,8 +2,8 @@
  * Tests for workflow commands
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
-import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import type { WorkflowEmitterEvent } from '@harneeslab/workflows/event-emitter';
+import { makeTestWorkflowWithSource } from '@harneeslab/workflows/test-utils';
 import {
   workflowListCommand,
   workflowRunCommand,
@@ -25,14 +25,14 @@ const mockLogger = {
   child: mock(() => mockLogger),
 };
 
-// Mock @archon/paths (createLogger moved here from @archon/core)
-mock.module('@archon/paths', () => ({
+// Mock @harneeslab/paths (createLogger moved here from @harneeslab/core)
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home/test/.archon'),
 }));
 
-// Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
-mock.module('@archon/isolation', () => ({
+// Mock @harneeslab/isolation (getIsolationProvider moved here from @harneeslab/core)
+mock.module('@harneeslab/isolation', () => ({
   configureIsolation: mock(() => undefined),
   getIsolationProvider: mock(() => ({
     create: mock(() =>
@@ -50,8 +50,8 @@ mock.module('@archon/isolation', () => ({
   })),
 }));
 
-// Mock the @archon/core modules
-mock.module('@archon/core', () => ({
+// Mock the @harneeslab/core modules
+mock.module('@harneeslab/core', () => ({
   registerRepository: mock(() =>
     Promise.resolve({
       codebaseId: 'cb-auto',
@@ -70,10 +70,10 @@ mock.module('@archon/core', () => ({
   })),
 }));
 
-mock.module('@archon/workflows/workflow-discovery', () => ({
+mock.module('@harneeslab/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mock(() => Promise.resolve({ workflows: [], errors: [] })),
 }));
-mock.module('@archon/workflows/executor', () => ({
+mock.module('@harneeslab/workflows/executor', () => ({
   executeWorkflow: mock(() => Promise.resolve({ success: true, workflowRunId: 'test-run-id' })),
 }));
 
@@ -81,7 +81,7 @@ mock.module('@archon/workflows/executor', () => ({
 let capturedSubscribeHandler: ((event: WorkflowEmitterEvent) => void) | null = null;
 const mockUnsubscribe = mock(() => undefined);
 
-mock.module('@archon/workflows/event-emitter', () => ({
+mock.module('@harneeslab/workflows/event-emitter', () => ({
   getWorkflowEventEmitter: mock(() => ({
     subscribeForConversation: mock(
       (_convId: string, handler: (event: WorkflowEmitterEvent) => void) => {
@@ -92,7 +92,7 @@ mock.module('@archon/workflows/event-emitter', () => ({
   })),
 }));
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   findRepoRoot: mock(() => Promise.resolve(null)),
   getRemoteUrl: mock(() => Promise.resolve(null)),
   checkout: mock(() => Promise.resolve()),
@@ -103,7 +103,7 @@ mock.module('@archon/git', () => ({
   isAncestorOf: mock(() => Promise.resolve(true)),
 }));
 
-mock.module('@archon/core/db/conversations', () => ({
+mock.module('@harneeslab/core/db/conversations', () => ({
   getOrCreateConversation: mock(() =>
     Promise.resolve({ id: 'conv-123', platform_type: 'cli', platform_conversation_id: 'cli-123' })
   ),
@@ -111,21 +111,21 @@ mock.module('@archon/core/db/conversations', () => ({
   updateConversation: mock(() => Promise.resolve()),
 }));
 
-mock.module('@archon/core/db/codebases', () => ({
+mock.module('@harneeslab/core/db/codebases', () => ({
   findCodebaseByDefaultCwd: mock(() => Promise.resolve(null)),
   getCodebase: mock(() => Promise.resolve(null)),
 }));
 
-mock.module('@archon/core/db/isolation-environments', () => ({
+mock.module('@harneeslab/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
 }));
 
-mock.module('@archon/core/db/messages', () => ({
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mock(() => Promise.resolve()),
 }));
 
-mock.module('@archon/core/db/workflows', () => ({
+mock.module('@harneeslab/core/db/workflows', () => ({
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
   cancelWorkflowRun: mock(() => Promise.resolve()),
@@ -137,7 +137,7 @@ mock.module('@archon/core/db/workflows', () => ({
   deleteOldWorkflowRuns: mock(() => Promise.resolve({ count: 0 })),
 }));
 
-mock.module('@archon/core/db/workflow-events', () => ({
+mock.module('@harneeslab/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   createWorkflowEvent: mock(() => Promise.resolve()),
 }));
@@ -154,7 +154,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should display message when no workflows found', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [],
       errors: [],
@@ -169,7 +170,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should list workflows with names and descriptions', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'General assistance workflow' }),
@@ -195,7 +197,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should output JSON when json flag is true', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'General assistance workflow' }),
@@ -227,7 +230,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should include errors in JSON output', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [],
       errors: [{ filename: 'bad.yaml', error: 'Invalid YAML', errorType: 'parse_error' }],
@@ -250,7 +254,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should not print header text in JSON mode', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [],
       errors: [],
@@ -267,7 +272,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should include modelReasoningEffort and webSearchMode in JSON output when present', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({
@@ -300,7 +306,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should produce text output when json flag is false', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'General assistance' }),
@@ -319,7 +326,8 @@ describe('workflowListCommand', () => {
   });
 
   it('passes globalSearchPath to discoverWorkflowsWithConfig', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [],
       errors: [],
@@ -335,7 +343,8 @@ describe('workflowListCommand', () => {
   });
 
   it('should throw error when discoverWorkflows fails', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('Permission denied')
     );
@@ -360,7 +369,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('should throw error when no workflows found', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [],
       errors: [],
@@ -372,7 +382,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('should throw error when workflow not found', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }),
@@ -387,7 +398,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('should include available workflows in error when workflow not found', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }),
@@ -407,9 +419,10 @@ describe('workflowRunCommand', () => {
   });
 
   it('should resolve workflow by suffix match', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -443,7 +456,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('should resolve workflow by substring match', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -464,9 +478,10 @@ describe('workflowRunCommand', () => {
   });
 
   it('should prefer case-insensitive exact match over suffix match', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -504,7 +519,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('should throw ambiguous error for multiple suffix matches', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'archon-review', description: 'Review' }),
@@ -519,7 +535,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('should throw ambiguous error for multiple substring matches', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({
@@ -537,9 +554,10 @@ describe('workflowRunCommand', () => {
   });
 
   it('should prefer exact match over suffix match', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -573,8 +591,9 @@ describe('workflowRunCommand', () => {
   });
 
   it('should throw error when database access fails', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -590,9 +609,10 @@ describe('workflowRunCommand', () => {
   });
 
   it('should throw when codebase lookup fails (isolation is default)', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -611,10 +631,11 @@ describe('workflowRunCommand', () => {
   });
 
   it('should continue when codebase lookup fails with --no-worktree', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -642,10 +663,11 @@ describe('workflowRunCommand', () => {
   });
 
   it('should throw error when workflow execution fails', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -668,11 +690,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('should call generateAndSetTitle with workflow name and user message', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const core = await import('@archon/core');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const core = await import('@harneeslab/core');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -706,11 +729,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('passes fromBranch into isolation task request', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const isolation = await import('@archon/isolation');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const isolation = await import('@harneeslab/isolation');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -749,7 +773,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('throws when --branch is used with --no-worktree', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -766,7 +791,8 @@ describe('workflowRunCommand', () => {
   });
 
   it('throws when --from is used with --no-worktree', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -783,12 +809,13 @@ describe('workflowRunCommand', () => {
   });
 
   it('creates worktree with auto-generated branch when no --branch given', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const isolation = await import('@archon/isolation');
-    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const isolation = await import('@harneeslab/isolation');
+    const isolationDb = await import('@harneeslab/core/db/isolation-environments');
 
     // Snapshot call counts before this test (process-global mocks)
     const findActiveCallsBefore = (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mock
@@ -835,11 +862,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('skips isolation when --no-worktree flag is set', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const isolation = await import('@archon/isolation');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const isolation = await import('@harneeslab/isolation');
 
     // Snapshot provider.create call count before this test
     const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
@@ -876,10 +904,11 @@ describe('workflowRunCommand', () => {
   });
 
   it('throws when isolation cannot be created due to missing codebase', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const gitModule = await import('@archon/git');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const gitModule = await import('@harneeslab/git');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -899,12 +928,13 @@ describe('workflowRunCommand', () => {
   });
 
   it('emits warning when reused worktree has mismatched base branch', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const isolationDb = await import('@archon/core/db/isolation-environments');
-    const gitModule = await import('@archon/git');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const isolationDb = await import('@harneeslab/core/db/isolation-environments');
+    const gitModule = await import('@harneeslab/git');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -943,11 +973,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('does not emit base branch warning when reused worktree is valid', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const isolationDb = await import('@archon/core/db/isolation-environments');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const isolationDb = await import('@harneeslab/core/db/isolation-environments');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -987,11 +1018,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('sends dispatch message before executeWorkflow with correct metadata', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const messagesDb = await import('@archon/core/db/messages');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const messagesDb = await import('@harneeslab/core/db/messages');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -1039,11 +1071,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('sends result card when executeWorkflow returns a summary', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const messagesDb = await import('@archon/core/db/messages');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const messagesDb = await import('@harneeslab/core/db/messages');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -1075,11 +1108,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('does not send result card when executeWorkflow has no summary', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const messagesDb = await import('@archon/core/db/messages');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const messagesDb = await import('@harneeslab/core/db/messages');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -1110,11 +1144,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('does not throw and logs warn when result message DB persist fails', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const messagesDb = await import('@archon/core/db/messages');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const messagesDb = await import('@harneeslab/core/db/messages');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -1153,11 +1188,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('does not throw and continues to executeWorkflow when dispatch sendMessage fails', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const messagesDb = await import('@archon/core/db/messages');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const messagesDb = await import('@harneeslab/core/db/messages');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -1188,11 +1224,12 @@ describe('workflowRunCommand', () => {
   });
 
   it('does not send result card when workflow is paused even with summary', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const messagesDb = await import('@archon/core/db/messages');
+    const { discoverWorkflowsWithConfig } =
+      await import('@harneeslab/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@harneeslab/workflows/executor');
+    const conversationDb = await import('@harneeslab/core/db/conversations');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const messagesDb = await import('@harneeslab/core/db/messages');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
@@ -1246,7 +1283,7 @@ describe('workflowStatusCommand', () => {
   });
 
   it('should print message when no active runs', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([]);
 
     await workflowStatusCommand();
@@ -1255,7 +1292,7 @@ describe('workflowStatusCommand', () => {
   });
 
   it('should list active runs with ID, name, path, status, and age', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
         id: 'run-abc',
@@ -1276,7 +1313,7 @@ describe('workflowStatusCommand', () => {
   });
 
   it('should output JSON when json=true', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([]);
 
     await workflowStatusCommand(true);
@@ -1285,8 +1322,8 @@ describe('workflowStatusCommand', () => {
   });
 
   it('should show node summaries in verbose mode', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const workflowEventsDb = await import('@harneeslab/core/db/workflow-events');
 
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
@@ -1330,8 +1367,8 @@ describe('workflowStatusCommand', () => {
   });
 
   it('should show error message for failed node in verbose mode', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const workflowEventsDb = await import('@harneeslab/core/db/workflow-events');
 
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
@@ -1374,8 +1411,8 @@ describe('workflowStatusCommand', () => {
   });
 
   it('should not show nodes section when no events in verbose mode', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const workflowEventsDb = await import('@harneeslab/core/db/workflow-events');
 
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
@@ -1395,8 +1432,8 @@ describe('workflowStatusCommand', () => {
   });
 
   it('should include events in JSON verbose output', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const workflowEventsDb = await import('@harneeslab/core/db/workflow-events');
 
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
       {
@@ -1440,7 +1477,7 @@ describe('workflowResumeCommand', () => {
   });
 
   it('should throw when run not found', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     await expect(workflowResumeCommand('missing-id')).rejects.toThrow(
@@ -1449,7 +1486,7 @@ describe('workflowResumeCommand', () => {
   });
 
   it('should throw when run is not resumable', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
       workflow_name: 'test',
@@ -1462,7 +1499,7 @@ describe('workflowResumeCommand', () => {
   });
 
   it('should print resume info and delegate to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
       workflow_name: 'implement',
@@ -1486,7 +1523,7 @@ describe('workflowResumeCommand', () => {
   });
 
   it('should throw when run has no working path', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-no-path',
       workflow_name: 'implement',
@@ -1500,9 +1537,9 @@ describe('workflowResumeCommand', () => {
   });
 
   it('should pass codebase_id from run record to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const workflowDiscovery = await import('@harneeslab/workflows/workflow-discovery');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
@@ -1539,9 +1576,9 @@ describe('workflowResumeCommand', () => {
   });
 
   it('should fall through to auto-registration when getCodebase throws', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const workflowDiscovery = await import('@harneeslab/workflows/workflow-discovery');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-err',
@@ -1590,7 +1627,7 @@ describe('workflowApproveCommand', () => {
   });
 
   it('should throw when run not found', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     await expect(workflowApproveCommand('missing-id')).rejects.toThrow(
@@ -1599,10 +1636,10 @@ describe('workflowApproveCommand', () => {
   });
 
   it('should pass codebase_id from run record to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-    const core = await import('@archon/core');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const workflowDiscovery = await import('@harneeslab/workflows/workflow-discovery');
+    const core = await import('@harneeslab/core');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-approve-1',
@@ -1641,11 +1678,11 @@ describe('workflowApproveCommand', () => {
   });
 
   it('should pass original platform conversation ID through to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const conversationsDb = await import('@archon/core/db/conversations');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-    const core = await import('@archon/core');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const codebaseDb = await import('@harneeslab/core/db/codebases');
+    const conversationsDb = await import('@harneeslab/core/db/conversations');
+    const workflowDiscovery = await import('@harneeslab/workflows/workflow-discovery');
+    const core = await import('@harneeslab/core');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-approve-conv',
@@ -1705,7 +1742,7 @@ describe('workflowAbandonCommand', () => {
   });
 
   it('should throw when run not found', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     await expect(workflowAbandonCommand('missing-id')).rejects.toThrow(
@@ -1714,7 +1751,7 @@ describe('workflowAbandonCommand', () => {
   });
 
   it('should throw when run is not abandonable', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
       workflow_name: 'test',
@@ -1727,7 +1764,7 @@ describe('workflowAbandonCommand', () => {
   });
 
   it('should abandon a running workflow', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
       workflow_name: 'implement',
@@ -1754,7 +1791,7 @@ describe('workflowCleanupCommand', () => {
   });
 
   it('should print deletion count when runs are deleted', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
       count: 5,
     });
@@ -1765,7 +1802,7 @@ describe('workflowCleanupCommand', () => {
   });
 
   it('should print no-op message when count is 0', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
       count: 0,
     });
@@ -1776,7 +1813,7 @@ describe('workflowCleanupCommand', () => {
   });
 
   it('should throw when deleteOldWorkflowRuns fails', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.deleteOldWorkflowRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('disk full')
     );
@@ -1797,14 +1834,14 @@ describe('workflowRejectCommand', () => {
   });
 
   it('should throw when run not found', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
 
     await expect(workflowRejectCommand('missing-id')).rejects.toThrow();
   });
 
   it('should throw when run is not paused', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
       workflow_name: 'my-wf',
@@ -1816,8 +1853,8 @@ describe('workflowRejectCommand', () => {
   });
 
   it('cancels immediately when no on_reject configured', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const core = await import('@archon/core');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const core = await import('@harneeslab/core');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-plain',
@@ -1839,7 +1876,7 @@ describe('workflowRejectCommand', () => {
   });
 
   it('updates metadata and auto-resumes when on_reject configured and under limit', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
 
     const runData = {
       id: 'run-on-reject',
@@ -1875,9 +1912,9 @@ describe('workflowRejectCommand', () => {
   });
 
   it('should pass original platform conversation ID through on reject-resume', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const conversationsDb = await import('@archon/core/db/conversations');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const conversationsDb = await import('@harneeslab/core/db/conversations');
+    const workflowDiscovery = await import('@harneeslab/workflows/workflow-discovery');
 
     const runData = {
       id: 'run-reject-conv',
@@ -1930,8 +1967,8 @@ describe('workflowRejectCommand', () => {
   });
 
   it('cancels when max attempts reached', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const core = await import('@archon/core');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
+    const core = await import('@harneeslab/core');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-max',
@@ -1962,7 +1999,7 @@ describe('workflowRejectCommand', () => {
   });
 
   it('throws when on_reject configured but working_path is null', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDb = await import('@harneeslab/core/db/workflows');
 
     const runData = {
       id: 'run-no-path',
@@ -2000,14 +2037,14 @@ describe('workflowRunCommand — progress rendering', () => {
 
   function setupWorkflowMocks(): void {
     // These need to be set up for each test since workflowRunCommand has many dependencies
-    const discoverMock = require('@archon/workflows/workflow-discovery')
+    const discoverMock = require('@harneeslab/workflows/workflow-discovery')
       .discoverWorkflowsWithConfig as ReturnType<typeof mock>;
     discoverMock.mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
       errors: [],
     });
 
-    const conversationDb = require('@archon/core/db/conversations');
+    const conversationDb = require('@harneeslab/core/db/conversations');
     (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'conv-1',
       platform: 'cli',
@@ -2017,7 +2054,7 @@ describe('workflowRunCommand — progress rendering', () => {
       codebase_id: null,
     });
 
-    const codebaseDb = require('@archon/core/db/codebases');
+    const codebaseDb = require('@harneeslab/core/db/codebases');
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'cb-1',
       name: 'test-repo',
@@ -2070,7 +2107,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write node_started event to stderr', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2091,7 +2128,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write node_completed event with duration to stderr', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2113,7 +2150,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write node_failed event to stderr', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2135,7 +2172,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write node_skipped event to stderr', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2157,7 +2194,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write approval_pending event to stderr', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2178,7 +2215,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should not write tool_started without verbose', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2199,7 +2236,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write tool_started with verbose', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2228,7 +2265,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should call unsubscribe even when executeWorkflow throws', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       throw new Error('executor crashed');
     });
@@ -2243,7 +2280,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write node_completed with sub-second duration to stderr', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({
@@ -2265,7 +2302,7 @@ describe('workflowRunCommand — progress rendering', () => {
   it('should write node_completed with minutes duration to stderr', async () => {
     setupWorkflowMocks();
 
-    const { executeWorkflow } = require('@archon/workflows/executor');
+    const { executeWorkflow } = require('@harneeslab/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
       if (capturedSubscribeHandler) {
         capturedSubscribeHandler({

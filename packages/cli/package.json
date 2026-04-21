@@ -1,10 +1,10 @@
 {
-  "name": "@archon/cli",
+  "name": "@harneeslab/cli",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/cli.ts",
   "bin": {
-    "archon": "./src/cli.ts"
+    "hlab": "./src/cli.ts"
   },
   "scripts": {
     "cli": "bun src/cli.ts",
@@ -12,14 +12,14 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "@archon/adapters": "workspace:*",
-    "@archon/core": "workspace:*",
-    "@archon/git": "workspace:*",
-    "@archon/isolation": "workspace:*",
-    "@archon/paths": "workspace:*",
-    "@archon/providers": "workspace:*",
-    "@archon/server": "workspace:*",
-    "@archon/workflows": "workspace:*",
+    "@harneeslab/adapters": "workspace:*",
+    "@harneeslab/core": "workspace:*",
+    "@harneeslab/git": "workspace:*",
+    "@harneeslab/isolation": "workspace:*",
+    "@harneeslab/paths": "workspace:*",
+    "@harneeslab/providers": "workspace:*",
+    "@harneeslab/server": "workspace:*",
+    "@harneeslab/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
     "dotenv": "^17.2.3"
   },

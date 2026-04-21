@@ -13,7 +13,7 @@ import { homedir } from 'os';
 async function importFresh() {
   // Clear the module from cache by deleting it from Loader registry
   const modulePath = require.resolve('./path-validation');
-  const archonPathsModulePath = require.resolve('@archon/paths');
+  const archonPathsModulePath = require.resolve('@harneeslab/paths');
   delete require.cache[modulePath];
   delete require.cache[archonPathsModulePath];
   return import('./path-validation');

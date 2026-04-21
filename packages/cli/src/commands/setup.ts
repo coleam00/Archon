@@ -1,5 +1,5 @@
 /**
- * Setup command - Interactive CLI wizard for HarnessLab credential configuration
+ * Setup command - Interactive CLI wizard for HarneesLab credential configuration
  *
  * Guides users through configuring:
  * - Database (SQLite default vs PostgreSQL)
@@ -28,7 +28,7 @@ import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
-import { getRegisteredProviders } from '@archon/providers';
+import { getRegisteredProviders } from '@harneeslab/providers';
 
 // =============================================================================
 // Types
@@ -45,7 +45,7 @@ interface SetupConfig {
     claudeApiKey?: string;
     claudeOauthToken?: string;
     /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
-     *  in ~/.archon/.env. Required in compiled HarnessLab binaries; harmless in dev. */
+     *  in ~/.archon/.env. Required in compiled HarneesLab binaries; harmless in dev. */
     claudeBinaryPath?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
@@ -203,7 +203,7 @@ export function probeWhichClaude(): string | null {
 /**
  * Try to locate the Claude Code executable on disk.
  *
- * Compiled HarnessLab binaries need an explicit path because the Claude Agent
+ * Compiled HarneesLab binaries need an explicit path because the Claude Agent
  * SDK's `import.meta.url` resolution is frozen to the build host's filesystem.
  * The SDK's `pathToClaudeCodeExecutable` accepts either:
  *   - A native compiled binary (from the curl/PowerShell/winget installers — current default)
@@ -368,7 +368,7 @@ async function collectDatabaseConfig(): Promise<SetupConfig['database']> {
   if (dbType === 'postgresql') {
     const url = await text({
       message: 'Enter your PostgreSQL connection string:',
-      placeholder: 'postgresql://user:pass@localhost:5432/archon',
+      placeholder: 'postgresql://user:pass@localhost:5432/hlab',
       validate: value => {
         if (!value) {
           return 'Connection string is required';
@@ -460,7 +460,7 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
     process.platform === 'win32' ? '%USERPROFILE%\\.local\\bin\\claude.exe' : '~/.local/bin/claude';
 
   note(
-    'Compiled HarnessLab binaries need CLAUDE_BIN_PATH set to the Claude Code executable.\n' +
+    'Compiled HarneesLab binaries need CLAUDE_BIN_PATH set to the Claude Code executable.\n' +
       'In dev (`bun run`) this is ignored — the SDK resolves it via node_modules.\n\n' +
       'Recommended (Anthropic default — native installer):\n' +
       `  macOS/Linux: ${nativeExample}\n` +
@@ -590,7 +590,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
         '1. Run `codex login` in your terminal\n' +
         '2. Complete the login flow\n' +
         '3. Tokens will be saved to ~/.codex/auth.json\n\n' +
-        'You can skip Codex setup now and run `archon setup` again later.',
+        'You can skip Codex setup now and run `hlab setup` again later.',
       'Codex Auth'
     );
   }
@@ -723,7 +723,7 @@ Or use a version manager like nvm:
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
     nvm install 18
 
-After installing Node.js, run 'archon setup' again.`,
+After installing Node.js, run 'hlab setup' again.`,
           'Node.js Not Found'
         );
         const continueWithoutCodex = await confirm({
@@ -750,7 +750,7 @@ Or use a version manager like nvm:
     nvm install 18
     nvm use 18
 
-After upgrading, run 'archon setup' again.`,
+After upgrading, run 'hlab setup' again.`,
           'Node.js Version Too Old'
         );
         const continueWithoutCodex = await confirm({
@@ -789,7 +789,7 @@ After upgrading, run 'archon setup' again.`,
   }
 
   if (!hasClaude && !hasCodex) {
-    log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
+    log.warning('No AI assistant selected. You can add one later by running `hlab setup` again.');
     return {
       claude: false,
       codex: false,
@@ -928,7 +928,7 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
   }
 
   const customMention = await confirm({
-    message: 'Do you want to set a custom @mention name? (Default: archon)',
+    message: 'Do you want to set a custom @mention name? (Default: hlab)',
   });
 
   if (isCancel(customMention)) {
@@ -940,7 +940,7 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
   if (customMention) {
     const mention = await text({
       message: 'Enter the @mention name (without @):',
-      placeholder: 'archon',
+      placeholder: 'hlab',
       validate: value => {
         if (!value) return 'Mention name is required';
         if (value.includes('@')) return 'Do not include @ symbol';
@@ -977,7 +977,7 @@ async function collectTelegramConfig(): Promise<TelegramConfig> {
       'Step 1: Create your bot\n' +
       '1. Open Telegram and search for @BotFather\n' +
       '2. Send /newbot\n' +
-      '3. Choose a display name (e.g., "My HarnessLab Bot")\n' +
+      '3. Choose a display name (e.g., "My HarneesLab Bot")\n' +
       '4. Choose a username (must end in "bot")\n' +
       '5. Copy the token BotFather gives you\n\n' +
       'Step 2: Get your user ID\n' +
@@ -1145,7 +1145,7 @@ async function collectDiscordConfig(): Promise<DiscordConfig> {
  */
 async function collectBotDisplayName(): Promise<string> {
   const customName = await confirm({
-    message: 'Do you want to set a custom bot display name? (Default: HarnessLab)',
+    message: 'Do you want to set a custom bot display name? (Default: HarneesLab)',
   });
 
   if (isCancel(customName)) {
@@ -1154,12 +1154,12 @@ async function collectBotDisplayName(): Promise<string> {
   }
 
   if (!customName) {
-    return 'HarnessLab';
+    return 'HarneesLab';
   }
 
   const name = await text({
     message: 'Enter the bot display name:',
-    placeholder: 'HarnessLab',
+    placeholder: 'HarneesLab',
     validate: value => {
       if (!value) return 'Name is required';
       return undefined;
@@ -1185,8 +1185,8 @@ export function generateEnvContent(config: SetupConfig): string {
   const lines: string[] = [];
 
   // Header
-  lines.push('# HarnessLab Configuration');
-  lines.push('# Generated by `archon setup`');
+  lines.push('# HarneesLab Configuration');
+  lines.push('# Generated by `hlab setup`');
   lines.push('');
 
   // Database
@@ -1283,7 +1283,7 @@ export function generateEnvContent(config: SetupConfig): string {
   }
 
   // Bot Display Name
-  if (config.botDisplayName !== 'HarnessLab') {
+  if (config.botDisplayName !== 'HarneesLab') {
     lines.push('# Bot Display Name');
     lines.push(`BOT_DISPLAY_NAME=${config.botDisplayName}`);
     lines.push('');
@@ -1331,12 +1331,12 @@ function writeEnvFiles(
 }
 
 /**
- * Copy the bundled HarnessLab skill files to <targetPath>/.claude/skills/archon/
+ * Copy the bundled HarneesLab skill files to <targetPath>/.claude/skills/hlab/
  *
  * Always overwrites existing files to ensure the latest skill version is installed.
  */
 export function copyArchonSkill(targetPath: string): void {
-  const skillRoot = join(targetPath, '.claude', 'skills', 'archon');
+  const skillRoot = join(targetPath, '.claude', 'skills', 'hlab');
   for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
     const dest = join(skillRoot, relativePath);
     const destDir = dirname(dest);
@@ -1380,7 +1380,7 @@ function trySpawn(
 function spawnWindowsTerminal(repoPath: string): SpawnResult {
   // Try Windows Terminal first (modern Windows 10/11)
   if (
-    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', 'hlab setup'], {
       detached: true,
       stdio: 'ignore',
     })
@@ -1390,7 +1390,7 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
 
   // Fallback to cmd.exe with start command (works on all Windows)
   if (
-    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', 'archon setup'], {
+    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', 'hlab setup'], {
       detached: true,
       stdio: 'ignore',
     })
@@ -1398,7 +1398,7 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
     return { success: true };
   }
 
-  return { success: false, error: 'Could not open terminal. Please run `archon setup` manually.' };
+  return { success: false, error: 'Could not open terminal. Please run `hlab setup` manually.' };
 }
 
 /**
@@ -1408,13 +1408,13 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
 function spawnMacTerminal(repoPath: string): SpawnResult {
   // Escape single quotes in path for AppleScript
   const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
-  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && archon setup"`;
+  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && hlab setup"`;
 
   if (trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
     return { success: true };
   }
 
-  return { success: false, error: 'Could not open Terminal. Please run `archon setup` manually.' };
+  return { success: false, error: 'Could not open Terminal. Please run `hlab setup` manually.' };
 }
 
 /**
@@ -1422,7 +1422,7 @@ function spawnMacTerminal(repoPath: string): SpawnResult {
  * Tries: x-terminal-emulator -> gnome-terminal -> konsole -> xterm
  */
 function spawnLinuxTerminal(repoPath: string): SpawnResult {
-  const setupCmd = 'archon setup; exec bash';
+  const setupCmd = 'hlab setup; exec bash';
 
   // Try x-terminal-emulator first (Debian/Ubuntu default)
   if (
@@ -1470,12 +1470,12 @@ function spawnLinuxTerminal(repoPath: string): SpawnResult {
 
   return {
     success: false,
-    error: 'Could not find a terminal emulator. Please run `archon setup` manually.',
+    error: 'Could not find a terminal emulator. Please run `hlab setup` manually.',
   };
 }
 
 /**
- * Spawn a new terminal window with archon setup
+ * Spawn a new terminal window with hlab setup
  */
 export function spawnTerminalWithSetup(repoPath: string): SpawnResult {
   const platform = process.platform;
@@ -1508,7 +1508,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       console.log('');
       console.log('Next step: run the setup wizard in a separate terminal.');
       console.log('');
-      console.log(`    cd ${options.repoPath} && archon setup`);
+      console.log(`    cd ${options.repoPath} && hlab setup`);
       console.log('');
       console.log(
         'Come back here and let me know when you finish so I can verify your configuration.'
@@ -1518,7 +1518,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   // Interactive setup flow
-  intro('HarnessLab Setup Wizard');
+  intro('HarneesLab Setup Wizard');
 
   // Check for existing configuration
   const existing = checkExistingConfig();
@@ -1582,7 +1582,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
         slack: existing?.platforms.slack ?? false,
         discord: existing?.platforms.discord ?? false,
       },
-      botDisplayName: 'HarnessLab',
+      botDisplayName: 'HarneesLab',
     };
 
     s.stop('Existing configuration loaded');
@@ -1622,7 +1622,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       database,
       ai,
       platforms,
-      botDisplayName: 'HarnessLab',
+      botDisplayName: 'HarneesLab',
     };
 
     // Collect platform credentials
@@ -1651,9 +1651,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
   s.stop('Configuration files written');
 
-  // Offer to install the HarnessLab skill
+  // Offer to install the HarneesLab skill
   const shouldCopySkill = await confirm({
-    message: 'Install the HarnessLab skill in your project? (recommended)',
+    message: 'Install the HarneesLab skill in your project? (recommended)',
     initialValue: true,
   });
 
@@ -1677,16 +1677,16 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     }
 
     const skillTarget = skillTargetRaw;
-    s.start('Installing HarnessLab skill...');
+    s.start('Installing HarneesLab skill...');
     try {
       copyArchonSkill(skillTarget);
     } catch (err) {
-      s.stop('HarnessLab skill installation failed');
+      s.stop('HarneesLab skill installation failed');
       cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
       process.exit(1);
     }
-    s.stop('HarnessLab skill installed');
-    skillInstalledPath = join(skillTarget, '.claude', 'skills', 'archon');
+    s.stop('HarneesLab skill installed');
+    skillInstalledPath = join(skillTarget, '.claude', 'skills', 'hlab');
   }
 
   // Optional: configure docs directory
@@ -1764,7 +1764,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
   if (skillInstalledPath) {
     summaryLines.push('');
-    summaryLines.push('HarnessLab skill installed:');
+    summaryLines.push('HarneesLab skill installed:');
     summaryLines.push(`  ${skillInstalledPath}`);
   }
 
@@ -1780,5 +1780,5 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     'Additional Options'
   );
 
-  outro('Setup complete! Run `archon version` to verify.');
+  outro('Setup complete! Run `hlab version` to verify.');
 }

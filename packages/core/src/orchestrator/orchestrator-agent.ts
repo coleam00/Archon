@@ -7,7 +7,7 @@
  * - Does NOT require a project to be selected before starting a conversation
  */
 import { existsSync } from 'fs';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import type {
   IPlatformAdapter,
   HandleMessageContext,
@@ -15,34 +15,34 @@ import type {
   Codebase,
   AttachedFile,
 } from '../types';
-import type { SendQueryOptions } from '@archon/providers/types';
+import type { SendQueryOptions } from '@harneeslab/providers/types';
 import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import * as commandHandler from '../handlers/command-handler';
-import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
+import { formatToolCall } from '@harneeslab/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
-import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
-import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths';
+import { getAgentProvider, getProviderCapabilities } from '@harneeslab/providers';
+import { getArchonHome, getArchonWorkspacesPath } from '@harneeslab/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { syncWorkspace, toRepoPath } from '@archon/git';
-import type { WorkspaceSyncResult } from '@archon/git';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { findWorkflow } from '@archon/workflows/router';
-import { executeWorkflow } from '@archon/workflows/executor';
+import { syncWorkspace, toRepoPath } from '@harneeslab/git';
+import type { WorkspaceSyncResult } from '@harneeslab/git';
+import { discoverWorkflowsWithConfig } from '@harneeslab/workflows/workflow-discovery';
+import { findWorkflow } from '@harneeslab/workflows/router';
+import { executeWorkflow } from '@harneeslab/workflows/executor';
 import type {
   WorkflowDefinition,
   WorkflowWithSource,
   WorkflowLoadError,
-} from '@archon/workflows/schemas/workflow';
+} from '@harneeslab/workflows/schemas/workflow';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
-import { IsolationBlockedError } from '@archon/isolation';
+import { IsolationBlockedError } from '@harneeslab/isolation';
 import {
   buildOrchestratorPrompt,
   buildProjectScopedPrompt,
@@ -53,7 +53,7 @@ import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import { getCodebaseEnvVars } from '../db/env-vars';
-import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import type { ApprovalContext } from '@harneeslab/workflows/schemas/workflow-run';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

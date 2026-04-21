@@ -1,8 +1,8 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-const githubRepository = process.env.GITHUB_REPOSITORY ?? 'NewTurn2017/HarnessLab';
-const [repoOwner = 'NewTurn2017', repoName = 'HarnessLab'] = githubRepository.split('/');
+const githubRepository = process.env.GITHUB_REPOSITORY ?? 'NewTurn2017/HarneesLab';
+const [repoOwner = 'NewTurn2017', repoName = 'HarneesLab'] = githubRepository.split('/');
 const site = process.env.DOCS_SITE_URL ?? `https://${repoOwner}.github.io`;
 const base = process.env.DOCS_BASE_PATH ?? (process.env.DOCS_SITE_URL ? '/' : `/${repoName}`);
 
@@ -11,13 +11,13 @@ export default defineConfig({
   base,
   integrations: [
     starlight({
-      title: 'HarnessLab',
+      title: 'HarneesLab',
       favicon: '/favicon.png',
       logo: {
         src: './src/assets/logo.png',
-        alt: 'HarnessLab',
+        alt: 'HarneesLab',
       },
-      description: 'HarnessLab is an Archon fork for studying, teaching, and building repeatable AI coding workflows.',
+      description: 'HarneesLab is an Archon fork for studying, teaching, and building repeatable AI coding workflows.',
       head: [
         {
           tag: 'script',
@@ -30,7 +30,7 @@ export default defineConfig({
       },
       sidebar: [
         {
-          label: 'HarnessLab 북',
+          label: 'HarneesLab 북',
           autogenerate: { directory: 'book' },
         },
         {
@@ -38,8 +38,8 @@ export default defineConfig({
           autogenerate: { directory: 'getting-started' },
         },
         {
-          label: 'HarnessLab',
-          autogenerate: { directory: 'harnesslab' },
+          label: 'HarneesLab',
+          autogenerate: { directory: 'harneeslab' },
         },
         {
           label: '가이드',

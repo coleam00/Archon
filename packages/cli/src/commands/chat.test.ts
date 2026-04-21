@@ -17,19 +17,19 @@ const mockLogger = {
   level: 'info',
 };
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Mock @archon/core/db/messages (used by CLIAdapter for persistence)
-mock.module('@archon/core/db/messages', () => ({
+// Mock @harneeslab/core/db/messages (used by CLIAdapter for persistence)
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mock(() => Promise.resolve()),
 }));
 
-// Mock handleMessage from @archon/core
+// Mock handleMessage from @harneeslab/core
 const mockHandleMessage = mock(() => Promise.resolve());
 
-mock.module('@archon/core', () => ({
+mock.module('@harneeslab/core', () => ({
   handleMessage: mockHandleMessage,
 }));
 

@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
-// Mock @archon/git before importing the module under test
+// Mock @harneeslab/git before importing the module under test
 const mockExecFileAsync = mock(
   async (_cmd: string, _args: string[]): Promise<{ stdout: string; stderr: string }> => ({
     stdout: '/usr/bin/bun\n',
@@ -8,12 +8,12 @@ const mockExecFileAsync = mock(
   })
 );
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   execFileAsync: mockExecFileAsync,
 }));
 
-// Mock @archon/paths logger
-mock.module('@archon/paths', () => ({
+// Mock @harneeslab/paths logger
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),

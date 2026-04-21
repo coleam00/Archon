@@ -6,11 +6,11 @@
  * - Otherwise: Use SQLite at ~/.archon/archon.db (standalone CLI)
  */
 import { join } from 'path';
-import { getArchonHome } from '@archon/paths';
+import { getArchonHome } from '@harneeslab/paths';
 import type { IDatabase, SqlDialect, QueryResult } from './adapters/types';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

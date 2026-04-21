@@ -22,13 +22,13 @@
       },
     },
     "packages/adapters": {
-      "name": "@archon/adapters",
-      "version": "0.3.6",
+      "name": "@harneeslab/adapters",
+      "version": "0.1.0",
       "dependencies": {
-        "@archon/core": "workspace:*",
-        "@archon/git": "workspace:*",
-        "@archon/isolation": "workspace:*",
-        "@archon/paths": "workspace:*",
+        "@harneeslab/core": "workspace:*",
+        "@harneeslab/git": "workspace:*",
+        "@harneeslab/isolation": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
         "@octokit/rest": "^22.0.0",
         "@slack/bolt": "^4.6.0",
         "discord.js": "^14.16.0",
@@ -40,21 +40,21 @@
       },
     },
     "packages/cli": {
-      "name": "@archon/cli",
-      "version": "0.3.6",
+      "name": "@harneeslab/cli",
+      "version": "0.1.0",
       "bin": {
-        "archon": "./src/cli.ts",
+        "hlab": "./src/cli.ts",
       },
       "dependencies": {
-        "@archon/adapters": "workspace:*",
-        "@archon/core": "workspace:*",
-        "@archon/git": "workspace:*",
-        "@archon/isolation": "workspace:*",
-        "@archon/paths": "workspace:*",
-        "@archon/providers": "workspace:*",
-        "@archon/server": "workspace:*",
-        "@archon/workflows": "workspace:*",
         "@clack/prompts": "^1.0.0",
+        "@harneeslab/adapters": "workspace:*",
+        "@harneeslab/core": "workspace:*",
+        "@harneeslab/git": "workspace:*",
+        "@harneeslab/isolation": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
+        "@harneeslab/providers": "workspace:*",
+        "@harneeslab/server": "workspace:*",
+        "@harneeslab/workflows": "workspace:*",
         "dotenv": "^17.2.3",
       },
       "devDependencies": {
@@ -62,14 +62,14 @@
       },
     },
     "packages/core": {
-      "name": "@archon/core",
-      "version": "0.3.6",
+      "name": "@harneeslab/core",
+      "version": "0.1.0",
       "dependencies": {
-        "@archon/git": "workspace:*",
-        "@archon/isolation": "workspace:*",
-        "@archon/paths": "workspace:*",
-        "@archon/providers": "workspace:*",
-        "@archon/workflows": "workspace:*",
+        "@harneeslab/git": "workspace:*",
+        "@harneeslab/isolation": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
+        "@harneeslab/providers": "workspace:*",
+        "@harneeslab/workflows": "workspace:*",
         "pg": "^8.11.0",
         "zod": "^3",
       },
@@ -82,8 +82,8 @@
       },
     },
     "packages/docs-web": {
-      "name": "@archon/docs-web",
-      "version": "0.3.6",
+      "name": "@harneeslab/docs-web",
+      "version": "0.1.0",
       "dependencies": {
         "@astrojs/starlight": "^0.38.0",
         "astro": "^6.1.0",
@@ -91,29 +91,29 @@
       },
     },
     "packages/git": {
-      "name": "@archon/git",
-      "version": "0.3.6",
+      "name": "@harneeslab/git",
+      "version": "0.1.0",
       "dependencies": {
-        "@archon/paths": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
       },
     },
     "packages/isolation": {
-      "name": "@archon/isolation",
-      "version": "0.3.6",
+      "name": "@harneeslab/isolation",
+      "version": "0.1.0",
       "dependencies": {
-        "@archon/git": "workspace:*",
-        "@archon/paths": "workspace:*",
+        "@harneeslab/git": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
       },
     },
     "packages/paths": {
-      "name": "@archon/paths",
-      "version": "0.3.6",
+      "name": "@harneeslab/paths",
+      "version": "0.1.0",
       "dependencies": {
         "dotenv": "^17",
         "pino": "^9",
@@ -125,11 +125,11 @@
       },
     },
     "packages/providers": {
-      "name": "@archon/providers",
-      "version": "0.3.6",
+      "name": "@harneeslab/providers",
+      "version": "0.1.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.89",
-        "@archon/paths": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
         "@mariozechner/pi-ai": "^0.67.5",
         "@mariozechner/pi-coding-agent": "^0.67.5",
         "@openai/codex-sdk": "^0.116.0",
@@ -143,15 +143,15 @@
       },
     },
     "packages/server": {
-      "name": "@archon/server",
-      "version": "0.3.6",
+      "name": "@harneeslab/server",
+      "version": "0.1.0",
       "dependencies": {
-        "@archon/adapters": "workspace:*",
-        "@archon/core": "workspace:*",
-        "@archon/git": "workspace:*",
-        "@archon/paths": "workspace:*",
-        "@archon/providers": "workspace:*",
-        "@archon/workflows": "workspace:*",
+        "@harneeslab/adapters": "workspace:*",
+        "@harneeslab/core": "workspace:*",
+        "@harneeslab/git": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
+        "@harneeslab/providers": "workspace:*",
+        "@harneeslab/workflows": "workspace:*",
         "@hono/zod-openapi": "^0.19.6",
         "dotenv": "^17.2.3",
         "hono": "^4.11.4",
@@ -162,8 +162,8 @@
       },
     },
     "packages/web": {
-      "name": "@archon/web",
-      "version": "0.3.6",
+      "name": "@harneeslab/web",
+      "version": "0.1.0",
       "dependencies": {
         "@dagrejs/dagre": "^2.0.4",
         "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -214,12 +214,12 @@
       },
     },
     "packages/workflows": {
-      "name": "@archon/workflows",
-      "version": "0.3.6",
+      "name": "@harneeslab/workflows",
+      "version": "0.1.0",
       "dependencies": {
-        "@archon/git": "workspace:*",
-        "@archon/paths": "workspace:*",
-        "@archon/providers": "workspace:*",
+        "@harneeslab/git": "workspace:*",
+        "@harneeslab/paths": "workspace:*",
+        "@harneeslab/providers": "workspace:*",
         "@hono/zod-openapi": "^0.19.6",
         "zod": "^3.25.28",
       },
@@ -237,28 +237,6 @@
     "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.2.74", "", { "optionalDependencies": { "@img/sharp-darwin-arm64": "^0.34.2", "@img/sharp-darwin-x64": "^0.34.2", "@img/sharp-linux-arm": "^0.34.2", "@img/sharp-linux-arm64": "^0.34.2", "@img/sharp-linux-x64": "^0.34.2", "@img/sharp-linuxmusl-arm64": "^0.34.2", "@img/sharp-linuxmusl-x64": "^0.34.2", "@img/sharp-win32-arm64": "^0.34.2", "@img/sharp-win32-x64": "^0.34.2" }, "peerDependencies": { "zod": "^4.0.0" } }, "sha512-S/SFSSbZHPL1HiQxAqCCxU3iHuE5nM+ir0OK1n0bZ+9hlVUH7OOn88AsV9s54E0c1kvH9YF4/foWH8J9kICsBw=="],
 
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.74.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-srbJV7JKsc5cQ6eVuFzjZO7UR3xEPJqPamHFIe29bs38Ij2IripoAhC0S5NslNbaFUYqBKypmmpzMTpqfHEUDw=="],
-
-    "@archon/adapters": ["@archon/adapters@workspace:packages/adapters"],
-
-    "@archon/cli": ["@archon/cli@workspace:packages/cli"],
-
-    "@archon/core": ["@archon/core@workspace:packages/core"],
-
-    "@archon/docs-web": ["@archon/docs-web@workspace:packages/docs-web"],
-
-    "@archon/git": ["@archon/git@workspace:packages/git"],
-
-    "@archon/isolation": ["@archon/isolation@workspace:packages/isolation"],
-
-    "@archon/paths": ["@archon/paths@workspace:packages/paths"],
-
-    "@archon/providers": ["@archon/providers@workspace:packages/providers"],
-
-    "@archon/server": ["@archon/server@workspace:packages/server"],
-
-    "@archon/web": ["@archon/web@workspace:packages/web"],
-
-    "@archon/workflows": ["@archon/workflows@workspace:packages/workflows"],
 
     "@asteasolutions/zod-to-openapi": ["@asteasolutions/zod-to-openapi@7.3.4", "", { "dependencies": { "openapi3-ts": "^4.1.2" }, "peerDependencies": { "zod": "^3.20.2" } }, "sha512-/2rThQ5zPi9OzVwes6U7lK1+Yvug0iXu25olp7S0XsYmOqnyMfxH7gdSQjn/+DSOHRg7wnotwGJSyL+fBKdnEA=="],
 
@@ -527,6 +505,28 @@
     "@google/genai": ["@google/genai@1.50.1", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-YbkX7H9+1Pt8wOt7DDREy8XSoiL6fRDzZQRyaVBarFf8MR3zHGqVdvM4cLbDXqPhxqvegZShgfxb8kw9C7YhAQ=="],
 
     "@grammyjs/types": ["@grammyjs/types@3.26.0", "", {}, "sha512-jlnyfxfev/2o68HlvAGRocAXgdPPX5QabG7jZlbqC2r9DZyWBfzTlg+nu3O3Fy4EhgLWu28hZ/8wr7DsNamP9A=="],
+
+    "@harneeslab/adapters": ["@harneeslab/adapters@workspace:packages/adapters"],
+
+    "@harneeslab/cli": ["@harneeslab/cli@workspace:packages/cli"],
+
+    "@harneeslab/core": ["@harneeslab/core@workspace:packages/core"],
+
+    "@harneeslab/docs-web": ["@harneeslab/docs-web@workspace:packages/docs-web"],
+
+    "@harneeslab/git": ["@harneeslab/git@workspace:packages/git"],
+
+    "@harneeslab/isolation": ["@harneeslab/isolation@workspace:packages/isolation"],
+
+    "@harneeslab/paths": ["@harneeslab/paths@workspace:packages/paths"],
+
+    "@harneeslab/providers": ["@harneeslab/providers@workspace:packages/providers"],
+
+    "@harneeslab/server": ["@harneeslab/server@workspace:packages/server"],
+
+    "@harneeslab/web": ["@harneeslab/web@workspace:packages/web"],
+
+    "@harneeslab/workflows": ["@harneeslab/workflows@workspace:packages/workflows"],
 
     "@hono/node-server": ["@hono/node-server@1.19.11", "", { "peerDependencies": { "hono": "^4" } }, "sha512-dr8/3zEaB+p0D2n/IUrlPF1HZm586qgJNXK1a9fhg/PzdtkK7Ksd5l312tJX2yBuALqDYBlG20QEbayqPyxn+g=="],
 
@@ -2784,8 +2784,6 @@
 
     "@antfu/ni/tinyexec": ["tinyexec@1.0.2", "", {}, "sha512-W/KYk+NFhkmsYpuHq5JykngiOCnxeVL8v8dFnqxSD8qEEdRfXk1SDM6JzNqcERbcGYj9tMrDQBYV9cjgnunFIg=="],
 
-    "@archon/providers/@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.2.89", "", { "dependencies": { "@anthropic-ai/sdk": "^0.74.0", "@modelcontextprotocol/sdk": "^1.27.1" }, "optionalDependencies": { "@img/sharp-darwin-arm64": "^0.34.2", "@img/sharp-darwin-x64": "^0.34.2", "@img/sharp-linux-arm": "^0.34.2", "@img/sharp-linux-arm64": "^0.34.2", "@img/sharp-linux-x64": "^0.34.2", "@img/sharp-linuxmusl-arm64": "^0.34.2", "@img/sharp-linuxmusl-x64": "^0.34.2", "@img/sharp-win32-arm64": "^0.34.2", "@img/sharp-win32-x64": "^0.34.2" }, "peerDependencies": { "zod": "^4.0.0" } }, "sha512-/9W0lyBGuGHw1uu7pQafsp6BLpxfqCv1QYE0Z/eZTX6lGHht4j4Q+O3UImzjsiyEE9cGkOAwZBGAEHDEqt+QUA=="],
-
     "@astrojs/markdown-remark/remark-parse": ["remark-parse@11.0.0", "", { "dependencies": { "@types/mdast": "^4.0.0", "mdast-util-from-markdown": "^2.0.0", "micromark-util-types": "^2.0.0", "unified": "^11.0.0" } }, "sha512-FCxlKLNGknS5ba/1lmpYijMUzX2esxW5xQqjWxw2eHFfS2MSdaHVINFmhjo+qN1WhZhNimq0dZATN9pH0IDrpA=="],
 
     "@astrojs/markdown-remark/unified": ["unified@11.0.5", "", { "dependencies": { "@types/unist": "^3.0.0", "bail": "^2.0.0", "devlop": "^1.0.0", "extend": "^3.0.0", "is-plain-obj": "^4.0.0", "trough": "^2.0.0", "vfile": "^6.0.0" } }, "sha512-xKvGhPWw3k84Qjh8bI3ZeJjqnyadK+GEFtazSfZv/rKeTkTjOJho6mFqh2SM96iIcZokxiOpg78GazTSg8+KHA=="],
@@ -2829,6 +2827,8 @@
     "@expressive-code/core/unist-util-visit": ["unist-util-visit@5.1.0", "", { "dependencies": { "@types/unist": "^3.0.0", "unist-util-is": "^6.0.0", "unist-util-visit-parents": "^6.0.0" } }, "sha512-m+vIdyeCOpdr/QeQCu2EzxX/ohgS8KbnPDgFni4dQsfSCtpz8UqDyY5GjRru8PDKuYn7Fq19j1CQ+nJSsGKOzg=="],
 
     "@expressive-code/plugin-shiki/shiki": ["shiki@3.23.0", "", { "dependencies": { "@shikijs/core": "3.23.0", "@shikijs/engine-javascript": "3.23.0", "@shikijs/engine-oniguruma": "3.23.0", "@shikijs/langs": "3.23.0", "@shikijs/themes": "3.23.0", "@shikijs/types": "3.23.0", "@shikijs/vscode-textmate": "^10.0.2", "@types/hast": "^3.0.4" } }, "sha512-55Dj73uq9ZXL5zyeRPzHQsK7Nbyt6Y10k5s7OjuFZGMhpp4r/rsLBH0o/0fstIzX1Lep9VxefWljK/SKCzygIA=="],
+
+    "@harneeslab/providers/@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.2.89", "", { "dependencies": { "@anthropic-ai/sdk": "^0.74.0", "@modelcontextprotocol/sdk": "^1.27.1" }, "optionalDependencies": { "@img/sharp-darwin-arm64": "^0.34.2", "@img/sharp-darwin-x64": "^0.34.2", "@img/sharp-linux-arm": "^0.34.2", "@img/sharp-linux-arm64": "^0.34.2", "@img/sharp-linux-x64": "^0.34.2", "@img/sharp-linuxmusl-arm64": "^0.34.2", "@img/sharp-linuxmusl-x64": "^0.34.2", "@img/sharp-win32-arm64": "^0.34.2", "@img/sharp-win32-x64": "^0.34.2" }, "peerDependencies": { "zod": "^4.0.0" } }, "sha512-/9W0lyBGuGHw1uu7pQafsp6BLpxfqCv1QYE0Z/eZTX6lGHht4j4Q+O3UImzjsiyEE9cGkOAwZBGAEHDEqt+QUA=="],
 
     "@img/sharp-darwin-arm64/@img/sharp-libvips-darwin-arm64": ["@img/sharp-libvips-darwin-arm64@1.2.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-zqjjo7RatFfFoP0MkQ51jfuFZBnVE2pRiaydKJ1G/rHZvnsrHAOcQALIi9sA5co5xenQdTugCvtb1cuf78Vf4g=="],
 

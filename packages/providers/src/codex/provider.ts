@@ -18,7 +18,7 @@ import type {
 import { parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

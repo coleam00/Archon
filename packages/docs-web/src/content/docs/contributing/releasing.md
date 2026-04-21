@@ -1,6 +1,6 @@
 ---
 title: 릴리스
-description: HarnessLab CLI의 새 릴리스를 만드는 방법 — 버전 관리, 릴리스 절차, Homebrew 자동화, 문제 해결.
+description: HarneesLab CLI의 새 릴리스를 만드는 방법 — 버전 관리, 릴리스 절차, Homebrew 자동화, 문제 해결.
 category: contributing
 area: infra
 audience: [developer]
@@ -9,7 +9,7 @@ sidebar:
   order: 3
 ---
 
-이 가이드는 HarnessLab CLI의 새 릴리스를 만드는 방법을 다룹니다. HarnessLab은 독립 버전 라인을 사용하며 `0.1.0`부터 시작합니다.
+이 가이드는 HarneesLab CLI의 새 릴리스를 만드는 방법을 다룹니다. HarneesLab은 독립 버전 라인을 사용하며 `0.1.0`부터 시작합니다.
 
 ## 버전 관리
 
@@ -24,23 +24,23 @@ sidebar:
 
 ```bash
 # 현재 버전
-bun run version:harnesslab -- current
+bun run version:harneeslab -- current
 
 # 다음 patch/minor/major 버전 미리보기
-bun run version:harnesslab -- next patch
-bun run version:harnesslab -- next minor
+bun run version:harneeslab -- next patch
+bun run version:harneeslab -- next minor
 
 # 모든 workspace package 버전 동기화
-bun run version:harnesslab -- bump patch
-bun run version:harnesslab -- set 0.1.0
+bun run version:harneeslab -- bump patch
+bun run version:harneeslab -- set 0.1.0
 
 # 현재 버전의 release tag 출력
-bun run version:harnesslab -- tag
+bun run version:harneeslab -- tag
 ```
 
 ## 릴리스 절차
 
-릴리스는 GitHub Actions의 **HarnessLab Release** workflow로 만듭니다. 이 workflow가 버전 bump, release tag 생성, binary release workflow trigger를 처리합니다.
+릴리스는 GitHub Actions의 **HarneesLab Release** workflow로 만듭니다. 이 workflow가 버전 bump, release tag 생성, binary release workflow trigger를 처리합니다.
 
 ### 1. 릴리스 준비
 
@@ -57,7 +57,7 @@ bun run validate
 
 ### 2. Version Bump와 Tag
 
-GitHub Actions에서 **HarnessLab Release**를 실행합니다.
+GitHub Actions에서 **HarneesLab Release**를 실행합니다.
 
 - `target_branch`: 보통 `dev`
 - `version`: 특정 버전을 직접 지정할 때 사용합니다. 예: `0.1.0`
@@ -81,24 +81,24 @@ stable tag(`v0.1.0`처럼 `-`가 없는 tag)가 release되면 `release.yml`의 `
 
 이 job은 다음을 처리합니다.
 1. GitHub Release의 `checksums.txt`를 다운로드합니다.
-2. `homebrew/archon.rb`의 version, release URL, platform별 SHA256을 갱신합니다.
+2. `homebrew/hlab.rb`의 version, release URL, platform별 SHA256을 갱신합니다.
 3. 갱신 commit을 `dev`에 push합니다.
 4. repository variable `HOMEBREW_TAP_REPO`가 있으면 외부 tap repository에도 formula를 복사합니다.
 
 외부 Homebrew tap까지 자동화하려면 repository settings에 다음을 설정합니다.
 
-- Variable `HOMEBREW_TAP_REPO`: 예: `NewTurn2017/homebrew-harnesslab`
+- Variable `HOMEBREW_TAP_REPO`: 예: `NewTurn2017/homebrew-harneeslab`
 - Secret `HOMEBREW_TAP_TOKEN`: 해당 tap repo에 push 가능한 GitHub token
-- Variable `HOMEBREW_TAP_FORMULA_PATH` optional: 기본값은 `Formula/archon.rb`
+- Variable `HOMEBREW_TAP_FORMULA_PATH` optional: 기본값은 `Formula/hlab.rb`
 
 ### 4. 릴리스 검증
 
 ```bash
 # Test the install script (only works if repo is public)
-curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarnessLab/dev/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NewTurn2017/HarneesLab/dev/scripts/install.sh | bash
 
 # Verify version
-archon version
+hlab version
 ```
 
 > **참고: Private Repository 설치**
@@ -108,7 +108,7 @@ archon version
 >
 > ```bash
 > # Download and install using gh (requires GitHub authentication)
-> gh release download v0.1.0 --repo NewTurn2017/HarnessLab \
+> gh release download v0.1.0 --repo NewTurn2017/HarneesLab \
 >   --pattern "archon-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')" \
 >   --dir /tmp/archon-install
 >
@@ -117,7 +117,7 @@ archon version
 > sudo mv /tmp/archon-install/archon-* /usr/local/bin/archon
 >
 > # Verify
-> archon version
+> hlab version
 > ```
 
 ## Manual Release (GitHub Actions를 사용할 수 없을 때)
@@ -130,7 +130,7 @@ GitHub Actions를 실행할 수 없다면(billing issue, private repo limit 등)
 
 # 2. Create the release with binaries
 gh release create vX.Y.Z dist/binaries/* \
-  --title "HarnessLab CLI vX.Y.Z" \
+  --title "HarneesLab CLI vX.Y.Z" \
   --generate-notes
 
 # 3. Verify the release
@@ -206,7 +206,7 @@ Install script에는 다음이 필요합니다.
 
 ```bash
 # Create a pre-release tag through the version helper
-bun run version:harnesslab -- set 0.2.0-beta.1
+bun run version:harneeslab -- set 0.2.0-beta.1
 git add package.json packages/*/package.json
 git commit -m "chore: release v0.2.0-beta.1"
 git tag v0.2.0-beta.1

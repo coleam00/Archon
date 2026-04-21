@@ -1,8 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import * as git from '@archon/git';
+import * as git from '@harneeslab/git';
 
 // Mock logger to suppress noisy output
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
     error: () => undefined,

@@ -2,7 +2,7 @@ import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 // event-emitter.ts uses a lazy-initialized logger via getLog(), so we must
-// mock @archon/paths before any import of event-emitter.
+// mock @harneeslab/paths before any import of event-emitter.
 
 const mockLogFn = mock(() => {});
 const mockLogger = {
@@ -17,7 +17,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 

@@ -6,8 +6,8 @@
  */
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
-import type { IsolationHints } from '@archon/isolation';
+import type { IPlatformAdapter, MessageMetadata } from '@harneeslab/core';
+import type { IsolationHints } from '@harneeslab/isolation';
 import {
   ConversationNotFoundError,
   handleMessage,
@@ -15,8 +15,12 @@ import {
   toError,
   onConversationClosed,
   ConversationLockManager,
-} from '@archon/core';
-import { getArchonWorkspacesPath, getCommandFolderSearchPaths, createLogger } from '@archon/paths';
+} from '@harneeslab/core';
+import {
+  getArchonWorkspacesPath,
+  getCommandFolderSearchPaths,
+  createLogger,
+} from '@harneeslab/paths';
 import {
   syncRepository,
   addSafeDirectory,
@@ -24,9 +28,9 @@ import {
   toBranchName,
   isWorktreePath,
   execFileAsync,
-} from '@archon/git';
-import * as db from '@archon/core/db/conversations';
-import * as codebaseDb from '@archon/core/db/codebases';
+} from '@harneeslab/git';
+import * as db from '@harneeslab/core/db/conversations';
+import * as codebaseDb from '@harneeslab/core/db/codebases';
 import { parseAllowedUsers, isGitLabUserAuthorized, verifyWebhookToken } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { GitLabWebhookEvent, GitLabIssue, GitLabMergeRequest } from './types';
@@ -69,7 +73,7 @@ export class GitLabAdapter implements IPlatformAdapter {
     this.token = token;
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
-    this.botMention = botMention ?? 'HarnessLab';
+    this.botMention = botMention ?? 'HarneesLab';
 
     this.allowedUsers = parseAllowedUsers(process.env.GITLAB_ALLOWED_USERS);
     if (this.allowedUsers.length > 0) {
@@ -270,7 +274,7 @@ export class GitLabAdapter implements IPlatformAdapter {
   }
 
   private stripMention(text: string): string {
-    // `+` consumes all trailing separators (e.g. "@archon, " not just "@archon")
+    // `+` consumes all trailing separators (e.g. "@harneeslab, " not just "@harneeslab")
     const pattern = new RegExp(`@${this.botMention}(?:[\\s,:;]+|$)`, 'gi');
     return text.replace(pattern, '').trim();
   }

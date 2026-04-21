@@ -9,7 +9,7 @@ import {
   copyWorktreeFiles,
   isPathWithinRoot,
   type CopyFileEntry,
-} from '@archon/isolation';
+} from '@harneeslab/isolation';
 
 describe('worktree-copy', () => {
   describe('parseCopyFileEntry', () => {

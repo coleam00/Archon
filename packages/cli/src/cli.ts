@@ -1,21 +1,21 @@
 #!/usr/bin/env bun
 /**
- * HarnessLab CLI - Run AI workflows from the command line
+ * HarneesLab CLI - Run AI workflows from the command line
  *
  * Usage:
- *   archon workflow list              List available workflows
- *   archon workflow run <name> [msg]  Run a workflow
- *   archon version                    Show version info
+ *   hlab workflow list              List available workflows
+ *   hlab workflow run <name> [msg]  Run a workflow
+ *   hlab version                    Show version info
  */
 // Must be the very first import — strips Bun-auto-loaded CWD .env keys before
-// any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
-import '@archon/paths/strip-cwd-env-boot';
+// any module reads process.env at init time (e.g. @harneeslab/paths/logger reads LOG_LEVEL).
+import '@harneeslab/paths/strip-cwd-env-boot';
 import { parseArgs } from 'util';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// Load ~/.archon/.env with override: true — HarnessLab-specific config must win
+// Load ~/.archon/.env with override: true — HarneesLab-specific config must win
 // over shell-inherited env vars (e.g. PORT, LOG_LEVEL from shell profile).
 // CWD .env keys are already gone (stripCwdEnv above), so override only
 // affects shell-inherited values, which is the intended behavior.
@@ -44,7 +44,7 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
 // DATABASE_URL is no longer required - SQLite will be used as default
 
 // Bootstrap provider registry before any provider lookups
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import { registerBuiltinProviders, registerCommunityProviders } from '@harneeslab/providers';
 registerBuiltinProviders();
 registerCommunityProviders();
 
@@ -62,7 +62,7 @@ import {
   workflowEventEmitCommand,
   isValidEventType,
 } from './commands/workflow';
-import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
+import { WORKFLOW_EVENT_TYPES } from '@harneeslab/workflows/store';
 import {
   isolationListCommand,
   isolationCleanupCommand,
@@ -74,7 +74,7 @@ import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
-import { closeDatabase } from '@archon/core';
+import { closeDatabase } from '@harneeslab/core';
 import {
   setLogLevel,
   createLogger,
@@ -82,8 +82,8 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
-} from '@archon/paths';
-import * as git from '@archon/git';
+} from '@harneeslab/paths';
+import * as git from '@harneeslab/git';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -97,10 +97,10 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 function printUsage(): void {
   console.log(`
-HarnessLab CLI - 명령줄에서 AI workflow(워크플로)를 실행합니다
+HarneesLab CLI - 명령줄에서 AI workflow(워크플로)를 실행합니다
 
 사용법:
-  archon <command> [subcommand] [options] [arguments]
+  hlab <command> [subcommand] [options] [arguments]
 
 명령:
   chat <message>             orchestrator에 메시지를 보냅니다
@@ -135,13 +135,13 @@ HarnessLab CLI - 명령줄에서 AI workflow(워크플로)를 실행합니다
   --download-only            서버를 시작하지 않고 web UI만 다운로드합니다
 
 예시:
-  archon chat "What does the orchestrator do?"
-  archon workflow list
-  archon workflow run investigate-issue "Fix the login bug"
-  archon workflow run plan --cwd /path/to/repo "Add dark mode"
-  archon workflow run implement --branch feature-auth "Implement auth"
-  archon workflow run quick-fix --no-worktree "Fix typo"
-  archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
+  hlab chat "What does the orchestrator do?"
+  hlab workflow list
+  hlab workflow run investigate-issue "Fix the login bug"
+  hlab workflow run plan --cwd /path/to/repo "Add dark mode"
+  hlab workflow run implement --branch feature-auth "Implement auth"
+  hlab workflow run quick-fix --no-worktree "Fix typo"
+  hlab continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
 `);
 }
 
@@ -271,7 +271,7 @@ async function main(): Promise<number> {
       const repoRoot = await git.findRepoRoot(cwd);
       if (!repoRoot) {
         console.error('오류: git repository 안에서 실행해야 합니다.');
-        console.error('HarnessLab CLI는 git repository 내부에서 실행되어야 합니다.');
+        console.error('HarneesLab CLI는 git repository 내부에서 실행되어야 합니다.');
         console.error('git repo로 이동하거나 --cwd로 repo 경로를 지정하세요.');
         return 1;
       }
@@ -291,7 +291,7 @@ async function main(): Promise<number> {
       case 'chat': {
         const chatMessage = positionals.slice(1).join(' ');
         if (!chatMessage) {
-          console.error('사용법: archon chat <message>');
+          console.error('사용법: hlab chat <message>');
           return 1;
         }
         await chatCommand(chatMessage);
@@ -311,7 +311,7 @@ async function main(): Promise<number> {
           case 'run': {
             const workflowName = positionals[2];
             if (!workflowName) {
-              console.error('사용법: archon workflow run <name> [message]');
+              console.error('사용법: hlab workflow run <name> [message]');
               return 1;
             }
             const userMessage = positionals.slice(3).join(' ') || '';
@@ -358,7 +358,7 @@ async function main(): Promise<number> {
           case 'resume': {
             const resumeRunId = positionals[2];
             if (!resumeRunId) {
-              console.error('사용법: archon workflow resume <run-id>');
+              console.error('사용법: hlab workflow resume <run-id>');
               return 1;
             }
             await workflowResumeCommand(resumeRunId);
@@ -368,7 +368,7 @@ async function main(): Promise<number> {
           case 'abandon': {
             const abandonRunId = positionals[2];
             if (!abandonRunId) {
-              console.error('사용법: archon workflow abandon <run-id>');
+              console.error('사용법: hlab workflow abandon <run-id>');
               return 1;
             }
             await workflowAbandonCommand(abandonRunId);
@@ -378,7 +378,7 @@ async function main(): Promise<number> {
           case 'approve': {
             const approveRunId = positionals[2];
             if (!approveRunId) {
-              console.error('사용법: archon workflow approve <run-id> [comment]');
+              console.error('사용법: hlab workflow approve <run-id> [comment]');
               return 1;
             }
             // Accept comment as positional args (everything after run ID) or --comment flag
@@ -391,7 +391,7 @@ async function main(): Promise<number> {
           case 'reject': {
             const rejectRunId = positionals[2];
             if (!rejectRunId) {
-              console.error('사용법: archon workflow reject <run-id> [reason]');
+              console.error('사용법: hlab workflow reject <run-id> [reason]');
               return 1;
             }
             const rejectReason =
@@ -403,7 +403,7 @@ async function main(): Promise<number> {
           case 'cleanup': {
             const days = positionals[2] ? Number(positionals[2]) : 7;
             if (Number.isNaN(days) || days < 0) {
-              console.error('사용법: archon workflow cleanup [days]');
+              console.error('사용법: hlab workflow cleanup [days]');
               console.error('  days: N일보다 오래된 종료된 run을 삭제합니다 (기본값: 7)');
               return 1;
             }
@@ -425,16 +425,12 @@ async function main(): Promise<number> {
             const runId = values['run-id'] as string | undefined;
             const eventType = values.type as string | undefined;
             if (!runId) {
-              console.error(
-                '사용법: archon workflow event emit --run-id <uuid> --type <event-type>'
-              );
+              console.error('사용법: hlab workflow event emit --run-id <uuid> --type <event-type>');
               console.error('오류: --run-id가 필요합니다.');
               return 1;
             }
             if (!eventType) {
-              console.error(
-                '사용법: archon workflow event emit --run-id <uuid> --type <event-type>'
-              );
+              console.error('사용법: hlab workflow event emit --run-id <uuid> --type <event-type>');
               console.error('오류: --type이 필요합니다.');
               return 1;
             }
@@ -526,7 +522,7 @@ async function main(): Promise<number> {
       case 'complete': {
         const branches = positionals.slice(1);
         if (branches.length === 0) {
-          console.error('사용법: archon complete <branch-name> [branch2 ...]');
+          console.error('사용법: hlab complete <branch-name> [branch2 ...]');
           return 1;
         }
         const forceFlag = args.includes('--force');
@@ -537,7 +533,7 @@ async function main(): Promise<number> {
       case 'continue': {
         const continueBranch = positionals[1];
         if (!continueBranch) {
-          console.error('사용법: archon continue <branch> [--workflow <name>] "instruction"');
+          console.error('사용법: hlab continue <branch> [--workflow <name>] "instruction"');
           return 1;
         }
         const continueMessage = positionals.slice(2).join(' ') || '';

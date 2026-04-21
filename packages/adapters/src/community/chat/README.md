@@ -4,10 +4,10 @@ Chat adapters connect Archon to messaging platforms (Slack, Telegram, Discord, e
 
 ## Interface
 
-Implement `IPlatformAdapter` from `@archon/core`:
+Implement `IPlatformAdapter` from `@harneeslab/core`:
 
 ```typescript
-import type { IPlatformAdapter } from '@archon/core';
+import type { IPlatformAdapter } from '@harneeslab/core';
 
 interface MyMessageContext {
   conversationId: string;
@@ -62,7 +62,7 @@ community/chat/
 After creating your adapter, register it in `packages/server/src/index.ts`:
 
 ```typescript
-import { MyAdapter } from '@archon/adapters/community/chat/my-adapter';
+import { MyAdapter } from '@harneeslab/adapters/community/chat/my-adapter';
 
 // In main():
 if (process.env.MY_PLATFORM_TOKEN) {
@@ -82,7 +82,7 @@ if (process.env.MY_PLATFORM_TOKEN) {
 
 Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it. Your test file **must** run in its own `bun test` invocation if it mocks modules differently from existing test files in the same batch.
 
-Check `packages/adapters/package.json` to see which test files share a batch. If your test mocks the same modules (e.g., `@archon/paths`) with different exports, split it into a separate batch:
+Check `packages/adapters/package.json` to see which test files share a batch. If your test mocks the same modules (e.g., `@harneeslab/paths`) with different exports, split it into a separate batch:
 
 ```json
 "test": "... existing batches ... && bun test src/community/chat/your-adapter/adapter.test.ts"

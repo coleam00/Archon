@@ -2,9 +2,9 @@
  * Web platform adapter implementing IPlatformAdapter with SSE stream management.
  * Bridge between the orchestrator and the React frontend via Server-Sent Events.
  */
-import type { IWebPlatformAdapter, MessageMetadata } from '@archon/core';
-import type { MessageChunk } from '@archon/providers/types';
-import { createLogger } from '@archon/paths';
+import type { IWebPlatformAdapter, MessageMetadata } from '@harneeslab/core';
+import type { MessageChunk } from '@harneeslab/providers/types';
+import { createLogger } from '@harneeslab/paths';
 import { MessagePersistence } from './web/persistence';
 import { SSETransport, type SSEWriter } from './web/transport';
 import { WorkflowEventBridge } from './web/workflow-bridge';

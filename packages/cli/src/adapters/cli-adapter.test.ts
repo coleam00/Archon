@@ -14,7 +14,7 @@ const mockAddMessage = mock(() =>
     created_at: '',
   })
 );
-mock.module('@archon/core/db/messages', () => ({
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mockAddMessage,
 }));
 
@@ -29,7 +29,7 @@ const mockLogger = {
     return this;
   }),
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 

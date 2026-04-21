@@ -7,7 +7,7 @@ Archon의 provider registry(Phase 2, [#1195](https://github.com/coleam00/Archon/
 
 ## 구현 Contract
 
-모든 provider는 `@archon/providers/types`의 `IAgentProvider`를 구현합니다.
+모든 provider는 `@harneeslab/providers/types`의 `IAgentProvider`를 구현합니다.
 
 ```typescript
 export interface IAgentProvider {
@@ -80,7 +80,7 @@ export const YOUR_CAPABILITIES: ProviderCapabilities = {
 
 ```typescript
 // provider.ts
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../../types';
 import { YOUR_CAPABILITIES } from './capabilities';
 

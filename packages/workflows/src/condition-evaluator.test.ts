@@ -12,7 +12,7 @@ const mockLogger = {
   fatal: mockLogFn,
   child: mock(() => mockLogger),
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 

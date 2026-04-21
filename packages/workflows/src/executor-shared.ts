@@ -8,9 +8,9 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import type { WorkflowDeps } from './deps';
-import * as archonPaths from '@archon/paths';
+import * as archonPaths from '@harneeslab/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
 

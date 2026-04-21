@@ -10,7 +10,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: newturn2017/harnesslab
+  IMAGE_NAME: newturn2017/harneeslab
 
 jobs:
   docker:

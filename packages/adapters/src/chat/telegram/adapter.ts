@@ -3,8 +3,8 @@
  * Handles message sending with 4096 character limit splitting
  */
 import { Bot, Context } from 'grammy';
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
-import { createLogger } from '@archon/paths';
+import type { IPlatformAdapter, MessageMetadata } from '@harneeslab/core';
+import { createLogger } from '@harneeslab/paths';
 import { parseAllowedUserIds, isUserAuthorized } from './auth';
 import { convertToTelegramMarkdown, stripMarkdown } from './markdown';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';

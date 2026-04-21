@@ -1,6 +1,6 @@
 /**
  * Cleans process.env at startup — BEFORE any module reads env at init time
- * (notably `@archon/paths/logger` which reads `LOG_LEVEL` during module load).
+ * (notably `@harneeslab/paths/logger` which reads `LOG_LEVEL` during module load).
  *
  * Two concerns handled in one pass:
  *

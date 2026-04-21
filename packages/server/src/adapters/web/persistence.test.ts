@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, mock, afterEach } from 'bun:test';
 
 // Mock logger before importing module under test
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -12,9 +12,9 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
-// Mock @archon/core/db/messages
+// Mock @harneeslab/core/db/messages
 const mockAddMessage = mock(() => Promise.resolve());
-mock.module('@archon/core/db/messages', () => ({
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mockAddMessage,
 }));
 

@@ -2,7 +2,7 @@
  * Tests for version command
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import * as git from '@archon/git';
+import * as git from '@harneeslab/git';
 import { versionCommand } from './version';
 
 describe('versionCommand', () => {
@@ -25,9 +25,9 @@ describe('versionCommand', () => {
     // Should have called console.log 5 times (version, platform, build, database, git commit)
     expect(consoleSpy).toHaveBeenCalledTimes(5);
 
-    // First call should contain "HarnessLab CLI" and version
+    // First call should contain "HarneesLab CLI" and version
     const firstCall = consoleSpy.mock.calls[0][0] as string;
-    expect(firstCall).toContain('HarnessLab CLI');
+    expect(firstCall).toContain('HarneesLab CLI');
     expect(firstCall).toMatch(/v\d+\.\d+\.\d+/);
 
     // Second call should contain platform info
@@ -61,8 +61,8 @@ describe('versionCommand', () => {
     await versionCommand();
 
     const firstCall = consoleSpy.mock.calls[0][0] as string;
-    // Format: "HarnessLab CLI v0.2.0"
-    expect(firstCall).toMatch(/^HarnessLab CLI v\d+\.\d+\.\d+$/);
+    // Format: "HarneesLab CLI v0.2.0"
+    expect(firstCall).toMatch(/^HarneesLab CLI v\d+\.\d+\.\d+$/);
   });
 
   it('should show source (bun) build type in development', async () => {

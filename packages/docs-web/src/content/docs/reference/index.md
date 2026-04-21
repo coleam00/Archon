@@ -7,7 +7,7 @@ sidebar:
   order: 0
 ---
 
-Archon 내부 구조를 다루는 기술 레퍼런스 문서입니다. HarnessLab은 Archon fork이므로 내부 패키지명과 런타임 명칭은 Archon을 유지합니다.
+Archon 내부 구조를 다루는 기술 레퍼런스 문서입니다. HarneesLab은 Archon fork이므로 내부 패키지명과 런타임 명칭은 Archon을 유지합니다.
 
 ## 레퍼런스 문서
 

@@ -1,17 +1,17 @@
 import type { Mock } from 'bun:test';
 import { mock } from 'bun:test';
-import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
-import type { ParseResult } from '@archon/workflows/loader';
+import type { WorkflowLoadResult } from '@harneeslab/workflows/schemas/workflow';
+import type { ParseResult } from '@harneeslab/workflows/loader';
 
 /**
- * Register all 4 @archon/workflows mock.module() calls at once.
+ * Register all 4 @harneeslab/workflows mock.module() calls at once.
  * Must be called before importing the module under test.
  */
 export function mockAllWorkflowModules(): void {
-  mock.module('@archon/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
-  mock.module('@archon/workflows/loader', makeLoaderMock);
-  mock.module('@archon/workflows/command-validation', makeCommandValidationMock);
-  mock.module('@archon/workflows/defaults', makeDefaultsMock);
+  mock.module('@harneeslab/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
+  mock.module('@harneeslab/workflows/loader', makeLoaderMock);
+  mock.module('@harneeslab/workflows/command-validation', makeCommandValidationMock);
+  mock.module('@harneeslab/workflows/defaults', makeDefaultsMock);
 }
 
 export function makeDiscoverWorkflowsMock(): {

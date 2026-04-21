@@ -2,12 +2,12 @@
  * Continue command - run a workflow on an existing worktree with prior context auto-injected
  */
 import { workflowRunCommand } from './workflow';
-import * as isolationDb from '@archon/core/db/isolation-environments';
-import * as codebaseDb from '@archon/core/db/codebases';
-import * as workflowDb from '@archon/core/db/workflows';
-import { execFileAsync } from '@archon/git';
-import { createLogger, getRunArtifactsPath, parseOwnerRepo } from '@archon/paths';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import * as isolationDb from '@harneeslab/core/db/isolation-environments';
+import * as codebaseDb from '@harneeslab/core/db/codebases';
+import * as workflowDb from '@harneeslab/core/db/workflows';
+import { execFileAsync } from '@harneeslab/git';
+import { createLogger, getRunArtifactsPath, parseOwnerRepo } from '@harneeslab/paths';
+import type { WorkflowRun } from '@harneeslab/workflows/schemas/workflow-run';
 import { readdir, readFile, stat } from 'fs/promises';
 import { join } from 'path';
 
@@ -44,7 +44,7 @@ export async function continueCommand(
   if (!env) {
     throw new Error(
       `No active worktree found for branch '${branch}'.\n` +
-        "Run 'archon isolation list' to see available worktrees."
+        "Run 'hlab isolation list' to see available worktrees."
     );
   }
 

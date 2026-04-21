@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager } from '@harneeslab/core';
 import type { WebAdapter } from '../adapters/web';
 import {
   makeDiscoverWorkflowsMock,
@@ -26,7 +26,7 @@ const mockGetStats = mock(() => ({
   activeConversationIds: [] as string[],
 }));
 
-mock.module('@archon/core', () => ({
+mock.module('@harneeslab/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: mockGetDatabaseType,
   loadConfig: mockLoadConfig,
@@ -57,7 +57,7 @@ mock.module('@archon/core', () => ({
   }),
 }));
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -80,10 +80,10 @@ mock.module('@archon/paths', () => ({
   isDocker: mockIsDocker,
 }));
 
-mock.module('@archon/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
-mock.module('@archon/workflows/loader', makeLoaderMock);
-mock.module('@archon/workflows/command-validation', makeCommandValidationMock);
-mock.module('@archon/workflows/defaults', () => ({
+mock.module('@harneeslab/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
+mock.module('@harneeslab/workflows/loader', makeLoaderMock);
+mock.module('@harneeslab/workflows/command-validation', makeCommandValidationMock);
+mock.module('@harneeslab/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {},
   BUNDLED_COMMANDS: {
     'archon-assist': '# archon-assist command',
@@ -93,13 +93,13 @@ mock.module('@archon/workflows/defaults', () => ({
   isBinaryBuild: mock(() => false),
 }));
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   removeWorktree: mock(async () => {}),
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
 }));
 
-mock.module('@archon/core/db/conversations', () => ({
+mock.module('@harneeslab/core/db/conversations', () => ({
   findConversationByPlatformId: mock(async () => null),
   listConversations: mock(async () => []),
   getOrCreateConversation: mock(async () => ({
@@ -118,13 +118,13 @@ mock.module('@archon/core/db/conversations', () => ({
   getConversationById: mock(async () => null),
 }));
 
-mock.module('@archon/core/db/codebases', () => ({
+mock.module('@harneeslab/core/db/codebases', () => ({
   listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),
   getCodebase: mock(async () => null),
   deleteCodebase: mock(async () => {}),
 }));
 
-mock.module('@archon/core/db/isolation-environments', () => ({
+mock.module('@harneeslab/core/db/isolation-environments', () => ({
   listByCodebase: mock(async () => []),
   updateStatus: mock(async () => {}),
 }));
@@ -134,7 +134,7 @@ const mockGetRunningWorkflows = mock(
     [] as { id: string; conversation_id: string; workflow_name: string; started_at: string }[]
 );
 
-mock.module('@archon/core/db/workflows', () => ({
+mock.module('@harneeslab/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
   listDashboardRuns: mock(async () => ({
     runs: [],
@@ -147,11 +147,11 @@ mock.module('@archon/core/db/workflows', () => ({
   getRunningWorkflows: mockGetRunningWorkflows,
 }));
 
-mock.module('@archon/core/db/workflow-events', () => ({
+mock.module('@harneeslab/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(async () => []),
 }));
 
-mock.module('@archon/core/db/messages', () => ({
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mock(async () => ({
     id: 'msg-1',
     conversation_id: 'conv-1',
@@ -163,7 +163,7 @@ mock.module('@archon/core/db/messages', () => ({
   listMessages: mock(async () => []),
 }));
 
-mock.module('@archon/core/utils/commands', () => ({
+mock.module('@harneeslab/core/utils/commands', () => ({
   findMarkdownFilesRecursive: mock(async () => []),
 }));
 

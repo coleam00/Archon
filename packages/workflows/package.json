@@ -1,5 +1,5 @@
 {
-  "name": "@archon/workflows",
+  "name": "@harneeslab/workflows",
   "version": "0.1.0",
   "type": "module",
   "exports": {
@@ -23,9 +23,9 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "@archon/git": "workspace:*",
-    "@archon/paths": "workspace:*",
-    "@archon/providers": "workspace:*",
+    "@harneeslab/git": "workspace:*",
+    "@harneeslab/paths": "workspace:*",
+    "@harneeslab/providers": "workspace:*",
     "@hono/zod-openapi": "^0.19.6",
     "zod": "^3.25.28"
   },

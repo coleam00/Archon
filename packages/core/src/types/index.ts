@@ -2,11 +2,11 @@
  * Core type definitions for the Remote Coding Agent platform
  */
 import type { TransitionTrigger } from '../state/session-transitions';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition } from '@harneeslab/workflows/schemas/workflow';
 import { z } from 'zod';
 
 // MessageChunk imported for use in IPlatformAdapter/IWebPlatformAdapter below
-import type { MessageChunk } from '@archon/providers/types';
+import type { MessageChunk } from '@harneeslab/providers/types';
 
 /**
  * Custom error for when a conversation is not found during update operations
@@ -35,7 +35,7 @@ export interface Conversation {
   updated_at: Date;
 }
 
-import type { IsolationHints } from '@archon/isolation';
+import type { IsolationHints } from '@harneeslab/isolation';
 
 export interface AttachedFile {
   /** Absolute path on disk where the file was saved by the server */
@@ -184,11 +184,11 @@ export function isWebAdapter(adapter: IPlatformAdapter): adapter is IWebPlatform
 }
 
 // Re-export workflow schema types for config-types.ts compatibility
-import type { ModelReasoningEffort, WebSearchMode } from '@archon/workflows/schemas/workflow';
+import type { ModelReasoningEffort, WebSearchMode } from '@harneeslab/workflows/schemas/workflow';
 export type { ModelReasoningEffort, WebSearchMode };
 import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
-} from '@archon/workflows/schemas/dag-node';
+} from '@harneeslab/workflows/schemas/dag-node';
 export type { EffortLevel, ThinkingConfig, SandboxSettings };

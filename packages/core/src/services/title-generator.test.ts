@@ -5,7 +5,7 @@ import type { MessageChunk } from '../types';
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
@@ -36,7 +36,7 @@ const mockGetAgentProvider = mock(() => ({
   getType: () => 'claude',
 }));
 
-mock.module('@archon/providers', () => ({
+mock.module('@harneeslab/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
 }));
 

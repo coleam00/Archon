@@ -15,7 +15,7 @@ sidebar:
 repo root에서 `bun dev`를 실행하면 Bun의 `--filter` 때문에 로그가 축약됩니다.
 
 ```
-@archon/server dev $ bun --watch src/index.ts
+@harneeslab/server dev $ bun --watch src/index.ts
 │ [129 lines elided]
 │ [Hono] Server listening on port 3090
 └─ Running...

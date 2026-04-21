@@ -1,5 +1,5 @@
 /**
- * Configuration loader for HarnessLab YAML config files
+ * Configuration loader for HarneesLab YAML config files
  *
  * Loading order (later overrides earlier):
  * 1. Defaults
@@ -14,7 +14,7 @@ import {
   getArchonConfigPath,
   getArchonWorkspacesPath,
   getArchonWorktreesPath,
-} from '@archon/paths';
+} from '@harneeslab/paths';
 
 // Wrapper functions for file I/O - allows mocking without polluting fs/promises globally
 export async function readConfigFile(path: string): Promise<string> {
@@ -36,13 +36,13 @@ import type {
   AssistantDefaults,
   AssistantDefaultsConfig,
 } from './config-types';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import {
   isRegisteredProvider,
   getRegisteredProviders,
   registerBuiltinProviders,
   registerCommunityProviders,
-} from '@archon/providers';
+} from '@harneeslab/providers';
 
 /**
  * Pure read of registered provider IDs. Registration is guaranteed by
@@ -142,11 +142,11 @@ let cachedGlobalConfig: GlobalConfig | null = null;
 /**
  * Default config file content
  */
-const DEFAULT_CONFIG_CONTENT = `# HarnessLab Global Configuration
-# See: https://github.com/NewTurn2017/HarnessLab/blob/dev/packages/docs-web/src/content/docs/reference/configuration.md
+const DEFAULT_CONFIG_CONTENT = `# HarneesLab Global Configuration
+# See: https://github.com/NewTurn2017/HarneesLab/blob/dev/packages/docs-web/src/content/docs/reference/configuration.md
 
 # Bot display name (shown in messages)
-# botName: HarnessLab
+# botName: HarneesLab
 
 # Default AI assistant (must match a registered provider, e.g. claude, codex)
 # defaultAssistant: claude
@@ -276,7 +276,7 @@ function getDefaults(): MergedConfig {
   }
 
   return {
-    botName: 'HarnessLab',
+    botName: 'HarneesLab',
     assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
     assistants: registeredAssistants,
     streaming: {

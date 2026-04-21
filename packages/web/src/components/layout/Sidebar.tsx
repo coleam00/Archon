@@ -177,7 +177,7 @@ export function Sidebar(): React.ReactElement {
       <div className="flex flex-col gap-3 p-4">
         <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <img src="/favicon.png" alt="" className="h-8 w-8 shrink-0 object-contain" />
-          <span className="text-base font-semibold text-text-primary">HarnessLab</span>
+          <span className="text-base font-semibold text-text-primary">HarneesLab</span>
         </Link>
       </div>
 

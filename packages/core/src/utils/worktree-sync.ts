@@ -1,10 +1,10 @@
-import { copyWorktreeFiles } from '@archon/isolation';
-import { getCanonicalRepoPath, isWorktreePath } from '@archon/git';
+import { copyWorktreeFiles } from '@harneeslab/isolation';
+import { getCanonicalRepoPath, isWorktreePath } from '@harneeslab/git';
 import { stat } from 'fs/promises';
 import type { Stats } from 'fs';
 import { join } from 'path';
 import { loadRepoConfig } from '../config/config-loader';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

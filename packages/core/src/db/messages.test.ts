@@ -14,8 +14,8 @@ mock.module('./connection', () => ({
   getDatabaseType: mockGetDatabaseType,
 }));
 
-// Mock @archon/paths to avoid lazy logger initialization issues in tests
-mock.module('@archon/paths', () => ({
+// Mock @harneeslab/paths to avoid lazy logger initialization issues in tests
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),

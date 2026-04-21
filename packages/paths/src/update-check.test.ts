@@ -43,11 +43,11 @@ describe('parseLatestRelease', () => {
   test('parses valid response with v prefix', () => {
     const result = parseLatestRelease({
       tag_name: 'v0.4.0',
-      html_url: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.4.0',
+      html_url: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.4.0',
     });
     expect(result).toEqual({
       version: '0.4.0',
-      url: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.4.0',
+      url: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.4.0',
     });
   });
 
@@ -97,7 +97,7 @@ describe('checkForUpdate', () => {
   test('returns result from fresh cache without fetching', async () => {
     const cache = {
       latestVersion: '0.5.0',
-      releaseUrl: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.5.0',
+      releaseUrl: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.5.0',
       checkedAt: Date.now(),
     };
     writeFileSync(join(testDir, 'update-check.json'), JSON.stringify(cache));
@@ -109,7 +109,7 @@ describe('checkForUpdate', () => {
       updateAvailable: true,
       currentVersion: '0.4.0',
       latestVersion: '0.5.0',
-      releaseUrl: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.5.0',
+      releaseUrl: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.5.0',
     });
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
@@ -120,7 +120,7 @@ describe('checkForUpdate', () => {
       new Response(
         JSON.stringify({
           tag_name: 'v0.5.0',
-          html_url: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.5.0',
+          html_url: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.5.0',
         }),
         { status: 200 }
       )
@@ -132,7 +132,7 @@ describe('checkForUpdate', () => {
       updateAvailable: true,
       currentVersion: '0.4.0',
       latestVersion: '0.5.0',
-      releaseUrl: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.5.0',
+      releaseUrl: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.5.0',
     });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
@@ -140,7 +140,7 @@ describe('checkForUpdate', () => {
     const cacheRaw = JSON.parse(readFileSync(join(testDir, 'update-check.json'), 'utf-8'));
     expect(cacheRaw.latestVersion).toBe('0.5.0');
     expect(cacheRaw.releaseUrl).toBe(
-      'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.5.0'
+      'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.5.0'
     );
     expect(typeof cacheRaw.checkedAt).toBe('number');
     fetchSpy.mockRestore();
@@ -170,7 +170,7 @@ describe('checkForUpdate', () => {
   test('returns updateAvailable: false when current matches latest', async () => {
     const cache = {
       latestVersion: '0.4.0',
-      releaseUrl: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.4.0',
+      releaseUrl: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.4.0',
       checkedAt: Date.now(),
     };
     writeFileSync(join(testDir, 'update-check.json'), JSON.stringify(cache));
@@ -192,7 +192,7 @@ describe('checkForUpdate', () => {
       new Response(
         JSON.stringify({
           tag_name: 'v0.5.0',
-          html_url: 'https://github.com/NewTurn2017/HarnessLab/releases/tag/v0.5.0',
+          html_url: 'https://github.com/NewTurn2017/HarneesLab/releases/tag/v0.5.0',
         }),
         { status: 200 }
       )

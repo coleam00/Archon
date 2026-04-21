@@ -4,13 +4,13 @@
  * Both CLI and command-handler are thin formatting adapters over these functions.
  * Operations throw on errors; callers catch and format for their platform.
  */
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   isApprovalContext,
-} from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+} from '@harneeslab/workflows/schemas/workflow-run';
+import type { WorkflowRun, ApprovalContext } from '@harneeslab/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 

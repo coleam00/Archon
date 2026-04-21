@@ -2,9 +2,9 @@
  * CLI adapter for stdout output
  * Implements IPlatformAdapter to allow workflow execution via command line
  */
-import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
-import { createLogger } from '@archon/paths';
-import * as messageDb from '@archon/core/db/messages';
+import type { IPlatformAdapter, MessageMetadata } from '@harneeslab/core';
+import { createLogger } from '@harneeslab/paths';
+import * as messageDb from '@harneeslab/core/db/messages';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

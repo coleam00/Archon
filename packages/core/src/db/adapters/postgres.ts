@@ -3,7 +3,7 @@
  */
 import { Pool } from 'pg';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

@@ -5,9 +5,9 @@
  * Optionally uses TITLE_GENERATION_MODEL env var for a cheaper/faster model.
  * Designed to be fire-and-forget — never throws, all errors logged internally.
  */
-import { getAgentProvider } from '@archon/providers';
+import { getAgentProvider } from '@harneeslab/providers';
 import * as conversationDb from '../db/conversations';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

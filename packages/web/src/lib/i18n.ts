@@ -104,7 +104,7 @@ const messages = {
   'sidebar.removeProjectTitle': '프로젝트를 제거할까요?',
   'sidebar.removeProjectPrefix': '',
   'sidebar.removeProjectSuffix':
-    '을(를) HarnessLab에서 제거하고 워크스페이스 디렉터리와 워크트리를 삭제합니다. 이 작업은 되돌릴 수 없습니다.',
+    '을(를) HarneesLab에서 제거하고 워크스페이스 디렉터리와 워크트리를 삭제합니다. 이 작업은 되돌릴 수 없습니다.',
 
   'header.openInVsCode': 'VS Code에서 열기',
 
@@ -147,7 +147,7 @@ const messages = {
   'chat.jsonOutput': 'JSON 출력',
   'chat.attachFile': '파일 첨부',
   'chat.dropFiles': '여기에 파일을 놓으세요...',
-  'chat.messagePlaceholder': 'HarnessLab에게 메시지 보내기...',
+  'chat.messagePlaceholder': 'HarneesLab에게 메시지 보내기...',
   'chat.removeFile': '파일 제거',
   'chat.maxFilesPerMessage': '메시지당 최대 5개 파일까지 첨부할 수 있습니다',
   'chat.fileSizeLimit': '파일 크기가 10 MB 제한을 초과합니다',

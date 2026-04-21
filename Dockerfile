@@ -1,5 +1,5 @@
 # =============================================================================
-# HarnessLab - Remote Agentic Coding Platform
+# HarneesLab - Remote Agentic Coding Platform
 # Multi-stage build: deps → web build → production image
 # =============================================================================
 
@@ -54,7 +54,7 @@ RUN bun run build:web && \
 FROM oven/bun:1.3.11-slim AS production
 
 # OCI Labels for GHCR
-LABEL org.opencontainers.image.source="https://github.com/NewTurn2017/HarnessLab"
+LABEL org.opencontainers.image.source="https://github.com/NewTurn2017/HarneesLab"
 LABEL org.opencontainers.image.description="Control AI coding assistants remotely from Telegram, Slack, Discord, and GitHub"
 LABEL org.opencontainers.image.licenses="MIT"
 
@@ -109,7 +109,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Pre-configure the Claude Code SDK cli.js path for any consumer that runs
-# a compiled HarnessLab binary inside (or extending) this image. In source mode
+# a compiled HarneesLab binary inside (or extending) this image. In source mode
 # (the default `bun run start` ENTRYPOINT), BUNDLED_IS_BINARY is false and
 # this variable is ignored — the SDK resolves cli.js via node_modules. Kept
 # here so extenders don't need to rediscover the path.
@@ -121,7 +121,7 @@ ENV CLAUDE_BIN_PATH=/app/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
 RUN useradd -m -u 1001 -s /bin/bash appuser \
     && chown -R appuser:appuser /app
 
-# Create HarnessLab directories
+# Create HarneesLab directories
 RUN mkdir -p /.archon/workspaces /.archon/worktrees \
     && chown -R appuser:appuser /.archon
 
@@ -172,7 +172,7 @@ RUN chown -R appuser:appuser /app
 # Create .codex directory for Codex authentication
 RUN mkdir -p /home/appuser/.codex && chown appuser:appuser /home/appuser/.codex
 
-# Configure git to trust HarnessLab directories (as appuser)
+# Configure git to trust HarneesLab directories (as appuser)
 RUN gosu appuser git config --global --add safe.directory '/.archon/workspaces' && \
     gosu appuser git config --global --add safe.directory '/.archon/workspaces/*' && \
     gosu appuser git config --global --add safe.directory '/.archon/worktrees' && \

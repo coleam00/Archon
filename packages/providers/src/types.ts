@@ -1,9 +1,9 @@
 // CONTRACT LAYER — no SDK imports, no runtime deps.
-// @archon/workflows and @archon/core import from this subpath (@archon/providers/types).
-// HARD RULE: This file must never import SDK packages or other @archon/* packages.
+// @harneeslab/workflows and @harneeslab/core import from this subpath (@harneeslab/providers/types).
+// HARD RULE: This file must never import SDK packages or other @harneeslab/* packages.
 
 // ─── Provider Config Defaults ──────────────────────────────────────────────
-// Canonical definitions — @archon/core/config/config-types.ts imports from here.
+// Canonical definitions — @harneeslab/core/config/config-types.ts imports from here.
 // Single source of truth for provider-specific config shapes.
 
 export interface ClaudeProviderDefaults {
@@ -22,9 +22,9 @@ export interface ClaudeProviderDefaults {
 export interface CodexProviderDefaults {
   [key: string]: unknown;
   model?: string;
-  /** Structurally matches @archon/workflows ModelReasoningEffort */
+  /** Structurally matches @harneeslab/workflows ModelReasoningEffort */
   modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-  /** Structurally matches @archon/workflows WebSearchMode */
+  /** Structurally matches @harneeslab/workflows WebSearchMode */
   webSearchMode?: 'disabled' | 'cached' | 'live';
   additionalDirectories?: string[];
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. */
@@ -129,11 +129,11 @@ export interface NodeConfig {
    * Inline sub-agent definitions (keyed by kebab-case agent ID).
    *
    * Intentional hand-written duplicate of `agentDefinitionSchema` (authoritative
-   * source: `@archon/workflows/schemas/dag-node`). Normally we follow the
+   * source: `@harneeslab/workflows/schemas/dag-node`). Normally we follow the
    * project rule "derive types from Zod via `z.infer`, never write parallel
-   * interfaces" — broken here on purpose: `@archon/providers/types` is the
-   * contract subpath consumed by `@archon/workflows`, so importing from
-   * `@archon/workflows` would create a circular dependency.
+   * interfaces" — broken here on purpose: `@harneeslab/providers/types` is the
+   * contract subpath consumed by `@harneeslab/workflows`, so importing from
+   * `@harneeslab/workflows` would create a circular dependency.
    *
    * Drift risk: when the schema gains a field, this shape must be updated
    * by hand. Follow-up work: extract the agent-definition contract to a

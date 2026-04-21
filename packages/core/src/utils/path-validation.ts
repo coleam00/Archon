@@ -2,7 +2,7 @@
  * Path validation utilities to prevent path traversal attacks
  */
 import { resolve, sep } from 'path';
-import { getArchonWorkspacesPath } from '@archon/paths';
+import { getArchonWorkspacesPath } from '@harneeslab/paths';
 
 // Lazy evaluation to allow tests to modify env vars
 function getWorkspaceRoot(): string {

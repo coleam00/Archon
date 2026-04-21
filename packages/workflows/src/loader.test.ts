@@ -21,15 +21,15 @@ const mockLogger = {
   level: 'info',
 };
 
-// Mock @archon/paths: suppress logger + pass through real path utilities
-const realArchonPaths = await import('@archon/paths');
-mock.module('@archon/paths', () => ({
+// Mock @harneeslab/paths: suppress logger + pass through real path utilities
+const realArchonPaths = await import('@harneeslab/paths');
+mock.module('@harneeslab/paths', () => ({
   ...realArchonPaths,
   createLogger: mock(() => mockLogger),
 }));
 
 // Bootstrap provider registry (needed by isModelCompatible in dag-node schema)
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, clearRegistry } from '@harneeslab/providers';
 clearRegistry();
 registerBuiltinProviders();
 

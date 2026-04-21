@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager } from '@harneeslab/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
 import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
@@ -37,7 +37,7 @@ const mockAddMessage = mock(
 const mockListMessages = mock(async (_conversationId: string, _limit?: number) => []);
 const mockHandleMessage = mock(async () => {});
 
-mock.module('@archon/core', () => ({
+mock.module('@harneeslab/core', () => ({
   handleMessage: mockHandleMessage,
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),
@@ -67,7 +67,7 @@ mock.module('@archon/core', () => ({
   }),
 }));
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -91,13 +91,13 @@ mock.module('@archon/paths', () => ({
 
 mockAllWorkflowModules();
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   removeWorktree: mock(async () => {}),
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,
 }));
 
-mock.module('@archon/core/db/conversations', () => ({
+mock.module('@harneeslab/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
   listConversations: mock(async () => []),
   getOrCreateConversation: mock(async () => ({
@@ -116,18 +116,18 @@ mock.module('@archon/core/db/conversations', () => ({
   getConversationById: mock(async () => null),
 }));
 
-mock.module('@archon/core/db/codebases', () => ({
+mock.module('@harneeslab/core/db/codebases', () => ({
   listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),
   getCodebase: mock(async () => null),
   deleteCodebase: mock(async () => {}),
 }));
 
-mock.module('@archon/core/db/isolation-environments', () => ({
+mock.module('@harneeslab/core/db/isolation-environments', () => ({
   listByCodebase: mock(async () => []),
   updateStatus: mock(async () => {}),
 }));
 
-mock.module('@archon/core/db/workflows', () => ({
+mock.module('@harneeslab/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
   listDashboardRuns: mock(async () => ({
     runs: [],
@@ -139,16 +139,16 @@ mock.module('@archon/core/db/workflows', () => ({
   getWorkflowRunByWorkerPlatformId: mock(async () => null),
 }));
 
-mock.module('@archon/core/db/workflow-events', () => ({
+mock.module('@harneeslab/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(async () => []),
 }));
 
-mock.module('@archon/core/db/messages', () => ({
+mock.module('@harneeslab/core/db/messages', () => ({
   addMessage: mockAddMessage,
   listMessages: mockListMessages,
 }));
 
-mock.module('@archon/core/utils/commands', () => ({
+mock.module('@harneeslab/core/utils/commands', () => ({
   findMarkdownFilesRecursive: mock(async () => []),
 }));
 

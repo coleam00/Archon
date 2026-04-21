@@ -25,7 +25,7 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   parseOwnerRepo: mock(() => null),
   getRunArtifactsPath: mock(() => '/tmp/artifacts'),
@@ -36,7 +36,7 @@ mock.module('@archon/paths', () => ({
 // Mock git
 // ---------------------------------------------------------------------------
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   getDefaultBranch: mock(async () => 'main'),
   toRepoPath: mock((p: string) => p),
 }));

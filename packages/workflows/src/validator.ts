@@ -5,7 +5,7 @@
  * This module adds Level 3: checking that referenced resources actually exist
  * on disk (command files, MCP configs, skill directories).
  *
- * Lives in @archon/workflows (no @archon/core dependency) so both CLI and
+ * Lives in @harneeslab/workflows (no @harneeslab/core dependency) so both CLI and
  * REST API can use it.
  */
 
@@ -17,11 +17,11 @@ import {
   getCommandFolderSearchPaths,
   getDefaultCommandsPath,
   findMarkdownFilesRecursive,
-} from '@archon/paths';
-import { execFileAsync } from '@archon/git';
+} from '@harneeslab/paths';
+import { execFileAsync } from '@harneeslab/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
-import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
+import { getProviderCapabilities, isRegisteredProvider } from '@harneeslab/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

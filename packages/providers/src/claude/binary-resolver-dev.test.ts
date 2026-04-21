@@ -5,7 +5,7 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => createMockLogger()),
   BUNDLED_IS_BINARY: false,
 }));

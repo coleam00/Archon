@@ -3,7 +3,7 @@
  */
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import { isModelCompatible } from './model-validation';
 import {
   dagNodeSchema,

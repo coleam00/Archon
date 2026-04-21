@@ -1,5 +1,5 @@
 {
-  "name": "@archon/core",
+  "name": "@harneeslab/core",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -27,11 +27,11 @@
     "build": "echo 'No build needed - Bun runs TypeScript directly'"
   },
   "dependencies": {
-    "@archon/git": "workspace:*",
-    "@archon/isolation": "workspace:*",
-    "@archon/paths": "workspace:*",
-    "@archon/providers": "workspace:*",
-    "@archon/workflows": "workspace:*",
+    "@harneeslab/git": "workspace:*",
+    "@harneeslab/isolation": "workspace:*",
+    "@harneeslab/paths": "workspace:*",
+    "@harneeslab/providers": "workspace:*",
+    "@harneeslab/workflows": "workspace:*",
     "pg": "^8.11.0",
     "zod": "^3"
   },

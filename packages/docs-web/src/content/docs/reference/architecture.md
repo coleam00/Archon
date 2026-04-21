@@ -8,7 +8,7 @@ sidebar:
   order: 1
 ---
 
-Archon을 이해하고 확장하기 위한 종합 가이드입니다. HarnessLab은 Archon fork를 기반으로 하므로, 이 문서는 upstream Archon의 구조를 이해하고 HarnessLab 실험과 운영에 맞게 확장할 때의 기준점으로 사용할 수 있습니다.
+Archon을 이해하고 확장하기 위한 종합 가이드입니다. HarneesLab은 Archon fork를 기반으로 하므로, 이 문서는 upstream Archon의 구조를 이해하고 HarneesLab 실험과 운영에 맞게 확장할 때의 기준점으로 사용할 수 있습니다.
 
 **탐색:** [개요](#system-overview) | [플랫폼](#adding-platform-adapters) | [AI Providers](#adding-ai-agent-providers) | [격리](#isolation-providers) | [명령](#command-system) | [스트리밍](#streaming-modes) | [데이터베이스](#database-schema)
 
@@ -114,7 +114,7 @@ export interface IPlatformAdapter {
 **2. 인터페이스 구현:**
 
 ```typescript
-import type { IPlatformAdapter } from '@archon/core';
+import type { IPlatformAdapter } from '@harneeslab/core';
 
 export class YourPlatformAdapter implements IPlatformAdapter {
   private streamingMode: 'stream' | 'batch';
@@ -835,7 +835,7 @@ for (const folder of searchPaths) {
 
 이 과정은 repo-specific 명령을 등록합니다. Default command는 repository에 복사되지 않고, 앱에 bundle된 defaults에서 runtime에 로딩됩니다.
 
-**참고:** `packages/paths/src/archon-paths.ts`(`@archon/paths`)
+**참고:** `packages/paths/src/archon-paths.ts`(`@harneeslab/paths`)
 
 ### Variable Substitution
 

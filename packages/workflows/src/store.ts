@@ -1,8 +1,8 @@
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
- * Mirrors the IIsolationStore pattern from @archon/isolation.
- * Implementations live in @archon/core (backed by the real DB);
+ * Mirrors the IIsolationStore pattern from @harneeslab/isolation.
+ * Implementations live in @harneeslab/core (backed by the real DB);
  * the workflow engine depends only on this narrow interface.
  */
 import type { WorkflowRun, WorkflowRunStatus, ApprovalContext } from './schemas';

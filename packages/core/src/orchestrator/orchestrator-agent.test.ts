@@ -14,9 +14,9 @@
 
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
-import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { makeTestWorkflow, makeTestWorkflowWithSource } from '@harneeslab/workflows/test-utils';
 import type { Codebase, Conversation, IPlatformAdapter } from '../types';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition } from '@harneeslab/workflows/schemas/workflow';
 
 // ─── Mock setup (ALL mocks must come before the module under test import) ────
 
@@ -51,7 +51,7 @@ const mockLoadConfig = mock(() =>
 
 const mockLogger = createMockLogger();
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getArchonHome: mock(() => '/home/test/.archon'),
@@ -86,25 +86,25 @@ mock.module('../handlers/command-handler', () => ({
   handleCommand: mockHandleCommand,
 }));
 
-mock.module('@archon/workflows/utils/tool-formatter', () => ({
+mock.module('@harneeslab/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock((toolName: string) => `🔧 ${toolName}`),
 }));
 const mockDiscoverWorkflowsWithConfig = mock(() =>
   Promise.resolve({ workflows: [] as Array<{ workflow: WorkflowDefinition }>, errors: [] })
 );
-mock.module('@archon/workflows/workflow-discovery', () => ({
+mock.module('@harneeslab/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
 }));
-mock.module('@archon/workflows/router', () => ({
+mock.module('@harneeslab/workflows/router', () => ({
   findWorkflow: mock((name: string, workflows: WorkflowDefinition[]) =>
     workflows.find(w => w.name === name)
   ),
 }));
-mock.module('@archon/workflows/executor', () => ({
+mock.module('@harneeslab/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 
-mock.module('@archon/providers', () => ({
+mock.module('@harneeslab/providers', () => ({
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
@@ -171,7 +171,7 @@ mock.module('../db/messages', () => ({
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 
-mock.module('@archon/isolation', () => ({
+mock.module('@harneeslab/isolation', () => ({
   IsolationBlockedError: class IsolationBlockedError extends Error {
     public reason: string;
     constructor(reason: string) {
@@ -186,7 +186,7 @@ mock.module('../utils/worktree-sync', () => ({
   syncArchonToWorktree: mock(() => Promise.resolve()),
 }));
 
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   syncWorkspace: mockSyncWorkspace,
   toRepoPath: mockToRepoPath,
 }));

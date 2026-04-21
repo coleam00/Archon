@@ -1,11 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import * as git from '@archon/git';
-import * as worktreeCopy from '@archon/isolation';
+import * as git from '@harneeslab/git';
+import * as worktreeCopy from '@harneeslab/isolation';
 import * as configLoader from '../config/config-loader';
 import * as fs from 'fs/promises';
 import type { Stats } from 'fs';
 import type { RepoConfig } from '../config/config-types';
-import type { CopyFileEntry } from '@archon/isolation';
+import type { CopyFileEntry } from '@harneeslab/isolation';
 import { createMockLogger } from '../test/mocks/logger';
 
 /** Normalize path separators to forward slashes for cross-platform comparison */
@@ -14,7 +14,7 @@ function normPath(p: string): string {
 }
 
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home/test/.archon'),
   getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),

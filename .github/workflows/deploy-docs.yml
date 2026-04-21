@@ -30,7 +30,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build docs
         env:
-          DOCS_SITE_URL: https://harnesslab.codewithgenie.com
+          DOCS_SITE_URL: https://harneeslab.codewithgenie.com
         run: bun run build:docs
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

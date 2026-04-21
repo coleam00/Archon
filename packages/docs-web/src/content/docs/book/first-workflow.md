@@ -16,7 +16,7 @@ sidebar:
 
 ## Workflow 기본
 
-**workflow**는 `.archon/workflows/` 안의 YAML 파일입니다. `archon workflow run my-workflow "do something"`을 실행하면 Archon은 파일을 찾고 node를 읽은 뒤 dependency 순서대로 실행합니다.
+**workflow**는 `.archon/workflows/` 안의 YAML 파일입니다. `hlab workflow run my-workflow "do something"`을 실행하면 Archon은 파일을 찾고 node를 읽은 뒤 dependency 순서대로 실행합니다.
 
 가장 작은 유효 workflow는 다음과 같습니다.
 
@@ -34,7 +34,7 @@ nodes:
 
 이것이 전부입니다. 위쪽에는 세 개 field, 아래쪽에는 node 목록이 있습니다. 각 node에는 고유한 `id`가 필요합니다. Archon은 `.archon/workflows/` 안의 workflow file을 재귀적으로 발견하므로 원한다면 하위 디렉터리로 정리할 수 있습니다.
 
-> **어디에 두나**: repository에 `.archon/workflows/my-workflow.yaml`을 만드세요. `archon workflow list`를 실행해 Archon이 찾았는지 확인합니다.
+> **어디에 두나**: repository에 `.archon/workflows/my-workflow.yaml`을 만드세요. `hlab workflow list`를 실행해 Archon이 찾았는지 확인합니다.
 
 ---
 
@@ -59,7 +59,7 @@ nodes:
 실행합니다.
 
 ```bash
-archon workflow run my-workflow --branch feature/auth-tokens "Add JWT refresh token support"
+hlab workflow run my-workflow --branch feature/auth-tokens "Add JWT refresh token support"
 ```
 
 Archon은 입력값으로 `archon-create-plan`을 실행하고, 완료를 기다린 뒤 `archon-implement-tasks`를 실행합니다. AI는 planning node의 전체 대화 context를 implementation node로 가져갑니다. 자신이 무엇을 계획했는지 알고 즉시 실행할 수 있습니다.
@@ -182,7 +182,7 @@ nodes:
 완성된 workflow를 실행합니다.
 
 ```bash
-archon workflow run my-workflow --branch feature/auth-tokens "Add JWT refresh token support"
+hlab workflow run my-workflow --branch feature/auth-tokens "Add JWT refresh token support"
 ```
 
 방금 `archon-idea-to-pr`의 미니 버전을 만들었습니다. 구조는 같고 더 압축되어 있습니다. 내장 workflow는 scope confirmation, PR creation, final summary 같은 node를 몇 개 더 추가하지만 핵심 패턴은 여기서 만든 것과 동일합니다.
@@ -193,7 +193,7 @@ archon workflow run my-workflow --branch feature/auth-tokens "Add JWT refresh to
 
 | Option | 역할 | 사용할 때 |
 |--------|-------------|-------------|
-| `name` | `archon workflow list`에서 workflow를 식별 | 필수 |
+| `name` | `hlab workflow list`에서 workflow를 식별 | 필수 |
 | `description` | 목록에 표시되고 router가 사용 | 필수 |
 | `provider` | AI provider 설정(등록된 provider, 예: `claude`, `codex`) | 특정 provider가 필요할 때 |
 | `model` | 모든 node의 model 설정(`sonnet`, `opus`, `haiku`) | config 기본값을 override하고 싶을 때 |

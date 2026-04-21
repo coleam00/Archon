@@ -16,7 +16,7 @@ import {
 import * as setupModule from './setup';
 
 // Test directory for file operations
-const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());
+const TEST_DIR = join(tmpdir(), 'hlab-setup-test-' + Date.now());
 
 describe('setup command', () => {
   beforeEach(() => {
@@ -144,7 +144,7 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).toContain('# Using SQLite (default)');
@@ -158,7 +158,7 @@ CODEX_ACCOUNT_ID=account1
 
     it('should generate valid .env content for PostgreSQL configuration', () => {
       const content = generateEnvContent({
-        database: { type: 'postgresql', url: 'postgresql://localhost:5432/archon' },
+        database: { type: 'postgresql', url: 'postgresql://localhost:5432/hlab' },
         ai: {
           claude: true,
           claudeAuthType: 'apiKey',
@@ -172,10 +172,10 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
-      expect(content).toContain('DATABASE_URL=postgresql://localhost:5432/archon');
+      expect(content).toContain('DATABASE_URL=postgresql://localhost:5432/hlab');
       expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=false');
       expect(content).toContain('CLAUDE_API_KEY=sk-test-key');
     });
@@ -191,7 +191,7 @@ CODEX_ACCOUNT_ID=account1
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false, discord: false },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).toContain(
@@ -209,7 +209,7 @@ CODEX_ACCOUNT_ID=account1
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false, discord: false },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).not.toContain('CLAUDE_BIN_PATH=');
@@ -240,7 +240,7 @@ CODEX_ACCOUNT_ID=account1
           botToken: '123:ABC',
           allowedUserIds: '111,222',
         },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).toContain('GH_TOKEN=ghp_testtoken');
@@ -273,7 +273,7 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).toContain('CODEX_ID_TOKEN=id-token');
@@ -319,7 +319,7 @@ CODEX_ACCOUNT_ID=account1
           slack: false,
           discord: false,
         },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).not.toContain('BOT_DISPLAY_NAME=');
@@ -345,7 +345,7 @@ CODEX_ACCOUNT_ID=account1
           appToken: 'xapp-test',
           allowedUserIds: 'U123',
         },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).toContain('SLACK_BOT_TOKEN=xoxb-test');
@@ -373,7 +373,7 @@ CODEX_ACCOUNT_ID=account1
           botToken: 'discord-bot-token-test',
           allowedUserIds: '123456789',
         },
-        botDisplayName: 'HarnessLab',
+        botDisplayName: 'HarneesLab',
       });
 
       expect(content).toContain('DISCORD_BOT_TOKEN=discord-bot-token-test');
@@ -409,15 +409,15 @@ CODEX_ACCOUNT_ID=account1
 
       copyArchonSkill(target);
 
-      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'guides', 'setup.md'))).toBe(
+      expect(existsSync(join(target, '.claude', 'skills', 'hlab', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(target, '.claude', 'skills', 'hlab', 'guides', 'setup.md'))).toBe(
         true
       );
       expect(
-        existsSync(join(target, '.claude', 'skills', 'archon', 'references', 'workflow-dag.md'))
+        existsSync(join(target, '.claude', 'skills', 'hlab', 'references', 'workflow-dag.md'))
       ).toBe(true);
       expect(
-        existsSync(join(target, '.claude', 'skills', 'archon', 'examples', 'dag-workflow.yaml'))
+        existsSync(join(target, '.claude', 'skills', 'hlab', 'examples', 'dag-workflow.yaml'))
       ).toBe(true);
     });
 
@@ -427,17 +427,14 @@ CODEX_ACCOUNT_ID=account1
 
       copyArchonSkill(target);
 
-      const content = readFileSync(
-        join(target, '.claude', 'skills', 'archon', 'SKILL.md'),
-        'utf-8'
-      );
+      const content = readFileSync(join(target, '.claude', 'skills', 'hlab', 'SKILL.md'), 'utf-8');
       expect(content.length).toBeGreaterThan(0);
-      expect(content).toContain('archon');
+      expect(content).toContain('hlab');
     });
 
     it('should overwrite existing skill files', () => {
       const target = join(TEST_DIR, 'skill-target-overwrite');
-      const skillDir = join(target, '.claude', 'skills', 'archon');
+      const skillDir = join(target, '.claude', 'skills', 'hlab');
       mkdirSync(skillDir, { recursive: true });
       writeFileSync(join(skillDir, 'SKILL.md'), 'old content');
 
@@ -453,7 +450,7 @@ CODEX_ACCOUNT_ID=account1
 
       copyArchonSkill(target);
 
-      expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(target, '.claude', 'skills', 'hlab', 'SKILL.md'))).toBe(true);
     });
   });
 });

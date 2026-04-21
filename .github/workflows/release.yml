@@ -22,19 +22,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: bun-linux-x64
-            binary: archon-linux-x64
+            binary: hlab-linux-x64
           - os: ubuntu-latest
             target: bun-linux-arm64
-            binary: archon-linux-arm64
+            binary: hlab-linux-arm64
           - os: ubuntu-latest
             target: bun-windows-x64
-            binary: archon-windows-x64.exe
+            binary: hlab-windows-x64.exe
           - os: macos-latest
             target: bun-darwin-x64
-            binary: archon-darwin-x64
+            binary: hlab-darwin-x64
           - os: macos-latest
             target: bun-darwin-arm64
-            binary: archon-darwin-arm64
+            binary: hlab-darwin-arm64
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -231,16 +231,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build web UI
-        run: bun --filter @archon/web build
+        run: bun --filter @harneeslab/web build
 
       - name: Package web dist
         run: |
-          tar czf dist/archon-web.tar.gz -C packages/web/dist .
+          tar czf dist/hlab-web.tar.gz -C packages/web/dist .
 
       - name: Generate checksums
         run: |
           cd dist
-          sha256sum archon-* archon-web.tar.gz > checksums.txt
+          sha256sum hlab-* hlab-web.tar.gz > checksums.txt
           cat checksums.txt
 
       - name: Get version
@@ -256,13 +256,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: HarnessLab CLI ${{ steps.version.outputs.version }}
+          name: HarneesLab CLI ${{ steps.version.outputs.version }}
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
           generate_release_notes: true
           files: |
-            dist/archon-*
-            dist/archon-web.tar.gz
+            dist/hlab-*
+            dist/hlab-web.tar.gz
             dist/checksums.txt
           body: |
             ## Installation
@@ -281,46 +281,46 @@ jobs:
 
             **Homebrew (macOS / Linux)**
             ```bash
-            brew install <tap>/archon
+            brew install <tap>/hlab
             ```
 
             **Docker**
             ```bash
-            docker run --rm -v "$PWD:/workspace" ghcr.io/newturn2017/harnesslab:latest workflow list
+            docker run --rm -v "$PWD:/workspace" ghcr.io/newturn2017/harneeslab:latest workflow list
             ```
 
             ### Manual Installation
 
             **macOS (Apple Silicon)**
             ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-darwin-arm64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/hlab-darwin-arm64 -o /usr/local/bin/hlab
+            chmod +x /usr/local/bin/hlab
             ```
 
             **macOS (Intel)**
             ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-darwin-x64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/hlab-darwin-x64 -o /usr/local/bin/hlab
+            chmod +x /usr/local/bin/hlab
             ```
 
             **Linux (x64)**
             ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-linux-x64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/hlab-linux-x64 -o /usr/local/bin/hlab
+            chmod +x /usr/local/bin/hlab
             ```
 
             **Linux (ARM64)**
             ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/archon-linux-arm64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/hlab-linux-arm64 -o /usr/local/bin/hlab
+            chmod +x /usr/local/bin/hlab
             ```
 
             **Windows (Manual)**
-            Download `archon-windows-x64.exe` from the assets below, rename to `archon.exe`, and add to your PATH.
+            Download `hlab-windows-x64.exe` from the assets below, rename to `hlab.exe`, and add to your PATH.
 
             ### Verify installation
             ```bash
-            archon version
+            hlab version
             ```
 
   update-homebrew:
@@ -355,7 +355,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add homebrew/archon.rb
+          git add homebrew/hlab.rb
           git diff --cached --quiet || git commit -m "chore: update Homebrew formula for ${{ steps.version.outputs.version }}"
           git push origin dev
 
@@ -375,17 +375,17 @@ jobs:
             exit 0
           fi
 
-          TAP_FORMULA_PATH="${TAP_FORMULA_PATH:-Formula/archon.rb}"
+          TAP_FORMULA_PATH="${TAP_FORMULA_PATH:-Formula/hlab.rb}"
           TAP_DIR="$(mktemp -d)"
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" "$TAP_DIR"
 
           mkdir -p "$(dirname "$TAP_DIR/$TAP_FORMULA_PATH")"
-          cp homebrew/archon.rb "$TAP_DIR/$TAP_FORMULA_PATH"
+          cp homebrew/hlab.rb "$TAP_DIR/$TAP_FORMULA_PATH"
 
           cd "$TAP_DIR"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$TAP_FORMULA_PATH"
           git diff --cached --quiet && exit 0
-          git commit -m "chore: update HarnessLab formula for ${{ steps.version.outputs.version }}"
+          git commit -m "chore: update HarneesLab formula for ${{ steps.version.outputs.version }}"
           git push origin HEAD

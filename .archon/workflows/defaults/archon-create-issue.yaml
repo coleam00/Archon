@@ -27,14 +27,14 @@ nodes:
       ## Area Definitions
       | Area | Packages | Indicators |
       |------|----------|------------|
-      | web-ui | @archon/web, @archon/server (routes, web adapter) | UI rendering, SSE streaming, React components, browser behavior |
-      | api-server | @archon/server (routes, middleware) | HTTP endpoints, response codes, request handling |
-      | cli | @archon/cli | CLI commands, workflow invocation from terminal, output formatting |
-      | isolation | @archon/isolation, @archon/git | Worktrees, branch operations, cleanup, environment lifecycle |
-      | workflows | @archon/workflows | YAML parsing, DAG execution, variable substitution, node types |
-      | database | @archon/core (db/) | SQLite/PostgreSQL queries, schema, data integrity, migrations |
-      | adapters | @archon/adapters | Slack/Telegram/GitHub/Discord message handling, auth, polling |
-      | core | @archon/core (orchestrator, handlers, clients) | Message routing, session management, AI client streaming |
+      | web-ui | @harneeslab/web, @harneeslab/server (routes, web adapter) | UI rendering, SSE streaming, React components, browser behavior |
+      | api-server | @harneeslab/server (routes, middleware) | HTTP endpoints, response codes, request handling |
+      | cli | @harneeslab/cli | CLI commands, workflow invocation from terminal, output formatting |
+      | isolation | @harneeslab/isolation, @harneeslab/git | Worktrees, branch operations, cleanup, environment lifecycle |
+      | workflows | @harneeslab/workflows | YAML parsing, DAG execution, variable substitution, node types |
+      | database | @harneeslab/core (db/) | SQLite/PostgreSQL queries, schema, data integrity, migrations |
+      | adapters | @harneeslab/adapters | Slack/Telegram/GitHub/Discord message handling, auth, polling |
+      | core | @harneeslab/core (orchestrator, handlers, clients) | Message routing, session management, AI client streaming |
       | other | Any package not covered above | Cross-cutting concerns, build tooling, config, unknown area |
 
       ## Classification Rules

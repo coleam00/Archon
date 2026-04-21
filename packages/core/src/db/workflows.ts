@@ -7,9 +7,9 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ApprovalContext,
-} from '@archon/workflows/schemas/workflow-run';
-import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
-import { createLogger } from '@archon/paths';
+} from '@harneeslab/workflows/schemas/workflow-run';
+import { TERMINAL_WORKFLOW_STATUSES } from '@harneeslab/workflows/schemas/workflow-run';
+import { createLogger } from '@harneeslab/paths';
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {

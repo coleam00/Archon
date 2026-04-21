@@ -6,7 +6,7 @@ import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
 const mockWorktreeExists = mock(() => Promise.resolve(true));
 const mockToWorktreePath = mock((p: string) => p);
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   worktreeExists: mockWorktreeExists,
   toWorktreePath: mockToWorktreePath,
 }));
@@ -35,7 +35,7 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 

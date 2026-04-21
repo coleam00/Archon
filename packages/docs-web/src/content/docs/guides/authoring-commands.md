@@ -9,7 +9,7 @@ sidebar:
   order: 2
 ---
 
-이 가이드는 Archon의 AI workflow system에서 효과적인 command를 작성하는 방법을 설명합니다. HarnessLab은 Archon fork로서 반복 가능한 agent workflow를 학습하고 실험하기 쉽게 다루며, command는 그 workflow의 구성 요소입니다. 각 command는 AI agent에게 무엇을 해야 하는지 지시하는 prompt template입니다.
+이 가이드는 Archon의 AI workflow system에서 효과적인 command를 작성하는 방법을 설명합니다. HarneesLab은 Archon fork로서 반복 가능한 agent workflow를 학습하고 실험하기 쉽게 다루며, command는 그 workflow의 구성 요소입니다. 각 command는 AI agent에게 무엇을 해야 하는지 지시하는 prompt template입니다.
 
 ## Command란 무엇인가요?
 

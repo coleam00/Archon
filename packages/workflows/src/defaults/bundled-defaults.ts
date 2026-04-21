@@ -14,26 +14,26 @@
  *
  * Why inline strings (and not `import X from '...file.md' with { type: 'text' }`)?
  *   - Node cannot load `type: 'text'` import attributes — it's Bun-specific.
- *     Using plain string literals keeps `@archon/workflows` importable from
+ *     Using plain string literals keeps `@harneeslab/workflows` importable from
  *     both runtimes, which removes SDK blocker #2.
  *   - Bun still embeds the data at compile time when building the CLI binary,
  *     so runtime behavior is unchanged.
  */
 
-import { BUNDLED_IS_BINARY } from '@archon/paths';
+import { BUNDLED_IS_BINARY } from '@harneeslab/paths';
 
 export { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } from './bundled-defaults.generated';
 
 /**
  * Check if the current process is running as a compiled binary (not via Bun CLI).
  *
- * Reads the build-time constant `BUNDLED_IS_BINARY` from `@archon/paths`.
+ * Reads the build-time constant `BUNDLED_IS_BINARY` from `@harneeslab/paths`.
  * `scripts/build-binaries.sh` rewrites that file to set it to `true` before
  * `bun build --compile` and restores it afterwards. See GitHub issue #979.
  *
  * Kept as a function (rather than a direct re-export of `BUNDLED_IS_BINARY`)
  * so tests can use `spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(...)`
- * without resorting to `mock.module('@archon/paths', ...)` — which is
+ * without resorting to `mock.module('@harneeslab/paths', ...)` — which is
  * process-global and irreversible in Bun and would pollute other test files.
  * See `loader.test.ts` for context.
  */

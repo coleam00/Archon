@@ -7,8 +7,8 @@ import type {
   IsolationWorkflowType,
   IIsolationStore,
   CreateEnvironmentParams,
-} from '@archon/isolation';
-import { createLogger } from '@archon/paths';
+} from '@harneeslab/isolation';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

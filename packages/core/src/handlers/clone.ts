@@ -6,7 +6,7 @@ import { access, rm } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync } from '@harneeslab/git';
 import {
   expandTilde,
   getCommandFolderSearchPaths,
@@ -14,9 +14,9 @@ import {
   getProjectSourcePath,
   createProjectSourceSymlink,
   parseOwnerRepo,
-} from '@archon/paths';
+} from '@harneeslab/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -45,7 +45,7 @@ async function registerRepoAtPath(
   // Auto-detect assistant type based on SDK folder conventions.
   // Built-in providers use well-known folders (.claude/, .codex/).
   // Falls back to first registered built-in provider if no folder detected.
-  const { getRegisteredProviders } = await import('@archon/providers');
+  const { getRegisteredProviders } = await import('@harneeslab/providers');
   const defaultProvider = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
   let suggestedAssistant = defaultProvider;
   const codexFolder = join(targetPath, '.codex');

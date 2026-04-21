@@ -13,7 +13,7 @@ describe('validateCommandsCommand', () => {
   let consoleErrorSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'archon-cli-validate-'));
+    tempDir = await mkdtemp(join(tmpdir(), 'hlab-cli-validate-'));
     consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
   });

@@ -1,6 +1,6 @@
 ---
 title: GitHub
-description: Webhook으로 HarnessLab을 GitHub에 연결해 이슈와 pull request에서 상호작용합니다.
+description: Webhook으로 HarneesLab을 GitHub에 연결해 이슈와 pull request에서 상호작용합니다.
 category: adapters
 area: adapters
 audience: [user, operator]
@@ -9,11 +9,11 @@ sidebar:
   order: 4
 ---
 
-HarnessLab을 GitHub에 연결하면 이슈와 pull request에서 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
+HarneesLab을 GitHub에 연결하면 이슈와 pull request에서 AI 코딩 어시스턴트와 상호작용할 수 있습니다.
 
 ## 사전 준비
 
-- 실행 중인 HarnessLab 서버([시작하기](/getting-started/) 참고)
+- 실행 중인 HarneesLab 서버([시작하기](/getting-started/) 참고)
 - Issues가 활성화된 GitHub repository
 - 환경 변수에 설정된 `GITHUB_TOKEN`([시작하기](/getting-started/) 참고)
 - Webhook을 받을 공개 endpoint(로컬 개발에서는 아래 ngrok 설정 참고)
@@ -100,9 +100,9 @@ GitHub adapter는 항상 `batch` 모드를 사용합니다(하드코딩). GitHub
 이슈 또는 PR **댓글**에서 bot을 @mention하여 상호작용합니다.
 
 ```
-@archon can you analyze this bug?
-@archon prime the codebase
-@archon review this implementation
+@harneeslab can you analyze this bug?
+@harneeslab prime the codebase
+@harneeslab review this implementation
 ```
 
 **첫 mention 동작:**

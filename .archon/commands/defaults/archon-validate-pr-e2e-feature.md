@@ -108,7 +108,7 @@ cd "$WORKTREE_PATH" && bun install --frozen-lockfile 2>/dev/null || bun install
 WORKTREE_PATH=$(cat $ARTIFACTS_DIR/.worktree-path | tr -d '\n')
 BACKEND_PORT=$(cat $ARTIFACTS_DIR/.backend-port | tr -d '\n')
 
-cd "$WORKTREE_PATH" && PORT=$BACKEND_PORT bun run --filter @archon/server dev > "$ARTIFACTS_DIR/.e2e-feature-backend.log" 2>&1 &
+cd "$WORKTREE_PATH" && PORT=$BACKEND_PORT bun run --filter @harneeslab/server dev > "$ARTIFACTS_DIR/.e2e-feature-backend.log" 2>&1 &
 BACKEND_PID=$!
 echo "$BACKEND_PID" > "$ARTIFACTS_DIR/.e2e-feature-backend-pid"
 echo "Backend started with PID: $BACKEND_PID"

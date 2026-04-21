@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } f
 import { mkdir, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import * as git from '@archon/git';
+import * as git from '@harneeslab/git';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
@@ -16,7 +16,7 @@ const mockLogger = {
   fatal: mockLogFn,
   child: mock(() => mockLogger),
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: (folder?: string) => {
     const paths = ['.archon/commands'];
@@ -27,7 +27,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, clearRegistry } from '@harneeslab/providers';
 clearRegistry();
 registerBuiltinProviders();
 
@@ -38,7 +38,7 @@ import {
   substituteNodeOutputRefs,
   executeDagWorkflow,
 } from './dag-executor';
-import { loadMcpConfig } from '@archon/providers/claude/provider';
+import { loadMcpConfig } from '@harneeslab/providers/claude/provider';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';

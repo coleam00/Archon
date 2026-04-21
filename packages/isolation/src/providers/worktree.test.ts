@@ -4,9 +4,9 @@ import { join } from 'node:path';
 // Fixed test home — path assertions use this constant; no duplication of production isDocker() logic.
 const TEST_ARCHON_HOME = '/test/.archon';
 
-// Mock @archon/paths: provide getArchonHome + workspaces path helpers so @archon/git (getWorktreeBase,
+// Mock @harneeslab/paths: provide getArchonHome + workspaces path helpers so @harneeslab/git (getWorktreeBase,
 // isProjectScopedWorktreeBase) and worktree.ts resolve paths against TEST_ARCHON_HOME consistently.
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: () => ({
     fatal: () => undefined,
     error: () => undefined,
@@ -24,7 +24,7 @@ mock.module('@archon/paths', () => ({
   isDocker: () => false,
 }));
 
-import * as git from '@archon/git';
+import * as git from '@harneeslab/git';
 import * as worktreeCopy from '../worktree-copy';
 import type { IsolationRequest, PRIsolationRequest, RepoConfigLoader } from '../types';
 

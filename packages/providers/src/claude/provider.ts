@@ -35,7 +35,7 @@ import type {
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { resolveClaudeBinaryPath } from './binary-resolver';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
 
@@ -290,7 +290,7 @@ export async function loadMcpConfig(
 
 // ─── SDK Hooks Building (absorbed from dag-executor) ───────────────────────
 
-/** YAML hook matcher shape (matches @archon/workflows/schemas/dag-node WorkflowNodeHooks) */
+/** YAML hook matcher shape (matches @harneeslab/workflows/schemas/dag-node WorkflowNodeHooks) */
 interface YAMLHookMatcher {
   matcher?: string;
   response: unknown;
@@ -547,7 +547,7 @@ interface ToolResultEntry {
  * binary does not auto-load `.env` from CWD (probed end-to-end with
  * sentinel `.env` and `.env.local` in the workflow CWD; both arrived
  * UNSET in the spawned bash tool). The first-layer protection —
- * `stripCwdEnv()` in `@archon/paths` (#1067) — removes CWD env keys from
+ * `stripCwdEnv()` in `@harneeslab/paths` (#1067) — removes CWD env keys from
  * the parent process before spawn, so the subprocess inherits a clean
  * env regardless of executable type.
  *

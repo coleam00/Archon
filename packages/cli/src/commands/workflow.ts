@@ -7,35 +7,35 @@ import {
   loadRepoConfig,
   generateAndSetTitle,
   createWorkflowStore,
-} from '@archon/core';
-import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
-import { configureIsolation, getIsolationProvider } from '@archon/isolation';
-import { createLogger, getArchonHome } from '@archon/paths';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { resolveWorkflowName } from '@archon/workflows/router';
-import { executeWorkflow } from '@archon/workflows/executor';
+} from '@harneeslab/core';
+import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@harneeslab/workflows/store';
+import { configureIsolation, getIsolationProvider } from '@harneeslab/isolation';
+import { createLogger, getArchonHome } from '@harneeslab/paths';
+import { createWorkflowDeps } from '@harneeslab/core/workflows/store-adapter';
+import { discoverWorkflowsWithConfig } from '@harneeslab/workflows/workflow-discovery';
+import { resolveWorkflowName } from '@harneeslab/workflows/router';
+import { executeWorkflow } from '@harneeslab/workflows/executor';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
-} from '@archon/workflows/event-emitter';
-import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+} from '@harneeslab/workflows/event-emitter';
+import type { WorkflowLoadResult } from '@harneeslab/workflows/schemas/workflow';
+import type { WorkflowRun } from '@harneeslab/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
   rejectWorkflow,
   resumeWorkflow as resumeWorkflowOp,
   abandonWorkflow,
   getWorkflowStatus,
-} from '@archon/core/operations/workflow-operations';
-import * as conversationDb from '@archon/core/db/conversations';
-import * as codebaseDb from '@archon/core/db/codebases';
-import * as isolationDb from '@archon/core/db/isolation-environments';
-import * as messageDb from '@archon/core/db/messages';
-import * as workflowDb from '@archon/core/db/workflows';
-import * as workflowEventsDb from '@archon/core/db/workflow-events';
-import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
-import * as git from '@archon/git';
+} from '@harneeslab/core/operations/workflow-operations';
+import * as conversationDb from '@harneeslab/core/db/conversations';
+import * as codebaseDb from '@harneeslab/core/db/codebases';
+import * as isolationDb from '@harneeslab/core/db/isolation-environments';
+import * as messageDb from '@harneeslab/core/db/messages';
+import * as workflowDb from '@harneeslab/core/db/workflows';
+import * as workflowEventsDb from '@harneeslab/core/db/workflow-events';
+import type { WorkflowEventRow } from '@harneeslab/core/db/workflow-events';
+import * as git from '@harneeslab/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */

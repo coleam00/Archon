@@ -8,7 +8,7 @@ sidebar:
   order: 7
 ---
 
-HarnessLab 실행 중 자주 발생하는 문제와 해결책입니다.
+HarneesLab 실행 중 자주 발생하는 문제와 해결책입니다.
 
 ## Bot이 응답하지 않음
 
@@ -285,11 +285,11 @@ docker compose exec app git clone https://github.com/user/repo /.archon/workspac
 **증상:** Claude를 사용하는 workflow가 다음 오류로 실패합니다.
 
 ```
-Claude Code not found. HarnessLab requires the Claude Code executable to be
+Claude Code not found. HarneesLab requires the Claude Code executable to be
 reachable at a configured path in compiled builds.
 ```
 
-**원인:** Compiled HarnessLab binary(curl/PowerShell installer 또는 Homebrew의 `archon`)에는 Claude Code가 bundle되어 있지 않습니다. Claude Code executable에 대한 명시적 path가 필요합니다. Source/dev mode(`bun run`)는 `node_modules`를 통해 auto-resolve되며 영향을 받지 않습니다.
+**원인:** Compiled HarneesLab binary(curl/PowerShell installer 또는 Homebrew의 `archon`)에는 Claude Code가 bundle되어 있지 않습니다. Claude Code executable에 대한 명시적 path가 필요합니다. Source/dev mode(`bun run`)는 `node_modules`를 통해 auto-resolve되며 영향을 받지 않습니다.
 
 **수정:** Claude Code를 별도로 설치하고 Archon이 해당 경로를 보게 합니다.
 
@@ -311,7 +311,7 @@ assistants:
     claudeBinaryPath: /absolute/path/to/claude
 ```
 
-`archon setup`은 `CLAUDE_BIN_PATH`를 자동 감지하고 써 줍니다. Docker 사용자는 아무것도 할 필요가 없습니다. Image가 variable을 미리 설정합니다.
+`hlab setup`은 `CLAUDE_BIN_PATH`를 자동 감지하고 써 줍니다. Docker 사용자는 아무것도 할 필요가 없습니다. Image가 variable을 미리 설정합니다.
 
 전체 install matrix는 [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) guide를 참고하세요.
 
@@ -321,18 +321,18 @@ assistants:
 
 **원인:** Nested Claude Code session은 deadlock될 수 있습니다. 바깥 session은 tool result를 기다리지만 안쪽 session은 이를 전달하지 못합니다.
 
-**수정:** Claude Code 밖의 일반 shell에서 `archon serve`를 실행하고 Web UI 또는 HTTP API를 사용하세요.
+**수정:** Claude Code 밖의 일반 shell에서 `hlab serve`를 실행하고 Web UI 또는 HTTP API를 사용하세요.
 
 **Warning 숨기기:** Deadlock이 발생하지 않는 setup이고 warning만 숨기고 싶다면:
 
 ```bash
-ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1 archon workflow run ...
+ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING=1 hlab workflow run ...
 ```
 
 **Timeout 조정:** 환경이 느려 60초 first-event timeout에 걸린다면:
 
 ```bash
-ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
+ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 hlab workflow run ...
 ```
 
 ## Worktree가 다른 clone에 속함
@@ -352,8 +352,8 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 
    ```bash
    # From the other clone's directory, find and remove the conflicting worktree
-   archon isolation list
-   archon complete <branch-name>          # graceful cleanup
+   hlab isolation list
+   hlab complete <branch-name>          # graceful cleanup
    # or, if no work to preserve:
    git worktree remove <path> --force
    ```
@@ -361,10 +361,10 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 2. **다른 branch name 사용.** 두 clone이 같은 worktree path를 두고 경쟁하지 않도록 이번 run에 다른 branch name을 사용합니다.
 
    ```bash
-   archon workflow run <name> --branch <different-name> "task"
+   hlab workflow run <name> --branch <different-name> "task"
    ```
 
-3. **하나의 clone에서 작업.** 두 local checkout이 같은 project라면 하나로 통합하세요. HarnessLab의 codebase registration은 현재 remote당 하나의 local path를 가정합니다. 진짜 multi-clone support는 [#1192](https://github.com/coleam00/Archon/issues/1192)에서 추적 중입니다.
+3. **하나의 clone에서 작업.** 두 local checkout이 같은 project라면 하나로 통합하세요. HarneesLab의 codebase registration은 현재 remote당 하나의 local path를 가정합니다. 진짜 multi-clone support는 [#1192](https://github.com/coleam00/Archon/issues/1192)에서 추적 중입니다.
 
 **다른 변형:**
 

@@ -1,4 +1,4 @@
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {

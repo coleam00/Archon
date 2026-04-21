@@ -1,6 +1,6 @@
 ---
-title: HarnessLab이란 무엇인가?
-description: HarnessLab은 AI 코딩 어시스턴트가 따를 결정적 프로세스를 제공해 결과를 예측 가능하게 만듭니다.
+title: HarneesLab이란 무엇인가?
+description: HarneesLab은 AI 코딩 어시스턴트가 따를 결정적 프로세스를 제공해 결과를 예측 가능하게 만듭니다.
 category: book
 part: orientation
 audience: [user]
@@ -8,7 +8,7 @@ sidebar:
   order: 1
 ---
 
-HarnessLab은 AI 코딩 어시스턴트를 예측 가능하게 만듭니다. 능력을 제한해서가 아니라, 따라야 할 프로세스를 제공해서입니다. HarnessLab은 upstream Archon을 기반으로 한국어 학습, 강의, 실험, 실무 적용에 맞게 발전시키는 Archon fork입니다.
+HarneesLab은 AI 코딩 어시스턴트를 예측 가능하게 만듭니다. 능력을 제한해서가 아니라, 따라야 할 프로세스를 제공해서입니다. HarneesLab은 upstream Archon을 기반으로 한국어 학습, 강의, 실험, 실무 적용에 맞게 발전시키는 Archon fork입니다.
 
 ---
 
@@ -30,7 +30,7 @@ AI의 능력이 부족한 것은 아닙니다. 문제는 실행할 때마다 행
 
 ## 해결책: 결정적 워크플로
 
-HarnessLab은 **무엇이 일어나는지**와 **AI가 어떻게 생각하는지**를 분리합니다.
+HarneesLab은 **무엇이 일어나는지**와 **AI가 어떻게 생각하는지**를 분리합니다.
 
 프로세스는 여러분이 정의합니다. **워크플로**는 정확한 단계 순서를 지정합니다. 먼저 조사하고, 구현하고, 검증하고, PR을 만듭니다. AI는 각 단계에서 코드를 읽고, 판단하고, 변경을 작성하는 지능을 발휘하지만, 구조는 여러분이 소유합니다.
 
@@ -46,7 +46,7 @@ HarnessLab은 **무엇이 일어나는지**와 **AI가 어떻게 생각하는지
 
 ## 세 가지 핵심 개념
 
-HarnessLab의 모든 것은 세 가지 아이디어 위에 세워집니다.
+HarneesLab의 모든 것은 세 가지 아이디어 위에 세워집니다.
 
 | 개념 | 의미 | 비유 |
 |---------|-----------|-----------------|
@@ -70,13 +70,13 @@ Isolation (각 workflow 실행은 고유 workspace를 가짐)
 
 **Isolation**은 각 workflow 실행이 자기만의 git worktree에서 일어난다는 뜻입니다. 각 worktree는 고유 브랜치를 가진 별도 작업 디렉터리입니다. 서로의 작업을 덮어쓰지 않고 세 개의 workflow를 병렬로 실행할 수 있습니다.
 
-핵심은 이것입니다. HarnessLab의 나머지 기능은 모두 이 세 가지 아이디어 위에 쌓입니다.
+핵심은 이것입니다. HarneesLab의 나머지 기능은 모두 이 세 가지 아이디어 위에 쌓입니다.
 
 ---
 
-## HarnessLab으로 무엇을 할 수 있나?
+## HarneesLab으로 무엇을 할 수 있나?
 
-HarnessLab에는 자주 쓰는 개발 작업용 workflow가 기본으로 포함되어 있습니다.
+HarneesLab에는 자주 쓰는 개발 작업용 workflow가 기본으로 포함되어 있습니다.
 
 - **GitHub issue 수정** — 조사, 구현, 검증, PR 생성을 자동으로 수행합니다.
 - **아이디어에서 기능 만들기** — 설명에서 시작해 동작하고 리뷰된 PR까지 진행합니다.

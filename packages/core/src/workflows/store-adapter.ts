@@ -1,18 +1,18 @@
 /**
- * WorkflowStore adapter — bridges @archon/core DB modules to the
- * IWorkflowStore trait defined in @archon/workflows.
+ * WorkflowStore adapter — bridges @harneeslab/core DB modules to the
+ * IWorkflowStore trait defined in @harneeslab/workflows.
  */
-import type { IWorkflowStore } from '@archon/workflows/store';
-import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
-import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { IWorkflowStore } from '@harneeslab/workflows/store';
+import type { WorkflowConfig, WorkflowDeps } from '@harneeslab/workflows/deps';
+import type { WorkflowRunStatus } from '@harneeslab/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
-import { getAgentProvider } from '@archon/providers';
+import { getAgentProvider } from '@harneeslab/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 // Compile-time assertion: MergedConfig must remain a structural subtype of WorkflowConfig.
 // If MergedConfig drifts from WorkflowConfig, this line becomes a type error.

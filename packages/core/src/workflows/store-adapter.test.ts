@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
-import type { IWorkflowStore } from '@archon/workflows/store';
+import type { IWorkflowStore } from '@harneeslab/workflows/store';
 
 // Mock DB modules before importing store-adapter
 const mockCreateWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
@@ -44,7 +44,7 @@ mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
 }));
 
-mock.module('@archon/providers', () => ({
+mock.module('@harneeslab/providers', () => ({
   getAgentProvider: mock(() => ({})),
 }));
 

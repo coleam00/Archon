@@ -1,4 +1,4 @@
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import { execFileAsync } from './exec';
 import { getDefaultBranch } from './branch';
 import type { RepoPath, BranchName, GitResult, WorkspaceSyncResult } from './types';

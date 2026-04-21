@@ -59,20 +59,20 @@ jobs:
           context: .
           push: false
           load: true
-          tags: archon-ci:test
+          tags: harneeslab-ci:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Smoke test — container starts and serves /api/health
         run: |
-          docker run -d --name archon-smoke -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -p 3000:3000 archon-ci:test
+          docker run -d --name harneeslab-smoke -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -p 3000:3000 harneeslab-ci:test
           sleep 5
           curl --fail --retry 10 --retry-delay 3 --retry-all-errors http://localhost:3000/api/health
 
       - name: Dump container logs on failure
         if: failure()
-        run: docker logs archon-smoke 2>&1 || true
+        run: docker logs harneeslab-smoke 2>&1 || true
 
       - name: Cleanup smoke test container
         if: always()
-        run: docker rm -f archon-smoke || true
+        run: docker rm -f harneeslab-smoke || true

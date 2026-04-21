@@ -1,12 +1,12 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager } from '@harneeslab/core';
 import type { WebAdapter } from '../adapters/web';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { validationErrorHook } from './openapi-defaults';
-import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { makeTestWorkflow, makeTestWorkflowWithSource } from '@harneeslab/workflows/test-utils';
 
 /** Test app factory: includes defaultHook to format validation errors as { error: string }. */
 function createTestApp(): OpenAPIHono {
@@ -26,7 +26,7 @@ const mockParseWorkflow = mock((_content: string, _filename: string) => ({
   error: null,
 }));
 
-mock.module('@archon/core', () => ({
+mock.module('@harneeslab/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),
@@ -55,13 +55,13 @@ mock.module('@archon/core', () => ({
   }),
 }));
 
-mock.module('@archon/workflows/workflow-discovery', () => ({
+mock.module('@harneeslab/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflows,
 }));
-mock.module('@archon/workflows/loader', () => ({
+mock.module('@harneeslab/workflows/loader', () => ({
   parseWorkflow: mockParseWorkflow,
 }));
-mock.module('@archon/workflows/command-validation', () => ({
+mock.module('@harneeslab/workflows/command-validation', () => ({
   isValidCommandName: mock(
     (name: string) =>
       !name.includes('/') &&
@@ -71,7 +71,7 @@ mock.module('@archon/workflows/command-validation', () => ({
       !name.startsWith('.')
   ),
 }));
-mock.module('@archon/workflows/defaults', () => ({
+mock.module('@harneeslab/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {
     'archon-assist': 'name: archon-assist\ndescription: Archon Assist\nnodes: []',
   },
@@ -81,19 +81,19 @@ mock.module('@archon/workflows/defaults', () => ({
   isBinaryBuild: mock(() => false),
 }));
 
-// Note: @archon/core/defaults/bundled-defaults and @archon/core/utils/commands are NOT mocked.
+// Note: @harneeslab/core/defaults/bundled-defaults and @harneeslab/core/utils/commands are NOT mocked.
 // The real implementations are used. isBinaryBuild() returns false in Bun test environment, and
 // the filesystem paths used by the routes point to non-existent directories, so access/readFile/unlink
 // calls naturally fail with ENOENT without needing to mock fs/promises (which would leak globally).
 
-mock.module('@archon/core/db/conversations', () => ({}));
-mock.module('@archon/core/db/isolation-environments', () => ({}));
-mock.module('@archon/core/db/workflows', () => ({}));
-mock.module('@archon/core/db/workflow-events', () => ({}));
-mock.module('@archon/core/db/messages', () => ({}));
+mock.module('@harneeslab/core/db/conversations', () => ({}));
+mock.module('@harneeslab/core/db/isolation-environments', () => ({}));
+mock.module('@harneeslab/core/db/workflows', () => ({}));
+mock.module('@harneeslab/core/db/workflow-events', () => ({}));
+mock.module('@harneeslab/core/db/messages', () => ({}));
 
 const mockListCodebases = mock(async () => [{ default_cwd: '/tmp/project' }]);
-mock.module('@archon/core/db/codebases', () => ({
+mock.module('@harneeslab/core/db/codebases', () => ({
   listCodebases: mockListCodebases,
 }));
 

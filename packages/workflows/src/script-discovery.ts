@@ -6,7 +6,7 @@
  */
 import { readdir, stat } from 'fs/promises';
 import { join, basename, extname } from 'path';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Normalize path separators to forward slashes for cross-platform consistency */
 function normalizeSep(p: string): string {

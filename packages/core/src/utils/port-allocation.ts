@@ -3,8 +3,8 @@
  * Separated from index.ts to allow testing without triggering app startup
  */
 import { createHash } from 'crypto';
-import { isWorktreePath } from '@archon/git';
-import { createLogger } from '@archon/paths';
+import { isWorktreePath } from '@harneeslab/git';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

@@ -6,7 +6,7 @@
 #
 # Env vars:
 #   REPO         - GitHub repo containing release assets (default: current origin/GITHUB_REPOSITORY)
-#   FORMULA_FILE - Homebrew formula to update (default: homebrew/archon.rb)
+#   FORMULA_FILE - Homebrew formula to update (default: homebrew/hlab.rb)
 #   CHECKSUMS_FILE - Local checksums.txt path for offline validation
 
 set -euo pipefail
@@ -45,8 +45,8 @@ fi
 
 # Remove 'v' prefix for formula version because Homebrew adds it in URLs.
 FORMULA_VERSION="${RELEASE_TAG#v}"
-REPO="${REPO:-${GITHUB_REPOSITORY:-$(derive_repo_from_origin || echo 'NewTurn2017/HarnessLab')}}"
-FORMULA_FILE="${FORMULA_FILE:-homebrew/archon.rb}"
+REPO="${REPO:-${GITHUB_REPOSITORY:-$(derive_repo_from_origin || echo 'NewTurn2017/HarneesLab')}}"
+FORMULA_FILE="${FORMULA_FILE:-homebrew/hlab.rb}"
 
 if [ ! -f "$FORMULA_FILE" ]; then
   echo "ERROR: Formula file not found: $FORMULA_FILE" >&2
@@ -68,10 +68,10 @@ echo "$CHECKSUMS"
 echo ""
 
 # Extract individual checksums
-SHA_DARWIN_ARM64=$(echo "$CHECKSUMS" | grep "archon-darwin-arm64" | awk '{print $1}')
-SHA_DARWIN_X64=$(echo "$CHECKSUMS" | grep "archon-darwin-x64" | awk '{print $1}')
-SHA_LINUX_ARM64=$(echo "$CHECKSUMS" | grep "archon-linux-arm64" | awk '{print $1}')
-SHA_LINUX_X64=$(echo "$CHECKSUMS" | grep "archon-linux-x64" | awk '{print $1}')
+SHA_DARWIN_ARM64=$(echo "$CHECKSUMS" | grep "hlab-darwin-arm64" | awk '{print $1}')
+SHA_DARWIN_X64=$(echo "$CHECKSUMS" | grep "hlab-darwin-x64" | awk '{print $1}')
+SHA_LINUX_ARM64=$(echo "$CHECKSUMS" | grep "hlab-linux-arm64" | awk '{print $1}')
+SHA_LINUX_X64=$(echo "$CHECKSUMS" | grep "hlab-linux-x64" | awk '{print $1}')
 
 # Validate all checksums were extracted
 validate_checksum() {
@@ -91,10 +91,10 @@ validate_checksum() {
   fi
 }
 
-validate_checksum "archon-darwin-arm64" "$SHA_DARWIN_ARM64"
-validate_checksum "archon-darwin-x64" "$SHA_DARWIN_X64"
-validate_checksum "archon-linux-arm64" "$SHA_LINUX_ARM64"
-validate_checksum "archon-linux-x64" "$SHA_LINUX_X64"
+validate_checksum "hlab-darwin-arm64" "$SHA_DARWIN_ARM64"
+validate_checksum "hlab-darwin-x64" "$SHA_DARWIN_X64"
+validate_checksum "hlab-linux-arm64" "$SHA_LINUX_ARM64"
+validate_checksum "hlab-linux-x64" "$SHA_LINUX_X64"
 
 echo "Extracted checksums:"
 echo "  darwin-arm64: $SHA_DARWIN_ARM64"
@@ -111,10 +111,10 @@ sed -i.bak "s/version \".*\"/version \"${FORMULA_VERSION}\"/" "$FORMULA_FILE"
 # Update repository metadata and release asset URLs.
 export REPO
 perl -0pi.bak -e 's~homepage "[^"]+"~homepage "https://github.com/$ENV{REPO}"~g' "$FORMULA_FILE"
-perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-darwin-arm64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-darwin-arm64"~g' "$FORMULA_FILE"
-perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-darwin-x64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-darwin-x64"~g' "$FORMULA_FILE"
-perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-linux-arm64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-linux-arm64"~g' "$FORMULA_FILE"
-perl -0pi.bak -e 's~url "https://github.com/[^"]+/archon-linux-x64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/archon-linux-x64"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/hlab-darwin-arm64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/hlab-darwin-arm64"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/hlab-darwin-x64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/hlab-darwin-x64"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/hlab-linux-arm64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/hlab-linux-arm64"~g' "$FORMULA_FILE"
+perl -0pi.bak -e 's~url "https://github.com/[^"]+/hlab-linux-x64"~url "https://github.com/$ENV{REPO}/releases/download/v#{version}/hlab-linux-x64"~g' "$FORMULA_FILE"
 
 # Update checksums - handles both PLACEHOLDER and existing 64-char hex hashes
 # The formula structure places sha256 on its own line after url in each on_* block
@@ -129,14 +129,14 @@ sed -i.bak "s/PLACEHOLDER_SHA256_LINUX_X64/${SHA_LINUX_X64}/" "$FORMULA_FILE"
 # We need to be careful to update the right checksum for each platform
 
 # Strategy: Use line context to identify which checksum to update
-# Darwin ARM64: line after archon-darwin-arm64 URL
-sed -i.bak '/archon-darwin-arm64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_DARWIN_ARM64}"'"/;}' "$FORMULA_FILE"
-# Darwin x64: line after archon-darwin-x64 URL
-sed -i.bak '/archon-darwin-x64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_DARWIN_X64}"'"/;}' "$FORMULA_FILE"
-# Linux ARM64: line after archon-linux-arm64 URL
-sed -i.bak '/archon-linux-arm64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_LINUX_ARM64}"'"/;}' "$FORMULA_FILE"
-# Linux x64: line after archon-linux-x64 URL
-sed -i.bak '/archon-linux-x64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_LINUX_X64}"'"/;}' "$FORMULA_FILE"
+# Darwin ARM64: line after hlab-darwin-arm64 URL
+sed -i.bak '/hlab-darwin-arm64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_DARWIN_ARM64}"'"/;}' "$FORMULA_FILE"
+# Darwin x64: line after hlab-darwin-x64 URL
+sed -i.bak '/hlab-darwin-x64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_DARWIN_X64}"'"/;}' "$FORMULA_FILE"
+# Linux ARM64: line after hlab-linux-arm64 URL
+sed -i.bak '/hlab-linux-arm64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_LINUX_ARM64}"'"/;}' "$FORMULA_FILE"
+# Linux x64: line after hlab-linux-x64 URL
+sed -i.bak '/hlab-linux-x64/{n;s/sha256 "[a-f0-9]\{64\}"/sha256 "'"${SHA_LINUX_X64}"'"/;}' "$FORMULA_FILE"
 
 # Clean up backup files
 rm -f "${FORMULA_FILE}.bak"

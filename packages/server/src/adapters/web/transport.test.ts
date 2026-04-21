@@ -16,7 +16,7 @@ const mockLogger = {
   level: 'info',
 };
 
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 

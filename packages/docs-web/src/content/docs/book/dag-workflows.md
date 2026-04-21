@@ -140,7 +140,7 @@ nodes:
 ### 실행하고 관찰하기
 
 ```bash
-archon workflow run classify-and-route --branch fix/auth-issue "Users can't log in after password reset"
+hlab workflow run classify-and-route --branch fix/auth-issue "Users can't log in after password reset"
 ```
 
 어떤 일이 일어나는지 봅시다.
@@ -153,7 +153,7 @@ archon workflow run classify-and-route --branch fix/auth-issue "Users can't log 
 feature request로 다시 실행합니다.
 
 ```bash
-archon workflow run classify-and-route --branch feature/dark-mode "Add dark mode support"
+hlab workflow run classify-and-route --branch feature/dark-mode "Add dark mode support"
 ```
 
 이번에는 `plan`이 실행되고 `investigate`는 건너뜁니다. 같은 workflow가 두 경로를 처리합니다.

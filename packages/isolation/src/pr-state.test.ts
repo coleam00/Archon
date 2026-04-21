@@ -9,7 +9,7 @@ const mockLogger = {
   trace: mock(() => undefined),
   child: mock(() => mockLogger),
 };
-mock.module('@archon/paths', () => ({
+mock.module('@harneeslab/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
@@ -22,7 +22,7 @@ const mockExecFileAsync = mock(
   (_cmd: string, _args: string[]): Promise<ExecResult> =>
     Promise.resolve({ stdout: '', stderr: '' })
 );
-mock.module('@archon/git', () => ({
+mock.module('@harneeslab/git', () => ({
   execFileAsync: mockExecFileAsync,
   toRepoPath: (p: string) => p,
   toBranchName: (b: string) => b,

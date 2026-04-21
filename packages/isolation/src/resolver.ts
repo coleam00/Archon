@@ -6,7 +6,7 @@
  * union results; the caller handles messaging and DB updates.
  */
 
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 import {
   worktreeExists,
   toWorktreePath,
@@ -15,8 +15,8 @@ import {
   toBranchName,
   isAncestorOf,
   verifyWorktreeOwnership,
-} from '@archon/git';
-import type { RepoPath, BranchName, WorktreePath } from '@archon/git';
+} from '@harneeslab/git';
+import type { RepoPath, BranchName, WorktreePath } from '@harneeslab/git';
 
 import type {
   IIsolationProvider,

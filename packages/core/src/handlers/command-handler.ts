@@ -8,23 +8,23 @@ import { type Conversation, type CommandResult, ConversationNotFoundError } from
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
-import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
-import { getIsolationProvider } from '@archon/isolation';
+import { listWorktrees, execFileAsync, toRepoPath } from '@harneeslab/git';
+import { getIsolationProvider } from '@harneeslab/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
   cleanupStaleWorktrees,
   getWorktreeStatusBreakdown,
 } from '../services/cleanup-service';
-import { getArchonWorkspacesPath } from '@archon/paths';
+import { getArchonWorkspacesPath } from '@harneeslab/paths';
 import { loadConfig } from '../config/config-loader';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { resolveWorkflowName } from '@archon/workflows/router';
+import { discoverWorkflowsWithConfig } from '@harneeslab/workflows/workflow-discovery';
+import { resolveWorkflowName } from '@harneeslab/workflows/router';
 import type {
   WorkflowWithSource,
   WorkflowLoadError,
   WorkflowDefinition,
-} from '@archon/workflows/schemas/workflow';
+} from '@harneeslab/workflows/schemas/workflow';
 import * as workflowDb from '../db/workflows';
 import {
   approveWorkflow,
@@ -35,7 +35,7 @@ import {
 } from '../operations/workflow-operations';
 import { getTriggerForCommand, type DeactivatingCommand } from '../state/session-transitions';
 import { SessionNotFoundError } from '../db/sessions';
-import { createLogger } from '@archon/paths';
+import { createLogger } from '@harneeslab/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -897,7 +897,7 @@ export async function handleCommand(
     case 'help':
       return {
         success: true,
-        message: `## HarnessLab Orchestrator
+        message: `## HarneesLab Orchestrator
 
 Talk naturally — the orchestrator routes your requests to the right workflow and project automatically.
 
@@ -1094,8 +1094,8 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
         await import('fs/promises').then(fs => fs.mkdir(commandsDir, { recursive: true }));
 
         // Create default config.yaml
-        const defaultConfig = `# HarnessLab repository configuration
-# See: https://github.com/NewTurn2017/HarnessLab
+        const defaultConfig = `# HarneesLab repository configuration
+# See: https://github.com/NewTurn2017/HarneesLab
 
 # AI assistant preference (optional - overrides global default)
 # assistant: claude

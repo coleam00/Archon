@@ -4,10 +4,10 @@ Forge adapters connect Archon to code hosting platforms (GitHub, GitLab, etc.) v
 
 ## Interface
 
-Implement `IPlatformAdapter` from `@archon/core`:
+Implement `IPlatformAdapter` from `@harneeslab/core`:
 
 ```typescript
-import type { IPlatformAdapter } from '@archon/core';
+import type { IPlatformAdapter } from '@harneeslab/core';
 
 export class MyForgeAdapter implements IPlatformAdapter {
   async handleWebhook(payload: string, signature: string): Promise<void> {
@@ -57,7 +57,7 @@ community/forge/
 Register in `packages/server/src/index.ts` with a webhook route:
 
 ```typescript
-import { MyForgeAdapter } from '@archon/adapters/community/forge/my-forge';
+import { MyForgeAdapter } from '@harneeslab/adapters/community/forge/my-forge';
 
 // In main():
 const myForge = new MyForgeAdapter(token, secret, lockManager);
@@ -85,7 +85,7 @@ After adding your test file, update `packages/adapters/package.json` to add a se
 "test": "... existing batches ... && bun test src/community/forge/your-adapter/adapter.test.ts"
 ```
 
-Never add your test to an existing batch that mocks the same modules differently (e.g., `@archon/paths`, `@archon/git`).
+Never add your test to an existing batch that mocks the same modules differently (e.g., `@harneeslab/paths`, `@harneeslab/git`).
 
 ### Lazy logger pattern
 

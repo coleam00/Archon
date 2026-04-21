@@ -6,7 +6,7 @@
  * enables future strategies (containers, VMs).
  */
 
-import type { RepoPath, BranchName } from '@archon/git';
+import type { RepoPath, BranchName } from '@harneeslab/git';
 
 // --- Provider Types ---
 
