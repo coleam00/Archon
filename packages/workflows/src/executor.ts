@@ -173,26 +173,36 @@ async function sendCriticalMessage(
 }
 
 const RESERVED_WORKFLOW_INPUT_KEYS = new Set([
+  '1',
+  '2',
+  '3',
   'ARGUMENTS',
+  'USER_MESSAGE',
   'WORKFLOW_ID',
   'ARTIFACTS_DIR',
   'BASE_BRANCH',
   'DOCS_DIR',
   'LOOP_USER_INPUT',
   'REJECTION_REASON',
+  'CONTEXT',
+  'EXTERNAL_CONTEXT',
+  'ISSUE_CONTEXT',
 ]);
+
+// Keys must be identifier-style: start with a letter or underscore, followed by
+// letters, digits, or underscores. Hyphens and dots are disallowed — hyphens
+// cause prefix-match ambiguity in $KEY substitution; dots shadow node outputs.
+const WORKFLOW_INPUT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function assertSafeInputKeys(...sources: (Record<string, unknown> | undefined)[]): void {
   const invalid = sources
     .flatMap(source => (source ? Object.keys(source) : []))
-    .filter(
-      key =>
-        key.length === 0 ||
-        RESERVED_WORKFLOW_INPUT_KEYS.has(key) ||
-        /^[A-Za-z0-9_-]+\.output$/.test(key)
-    );
+    .filter(key => !WORKFLOW_INPUT_KEY_PATTERN.test(key) || RESERVED_WORKFLOW_INPUT_KEYS.has(key));
   if (invalid.length > 0) {
-    throw new Error(`Invalid workflow input key(s): ${invalid.join(', ')}`);
+    throw new Error(
+      `Invalid workflow input key(s): ${invalid.join(', ')}. ` +
+        'Keys must match /^[A-Za-z_][A-Za-z0-9_]*$/ and must not shadow reserved workflow variables.'
+    );
   }
 }
 
