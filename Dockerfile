@@ -121,9 +121,10 @@ ENV CLAUDE_BIN_PATH=/app/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
 RUN useradd -m -u 1001 -s /bin/bash appuser \
     && chown -R appuser:appuser /app
 
-# Create HarneesLab directories
-RUN mkdir -p /.archon/workspaces /.archon/worktrees \
-    && chown -R appuser:appuser /.archon
+# Create HarneesLab directories. Keep /.archon for users running new images with
+# older compose files that still mount the legacy path.
+RUN mkdir -p /.harneeslab/workspaces /.harneeslab/worktrees /.archon/workspaces /.archon/worktrees \
+    && chown -R appuser:appuser /.harneeslab /.archon
 
 # Copy root package files and lockfile
 COPY package.json bun.lock ./
@@ -173,7 +174,11 @@ RUN chown -R appuser:appuser /app
 RUN mkdir -p /home/appuser/.codex && chown appuser:appuser /home/appuser/.codex
 
 # Configure git to trust HarneesLab directories (as appuser)
-RUN gosu appuser git config --global --add safe.directory '/.archon/workspaces' && \
+RUN gosu appuser git config --global --add safe.directory '/.harneeslab/workspaces' && \
+    gosu appuser git config --global --add safe.directory '/.harneeslab/workspaces/*' && \
+    gosu appuser git config --global --add safe.directory '/.harneeslab/worktrees' && \
+    gosu appuser git config --global --add safe.directory '/.harneeslab/worktrees/*' && \
+    gosu appuser git config --global --add safe.directory '/.archon/workspaces' && \
     gosu appuser git config --global --add safe.directory '/.archon/workspaces/*' && \
     gosu appuser git config --global --add safe.directory '/.archon/worktrees' && \
     gosu appuser git config --global --add safe.directory '/.archon/worktrees/*'

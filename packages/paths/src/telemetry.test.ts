@@ -12,6 +12,7 @@ import {
 } from './telemetry';
 
 const ENV_VARS = [
+  'HARNEESLAB_HOME',
   'ARCHON_HOME',
   'ARCHON_TELEMETRY_DISABLED',
   'DO_NOT_TRACK',
@@ -116,6 +117,7 @@ describe('telemetry ID persistence', () => {
   beforeEach(() => {
     saved = saveEnv();
     tmpHome = mkdtempSync(join(tmpdir(), 'archon-telemetry-test-'));
+    delete process.env.HARNEESLAB_HOME;
     process.env.ARCHON_HOME = tmpHome;
     // Force-disable actual network capture — we only exercise the ID path.
     process.env.ARCHON_TELEMETRY_DISABLED = '1';

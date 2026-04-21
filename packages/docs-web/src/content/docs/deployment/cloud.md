@@ -281,7 +281,7 @@ GITHUB_TOKEN=ghp_your_token_here
 
 # Server settings
 PORT=3090
-ARCHON_HOME=/tmp/archon  # Override base directory (optional)
+HARNEESLAB_HOME=/opt/harneeslab  # Override base directory (optional)
 ```
 
 **GitHub Token 설정:**

@@ -3,10 +3,10 @@
  *
  * Strategy:
  * - If DATABASE_URL is set: Use PostgreSQL (shared with server)
- * - Otherwise: Use SQLite at ~/.archon/archon.db (standalone CLI)
+ * - Otherwise: Use SQLite in the HarneesLab home directory (standalone CLI)
  */
 import { join } from 'path';
-import { getArchonHome } from '@harneeslab/paths';
+import { getArchonHome, isDocker } from '@harneeslab/paths';
 import type { IDatabase, SqlDialect, QueryResult } from './adapters/types';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -44,7 +44,7 @@ export function getDatabase(): IDatabase {
 
     // Warn if running in Docker without DATABASE_URL — the postgres container
     // from --profile with-db is running but the app is silently using SQLite
-    if (process.env.ARCHON_DOCKER === 'true') {
+    if (isDocker()) {
       getLog().warn(
         {
           hint: 'Add DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent to .env to use PostgreSQL',

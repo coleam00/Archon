@@ -142,15 +142,15 @@ echo ""
 echo "HarneesLab Paths"
 echo "---------------"
 
-ARCHON_HOME="${ARCHON_HOME:-$HOME/.archon}"
-echo "  Home: $ARCHON_HOME"
-echo "  Workspaces: $ARCHON_HOME/workspaces"
-echo "  Worktrees: $ARCHON_HOME/worktrees"
+HARNEESLAB_HOME="${HARNEESLAB_HOME:-${ARCHON_HOME:-$HOME/.archon}}"
+echo "  Home: $HARNEESLAB_HOME"
+echo "  Workspaces: $HARNEESLAB_HOME/workspaces"
+echo "  Worktrees: $HARNEESLAB_HOME/worktrees"
 
-if [ -d "$ARCHON_HOME" ]; then
+if [ -d "$HARNEESLAB_HOME" ]; then
   check_pass "HarneesLab home directory exists"
-  if [ -f "$ARCHON_HOME/config.yaml" ]; then
-    check_pass "Global config exists ($ARCHON_HOME/config.yaml)"
+  if [ -f "$HARNEESLAB_HOME/config.yaml" ]; then
+    check_pass "Global config exists ($HARNEESLAB_HOME/config.yaml)"
   else
     check_warn "Global config will be created on first run"
   fi

@@ -18,6 +18,20 @@ import * as setupModule from './setup';
 // Test directory for file operations
 const TEST_DIR = join(tmpdir(), 'hlab-setup-test-' + Date.now());
 
+function restoreHomeEnv(harneeslabHome: string | undefined, archonHome: string | undefined): void {
+  if (harneeslabHome === undefined) {
+    delete process.env.HARNEESLAB_HOME;
+  } else {
+    process.env.HARNEESLAB_HOME = harneeslabHome;
+  }
+
+  if (archonHome === undefined) {
+    delete process.env.ARCHON_HOME;
+  } else {
+    process.env.ARCHON_HOME = archonHome;
+  }
+}
+
 describe('setup command', () => {
   beforeEach(() => {
     // Create test directory
@@ -52,17 +66,16 @@ describe('setup command', () => {
   describe('checkExistingConfig', () => {
     it('should return null when no .env file exists', () => {
       // Mock ARCHON_HOME to point to non-existent directory
+      const originalHarneesLabHome = process.env.HARNEESLAB_HOME;
       const originalHome = process.env.ARCHON_HOME;
+      delete process.env.HARNEESLAB_HOME;
       process.env.ARCHON_HOME = join(TEST_DIR, 'nonexistent');
 
-      const result = checkExistingConfig();
-
-      expect(result).toBeNull();
-
-      if (originalHome === undefined) {
-        delete process.env.ARCHON_HOME;
-      } else {
-        process.env.ARCHON_HOME = originalHome;
+      try {
+        const result = checkExistingConfig();
+        expect(result).toBeNull();
+      } finally {
+        restoreHomeEnv(originalHarneesLabHome, originalHome);
       }
     });
 
@@ -84,24 +97,24 @@ CODEX_ACCOUNT_ID=account1
 `.trim()
       );
 
+      const originalHarneesLabHome = process.env.HARNEESLAB_HOME;
       const originalHome = process.env.ARCHON_HOME;
+      delete process.env.HARNEESLAB_HOME;
       process.env.ARCHON_HOME = envDir;
 
-      const result = checkExistingConfig();
+      try {
+        const result = checkExistingConfig();
 
-      expect(result).not.toBeNull();
-      expect(result?.hasClaude).toBe(true);
-      expect(result?.hasCodex).toBe(true);
-      expect(result?.platforms.telegram).toBe(true);
-      expect(result?.platforms.github).toBe(false);
-      expect(result?.platforms.slack).toBe(false);
-      expect(result?.platforms.discord).toBe(false);
-      expect(result?.hasDatabase).toBe(false);
-
-      if (originalHome === undefined) {
-        delete process.env.ARCHON_HOME;
-      } else {
-        process.env.ARCHON_HOME = originalHome;
+        expect(result).not.toBeNull();
+        expect(result?.hasClaude).toBe(true);
+        expect(result?.hasCodex).toBe(true);
+        expect(result?.platforms.telegram).toBe(true);
+        expect(result?.platforms.github).toBe(false);
+        expect(result?.platforms.slack).toBe(false);
+        expect(result?.platforms.discord).toBe(false);
+        expect(result?.hasDatabase).toBe(false);
+      } finally {
+        restoreHomeEnv(originalHarneesLabHome, originalHome);
       }
     });
 
@@ -112,18 +125,44 @@ CODEX_ACCOUNT_ID=account1
 
       writeFileSync(envPath, 'DATABASE_URL=postgresql://localhost:5432/test');
 
+      const originalHarneesLabHome = process.env.HARNEESLAB_HOME;
       const originalHome = process.env.ARCHON_HOME;
+      delete process.env.HARNEESLAB_HOME;
       process.env.ARCHON_HOME = envDir;
 
-      const result = checkExistingConfig();
+      try {
+        const result = checkExistingConfig();
 
-      expect(result).not.toBeNull();
-      expect(result?.hasDatabase).toBe(true);
+        expect(result).not.toBeNull();
+        expect(result?.hasDatabase).toBe(true);
+      } finally {
+        restoreHomeEnv(originalHarneesLabHome, originalHome);
+      }
+    });
 
-      if (originalHome === undefined) {
-        delete process.env.ARCHON_HOME;
-      } else {
-        process.env.ARCHON_HOME = originalHome;
+    it('should prefer HARNEESLAB_HOME over ARCHON_HOME', () => {
+      const harneeslabEnvDir = join(TEST_DIR, '.harneeslab');
+      const archonEnvDir = join(TEST_DIR, '.archon');
+      mkdirSync(harneeslabEnvDir, { recursive: true });
+      mkdirSync(archonEnvDir, { recursive: true });
+      writeFileSync(
+        join(harneeslabEnvDir, '.env'),
+        'SLACK_BOT_TOKEN=xoxb-token\nSLACK_APP_TOKEN=xapp-token'
+      );
+      writeFileSync(join(archonEnvDir, '.env'), 'TELEGRAM_BOT_TOKEN=123:ABC');
+
+      const originalHarneesLabHome = process.env.HARNEESLAB_HOME;
+      const originalHome = process.env.ARCHON_HOME;
+      process.env.HARNEESLAB_HOME = harneeslabEnvDir;
+      process.env.ARCHON_HOME = archonEnvDir;
+
+      try {
+        const result = checkExistingConfig();
+
+        expect(result?.platforms.slack).toBe(true);
+        expect(result?.platforms.telegram).toBe(false);
+      } finally {
+        restoreHomeEnv(originalHarneesLabHome, originalHome);
       }
     });
   });

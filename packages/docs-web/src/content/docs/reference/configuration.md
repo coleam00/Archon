@@ -183,7 +183,7 @@ assistants:
 
 | Variable | 설명 | Default |
 | --- | --- | --- |
-| `ARCHON_HOME` | HarneesLab-managed file의 base directory | `~/.archon` |
+| `HARNEESLAB_HOME` | HarneesLab-managed file의 base directory. `ARCHON_HOME`은 legacy fallback | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090`(worktree에서는 auto-allocated) |
 | `LOG_LEVEL` | Logging verbosity(`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | batch-mode "starting" message에 표시할 bot name | `HarneesLab` |
@@ -283,7 +283,7 @@ assistants:
 
 | Variable | 설명 | Default |
 | --- | --- | --- |
-| `ARCHON_DATA` | HarneesLab data(workspaces, worktrees, artifacts)의 host path | Docker-managed volume |
+| `HARNEESLAB_DATA` | HarneesLab data(workspaces, worktrees, artifacts)의 host path. `ARCHON_DATA`는 legacy fallback | Docker-managed volume(`archon_data` compatibility default) |
 | `DOMAIN` | Caddy reverse proxy용 public domain(TLS auto-provisioned) | -- |
 | `CADDY_BASIC_AUTH` | Web UI와 API 보호용 Caddy basicauth directive | Disabled |
 | `AUTH_USERNAME` | form-based auth(Caddy forward_auth) username | -- |
@@ -298,13 +298,13 @@ Infrastructure configuration(database URL, platform token)은 `.env` file에 저
 
 | Component | 위치 | 목적 |
 |-----------|----------|---------|
-| **CLI** | `~/.archon/.env` | Global infrastructure config; CWD .env key를 먼저 strip한 뒤 `override: true`로 로드(HarneesLab config가 shell-inherited var보다 우선) |
-| **Server (dev)** | `<archon-repo>/.env` + `~/.archon/.env` | Repo `.env`는 platform token용; `~/.archon/.env`는 `override: true`로 로드 |
-| **Server (binary)** | `~/.archon/.env` | 단일 source of truth(compiled binary에서는 repo `.env` path 사용 불가) |
+| **CLI** | `$HARNEESLAB_HOME/.env`, `$ARCHON_HOME/.env`, 또는 `~/.archon/.env` | Global infrastructure config; CWD .env key를 먼저 strip한 뒤 `override: true`로 로드(HarneesLab config가 shell-inherited var보다 우선) |
+| **Server (dev)** | `<archon-repo>/.env` + global `.env` | Repo `.env`는 platform token용; global `.env`는 `override: true`로 로드 |
+| **Server (binary)** | global `.env` | 단일 source of truth(compiled binary에서는 repo `.env` path 사용 불가) |
 
-**동작 방식**: 시작 시 CLI와 server는 현재 작업 디렉터리의 `.env`, `.env.local`, `.env.development`, `.env.production`에서 Bun이 자동 로드한 모든 key와 nested Claude Code session marker(auth var를 제외한 `CLAUDECODE`, `CLAUDE_CODE_*`)를 제거한 뒤 `~/.archon/.env`를 로드합니다. 이렇게 하면 target repo key와 nested-session guard가 어떤 application code도 실행되기 전에 `process.env`에서 완전히 제거됩니다.
+**동작 방식**: 시작 시 CLI와 server는 현재 작업 디렉터리의 `.env`, `.env.local`, `.env.development`, `.env.production`에서 Bun이 자동 로드한 모든 key와 nested Claude Code session marker(auth var를 제외한 `CLAUDECODE`, `CLAUDE_CODE_*`)를 제거한 뒤 global `.env`를 로드합니다. global `.env` 위치는 `HARNEESLAB_HOME`, `ARCHON_HOME`, `~/.archon` 순서로 결정됩니다. 이렇게 하면 target repo key와 nested-session guard가 어떤 application code도 실행되기 전에 `process.env`에서 완전히 제거됩니다.
 
-**Best practice**: `~/.archon/.env`를 단일 source of truth로 사용하세요.
+**Best practice**: 기본 compatibility 경로인 `~/.archon/.env`를 사용하거나, 새 custom 위치가 필요하면 `HARNEESLAB_HOME`을 설정하세요.
 
 ```bash
 # Create global config
@@ -318,7 +318,7 @@ cp .env.example ~/.archon/.env
 Docker container에서는 path가 자동으로 설정됩니다.
 
 ```
-/.archon/
+/.harneeslab/
 ├── workspaces/owner/repo/
 │   ├── source/
 │   ├── worktrees/
@@ -372,8 +372,10 @@ commands:
 ### Custom volume을 사용하는 Docker
 
 ```bash
-docker run -v /my/data:/.archon ghcr.io/newturn2017/harneeslab
+docker run -v /my/data:/.harneeslab ghcr.io/newturn2017/harneeslab
 ```
+
+기존 `ARCHON_DOCKER`와 `/.archon` mount도 compatibility path로 유지됩니다.
 
 ## Streaming mode
 
