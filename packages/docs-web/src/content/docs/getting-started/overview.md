@@ -383,9 +383,9 @@ assistant: claude
 commands:
   folder: .claude/commands/archon    # additional command search path
 worktree:
-  copyFiles:
-    - .env.example                   # copy into worktrees (same filename)
-    - .env
+  copyFiles:                         # gitignored files/dirs to copy into worktrees
+    - .env                           # (`.archon/` is copied automatically — no need to list it)
+    - plans/
 ```
 
 Without any `.archon/` config, the platform uses sensible defaults (bundled commands and workflows).
