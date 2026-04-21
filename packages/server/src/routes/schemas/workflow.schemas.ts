@@ -205,6 +205,12 @@ export const runWorkflowBodySchema = z
   .object({
     conversationId: z.string(),
     message: z.string(),
+    /**
+     * Runtime input values for workflows that declare an `inputs:` block.
+     * Keys must match input names declared in the workflow YAML; values are strings.
+     * Unrecognised keys are passed through and ignored by workflows that don't declare them.
+     */
+    inputs: z.record(z.string()).optional(),
   })
   .openapi('RunWorkflowBody');
 

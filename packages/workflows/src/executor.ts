@@ -15,6 +15,7 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import { classifyError } from './executor-shared';
+import type { WorkflowInput } from './schemas/workflow';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -172,6 +173,55 @@ async function sendCriticalMessage(
 }
 
 /**
+ * Merge workflow `inputs` defaults with caller-supplied runtime values.
+ * Caller values take precedence; defaults fill gaps.
+ * Validates that all `required: true` inputs are satisfied.
+ */
+function resolveInputs(
+  inputsDef: Record<string, WorkflowInput> | undefined,
+  runtimeInputs: Record<string, string> | undefined
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  if (inputsDef) {
+    for (const [key, spec] of Object.entries(inputsDef)) {
+      if (spec.default !== undefined) resolved[key] = spec.default;
+    }
+  }
+  if (runtimeInputs) {
+    for (const [key, value] of Object.entries(runtimeInputs)) {
+      resolved[key] = value;
+    }
+  }
+  if (inputsDef) {
+    for (const [key, spec] of Object.entries(inputsDef)) {
+      if (spec.required && resolved[key] === undefined) {
+        throw new Error(
+          `Required workflow input "${key}" was not provided. ` +
+            'Supply it via --set (CLI) or the inputs API field.'
+        );
+      }
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Apply resolved inputs map to a string value (model, provider, etc.).
+ * Substitutes $KEY patterns using the same word-boundary rule as substituteWorkflowVariables.
+ */
+function applyInputsToString(
+  value: string | undefined,
+  inputs: Record<string, string>
+): string | undefined {
+  if (!value || Object.keys(inputs).length === 0) return value;
+  let result = value;
+  for (const [key, val] of Object.entries(inputs)) {
+    result = result.replace(new RegExp(`\\$${key}(?![A-Za-z0-9_])`, 'g'), val);
+  }
+  return result;
+}
+
+/**
  * Resolve the artifacts and log directories for a workflow run.
  * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
  * Falls back to cwd-based paths for unregistered repos.
@@ -244,7 +294,9 @@ export async function executeWorkflow(
     prBranch?: string;
   },
   parentConversationId?: string,
-  preCreatedRun?: WorkflowRun
+  preCreatedRun?: WorkflowRun,
+  /** Runtime input values supplied by the caller. Merged with workflow `inputs` defaults. */
+  runtimeInputs?: Record<string, string>
 ): Promise<WorkflowExecutionResult> {
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -276,23 +328,31 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  // Resolve provider and model once (used by all nodes)
+  // Resolve runtime inputs (merge caller values with workflow-declared defaults).
+  // This must happen before model/provider resolution so $INPUT_NAME references work there.
+  const resolvedInputs = resolveInputs(workflow.inputs, runtimeInputs);
+
+  // Resolve provider and model once (used by all nodes).
+  // Apply runtime inputs first so model/provider can be parameterised via $INPUT_NAME.
   // When workflow sets a model but not a provider, infer provider from the model.
   // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
+  const effectiveModel = applyInputsToString(workflow.model, resolvedInputs);
+  const effectiveProvider = applyInputsToString(workflow.provider, resolvedInputs);
+
   let resolvedProvider: string;
   let providerSource: string;
-  if (workflow.provider) {
-    resolvedProvider = workflow.provider;
+  if (effectiveProvider) {
+    resolvedProvider = effectiveProvider;
     providerSource = 'workflow definition';
-  } else if (workflow.model) {
-    resolvedProvider = inferProviderFromModel(workflow.model, config.assistant);
+  } else if (effectiveModel) {
+    resolvedProvider = inferProviderFromModel(effectiveModel, config.assistant);
     providerSource = 'inferred from workflow model';
   } else {
     resolvedProvider = config.assistant;
     providerSource = 'config';
   }
   const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
+  const resolvedModel = effectiveModel ?? (assistantDefaults?.model as string | undefined);
   if (!isModelCompatible(resolvedProvider, resolvedModel)) {
     throw new Error(
       `Model "${resolvedModel}" is not compatible with provider "${resolvedProvider}". ` +
@@ -750,7 +810,8 @@ export async function executeWorkflow(
       config,
       configuredCommandFolder,
       issueContext,
-      dagPriorCompletedNodes
+      dagPriorCompletedNodes,
+      resolvedInputs
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

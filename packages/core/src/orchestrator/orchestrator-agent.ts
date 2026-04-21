@@ -221,7 +221,8 @@ async function dispatchOrchestratorWorkflow(
   codebase: Codebase,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  inputs?: Record<string, string>
 ): Promise<void> {
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -293,7 +294,12 @@ async function dispatchOrchestratorWorkflow(
         workflow,
         userMessage,
         conversation.id,
-        codebase.id
+        codebase.id,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        inputs
       );
     } else if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation
@@ -305,7 +311,12 @@ async function dispatchOrchestratorWorkflow(
         workflow,
         userMessage,
         conversation.id,
-        codebase.id
+        codebase.id,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        inputs
       );
     } else {
       await dispatchBackgroundWorkflow(
@@ -318,6 +329,7 @@ async function dispatchOrchestratorWorkflow(
           codebaseId: codebase.id,
           availableWorkflows: [workflow],
           isolationHints,
+          inputs,
         },
         workflow
       );
@@ -331,7 +343,12 @@ async function dispatchOrchestratorWorkflow(
       workflow,
       userMessage,
       conversation.id,
-      codebase.id
+      codebase.id,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      inputs
     );
   }
 }
@@ -530,8 +547,14 @@ export async function handleMessage(
   message: string,
   context?: HandleMessageContext
 ): Promise<void> {
-  const { issueContext, threadContext, parentConversationId, isolationHints, attachedFiles } =
-    context ?? {};
+  const {
+    issueContext,
+    threadContext,
+    parentConversationId,
+    isolationHints,
+    attachedFiles,
+    inputs,
+  } = context ?? {};
   try {
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
@@ -723,7 +746,8 @@ export async function handleMessage(
             conversation,
             result.workflow.definition,
             result.workflow.args ?? message,
-            isolationHints
+            isolationHints,
+            inputs
           );
         }
         return;
@@ -1392,7 +1416,8 @@ async function handleWorkflowRunCommand(
   conversation: Conversation,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  inputs?: Record<string, string>
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -1412,7 +1437,8 @@ async function handleWorkflowRunCommand(
       codebase,
       workflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      inputs
     );
     return;
   }
@@ -1489,7 +1515,8 @@ async function handleWorkflowRunCommand(
       codebase,
       resolvedWorkflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      inputs
     );
     return;
   }
