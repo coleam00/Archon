@@ -5753,3 +5753,101 @@ describe('executeDagWorkflow -- script nodes', () => {
     execSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// MCP plugin-noise filtering helpers
+// ---------------------------------------------------------------------------
+
+describe('parseMcpFailureServerNames', () => {
+  it('extracts names from a well-formed message', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    const names = parseMcpFailureServerNames(
+      'MCP server connection failed: telegram (disconnected), github (timeout)'
+    );
+    expect(names).toEqual(['telegram', 'github']);
+  });
+
+  it('returns empty array for unrelated messages', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('⚠️ Something else')).toEqual([]);
+    expect(parseMcpFailureServerNames('')).toEqual([]);
+  });
+
+  it('deduplicates repeated entries', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    const names = parseMcpFailureServerNames(
+      'MCP server connection failed: foo (a), foo (b), bar (c)'
+    );
+    expect(names).toEqual(['foo', 'bar']);
+  });
+
+  it('handles a single entry without status parens gracefully', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('MCP server connection failed: solo')).toEqual(['solo']);
+  });
+
+  it('drops empty segments from trailing/leading commas', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('MCP server connection failed: a (x), , b (y)')).toEqual([
+      'a',
+      'b',
+    ]);
+  });
+});
+
+describe('loadConfiguredMcpServerNames', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `mcp-names-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('returns empty set when nodeMcpPath is undefined', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const names = await loadConfiguredMcpServerNames(undefined, testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns server names for a valid JSON config (relative path)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(
+      join(testDir, 'mcp.json'),
+      JSON.stringify({ foo: { command: 'x' }, bar: { command: 'y' } })
+    );
+    const names = await loadConfiguredMcpServerNames('mcp.json', testDir);
+    expect([...names].sort()).toEqual(['bar', 'foo']);
+  });
+
+  it('returns server names for an absolute path', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const absolutePath = join(testDir, 'abs.json');
+    await writeFile(absolutePath, JSON.stringify({ baz: {} }));
+    const names = await loadConfiguredMcpServerNames(absolutePath, '/nonexistent/cwd');
+    expect([...names]).toEqual(['baz']);
+  });
+
+  it('returns empty set when file is missing (no crash)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const names = await loadConfiguredMcpServerNames('missing.json', testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns empty set for invalid JSON (provider surfaces its own error)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(join(testDir, 'broken.json'), '{ not-json');
+    const names = await loadConfiguredMcpServerNames('broken.json', testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns empty set when JSON is an array (not an object of servers)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(join(testDir, 'arr.json'), '["foo","bar"]');
+    const names = await loadConfiguredMcpServerNames('arr.json', testDir);
+    expect(names.size).toBe(0);
+  });
+});

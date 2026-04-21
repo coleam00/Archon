@@ -5,6 +5,8 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
+import { readFile } from 'fs/promises';
+import { isAbsolute, resolve as resolvePath } from 'path';
 import { execFileAsync } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
@@ -75,6 +77,54 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.dag-executor');
   return cachedLog;
+}
+
+const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
+
+/**
+ * Parse the SDK's "MCP server connection failed: a (status), b (status)"
+ * message into the list of failed server names (ordered, deduped). Best-effort
+ * — malformed or prefix-free messages return an empty array.
+ */
+export function parseMcpFailureServerNames(message: string): string[] {
+  if (!message.startsWith(MCP_FAILURE_PREFIX)) return [];
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const entry of message.slice(MCP_FAILURE_PREFIX.length).split(', ')) {
+    const name = entry.split(' (')[0]?.trim();
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Load the set of MCP server names that a node's `mcp:` config file declares.
+ *
+ * Returns an empty set when no `mcp:` is configured or when the file can't be
+ * read/parsed. Used to distinguish workflow-configured failures (surface to
+ * user) from user-plugin failures (silent debug log). We intentionally do not
+ * validate or env-expand here — the provider owns full loading and will
+ * surface its own parse errors via the warning channel if the file is broken.
+ */
+export async function loadConfiguredMcpServerNames(
+  nodeMcpPath: string | undefined,
+  cwd: string
+): Promise<Set<string>> {
+  if (!nodeMcpPath) return new Set();
+  const fullPath = isAbsolute(nodeMcpPath) ? nodeMcpPath : resolvePath(cwd, nodeMcpPath);
+  try {
+    const raw = await readFile(fullPath, 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(Object.keys(parsed as Record<string, unknown>));
+  } catch {
+    return new Set();
+  }
 }
 
 /** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
@@ -488,6 +538,11 @@ async function executeNodeInternal(
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
 
+  // Pre-compute the workflow-configured MCP server names. Used by the system
+  // message handler below to distinguish workflow-owned MCP failures (surface
+  // to the user) from user-plugin noise (debug log, suppress).
+  const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
+
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, node.command ?? '<inline>');
 
@@ -815,13 +870,48 @@ async function executeNodeInternal(
         }
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
-        // Forward provider warnings (⚠️) and MCP connection failures to the user.
-        // Providers yield system chunks for user-actionable issues (missing env vars,
-        // Haiku+MCP, structured output failures, etc.)
-        if (
-          msg.content.startsWith('MCP server connection failed:') ||
-          msg.content.startsWith('⚠️')
-        ) {
+        // Providers yield system chunks for user-actionable issues (missing env
+        // vars, Haiku+MCP, structured output failures, etc.). Two sub-cases:
+        //
+        // 1. MCP connection failures — only surface servers the *workflow*
+        //    configured via `mcp:`. User-level plugin MCPs (e.g. `telegram`
+        //    inherited from `~/.claude/`) often fail to connect in the
+        //    headless subprocess and produced spurious warnings before this
+        //    filter landed. Plugin failures are debug-logged, not shown.
+        //
+        // 2. Other provider warnings (⚠️) — always surface; these are things
+        //    the workflow author can act on.
+        if (msg.content.startsWith(MCP_FAILURE_PREFIX)) {
+          const failedNames = parseMcpFailureServerNames(msg.content);
+          const workflowFailures = failedNames.filter(n => configuredMcpNames.has(n));
+          const pluginFailures = failedNames.filter(n => !configuredMcpNames.has(n));
+
+          if (workflowFailures.length > 0) {
+            const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.join(', ')}`;
+            getLog().warn(
+              { nodeId: node.id, systemContent: filteredMsg },
+              'dag.provider_warning_forwarded'
+            );
+            const delivered = await safeSendMessage(
+              platform,
+              conversationId,
+              filteredMsg,
+              nodeContext
+            );
+            if (!delivered) {
+              getLog().error(
+                { nodeId: node.id, workflowRunId: workflowRun.id },
+                'dag.provider_warning_delivery_failed'
+              );
+            }
+          }
+          if (pluginFailures.length > 0) {
+            getLog().debug(
+              { nodeId: node.id, pluginFailures },
+              'dag.mcp_plugin_connection_suppressed'
+            );
+          }
+        } else if (msg.content.startsWith('⚠️')) {
           getLog().warn(
             { nodeId: node.id, systemContent: msg.content },
             'dag.provider_warning_forwarded'
