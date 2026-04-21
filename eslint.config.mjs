@@ -28,6 +28,7 @@ export default tseslint.config(
       'packages/web/components.json',
       'packages/web/src/components/ui/**', // shadcn/ui auto-generated components
       'packages/web/src/lib/utils.ts', // shadcn/ui utility file
+      'md-quick-view/**', // Unrelated local project
     ],
   },
 

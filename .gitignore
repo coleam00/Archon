@@ -109,3 +109,6 @@ packages/server/.env
 skills-lock.json
 test-results/
 .archon/ralph/
+
+# Unrelated local project
+md-quick-view/
