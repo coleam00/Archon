@@ -2,7 +2,7 @@ name: Deploy Docs
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths: ['packages/docs-web/**']
   workflow_dispatch:
 

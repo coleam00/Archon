@@ -227,7 +227,7 @@ If you want Codex to be the default AI assistant for new conversations without c
 DEFAULT_AI_ASSISTANT=codex
 ```
 
-## Pi (Community Provider)
+## Pi (Community Provider / pi.dev)
 
 **One adapter, ~20 LLM backends.** Pi (`@mariozechner/pi-coding-agent`) is a community-maintained coding-agent harness that Archon integrates as the first community provider. It unlocks Anthropic, OpenAI, Google (Gemini + Vertex), Groq, Mistral, Cerebras, xAI, OpenRouter, Hugging Face, and more under a single `provider: pi` entry.
 
@@ -235,11 +235,26 @@ Pi is registered as `builtIn: false` — it validates the community-provider sea
 
 ### Install
 
-Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
+Archon's Pi provider is included as a dependency of `@archon/providers` — no separate Archon plugin is needed.
+
+If you want to use Pi's own login flow, manage Pi packages/extensions, or populate `~/.pi/agent/auth.json` locally, install the upstream `pi` CLI too:
+
+```bash
+npm install -g @mariozechner/pi-coding-agent
+```
+
+Official docs live at [pi.dev](https://pi.dev).
 
 ### Authenticate
 
-Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
+Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi`, then `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.
+
+If you want subscription-backed auth, install the upstream CLI above, then run:
+
+```bash
+pi
+# then type: /login
+```
 
 **OAuth subscriptions (run `pi /login` locally):**
 - Anthropic Claude Pro/Max
@@ -371,6 +386,7 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 
 ### See also
 
+- [pi.dev](https://pi.dev) — official docs.
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
 

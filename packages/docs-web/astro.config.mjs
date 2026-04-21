@@ -20,7 +20,7 @@ export default defineConfig({
       ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/coleam00/Archon' }],
       editLink: {
-        baseUrl: 'https://github.com/coleam00/Archon/edit/main/packages/docs-web/',
+        baseUrl: 'https://github.com/coleam00/Archon/edit/dev/packages/docs-web/',
       },
       sidebar: [
         {

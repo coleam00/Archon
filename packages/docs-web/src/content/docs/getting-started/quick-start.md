@@ -10,9 +10,9 @@ sidebar:
 ## Prerequisites
 
 1. [Install Archon](/getting-started/installation/)
-2. [Install Claude Code](/getting-started/ai-assistants/#claude-code) — Archon orchestrates it but does not bundle it
-3. Authenticate with Claude: run `claude /login` (uses your existing Claude Pro/Max subscription)
-4. In compiled Archon binaries, set `CLAUDE_BIN_PATH` (see [Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only))
+2. [Set up an AI assistant](/getting-started/ai-assistants/) — Claude Code, Codex, and pi.dev are supported
+3. Authenticate the assistant you plan to use
+4. If you use compiled Archon binaries with Claude Code, set `CLAUDE_BIN_PATH` (see [Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only))
 5. Navigate to any git repository
 
 ## Run Your First Workflow
