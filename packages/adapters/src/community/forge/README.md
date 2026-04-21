@@ -1,10 +1,10 @@
 # Community Forge Adapters
 
-Forge adapters connect Archon to code hosting platforms (GitHub, GitLab, etc.) via webhooks.
+Forge adapter는 webhook을 통해 HarneesLab을 GitHub, GitLab 같은 code hosting platform에 연결합니다.
 
 ## Interface
 
-Implement `IPlatformAdapter` from `@harneeslab/core`:
+`@harneeslab/core`의 `IPlatformAdapter`를 구현합니다.
 
 ```typescript
 import type { IPlatformAdapter } from '@harneeslab/core';
@@ -33,12 +33,12 @@ export class MyForgeAdapter implements IPlatformAdapter {
 }
 ```
 
-## Key Differences from Chat Adapters
+## Chat Adapter와 다른 점
 
-- **Webhook-driven**: Events arrive via HTTP POST, not polling
-- **Heavier lifecycle**: Forge adapters manage repos, codebases, and isolation environments
-- **Conversation ID**: Typically `owner/repo#number` format
-- **Auth**: Webhook signature verification + user allowlist
+- **Webhook-driven**: event는 polling이 아니라 HTTP POST로 들어옵니다.
+- **더 무거운 lifecycle**: repo, codebase, isolation environment를 함께 다룹니다.
+- **Conversation ID**: 일반적으로 `owner/repo#number` 형식입니다.
+- **Auth**: webhook signature verification과 user allowlist를 함께 사용합니다.
 
 ## Directory Structure
 
@@ -54,7 +54,7 @@ community/forge/
 
 ## Registration
 
-Register in `packages/server/src/index.ts` with a webhook route:
+`packages/server/src/index.ts`에 webhook route와 함께 등록합니다.
 
 ```typescript
 import { MyForgeAdapter } from '@harneeslab/adapters/community/forge/my-forge';
@@ -75,21 +75,21 @@ app.post('/webhooks/my-forge', async (c) => {
 
 ## Testing
 
-### Mock isolation (required)
+### Mock isolation (필수)
 
-Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it. Your test file **must** run in its own `bun test` invocation to avoid polluting other tests.
+Bun의 `mock.module()`은 process-global이고 되돌릴 수 없습니다. `mock.restore()`로는 원복되지 않습니다. 다른 test를 오염시키지 않도록 이 test file은 반드시 별도 `bun test` invocation에서 실행해야 합니다.
 
-After adding your test file, update `packages/adapters/package.json` to add a separate batch:
+test file을 추가했다면 `packages/adapters/package.json`에 별도 batch를 추가합니다.
 
 ```json
 "test": "... existing batches ... && bun test src/community/forge/your-adapter/adapter.test.ts"
 ```
 
-Never add your test to an existing batch that mocks the same modules differently (e.g., `@harneeslab/paths`, `@harneeslab/git`).
+같은 module(예: `@harneeslab/paths`, `@harneeslab/git`)을 다른 방식으로 mock하는 기존 batch에 새 test를 추가하지 마세요.
 
 ### Lazy logger pattern
 
-Always use a module-level `cachedLog` + `getLog()` getter so test mocks can intercept `createLogger` before the logger is instantiated:
+test mock이 logger 생성 전에 `createLogger`를 가로챌 수 있도록 module-level `cachedLog`와 `getLog()` getter를 사용합니다.
 
 ```typescript
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -101,7 +101,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 ### Log event naming
 
-Follow the `{domain}.{action}_{state}` convention. Standard states: `_started`, `_completed`, `_failed`. Always pair `_started` with `_completed` or `_failed`.
+`{domain}.{action}_{state}` convention을 따릅니다. 표준 state는 `_started`, `_completed`, `_failed`입니다. `_started`는 항상 `_completed` 또는 `_failed`와 짝을 맞춥니다.
 
 ```typescript
 // ✅ CORRECT
@@ -115,4 +115,4 @@ getLog().error({ err }, 'error_posting');
 
 ## Reference
 
-See the GitHub adapter (`packages/adapters/src/forge/github/`) for a complete working example.
+완성된 예시는 GitHub adapter(`packages/adapters/src/forge/github/`)를 참고하세요.
