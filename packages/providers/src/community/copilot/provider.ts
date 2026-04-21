@@ -189,8 +189,11 @@ async function buildSessionConfig(
     warnings.push({ code: 'copilot.reasoning_ignored', message: reasoning.warning });
   }
 
+  const requestedModel = requestOptions?.model?.trim() || undefined;
+  const defaultModel = copilotConfig.model?.trim() || undefined;
+
   const sessionConfig: SessionConfig = {
-    model: requestOptions?.model ?? copilotConfig.model,
+    model: requestedModel ?? defaultModel,
     reasoningEffort: reasoning.effort,
     workingDirectory: cwd,
     configDir: copilotConfig.configDir,
@@ -429,6 +432,12 @@ export class CopilotProvider implements IAgentProvider {
         });
 
         const abortSignal = requestOptions?.abortSignal;
+        // `addEventListener('abort', ...)` is a no-op on an already-aborted
+        // signal, so short-circuit before handing the 24-hour sendAndWait
+        // path a signal that will never fire.
+        if (abortSignal?.aborted) {
+          throw new DOMException('Copilot sendQuery aborted before start', 'AbortError');
+        }
         const onAbort = (): void => {
           if (!session) return;
           void session.abort().catch(err => {
@@ -448,6 +457,7 @@ export class CopilotProvider implements IAgentProvider {
         }
 
         if (!sawAssistantContent && finalMessage?.data.content) {
+          sawAssistantContent = true;
           assistantBuffer += finalMessage.data.content;
           queue.push({ type: 'assistant', content: finalMessage.data.content });
         }
@@ -478,9 +488,14 @@ export class CopilotProvider implements IAgentProvider {
       } catch (error) {
         throw buildFriendlyCopilotError(error, lastSessionError);
       } finally {
+        // Cleanup must not throw — doing so would replace the primary
+        // result/error from the try block above. Log and swallow.
         try {
           await session?.disconnect();
-        } finally {
+        } catch (err) {
+          getLog().warn({ err }, 'copilot.disconnect_failed');
+        }
+        try {
           const stopErrors = await client.stop();
           if (stopErrors.length > 0) {
             getLog().warn(
@@ -488,6 +503,8 @@ export class CopilotProvider implements IAgentProvider {
               'copilot.client_stop_errors'
             );
           }
+        } catch (err) {
+          getLog().warn({ err }, 'copilot.client_stop_threw');
         }
       }
     })()

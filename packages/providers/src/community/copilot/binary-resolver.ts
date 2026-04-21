@@ -1,10 +1,27 @@
-import { existsSync as _existsSync } from 'node:fs';
+import { existsSync as _existsSync, statSync as _statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
 
+/** Wrapper for existsSync — enables spyOn in tests. */
 export function fileExists(path: string): boolean {
   return _existsSync(path);
+}
+
+/**
+ * True if `path` is a regular file and is executable by the current user.
+ * On win32, Node's stat.mode doesn't track Unix exec bits, so we fall back
+ * to "is a file" — which matches how `where` / `PATH` resolution works there.
+ */
+export function isExecutableFile(path: string): boolean {
+  try {
+    const stat = _statSync(path);
+    if (!stat.isFile()) return false;
+    if (process.platform === 'win32') return true;
+    return (stat.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
 }
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -63,10 +80,10 @@ export async function resolveCopilotCliPath(
 ): Promise<string | undefined> {
   const envPath = process.env.COPILOT_CLI_PATH;
   if (envPath) {
-    if (!fileExists(envPath)) {
+    if (!isExecutableFile(envPath)) {
       throw new Error(
-        `COPILOT_CLI_PATH is set to "${envPath}" but the file does not exist.\n` +
-          'Please verify the path points to the Copilot CLI executable.'
+        `COPILOT_CLI_PATH is set to "${envPath}" but it is not an executable file.\n` +
+          'Please verify the path points to the Copilot CLI executable (chmod +x if needed).'
       );
     }
     getLog().info({ binaryPath: envPath, source: 'env' }, 'copilot.binary_resolved');
@@ -74,10 +91,10 @@ export async function resolveCopilotCliPath(
   }
 
   if (configCopilotCliPath) {
-    if (!fileExists(configCopilotCliPath)) {
+    if (!isExecutableFile(configCopilotCliPath)) {
       throw new Error(
-        `assistants.copilot.copilotCliPath is set to "${configCopilotCliPath}" but the file does not exist.\n` +
-          'Please verify the path in .archon/config.yaml points to the Copilot CLI executable.'
+        `assistants.copilot.copilotCliPath is set to "${configCopilotCliPath}" but it is not an executable file.\n` +
+          'Please verify the path in .archon/config.yaml points to the Copilot CLI executable (chmod +x if needed).'
       );
     }
     getLog().info(
@@ -91,7 +108,7 @@ export async function resolveCopilotCliPath(
     const vendorBinaryName = getVendorBinaryName();
     if (vendorBinaryName) {
       const vendorBinaryPath = join(getArchonHome(), COPILOT_VENDOR_DIR, vendorBinaryName);
-      if (fileExists(vendorBinaryPath)) {
+      if (isExecutableFile(vendorBinaryPath)) {
         getLog().info(
           { binaryPath: vendorBinaryPath, source: 'vendor' },
           'copilot.binary_resolved'
@@ -102,7 +119,7 @@ export async function resolveCopilotCliPath(
   }
 
   const fromPath = resolveFromPath();
-  if (fromPath && fileExists(fromPath)) {
+  if (fromPath && isExecutableFile(fromPath)) {
     getLog().info({ binaryPath: fromPath, source: 'path' }, 'copilot.binary_resolved');
     return fromPath;
   }

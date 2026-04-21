@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,23 +18,40 @@ const mockLogger = {
   level: 'info',
 };
 
+// Per-test Archon home — mutated from beforeEach so each test run is isolated
+// and never writes to a shared `/tmp/.archon`.
+let archonHome = '';
+
 mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: true,
-  getArchonHome: () => '/tmp/.archon',
+  getArchonHome: () => archonHome,
   createLogger: () => mockLogger,
 }));
 
 import * as resolver from './binary-resolver';
 
+function writeExecutable(path: string): void {
+  writeFileSync(path, '#!/bin/sh\n');
+  chmodSync(path, 0o755);
+}
+
+let tmpRoot = '';
+
 describe('resolveCopilotCliPath', () => {
   beforeEach(() => {
     delete process.env.COPILOT_CLI_PATH;
+    tmpRoot = mkdtempSync(join(tmpdir(), 'copilot-bin-'));
+    archonHome = join(tmpRoot, 'archon-home');
+    mkdirSync(archonHome, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
   });
 
   test('uses env override when present', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'copilot-bin-'));
-    const binaryPath = join(dir, 'copilot');
-    writeFileSync(binaryPath, '#!/bin/sh\n');
+    const binaryPath = join(tmpRoot, 'copilot');
+    writeExecutable(binaryPath);
     process.env.COPILOT_CLI_PATH = binaryPath;
 
     await expect(resolver.resolveCopilotCliPath()).resolves.toBe(binaryPath);
@@ -46,20 +63,75 @@ describe('resolveCopilotCliPath', () => {
     await expect(resolver.resolveCopilotCliPath()).rejects.toThrow('COPILOT_CLI_PATH');
   });
 
+  test('throws when env override path is a directory, not a file', async () => {
+    const dirPath = join(tmpRoot, 'copilot-dir');
+    mkdirSync(dirPath, { recursive: true });
+    process.env.COPILOT_CLI_PATH = dirPath;
+
+    await expect(resolver.resolveCopilotCliPath()).rejects.toThrow('not an executable file');
+  });
+
+  test('throws when env override path is not executable', async () => {
+    const nonExec = join(tmpRoot, 'copilot-noexec');
+    writeFileSync(nonExec, '#!/bin/sh\n');
+    chmodSync(nonExec, 0o644);
+    process.env.COPILOT_CLI_PATH = nonExec;
+
+    // win32 skips the exec-bit check — skip assertion there.
+    if (process.platform === 'win32') {
+      await expect(resolver.resolveCopilotCliPath()).resolves.toBe(nonExec);
+      return;
+    }
+    await expect(resolver.resolveCopilotCliPath()).rejects.toThrow('not an executable file');
+  });
+
   test('uses config override when present', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'copilot-bin-'));
-    const binaryPath = join(dir, 'copilot');
-    writeFileSync(binaryPath, '#!/bin/sh\n');
+    const binaryPath = join(tmpRoot, 'copilot');
+    writeExecutable(binaryPath);
 
     await expect(resolver.resolveCopilotCliPath(binaryPath)).resolves.toBe(binaryPath);
   });
 
   test('uses vendor path in binary mode when available', async () => {
-    const vendorDir = '/tmp/.archon/vendor/copilot';
+    const vendorDir = join(archonHome, 'vendor', 'copilot');
     mkdirSync(vendorDir, { recursive: true });
     const vendorPath = join(vendorDir, 'copilot');
-    writeFileSync(vendorPath, '#!/bin/sh\n');
+    writeExecutable(vendorPath);
 
     await expect(resolver.resolveCopilotCliPath()).resolves.toBe(vendorPath);
+  });
+});
+
+describe('isExecutableFile', () => {
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'copilot-exec-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  test('returns true for an executable file', () => {
+    const path = join(tmpRoot, 'copilot');
+    writeExecutable(path);
+    expect(resolver.isExecutableFile(path)).toBe(true);
+  });
+
+  test('returns false for a missing path', () => {
+    expect(resolver.isExecutableFile(join(tmpRoot, 'nope'))).toBe(false);
+  });
+
+  test('returns false for a directory', () => {
+    const path = join(tmpRoot, 'a-dir');
+    mkdirSync(path, { recursive: true });
+    expect(resolver.isExecutableFile(path)).toBe(false);
+  });
+
+  test('returns false for a non-executable file on posix', () => {
+    if (process.platform === 'win32') return;
+    const path = join(tmpRoot, 'noexec');
+    writeFileSync(path, '#!/bin/sh\n');
+    chmodSync(path, 0o644);
+    expect(resolver.isExecutableFile(path)).toBe(false);
   });
 });

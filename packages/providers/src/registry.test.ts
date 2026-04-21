@@ -279,8 +279,7 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
+      // Bundled community providers should appear here automatically.
       expect(isRegisteredProvider('copilot')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
     });

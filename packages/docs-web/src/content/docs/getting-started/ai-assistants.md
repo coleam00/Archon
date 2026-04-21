@@ -283,6 +283,8 @@ assistants:
     # enableConfigDiscovery: false
 ```
 
+> **⚠️ Trust boundary.** `enableConfigDiscovery: true` lets the Copilot CLI/SDK load repo-level config (e.g. `.mcp.json`, `.vscode/mcp.json`, skill directories) directly, bypassing Archon's workflow validation surface. Only enable it for repositories you trust. Archon's default (`false`) keeps MCP/skills under explicit workflow control via `nodeConfig.mcp` and `nodeConfig.skills`.
+
 ### Supported Archon Features
 
 | Feature | Support | Notes |
