@@ -98,7 +98,7 @@ nodes:
       - For each finding: file, what's wrong, why it matters, estimated effort
     depends_on: [scan-metrics]
     context: fresh
-    allowed_tools: [Read, Write]
+    denied_tools: [Edit, Bash]
     hooks:
       PostToolUse:
         - matcher: "Read"
