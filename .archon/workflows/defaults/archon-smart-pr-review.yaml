@@ -1,14 +1,14 @@
 name: archon-smart-pr-review
 description: |
-  Use when: User wants a smart, efficient PR review that adapts to PR complexity.
-  Triggers: "smart review", "review this PR", "review PR #123", "efficient review",
+  사용할 때: PR complexity에 맞춰 효율적으로 적응하는 smart PR review를 원할 때.
+  트리거 예시: "smart review", "이 PR 리뷰해줘", "review PR #123", "efficient review",
             "smart PR review", "quick review".
-  Does: Gathers PR scope -> classifies complexity -> routes to only relevant review agents ->
-        synthesizes findings -> auto-fixes CRITICAL/HIGH issues.
-  NOT for: When you explicitly want ALL review agents (use archon-comprehensive-pr-review instead).
+  하는 일: PR scope 수집 -> complexity 분류 -> 관련 review agent만 라우팅 ->
+        findings 종합 -> CRITICAL/HIGH issue 자동 수정.
+  사용하지 않을 때: 모든 review agent를 명시적으로 실행하고 싶을 때(대신 archon-comprehensive-pr-review 사용).
 
-  Unlike the comprehensive review, this workflow classifies the PR first and only runs
-  the review agents that are relevant. A 3-line typo fix skips test-coverage and docs-impact.
+  comprehensive review와 달리, 이 workflow는 먼저 PR을 분류한 뒤 관련 있는 review agent만 실행한다.
+  예를 들어 3줄짜리 typo fix는 test-coverage와 docs-impact를 건너뛴다.
 
 nodes:
   - id: scope

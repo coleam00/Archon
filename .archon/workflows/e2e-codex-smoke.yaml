@@ -1,7 +1,7 @@
-# E2E smoke test — Codex provider
-# Verifies: provider selection, sendQuery, structured output
+# E2E smoke test - Codex provider
+# 확인 항목: provider 선택, sendQuery, structured output
 name: e2e-codex-smoke
-description: "E2E smoke test for Codex provider. Runs a simple prompt + structured output node."
+description: "Codex provider 연결을 확인하는 예제. 간단한 prompt와 structured output node를 실행한다."
 provider: codex
 model: gpt-5.2
 
@@ -23,7 +23,7 @@ nodes:
     idle_timeout: 30000
     depends_on: [simple]
 
-  # Assert both nodes returned output
+  # 두 node가 모두 output을 반환했는지 확인
   - id: assert
     bash: |
       simple_out="$simple.output"

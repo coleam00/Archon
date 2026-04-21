@@ -1,15 +1,15 @@
 name: archon-interactive-prd
 description: |
-  Use when: User wants to create a PRD through guided conversation.
-  Triggers: "create a prd", "new prd", "interactive prd", "plan a feature",
+  사용할 때: guided conversation을 통해 PRD를 만들고 싶을 때.
+  트리거 예시: "PRD 만들어줘", "new prd", "interactive prd", "feature 계획 세워줘",
             "product requirements", "write a prd".
-  NOT for: Autonomous PRD generation without human input (use archon-ralph-generate).
+  사용하지 않을 때: 사람 입력 없이 자율적으로 PRD를 생성할 때(archon-ralph-generate 사용).
 
-  Interactive workflow that guides the user through problem-first PRD creation:
-  1. Understand the idea → ask foundation questions → wait for answers
-  2. Research market & codebase → ask deep dive questions → wait for answers
-  3. Assess technical feasibility → ask scope questions → wait for answers
-  4. Generate PRD → validate technical claims against codebase → output
+  문제 우선 PRD 작성을 안내하는 interactive workflow:
+  1. 아이디어 이해 -> foundation questions 질문 -> 답변 대기.
+  2. market 및 codebase 조사 -> deep dive questions 질문 -> 답변 대기.
+  3. technical feasibility 평가 -> scope questions 질문 -> 답변 대기.
+  4. PRD 생성 -> 기술적 주장을 codebase 기준으로 검증 -> 출력.
 
 provider: claude
 interactive: true

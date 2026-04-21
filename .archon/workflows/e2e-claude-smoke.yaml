@@ -1,20 +1,20 @@
-# E2E smoke test — Claude provider
-# Verifies: Claude connectivity (sendQuery), $nodeId.output refs
-# Design: Only uses allowed_tools: [] (no tool use) and no output_format (no structured output)
-# because the Claude CLI subprocess is slow with those features in CI.
+# E2E smoke test - Claude provider
+# 확인 항목: Claude 연결(sendQuery), $nodeId.output refs
+# 설계: CI에서 Claude CLI subprocess가 느려질 수 있으므로 allowed_tools: []만 사용한다.
+# output_format은 쓰지 않아 structured output 비용을 피한다.
 name: e2e-claude-smoke
-description: "Smoke test for Claude provider. Verifies prompt response."
+description: "Claude provider 연결을 확인하는 짧은 예제. 간단한 prompt 응답을 검증한다."
 provider: claude
 model: haiku
 
 nodes:
-  # 1. Simple prompt — verifies Claude API connectivity via sendQuery
+  # 1. 간단한 prompt - sendQuery를 통한 Claude API 연결 확인
   - id: simple
     prompt: "What is 2+2? Answer with just the number, nothing else."
     allowed_tools: []
     idle_timeout: 30000
 
-  # 2. Assert non-empty output — fails CI if Claude returned nothing
+  # 2. 빈 output 방지 - Claude가 아무것도 반환하지 않으면 CI 실패
   - id: assert
     bash: |
       output="$simple.output"

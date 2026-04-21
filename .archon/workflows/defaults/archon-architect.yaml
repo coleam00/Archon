@@ -1,16 +1,16 @@
 name: archon-architect
 description: |
-  Use when: User wants an architectural sweep, complexity reduction, or codebase health improvement.
-  Triggers: "architect", "simplify codebase", "reduce complexity", "architectural sweep",
-            "clean up architecture", "codebase health", "fix architecture".
-  Does: Scans codebase metrics -> analyzes architecture with principled lens -> plans targeted
-        simplifications -> executes fixes with self-review loops (hooks) -> validates -> creates PR.
-  NOT for: Single-file fixes, feature development, bug fixes, PR reviews.
+  사용할 때: architecture sweep, 복잡도 감소, codebase health 개선이 필요할 때.
+  트리거 예시: "architect", "codebase 단순화", "복잡도 줄이기", "architecture 정리",
+            "codebase health", "architecture 수정".
+  하는 일: codebase metrics 스캔 -> 원칙 기반 architecture 분석 -> targeted simplification 계획 ->
+        self-review loop(hooks)로 수정 실행 -> 검증 -> PR 생성.
+  사용하지 않을 때: 단일 파일 수정, feature 개발, 버그 수정, PR 리뷰.
 
-  DAG workflow showcasing per-node hooks:
-  - PostToolUse hooks create organic quality loops (lint after write, self-review)
-  - PreToolUse hooks inject architectural principles before changes
-  - Different nodes have different trust levels and steering
+  node별 hooks를 보여주는 DAG workflow:
+  - PostToolUse hooks는 lint after write, self-review 같은 품질 loop를 만든다.
+  - PreToolUse hooks는 변경 전에 architectural principles를 주입한다.
+  - node마다 다른 trust level과 steering을 적용한다.
 
 provider: claude
 

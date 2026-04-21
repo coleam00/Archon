@@ -1,9 +1,9 @@
 name: archon-feature-development
 description: |
-  Use when: Implementing a feature from an existing plan.
-  Input: Path to a plan file ($ARTIFACTS_DIR/plan.md) or GitHub issue containing a plan.
-  Does: Implements the plan with validation loops -> creates pull request.
-  NOT for: Creating plans (plans should be created separately), bug fixes, code reviews.
+  사용할 때: 기존 plan을 바탕으로 feature를 구현할 때.
+  입력: plan 파일 경로($ARTIFACTS_DIR/plan.md) 또는 plan이 포함된 GitHub issue.
+  하는 일: validation loop와 함께 plan을 구현 -> pull request 생성.
+  사용하지 않을 때: plan 작성(별도로 만들어야 함), 버그 수정, code review.
 
 nodes:
   - id: implement

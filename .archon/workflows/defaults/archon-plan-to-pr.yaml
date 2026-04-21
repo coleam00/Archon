@@ -1,20 +1,20 @@
 name: archon-plan-to-pr
 description: |
-  Use when: You have an existing implementation plan and want to execute it end-to-end.
-  Input: Path to a plan file ($ARTIFACTS_DIR/plan.md or .agents/plans/*.md)
-  Output: PR ready for merge with comprehensive review completed
+  사용할 때: 기존 implementation plan이 있고 이를 end-to-end로 실행하고 싶을 때.
+  입력: plan 파일 경로($ARTIFACTS_DIR/plan.md 또는 .agents/plans/*.md).
+  출력: comprehensive review까지 완료되어 merge 준비가 된 PR.
 
-  Full workflow:
-  1. Read plan, setup branch, extract scope limits
-  2. Verify plan research is still valid
-  3. Implement all tasks with type-checking
-  4. Run full validation suite
-  5. Create PR with template, mark ready
-  6. Comprehensive code review (5 parallel agents with scope limit awareness)
-  7. Synthesize and fix review findings
-  8. Final summary with decision matrix -> GitHub comment + follow-up recommendations
+  전체 workflow:
+  1. plan을 읽고 branch를 설정하며 scope limits를 추출한다.
+  2. plan research가 아직 유효한지 확인한다.
+  3. type-checking과 함께 모든 task를 구현한다.
+  4. 전체 validation suite를 실행한다.
+  5. template으로 PR을 만들고 ready 상태로 표시한다.
+  6. comprehensive code review를 실행한다(scope limit을 인식하는 병렬 agent 5개).
+  7. review findings를 종합하고 수정한다.
+  8. decision matrix가 포함된 최종 요약 -> GitHub comment + follow-up recommendations.
 
-  NOT for: Creating plans from scratch (use archon-idea-to-pr), quick fixes, standalone reviews.
+  사용하지 않을 때: plan을 처음부터 작성할 때(archon-idea-to-pr 사용), 빠른 수정, 단독 review.
 
 nodes:
   # ═══════════════════════════════════════════════════════════════════

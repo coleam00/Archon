@@ -1,12 +1,12 @@
 name: archon-remotion-generate
 description: |
-  Use when: User wants to generate or modify a Remotion video composition using AI.
-  Triggers: "create a video", "generate video", "remotion", "make an animation",
+  사용할 때: AI로 Remotion video composition을 생성하거나 수정하고 싶을 때.
+  트리거 예시: "video 만들어줘", "generate video", "remotion", "animation 만들어줘",
             "video about", "animate".
-  Does: AI writes Remotion React code -> renders preview stills -> renders full video ->
-        summarizes the output.
-  Requires: A Remotion project in the working directory (src/index.ts, src/Root.tsx).
-  Optional: Install the remotion-best-practices skill for higher quality output:
+  하는 일: AI가 Remotion React code 작성 -> preview stills 렌더링 -> 전체 video 렌더링 ->
+        output 요약.
+  필요 조건: working directory가 Remotion project여야 한다(src/index.ts, src/Root.tsx).
+  선택 사항: 더 높은 품질의 output을 위해 remotion-best-practices skill 설치:
             npx skills add remotion-dev/skills
 
 nodes:

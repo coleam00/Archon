@@ -1,21 +1,21 @@
 name: archon-idea-to-pr
 description: |
-  Use when: You have a feature idea or description and want end-to-end development.
-  Input: Feature description in natural language, or path to a PRD file
-  Output: PR ready for merge with comprehensive review completed
+  사용할 때: feature 아이디어나 설명이 있고 end-to-end 개발을 원할 때.
+  입력: 자연어 feature 설명 또는 PRD 파일 경로.
+  출력: comprehensive review까지 완료되어 merge 준비가 된 PR.
 
-  Full workflow:
-  1. Create comprehensive implementation plan with codebase analysis
-  2. Setup branch and extract scope limits
-  3. Verify plan research is still valid
-  4. Implement all tasks with type-checking
-  5. Run full validation suite
-  6. Create PR with template, mark ready
-  7. Comprehensive code review (5 parallel agents with scope limit awareness)
-  8. Synthesize and fix review findings
-  9. Final summary with decision matrix -> GitHub comment + follow-up recommendations
+  전체 workflow:
+  1. codebase 분석과 함께 포괄적인 implementation plan을 만든다.
+  2. branch를 설정하고 scope limits를 추출한다.
+  3. plan research가 아직 유효한지 확인한다.
+  4. type-checking과 함께 모든 task를 구현한다.
+  5. 전체 validation suite를 실행한다.
+  6. template으로 PR을 만들고 ready 상태로 표시한다.
+  7. comprehensive code review를 실행한다(scope limit을 인식하는 병렬 agent 5개).
+  8. review findings를 종합하고 수정한다.
+  9. decision matrix가 포함된 최종 요약 -> GitHub comment + follow-up recommendations.
 
-  NOT for: Executing existing plans (use archon-plan-to-pr), quick fixes, standalone reviews.
+  사용하지 않을 때: 기존 plan 실행(archon-plan-to-pr 사용), 빠른 수정, 단독 review.
 
 nodes:
   # ═══════════════════════════════════════════════════════════════════

@@ -1,14 +1,14 @@
 name: archon-validate-pr
 description: |
-  Use when: User wants a thorough PR validation that tests both main (bug present) and feature branch (bug fixed).
-  Triggers: "validate PR", "validate pr #123", "test this PR", "verify PR", "full PR validation",
+  사용할 때: main(버그 존재)과 feature branch(버그 수정)를 모두 테스트하는 철저한 PR validation이 필요할 때.
+  트리거 예시: "validate PR", "validate pr #123", "이 PR 테스트해줘", "verify PR", "full PR validation",
             "validate pull request", "test PR end-to-end".
-  Does: Fetches PR info -> finds free ports -> parallel code review (main vs feature) ->
-        E2E test on main (reproduce bug) -> E2E test on feature (verify fix) -> final verdict report.
-  NOT for: Quick code-only reviews (use archon-smart-pr-review), fixing issues, general exploration.
+  하는 일: PR info fetch -> free ports 탐색 -> 병렬 code review(main vs feature) ->
+        main에서 E2E test(버그 재현) -> feature에서 E2E test(fix 검증) -> final verdict report.
+  사용하지 않을 때: 빠른 code-only review(archon-smart-pr-review 사용), issue 수정, 일반 탐색.
 
-  This workflow is designed for running in parallel — each instance finds its own free ports
-  to avoid conflicts. Produces artifacts in $ARTIFACTS_DIR/ and posts a validation report.
+  이 workflow는 병렬 실행을 전제로 설계되었다. 각 instance가 자체 free ports를 찾아 충돌을 피한다.
+  $ARTIFACTS_DIR/ 에 artifacts를 만들고 validation report를 게시한다.
 
 provider: claude
 model: opus

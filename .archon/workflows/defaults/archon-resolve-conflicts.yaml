@@ -1,14 +1,14 @@
 name: archon-resolve-conflicts
 description: |
-  Use when: PR has merge conflicts that need resolution.
-  Triggers: "resolve conflicts", "fix merge conflicts", "rebase this PR", "resolve this",
+  사용할 때: PR에 해결해야 할 merge conflicts가 있을 때.
+  트리거 예시: "conflict 해결해줘", "fix merge conflicts", "이 PR rebase해줘", "resolve this",
             "fix conflicts", "merge conflicts", "rebase and fix".
-  Does: Fetches latest base branch -> analyzes conflicts -> auto-resolves simple conflicts ->
-        presents options for complex conflicts -> commits and pushes resolution.
-  NOT for: PRs without conflicts, general rebasing without conflicts, squashing commits.
+  하는 일: 최신 base branch fetch -> conflicts 분석 -> 단순 conflicts 자동 해결 ->
+        복잡한 conflicts는 선택지 제시 -> resolution commit 및 push.
+  사용하지 않을 때: conflicts가 없는 PR, conflicts 없는 일반 rebase, commit squash.
 
-  This workflow helps resolve merge conflicts by analyzing the conflicting changes,
-  automatically resolving where intent is clear, and presenting options for complex conflicts.
+  이 workflow는 충돌 변경을 분석하고, 의도가 명확한 부분은 자동 해결하며,
+  복잡한 conflicts는 선택지를 제시해 merge conflicts 해결을 돕는다.
 
 nodes:
   - id: resolve

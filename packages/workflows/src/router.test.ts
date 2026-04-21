@@ -474,6 +474,7 @@ function broken() {
 
       expect(result).toContain('CI failures, test failures, build errors');
       expect(result).toContain('assist');
+      expect(result).toContain('사용하지 않을 때 / NOT for');
       expect(result).toContain('NOT for');
     });
 

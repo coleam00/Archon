@@ -115,7 +115,7 @@ ${workflowList}
 
 1. The USER REQUEST is the PRIMARY signal — it determines which workflow to use
 2. The CONTEXT section is supplementary — it tells you WHERE the user is, not WHAT they want
-3. Read each workflow's description - especially the "NOT for" and "Use when" sections
+3. Read each workflow's description - especially "사용하지 않을 때 / NOT for" and "사용할 때 / Use when" sections
 4. CRITICAL: Being on a GitHub issue does NOT mean the user wants to fix it. Only route to "fix-github-issue" if the user EXPLICITLY asks to fix, resolve, or implement something.
 5. IMPORTANT distinctions:
    - CI failures, test failures, build errors, linting issues → use "assist" (debugging help)

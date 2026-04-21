@@ -1,29 +1,28 @@
-# E2E smoke test — Pi community provider
-# Verifies: Pi connectivity, $nodeId.output refs, async-queue bridge,
-#   and v2 wiring (thinkingLevel, allowed_tools).
-# Design: mirrors e2e-claude-smoke.yaml structure. The `allowed_tools: []`
-#   idiom disables Pi's built-in read/bash/edit/write so the smoke stays
-#   fast (no tool-use round-trips). `thinking: minimal` exercises the
-#   thinkingLevel translation path.
-# Auth: picks up either ANTHROPIC_API_KEY env var (CI) or your local
-#   `pi /login` OAuth credentials from ~/.pi/agent/auth.json.
+# E2E smoke test - Pi community provider
+# 확인 항목: Pi 연결, $nodeId.output refs, async-queue bridge,
+#   v2 wiring(thinkingLevel, allowed_tools).
+# 설계: e2e-claude-smoke.yaml 구조를 따른다. `allowed_tools: []`로 Pi의 내장
+#   read/bash/edit/write 도구를 꺼서 빠르게 실행한다(tool-use round trip 없음).
+#   `effort: low`는 thinkingLevel 변환 경로를 확인한다.
+# 인증: CI의 ANTHROPIC_API_KEY 또는 로컬 `pi /login` OAuth credentials
+#   (~/.pi/agent/auth.json)를 사용한다.
 name: e2e-pi-smoke
-description: 'Smoke test for Pi community provider. Verifies prompt response via sendQuery.'
+description: 'Pi community provider 연결을 확인하는 짧은 예제. sendQuery로 prompt 응답을 검증한다.'
 provider: pi
 model: anthropic/claude-haiku-4-5
 
 nodes:
-  # 1. Simple prompt — verifies Pi harness starts, AsyncQueue bridge yields
-  #    assistant chunks, and agent_end produces a result chunk. v2 wiring:
-  #    allowed_tools: [] disables all Pi tools (LLM-only); effort: low is
-  #    translated to Pi's thinkingLevel by options-translator.ts.
+  # 1. 간단한 prompt - Pi harness 시작, AsyncQueue bridge의 assistant chunks,
+  #    agent_end result chunk 생성을 확인한다. v2 wiring:
+  #    allowed_tools: []는 Pi tools를 모두 꺼서 LLM-only로 실행한다.
+  #    effort: low는 options-translator.ts에서 thinkingLevel로 변환된다.
   - id: simple
     prompt: 'What is 2+2? Answer with just the number, nothing else.'
     allowed_tools: []
     effort: low
     idle_timeout: 30000
 
-  # 2. Assert non-empty output — fails CI if Pi returned nothing
+  # 2. 빈 output 방지 - Pi가 아무것도 반환하지 않으면 CI 실패
   - id: assert
     bash: |
       output="$simple.output"

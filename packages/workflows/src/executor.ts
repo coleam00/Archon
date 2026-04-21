@@ -29,6 +29,21 @@ interface SendMessageContext {
   stepName?: string;
 }
 
+const ROUTING_METADATA_LABEL_PATTERN =
+  /^(Use when|Handles|NOT for|Capability|Triggers|사용할 때|처리 범위|사용하지 않을 때|역량|트리거 예시)[:\s]/i;
+
+export function cleanWorkflowDescriptionForStartup(
+  description: string | undefined,
+  fallbackName: string
+): string {
+  const cleanDescription = (description ?? '')
+    .split('\n')
+    .filter(line => !ROUTING_METADATA_LABEL_PATTERN.test(line) && line.trim())
+    .join('\n')
+    .trim();
+  return cleanDescription || fallbackName;
+}
+
 /**
  * Log a send message failure with context
  */
@@ -703,16 +718,7 @@ export async function executeWorkflow(
     }
 
     // Add workflow start message (step details omitted from text notification)
-    // Strip routing metadata from description (Use when:, Handles:, NOT for:, Capability:, Triggers:)
-    const cleanDescription = (workflow.description ?? '')
-      .split('\n')
-      .filter(
-        line =>
-          !/^\s*(Use when|Handles|NOT for|Capability|Triggers)[:\s]/i.test(line) && line.trim()
-      )
-      .join('\n')
-      .trim();
-    const descriptionText = cleanDescription || workflow.name;
+    const descriptionText = cleanWorkflowDescriptionForStartup(workflow.description, workflow.name);
     startupMessage += `🚀 **Starting workflow**: \`${workflow.name}\`\n\n> ${descriptionText}`;
 
     // Send consolidated message - use critical send with limited retries (1 retry max)

@@ -309,12 +309,15 @@ export async function validateWorkflowResources(
       const mcpPath = isAbsolute(node.mcp) ? node.mcp : resolve(cwd, node.mcp);
 
       if (!(await fileExists(mcpPath))) {
+        const isConditionalMcp = typeof node.when === 'string' && node.when.trim().length > 0;
         issues.push({
-          level: 'error',
+          level: isConditionalMcp ? 'warning' : 'error',
           nodeId: node.id,
           field: 'mcp',
           message: `MCP config file not found: '${node.mcp}'`,
-          hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
+          hint: isConditionalMcp
+            ? `This node is conditional and may be skipped. If the condition can be true, create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`
+            : `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
         });
       } else {
         // File exists — check it's valid JSON

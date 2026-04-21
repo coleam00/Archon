@@ -1,19 +1,19 @@
 name: archon-refactor-safely
 description: |
-  Use when: User wants to refactor code safely with continuous validation and behavior preservation.
-  Triggers: "refactor", "refactor safely", "split this file", "extract module", "break up",
+  사용할 때: 지속적인 validation과 behavior preservation을 유지하며 안전하게 refactor하고 싶을 때.
+  트리거 예시: "refactor", "안전하게 refactor", "이 파일 나눠줘", "extract module", "break up",
             "decompose", "safe refactor", "split file", "extract into modules".
-  Does: Scans refactoring scope -> analyzes impact (read-only) -> plans ordered task list ->
-        executes with type-check hooks after every edit -> validates full suite ->
-        verifies behavior preservation (read-only) -> creates PR with before/after comparison.
-  NOT for: Bug fixes (use archon-fix-github-issue), feature development (use archon-feature-development),
-           general architecture sweeps (use archon-architect), PR reviews.
+  하는 일: refactoring scope 스캔 -> impact 분석(read-only) -> 순서 있는 task list 계획 ->
+        매 edit 후 type-check hooks로 실행 -> 전체 suite 검증 ->
+        behavior preservation 확인(read-only) -> before/after 비교가 포함된 PR 생성.
+  사용하지 않을 때: 버그 수정(archon-fix-github-issue 사용), feature 개발(archon-feature-development 사용),
+           일반 architecture sweep(archon-architect 사용), PR 리뷰.
 
-  Key safety features:
-  - Analysis and verification nodes are read-only (denied_tools: [Write, Edit, Bash])
-  - PreToolUse hooks check if each edit is in the plan
-  - PostToolUse hooks force type-check after every file change
-  - Behavior verification confirms no logic changes after refactoring
+  주요 안전 장치:
+  - analysis 및 verification nodes는 read-only(denied_tools: [Write, Edit, Bash]).
+  - PreToolUse hooks가 각 edit이 plan 안에 있는지 확인한다.
+  - PostToolUse hooks가 모든 파일 변경 후 type-check를 강제한다.
+  - behavior verification이 refactoring 후 logic change가 없음을 확인한다.
 
 provider: claude
 

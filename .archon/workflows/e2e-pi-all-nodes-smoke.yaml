@@ -1,34 +1,34 @@
-# E2E smoke test — Pi provider, every node type
-# Covers: prompt, command, loop (AI node types) + bash, script bun/uv
+# E2E smoke test - Pi provider의 모든 주요 node type 예제
+# 포함 항목: prompt, command, loop(AI node types) + bash, script bun/uv
 #   (deterministic node types) + depends_on / when / trigger_rule / $nodeId.output
 #   (DAG features).
-# Skipped: `approval:` — pauses for human input, incompatible with CI.
-# Auth: ANTHROPIC_API_KEY (CI) or your local `pi /login` OAuth.
-# Expected runtime: ~10s on haiku (3 AI round-trips + deterministic nodes).
+# 제외 항목: `approval:` - 사람 입력을 기다리므로 CI와 맞지 않음.
+# 인증: ANTHROPIC_API_KEY(CI) 또는 로컬 `pi /login` OAuth.
+# 예상 시간: haiku 기준 약 10초(3회 AI round trip + deterministic nodes).
 name: e2e-pi-all-nodes-smoke
-description: 'Pi provider smoke across every CI-compatible node type.'
+description: 'Pi provider로 CI에서 실행 가능한 주요 node type을 한 번에 보여주는 예제.'
 provider: pi
 model: anthropic/claude-haiku-4-5
 
 nodes:
   # ─── AI node types ──────────────────────────────────────────────────────
 
-  # 1. prompt: inline prompt (simplest AI node)
+  # 1. prompt: inline prompt(가장 단순한 AI node)
   - id: prompt-node
     prompt: "Reply with exactly the single word 'ok' and nothing else."
     allowed_tools: []
     effort: low
     idle_timeout: 30000
 
-  # 2. command: named command file (.archon/commands/e2e-echo-command.md)
-  #    The command echoes back $ARGUMENTS (the workflow invocation message).
+  # 2. command: 이름이 있는 command file(.archon/commands/e2e-echo-command.md)
+  #    command는 $ARGUMENTS(workflow invocation message)를 echo로 돌려준다.
   - id: command-node
     command: e2e-echo-command
     allowed_tools: []
     idle_timeout: 30000
 
-  # 3. loop: iterative AI prompt until completion signal
-  #    Bounded by max_iterations: 2 so a misbehaving model can't hang CI.
+  # 3. loop: completion signal이 나올 때까지 반복하는 AI prompt
+  #    max_iterations: 2로 제한해 모델이 잘못 응답해도 CI가 멈추지 않게 한다.
   - id: loop-node
     loop:
       prompt: "Reply with exactly 'DONE' and nothing else."
@@ -38,20 +38,20 @@ nodes:
     effort: low
     idle_timeout: 60000
 
-  # ─── Deterministic node types (no AI) ───────────────────────────────────
+  # ─── Deterministic node types(AI 없음) ──────────────────────────────────
 
-  # 4. bash: shell script with JSON output (enables $nodeId.output.status
-  #    dot-access downstream)
+  # 4. bash: JSON output을 내는 shell script
+  #    downstream에서 $nodeId.output.status dot-access를 가능하게 한다.
   - id: bash-json-node
     bash: 'echo ''{"status":"ok"}'''
 
-  # 5. script: bun (TypeScript/JavaScript runtime)
+  # 5. script: bun(TypeScript/JavaScript runtime)
   - id: script-bun-node
     script: echo-args
     runtime: bun
     timeout: 30000
 
-  # 6. script: uv (Python runtime)
+  # 6. script: uv(Python runtime)
   - id: script-python-node
     script: echo-py
     runtime: uv
@@ -59,18 +59,18 @@ nodes:
 
   # ─── DAG features ───────────────────────────────────────────────────────
 
-  # 7. depends_on + $nodeId.output substitution
+  # 7. depends_on + $nodeId.output 치환
   - id: downstream
     bash: "echo 'downstream got: $prompt-node.output'"
     depends_on: [prompt-node]
 
-  # 8. when: conditional (JSON dot-access on upstream output)
+  # 8. when: 조건부 실행(upstream output의 JSON dot-access 사용)
   - id: gated
     bash: "echo 'gated-ok'"
     depends_on: [bash-json-node]
     when: "$bash-json-node.output.status == 'ok'"
 
-  # 9. trigger_rule: merge multiple deps (all_success semantics)
+  # 9. trigger_rule: 여러 dependency 병합(all_success 의미)
   - id: merge
     bash: "echo 'merge-ok'"
     depends_on: [downstream, gated, script-bun-node, script-python-node]
@@ -78,7 +78,7 @@ nodes:
 
   # ─── Final assertion ────────────────────────────────────────────────────
 
-  # 10. Verify every upstream node produced non-empty output.
+  # 10. 모든 upstream node가 비어 있지 않은 output을 만들었는지 확인
   - id: assert
     bash: |
       fail=0

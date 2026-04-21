@@ -1,21 +1,21 @@
 name: archon-fix-github-issue
 description: |
-  Use when: User wants to FIX, RESOLVE, or IMPLEMENT a solution for a GitHub issue.
-  Triggers: "fix this issue", "implement issue #123", "resolve this bug", "fix it",
+  사용할 때: GitHub issue의 해결책을 FIX, RESOLVE, IMPLEMENT하고 싶을 때.
+  트리거 예시: "이 issue 고쳐줘", "implement issue #123", "이 버그 해결해줘", "fix it",
             "fix issue", "resolve issue", "fix #123".
-  NOT for: Comprehensive multi-agent reviews (use archon-issue-review-full),
-           questions about issues, CI failures, PR reviews, general exploration.
+  사용하지 않을 때: 포괄적인 multi-agent review가 필요할 때(archon-issue-review-full 사용),
+           issue 관련 질문, CI 실패, PR 리뷰, 일반 탐색.
 
-  DAG workflow that:
-  1. Classifies the issue (bug/feature/enhancement/etc)
-  2. Researches context (web research + codebase exploration via investigate/plan)
-  3. Routes to investigate (bugs) or plan (features) based on classification
-  4. Implements the fix/feature with validation
-  5. Creates a draft PR using the repo's PR template
-  6. Runs smart review (always code review + CLAUDE.md check, conditional additional agents)
-  7. Aggressively self-fixes all findings (tests, docs, error handling)
-  8. Simplifies changed code (implements fixes directly, not just reports)
-  9. Reports results back to the GitHub issue with follow-up suggestions
+  DAG workflow가 하는 일:
+  1. issue를 분류한다(bug/feature/enhancement 등).
+  2. context를 조사한다(web research + investigate/plan을 통한 codebase 탐색).
+  3. 분류에 따라 investigate(버그) 또는 plan(feature)로 라우팅한다.
+  4. validation과 함께 fix/feature를 구현한다.
+  5. repo의 PR template으로 draft PR을 생성한다.
+  6. smart review를 실행한다(항상 code review + CLAUDE.md check, 조건부 추가 agent).
+  7. 모든 findings를 적극적으로 self-fix한다(tests, docs, error handling).
+  8. 변경 코드를 단순화한다(보고만 하지 않고 직접 수정).
+  9. GitHub issue에 결과와 follow-up 제안을 보고한다.
 
 provider: claude
 model: sonnet

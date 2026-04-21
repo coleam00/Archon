@@ -1,16 +1,16 @@
 name: archon-issue-review-full
 description: |
-  Use when: User wants a FULL, COMPREHENSIVE fix + review pipeline for a GitHub issue.
-  Triggers: "full review", "comprehensive fix", "fix with full review", "deep review", "issue review full".
-  NOT for: Simple issue fixes (use archon-fix-github-issue instead),
-           questions about issues, CI failures, PR reviews, general exploration.
+  사용할 때: GitHub issue에 대해 FULL, COMPREHENSIVE fix + review pipeline을 원할 때.
+  트리거 예시: "full review", "comprehensive fix", "fix with full review", "deep review", "issue review full".
+  사용하지 않을 때: 단순 issue 수정(대신 archon-fix-github-issue 사용),
+           issue 관련 질문, CI 실패, PR 리뷰, 일반 탐색.
 
-  Full workflow:
-  1. Investigate issue -> root cause analysis, implementation plan
-  2. Implement fix -> code changes, tests, PR creation
-  3. Comprehensive review -> 5 parallel agents with scope awareness
-  4. Fix review issues -> address CRITICAL/HIGH findings
-  5. Final summary -> decision matrix, follow-up recommendations
+  전체 workflow:
+  1. issue 조사 -> root cause analysis, implementation plan.
+  2. fix 구현 -> code changes, tests, PR 생성.
+  3. comprehensive review -> scope를 인식하는 병렬 agent 5개.
+  4. review issue 수정 -> CRITICAL/HIGH findings 대응.
+  5. 최종 요약 -> decision matrix, follow-up recommendations.
 
 nodes:
   # ═══════════════════════════════════════════════════════════════════

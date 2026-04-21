@@ -177,6 +177,22 @@ describe('validateWorkflowResources — MCP validation', () => {
     expect(issues.some(i => i.field === 'mcp' && i.level === 'error')).toBe(true);
   });
 
+  test('warning when missing MCP config is guarded by when condition', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'step1',
+        prompt: 'do stuff',
+        mcp: 'missing.json',
+        when: "$check.output == 'true'",
+      } as unknown as DagNode,
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const mcpIssues = issues.filter(i => i.field === 'mcp');
+    expect(mcpIssues).toHaveLength(1);
+    expect(mcpIssues[0].level).toBe('warning');
+    expect(mcpIssues[0].hint).toContain('conditional');
+  });
+
   test('error when MCP config has invalid JSON', async () => {
     const mcpPath = join(tmpDir, 'bad.json');
     await writeFile(mcpPath, '{bad json');

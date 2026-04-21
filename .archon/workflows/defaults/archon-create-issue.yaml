@@ -1,15 +1,15 @@
 name: archon-create-issue
 description: |
-  Use when: User wants to report a bug or problem as a GitHub issue with automated reproduction.
-  Triggers: "create issue", "file a bug", "report this bug", "open an issue for",
+  사용할 때: 버그나 문제를 자동 재현 근거와 함께 GitHub issue로 등록하고 싶을 때.
+  트리거 예시: "create issue", "버그 issue 만들어줘", "이 버그 신고해줘", "open an issue for",
             "create github issue", "report issue", "log this bug".
-  Does: Classifies problem area (haiku) -> gathers context in parallel (templates, git state, duplicates) ->
-        investigates relevant code -> reproduces the issue using area-specific tools (agent-browser, CLI, DB queries) ->
-        gates on reproduction success -> creates issue with full evidence OR reports back if cannot reproduce.
-  NOT for: Feature requests, enhancements, or non-bug work. Only for bugs/problems.
+  하는 일: 문제 영역 분류(haiku) -> context 병렬 수집(templates, git state, duplicates) ->
+        관련 코드 조사 -> 영역별 도구(agent-browser, CLI, DB queries)로 issue 재현 ->
+        재현 성공 여부로 gate -> 충분한 근거가 있으면 issue 생성, 재현 실패 시 결과 보고.
+  사용하지 않을 때: feature request, enhancement, 버그가 아닌 작업. 버그/문제 전용이다.
 
-  Reproduction gating: If the issue cannot be reproduced, the workflow does NOT create an issue.
-  Instead, it reports what was tried and suggests next steps to the user.
+  재현 gate: issue를 재현하지 못하면 이 workflow는 issue를 생성하지 않는다.
+  대신 시도한 내용과 다음 단계를 사용자에게 보고한다.
 
 nodes:
   # ═══════════════════════════════════════════════════════════════

@@ -60,7 +60,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 // --- Import after mocks ---
-import { executeWorkflow } from './executor';
+import { cleanWorkflowDescriptionForStartup, executeWorkflow } from './executor';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun } from './schemas';
@@ -141,6 +141,37 @@ describe('executeWorkflow', () => {
     mockEmitter.unregisterRun.mockClear();
     mockEmitter.emit.mockClear();
     mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
+  });
+
+  describe('startup description cleanup', () => {
+    it('strips Korean and English routing labels from startup descriptions', () => {
+      const cleaned = cleanWorkflowDescriptionForStartup(
+        `사용할 때: PR complexity에 맞춰 review할 때.
+트리거 예시: "smart review".
+하는 일: PR scope 수집 -> complexity 분류 -> 관련 review agent만 라우팅.
+사용하지 않을 때: 모든 review agent가 필요할 때.
+Use when: English metadata.
+Does: English body remains.`,
+        'archon-smart-pr-review'
+      );
+
+      expect(cleaned).toContain('하는 일: PR scope 수집');
+      expect(cleaned).toContain('Does: English body remains.');
+      expect(cleaned).not.toContain('사용할 때:');
+      expect(cleaned).not.toContain('트리거 예시:');
+      expect(cleaned).not.toContain('사용하지 않을 때:');
+      expect(cleaned).not.toContain('Use when:');
+    });
+
+    it('falls back to workflow name when only routing labels remain', () => {
+      const cleaned = cleanWorkflowDescriptionForStartup(
+        `사용할 때: 다른 workflow가 맞지 않을 때.
+트리거 예시: "assist".`,
+        'archon-assist'
+      );
+
+      expect(cleaned).toBe('archon-assist');
+    });
   });
 
   // -------------------------------------------------------------------------

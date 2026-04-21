@@ -1,10 +1,10 @@
 name: archon-workflow-builder
 description: |
-  Use when: User wants to create a new custom workflow for their project.
-  Triggers: "build me a workflow", "create a workflow", "generate a workflow",
+  사용할 때: project용 새 custom workflow를 만들고 싶을 때.
+  트리거 예시: "workflow 만들어줘", "create a workflow", "generate a workflow",
             "new workflow", "make a workflow for", "workflow builder".
-  Does: Scans codebase -> extracts intent (JSON) -> generates YAML -> validates -> saves.
-  NOT for: Editing existing workflows or creating non-workflow files.
+  하는 일: codebase 스캔 -> intent 추출(JSON) -> YAML 생성 -> validation -> 저장.
+  사용하지 않을 때: 기존 workflow 편집 또는 workflow가 아닌 파일 생성.
 
 nodes:
   - id: scan-codebase
@@ -55,13 +55,15 @@ nodes:
 
       Analyze the user's request and the existing codebase to determine:
       1. A kebab-case workflow name (e.g., "lint-and-test", "deploy-staging")
-      2. A description following the Archon pattern (Use when / Triggers / Does / NOT for)
+      2. A Korean description following the Archon routing pattern:
+         `사용할 때` / `트리거 예시` / `하는 일` / `사용하지 않을 때`
       3. Trigger phrases the router should match
       4. A list of proposed nodes with their types and purposes
       5. Whether this should be a simple DAG or include a loop node
 
       Be specific and concrete. Each proposed node should have a clear type
       (bash, prompt, command, or loop) and a one-line description of what it does.
+      Keep workflow names, commands, flags, file paths, variables, and provider/model names in English.
     model: haiku
     allowed_tools: []
     output_format:
@@ -103,10 +105,10 @@ nodes:
       ```yaml
       name: workflow-name
       description: |
-        Use when: ...
-        Triggers: ...
-        Does: ...
-        NOT for: ...
+        사용할 때: ...
+        트리거 예시: "trigger phrase", "한국어 트리거".
+        하는 일: ...
+        사용하지 않을 때: ...
 
       # Optional top-level settings:
       # provider: claude    (or codex)
@@ -155,7 +157,7 @@ nodes:
 
       ## Rules
       1. The `name:` field MUST match: $extract-intent.output.workflow_name
-      2. The `description:` MUST follow the "Use when / Triggers / Does / NOT for" pattern
+      2. The `description:` MUST use Korean routing labels: `사용할 때`, `트리거 예시`, `하는 일`, `사용하지 않을 때`
       3. Every node MUST have a unique kebab-case `id`
       4. Use `depends_on` to define execution order
       5. Use `bash` nodes for deterministic operations (file checks, git commands, installs)

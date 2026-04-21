@@ -1,16 +1,16 @@
 name: archon-ralph-dag
 description: |
-  Use when: User wants to run a Ralph implementation loop.
-  Triggers: "ralph", "run ralph", "ralph dag", "run ralph dag".
+  사용할 때: Ralph implementation loop를 실행하고 싶을 때.
+  트리거 예시: "ralph", "run ralph", "ralph dag", "run ralph dag".
 
-  DAG workflow that:
-  1. Detects input: existing prd.json, existing prd.md (needs stories), or raw idea
-  2. Generates prd.md + prd.json if needed (explores codebase, breaks into stories)
-  3. Validates PRD files, reads project context, installs dependencies
-  4. Runs Ralph loop (fresh context per iteration) implementing one story per iteration
-  5. Creates PR and reports completion
+  DAG workflow가 하는 일:
+  1. 입력을 감지한다: 기존 prd.json, 기존 prd.md(stories 필요), 또는 raw idea.
+  2. 필요하면 prd.md + prd.json을 생성한다(codebase 탐색, stories로 분해).
+  3. PRD 파일을 검증하고 project context를 읽으며 dependencies를 설치한다.
+  4. Ralph loop를 실행한다(반복마다 fresh context, 한 번에 story 하나 구현).
+  5. PR을 만들고 완료를 보고한다.
 
-  Accepts: An idea description, a path to an existing prd.md, or a directory with prd.md + prd.json
+  입력 가능: 아이디어 설명, 기존 prd.md 경로, 또는 prd.md + prd.json이 있는 directory.
 
 provider: claude
 

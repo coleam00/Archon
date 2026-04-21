@@ -1,9 +1,9 @@
 name: archon-test-loop-dag
 description: |
-  Use when: User explicitly says "test-loop-dag" or "run test-loop-dag".
-  IMPORTANT: This is a DAG workflow with a loop node that iterates until completion.
-  NOT for: General testing questions or debugging.
-  Does: Initializes a counter, iterates until it reaches 3, then reports completion.
+  사용할 때: 사용자가 명시적으로 "test-loop-dag" 또는 "run test-loop-dag"라고 말할 때.
+  중요: 완료될 때까지 반복하는 loop node가 포함된 DAG workflow다.
+  사용하지 않을 때: 일반 테스트 질문 또는 디버깅.
+  하는 일: counter를 초기화하고 3에 도달할 때까지 반복한 뒤 완료를 보고한다.
 
 nodes:
   - id: setup

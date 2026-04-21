@@ -1,17 +1,17 @@
 name: archon-adversarial-dev
 description: |
-  Use when: User wants to build a complete application from scratch using adversarial development.
-  Triggers: "adversarial dev", "adversarial development", "build with adversarial", "gan dev",
-            "adversarial build", "build app adversarially", "adversarial coding".
-  Does: Three-role GAN-inspired development — Planner creates spec with sprints, then a state-machine
-        loop alternates between Generator (builds code) and Evaluator (attacks it) with hard pass/fail
-        thresholds. The evaluator's job is to BREAK what the generator builds. If any criterion scores
-        below 7/10, the sprint goes back to the generator with adversarial feedback. Stops on sprint
-        failure after max retries.
-  NOT for: Bug fixes, PR reviews, refactoring existing code, simple one-off tasks.
+  사용할 때: adversarial development 방식으로 새 애플리케이션을 처음부터 완성하고 싶을 때.
+  트리거 예시: "adversarial dev", "적대적 개발", "adversarial 방식으로 앱 빌드",
+            "gan dev", "adversarial coding".
+  하는 일: GAN에서 영감을 받은 3개 역할로 개발한다. Planner가 sprint가 포함된 spec을 만들고,
+        state-machine loop가 Generator(코드 작성)와 Evaluator(공격적 평가)를 번갈아 실행한다.
+        Evaluator의 목적은 Generator 결과를 깨뜨리는 것이다. 어떤 기준이든 7/10 미만이면
+        adversarial feedback과 함께 sprint를 Generator로 되돌린다. max retries 후에도
+        sprint가 실패하면 중단한다.
+  사용하지 않을 때: 버그 수정, PR 리뷰, 기존 코드 refactor, 단순 일회성 작업.
 
-  Based on Anthropic's harness design article for long-running application development.
-  Separates planning, building, and evaluation into distinct roles with adversarial tension.
+  참고: 긴 애플리케이션 개발을 다룬 Anthropic harness design 글을 바탕으로 한다.
+  계획, 구현, 평가를 별도 역할로 나눠 의도적인 긴장 관계를 만든다.
 provider: claude
 model: sonnet
 
