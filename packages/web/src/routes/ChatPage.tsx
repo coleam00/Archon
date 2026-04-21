@@ -7,7 +7,7 @@ import { ConversationItem } from '@/components/conversations/ConversationItem';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useProject } from '@/contexts/ProjectContext';
-import { listConversations, listWorkflowRuns, addCodebase } from '@/lib/api';
+import { listConversations, listWorkflowRuns, addCodebase, getCodebaseInput } from '@/lib/api';
 import type { CodebaseResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -146,11 +146,7 @@ export function ChatPage(): React.ReactElement {
     setAddLoading(true);
     setAddError(null);
 
-    const isLocalPath =
-      trimmed.startsWith('/') || trimmed.startsWith('~') || /^[A-Za-z]:[/\\]/.test(trimmed);
-    const input = isLocalPath ? { path: trimmed } : { url: trimmed };
-
-    void addCodebase(input)
+    void addCodebase(getCodebaseInput(trimmed))
       .then(codebase => {
         void queryClient.invalidateQueries({ queryKey: ['codebases'] });
         setSelectedProjectId(codebase.id);

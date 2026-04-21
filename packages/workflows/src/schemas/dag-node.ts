@@ -106,6 +106,26 @@ export const sandboxSettingsSchema = z
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
+/**
+ * Claude Agent SDK AgentDefinition — inline sub-agent available via the Task tool.
+ * Mirrors the SDK's AgentDefinition type (sdk.d.ts), minus mcpServers and the
+ * experimental critical-reminder field.
+ */
+export const agentDefinitionSchema = z.object({
+  description: z.string().min(1, "'description' is required"),
+  prompt: z.string().min(1, "'prompt' is required"),
+  model: z.string().min(1).optional(),
+  tools: z.array(z.string().min(1)).optional(),
+  disallowedTools: z.array(z.string().min(1)).optional(),
+  skills: z.array(z.string().min(1)).optional(),
+  maxTurns: z.number().int().positive().optional(),
+});
+
+export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
+
+// Kebab-case: no leading/trailing/double hyphens (e.g. `brief-gen`, not `-brief`, `brief-`, `brief--gen`).
+const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
 // ---------------------------------------------------------------------------
 // DagNodeBase — common fields shared by all node types
 // ---------------------------------------------------------------------------
@@ -116,7 +136,7 @@ export const dagNodeBaseSchema = z.object({
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
   model: z.string().optional(),
-  provider: z.enum(['claude', 'codex']).optional(),
+  provider: z.string().trim().min(1).optional(),
   context: z.enum(['fresh', 'shared']).optional(),
   output_format: z.record(z.unknown()).optional(),
   allowed_tools: z.array(z.string()).optional(),
@@ -128,6 +148,13 @@ export const dagNodeBaseSchema = z.object({
   skills: z
     .array(z.string().min(1, 'each skill must be a non-empty string'))
     .nonempty("'skills' must be a non-empty array")
+    .optional(),
+  agents: z
+    .record(
+      z.string().regex(AGENT_ID_REGEX, 'agent IDs must be kebab-case (a-z, 0-9, hyphen)'),
+      agentDefinitionSchema
+    )
+    .refine(map => Object.keys(map).length > 0, "'agents' must have at least one entry")
     .optional(),
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),
@@ -291,10 +318,10 @@ export type DagNode =
   | ScriptNode;
 
 // ---------------------------------------------------------------------------
-// AI-specific fields that are meaningless on bash/loop nodes
+// AI-specific fields that are meaningless on non-AI nodes
 // ---------------------------------------------------------------------------
 
-/** AI-specific fields that are meaningless on bash/loop nodes — exported for loader warnings */
+/** AI-specific fields that are meaningless on bash nodes — exported for loader warnings */
 export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'provider',
   'model',
@@ -305,6 +332,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'hooks',
   'mcp',
   'skills',
+  'agents',
   'effort',
   'thinking',
   'maxBudgetUsd',
@@ -316,6 +344,15 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
 
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
 export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
+
+/**
+ * AI-specific fields that are unsupported on loop nodes.
+ * `model` and `provider` are excluded because the DAG executor resolves and
+ * forwards them to each iteration's AI call (see dag-executor.ts:2602-2648).
+ */
+export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
+  f => f !== 'model' && f !== 'provider'
+);
 
 // ---------------------------------------------------------------------------
 // dagNodeSchema — flat validation schema with transform to DagNode
@@ -488,10 +525,18 @@ export const dagNodeSchema = dagNodeBaseSchema
 
     // Provider/model compatibility (AI nodes only)
     if (!hasBash && !hasLoop && !hasScript && data.provider && data.model) {
-      if (!isModelCompatible(data.provider, data.model)) {
+      try {
+        if (!isModelCompatible(data.provider, data.model)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
+          });
+        }
+      } catch (e) {
+        // isModelCompatible throws on unknown providers — surface as a validation issue
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
+          message: (e as Error).message,
         });
       }
     }
@@ -526,6 +571,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
       ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
+      ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
       ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
       ...(data.maxBudgetUsd !== undefined ? { maxBudgetUsd: data.maxBudgetUsd } : {}),

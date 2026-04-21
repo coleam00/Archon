@@ -6,7 +6,17 @@
  * - AI assistants (Claude and/or Codex)
  * - Platform connections (GitHub, Telegram, Slack, Discord)
  *
- * Writes configuration to both ~/.archon/.env and <repo>/.env
+ * Writes configuration to one archon-owned env file, chosen by --scope:
+ *   - 'home'    (default)  → ~/.archon/.env
+ *   - 'project'            → <repo>/.archon/.env
+ *
+ * Never writes to <repo>/.env — that file is stripped at boot by stripCwdEnv()
+ * (see #1302 / #1303 three-path model). Writing there would be incoherent
+ * (values would be silently deleted on the next run).
+ *
+ * Writes are merge-only by default: existing non-empty values are preserved,
+ * user-added custom keys survive, and a timestamped backup is written before
+ * every rewrite. `--force` skips the merge (proposed wins) but still backs up.
  */
 import {
   intro,
@@ -22,12 +32,18 @@ import {
   cancel,
   log,
 } from '@clack/prompts';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
+import { parse as parseDotenv } from 'dotenv';
 import { join, dirname } from 'path';
 import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
+import { getRegisteredProviders } from '@archon/providers';
+import {
+  getArchonEnvPath as pathsGetArchonEnvPath,
+  getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
+} from '@archon/paths';
 
 // =============================================================================
 // Types
@@ -43,9 +59,12 @@ interface SetupConfig {
     claudeAuthType?: 'global' | 'apiKey' | 'oauthToken';
     claudeApiKey?: string;
     claudeOauthToken?: string;
+    /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
+     *  in ~/.archon/.env. Required in compiled Archon binaries; harmless in dev. */
+    claudeBinaryPath?: string;
     codex: boolean;
     codexTokens?: CodexTokens;
-    defaultAssistant: 'claude' | 'codex';
+    defaultAssistant: string;
   };
   platforms: {
     github: boolean;
@@ -105,6 +124,10 @@ interface ExistingConfig {
 interface SetupOptions {
   spawn?: boolean;
   repoPath: string;
+  /** Which archon-owned file to target. Default: 'home'. */
+  scope?: 'home' | 'project';
+  /** Skip merge and overwrite the target wholesale (backup still written). Default: false. */
+  force?: boolean;
 }
 
 interface SpawnResult {
@@ -160,6 +183,85 @@ function isCommandAvailable(command: string): boolean {
 }
 
 /**
+ * Probe wrappers — exported so tests can spy on each tier independently.
+ * Direct imports of `existsSync` and `execSync` cannot be intercepted by
+ * `spyOn` (esm rebinding limitation), so we route the probes through these
+ * thin wrappers and let the test mock them in isolation.
+ */
+export function probeFileExists(path: string): boolean {
+  return existsSync(path);
+}
+
+export function probeNpmRoot(): string | null {
+  try {
+    const out = execSync('npm root -g', {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+export function probeWhichClaude(): string | null {
+  try {
+    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
+    const resolved = execSync(`${checkCmd} claude`, {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    // On Windows, `where` can return multiple lines — take the first.
+    const first = resolved.split(/\r?\n/)[0]?.trim();
+    return first ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Try to locate the Claude Code executable on disk.
+ *
+ * Compiled Archon binaries need an explicit path because the Claude Agent
+ * SDK's `import.meta.url` resolution is frozen to the build host's filesystem.
+ * The SDK's `pathToClaudeCodeExecutable` accepts either:
+ *   - A native compiled binary (from the curl/PowerShell/winget installers — current default)
+ *   - A JS `cli.js` (from `npm install -g @anthropic-ai/claude-code` — older path)
+ *
+ * We probe the well-known install locations in order:
+ *   1. Native installer (`~/.local/bin/claude` on macOS/Linux, `%USERPROFILE%\.local\bin\claude.exe` on Windows)
+ *   2. npm global `cli.js`
+ *   3. `which claude` / `where claude` — fallback if the user installed via Homebrew, winget, or a custom layout
+ *
+ * Returns null on total failure so the caller can prompt the user.
+ * Detection is best-effort; the caller should let users override.
+ *
+ * Exported so the probe order can be tested directly by spying on the
+ * tier wrappers above (`probeFileExists`, `probeNpmRoot`, `probeWhichClaude`).
+ */
+export function detectClaudeExecutablePath(): string | null {
+  // 1. Native installer default location (primary Anthropic-recommended path)
+  const nativePath =
+    process.platform === 'win32'
+      ? join(homedir(), '.local', 'bin', 'claude.exe')
+      : join(homedir(), '.local', 'bin', 'claude');
+  if (probeFileExists(nativePath)) return nativePath;
+
+  // 2. npm global cli.js
+  const npmRoot = probeNpmRoot();
+  if (npmRoot) {
+    const npmCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
+    if (probeFileExists(npmCliJs)) return npmCliJs;
+  }
+
+  // 3. Fallback: resolve via `which` / `where` (Homebrew, winget, custom layouts)
+  const fromPath = probeWhichClaude();
+  if (fromPath && probeFileExists(fromPath)) return fromPath;
+
+  return null;
+}
+
+/**
  * Get Node.js version if installed, or null if not
  */
 function getNodeVersion(): { major: number; minor: number; patch: number } | null {
@@ -209,7 +311,7 @@ After installation, run: claude /login`,
 Install using one of these methods:
 
   Recommended for macOS (no Node.js required):
-    brew install --cask codex
+    brew install codex
 
   Or via npm (requires Node.js 18+):
     npm install -g @openai/codex
@@ -226,16 +328,19 @@ After installation, run 'codex' to authenticate.`,
 };
 
 /**
- * Check for existing configuration at ~/.archon/.env
+ * Check for existing configuration at the selected scope's archon-owned env
+ * file. Defaults to home scope for backward compatibility — callers writing to
+ * project scope must pass a path so the Add/Update/Fresh decision reflects the
+ * actual target.
  */
-export function checkExistingConfig(): ExistingConfig | null {
-  const envPath = join(getArchonHome(), '.env');
+export function checkExistingConfig(envPath?: string): ExistingConfig | null {
+  const path = envPath ?? join(getArchonHome(), '.env');
 
-  if (!existsSync(envPath)) {
+  if (!existsSync(path)) {
     return null;
   }
 
-  const content = readFileSync(envPath, 'utf-8');
+  const content = readFileSync(path, 'utf-8');
 
   return {
     hasDatabase: hasEnvValue(content, 'DATABASE_URL'),
@@ -352,6 +457,62 @@ function tryReadCodexAuth(): CodexTokens | null {
 /**
  * Collect Claude authentication method
  */
+/**
+ * Resolve the Claude Code executable path for CLAUDE_BIN_PATH.
+ * Auto-detects common install locations and falls back to prompting the user.
+ * Returns undefined if the user declines to configure (setup continues; the
+ * compiled binary will error with clear instructions on first Claude query).
+ */
+async function collectClaudeBinaryPath(): Promise<string | undefined> {
+  const detected = detectClaudeExecutablePath();
+
+  if (detected) {
+    const useDetected = await confirm({
+      message: `Found Claude Code at ${detected}. Write this to CLAUDE_BIN_PATH?`,
+      initialValue: true,
+    });
+    if (isCancel(useDetected)) {
+      cancel('Setup cancelled.');
+      process.exit(0);
+    }
+    if (useDetected) return detected;
+  }
+
+  const nativeExample =
+    process.platform === 'win32' ? '%USERPROFILE%\\.local\\bin\\claude.exe' : '~/.local/bin/claude';
+
+  note(
+    'Compiled Archon binaries need CLAUDE_BIN_PATH set to the Claude Code executable.\n' +
+      'In dev (`bun run`) this is ignored — the SDK resolves it via node_modules.\n\n' +
+      'Recommended (Anthropic default — native installer):\n' +
+      `  macOS/Linux: ${nativeExample}\n` +
+      '  Windows:     %USERPROFILE%\\.local\\bin\\claude.exe\n\n' +
+      'Alternative (npm global install):\n' +
+      '  $(npm root -g)/@anthropic-ai/claude-code/cli.js',
+    'Claude binary path'
+  );
+
+  const customPath = await text({
+    message: 'Absolute path to the Claude Code executable (leave blank to skip):',
+    placeholder: nativeExample,
+  });
+
+  if (isCancel(customPath)) {
+    cancel('Setup cancelled.');
+    process.exit(0);
+  }
+
+  const trimmed = (customPath ?? '').trim();
+  if (!trimmed) return undefined;
+
+  if (!existsSync(trimmed)) {
+    log.warning(
+      `Path does not exist: ${trimmed}. Saving anyway — the compiled binary will error on first use until this is correct.`
+    );
+  }
+  return trimmed;
+}
+
 async function collectClaudeAuth(): Promise<{
   authType: 'global' | 'apiKey' | 'oauthToken';
   apiKey?: string;
@@ -534,7 +695,8 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
   const assistants = await multiselect({
-    message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
+    message:
+      'Which built-in AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
@@ -653,13 +815,14 @@ After upgrading, run 'archon setup' again.`,
     return {
       claude: false,
       codex: false,
-      defaultAssistant: 'claude',
+      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
     };
   }
 
   let claudeAuthType: 'global' | 'apiKey' | 'oauthToken' | undefined;
   let claudeApiKey: string | undefined;
   let claudeOauthToken: string | undefined;
+  let claudeBinaryPath: string | undefined;
   let codexTokens: CodexTokens | undefined;
 
   // Collect Claude auth if selected
@@ -668,6 +831,7 @@ After upgrading, run 'archon setup' again.`,
     claudeAuthType = claudeAuth.authType;
     claudeApiKey = claudeAuth.apiKey;
     claudeOauthToken = claudeAuth.oauthToken;
+    claudeBinaryPath = await collectClaudeBinaryPath();
   }
 
   // Collect Codex auth if selected
@@ -676,16 +840,21 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Determine default assistant
-  let defaultAssistant: 'claude' | 'codex' = 'claude';
+  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
+  // Default to first registered built-in provider rather than hardcoding 'claude'.
+  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
 
   if (hasClaude && hasCodex) {
+    const providerChoices = getRegisteredProviders()
+      .filter(p => p.builtIn)
+      .map(p => ({
+        value: p.id,
+        label: p.id === 'claude' ? `${p.displayName} (Recommended)` : p.displayName,
+      }));
+
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
-      options: [
-        { value: 'claude', label: 'Claude (Recommended)' },
-        { value: 'codex', label: 'Codex' },
-      ],
+      options: providerChoices,
     });
 
     if (isCancel(defaultChoice)) {
@@ -703,6 +872,7 @@ After upgrading, run 'archon setup' again.`,
     claudeAuthType,
     claudeApiKey,
     claudeOauthToken,
+    ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
     codex: hasCodex,
     codexTokens,
     defaultAssistant,
@@ -1063,6 +1233,9 @@ export function generateEnvContent(config: SetupConfig): string {
       lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
       lines.push(`CLAUDE_CODE_OAUTH_TOKEN=${config.ai.claudeOauthToken}`);
     }
+    if (config.ai.claudeBinaryPath) {
+      lines.push(`CLAUDE_BIN_PATH=${config.ai.claudeBinaryPath}`);
+    }
   } else {
     lines.push('# Claude not configured');
   }
@@ -1139,8 +1312,12 @@ export function generateEnvContent(config: SetupConfig): string {
   }
 
   // Server
+  // PORT is intentionally omitted: both the Hono server (packages/core/src/utils/port-allocation.ts)
+  // and the Vite dev proxy (packages/web/vite.config.ts) default to 3090 when unset, which keeps
+  // them in sync. Writing a fixed PORT here risked a mismatch if ~/.archon/.env leaks a PORT that
+  // the Vite proxy (which only reads repo-local .env) never sees — see #1152.
   lines.push('# Server');
-  lines.push('PORT=3000');
+  lines.push('# PORT=3090  # Default: 3090. Uncomment to override.');
   lines.push('');
 
   // Concurrency
@@ -1151,28 +1328,120 @@ export function generateEnvContent(config: SetupConfig): string {
 }
 
 /**
- * Write .env files to both global and repo locations
+ * Resolve the target path for the selected scope. Delegates to `@archon/paths`
+ * so Docker (`/.archon`), the `ARCHON_HOME` override, and the "undefined"
+ * literal guard behave identically to the loader. Never resolves to
+ * `<repoPath>/.env` — that path belongs to the user.
  */
-function writeEnvFiles(
-  content: string,
-  repoPath: string
-): { globalPath: string; repoEnvPath: string } {
-  const archonHome = getArchonHome();
-  const globalPath = join(archonHome, '.env');
-  const repoEnvPath = join(repoPath, '.env');
+export function resolveScopedEnvPath(scope: 'home' | 'project', repoPath: string): string {
+  if (scope === 'project') return pathsGetRepoArchonEnvPath(repoPath);
+  return pathsGetArchonEnvPath();
+}
 
-  // Create ~/.archon/ if needed
-  if (!existsSync(archonHome)) {
-    mkdirSync(archonHome, { recursive: true });
+/**
+ * Serialize a key/value map back to `KEY=value` lines. Values with whitespace,
+ * `#`, `"`, `'`, `\n`, or `\r` are double-quoted with `\\`, `"`, `\n`, `\r`
+ * escaped so round-tripping through dotenv.parse is stable.
+ */
+export function serializeEnv(entries: Record<string, string>): string {
+  const lines: string[] = [];
+  for (const [key, rawValue] of Object.entries(entries)) {
+    const value = rawValue;
+    const needsQuoting = /[\s#"'\n\r]/.test(value) || value === '';
+    if (needsQuoting) {
+      const escaped = value
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+      lines.push(`${key}="${escaped}"`);
+    } else {
+      lines.push(`${key}=${value}`);
+    }
+  }
+  return lines.join('\n') + (lines.length > 0 ? '\n' : '');
+}
+
+/**
+ * Produce a filesystem-safe ISO timestamp (no `:` or `.` characters).
+ */
+function backupTimestamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+interface WriteScopedEnvResult {
+  targetPath: string;
+  backupPath: string | null;
+  /** Keys present in the existing file that were preserved against the proposed set. */
+  preservedKeys: string[];
+  /** True when `--force` overrode the merge. */
+  forced: boolean;
+}
+
+/**
+ * Write env content to exactly one archon-owned file, selected by scope.
+ * Merge-only by default (existing non-empty values win, user-added keys
+ * survive). Backs up the existing file (if any) before every rewrite, even
+ * when `--force` is set.
+ */
+export function writeScopedEnv(
+  content: string,
+  options: { scope: 'home' | 'project'; repoPath: string; force: boolean }
+): WriteScopedEnvResult {
+  const targetPath = resolveScopedEnvPath(options.scope, options.repoPath);
+  const parentDir = dirname(targetPath);
+  if (!existsSync(parentDir)) {
+    mkdirSync(parentDir, { recursive: true });
   }
 
-  // Write to global location
-  writeFileSync(globalPath, content);
+  const exists = existsSync(targetPath);
+  let backupPath: string | null = null;
+  if (exists) {
+    backupPath = `${targetPath}.archon-backup-${backupTimestamp()}`;
+    copyFileSync(targetPath, backupPath);
+    // Backups carry tokens/secrets — match the 0o600 we set on the live file.
+    chmodSync(backupPath, 0o600);
+  }
 
-  // Write to repo location
-  writeFileSync(repoEnvPath, content);
+  const preservedKeys: string[] = [];
+  let finalContent: string;
 
-  return { globalPath, repoEnvPath };
+  if (options.force || !exists) {
+    finalContent = content;
+    if (options.force && backupPath) {
+      process.stderr.write(
+        `[archon] --force: overwriting ${targetPath} (backup at ${backupPath})\n`
+      );
+    }
+  } else {
+    // Merge: existing non-empty values win; proposed-only keys are added;
+    // existing-only keys (user customizations) are preserved verbatim.
+    const existingRaw = readFileSync(targetPath, 'utf-8');
+    const existing = parseDotenv(existingRaw);
+    const proposed = parseDotenv(content);
+    const merged: Record<string, string> = { ...existing };
+    for (const [key, value] of Object.entries(proposed)) {
+      const prior = existing[key];
+      // Treat whitespace-only existing values as empty — otherwise a
+      // copy-paste stray `   ` would silently defeat the wizard's update for
+      // that key forever.
+      const priorIsEmpty = prior === undefined || prior.trim() === '';
+      if (!(key in existing) || priorIsEmpty) {
+        merged[key] = value;
+      } else {
+        preservedKeys.push(key);
+      }
+    }
+    finalContent = serializeEnv(merged);
+  }
+
+  // 0o600 — env files hold secrets. Prevents group/world-readable writes on a
+  // permissive umask. writeFileSync's default mode is 0o666 & ~umask.
+  writeFileSync(targetPath, finalContent, { mode: 0o600 });
+  // writeFileSync preserves mode for existing files; chmod guarantees 0o600
+  // even when overwriting a file that pre-existed with looser permissions.
+  chmodSync(targetPath, 0o600);
+  return { targetPath, backupPath, preservedKeys, forced: options.force && exists };
 }
 
 /**
@@ -1203,7 +1472,7 @@ export function copyArchonSkill(targetPath: string): void {
 function trySpawn(
   command: string,
   args: string[],
-  options: { detached: boolean; stdio: 'ignore'; shell?: boolean }
+  options: { detached: boolean; stdio: 'ignore' }
 ): boolean {
   try {
     const child: ChildProcess = spawn(command, args, options);
@@ -1238,7 +1507,6 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
     trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', 'archon setup'], {
       detached: true,
       stdio: 'ignore',
-      shell: true,
     })
   ) {
     return { success: true };
@@ -1366,8 +1634,28 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   // Interactive setup flow
   intro('Archon Setup Wizard');
 
-  // Check for existing configuration
-  const existing = checkExistingConfig();
+  // Resolve scope + target path up-front so everything downstream (existing-
+  // config check, merge, write) agrees on which file we're touching.
+  const scope: 'home' | 'project' = options.scope ?? 'home';
+  const force = options.force ?? false;
+  const targetEnvPath = resolveScopedEnvPath(scope, options.repoPath);
+
+  // If a pre-existing <repo>/.env is present, tell the operator once that
+  // archon does NOT manage it — avoids confusion for users upgrading from
+  // versions that used to write there.
+  const legacyRepoEnv = join(options.repoPath, '.env');
+  if (existsSync(legacyRepoEnv)) {
+    log.info(
+      `Note: ${legacyRepoEnv} exists but is not managed by archon.\n` +
+        '      Values there are stripped from the archon process at runtime (safety guard).\n' +
+        '      Put archon env vars in ~/.archon/.env (home scope) or ' +
+        `${join(options.repoPath, '.archon', '.env')} (project scope).`
+    );
+  }
+
+  // Check for existing configuration at the selected scope (not unconditionally
+  // ~/.archon/.env) so the Add/Update/Fresh decision reflects the actual target.
+  const existing = checkExistingConfig(targetEnvPath);
 
   type SetupMode = 'fresh' | 'add' | 'update';
   let mode: SetupMode = 'fresh';
@@ -1420,7 +1708,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
-        defaultAssistant: 'claude',
+        defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
       platforms: {
         github: existing?.platforms.github ?? false,
@@ -1489,13 +1777,41 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     config.botDisplayName = await collectBotDisplayName();
   }
 
-  // Generate and write configuration
-  s.start('Writing configuration files...');
+  // Generate and write configuration. Wrap in try/catch so any fs exception
+  // (permission denied, read-only FS, backup copy failure, etc.) stops the
+  // spinner cleanly and surfaces an actionable error instead of a raw stack
+  // trace after the user has filled out the entire wizard.
+  s.start('Writing configuration...');
 
   const envContent = generateEnvContent(config);
-  const { globalPath, repoEnvPath } = writeEnvFiles(envContent, options.repoPath);
+  let writeResult: ReturnType<typeof writeScopedEnv>;
+  try {
+    writeResult = writeScopedEnv(envContent, {
+      scope,
+      repoPath: options.repoPath,
+      force,
+    });
+  } catch (error) {
+    s.stop('Failed to write configuration');
+    const err = error as NodeJS.ErrnoException;
+    const code = err.code ? ` (${err.code})` : '';
+    cancel(`Could not write ${targetEnvPath}${code}: ${err.message}`);
+    process.exit(1);
+  }
 
-  s.stop('Configuration files written');
+  s.stop('Configuration written');
+
+  // Tell the operator exactly what happened — especially that <repo>/.env was
+  // NOT touched, because prior versions wrote there and this is the biggest
+  // behavior change for returning users.
+  if (writeResult.preservedKeys.length > 0) {
+    log.info(
+      `Preserved ${writeResult.preservedKeys.length} existing value(s) (use --force to overwrite): ${writeResult.preservedKeys.join(', ')}`
+    );
+  }
+  if (writeResult.backupPath) {
+    log.info(`Backup written to ${writeResult.backupPath}`);
+  }
 
   // Offer to install the Archon skill
   const shouldCopySkill = await confirm({
@@ -1596,9 +1912,8 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     `Default: ${config.ai.defaultAssistant}`,
     `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     '',
-    'Files written:',
-    `  ${globalPath}`,
-    `  ${repoEnvPath}`,
+    `File written (${scope} scope):`,
+    `  ${writeResult.targetPath}`,
   ];
 
   if (config.platforms.github && config.github) {
@@ -1619,7 +1934,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   // Additional options note
   note(
     'Other settings you can customize in ~/.archon/.env:\n' +
-      '  - PORT (default: 3000)\n' +
+      '  - PORT (default: 3090)\n' +
       '  - MAX_CONCURRENT_CONVERSATIONS (default: 10)\n' +
       '  - *_STREAMING_MODE (stream | batch per platform)\n\n' +
       'These defaults work well for most users.',

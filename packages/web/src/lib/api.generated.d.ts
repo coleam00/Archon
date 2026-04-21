@@ -549,51 +549,7 @@ export interface paths {
     };
     options?: never;
     head?: never;
-    /** Update codebase consent flags (e.g. allow_env_keys) */
-    patch: {
-      parameters: {
-        query?: never;
-        header?: never;
-        path: {
-          id: string;
-        };
-        cookie?: never;
-      };
-      requestBody: {
-        content: {
-          'application/json': components['schemas']['UpdateCodebaseBody'];
-        };
-      };
-      responses: {
-        /** @description Updated codebase */
-        200: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Codebase'];
-          };
-        };
-        /** @description Not found */
-        404: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Error'];
-          };
-        };
-        /** @description Server error */
-        500: {
-          headers: {
-            [name: string]: unknown;
-          };
-          content: {
-            'application/json': components['schemas']['Error'];
-          };
-        };
-      };
-    };
+    patch?: never;
     trace?: never;
   };
   '/api/codebases/{id}/env': {
@@ -1820,6 +1776,42 @@ export interface paths {
     };
     trace?: never;
   };
+  '/api/providers': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List registered AI providers */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description List of registered providers */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderListResponse'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/codebases/{id}/environments': {
     parameters: {
       query?: never;
@@ -2010,7 +2002,6 @@ export interface components {
       repository_url: string | null;
       default_cwd: string;
       ai_assistant_type: string;
-      allow_env_keys: boolean;
       commands: {
         [key: string]: components['schemas']['CodebaseCommand'];
       };
@@ -2021,10 +2012,6 @@ export interface components {
     AddCodebaseBody: {
       url?: string;
       path?: string;
-      allowEnvKeys?: boolean;
-    };
-    UpdateCodebaseBody: {
-      allowEnvKeys: boolean;
     };
     DeleteCodebaseResponse: {
       success: boolean;
@@ -2046,8 +2033,7 @@ export interface components {
       /** @enum {string} */
       trigger_rule?: 'all_success' | 'one_success' | 'none_failed_min_one_success' | 'all_done';
       model?: string;
-      /** @enum {string} */
-      provider?: 'claude' | 'codex';
+      provider?: string;
       /** @enum {string} */
       context?: 'fresh' | 'shared';
       output_format?: {
@@ -2213,6 +2199,17 @@ export interface components {
       };
       mcp?: string;
       skills?: string[];
+      agents?: {
+        [key: string]: {
+          description: string;
+          prompt: string;
+          model?: string;
+          tools?: string[];
+          disallowedTools?: string[];
+          skills?: string[];
+          maxTurns?: number;
+        };
+      };
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
       thinking?:
@@ -2293,8 +2290,7 @@ export interface components {
     WorkflowDefinition: {
       name: string;
       description: string;
-      /** @enum {string} */
-      provider?: 'claude' | 'codex';
+      provider?: string;
       model?: string;
       /** @enum {string} */
       modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -2352,7 +2348,7 @@ export interface components {
       nodes: components['schemas']['DagNode'][];
     };
     /** @enum {string} */
-    WorkflowSource: 'project' | 'bundled';
+    WorkflowSource: 'project' | 'bundled' | 'global';
     WorkflowListEntry: {
       workflow: components['schemas']['WorkflowDefinition'];
       source: components['schemas']['WorkflowSource'];
@@ -2484,21 +2480,14 @@ export interface components {
     CommandListResponse: {
       commands: components['schemas']['CommandEntry'][];
     };
+    ProviderDefaults: {
+      [key: string]: unknown;
+    };
     SafeConfig: {
       botName: string;
-      /** @enum {string} */
-      assistant: 'claude' | 'codex';
+      assistant: string;
       assistants: {
-        claude: {
-          model?: string;
-        };
-        codex: {
-          model?: string;
-          /** @enum {string} */
-          modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-          /** @enum {string} */
-          webSearchMode?: 'disabled' | 'cached' | 'live';
-        };
+        [key: string]: components['schemas']['ProviderDefaults'];
       };
       streaming: {
         /** @enum {string} */
@@ -2522,18 +2511,33 @@ export interface components {
       database: string;
     };
     UpdateAssistantConfigBody: {
-      /** @enum {string} */
-      assistant?: 'claude' | 'codex';
-      claude?: {
-        model: string;
+      assistant?: string;
+      assistants?: {
+        [key: string]: components['schemas']['ProviderDefaults'];
       };
-      codex?: {
-        model: string;
-        /** @enum {string} */
-        modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
-        /** @enum {string} */
-        webSearchMode?: 'disabled' | 'cached' | 'live';
-      };
+    };
+    ProviderCapabilities: {
+      sessionResume: boolean;
+      mcp: boolean;
+      hooks: boolean;
+      skills: boolean;
+      toolRestrictions: boolean;
+      structuredOutput: boolean;
+      envInjection: boolean;
+      costControl: boolean;
+      effortControl: boolean;
+      thinkingControl: boolean;
+      fallbackModel: boolean;
+      sandbox: boolean;
+    };
+    ProviderInfo: {
+      id: string;
+      displayName: string;
+      capabilities: components['schemas']['ProviderCapabilities'];
+      builtIn: boolean;
+    };
+    ProviderListResponse: {
+      providers: components['schemas']['ProviderInfo'][];
     };
     IsolationEnvironment: {
       id: string;

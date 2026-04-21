@@ -51,7 +51,7 @@ bridges these to SSE via `WorkflowEventBridge`.
 ### 7. Understand Dependency Injection
 
 Read `packages/workflows/src/deps.ts` — `WorkflowDeps` type: `IWorkflowPlatform`,
-`IWorkflowAssistantClient`, `IWorkflowStore` injected at runtime. No direct DB or AI imports
+`IWorkflowAgentProvider`, `IWorkflowStore` injected at runtime. No direct DB or AI imports
 inside this package.
 
 ### 8. See What Workflows Are Available

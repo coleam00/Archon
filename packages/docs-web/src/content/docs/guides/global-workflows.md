@@ -1,6 +1,6 @@
 ---
-title: Global Workflows
-description: Define user-level workflows that apply to every project on your machine.
+title: Global Workflows, Commands, and Scripts
+description: Define user-level workflows, commands, and scripts that apply to every project on your machine.
 category: guides
 area: workflows
 audience: [user]
@@ -9,45 +9,62 @@ sidebar:
   order: 8
 ---
 
-Workflows placed in `~/.archon/.archon/workflows/` are loaded globally -- they appear in
-every project's `workflow list` and can be invoked from any repository.
+Workflows placed in `~/.archon/workflows/`, commands in `~/.archon/commands/`, and scripts in `~/.archon/scripts/` are loaded globally -- they appear in every project and can be invoked from any repository. Workflows and commands carry the `source: 'global'` label in the Web UI node palette; scripts resolve under the same repo-wins-over-home precedence.
 
-## Path
+## Paths
 
 ```
-~/.archon/.archon/workflows/
+~/.archon/workflows/
+~/.archon/commands/
+~/.archon/scripts/
 ```
 
 Or, if you have set `ARCHON_HOME`:
 
 ```
-$ARCHON_HOME/.archon/workflows/
+$ARCHON_HOME/workflows/
+$ARCHON_HOME/commands/
+$ARCHON_HOME/scripts/
 ```
 
-Create the directory if it does not exist:
+Create the directories if they do not exist:
 
 ```bash
-mkdir -p ~/.archon/.archon/workflows
+mkdir -p ~/.archon/workflows ~/.archon/commands ~/.archon/scripts
 ```
+
+> **Note on location.** These are direct children of `~/.archon/` -- same level as `workspaces/`, `archon.db`, and `config.yaml`. Earlier Archon versions stored global workflows at `~/.archon/.archon/workflows/`; see [Migrating from the old path](#migrating-from-the-old-path) below.
+
+## Subfolders (1 level deep)
+
+Each directory supports one level of subfolders for grouping, matching the existing `defaults/` convention. Deeper nesting is ignored silently.
+
+```
+~/.archon/workflows/
+├── my-review.yaml              # ✅ top-level file
+├── triage/                     # ✅ 1-level subfolder (grouping)
+│   └── weekly-cleanup.yaml     # ✅ resolvable as `weekly-cleanup`
+└── team/personal/too-deep.yaml # ❌ ignored — 2 levels down
+```
+
+Resolution is by **filename without extension** (for commands) or **exact filename** (for workflows), regardless of which subfolder the file lives in. Duplicate basenames within the same scope are a user error -- keep each name unique within `~/.archon/commands/` (or `<repoRoot>/.archon/commands/`), across whatever subfolders you use.
 
 ## Load Priority
 
-1. **Bundled defaults** (lowest priority)
-2. **Global workflows** -- `~/.archon/.archon/workflows/` (override bundled by filename)
-3. **Repo-specific workflows** -- `.archon/workflows/` (override global by filename)
+1. **Bundled defaults** (lowest priority) -- the `archon-*` workflows/commands embedded in the Archon binary.
+2. **Global / home-scoped** -- `~/.archon/workflows/`, `~/.archon/commands/`, `~/.archon/scripts/` (override bundled by filename).
+3. **Repo-specific** -- `<repoRoot>/.archon/workflows/`, `<repoRoot>/.archon/commands/`, `<repoRoot>/.archon/scripts/` (override global by filename).
 
-If a global workflow has the same filename as a bundled default, the global version wins. If a repo-specific workflow has the same filename as a global one, the repo-specific version wins.
+Same-named files at a higher scope win. A repo can override a personal helper by dropping a file with the same name in its own `.archon/workflows/`, `.archon/commands/`, or `.archon/scripts/`.
 
 ## Practical Examples
-
-Global workflows are useful for personal standards that you want enforced everywhere, regardless of the project.
 
 ### Personal Code Review
 
 A workflow that runs your preferred review checklist on every project:
 
 ```yaml
-# ~/.archon/.archon/workflows/my-review.yaml
+# ~/.archon/workflows/my-review.yaml
 name: my-review
 description: Personal code review with my standards
 model: sonnet
@@ -65,7 +82,7 @@ nodes:
 A workflow that runs project-agnostic checks:
 
 ```yaml
-# ~/.archon/.archon/workflows/lint-check.yaml
+# ~/.archon/workflows/lint-check.yaml
 name: lint-check
 description: Check for common code quality issues across any project
 
@@ -84,7 +101,7 @@ nodes:
 A simple workflow for understanding unfamiliar codebases:
 
 ```yaml
-# ~/.archon/.archon/workflows/explain.yaml
+# ~/.archon/workflows/explain.yaml
 name: explain
 description: Quick explanation of a codebase or module
 model: haiku
@@ -98,38 +115,64 @@ nodes:
       Topic: $ARGUMENTS
 ```
 
+### Personal Command Helpers
+
+Commands placed in `~/.archon/commands/` are available to every workflow on the machine. Useful for prompts you reuse across projects.
+
+```markdown
+<!-- ~/.archon/commands/review-checklist.md -->
+Review the uncommitted changes in the current worktree.
+Check for:
+- Error handling gaps
+- Missing tests
+- Surprising API shapes
+- Unnecessary cleverness
+Be terse. Report findings grouped by file.
+```
+
+A workflow in any repo can then reference it:
+
+```yaml
+nodes:
+  - id: review
+    command: review-checklist
+```
+
 ## Syncing with Dotfiles
 
-If you manage your configuration with a dotfiles repository, you can include your global workflows:
+If you manage your configuration with a dotfiles repository, you can include your global content:
 
 ```bash
 # In your dotfiles repo
 dotfiles/
 └── archon/
-    └── .archon/
-        └── workflows/
-            ├── my-review.yaml
-            └── explain.yaml
+    ├── workflows/
+    │   ├── my-review.yaml
+    │   └── explain.yaml
+    └── commands/
+        └── review-checklist.md
 ```
 
 Then symlink during dotfiles setup:
 
 ```bash
-ln -sf ~/dotfiles/archon/.archon/workflows ~/.archon/.archon/workflows
+ln -sf ~/dotfiles/archon/workflows ~/.archon/workflows
+ln -sf ~/dotfiles/archon/commands  ~/.archon/commands
 ```
 
 Or copy them as part of your dotfiles install script:
 
 ```bash
-mkdir -p ~/.archon/.archon/workflows
-cp ~/dotfiles/archon/.archon/workflows/*.yaml ~/.archon/.archon/workflows/
+mkdir -p ~/.archon/workflows ~/.archon/commands
+cp ~/dotfiles/archon/workflows/*.yaml ~/.archon/workflows/
+cp ~/dotfiles/archon/commands/*.md    ~/.archon/commands/
 ```
 
-This way your personal workflows travel with you across machines.
+This way your personal workflows and commands travel with you across machines.
 
-## CLI Support
+## CLI and Web Support
 
-Both the CLI and the server discover global workflows automatically:
+Both the CLI, the server, and the Web UI discover home-scoped content automatically -- no flag, no config option.
 
 ```bash
 # Lists bundled + global + repo-specific workflows
@@ -139,14 +182,26 @@ archon workflow list
 archon workflow run my-review
 ```
 
+In the Web UI workflow builder, commands from `~/.archon/commands/` appear under a **Global (~/.archon/commands/)** section in the node palette, distinct from project and bundled entries.
+
+## Migrating from the old path
+
+Pre-refactor versions of Archon stored global workflows at `~/.archon/.archon/workflows/` (with an extra nested `.archon/`). That location is no longer read. If you have workflows there, Archon emits a one-time deprecation warning on first use telling you the exact migration command:
+
+```bash
+mv ~/.archon/.archon/workflows ~/.archon/workflows && rmdir ~/.archon/.archon
+```
+
+Run it once; the warning stops firing on subsequent invocations. There was no prior home-scoped commands location, so `~/.archon/commands/` is new capability -- nothing to migrate.
+
 ## Troubleshooting
 
 ### Workflow Not Appearing in List
 
-1. **Check the path** -- The directory must be exactly `~/.archon/.archon/workflows/` (note the double `.archon`). The first `.archon` is the Archon home directory, the second is the standard config directory structure within it.
+1. **Check the path** -- The directory must be exactly `~/.archon/workflows/` (a direct child of `~/.archon/`, not the old double-nested `~/.archon/.archon/workflows/`).
 
    ```bash
-   ls ~/.archon/.archon/workflows/
+   ls ~/.archon/workflows/
    ```
 
 2. **Check file extension** -- Workflow files must end in `.yaml` or `.yml`.
@@ -159,4 +214,4 @@ archon workflow run my-review
 
 4. **Check for name conflicts** -- If a repo-specific workflow has the same filename, it overrides the global one. The global version will not appear when you are in that repo.
 
-5. **Check ARCHON_HOME** -- If you have set `ARCHON_HOME` to a custom path, global workflows must be at `$ARCHON_HOME/.archon/workflows/`, not `~/.archon/.archon/workflows/`.
+5. **Check ARCHON_HOME** -- If you have set `ARCHON_HOME` to a custom path, global workflows must be at `$ARCHON_HOME/workflows/`, not `~/.archon/workflows/`.

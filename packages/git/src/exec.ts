@@ -8,7 +8,7 @@ const promisifiedExecFile = promisify(execFile);
 export async function execFileAsync(
   cmd: string,
   args: string[],
-  options?: { timeout?: number; cwd?: string; maxBuffer?: number }
+  options?: { timeout?: number; cwd?: string; maxBuffer?: number; env?: NodeJS.ProcessEnv }
 ): Promise<{ stdout: string; stderr: string }> {
   const result = await promisifiedExecFile(cmd, args, options);
   return {

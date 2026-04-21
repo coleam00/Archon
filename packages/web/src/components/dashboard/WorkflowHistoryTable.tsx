@@ -3,6 +3,7 @@ import { Globe, Terminal, Hash, Send, GitBranch, Trash2 } from 'lucide-react';
 import type { DashboardRunResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { formatDuration, formatStarted } from '@/lib/format';
+import { ConfirmRunActionDialog } from './ConfirmRunActionDialog';
 
 interface WorkflowHistoryTableProps {
   runs: DashboardRunResponse[];
@@ -101,21 +102,27 @@ export function WorkflowHistoryTable({
                     View Logs
                   </Link>
                   {onDelete && (
-                    <button
-                      onClick={(): void => {
-                        if (
-                          window.confirm(
-                            `Delete workflow run "${run.workflow_name}"? This cannot be undone.`
-                          )
-                        ) {
-                          onDelete(run.id);
-                        }
+                    <ConfirmRunActionDialog
+                      trigger={
+                        <button
+                          className="text-text-tertiary hover:text-error transition-colors"
+                          title="Delete run"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      }
+                      title="Delete workflow run?"
+                      description={
+                        <>
+                          Permanently delete the run record for <strong>{run.workflow_name}</strong>{' '}
+                          and its events. This cannot be undone.
+                        </>
+                      }
+                      confirmLabel="Delete"
+                      onConfirm={(): void => {
+                        onDelete(run.id);
                       }}
-                      className="text-text-tertiary hover:text-error transition-colors"
-                      title="Delete run"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
+                    />
                   )}
                 </div>
               </td>

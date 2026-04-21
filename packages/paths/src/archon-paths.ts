@@ -97,6 +97,69 @@ export function getArchonConfigPath(): string {
 }
 
 /**
+ * Get the home-scoped workflows directory (`~/.archon/workflows/`).
+ * Workflows placed here are discovered from every repo and apply globally —
+ * overridden per-filename by the same name under `<repoRoot>/.archon/workflows/`.
+ *
+ * Direct child of `~/.archon/`, matching the convention for `workspaces/`,
+ * `archon.db`, `config.yaml`, etc. Replaces the prior `~/.archon/.archon/workflows/`
+ * location which was an artifact of reusing the repo-relative discovery helper.
+ */
+export function getHomeWorkflowsPath(): string {
+  return join(getArchonHome(), 'workflows');
+}
+
+/**
+ * Get the home-scoped commands directory (`~/.archon/commands/`).
+ * Commands placed here are resolvable from every repo and apply globally —
+ * overridden per-filename by the same name under `<repoRoot>/.archon/commands/`.
+ * Command resolution precedence: repo > home > bundled.
+ */
+export function getHomeCommandsPath(): string {
+  return join(getArchonHome(), 'commands');
+}
+
+/**
+ * Get the home-scoped scripts directory (`~/.archon/scripts/`).
+ * Scripts placed here are available to every workflow's `script:` nodes —
+ * overridden per-name by the same name under `<repoRoot>/.archon/scripts/`.
+ * Script resolution precedence: repo > home.
+ */
+export function getHomeScriptsPath(): string {
+  return join(getArchonHome(), 'scripts');
+}
+
+/**
+ * Legacy home-scoped workflows directory (`~/.archon/.archon/workflows/`).
+ * Retained only so discovery can DETECT files there and emit a one-time
+ * deprecation warning pointing at the migration command. Archon no longer
+ * reads workflows from this path — it's a signal, not a source.
+ */
+export function getLegacyHomeWorkflowsPath(): string {
+  return join(getArchonHome(), '.archon', 'workflows');
+}
+
+/**
+ * Get the home-scope archon env file path (~/.archon/.env).
+ * This is the archon-owned env location loaded by every entry point.
+ */
+export function getArchonEnvPath(): string {
+  return join(getArchonHome(), '.env');
+}
+
+/**
+ * Get the repo-scope archon env file path (<cwd>/.archon/.env).
+ * This is the archon-owned env location loaded with override: true AFTER the home
+ * env, so per-project values win over user-wide defaults.
+ *
+ * Note: <cwd>/.env (without the .archon/ prefix) is the USER's — it is stripped at
+ * boot by stripCwdEnv() and never loaded by Archon.
+ */
+export function getRepoArchonEnvPath(cwd: string): string {
+  return join(cwd, '.archon', '.env');
+}
+
+/**
  * Get command folder search paths for a repository
  * Returns folders in priority order (first match wins)
  *
@@ -133,11 +196,21 @@ export function getWorkflowFolderSearchPaths(): string[] {
 /**
  * Recursively find all .md files in a directory and its subdirectories.
  * Skips hidden directories and node_modules.
+ *
+ * `maxDepth` caps how many folders deep the walk descends. Depth is counted as
+ * the number of folder boundaries between `rootPath` and the file — so at
+ * `maxDepth: 1`, files at `rootPath/file.md` (depth 0) and `rootPath/group/file.md`
+ * (depth 1) are included, but `rootPath/group/sub/file.md` (depth 2) is not.
+ * Default is `Infinity` (no cap) for backwards compatibility with callers that
+ * want to copy arbitrary subtrees (e.g. clone handlers).
  */
 export async function findMarkdownFilesRecursive(
   rootPath: string,
-  relativePath = ''
+  relativePath = '',
+  options?: { maxDepth?: number }
 ): Promise<{ commandName: string; relativePath: string }[]> {
+  const maxDepth = options?.maxDepth ?? Infinity;
+  const currentDepth = relativePath ? relativePath.split(/[/\\]/).filter(Boolean).length : 0;
   const results: { commandName: string; relativePath: string }[] = [];
   const fullPath = join(rootPath, relativePath);
 
@@ -156,7 +229,15 @@ export async function findMarkdownFilesRecursive(
     }
 
     if (entry.isDirectory()) {
-      const subResults = await findMarkdownFilesRecursive(rootPath, join(relativePath, entry.name));
+      // Skip descending if we're already at the depth cap — files at deeper
+      // levels are silently ignored (matches the convention that `.archon/*/`
+      // folders support one level of grouping like `defaults/`).
+      if (currentDepth >= maxDepth) continue;
+      const subResults = await findMarkdownFilesRecursive(
+        rootPath,
+        join(relativePath, entry.name),
+        options
+      );
       results.push(...subResults);
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       results.push({

@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Ensure required subdirectories exist.
+# Named volumes inherit these from the image layer on first run; bind mounts do not,
+# which causes the Claude subprocess to fail silently when spawned with a missing cwd.
+mkdir -p /.archon/workspaces /.archon/worktrees
+
 # Determine if we need to use gosu for privilege dropping
 if [ "$(id -u)" = "0" ]; then
   # Running as root: fix volume permissions, then drop to appuser

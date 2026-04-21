@@ -47,6 +47,42 @@ bun install
 - [GitHub CLI](https://cli.github.com/) (`gh`)
 - [Claude Code](https://claude.ai/code) (`claude`)
 
+## Claude Code is required
+
+Archon orchestrates Claude Code; it does not bundle it. Install Claude Code separately:
+
+```bash
+# macOS / Linux / WSL (Anthropic's recommended installer)
+curl -fsSL https://claude.ai/install.sh | bash
+
+# Windows (PowerShell)
+irm https://claude.ai/install.ps1 | iex
+```
+
+Source installs (`bun run`) find the executable automatically via `node_modules`. Compiled binaries (quick install, Homebrew) must point at the Claude Code executable:
+
+```bash
+# After the native installer:
+export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
+
+# After `npm install -g @anthropic-ai/claude-code`:
+export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
+```
+
+Or set it durably in `~/.archon/config.yaml`:
+
+```yaml
+assistants:
+  claude:
+    claudeBinaryPath: /absolute/path/to/claude
+```
+
+Docker images (`ghcr.io/coleam00/archon`) ship with Claude Code pre-installed and
+`CLAUDE_BIN_PATH` pre-set — no configuration needed.
+
+See [AI Assistants → Claude Code](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)
+for full details and install-layout paths.
+
 ## Verify Installation
 
 ```bash

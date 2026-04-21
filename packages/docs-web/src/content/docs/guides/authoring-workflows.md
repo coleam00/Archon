@@ -59,7 +59,7 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 
 Archon discovers workflows recursively - subdirectories are fine. If a workflow file fails to load (syntax error, validation failure), it's skipped and the error is reported via `/workflow list`.
 
-> **Global workflows:** For workflows that apply to every project, place them in `~/.archon/.archon/workflows/`. Global workflows are overridden by same-named repo workflows. See [Global Workflows](/guides/global-workflows/).
+> **Global workflows:** For workflows that apply to every project, place them in `~/.archon/workflows/`. Global workflows are overridden by same-named repo workflows. See [Global Workflows](/guides/global-workflows/).
 
 > **CLI vs Server:** The CLI reads workflow files from wherever you run it (sees uncommitted changes). The server reads from the workspace clone at `~/.archon/workspaces/owner/repo/`, which only syncs from the remote before worktree creation. If you edit a workflow locally but don't push, the server won't see it.
 
@@ -120,12 +120,18 @@ model: sonnet
 modelReasoningEffort: medium     # Codex only
 webSearchMode: live              # Codex only
 interactive: true                # Web only: run in foreground instead of background
+worktree:                        # Optional: pin isolation behavior regardless of caller
+  enabled: false                 #   false = always run in the live checkout (CLI --no-worktree
+                                 #           and web both honor it). Use for read-only workflows
+                                 #           like triage/reporting. true = must use a worktree;
+                                 #           CLI --no-worktree hard-errors. Omit to let the
+                                 #           caller decide (current default = worktree).
 
 # Required for DAG-based
 nodes:
   - id: classify                 # Unique node ID (used for dependency refs and $id.output)
     command: classify-issue      # Loads from .archon/commands/classify-issue.md
-    output_format:               # Optional: enforce structured JSON output (Claude + Codex)
+    output_format:               # Optional: structured JSON output. SDK-enforced on Claude/Codex; best-effort (prompt + JSON extraction) on Pi.
       type: object
       properties:
         type:
@@ -188,14 +194,15 @@ nodes:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | `'claude'` \| `'codex'` | inherited | Per-node provider override |
+| `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
-| `output_format` | object | — | JSON Schema for structured output (Claude and Codex) |
+| `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude and Codex; best-effort on Pi (schema appended to prompt, JSON extracted from result text) |
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string | — | Path to MCP server config JSON file. Claude only. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Skills to preload. Claude only. See [Skills](/guides/skills/) |
+| `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude only. Also settable at workflow level |
 | `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude only. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
@@ -404,6 +411,43 @@ nodes:
 - `undefined` (field absent) and `[]` have different semantics — absent means use default tool set, `[]` means no tools
 - Claude only — Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
 
+### Inline sub-agents
+
+Define Claude sub-agents directly in the workflow YAML, without authoring `.claude/agents/*.md` files. The main agent can spawn them in parallel via the `Task` tool — useful for map-reduce patterns where a cheap model (e.g. Haiku) briefs items and a stronger model reduces.
+
+```yaml
+nodes:
+  - id: triage
+    prompt: |
+      Fetch open issues via `gh issue list ...`. For each issue, spawn the
+      brief-gen sub-agent in parallel (one message, multiple Task tool calls)
+      to produce a 2-3 sentence brief. Then cluster briefs for duplicates.
+    model: sonnet
+    allowed_tools: [Bash, Read, Write, Task]
+    agents:
+      brief-gen:
+        description: Summarises a single GitHub issue in 2-3 sentences
+        prompt: |
+          You are concise. Read the issue provided in the caller's prompt.
+          Return JSON { summary, primarySymptom, affectedArea }.
+        model: haiku
+        tools: [Bash, Read]
+```
+
+Keys:
+
+- Agent IDs must be **kebab-case** (`^[a-z0-9]+(-[a-z0-9]+)*$`)
+- Each definition requires `description` and `prompt`; `model`, `tools`, `disallowedTools`, `skills`, and `maxTurns` are optional
+- Map is merged with any SDK-level agents and with the internal `dag-node-skills` wrapper created by `skills:` — user-defined agents win on ID collision (a warning is logged when this happens)
+- Claude only. Codex and community providers that don't support inline agents emit a warning and ignore the field
+
+**When to use `agents:` vs `.claude/agents/*.md` files:**
+
+- **`agents:` (inline)** — use when the sub-agent is specific to ONE workflow's needs. Keeps the workflow self-contained in a single YAML file; travels cleanly in PRs and forks.
+- **`.claude/agents/*.md` (on-disk)** — use when the sub-agent is shared across multiple workflows OR the whole project (for example, a `triage-agent` used by several maintenance workflows). On-disk agents live outside workflow YAMLs and are picked up automatically by the Claude Agent SDK.
+
+Both sources coexist — inline agents and on-disk agents are both available to `Task(subagent_type=...)` at runtime.
+
 ---
 
 ## Retry Configuration
@@ -474,7 +518,7 @@ This means a single transient crash may trigger up to **3 SDK retries** before a
 
 ## DAG Resume on Failure
 
-When a `nodes:` (DAG) workflow fails (including due to a server restart), the next invocation automatically resumes from where it left off — no `--resume` flag required.
+When a `nodes:` (DAG) workflow fails, the next invocation automatically resumes from where it left off — no `--resume` flag required.
 
 **How it works:**
 
@@ -483,7 +527,14 @@ When a `nodes:` (DAG) workflow fails (including due to a server restart), the ne
 3. Completed nodes are skipped; only failed and not-yet-run nodes are executed.
 4. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
-**Server restart**: If a server restart leaves runs in `running` status, they are automatically marked as `failed` on the next startup (with `metadata.failure_reason = 'server_restart'`). The next invocation of the same workflow at the same path auto-resumes from completed nodes.
+**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup — that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the dashboard (the Dashboard nav tab shows a count of running workflows). Transition it to a terminal status explicitly:
+
+- **Web UI**: click the Abandon or Cancel button on the workflow card. Abandon marks the run `cancelled` and keeps completed-node history. Cancel also terminates any in-flight subprocess.
+- **CLI**: `archon workflow abandon <run-id>` (equivalent to the dashboard Abandon button). Run IDs are listed by `archon workflow status`.
+
+Once the row reaches a terminal status, the next invocation of the same workflow at the same path auto-resumes from completed nodes via the mechanism above.
+
+> Not to be confused with `archon workflow cleanup [days]`, which **deletes** old terminal runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. It does not transition `running` rows.
 
 **Known limitation**: AI session context from prior nodes is not restored. If a downstream node relies on in-context knowledge from a prior run's session (rather than artifacts), it may need to re-read those artifacts explicitly.
 
@@ -542,7 +593,7 @@ Model and options are resolved in this order:
 
 ```yaml
 name: my-workflow
-provider: claude     # 'claude' or 'codex' (default: from config)
+provider: claude     # Any registered provider (default: from config)
 model: sonnet        # Model override (default: from config assistants.claude.model)
 ```
 
@@ -1119,10 +1170,11 @@ Before deploying a workflow:
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude only)
 12. **`skills:`** — preload skills into Claude nodes for domain expertise
-13. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
-14. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
-15. **`systemPrompt`** — override the default system prompt per node (Claude only)
-16. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
-17. **Loop nodes** — use `loop:` within a DAG node for iterative execution until completion signal
-18. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
-19. **Test thoroughly** — each command, the artifact flow, and edge cases
+13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
+14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
+15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
+16. **`systemPrompt`** — override the default system prompt per node (Claude only)
+17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
+18. **Loop nodes** — use `loop:` within a DAG node for iterative execution until completion signal
+19. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
+20. **Test thoroughly** — each command, the artifact flow, and edge cases

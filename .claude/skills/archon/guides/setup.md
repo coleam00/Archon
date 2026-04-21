@@ -119,9 +119,11 @@ If Bun was just installed in Prerequisites (macOS/Linux), use `~/.bun/bin/bun` i
 3. Verify: `archon version`
 4. Check Claude is installed: `which claude`, then `claude /login` if needed
 
+> **Note — Claude Code binary path.** Archon does not bundle Claude Code. In compiled Archon binaries (quick install, Homebrew), the Claude Code SDK needs `CLAUDE_BIN_PATH` set to the absolute path of its `cli.js`. The `archon setup` wizard in Step 4 auto-detects this via `npm root -g` and writes it to `~/.archon/.env` — no manual action needed in the typical case. Source installs (`bun run`) don't need this; the SDK finds `cli.js` via `node_modules` automatically.
+
 ## Step 4: Configure Credentials
 
-The CLI loads infrastructure config (database, tokens) from `~/.archon/.env` only. This prevents conflicts with project `.env` files that may contain different database URLs.
+Archon loads infrastructure config (database, tokens) from two archon-owned files — `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, overrides user). The project's own `<cwd>/.env` is stripped at boot so it cannot leak into Archon; `archon setup` never writes to it.
 
 Credential configuration runs in a separate terminal so your API keys stay private — the AI assistant won't see them.
 
@@ -144,7 +146,7 @@ Tell the user:
 > 2. AI assistant configuration (Claude and/or Codex)
 > 3. Platform tokens for any integrations you selected
 >
-> It saves configuration to both `~/.archon/.env` and the repo `.env`."
+> By default it saves to `~/.archon/.env` (user scope). Re-run with `archon setup --scope project` to write `<repo>/.archon/.env` instead (project overrides user for this repo). Existing values are preserved — a timestamped backup is written before every rewrite."
 
 **If the terminal opened automatically**, add:
 > "Complete the wizard in the new terminal window that just opened."
@@ -158,7 +160,7 @@ Both paths are normal — the manual path is not an error.
 
 Wait for the user to confirm they've completed the setup wizard before proceeding.
 
-### 5c: Verify Configuration
+### 4c: Verify Configuration
 
 After the user confirms setup is complete:
 
@@ -170,7 +172,7 @@ Should show:
 - `Database: sqlite` (default, zero setup) or `Database: postgresql` (if DATABASE_URL was configured)
 - No errors about missing configuration
 
-### 5d: Run Database Migrations (PostgreSQL only)
+### 4d: Run Database Migrations (PostgreSQL only)
 
 **SQLite users: skip this step.** SQLite is auto-initialized on first run with zero setup.
 
@@ -299,16 +301,21 @@ For advanced users — these are not needed for basic setup:
 
 ### Environment Files (`.env`)
 
-Infrastructure config (database URL, platform tokens) is stored in `.env` files:
+Archon's env model is scoped by directory ownership: `.archon/` is archon-owned, anything else belongs to you.
 
-| Location | Used by | Purpose |
-|----------|---------|---------|
-| `~/.archon/.env` | **CLI** | Global infrastructure config — database, AI tokens |
-| `<archon-repo>/.env` | **Server** | Platform tokens for Telegram/Slack/GitHub/Discord |
+| Path | Stripped at boot? | Archon loads? | `archon setup` writes? |
+|------|-------------------|---------------|------------------------|
+| `<cwd>/.env` | **yes** (safety guard) | never | never |
+| `<cwd>/.archon/.env` | no | yes (project scope, overrides user scope) | yes iff `--scope project` |
+| `~/.archon/.env` | no | yes (user scope) | yes iff `--scope home` (default) |
 
-**Best practice**: Use `~/.archon/.env` as the single source of truth. Symlink or copy to `<archon-repo>/.env` if running the server.
+**Which should I use?**
 
-**Note**: The CLI does NOT load `.env` from the current working directory. This prevents conflicts when running Archon from projects that have their own database configurations.
+- `~/.archon/.env` — defaults that apply everywhere (your personal `SLACK_WEBHOOK`, `DATABASE_URL`, bot tokens).
+- `<cwd>/.archon/.env` — per-project overrides (different webhook per repo, different DB per environment).
+- `<cwd>/.env` — your app's env file; archon strips these keys at boot so nothing leaks between your app and archon.
+
+`archon setup` writes to exactly one archon-owned file chosen by `--scope` (default `home`), merges into existing content so user-added keys survive, and writes a timestamped backup before every rewrite. Use `--force` to opt into wholesale overwrite (backup still written).
 
 ### Config Files (YAML)
 

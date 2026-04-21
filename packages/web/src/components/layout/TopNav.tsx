@@ -1,7 +1,7 @@
 import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutDashboard, MessageSquare, Workflow, Settings } from 'lucide-react';
-import { listWorkflowRuns, getUpdateCheck } from '@/lib/api';
+import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 const tabs = [
@@ -12,12 +12,15 @@ const tabs = [
 ] as const;
 
 export function TopNav(): React.ReactElement {
-  const { data: runningRuns } = useQuery({
-    queryKey: ['workflowRuns', { status: 'running' }],
-    queryFn: () => listWorkflowRuns({ status: 'running', limit: 1 }),
+  // We only need `counts.running` — a server-side aggregate independent of
+  // the `runs` array. `limit: 1` minimises the `runs` payload that the API
+  // returns alongside the counts (we discard it).
+  const { data: dashboardRuns } = useQuery({
+    queryKey: ['dashboardRuns', { status: 'running', forCount: true }],
+    queryFn: () => listDashboardRuns({ status: 'running', limit: 1 }),
     refetchInterval: 10_000,
   });
-  const hasRunning = (runningRuns?.length ?? 0) > 0;
+  const runningCount = dashboardRuns?.counts.running ?? 0;
 
   const { data: updateCheck } = useQuery({
     queryKey: ['update-check'],
@@ -53,8 +56,13 @@ export function TopNav(): React.ReactElement {
         >
           <Icon className="h-4 w-4" />
           {label}
-          {to === '/dashboard' && hasRunning && (
-            <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse" />
+          {to === '/dashboard' && runningCount > 0 && (
+            <span
+              className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
+              aria-label={`${runningCount} workflows running`}
+            >
+              {runningCount}
+            </span>
           )}
         </NavLink>
       ))}

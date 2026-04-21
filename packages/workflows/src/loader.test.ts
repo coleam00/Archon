@@ -28,6 +28,11 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+// Bootstrap provider registry (needed by isModelCompatible in dag-node schema)
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+clearRegistry();
+registerBuiltinProviders();
+
 import { discoverWorkflows } from './workflow-discovery';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
 import * as bundledDefaults from './defaults/bundled-defaults';
@@ -86,6 +91,33 @@ describe('Workflow Loader', () => {
       await writeFile(join(workflowDir, 'test.yaml'), yaml);
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.workflows[0].workflow.interactive).toBeUndefined();
+    });
+
+    it('should parse worktree.enabled: false', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: triage\ndescription: read-only\nworktree:\n  enabled: false\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'triage.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.worktree).toEqual({ enabled: false });
+    });
+
+    it('should parse worktree.enabled: true', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: build\ndescription: needs worktree\nworktree:\n  enabled: true\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'build.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.worktree).toEqual({ enabled: true });
+    });
+
+    it('should omit worktree block when not present (policy is caller-decides)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: normal\ndescription: no policy\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'normal.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.worktree).toBeUndefined();
     });
 
     it('should parse valid DAG workflow YAML', async () => {
@@ -206,9 +238,9 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const workflows = result.workflows.map(ws => ws.workflow);
 
-      // Invalid provider treated as undefined - executor will fall back to config
+      // Unknown providers are accepted (validated against registry at execution time)
       expect(workflows).toHaveLength(1);
-      expect(workflows[0].provider).toBeUndefined();
+      expect(workflows[0].provider).toBe('invalid');
     });
 
     it('should reject claude model with codex provider at load time', async () => {
@@ -593,81 +625,223 @@ nodes:
     });
   });
 
-  describe('globalSearchPath loading', () => {
-    it('should load workflows from globalSearchPath and merge with local', async () => {
-      const globalDir = join(
-        tmpdir(),
-        `global-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
-      );
-      const globalWorkflowDir = join(globalDir, '.archon', 'workflows');
-      const localWorkflowDir = join(testDir, '.archon', 'workflows');
+  describe('home-scoped workflows (~/.archon/workflows/)', () => {
+    // Home-scope is read unconditionally by discovery — no caller option. Tests
+    // redirect `getArchonHome()` to a temp dir via the `ARCHON_HOME` env var so
+    // they don't touch the user's real `~/.archon/`.
+    let homeDir: string;
+    const originalArchonHome = process.env.ARCHON_HOME;
+    const originalArchonDocker = process.env.ARCHON_DOCKER;
 
-      await mkdir(globalWorkflowDir, { recursive: true });
-      await mkdir(localWorkflowDir, { recursive: true });
+    beforeEach(async () => {
+      homeDir = join(tmpdir(), `home-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      await mkdir(homeDir, { recursive: true });
+      process.env.ARCHON_HOME = homeDir;
+      delete process.env.ARCHON_DOCKER;
+      // The deprecation warning uses a module-scoped flag; reset between tests
+      // so each case is independent.
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+      resetLegacyHomeWarningForTests();
+      mockLogger.warn.mockClear();
+    });
+
+    afterEach(async () => {
+      try {
+        await rm(homeDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      if (originalArchonDocker === undefined) {
+        delete process.env.ARCHON_DOCKER;
+      } else {
+        process.env.ARCHON_DOCKER = originalArchonDocker;
+      }
+    });
+
+    it('loads home-scoped workflows from ~/.archon/workflows/ and merges with repo', async () => {
+      const homeWorkflowDir = join(homeDir, 'workflows');
+      const repoWorkflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(homeWorkflowDir, { recursive: true });
+      await mkdir(repoWorkflowDir, { recursive: true });
 
       await writeFile(
-        join(globalWorkflowDir, 'global-wf.yaml'),
-        'name: global-workflow\ndescription: From global\nnodes:\n  - id: foo\n    command: foo\n'
+        join(homeWorkflowDir, 'home-wf.yaml'),
+        'name: home-workflow\ndescription: From home\nnodes:\n  - id: foo\n    command: foo\n'
       );
       await writeFile(
-        join(localWorkflowDir, 'local-wf.yaml'),
-        'name: local-workflow\ndescription: From local\nnodes:\n  - id: bar\n    command: bar\n'
+        join(repoWorkflowDir, 'repo-wf.yaml'),
+        'name: repo-workflow\ndescription: From repo\nnodes:\n  - id: bar\n    command: bar\n'
       );
 
-      const result = await discoverWorkflows(testDir, {
-        loadDefaults: false,
-        globalSearchPath: globalDir,
-      });
-
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const names = result.workflows.map(w => w.workflow.name);
-      expect(names).toContain('global-workflow');
-      expect(names).toContain('local-workflow');
-
-      await rm(globalDir, { recursive: true, force: true });
+      expect(names).toContain('home-workflow');
+      expect(names).toContain('repo-workflow');
     });
 
-    it('should allow local workflows to override global by filename', async () => {
-      const globalDir = join(
-        tmpdir(),
-        `global-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    it("classifies home-scoped workflows as source: 'global'", async () => {
+      const homeWorkflowDir = join(homeDir, 'workflows');
+      await mkdir(homeWorkflowDir, { recursive: true });
+      await writeFile(
+        join(homeWorkflowDir, 'only-home.yaml'),
+        'name: only-home\ndescription: From home\nnodes:\n  - id: n\n    command: c\n'
       );
-      const globalWorkflowDir = join(globalDir, '.archon', 'workflows');
-      const localWorkflowDir = join(testDir, '.archon', 'workflows');
 
-      await mkdir(globalWorkflowDir, { recursive: true });
-      await mkdir(localWorkflowDir, { recursive: true });
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const entry = result.workflows.find(w => w.workflow.name === 'only-home');
+      expect(entry?.source).toBe('global');
+    });
+
+    it('repo workflow overrides home workflow with the same filename', async () => {
+      const homeWorkflowDir = join(homeDir, 'workflows');
+      const repoWorkflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(homeWorkflowDir, { recursive: true });
+      await mkdir(repoWorkflowDir, { recursive: true });
 
       await writeFile(
-        join(globalWorkflowDir, 'shared.yaml'),
-        'name: global-version\ndescription: Global version\nnodes:\n  - id: global\n    command: global\n'
+        join(homeWorkflowDir, 'shared.yaml'),
+        'name: home-version\ndescription: Home version\nnodes:\n  - id: h\n    command: c\n'
       );
       await writeFile(
-        join(localWorkflowDir, 'shared.yaml'),
-        'name: local-version\ndescription: Local override\nnodes:\n  - id: local\n    command: local\n'
+        join(repoWorkflowDir, 'shared.yaml'),
+        'name: repo-version\ndescription: Repo override\nnodes:\n  - id: r\n    command: c\n'
       );
 
-      const result = await discoverWorkflows(testDir, {
-        loadDefaults: false,
-        globalSearchPath: globalDir,
-      });
-
-      // Local should override global by filename
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const shared = result.workflows.find(
-        w => w.workflow.name === 'global-version' || w.workflow.name === 'local-version'
+        w => w.workflow.name === 'home-version' || w.workflow.name === 'repo-version'
       );
-      expect(shared?.workflow.name).toBe('local-version');
-
-      await rm(globalDir, { recursive: true, force: true });
+      expect(shared?.workflow.name).toBe('repo-version');
+      expect(shared?.source).toBe('project');
     });
 
-    it('should handle missing globalSearchPath gracefully', async () => {
-      const result = await discoverWorkflows(testDir, {
-        loadDefaults: false,
-        globalSearchPath: '/nonexistent/path',
-      });
-
-      // Should not throw, just return whatever local workflows exist
+    it('silently skips when ~/.archon/workflows/ does not exist', async () => {
+      // homeDir exists but no workflows/ subdirectory — should not error.
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toEqual([]);
+    });
+
+    it('supports 1-level subfolders under ~/.archon/workflows/ (e.g. triage/foo.yaml)', async () => {
+      const homeWorkflowDir = join(homeDir, 'workflows', 'triage');
+      await mkdir(homeWorkflowDir, { recursive: true });
+      await writeFile(
+        join(homeWorkflowDir, 'grouped.yaml'),
+        'name: grouped-workflow\ndescription: In a subfolder\nnodes:\n  - id: n\n    command: c\n'
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const entry = result.workflows.find(w => w.workflow.name === 'grouped-workflow');
+      expect(entry).toBeDefined();
+      expect(entry?.source).toBe('global');
+    });
+
+    it('does NOT descend past 1 level of subfolders (rejects workflows/a/b/foo.yaml)', async () => {
+      const nestedDir = join(homeDir, 'workflows', 'a', 'b');
+      await mkdir(nestedDir, { recursive: true });
+      await writeFile(
+        join(nestedDir, 'too-deep.yaml'),
+        'name: too-deep\ndescription: Nested too deep\nnodes:\n  - id: n\n    command: c\n'
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const entry = result.workflows.find(w => w.workflow.name === 'too-deep');
+      expect(entry).toBeUndefined();
+    });
+  });
+
+  describe('legacy ~/.archon/.archon/workflows/ deprecation warning', () => {
+    let homeDir: string;
+    const originalArchonHome = process.env.ARCHON_HOME;
+    const originalArchonDocker = process.env.ARCHON_DOCKER;
+
+    beforeEach(async () => {
+      homeDir = join(tmpdir(), `legacy-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      await mkdir(homeDir, { recursive: true });
+      process.env.ARCHON_HOME = homeDir;
+      delete process.env.ARCHON_DOCKER;
+      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
+      resetLegacyHomeWarningForTests();
+      mockLogger.warn.mockClear();
+    });
+
+    afterEach(async () => {
+      try {
+        await rm(homeDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      if (originalArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = originalArchonHome;
+      }
+      if (originalArchonDocker === undefined) {
+        delete process.env.ARCHON_DOCKER;
+      } else {
+        process.env.ARCHON_DOCKER = originalArchonDocker;
+      }
+    });
+
+    it('emits a WARN with the migration command when the legacy path exists', async () => {
+      const legacyDir = join(homeDir, '.archon', 'workflows');
+      await mkdir(legacyDir, { recursive: true });
+      await writeFile(
+        join(legacyDir, 'stranded.yaml'),
+        'name: stranded\ndescription: At the old path\nnodes:\n  - id: n\n    command: c\n'
+      );
+
+      await discoverWorkflows(testDir, { loadDefaults: false });
+
+      const warnCalls = mockLogger.warn.mock.calls;
+      const legacyWarn = warnCalls.find(call => call[1] === 'workflow.legacy_home_path_detected');
+      expect(legacyWarn).toBeDefined();
+      expect(legacyWarn?.[0]).toMatchObject({
+        legacyPath: legacyDir,
+        newPath: join(homeDir, 'workflows'),
+        moveCommand: expect.stringContaining('mv'),
+      });
+    });
+
+    it('does NOT load workflows from the legacy path (clean cut)', async () => {
+      const legacyDir = join(homeDir, '.archon', 'workflows');
+      await mkdir(legacyDir, { recursive: true });
+      await writeFile(
+        join(legacyDir, 'stranded.yaml'),
+        'name: stranded\ndescription: At the old path\nnodes:\n  - id: n\n    command: c\n'
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const stranded = result.workflows.find(w => w.workflow.name === 'stranded');
+      expect(stranded).toBeUndefined();
+    });
+
+    it('warns exactly once per process, even across multiple discovery calls', async () => {
+      const legacyDir = join(homeDir, '.archon', 'workflows');
+      await mkdir(legacyDir, { recursive: true });
+
+      await discoverWorkflows(testDir, { loadDefaults: false });
+      await discoverWorkflows(testDir, { loadDefaults: false });
+      await discoverWorkflows(testDir, { loadDefaults: false });
+
+      const warnCalls = mockLogger.warn.mock.calls.filter(
+        call => call[1] === 'workflow.legacy_home_path_detected'
+      );
+      expect(warnCalls).toHaveLength(1);
+    });
+
+    it('does not emit the warning when the legacy path is absent', async () => {
+      // No legacy directory created — warning should not fire.
+      await discoverWorkflows(testDir, { loadDefaults: false });
+
+      const warnCalls = mockLogger.warn.mock.calls.filter(
+        call => call[1] === 'workflow.legacy_home_path_detected'
+      );
+      expect(warnCalls).toHaveLength(0);
     });
   });
 
@@ -699,31 +873,48 @@ nodes:
       expect(archonWorkflow).toBeDefined();
     });
 
-    it('should pass globalSearchPath through to discoverWorkflows', async () => {
-      const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
-      const globalDir = join(
+    it('surfaces home-scoped workflows without any option — discovery reads ~/.archon/workflows/ internally', async () => {
+      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } =
+        await import('./workflow-discovery');
+      resetLegacyHomeWarningForTests();
+
+      const homeDir = join(
         tmpdir(),
-        `global-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        `home-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
       );
-      const globalWorkflowDir = join(globalDir, '.archon', 'workflows');
-      await mkdir(globalWorkflowDir, { recursive: true });
+      const homeWorkflowDir = join(homeDir, 'workflows');
+      await mkdir(homeWorkflowDir, { recursive: true });
       await writeFile(
-        join(globalWorkflowDir, 'global-only.yaml'),
-        'name: global-only\ndescription: From global\nnodes:\n  - id: foo\n    command: foo\n'
+        join(homeWorkflowDir, 'home-only.yaml'),
+        'name: home-only\ndescription: From home\nnodes:\n  - id: foo\n    command: foo\n'
       );
 
-      const mockLoadConfig = mock(async () => ({
-        defaults: { loadDefaultWorkflows: false },
-      }));
+      const originalArchonHome = process.env.ARCHON_HOME;
+      const originalArchonDocker = process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = homeDir;
+      delete process.env.ARCHON_DOCKER;
+      try {
+        const mockLoadConfig = mock(async () => ({
+          defaults: { loadDefaultWorkflows: false },
+        }));
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, {
-        globalSearchPath: globalDir,
-      });
-
-      const names = result.workflows.map(w => w.workflow.name);
-      expect(names).toContain('global-only');
-
-      await rm(globalDir, { recursive: true, force: true });
+        const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+        const entry = result.workflows.find(w => w.workflow.name === 'home-only');
+        expect(entry).toBeDefined();
+        expect(entry?.source).toBe('global');
+      } finally {
+        if (originalArchonHome === undefined) {
+          delete process.env.ARCHON_HOME;
+        } else {
+          process.env.ARCHON_HOME = originalArchonHome;
+        }
+        if (originalArchonDocker === undefined) {
+          delete process.env.ARCHON_DOCKER;
+        } else {
+          process.env.ARCHON_DOCKER = originalArchonDocker;
+        }
+        await rm(homeDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -1276,6 +1467,82 @@ nodes:
       expect(isBashNode(node)).toBe(true);
       expect(node.provider).toBeUndefined();
       expect(node.model).toBeUndefined();
+    });
+
+    it('should NOT warn about model/provider on loop nodes (they are supported)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-model.yaml'),
+        `
+name: loop-model
+description: Loop with model override
+nodes:
+  - id: iterate
+    loop:
+      prompt: "Do something"
+      until: "COMPLETE"
+      max_iterations: 3
+    provider: claude
+    model: claude-opus-4-6
+`
+      );
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const node = result.workflows[0].workflow.nodes[0];
+      expect(isLoopNode(node)).toBe(true);
+
+      // model and provider should NOT trigger a warning
+      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const aiFieldWarnings = warnCalls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(0);
+    });
+
+    it('should warn about unsupported AI fields on loop nodes (not model/provider)', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-unsupported.yaml'),
+        `
+name: loop-unsupported
+description: Loop with unsupported AI fields
+nodes:
+  - id: iterate
+    loop:
+      prompt: "Do something"
+      until: "COMPLETE"
+      max_iterations: 3
+    model: claude-opus-4-6
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+`
+      );
+
+      (mockLogger.warn as Mock<() => undefined>).mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      // Should warn about output_format but NOT about model
+      const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;
+      const aiFieldWarnings = warnCalls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(1);
+      const warnedFields = (aiFieldWarnings[0][0] as { fields: string[] }).fields;
+      expect(warnedFields).toContain('output_format');
+      expect(warnedFields).not.toContain('model');
+      expect(warnedFields).not.toContain('provider');
     });
   });
 

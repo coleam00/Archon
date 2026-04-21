@@ -119,9 +119,9 @@ export function CommandPicker({
                     <span
                       className={cn(
                         'text-[9px] font-medium px-1.5 py-0.5 rounded shrink-0',
-                        cmd.source === 'project'
-                          ? 'bg-node-command/20 text-node-command'
-                          : 'bg-surface-inset text-text-tertiary'
+                        cmd.source === 'project' && 'bg-node-command/20 text-node-command',
+                        cmd.source === 'global' && 'bg-node-loop/20 text-node-loop',
+                        cmd.source === 'bundled' && 'bg-surface-inset text-text-tertiary'
                       )}
                     >
                       {cmd.source}

@@ -7,28 +7,21 @@
  *   archon workflow run <name> [msg]  Run a workflow
  *   archon version                    Show version info
  */
+// Must be the very first import — strips Bun-auto-loaded CWD .env keys before
+// any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
+import '@archon/paths/strip-cwd-env-boot';
+// Then load archon-owned env from ~/.archon/.env (user scope) and
+// <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
+// See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
+import { loadArchonEnv } from '@archon/paths/env-loader';
+loadArchonEnv(process.cwd());
+
 import { parseArgs } from 'util';
-import { config } from 'dotenv';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 
-// Load .env from global Archon config (override: true so ~/.archon/.env
-// always wins over any Bun-auto-loaded CWD vars).
-//
-// Credential safety: target repo .env keys that Bun auto-loads from CWD
-// cannot leak into AI subprocesses — SUBPROCESS_ENV_ALLOWLIST blocks them.
-// The env-leak gate provides a second layer by scanning target repos before
-// spawning. No CWD stripping needed.
-const globalEnvPath = resolve(process.env.HOME ?? '~', '.archon', '.env');
-if (existsSync(globalEnvPath)) {
-  const result = config({ path: globalEnvPath, override: true });
-  if (result.error) {
-    // Logger may not be available yet (early startup), so use console for user-facing error
-    console.error(`Error loading .env from ${globalEnvPath}: ${result.error.message}`);
-    console.error('Hint: Check for syntax errors in your .env file.');
-    process.exit(1);
-  }
-}
+// CLAUDECODE=1 warning is emitted inside stripCwdEnv() (boot import above)
+// BEFORE the marker is deleted from process.env. No duplicate warning here.
 
 // Smart defaults for Claude auth
 // If no explicit tokens, default to global auth from `claude /login`
@@ -39,6 +32,11 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
 }
 
 // DATABASE_URL is no longer required - SQLite will be used as default
+
+// Bootstrap provider registry before any provider lookups
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+registerBuiltinProviders();
+registerCommunityProviders();
 
 // Import commands after dotenv is loaded
 import { versionCommand } from './commands/version';
@@ -73,6 +71,7 @@ import {
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
+  shutdownTelemetry,
 } from '@archon/paths';
 import * as git from '@archon/git';
 
@@ -122,9 +121,6 @@ Options:
   --json                     Output machine-readable JSON (for workflow list)
   --workflow <name>          Workflow to run for 'continue' (default: archon-assist)
   --no-context               Skip context injection for 'continue'
-  --allow-env-keys           Grant env-key consent during auto-registration
-                             (bypasses the env-leak gate for this codebase;
-                             logs an audit entry)
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
 
@@ -204,9 +200,10 @@ async function main(): Promise<number> {
         reason: { type: 'string' },
         workflow: { type: 'string' },
         'no-context': { type: 'boolean' },
-        'allow-env-keys': { type: 'boolean' },
         port: { type: 'string' },
         'download-only': { type: 'boolean' },
+        scope: { type: 'string' },
+        force: { type: 'boolean' },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -228,8 +225,6 @@ async function main(): Promise<number> {
   const resumeFlag = values.resume as boolean | undefined;
   const spawnFlag = values.spawn as boolean | undefined;
   const jsonFlag = values.json as boolean | undefined;
-  const allowEnvKeysFlag = values['allow-env-keys'] as boolean | undefined;
-
   // Handle help flag
   if (values.help) {
     printUsage();
@@ -295,9 +290,30 @@ async function main(): Promise<number> {
         break;
       }
 
-      case 'setup':
-        await setupCommand({ spawn: spawnFlag, repoPath: cwd });
+      case 'setup': {
+        const rawScope = values.scope as string | undefined;
+        if (rawScope !== undefined && rawScope !== 'home' && rawScope !== 'project') {
+          console.error(`Error: Invalid --scope: "${rawScope}". Must be "home" or "project".`);
+          return 1;
+        }
+        const scope: 'home' | 'project' = rawScope ?? 'home';
+        const forceFlag = (values.force as boolean | undefined) ?? false;
+        // For --scope project, resolve to the git repo root so running from a
+        // subdirectory writes to <repo-root>/.archon/.env (what loadArchonEnv
+        // reads at boot) — not <subdir>/.archon/.env.
+        let repoPath = cwd;
+        if (scope === 'project') {
+          const repoRoot = await git.findRepoRoot(cwd);
+          if (!repoRoot) {
+            console.error('Error: --scope project requires running from inside a git repository.');
+            console.error('Run from the repo root, pass --cwd <repo>, or use --scope home.');
+            return 1;
+          }
+          repoPath = repoRoot;
+        }
+        await setupCommand({ spawn: spawnFlag, repoPath, scope, force: forceFlag });
         break;
+      }
 
       case 'workflow':
         switch (subcommand) {
@@ -341,7 +357,6 @@ async function main(): Promise<number> {
               fromBranch,
               noWorktree,
               resume: resumeFlag,
-              allowEnvKeys: allowEnvKeysFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
             };
@@ -573,6 +588,9 @@ async function main(): Promise<number> {
     }
     return 1;
   } finally {
+    // Flush queued telemetry events before the CLI process exits.
+    // Short-lived CLI commands lose buffered events if shutdown() is skipped.
+    await shutdownTelemetry();
     // Always close database connection
     await closeDb();
   }

@@ -48,15 +48,6 @@ mock.module('@archon/core', () => ({
       this.name = 'ConversationNotFoundError';
     }
   },
-  scanPathForSensitiveKeys: mock((_p: string) => ({ path: _p, findings: [] })),
-  EnvLeakError: class EnvLeakError extends Error {
-    constructor(public report: { path: string; findings: { file: string; keys: string[] }[] }) {
-      super(
-        `Cannot add codebase — ${report.path} contains keys that will leak into AI subprocesses`
-      );
-      this.name = 'EnvLeakError';
-    }
-  },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   generateAndSetTitle: mock(async () => {}),
   createLogger: () => ({
@@ -123,12 +114,10 @@ mock.module('@archon/core/db/conversations', () => ({
   getConversationById: mock(async () => null),
 }));
 
-const mockUpdateCodebaseAllowEnvKeys = mock(async (_id: string, _v: boolean) => {});
 mock.module('@archon/core/db/codebases', () => ({
   listCodebases: mockListCodebases,
   getCodebase: mockGetCodebase,
   deleteCodebase: mockDeleteCodebase,
-  updateCodebaseAllowEnvKeys: mockUpdateCodebaseAllowEnvKeys,
 }));
 
 mock.module('@archon/core/db/isolation-environments', () => ({
@@ -181,7 +170,6 @@ const MOCK_CODEBASE = {
   repository_url: 'https://github.com/user/repo',
   default_cwd: '/home/user/projects/my-project',
   ai_assistant_type: 'claude',
-  allow_env_keys: false,
   commands: {},
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
@@ -399,7 +387,7 @@ describe('POST /api/codebases', () => {
 
     const body = (await response.json()) as { id: string };
     expect(body.id).toBe('codebase-uuid-1');
-    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/user/repo', undefined);
+    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/user/repo');
   });
 
   test('registers existing URL codebase with 200', async () => {
@@ -436,7 +424,7 @@ describe('POST /api/codebases', () => {
       body: JSON.stringify({ path: '/home/user/my-repo' }),
     });
     expect(response.status).toBe(201);
-    expect(mockRegisterRepository).toHaveBeenCalledWith('/home/user/my-repo', undefined);
+    expect(mockRegisterRepository).toHaveBeenCalledWith('/home/user/my-repo');
   });
 
   test('returns 400 when both url and path are provided', async () => {
@@ -507,101 +495,6 @@ describe('POST /api/codebases', () => {
 
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('authentication required');
-  });
-
-  test('returns 422 when cloneRepository throws EnvLeakError', async () => {
-    const { EnvLeakError } = await import('@archon/core');
-    mockCloneRepository.mockImplementationOnce(async () => {
-      throw new EnvLeakError({
-        path: '/repo/path',
-        findings: [{ file: '.env', keys: ['ANTHROPIC_API_KEY'] }],
-      });
-    });
-
-    const app = makeApp();
-    const response = await app.request('/api/codebases', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://github.com/user/repo' }),
-    });
-    expect(response.status).toBe(422);
-
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('Cannot add codebase');
-  });
-
-  test('passes allowEnvKeys=true to cloneRepository when body includes it', async () => {
-    mockCloneRepository.mockImplementationOnce(async () => ({
-      codebaseId: 'clone-uuid-2',
-      alreadyExisted: false,
-    }));
-    mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
-
-    const app = makeApp();
-    const response = await app.request('/api/codebases', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://github.com/user/repo', allowEnvKeys: true }),
-    });
-    expect(response.status).toBe(201);
-    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/user/repo', true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests: PATCH /api/codebases/:id
-// ---------------------------------------------------------------------------
-
-describe('PATCH /api/codebases/:id', () => {
-  beforeEach(() => {
-    mockGetCodebase.mockReset();
-    mockUpdateCodebaseAllowEnvKeys.mockReset();
-  });
-
-  test('grants consent and returns updated codebase', async () => {
-    mockGetCodebase
-      .mockImplementationOnce(async () => MOCK_CODEBASE)
-      .mockImplementationOnce(async () => ({ ...MOCK_CODEBASE, allow_env_keys: true }));
-    mockUpdateCodebaseAllowEnvKeys.mockImplementationOnce(async () => {});
-
-    const app = makeApp();
-    const response = await app.request('/api/codebases/codebase-uuid-1', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ allowEnvKeys: true }),
-    });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { allow_env_keys: boolean };
-    expect(body.allow_env_keys).toBe(true);
-    expect(mockUpdateCodebaseAllowEnvKeys).toHaveBeenCalledWith('codebase-uuid-1', true);
-  });
-
-  test('revokes consent', async () => {
-    mockGetCodebase
-      .mockImplementationOnce(async () => ({ ...MOCK_CODEBASE, allow_env_keys: true }))
-      .mockImplementationOnce(async () => MOCK_CODEBASE);
-    mockUpdateCodebaseAllowEnvKeys.mockImplementationOnce(async () => {});
-
-    const app = makeApp();
-    const response = await app.request('/api/codebases/codebase-uuid-1', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ allowEnvKeys: false }),
-    });
-    expect(response.status).toBe(200);
-    expect(mockUpdateCodebaseAllowEnvKeys).toHaveBeenCalledWith('codebase-uuid-1', false);
-  });
-
-  test('returns 404 when codebase not found', async () => {
-    mockGetCodebase.mockImplementationOnce(async () => null);
-
-    const app = makeApp();
-    const response = await app.request('/api/codebases/missing', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ allowEnvKeys: true }),
-    });
-    expect(response.status).toBe(404);
   });
 });
 
