@@ -322,6 +322,7 @@ describe('registry', () => {
       expect(caps.skills).toBe(true);
       expect(caps.toolRestrictions).toBe(true);
       expect(caps.structuredOutput).toBe(true);
+      expect(caps.agents).toBe(true);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
     });

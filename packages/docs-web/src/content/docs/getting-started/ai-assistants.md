@@ -297,6 +297,7 @@ assistants:
 | MCP servers | ✅ | `mcp: path/to/servers.json` → `SessionConfig.mcpServers` (env vars `$FOO` expanded; missing vars warned) |
 | Skills | ✅ | `skills: [name]` resolved from `.agents/skills/`, `.claude/skills/` (project or home) → `SessionConfig.skillDirectories` |
 | Structured output | ✅ | best-effort: schema instruction appended to the prompt, assistant transcript parsed as JSON on completion (models that reliably follow instruction succeed; unparseable output degrades to the dag-executor's missing-output warning) |
+| Sub-agents (`agents:`) | ✅ | `name`/`description`/`prompt`/`tools` (allowlist) map 1:1 to `SessionConfig.customAgents`; Claude-specific fields (`model`, `disallowedTools`, `skills`, `maxTurns`) warn per agent and are ignored |
 | Fallback model | ❌ | not wired |
 | Sandbox | ❌ | Copilot permissions are separate from Archon's sandbox surface |
 

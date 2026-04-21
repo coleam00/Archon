@@ -2,6 +2,7 @@ import {
   CopilotClient,
   approveAll,
   type AssistantMessageEvent,
+  type CustomAgentConfig,
   type MCPServerConfig,
   type SessionConfig,
   type SessionEvent,
@@ -174,6 +175,62 @@ function applySkills(
 }
 
 /**
+ * Translate Archon's `nodeConfig.agents` (Record<name, AgentDef>) to
+ * Copilot's `SessionConfig.customAgents`. Mapping is deliberately narrow —
+ * only the fields Copilot's `CustomAgentConfig` supports pass through:
+ *
+ *   name        ← map key
+ *   description ← agent.description
+ *   prompt      ← agent.prompt
+ *   tools       ← agent.tools (allowlist; Copilot has no per-agent denylist)
+ *
+ * Archon agent fields Copilot cannot represent (`model`, `disallowedTools`,
+ * `skills`, `maxTurns`) surface as one consolidated warning per agent.
+ *
+ * We do NOT set `SessionConfig.agent` — Archon's workflow model invokes
+ * sub-agents via the Task tool, not by switching active agent at session
+ * start.
+ */
+function applyAgents(
+  sessionConfig: SessionConfig,
+  nodeConfig: SendQueryOptions['nodeConfig'],
+  warnings: ProviderWarning[]
+): void {
+  const agents = nodeConfig?.agents;
+  if (!agents) return;
+  const entries = Object.entries(agents);
+  if (entries.length === 0) return;
+
+  const customAgents: CustomAgentConfig[] = entries.map(([name, def]) => {
+    const ignored: string[] = [];
+    if (def.model !== undefined) ignored.push('model');
+    if (def.disallowedTools !== undefined) ignored.push('disallowedTools');
+    if (def.skills !== undefined) ignored.push('skills');
+    if (def.maxTurns !== undefined) ignored.push('maxTurns');
+
+    if (ignored.length > 0) {
+      warnings.push({
+        code: 'copilot.agent_fields_ignored',
+        message: `Copilot agent '${name}' ignored unsupported fields: ${ignored.join(', ')}. Copilot supports description, prompt, tools (allowlist) only.`,
+      });
+    }
+
+    return {
+      name,
+      description: def.description,
+      prompt: def.prompt,
+      ...(def.tools !== undefined ? { tools: def.tools } : {}),
+    };
+  });
+
+  sessionConfig.customAgents = customAgents;
+  getLog().info(
+    { count: customAgents.length, names: customAgents.map(a => a.name) },
+    'copilot.agents_registered'
+  );
+}
+
+/**
  * Single construction site for the Copilot SessionConfig. Each subsequent
  * workflow-parity phase adds one `applyX(sessionConfig, ..., warnings)` call
  * below this function — keep business logic here straight-through.
@@ -206,6 +263,7 @@ async function buildSessionConfig(
   applyToolRestrictions(sessionConfig, requestOptions?.nodeConfig);
   await applyMcpServers(sessionConfig, requestOptions?.nodeConfig, cwd, warnings);
   applySkills(sessionConfig, requestOptions?.nodeConfig, cwd, warnings);
+  applyAgents(sessionConfig, requestOptions?.nodeConfig, warnings);
 
   return sessionConfig;
 }

@@ -11,7 +11,7 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   mcp: true,
   hooks: false,
   skills: true,
-  agents: false,
+  agents: true,
   toolRestrictions: true,
   structuredOutput: true,
   envInjection: true,
