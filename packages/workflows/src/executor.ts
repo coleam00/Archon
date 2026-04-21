@@ -172,6 +172,30 @@ async function sendCriticalMessage(
   return false;
 }
 
+const RESERVED_WORKFLOW_INPUT_KEYS = new Set([
+  'ARGUMENTS',
+  'WORKFLOW_ID',
+  'ARTIFACTS_DIR',
+  'BASE_BRANCH',
+  'DOCS_DIR',
+  'LOOP_USER_INPUT',
+  'REJECTION_REASON',
+]);
+
+function assertSafeInputKeys(...sources: (Record<string, unknown> | undefined)[]): void {
+  const invalid = sources
+    .flatMap(source => (source ? Object.keys(source) : []))
+    .filter(
+      key =>
+        key.length === 0 ||
+        RESERVED_WORKFLOW_INPUT_KEYS.has(key) ||
+        /^[A-Za-z0-9_-]+\.output$/.test(key)
+    );
+  if (invalid.length > 0) {
+    throw new Error(`Invalid workflow input key(s): ${invalid.join(', ')}`);
+  }
+}
+
 /**
  * Merge workflow `inputs` defaults with caller-supplied runtime values.
  * Caller values take precedence; defaults fill gaps.
@@ -181,6 +205,7 @@ function resolveInputs(
   inputsDef: Record<string, WorkflowInput> | undefined,
   runtimeInputs: Record<string, string> | undefined
 ): Record<string, string> {
+  assertSafeInputKeys(inputsDef, runtimeInputs);
   const resolved: Record<string, string> = {};
   if (inputsDef) {
     for (const [key, spec] of Object.entries(inputsDef)) {
@@ -221,7 +246,10 @@ function applyInputsToString(
   if (!value || Object.keys(inputs).length === 0) return value;
   let result = value;
   for (const [key, val] of Object.entries(inputs)) {
-    result = result.replace(new RegExp(`\\$${escapeForRegex(key)}(?![A-Za-z0-9_])`, 'g'), val);
+    result = result.replace(
+      new RegExp(`\\$${escapeForRegex(key)}(?![A-Za-z0-9_])`, 'g'),
+      () => val
+    );
   }
   return result;
 }
@@ -333,11 +361,12 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  // Resolve runtime inputs (merge caller values with workflow-declared defaults).
-  // This is done early but may be replaced by stored prior-run metadata if a
-  // resumable run is found — model/provider resolution is deferred until after
-  // the resume block so it always uses the final resolvedInputs value.
-  let resolvedInputs = resolveInputs(workflow.inputs, runtimeInputs);
+  // resolvedInputs is computed after the resume block so that:
+  // 1. stored metadata inputs (from a prior run) are merged before required-input validation runs
+  // 2. an empty {} runtimeInputs is treated as absent (not as an explicit override)
+  // 3. runtimeInputs still takes precedence when non-empty
+  let resolvedInputs: Record<string, string>;
+  let storedInputsFromResume: Record<string, string> | undefined;
 
   if (configuredCommandFolder) {
     getLog().debug({ configuredCommandFolder }, 'command_folder_configured');
@@ -412,23 +441,21 @@ export async function executeWorkflow(
           workflowRun = await deps.store.resumeWorkflowRun(resumableRun.id);
           dagPriorCompletedNodes = priorNodes;
 
-          // Restore runtime inputs from prior run metadata so $INPUT_NAME substitutions
-          // continue to work on resume without the caller re-supplying --set flags.
-          if (!runtimeInputs) {
-            const rawStoredInputs = resumableRun.metadata?.resolved_inputs;
-            const storedInputs =
-              rawStoredInputs &&
-              typeof rawStoredInputs === 'object' &&
-              !Array.isArray(rawStoredInputs)
-                ? Object.fromEntries(
-                    Object.entries(rawStoredInputs as Record<string, unknown>).filter(
-                      ([, v]) => typeof v === 'string'
-                    ) as [string, string][]
-                  )
-                : undefined;
-            if (storedInputs && Object.keys(storedInputs).length > 0) {
-              resolvedInputs = resolveInputs(workflow.inputs, storedInputs);
-            }
+          // Capture stored inputs from prior run metadata so they can be merged
+          // with runtimeInputs after the resume block (runtimeInputs wins on conflict).
+          const rawStoredInputs = resumableRun.metadata?.resolved_inputs;
+          const storedInputs =
+            rawStoredInputs &&
+            typeof rawStoredInputs === 'object' &&
+            !Array.isArray(rawStoredInputs)
+              ? Object.fromEntries(
+                  Object.entries(rawStoredInputs as Record<string, unknown>).filter(
+                    ([, v]) => typeof v === 'string'
+                  ) as [string, string][]
+                )
+              : undefined;
+          if (storedInputs && Object.keys(storedInputs).length > 0) {
+            storedInputsFromResume = storedInputs;
           }
 
           if (orphanPreCreated) {
@@ -496,6 +523,19 @@ export async function executeWorkflow(
     }
   }
 
+  // Compute resolvedInputs now that the resume block has had a chance to populate
+  // storedInputsFromResume. Stored inputs are the base; non-empty runtimeInputs override
+  // them. An empty {} runtimeInputs is treated as absent so stored values aren't masked.
+  {
+    const effectiveRuntime =
+      runtimeInputs && Object.keys(runtimeInputs).length > 0 ? runtimeInputs : undefined;
+    const inputsForResolution =
+      storedInputsFromResume || effectiveRuntime
+        ? { ...(storedInputsFromResume ?? {}), ...(effectiveRuntime ?? {}) }
+        : undefined;
+    resolvedInputs = resolveInputs(workflow.inputs, inputsForResolution);
+  }
+
   // Resolve provider and model now that resolvedInputs is final (resume may have updated it).
   // Apply runtime inputs so model/provider can be parameterised via $INPUT_NAME.
   // When workflow sets a model but not a provider, infer provider from the model.
@@ -531,7 +571,7 @@ export async function executeWorkflow(
       providerSource,
       model: resolvedModel,
     },
-    'workflow_provider_resolved'
+    'workflow.provider_resolved'
   );
 
   if (!workflowRun) {
