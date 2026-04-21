@@ -1,6 +1,6 @@
 ---
 title: Docker 가이드
-description: 자동 HTTPS, PostgreSQL, Web UI를 포함해 Docker로 Archon을 배포합니다.
+description: 자동 HTTPS, PostgreSQL, Web UI를 포함해 Docker로 HarneesLab을 배포합니다.
 category: deployment
 area: infra
 audience: [operator]
@@ -9,7 +9,7 @@ sidebar:
   order: 2
 ---
 
-Docker로 server에 HarneesLab을 배포합니다. 자동 HTTPS, PostgreSQL, Web UI 구성이 포함됩니다. HarneesLab은 Archon fork이므로 같은 Docker 배포 방식을 그대로 사용할 수 있습니다.
+Docker로 server에 HarneesLab을 배포합니다. 자동 HTTPS, PostgreSQL, Web UI 구성이 포함됩니다. HarneesLab은 Archon fork이므로 기존 Archon-compatible 배포 흐름과 runtime path fallback을 함께 지원합니다.
 
 > **Claude Code는 image에 미리 설치되어 있습니다.** 공식 `ghcr.io/newturn2017/harneeslab` image에는 npm으로 설치된 Claude Code와 미리 설정된 `CLAUDE_BIN_PATH`가 포함되어 있어 추가 설정이 필요 없습니다. npm install을 생략한 custom image를 build하는 경우에는 mounted `cli.js`를 가리키도록 `CLAUDE_BIN_PATH`를 직접 설정하세요([AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only) 참고).
 
@@ -42,18 +42,18 @@ Docker로 server에 HarneesLab을 배포합니다. 자동 HTTPS, PostgreSQL, Web
 server에 SSH로 접속해 설정을 마무리합니다.
 
 ```bash
-# Check setup completed
+# setup 완료 확인
 cat /opt/harneeslab/SETUP_COMPLETE
 
-# Edit credentials and domain
+# credential과 domain 편집
 nano /opt/harneeslab/.env
 
 # Set at minimum:
 #   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-#   DOMAIN=archon.example.com
+#   DOMAIN=harneeslab.example.com
 #   DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
-# (Optional) Set up basic auth to protect Web UI:
+# (선택) Web UI 보호용 basic auth 설정:
 # docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
 # Add to .env: CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$<hash> }
 
@@ -86,7 +86,7 @@ Docker Desktop으로 HarneesLab을 로컬에서 실행합니다. domain이나 VP
 git clone https://github.com/NewTurn2017/HarneesLab.git
 cd HarneesLab
 cp .env.example .env
-# Edit .env: set CLAUDE_CODE_OAUTH_TOKEN or CLAUDE_API_KEY
+# .env 편집: CLAUDE_CODE_OAUTH_TOKEN 또는 CLAUDE_API_KEY 설정
 docker compose up -d
 ```
 
@@ -110,8 +110,8 @@ git reset --hard
 
 ### 실행 후 제공되는 것
 
-| Feature | Status |
-|---------|--------|
+| 기능 | 상태 |
+| --- | --- |
 | Web UI | http://localhost:3000 |
 | Database | SQLite(자동, zero setup) |
 | HTTPS / Caddy | 로컬에서는 필요 없음 |
@@ -126,7 +126,7 @@ docker compose --profile with-db up -d
 
 그다음 `.env`에 추가합니다.
 
-```env
+```ini
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 ```
 
@@ -159,7 +159,7 @@ git clone https://github.com/NewTurn2017/HarneesLab.git
 cd HarneesLab
 ```
 
-### 3. Environment 설정
+### 3. 환경 설정
 
 ```bash
 cp .env.example .env
@@ -177,9 +177,9 @@ CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxxxx
 # CLAUDE_API_KEY=sk-ant-xxxxx
 
 # Domain — your domain or subdomain pointing to this server
-DOMAIN=archon.example.com
+DOMAIN=harneeslab.example.com
 
-# Database — connect to the Docker PostgreSQL container
+# Database — Docker PostgreSQL container에 연결
 # Without this, the app uses SQLite (fine for getting started, but PostgreSQL recommended)
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
@@ -206,9 +206,9 @@ domain registrar에서 DNS **A record**를 생성합니다.
 
 | Type | Name | Value |
 |------|------|-------|
-| A | `archon`(root domain이면 `@`) | server의 public IP |
+| A | `harneeslab`(root domain이면 `@`) | server의 public IP |
 
-DNS propagation을 기다립니다(보통 5-60분). `dig archon.example.com`으로 확인합니다.
+DNS propagation을 기다립니다(보통 5-60분). `dig harneeslab.example.com`으로 확인합니다.
 
 ### 5. Firewall port 열기
 
@@ -234,7 +234,7 @@ docker compose --profile with-db --profile cloud up -d
 ### 7. 확인
 
 ```bash
-# Check all containers are running
+# 모든 container 실행 상태 확인
 docker compose --profile with-db --profile cloud ps
 
 # Watch logs
@@ -242,7 +242,7 @@ docker compose logs -f app
 docker compose logs -f caddy
 
 # Test HTTPS (from your local machine)
-curl https://archon.example.com/api/health
+curl https://harneeslab.example.com/api/health
 ```
 
 browser에서 **https://harneeslab.example.com**을 열면 HarneesLab Web UI가 보여야 합니다.
@@ -251,10 +251,10 @@ browser에서 **https://harneeslab.example.com**을 열면 HarneesLab Web UI가 
 
 ## Profile
 
-Archon은 Docker Compose profile로 PostgreSQL 또는 HTTPS를 선택적으로 추가합니다. 필요에 따라 조합해서 사용합니다.
+HarneesLab은 Docker Compose profile로 PostgreSQL 또는 HTTPS를 선택적으로 추가합니다. 필요에 따라 조합해서 사용합니다.
 
-| Command | What runs |
-|---------|-----------|
+| 명령 | 실행되는 항목 |
+| --- | --- |
 | `docker compose up -d` | SQLite를 사용하는 App |
 | `docker compose --profile with-db up -d` | App + PostgreSQL |
 | `docker compose --profile cloud up -d` | App + Caddy(HTTPS) |
@@ -291,7 +291,7 @@ Let's Encrypt에서 TLS certificate을 자동으로 발급하는 [Caddy](https:/
 
 Caddy는 HTTPS certificate, HTTP->HTTPS redirect, HTTP/3, SSE streaming을 처리합니다.
 
-### Authentication(Optional Basic Auth)
+### 인증(Optional Basic Auth)
 
 Caddy는 webhook(`/webhooks/*`)과 health check(`/api/health`)를 제외한 모든 route에 HTTP Basic Auth를 적용할 수 있습니다. 선택 사항이므로 IP 기반 firewall rule 또는 다른 network-level access control을 사용한다면 생략해도 됩니다.
 
@@ -379,7 +379,7 @@ COOKIE_MAX_AGE=3600  # 1 hour
 
 ## 설정
 
-### Port Defaults
+### Port 기본값
 
 :::caution
 Docker 기본 port는 **3000**입니다(`docker-compose.yml`의 `${PORT:-3000}`). 반면 local development 기본 port는 **3090**입니다. Docker port를 바꾸려면 `.env`에 `PORT`를 설정하세요.
@@ -434,8 +434,8 @@ WEBHOOK_SECRET=...
 ### Server Settings(선택)
 
 ```ini
-PORT=3000                          # Default: 3000
-DOMAIN=archon.example.com          # Required for --profile cloud
+PORT=3000                          # 기본값: 3000
+DOMAIN=harneeslab.example.com      # --profile cloud에 필요
 LOG_LEVEL=info                     # fatal|error|warn|info|debug|trace
 MAX_CONCURRENT_CONVERSATIONS=10
 ```
@@ -480,7 +480,7 @@ server가 HTTPS로 접근 가능해진 뒤 설정합니다.
 
 1. `https://github.com/<owner>/<repo>/settings/hooks`로 이동합니다.
 2. webhook을 추가합니다.
-   - **Payload URL**: `https://archon.example.com/webhooks/github`
+   - **Payload URL**: `https://harneeslab.example.com/webhooks/github`
    - **Content type**: `application/json`
    - **Secret**: `.env`의 `WEBHOOK_SECRET`
    - **Events**: Issues, Issue comments, Pull requests
@@ -492,12 +492,12 @@ server가 HTTPS로 접근 가능해진 뒤 설정합니다.
 source에서 build할 필요가 없는 사용자를 위한 방식입니다.
 
 ```bash
-mkdir archon && cd archon
+mkdir harneeslab && cd harneeslab
 curl -O https://raw.githubusercontent.com/NewTurn2017/HarneesLab/dev/deploy/docker-compose.yml
 curl -O https://raw.githubusercontent.com/NewTurn2017/HarneesLab/dev/.env.example
 
 cp .env.example .env
-# Edit .env — set AI credentials, DOMAIN, etc.
+# .env 편집 — AI credential, DOMAIN 등 설정
 
 docker compose up -d
 ```
@@ -630,16 +630,16 @@ docker compose --profile cloud up -d
 ### Caddy가 SSL certificate을 받지 못함
 
 ```bash
-# Check DNS propagation
-dig archon.example.com
-# Should return your server IP
+# DNS propagation 확인
+dig harneeslab.example.com
+# server IP가 반환되어야 함
 
-# Check Caddy logs
+# Caddy log 확인
 docker compose logs caddy
 
-# Check firewall
+# firewall 확인
 sudo ufw status
-# Ports 80 and 443 must be open
+# port 80과 443이 열려 있어야 함
 ```
 
 흔한 원인: DNS propagation 미완료(5-60분 대기), firewall이 80/443 차단, `.env`의 domain typo.
