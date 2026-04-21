@@ -330,7 +330,9 @@ export async function executeWorkflow(
 
   // Resolve runtime inputs (merge caller values with workflow-declared defaults).
   // This must happen before model/provider resolution so $INPUT_NAME references work there.
-  const resolvedInputs = resolveInputs(workflow.inputs, runtimeInputs);
+  // Note: if the run is later found to be a resume (findResumableRun below), inputs may be
+  // re-resolved from the stored prior-run metadata — see the resume block below.
+  let resolvedInputs = resolveInputs(workflow.inputs, runtimeInputs);
 
   // Resolve provider and model once (used by all nodes).
   // Apply runtime inputs first so model/provider can be parameterised via $INPUT_NAME.
@@ -443,6 +445,17 @@ export async function executeWorkflow(
           workflowRun = await deps.store.resumeWorkflowRun(resumableRun.id);
           dagPriorCompletedNodes = priorNodes;
 
+          // Restore runtime inputs from prior run metadata so $INPUT_NAME substitutions
+          // continue to work on resume without the caller re-supplying --set flags.
+          if (!runtimeInputs) {
+            const storedInputs = resumableRun.metadata?.resolved_inputs as
+              | Record<string, string>
+              | undefined;
+            if (storedInputs && Object.keys(storedInputs).length > 0) {
+              resolvedInputs = resolveInputs(workflow.inputs, storedInputs);
+            }
+          }
+
           if (orphanPreCreated) {
             await deps.store
               .updateWorkflowRun(orphanPreCreated.id, { status: 'cancelled' })
@@ -511,13 +524,18 @@ export async function executeWorkflow(
   if (!workflowRun) {
     // Create workflow run record
     try {
+      const runMetadata: Record<string, unknown> = {};
+      if (issueContext) runMetadata.github_context = issueContext;
+      if (resolvedInputs && Object.keys(resolvedInputs).length > 0) {
+        runMetadata.resolved_inputs = resolvedInputs;
+      }
       workflowRun = await deps.store.createWorkflowRun({
         workflow_name: workflow.name,
         conversation_id: conversationDbId,
         codebase_id: codebaseId,
         user_message: userMessage,
         working_path: cwd,
-        metadata: issueContext ? { github_context: issueContext } : {},
+        metadata: runMetadata,
         parent_conversation_id: parentConversationId,
       });
     } catch (error) {

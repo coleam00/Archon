@@ -1879,7 +1879,10 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined,
+          undefined,
+          inputs
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,

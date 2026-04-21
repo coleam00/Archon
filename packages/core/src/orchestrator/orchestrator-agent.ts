@@ -669,6 +669,9 @@ export async function handleMessage(
             return;
           }
           await platform.sendMessage(conversationId, `▶️ Resuming **${workflow.name}**...`);
+          const pausedResumeInputs = pausedRun.metadata?.resolved_inputs as
+            | Record<string, string>
+            | undefined;
           await dispatchOrchestratorWorkflow(
             platform,
             conversationId,
@@ -676,7 +679,10 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            pausedResumeInputs && Object.keys(pausedResumeInputs).length > 0
+              ? pausedResumeInputs
+              : undefined
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
