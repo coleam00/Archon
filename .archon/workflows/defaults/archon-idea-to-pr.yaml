@@ -13,7 +13,7 @@ description: |
   6. Create PR with template, mark ready
   7. Comprehensive code review (5 parallel agents with scope limit awareness)
   8. Synthesize and fix review findings
-  9. Final summary with decision matrix -> GitHub comment + follow-up recommendations
+  9. Final summary with decision matrix -> $FORGE_NAME comment + follow-up recommendations
 
   NOT for: Executing existing plans (use archon-plan-to-pr), quick fixes, standalone reviews.
 

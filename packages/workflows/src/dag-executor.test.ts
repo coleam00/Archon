@@ -4775,7 +4775,9 @@ describe('executeDagWorkflow -- env var injection', () => {
 
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
-    expect(optionsArg?.env).toEqual({ MY_SECRET: 'abc123' });
+    expect(optionsArg?.env).toEqual({
+      MY_SECRET: 'abc123',
+    });
   });
 
   it('does not set env on claudeOptions when config.envVars is empty', async () => {
@@ -4801,6 +4803,7 @@ describe('executeDagWorkflow -- env var injection', () => {
 
     expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
     const optionsArg = mockSendQueryDag.mock.calls[0]?.[3] as Record<string, unknown> | undefined;
+    // No env vars when config.envVars is empty (forge vars injected by executor.ts, not dag-executor)
     expect(optionsArg?.env).toBeUndefined();
   });
 });

@@ -6,6 +6,9 @@ argument-hint: (no arguments - reads from workflow artifacts)
 # Finalize Pull Request
 
 **Workflow ID**: $WORKFLOW_ID
+**Forge**: $FORGE_TYPE
+
+> **Forge note**: When `$FORGE_TYPE` is not `github`, use `bun "$FORGE_CLI"` instead of `gh` for all forge operations (e.g., `"$FORGE_CLI" pr create`, `"$FORGE_CLI" pr list`, `"$FORGE_CLI" pr edit`). The tool handles authentication and API differences automatically.
 
 ---
 
@@ -47,7 +50,7 @@ Extract:
 ### 1.3 Check for Existing PR
 
 ```bash
-gh pr list --head $(git branch --show-current) --json number,url,state
+bun "$FORGE_CLI" pr list --head $(git branch --show-current) --json number,url,state
 ```
 
 **If PR already exists**: Will update it instead of creating new one.
@@ -183,16 +186,16 @@ cat > $ARTIFACTS_DIR/pr-body.md <<'EOF'
 {prepared-body}
 EOF
 
-gh pr create \
+bun "$FORGE_CLI" pr create \
   --title "{plan-title}" \
-  --body-file $ARTIFACTS_DIR/pr-body.md \
+  --body "$(<$ARTIFACTS_DIR/pr-body.md)" \
   --base $BASE_BRANCH
 ```
 
 **If PR already exists**, update it:
 
 ```bash
-gh pr edit {pr-number} --body-file $ARTIFACTS_DIR/pr-body.md
+bun "$FORGE_CLI" pr edit {pr-number} --body "$(<$ARTIFACTS_DIR/pr-body.md)"
 ```
 
 ### 3.3 Ensure Ready for Review
@@ -200,13 +203,17 @@ gh pr edit {pr-number} --body-file $ARTIFACTS_DIR/pr-body.md
 If PR was created as draft, mark ready:
 
 ```bash
-gh pr ready {pr-number} 2>/dev/null || true
+bun "$FORGE_CLI" pr ready {pr-number} 2>/dev/null || true
 ```
 
 ### 3.4 Capture PR Info
 
+After creating the PR, capture and persist its number and URL for downstream steps.
+Use the PR number from the create/list output above:
+
 ```bash
-gh pr view --json number,url,headRefName,baseRefName
+PR_NUMBER={pr-number from create or list output}
+bun "$FORGE_CLI" pr view "$PR_NUMBER" --json number,url,headRefName,baseRefName
 ```
 
 ### 3.5 Write PR Number Registry
@@ -214,9 +221,8 @@ gh pr view --json number,url,headRefName,baseRefName
 Write PR number for downstream review steps:
 
 ```bash
-PR_NUMBER=$(gh pr view --json number -q '.number')
-PR_URL=$(gh pr view --json url -q '.url')
 echo "$PR_NUMBER" > $ARTIFACTS_DIR/.pr-number
+PR_URL=$(bun "$FORGE_CLI" pr view "$PR_NUMBER" --json url -q '.url')
 echo "$PR_URL" > $ARTIFACTS_DIR/.pr-url
 ```
 
@@ -381,7 +387,7 @@ Check:
 ❌ PR not found: #{number}
 
 The draft PR may have been closed or deleted. Create a new one:
-`gh pr create --title "..." --body "..."`
+`bun "$FORGE_CLI" pr create --title "..." --body "..."`
 ```
 
 ### Template Parsing

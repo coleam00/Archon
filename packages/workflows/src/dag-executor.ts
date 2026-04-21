@@ -1132,7 +1132,9 @@ async function executeBashNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined, // loopUserInput
+    undefined // rejectionReason
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
@@ -1286,7 +1288,9 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined, // loopUserInput
+    undefined // rejectionReason
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -1646,7 +1650,8 @@ async function executeLoopNode(
         baseBranch,
         docsDir,
         issueContext,
-        i === startIteration ? loopUserInput : ''
+        i === startIteration ? loopUserInput : '',
+        undefined // rejectionReason
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -1866,7 +1871,9 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined, // loopUserInput
+          undefined // rejectionReason
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,

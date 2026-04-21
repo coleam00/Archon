@@ -53,7 +53,7 @@ Read the plan file:
 cat $PLAN_PATH
 ```
 
-If `$ARGUMENTS` is a GitHub issue URL or number (e.g., `#123`), fetch the issue body instead.
+If `$ARGUMENTS` is a $FORGE_NAME issue URL or number (e.g., `#123`), fetch the issue body instead.
 
 ### 1.3 Extract Key Information
 
@@ -107,7 +107,7 @@ git remote get-url origin
 Extract owner/repo from the remote URL for PR creation:
 
 ```bash
-gh repo view --json nameWithOwner -q .nameWithOwner
+bun "$FORGE_CLI" repo view --json nameWithOwner -q .nameWithOwner
 ```
 
 ### 2.3 Branch Decision

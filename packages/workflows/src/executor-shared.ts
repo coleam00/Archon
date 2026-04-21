@@ -279,6 +279,20 @@ export const CONTEXT_VAR_PATTERN_STR =
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
  */
+
+/** Map forge type to display name for use in prompts */
+function forgeDisplayName(forgeType: string | undefined): string {
+  switch (forgeType) {
+    case 'gitea':
+      return 'Gitea';
+    case 'gitlab':
+      return 'GitLab';
+    case 'github':
+    default:
+      return 'GitHub';
+  }
+}
+
 export function substituteWorkflowVariables(
   prompt: string,
   workflowId: string,
@@ -288,7 +302,10 @@ export function substituteWorkflowVariables(
   docsDir: string,
   issueContext?: string,
   loopUserInput?: string,
-  rejectionReason?: string
+  rejectionReason?: string,
+  forgeType?: string,
+  forgeApiBase?: string,
+  forgeCli?: string
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -310,7 +327,11 @@ export function substituteWorkflowVariables(
     .replace(/\$BASE_BRANCH/g, baseBranch)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir)
     .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
-    .replace(/\$REJECTION_REASON/g, rejectionReason ?? '');
+    .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
+    .replace(/\$FORGE_TYPE/g, forgeType ?? 'github')
+    .replace(/\$FORGE_API_BASE/g, forgeApiBase ?? 'https://api.github.com')
+    .replace(/\$FORGE_CLI/g, forgeCli ?? '')
+    .replace(/\$FORGE_NAME/g, forgeDisplayName(forgeType));
 
   // Check if context variables exist (use fresh regex to avoid lastIndex issues)
   const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(result);
@@ -356,7 +377,10 @@ export function buildPromptWithContext(
   baseBranch: string,
   docsDir: string,
   issueContext: string | undefined,
-  logLabel: string
+  logLabel: string,
+  forgeType?: string,
+  forgeApiBase?: string,
+  forgeCli?: string
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -365,15 +389,40 @@ export function buildPromptWithContext(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined, // loopUserInput
+    undefined, // rejectionReason
+    forgeType,
+    forgeApiBase,
+    forgeCli
   );
+
+  // Auto-inject forge compatibility preamble for non-GitHub forges.
+  // This ensures all AI command prompts know to use forge-cli instead of gh.
+  // NOTE: The `$FORGE_CLI` references in the preamble text below are intentionally
+  // un-substituted — they use shell variable syntax to show the AI how to invoke
+  // the forge-cli tool at runtime (the env var is set by the executor).
+  const resolvedForgeType = forgeType ?? 'github';
+  let finalPrompt = prompt;
+  if (resolvedForgeType !== 'github' && resolvedForgeType !== 'unknown') {
+    const preamble =
+      '## Forge Compatibility\n\n' +
+      `This repository uses **${resolvedForgeType}** (not GitHub).\n\n` +
+      '**CRITICAL**: Replace ALL `gh` CLI commands with the forge-cli tool:\n' +
+      '- Instead of `gh pr create ...` use `bun "$FORGE_CLI" pr create ...`\n' +
+      '- Instead of `gh issue view ...` use `bun "$FORGE_CLI" issue view ...`\n' +
+      '- Instead of `gh pr comment ...` use `bun "$FORGE_CLI" pr comment ...`\n' +
+      '- The forge-cli tool handles authentication and API differences automatically.\n' +
+      '- All git commands (push, branch, log, etc.) are unchanged.\n\n';
+    finalPrompt = preamble + finalPrompt;
+  }
 
   if (issueContext && !contextSubstituted) {
     getLog().debug({ logLabel }, 'issue_context_appended');
-    return prompt + '\n\n---\n\n' + issueContext;
+    return finalPrompt + '\n\n---\n\n' + issueContext;
   }
 
-  return prompt;
+  return finalPrompt;
 }
 
 // ─── Completion Signal Detection ────────────────────────────────────────────
