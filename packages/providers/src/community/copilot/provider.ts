@@ -2,12 +2,14 @@ import {
   CopilotClient,
   approveAll,
   type AssistantMessageEvent,
+  type MCPServerConfig,
   type SessionConfig,
   type SessionEvent,
 } from '@github/copilot-sdk';
 import { createLogger } from '@archon/paths';
 
 import type { IAgentProvider, MessageChunk, SendQueryOptions } from '../../types';
+import { loadMcpConfig } from '../../claude/provider';
 import { COPILOT_CAPABILITIES } from './capabilities';
 import { resolveCopilotCliPath } from './binary-resolver';
 import { parseCopilotConfig, type CopilotProviderDefaults } from './config';
@@ -112,16 +114,43 @@ function applyToolRestrictions(
 }
 
 /**
+ * Translate Archon's `nodeConfig.mcp` (JSON-file path) to Copilot's
+ * `SessionConfig.mcpServers`. Reuses Claude's `loadMcpConfig` so env-var
+ * expansion and missing-var detection behave consistently across providers.
+ */
+async function applyMcpServers(
+  sessionConfig: SessionConfig,
+  nodeConfig: SendQueryOptions['nodeConfig'],
+  cwd: string,
+  warnings: ProviderWarning[]
+): Promise<void> {
+  const mcpPath = nodeConfig?.mcp;
+  if (typeof mcpPath !== 'string' || mcpPath.length === 0) return;
+
+  const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd);
+
+  if (missingVars.length > 0) {
+    warnings.push({
+      code: 'copilot.mcp_env_vars_missing',
+      message: `Copilot MCP config references undefined env vars: ${missingVars.join(', ')}. Servers using them may fail at runtime.`,
+    });
+  }
+
+  sessionConfig.mcpServers = servers as Record<string, MCPServerConfig>;
+  getLog().info({ serverNames, missingVars }, 'copilot.mcp_loaded');
+}
+
+/**
  * Single construction site for the Copilot SessionConfig. Each subsequent
  * workflow-parity phase adds one `applyX(sessionConfig, ..., warnings)` call
  * below this function — keep business logic here straight-through.
  */
-function buildSessionConfig(
+async function buildSessionConfig(
   copilotConfig: CopilotProviderDefaults,
   requestOptions: SendQueryOptions | undefined,
   cwd: string,
   warnings: ProviderWarning[]
-): SessionConfig {
+): Promise<SessionConfig> {
   const reasoning = resolveCopilotReasoning(requestOptions?.nodeConfig);
   if (reasoning.warning) {
     warnings.push({ code: 'copilot.reasoning_ignored', message: reasoning.warning });
@@ -139,6 +168,7 @@ function buildSessionConfig(
   };
 
   applyToolRestrictions(sessionConfig, requestOptions?.nodeConfig);
+  await applyMcpServers(sessionConfig, requestOptions?.nodeConfig, cwd, warnings);
 
   return sessionConfig;
 }
@@ -266,7 +296,7 @@ export class CopilotProvider implements IAgentProvider {
       const cliPath = await resolveCopilotCliPath(copilotConfig.copilotCliPath);
 
       const warnings: ProviderWarning[] = [];
-      const sessionConfig = buildSessionConfig(copilotConfig, requestOptions, cwd, warnings);
+      const sessionConfig = await buildSessionConfig(copilotConfig, requestOptions, cwd, warnings);
 
       for (const w of warnings) {
         queue.push({ type: 'system', content: `⚠️ ${w.message}` });
