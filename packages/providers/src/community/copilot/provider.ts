@@ -10,6 +10,7 @@ import { createLogger } from '@archon/paths';
 
 import type { IAgentProvider, MessageChunk, SendQueryOptions } from '../../types';
 import { loadMcpConfig } from '../../claude/provider';
+import { resolveSkillDirectories } from '../../shared/skills';
 import { COPILOT_CAPABILITIES } from './capabilities';
 import { resolveCopilotCliPath } from './binary-resolver';
 import { parseCopilotConfig, type CopilotProviderDefaults } from './config';
@@ -141,6 +142,34 @@ async function applyMcpServers(
 }
 
 /**
+ * Translate Archon's `nodeConfig.skills` (string names) to Copilot's
+ * `SessionConfig.skillDirectories` (absolute paths). Unresolved names become
+ * a single system warning chunk so the user notices the typo/missing skill.
+ */
+function applySkills(
+  sessionConfig: SessionConfig,
+  nodeConfig: SendQueryOptions['nodeConfig'],
+  cwd: string,
+  warnings: ProviderWarning[]
+): void {
+  if (!nodeConfig?.skills || nodeConfig.skills.length === 0) return;
+
+  const { paths, missing } = resolveSkillDirectories(cwd, nodeConfig.skills);
+
+  if (missing.length > 0) {
+    warnings.push({
+      code: 'copilot.skills_missing',
+      message: `Copilot ignored missing skills: ${missing.join(', ')}. Expected a directory with SKILL.md under .agents/skills/ or .claude/skills/ (project or home).`,
+    });
+  }
+
+  if (paths.length > 0) {
+    sessionConfig.skillDirectories = paths;
+  }
+  getLog().info({ resolved: paths.length, missing }, 'copilot.skills_resolved');
+}
+
+/**
  * Single construction site for the Copilot SessionConfig. Each subsequent
  * workflow-parity phase adds one `applyX(sessionConfig, ..., warnings)` call
  * below this function — keep business logic here straight-through.
@@ -169,6 +198,7 @@ async function buildSessionConfig(
 
   applyToolRestrictions(sessionConfig, requestOptions?.nodeConfig);
   await applyMcpServers(sessionConfig, requestOptions?.nodeConfig, cwd, warnings);
+  applySkills(sessionConfig, requestOptions?.nodeConfig, cwd, warnings);
 
   return sessionConfig;
 }

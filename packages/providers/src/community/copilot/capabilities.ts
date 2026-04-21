@@ -10,7 +10,7 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
   mcp: true,
   hooks: false,
-  skills: false,
+  skills: true,
   agents: false,
   toolRestrictions: true,
   structuredOutput: false,
