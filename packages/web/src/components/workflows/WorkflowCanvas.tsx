@@ -174,8 +174,6 @@ export function WorkflowCanvas({
 
       onPushSnapshot?.();
       setNodes(nds => [...nds, newNode]);
-      // Auto-select the new node so keyboard shortcuts (Delete/Backspace) and the
-      // inspector panel work immediately without an extra click. Fixes #971.
       onNodeSelect(id);
       onDirty();
     },
@@ -292,7 +290,6 @@ export function WorkflowCanvas({
 
       onPushSnapshot?.();
       setNodes(nds => [...nds, newNode]);
-      // Auto-select for the same reason as onDrop above (#971).
       onNodeSelect(id);
       onDirty();
       setQuickAddPosition(null);
@@ -304,29 +301,29 @@ export function WorkflowCanvas({
     setQuickAddPosition(null);
   }, []);
 
-  // Right-click on a node opens a small context menu with a Delete option (#971).
-  // We must call preventDefault() to suppress the browser's native menu.
+  // Approximate menu size used for viewport-edge clamping.
+  const CONTEXT_MENU_WIDTH = 160;
+  const CONTEXT_MENU_HEIGHT = 40;
+
   const handleNodeContextMenu = useCallback(
     (e: React.MouseEvent, node: DagFlowNode) => {
       e.preventDefault();
       onNodeSelect(node.id);
-      setContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.id });
+      const x = Math.min(e.clientX, window.innerWidth - CONTEXT_MENU_WIDTH);
+      const y = Math.min(e.clientY, window.innerHeight - CONTEXT_MENU_HEIGHT);
+      setContextMenu({ x, y, nodeId: node.id });
     },
     [onNodeSelect]
   );
-
-  const closeContextMenu = useCallback(() => {
-    setContextMenu(null);
-  }, []);
 
   // Dismiss the context menu on Escape or any click/contextmenu outside it.
   useEffect(() => {
     if (!contextMenu) return;
 
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') closeContextMenu();
+      if (e.key === 'Escape') setContextMenu(null);
     };
-    const onPointer = (e: MouseEvent): void => {
+    const onClickOutside = (e: MouseEvent): void => {
       if (
         contextMenuRef.current &&
         e.target instanceof Node &&
@@ -334,19 +331,19 @@ export function WorkflowCanvas({
       ) {
         return;
       }
-      closeContextMenu();
+      setContextMenu(null);
     };
 
     window.addEventListener('keydown', onKey);
     // Use capture so we beat ReactFlow's own handlers and any stopPropagation.
-    window.addEventListener('mousedown', onPointer, true);
-    window.addEventListener('contextmenu', onPointer, true);
+    window.addEventListener('mousedown', onClickOutside, true);
+    window.addEventListener('contextmenu', onClickOutside, true);
     return (): void => {
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mousedown', onPointer, true);
-      window.removeEventListener('contextmenu', onPointer, true);
+      window.removeEventListener('mousedown', onClickOutside, true);
+      window.removeEventListener('contextmenu', onClickOutside, true);
     };
-  }, [contextMenu, closeContextMenu]);
+  }, [contextMenu]);
 
   return (
     <div className="relative w-full h-full">
@@ -385,21 +382,17 @@ export function WorkflowCanvas({
         />
       )}
 
-      {/* Right-click context menu (#971). Positioned with fixed viewport coords. */}
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          role="menu"
-          aria-label="Node actions"
           className="fixed z-50 min-w-[140px] rounded-md border border-border bg-surface-elevated py-1 shadow-md"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
             type="button"
-            role="menuitem"
             onClick={(): void => {
               onNodeDelete(contextMenu.nodeId);
-              closeContextMenu();
+              setContextMenu(null);
             }}
             className="w-full px-3 py-1.5 text-left text-xs text-error hover:bg-surface"
           >

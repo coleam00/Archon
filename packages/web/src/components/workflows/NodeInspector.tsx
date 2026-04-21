@@ -714,8 +714,6 @@ function DagInspector({
         <span className="flex-1 truncate text-xs font-semibold text-text-primary">
           {node.label || node.id}
         </span>
-        {/* Delete button visible for ALL node types — including bash, which has no
-            Advanced tab. Fixes #971 (bash nodes had no UI delete affordance). */}
         <Button
           variant="destructive"
           size="sm"

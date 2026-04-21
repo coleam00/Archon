@@ -172,6 +172,7 @@ The Workflow Builder at `/workflows/builder` provides a visual editor for creati
 - **Command picker** -- Browse available commands when configuring command nodes
 - **Validation panel** -- Real-time validation feedback as you build
 - **Undo/redo** -- Full undo/redo stack with keyboard shortcuts
+- **Delete node** -- Remove a selected node with `Delete` or `Backspace`, the Delete button in the inspector header, or the right-click context menu on any node
 - **Save** -- Saves the workflow YAML to your project's `.archon/workflows/` directory
 
 You can also browse existing workflows on the `/workflows` page and open any of them in the builder to edit.
