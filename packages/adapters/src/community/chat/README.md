@@ -1,10 +1,10 @@
 # Community Chat Adapters
 
-Chat adapters connect Archon to messaging platforms (Slack, Telegram, Discord, etc.) via polling or WebSocket.
+Chat adapter는 polling 또는 WebSocket을 통해 HarneesLab을 Slack, Telegram, Discord 같은 messaging platform에 연결합니다.
 
 ## Interface
 
-Implement `IPlatformAdapter` from `@harneeslab/core`:
+`@harneeslab/core`의 `IPlatformAdapter`를 구현합니다.
 
 ```typescript
 import type { IPlatformAdapter } from '@harneeslab/core';
@@ -39,7 +39,7 @@ export class MyChatAdapter implements IPlatformAdapter {
 
 ## Directory Structure
 
-Each adapter lives in its own directory:
+각 adapter는 독립된 directory에 둡니다.
 
 ```
 community/chat/
@@ -59,7 +59,7 @@ community/chat/
 
 ## Registration
 
-After creating your adapter, register it in `packages/server/src/index.ts`:
+adapter를 만든 뒤 `packages/server/src/index.ts`에 등록합니다.
 
 ```typescript
 import { MyAdapter } from '@harneeslab/adapters/community/chat/my-adapter';
@@ -78,11 +78,11 @@ if (process.env.MY_PLATFORM_TOKEN) {
 
 ## Testing
 
-### Mock isolation (required)
+### Mock isolation (필수)
 
-Bun's `mock.module()` is process-global and irreversible — `mock.restore()` does NOT undo it. Your test file **must** run in its own `bun test` invocation if it mocks modules differently from existing test files in the same batch.
+Bun의 `mock.module()`은 process-global이고 되돌릴 수 없습니다. `mock.restore()`로는 원복되지 않습니다. 같은 batch의 기존 test file과 다른 방식으로 module을 mock한다면, 해당 test file은 반드시 별도 `bun test` invocation에서 실행해야 합니다.
 
-Check `packages/adapters/package.json` to see which test files share a batch. If your test mocks the same modules (e.g., `@harneeslab/paths`) with different exports, split it into a separate batch:
+어떤 test file이 같은 batch를 공유하는지는 `packages/adapters/package.json`에서 확인하세요. 같은 module(예: `@harneeslab/paths`)을 다른 export로 mock한다면 별도 batch로 분리합니다.
 
 ```json
 "test": "... existing batches ... && bun test src/community/chat/your-adapter/adapter.test.ts"
@@ -90,7 +90,7 @@ Check `packages/adapters/package.json` to see which test files share a batch. If
 
 ### Lazy logger pattern
 
-Always use a module-level `cachedLog` + `getLog()` getter so test mocks can intercept `createLogger` before the logger is instantiated:
+test mock이 logger 생성 전에 `createLogger`를 가로챌 수 있도록 module-level `cachedLog`와 `getLog()` getter를 사용합니다.
 
 ```typescript
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -102,4 +102,4 @@ function getLog(): ReturnType<typeof createLogger> {
 
 ## Reference
 
-See the Discord adapter (`discord/`) for a complete working example.
+완성된 예시는 Discord adapter(`discord/`)를 참고하세요.
