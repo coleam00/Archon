@@ -866,6 +866,45 @@ describe('workflowRunCommand', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Stale workspace source-symlink → truthful CLI error (#1146)
+  // -------------------------------------------------------------------------
+
+  it('surfaces auto-registration failures instead of claiming the repo is invalid', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { registerRepository } = await import('@archon/core');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const gitModule = await import('@archon/git');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/path');
+    (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error(
+        'Source symlink at /home/test/.archon/workspaces/acme/widget/source already points to ' +
+          '/home/test/.archon/workspaces/widget, expected /test/path'
+      )
+    );
+
+    const error = await workflowRunCommand('/test/path', 'assist', 'hello', {}).catch(
+      err => err as Error
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toContain('Cannot create worktree: repository registration failed.');
+    expect(error.message).toContain(
+      'Remove the stale workspace entry at /home/test/.archon/workspaces/acme/widget and retry'
+    );
+    expect(error.message).not.toContain('not in a git repository');
+  });
+
+  // -------------------------------------------------------------------------
   // Workflow-level `worktree.enabled` policy
   // -------------------------------------------------------------------------
 
