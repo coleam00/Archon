@@ -321,7 +321,7 @@ describe('registry', () => {
       expect(caps.mcp).toBe(false);
       expect(caps.hooks).toBe(false);
       expect(caps.skills).toBe(false);
-      expect(caps.toolRestrictions).toBe(false);
+      expect(caps.toolRestrictions).toBe(true);
       expect(caps.structuredOutput).toBe(false);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);

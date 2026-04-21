@@ -291,7 +291,7 @@ assistants:
 | Reasoning control | ✅ | `effort:` / string `thinking:` map to Copilot `reasoningEffort` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | merged into the spawned Copilot CLI environment |
-| Tool restrictions | ❌ | not wired yet in Archon's Copilot adapter |
+| Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` (SDK enforces `availableTools` precedence when both are set) |
 | MCP servers | ❌ | not wired yet in Archon's Copilot adapter |
 | Skills | ❌ | not wired yet in Archon's Copilot adapter |
 | Structured output | ❌ | no Archon-side JSON-mode shim yet |

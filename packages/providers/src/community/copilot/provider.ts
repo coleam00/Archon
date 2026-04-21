@@ -1,11 +1,16 @@
-import { CopilotClient, approveAll, type AssistantMessageEvent } from '@github/copilot-sdk';
-import type { SessionEvent } from '@github/copilot-sdk';
+import {
+  CopilotClient,
+  approveAll,
+  type AssistantMessageEvent,
+  type SessionConfig,
+  type SessionEvent,
+} from '@github/copilot-sdk';
 import { createLogger } from '@archon/paths';
 
 import type { IAgentProvider, MessageChunk, SendQueryOptions } from '../../types';
 import { COPILOT_CAPABILITIES } from './capabilities';
 import { resolveCopilotCliPath } from './binary-resolver';
-import { parseCopilotConfig } from './config';
+import { parseCopilotConfig, type CopilotProviderDefaults } from './config';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -17,6 +22,12 @@ const SEND_AND_WAIT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 const AUTH_ENV_KEYS = ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'] as const;
 type CopilotReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+
+/** Structured provider warning collected during translation and flushed as a system chunk. */
+interface ProviderWarning {
+  code: string;
+  message: string;
+}
 
 function buildCopilotEnv(requestEnv?: Record<string, string>): Record<string, string> {
   const baseEnv = Object.fromEntries(
@@ -33,14 +44,16 @@ function resolveGitHubToken(env: Record<string, string>): string | undefined {
   return undefined;
 }
 
-interface ResolvedReasoningEffort {
-  effort: CopilotReasoningEffort | undefined;
-  warning?: string;
+function normalizeReasoning(value: unknown): CopilotReasoningEffort | undefined {
+  if (value === 'max') return 'xhigh';
+  if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') return value;
+  return undefined;
 }
 
-function resolveCopilotReasoning(
-  nodeConfig?: SendQueryOptions['nodeConfig']
-): ResolvedReasoningEffort {
+function resolveCopilotReasoning(nodeConfig?: SendQueryOptions['nodeConfig']): {
+  effort: CopilotReasoningEffort | undefined;
+  warning?: string;
+} {
   if (!nodeConfig) return { effort: undefined };
 
   const rawThinking = nodeConfig.thinking;
@@ -48,18 +61,10 @@ function resolveCopilotReasoning(
 
   if (rawThinking === 'off' || rawEffort === 'off') return { effort: undefined };
 
-  const normalize = (value: unknown): CopilotReasoningEffort | undefined => {
-    if (value === 'max') return 'xhigh';
-    if (value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh') {
-      return value;
-    }
-    return undefined;
-  };
-
-  const fromThinking = normalize(rawThinking);
+  const fromThinking = normalizeReasoning(rawThinking);
   if (fromThinking) return { effort: fromThinking };
 
-  const fromEffort = normalize(rawEffort);
+  const fromEffort = normalizeReasoning(rawEffort);
   if (fromEffort) return { effort: fromEffort };
 
   if (rawThinking !== undefined && rawThinking !== null && typeof rawThinking === 'object') {
@@ -85,6 +90,57 @@ function buildSystemMessage(requestOptions?: SendQueryOptions): { content: strin
   const systemPrompt = requestOptions?.systemPrompt ?? requestOptions?.nodeConfig?.systemPrompt;
   if (!systemPrompt) return undefined;
   return { content: systemPrompt };
+}
+
+/**
+ * Translate Archon's per-node `allowed_tools` / `denied_tools` to Copilot's
+ * `availableTools` / `excludedTools`. Copilot's spec: `availableTools` takes
+ * precedence over `excludedTools`. We pass both through when present and let
+ * the SDK enforce precedence.
+ */
+function applyToolRestrictions(
+  sessionConfig: SessionConfig,
+  nodeConfig: SendQueryOptions['nodeConfig']
+): void {
+  if (!nodeConfig) return;
+  if (nodeConfig.allowed_tools !== undefined) {
+    sessionConfig.availableTools = nodeConfig.allowed_tools;
+  }
+  if (nodeConfig.denied_tools !== undefined) {
+    sessionConfig.excludedTools = nodeConfig.denied_tools;
+  }
+}
+
+/**
+ * Single construction site for the Copilot SessionConfig. Each subsequent
+ * workflow-parity phase adds one `applyX(sessionConfig, ..., warnings)` call
+ * below this function — keep business logic here straight-through.
+ */
+function buildSessionConfig(
+  copilotConfig: CopilotProviderDefaults,
+  requestOptions: SendQueryOptions | undefined,
+  cwd: string,
+  warnings: ProviderWarning[]
+): SessionConfig {
+  const reasoning = resolveCopilotReasoning(requestOptions?.nodeConfig);
+  if (reasoning.warning) {
+    warnings.push({ code: 'copilot.reasoning_ignored', message: reasoning.warning });
+  }
+
+  const sessionConfig: SessionConfig = {
+    model: requestOptions?.model ?? copilotConfig.model,
+    reasoningEffort: reasoning.effort,
+    workingDirectory: cwd,
+    configDir: copilotConfig.configDir,
+    streaming: true,
+    systemMessage: buildSystemMessage(requestOptions),
+    enableConfigDiscovery: copilotConfig.enableConfigDiscovery ?? false,
+    onPermissionRequest: approveAll,
+  };
+
+  applyToolRestrictions(sessionConfig, requestOptions?.nodeConfig);
+
+  return sessionConfig;
 }
 
 function isModelAccessError(errorMessage: string): boolean {
@@ -208,10 +264,12 @@ export class CopilotProvider implements IAgentProvider {
       const mergedEnv = buildCopilotEnv(requestOptions?.env);
       const githubToken = resolveGitHubToken(mergedEnv);
       const cliPath = await resolveCopilotCliPath(copilotConfig.copilotCliPath);
-      const { effort, warning } = resolveCopilotReasoning(requestOptions?.nodeConfig);
 
-      if (warning) {
-        queue.push({ type: 'system', content: `⚠️ ${warning}` });
+      const warnings: ProviderWarning[] = [];
+      const sessionConfig = buildSessionConfig(copilotConfig, requestOptions, cwd, warnings);
+
+      for (const w of warnings) {
+        queue.push({ type: 'system', content: `⚠️ ${w.message}` });
       }
 
       const client = new CopilotClient({
@@ -232,17 +290,6 @@ export class CopilotProvider implements IAgentProvider {
       let sawAssistantContent = false;
 
       try {
-        const sessionConfig = {
-          model: requestOptions?.model ?? copilotConfig.model,
-          reasoningEffort: effort,
-          workingDirectory: cwd,
-          configDir: copilotConfig.configDir,
-          streaming: true,
-          systemMessage: buildSystemMessage(requestOptions),
-          enableConfigDiscovery: copilotConfig.enableConfigDiscovery ?? false,
-          onPermissionRequest: approveAll,
-        };
-
         session = resumeSessionId
           ? await client.resumeSession(resumeSessionId, sessionConfig)
           : await client.createSession(sessionConfig);
