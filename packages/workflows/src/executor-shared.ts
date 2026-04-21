@@ -375,13 +375,20 @@ function escapeRegExp(str: string): string {
  * 2. <anytag>SIGNAL</anytag> - Any XML-wrapped tag; case-insensitive on tag names
  * 3. Plain SIGNAL - Backwards compatibility; only at end of output or on own line
  *
+ * Tag matching uses a backreference (\1) so opening and closing tag names must
+ * agree — `<COMPLETE>X</done>` is not treated as a completion, which avoids
+ * false positives when the AI interleaves tags in prose.
+ *
  * Plain signal detection is restrictive to prevent false positives like "not SIGNAL yet".
  */
 export function detectCompletionSignal(output: string, signal: string): boolean {
-  // Check for any XML-like tag wrapping: <tag>SIGNAL</tag>
-  // Catches <promise>COMPLETE</promise>, <COMPLETE>ALL_CLEAN</COMPLETE>, <done>COMPLETE</done>, etc.
-  // Note: opening and closing tag names are not required to match — good enough for well-formed AI output.
-  const xmlWrappedPattern = new RegExp(`<[^>/][^>]*>\\s*${escapeRegExp(signal)}\\s*</[^>]+>`, 'i');
+  // Check for XML-like tag wrapping with matching open/close names: <tag>SIGNAL</tag>.
+  // Catches <promise>COMPLETE</promise>, <COMPLETE>ALL_CLEAN</COMPLETE>, <done>X</done>.
+  // The `([a-zA-Z][\w-]*)` capture plus `</\1>` backreference requires tag names to match.
+  const xmlWrappedPattern = new RegExp(
+    `<([a-zA-Z][\\w-]*)[^>]*>\\s*${escapeRegExp(signal)}\\s*</\\1>`,
+    'i'
+  );
   if (xmlWrappedPattern.test(output)) {
     return true;
   }
@@ -397,14 +404,19 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
 /**
  * Strip internal completion signal tags before sending to user-facing output.
  * Always strips `<promise>…</promise>` (any content). When `until` is provided,
- * also strips any XML-wrapped form of that signal (e.g. `<COMPLETE>ALL_CLEAN</COMPLETE>`).
+ * also strips any XML-wrapped form of that signal with matching tag names
+ * (e.g. `<COMPLETE>ALL_CLEAN</COMPLETE>`). Mismatched tag names are left alone
+ * so regular prose (`<note>ALL_CLEAN</warning>`) isn't accidentally rewritten.
  */
 export function stripCompletionTags(content: string, until?: string): string {
   let result = content.replace(/<promise>[\s\S]*?<\/promise>/gi, '');
   if (until) {
-    // Also strip XML-tagged completion signals (e.g., <COMPLETE>ALL_CLEAN</COMPLETE>)
+    // Strip XML-tagged completion signals with matching open/close tag names.
     const escapedSignal = escapeRegExp(until);
-    result = result.replace(new RegExp(`<[^>/][^>]*>\\s*${escapedSignal}\\s*</[^>]+>`, 'gi'), '');
+    result = result.replace(
+      new RegExp(`<([a-zA-Z][\\w-]*)[^>]*>\\s*${escapedSignal}\\s*</\\1>`, 'gi'),
+      ''
+    );
   }
   return result.trim();
 }

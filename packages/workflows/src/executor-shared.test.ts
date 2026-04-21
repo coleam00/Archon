@@ -363,9 +363,15 @@ describe('detectCompletionSignal', () => {
     expect(detectCompletionSignal('<COMPLETE>WRONG</COMPLETE>', 'ALL_CLEAN')).toBe(false);
   });
 
-  it('detects signal in mismatched XML tags (permissive)', () => {
-    // Opening and closing tag names are matched independently by design
-    expect(detectCompletionSignal('<COMPLETE>ALL_CLEAN</done>', 'ALL_CLEAN')).toBe(true);
+  it('does NOT detect signal when XML tag names do not match (strict)', () => {
+    // Open/close tag names must agree — guards against AI prose that
+    // interleaves tags (e.g. "<COMPLETE>ALL_CLEAN</other-tag>") being
+    // treated as a completion.
+    expect(detectCompletionSignal('<COMPLETE>ALL_CLEAN</done>', 'ALL_CLEAN')).toBe(false);
+  });
+
+  it('detects signal when tag names match case-insensitively', () => {
+    expect(detectCompletionSignal('<Complete>ALL_CLEAN</complete>', 'ALL_CLEAN')).toBe(true);
   });
 });
 
