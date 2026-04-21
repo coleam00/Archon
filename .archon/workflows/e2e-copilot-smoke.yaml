@@ -1,0 +1,26 @@
+# E2E smoke test — GitHub Copilot community provider
+# Verifies: provider registration, SDK session start, simple prompt response.
+# Auth: run `copilot login`, or provide COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
+name: e2e-copilot-smoke
+description: 'Smoke test for the GitHub Copilot community provider.'
+provider: copilot
+model: gpt-5-mini
+
+nodes:
+  - id: simple
+    prompt: 'Reply with exactly COPILOT_OK'
+    idle_timeout: 30000
+
+  - id: assert
+    bash: |
+      output="$simple.output"
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      echo "$output" | rg -q "COPILOT_OK" || {
+        echo "FAIL: expected COPILOT_OK, got: $output"
+        exit 1
+      }
+      echo "PASS: simple=$output"
+    depends_on: [simple]

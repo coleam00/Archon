@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, GitHub Copilot, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All three can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -226,6 +226,77 @@ If you want Codex to be the default AI assistant for new conversations without c
 ```ini
 DEFAULT_AI_ASSISTANT=codex
 ```
+
+## GitHub Copilot (Community Provider)
+
+**SDK-backed community provider.** Archon's Copilot adapter uses `@github/copilot-sdk`, which drives the Copilot CLI over GitHub's supported JSON-RPC bridge instead of screen-scraping the interactive TUI.
+
+Copilot is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
+
+### Install
+
+For source installs, `bun install` pulls in the SDK and its bundled CLI dependency automatically.
+
+For compiled Archon binaries, install the Copilot CLI yourself and point Archon at it if needed:
+
+```bash
+# Any platform
+npm install -g @github/copilot
+```
+
+Optional override paths:
+
+```ini
+COPILOT_CLI_PATH=/absolute/path/to/copilot
+```
+
+```yaml
+assistants:
+  copilot:
+    copilotCliPath: /absolute/path/to/copilot
+```
+
+### Authenticate
+
+Copilot authentication is delegated to the Copilot CLI / SDK.
+
+Use one of:
+
+- `copilot login`
+- `COPILOT_GITHUB_TOKEN`
+- `GH_TOKEN`
+- `GITHUB_TOKEN`
+
+Request-scoped env vars still win, so codebase env overrides work the same way they do for the other providers.
+
+### Configuration Options
+
+```yaml
+assistants:
+  copilot:
+    model: gpt-5-mini
+    # Optional: explicit Copilot CLI path
+    # copilotCliPath: /absolute/path/to/copilot
+    # Optional: override Copilot config dir
+    # configDir: /absolute/path/to/copilot-config
+    # Optional: allow Copilot to auto-discover repo MCP/skills
+    # enableConfigDiscovery: false
+```
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Returns `sessionId` and reuses it on resume |
+| Reasoning control | ✅ | `effort:` / string `thinking:` map to Copilot `reasoningEffort` |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars (`envInjection`) | ✅ | merged into the spawned Copilot CLI environment |
+| Tool restrictions | ❌ | not wired yet in Archon's Copilot adapter |
+| MCP servers | ❌ | not wired yet in Archon's Copilot adapter |
+| Skills | ❌ | not wired yet in Archon's Copilot adapter |
+| Structured output | ❌ | no Archon-side JSON-mode shim yet |
+| Fallback model | ❌ | not wired |
+| Sandbox | ❌ | Copilot permissions are separate from Archon's sandbox surface |
 
 ## Pi (Community Provider)
 
