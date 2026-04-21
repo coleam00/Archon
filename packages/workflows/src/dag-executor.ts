@@ -81,23 +81,33 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
 
+/** A failed MCP server entry parsed from the SDK message. `segment` is the
+ *  original substring (e.g. `"telegram (disconnected)"`) so callers can
+ *  reconstruct a filtered message without losing the status detail. */
+export interface McpFailureEntry {
+  name: string;
+  segment: string;
+}
+
 /**
  * Parse the SDK's "MCP server connection failed: a (status), b (status)"
- * message into the list of failed server names (ordered, deduped). Best-effort
- * — malformed or prefix-free messages return an empty array.
+ * message. Best-effort — malformed or prefix-free messages return `[]`.
+ * Entries are ordered and deduped by name; the segment of the first
+ * occurrence wins.
  */
-export function parseMcpFailureServerNames(message: string): string[] {
+export function parseMcpFailureServerNames(message: string): McpFailureEntry[] {
   if (!message.startsWith(MCP_FAILURE_PREFIX)) return [];
   const seen = new Set<string>();
-  const names: string[] = [];
-  for (const entry of message.slice(MCP_FAILURE_PREFIX.length).split(', ')) {
-    const name = entry.split(' (')[0]?.trim();
+  const entries: McpFailureEntry[] = [];
+  for (const raw of message.slice(MCP_FAILURE_PREFIX.length).split(', ')) {
+    const segment = raw.trim();
+    const name = segment.split(' (')[0]?.trim();
     if (name && !seen.has(name)) {
       seen.add(name);
-      names.push(name);
+      entries.push({ name, segment });
     }
   }
-  return names;
+  return entries;
 }
 
 /**
@@ -108,6 +118,10 @@ export function parseMcpFailureServerNames(message: string): string[] {
  * user) from user-plugin failures (silent debug log). We intentionally do not
  * validate or env-expand here — the provider owns full loading and will
  * surface its own parse errors via the warning channel if the file is broken.
+ *
+ * Read failures are debug-logged so a transient I/O error (EMFILE/EBUSY) that
+ * leaves us with an empty set — and silently reclassifies a real workflow-MCP
+ * failure as plugin noise — is at least observable.
  */
 export async function loadConfiguredMcpServerNames(
   nodeMcpPath: string | undefined,
@@ -122,7 +136,8 @@ export async function loadConfiguredMcpServerNames(
       return new Set();
     }
     return new Set(Object.keys(parsed as Record<string, unknown>));
-  } catch {
+  } catch (err) {
+    getLog().debug({ err, nodeMcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
     return new Set();
   }
 }
@@ -538,9 +553,6 @@ async function executeNodeInternal(
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
 
-  // Pre-compute the workflow-configured MCP server names. Used by the system
-  // message handler below to distinguish workflow-owned MCP failures (surface
-  // to the user) from user-plugin noise (debug log, suppress).
   const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
@@ -871,23 +883,18 @@ async function executeNodeInternal(
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
         // Providers yield system chunks for user-actionable issues (missing env
-        // vars, Haiku+MCP, structured output failures, etc.). Two sub-cases:
-        //
-        // 1. MCP connection failures — only surface servers the *workflow*
-        //    configured via `mcp:`. User-level plugin MCPs (e.g. `telegram`
-        //    inherited from `~/.claude/`) often fail to connect in the
-        //    headless subprocess and produced spurious warnings before this
-        //    filter landed. Plugin failures are debug-logged, not shown.
-        //
-        // 2. Other provider warnings (⚠️) — always surface; these are things
-        //    the workflow author can act on.
+        // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
+        // chunks need filtering: user-level plugin MCPs inherited from
+        // `~/.claude/` (e.g. `telegram`) routinely fail to connect inside the
+        // headless subprocess and aren't actionable for the workflow author.
+        // Other warnings (⚠️) are always actionable and surface verbatim.
         if (msg.content.startsWith(MCP_FAILURE_PREFIX)) {
-          const failedNames = parseMcpFailureServerNames(msg.content);
-          const workflowFailures = failedNames.filter(n => configuredMcpNames.has(n));
-          const pluginFailures = failedNames.filter(n => !configuredMcpNames.has(n));
+          const failedEntries = parseMcpFailureServerNames(msg.content);
+          const workflowFailures = failedEntries.filter(e => configuredMcpNames.has(e.name));
+          const pluginFailures = failedEntries.filter(e => !configuredMcpNames.has(e.name));
 
           if (workflowFailures.length > 0) {
-            const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.join(', ')}`;
+            const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.map(e => e.segment).join(', ')}`;
             getLog().warn(
               { nodeId: node.id, systemContent: filteredMsg },
               'dag.provider_warning_forwarded'
@@ -907,7 +914,7 @@ async function executeNodeInternal(
           }
           if (pluginFailures.length > 0) {
             getLog().debug(
-              { nodeId: node.id, pluginFailures },
+              { nodeId: node.id, pluginFailures: pluginFailures.map(e => e.name) },
               'dag.mcp_plugin_connection_suppressed'
             );
           }
