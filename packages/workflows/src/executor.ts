@@ -448,9 +448,17 @@ export async function executeWorkflow(
           // Restore runtime inputs from prior run metadata so $INPUT_NAME substitutions
           // continue to work on resume without the caller re-supplying --set flags.
           if (!runtimeInputs) {
-            const storedInputs = resumableRun.metadata?.resolved_inputs as
-              | Record<string, string>
-              | undefined;
+            const rawStoredInputs = resumableRun.metadata?.resolved_inputs;
+            const storedInputs =
+              rawStoredInputs &&
+              typeof rawStoredInputs === 'object' &&
+              !Array.isArray(rawStoredInputs)
+                ? Object.fromEntries(
+                    Object.entries(rawStoredInputs as Record<string, unknown>).filter(
+                      ([, v]) => typeof v === 'string'
+                    ) as [string, string][]
+                  )
+                : undefined;
             if (storedInputs && Object.keys(storedInputs).length > 0) {
               resolvedInputs = resolveInputs(workflow.inputs, storedInputs);
             }
@@ -550,6 +558,23 @@ export async function executeWorkflow(
         '❌ **Workflow failed**: Unable to start workflow (database error). Please try again later.'
       );
       return { success: false, error: 'Database error creating workflow run' };
+    }
+  } else if (resolvedInputs && Object.keys(resolvedInputs).length > 0) {
+    // preCreatedRun path: workflowRun already existed before this function was
+    // called, so the `if (!workflowRun)` branch above was skipped and
+    // resolved_inputs was never written to its metadata. Persist it now so
+    // resume-path restores work correctly if the run is interrupted.
+    try {
+      await deps.store.updateWorkflowRun(workflowRun.id, {
+        metadata: { ...(workflowRun.metadata ?? {}), resolved_inputs: resolvedInputs },
+      });
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn(
+        { err, workflowRunId: workflowRun.id },
+        'workflow.precreated_run_resolved_inputs_persist_failed'
+      );
+      // Non-fatal: inputs are still in memory for this run; only resume would be affected.
     }
   }
 
