@@ -60,12 +60,15 @@ nodes:
 
       | Type | Indicators |
       |------|------------|
+      | src | title contains [SRC], labels include source-connection or source-integration |
       | bug | "broken", "error", "crash", "doesn't work", stack traces, regression |
       | feature | "add", "new", "support", "would be nice", net-new capability |
       | enhancement | "improve", "better", "update existing", "extend", incremental improvement |
       | refactor | "clean up", "simplify", "reorganize", "restructure" |
       | chore | "update deps", "upgrade", "maintenance", "CI/CD" |
       | documentation | "docs", "readme", "clarify", "examples" |
+
+      If type is `src`, also extract the `source_key` from the issue title (e.g., `us_fed_congress_hearings` from `[SRC] us_fed_congress_hearings — ...`).
 
       Provide reasoning for your classification.
     depends_on: [fetch-issue]
@@ -76,12 +79,30 @@ nodes:
       properties:
         issue_type:
           type: string
-          enum: ["bug", "feature", "enhancement", "refactor", "chore", "documentation"]
+          enum: ["src", "bug", "feature", "enhancement", "refactor", "chore", "documentation"]
         title:
           type: string
+        source_key:
+          type: string
+          description: "Only for src issues: the source_key identifier (e.g., us_fed_congress_hearings)"
         reasoning:
           type: string
       required: [issue_type, title, reasoning]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PROGRESS: Picked up comment
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: comment-picked-up
+    bash: |
+      ISSUE_NUM=$(echo $fetch-issue.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('url','').split('/')[-1])" 2>/dev/null || echo "")
+      REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||; s|\.git$||')
+      TITLE=$(echo $classify.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('title',''))" 2>/dev/null || echo "")
+      TYPE=$(echo $classify.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('issue_type',''))" 2>/dev/null || echo "")
+      if [ -n "$ISSUE_NUM" ] && [ -n "$REPO" ]; then
+        gh issue comment "$ISSUE_NUM" --repo "$REPO" --body "**[Archon] Picked up** — *${TITLE}* (${TYPE})" 2>/dev/null || true
+      fi
+    depends_on: [classify]
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 2: RESEARCH (parallel with PR template fetch)
@@ -89,7 +110,7 @@ nodes:
 
   - id: web-research
     command: archon-web-research
-    depends_on: [classify]
+    depends_on: [comment-picked-up]
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
@@ -136,12 +157,104 @@ nodes:
     model: claude-opus-4-6[1m]
 
   # ═══════════════════════════════════════════════════════════════
+  # PHASE 4b: [SRC] VERIFICATION GATE (deterministic, cannot be skipped by AI)
+  # ═══════════════════════════════════════════════════════════════
+
+  # src-verify ALWAYS exits 0 so its output is preserved for src-gate.
+  # The verdict is encoded in the output text, not the exit code.
+  - id: src-verify
+    bash: |
+      IS_SRC=$(echo $classify.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('issue_type',''))" 2>/dev/null || echo "")
+      if [ "$IS_SRC" != "src" ]; then
+        echo "SRC_VERDICT=SKIP"
+        echo "REASON=not a [SRC] issue (type=$IS_SRC)"
+        exit 0
+      fi
+      SOURCE_KEY=$(echo $classify.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('source_key',''))" 2>/dev/null || echo "")
+      if [ -z "$SOURCE_KEY" ]; then
+        echo "SRC_VERDICT=SKIP"
+        echo "REASON=no source_key extracted from classify output"
+        exit 0
+      fi
+      # Source .env if it exists (for API keys)
+      [ -f api/.env ] && set -a && . api/.env && set +a
+      [ -f .env ] && set -a && . .env && set +a
+      if [ ! -f api/ingestion/verify_source_integration.py ]; then
+        echo "SRC_VERDICT=SKIP"
+        echo "REASON=verify_source_integration.py not found in this project"
+        exit 0
+      fi
+      echo "Running verify_source_integration.py for $SOURCE_KEY"
+      VERIFIER_OUTPUT=$(python3 api/ingestion/verify_source_integration.py "$SOURCE_KEY" 2>&1)
+      RC=$?
+      echo "$VERIFIER_OUTPUT"
+      echo "VERIFY_EXIT=$RC"
+      if [ "$RC" -eq 0 ]; then
+        echo "SRC_VERDICT=PASS"
+      else
+        echo "SRC_VERDICT=FAIL"
+      fi
+      # Always exit 0 so output is captured for src-gate
+      exit 0
+    depends_on: [implement]
+    timeout: 300000
+
+  # src-gate reads the verdict from src-verify output. No guessing from empty strings.
+  - id: src-gate
+    bash: |
+      VERIFY_OUTPUT=$src-verify.output
+      VERDICT=$(echo "$VERIFY_OUTPUT" | grep '^SRC_VERDICT=' | tail -1 | cut -d= -f2)
+      case "$VERDICT" in
+        SKIP)
+          REASON=$(echo "$VERIFY_OUTPUT" | grep '^REASON=' | tail -1 | cut -d= -f2-)
+          echo "Gate passed: $REASON"
+          exit 0
+          ;;
+        PASS)
+          echo "SRC verification PASSED"
+          exit 0
+          ;;
+        FAIL)
+          echo "SRC VERIFICATION FAILED — converting PR to draft WIP"
+          BRANCH=$(git branch --show-current 2>/dev/null)
+          PR_NUM=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null)
+          if [ -n "$PR_NUM" ] && [ "$PR_NUM" != "null" ]; then
+            gh pr ready --undo "$PR_NUM" 2>/dev/null || true
+            TITLE=$(gh pr view "$PR_NUM" --json title --jq '.title' 2>/dev/null)
+            gh pr edit "$PR_NUM" --title "[WIP] BLOCKED: $TITLE" 2>/dev/null || true
+          fi
+          ISSUE_NUM=$(echo $fetch-issue.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('url','').split('/')[-1])" 2>/dev/null || echo "")
+          REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||; s|\.git$||')
+          if [ -n "$ISSUE_NUM" ] && [ -n "$REPO" ]; then
+            # Include the verifier's failing checks in the comment
+            FAILED_CHECKS=$(echo "$VERIFY_OUTPUT" | grep -E '"passed":\s*false' | head -5 || echo "(see workflow logs)")
+            gh issue comment "$ISSUE_NUM" --repo "$REPO" --body "**[Archon] SRC verification FAILED**
+
+      Source did not produce valid data. PR converted to draft WIP.
+
+      \`\`\`
+      $FAILED_CHECKS
+      \`\`\`" 2>/dev/null || true
+          fi
+          exit 1
+          ;;
+        *)
+          echo "ERROR: src-verify produced no SRC_VERDICT — unexpected state"
+          echo "Raw output:"
+          echo "$VERIFY_OUTPUT"
+          exit 1
+          ;;
+      esac
+    depends_on: [src-verify]
+
+  # ═══════════════════════════════════════════════════════════════
   # PHASE 5: VALIDATE
   # ═══════════════════════════════════════════════════════════════
 
   - id: validate
     command: archon-validate
-    depends_on: [implement]
+    depends_on: [src-gate]
+    trigger_rule: one_success
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
@@ -184,12 +297,28 @@ nodes:
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
+  # PROGRESS: PR created comment
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: comment-pr-created
+    bash: |
+      ISSUE_NUM=$(echo $fetch-issue.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('url','').split('/')[-1])" 2>/dev/null || echo "")
+      REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||; s|\.git$||')
+      PR_URL=$(cat "$ARTIFACTS_DIR/.pr-url" 2>/dev/null || echo "(unknown)")
+      STAT=$(git diff --stat origin/$BASE_BRANCH..HEAD 2>/dev/null | tail -1 | sed 's/^ *//' || echo "")
+      if [ -n "$ISSUE_NUM" ] && [ -n "$REPO" ]; then
+        gh issue comment "$ISSUE_NUM" --repo "$REPO" --body "**[Archon] PR created** — ${PR_URL}
+      **Diff:** ${STAT}" 2>/dev/null || true
+      fi
+    depends_on: [create-pr]
+
+  # ═══════════════════════════════════════════════════════════════
   # PHASE 7: REVIEW
   # ═══════════════════════════════════════════════════════════════
 
   - id: review-scope
     command: archon-pr-review-scope
-    depends_on: [create-pr]
+    depends_on: [comment-pr-created]
     context: fresh
 
   - id: review-classify
@@ -308,3 +437,25 @@ nodes:
     command: archon-issue-completion-report
     depends_on: [simplify]
     context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PROGRESS: Pipeline complete comment
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: comment-complete
+    bash: |
+      ISSUE_NUM=$(echo $fetch-issue.output | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('url','').split('/')[-1])" 2>/dev/null || echo "")
+      REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||; s|\.git$||')
+      PR_URL=$(cat "$ARTIFACTS_DIR/.pr-url" 2>/dev/null || echo "(unknown)")
+      COMMITS=$(git log --oneline origin/$BASE_BRANCH..HEAD 2>/dev/null | wc -l | tr -d ' ')
+      STAT=$(git diff --stat origin/$BASE_BRANCH..HEAD 2>/dev/null | tail -1 | sed 's/^ *//')
+      if [ -n "$ISSUE_NUM" ] && [ -n "$REPO" ]; then
+        gh issue comment "$ISSUE_NUM" --repo "$REPO" --body "**[Archon] Pipeline complete**
+
+      **PR:** ${PR_URL}
+      **Commits:** ${COMMITS}
+      **Diff:** ${STAT}
+
+      All phases finished: classify → research → implement → verify → validate → PR → review → simplify → report." 2>/dev/null || true
+      fi
+    depends_on: [report]
