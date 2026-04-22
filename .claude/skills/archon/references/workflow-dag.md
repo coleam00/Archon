@@ -20,6 +20,88 @@ nodes:
     depends_on: [other-node]        # Node IDs that must complete first
 ```
 
+## Workflow-Level Fields
+
+Top-level YAML fields on a workflow object. Per-node overrides (same name under a node) win over workflow-level defaults.
+
+### Core
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string (required) | Workflow identifier (used in `archon workflow run <name>`) |
+| `description` | string (required) | Human-readable summary. Used for routing; see **Workflow Description Best Practices** in `docs-web/.../authoring-workflows.md` |
+| `provider` | string | AI provider (e.g. `claude`, `codex`, `pi`). Default: from `.archon/config.yaml` |
+| `model` | string | Model override. Claude: `sonnet` \| `opus` \| `haiku` \| `claude-*` \| `inherit`. Codex: any non-Claude model ID |
+| `interactive` | boolean | **Required for web UI** when the workflow has approval gates or `loop.interactive` nodes. Forces foreground execution so gate messages reach the user's chat. Default: `false` (background on web) |
+
+### Isolation
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `worktree.enabled` | boolean | Pin isolation regardless of caller. `false` = always live checkout (CLI `--branch`/`--from` hard-error). `true` = always worktree (CLI `--no-worktree` hard-errors). Omit = caller decides. Use `false` for read-only workflows (triage, reporting) |
+
+Other worktree config (`baseBranch`, `copyFiles`, `initSubmodules`, `path`) lives in `.archon/config.yaml`, not the workflow YAML — see `references/repo-init.md`.
+
+### Claude SDK Advanced Options
+
+These fields apply to Claude nodes workflow-wide; each can be overridden per-node. Codex nodes ignore them with a warning.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `effort` | `'low'` \| `'medium'` \| `'high'` \| `'max'` | Claude Agent SDK reasoning depth. Different from Codex `modelReasoningEffort` below |
+| `thinking` | string \| object | Extended thinking. String shorthand: `'adaptive'` \| `'enabled'` \| `'disabled'`. Object form: `{ type: 'enabled', budgetTokens: 8000 }` |
+| `fallbackModel` | string | Model to use if the primary model fails (e.g. `claude-haiku-4-5-20251001`) |
+| `betas` | string[] | SDK beta feature flags (non-empty array). Example: `['context-1m-2025-08-07']` for 1M-context Claude |
+| `sandbox` | object | OS-level filesystem/network restrictions. Nested `network` / `filesystem` sub-objects — see the docs site for the full schema. Layers on top of worktree isolation |
+
+Per-node-only (NOT valid at workflow level): `maxBudgetUsd`, `systemPrompt`.
+
+### Codex-Specific Options
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `modelReasoningEffort` | `'minimal'` \| `'low'` \| `'medium'` \| `'high'` \| `'xhigh'` | Codex reasoning depth. Separate field from Claude's `effort` |
+| `webSearchMode` | `'disabled'` \| `'cached'` \| `'live'` | Codex web search behavior. Default: `disabled` |
+| `additionalDirectories` | string[] | Absolute paths Codex can read outside the codebase (shared libraries, docs repos) |
+
+### Complete workflow-level example
+
+```yaml
+name: careful-migration
+description: |
+  Plan a migration, get explicit approval, then implement under strict
+  sandbox and cost limits. Used by the ops team before destructive work.
+provider: claude
+model: sonnet
+interactive: true                   # required — this workflow has an approval gate
+
+worktree:
+  enabled: true                     # always isolate; reject --no-worktree
+
+effort: high
+thinking: adaptive
+fallbackModel: claude-haiku-4-5-20251001
+betas: ['context-1m-2025-08-07']
+sandbox:
+  enabled: true
+  network:
+    allowedDomains: ['api.github.com']
+    allowManagedDomainsOnly: true
+  filesystem:
+    denyWrite: ['/etc', '/usr']
+
+nodes:
+  - id: plan
+    command: plan-migration
+  - id: review
+    approval:
+      message: "Review the migration plan above."
+    depends_on: [plan]
+  - id: implement
+    command: implement-migration
+    depends_on: [review]
+```
+
 ## Node Types (Mutually Exclusive)
 
 Each node must have exactly ONE of these fields: `command`, `prompt`, `bash`, `script`, `loop`, `approval`, or `cancel`.
