@@ -76,7 +76,52 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
     expect(result).toBe('/env/cli.js');
   });
 
-  test('throws with install instructions when nothing configured', async () => {
+  test('autodetects native installer path when env and config are unset', async () => {
+    const home = process.env.HOME ?? '/Users/test';
+    const expected =
+      process.platform === 'win32'
+        ? `${home}\\.local\\bin\\claude.exe`
+        : `${home}/.local/bin/claude`;
+    // File exists only at the native-installer path.
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
+      (path: string) => path === expected
+    );
+
+    const result = await resolver.resolveClaudeBinaryPath();
+    expect(result).toBe(expected);
+    // Log must mark this as autodetect, not 'env' or 'config' — the source
+    // string is load-bearing for debug triage.
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { binaryPath: expected, source: 'autodetect' },
+      'claude.binary_resolved'
+    );
+  });
+
+  test('env var takes precedence over autodetect when both would match', async () => {
+    process.env.CLAUDE_BIN_PATH = '/custom/env/claude';
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+
+    const result = await resolver.resolveClaudeBinaryPath();
+    expect(result).toBe('/custom/env/claude');
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { binaryPath: '/custom/env/claude', source: 'env' },
+      'claude.binary_resolved'
+    );
+  });
+
+  test('config takes precedence over autodetect when both would match', async () => {
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+
+    const result = await resolver.resolveClaudeBinaryPath('/custom/config/claude');
+    expect(result).toBe('/custom/config/claude');
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      { binaryPath: '/custom/config/claude', source: 'config' },
+      'claude.binary_resolved'
+    );
+  });
+
+  test('throws with install instructions when nothing is configured and autodetect misses', async () => {
+    // Every probe returns false — env unset, config unset, native path absent.
     fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
 
     const promise = resolver.resolveClaudeBinaryPath();

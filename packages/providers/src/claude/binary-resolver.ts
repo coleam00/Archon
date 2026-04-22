@@ -9,13 +9,16 @@
  * Resolution order (binary mode only):
  * 1. `CLAUDE_BIN_PATH` environment variable
  * 2. `assistants.claude.claudeBinaryPath` in config
- * 3. Throw with install instructions
+ * 3. Autodetect canonical install path (native installer default)
+ * 4. Throw with install instructions
  *
  * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the caller
  * omits `pathToClaudeCodeExecutable` entirely and the SDK resolves via its
  * normal node_modules lookup.
  */
 import { existsSync as _existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
@@ -89,6 +92,25 @@ export async function resolveClaudeBinaryPath(
     return configClaudeBinaryPath;
   }
 
-  // 3. Not found — throw with install instructions
+  // 3. Autodetect — the Anthropic native installer
+  // (`curl -fsSL https://claude.ai/install.sh | bash` on macOS/Linux,
+  // `irm https://claude.ai/install.ps1 | iex` on Windows) writes the
+  // executable to a fixed location relative to $HOME. Users who follow
+  // the recommended install path don't need any env var or config entry;
+  // users who deviate (npm global, custom path, etc.) still set one of
+  // the higher-priority sources above.
+  const nativeInstallerPath =
+    process.platform === 'win32'
+      ? join(homedir(), '.local', 'bin', 'claude.exe')
+      : join(homedir(), '.local', 'bin', 'claude');
+  if (fileExists(nativeInstallerPath)) {
+    getLog().info(
+      { binaryPath: nativeInstallerPath, source: 'autodetect' },
+      'claude.binary_resolved'
+    );
+    return nativeInstallerPath;
+  }
+
+  // 4. Not found — throw with install instructions
   throw new Error(INSTALL_INSTRUCTIONS);
 }
