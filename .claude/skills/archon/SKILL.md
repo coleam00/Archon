@@ -152,9 +152,9 @@ nodes:
     depends_on: [first-node]
 ```
 
-### Four Node Types
+### Node Types
 
-Each node has exactly ONE of: `command`, `prompt`, `bash`, or `loop`.
+Each node has exactly ONE of: `command`, `prompt`, `bash`, `script`, `loop`, `approval`, or `cancel`.
 
 **Command node** — runs a `.archon/commands/*.md` file:
 ```yaml
@@ -175,6 +175,22 @@ Each node has exactly ONE of: `command`, `prompt`, `bash`, or `loop`.
 - id: fetch-data
   bash: "gh issue view 42 --json title,body"
   timeout: 15000
+```
+
+**Script node** — TypeScript/JavaScript (via `bun`) or Python (via `uv`), no AI, stdout captured as output:
+```yaml
+- id: transform
+  script: |
+    const raw = process.argv.slice(2).join(' ') || '{}';
+    console.log(JSON.stringify({ parsed: JSON.parse(raw) }));
+  runtime: bun           # 'bun' (.ts/.js) or 'uv' (.py) — REQUIRED
+  timeout: 30000         # Optional, ms, default 120000
+
+# Or reference a named script from .archon/scripts/ or ~/.archon/scripts/
+- id: analyze
+  script: analyze-metrics   # loads .archon/scripts/analyze-metrics.py
+  runtime: uv
+  deps: ["pandas>=2.0"]     # Optional, uv only — 'uv run --with <dep>'
 ```
 
 **Loop node** — iterates AI prompt until completion:
@@ -230,7 +246,7 @@ For details: Read `references/dag-advanced.md`
 
 ### Example Files
 
-- `examples/dag-workflow.yaml` — workflow with conditions, bash nodes, structured output
+- `examples/dag-workflow.yaml` — workflow with conditions, bash + script + loop nodes, structured output
 - `examples/command-template.md` — Command file skeleton with all variables
 
 ---

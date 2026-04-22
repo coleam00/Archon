@@ -20,6 +20,7 @@ How-to guides for building and running AI coding workflows with Archon.
 
 - [Loop Nodes](/guides/loop-nodes/) — Iterative AI execution with completion conditions and deterministic exit checks
 - [Approval Nodes](/guides/approval-nodes/) — Human review gates with optional AI rework on rejection
+- [Script Nodes](/guides/script-nodes/) — TypeScript/JavaScript (bun) or Python (uv) as a deterministic DAG node, without AI
 
 ## Node Features (Claude only)
 
