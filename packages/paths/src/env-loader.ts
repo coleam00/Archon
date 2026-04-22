@@ -39,6 +39,20 @@ function displayPath(p: string): string {
   return p;
 }
 
+function loadEnvFile(path: string, suffix = ''): void {
+  if (!existsSync(path)) return;
+  const result = config({ path, override: true, quiet: true });
+  if (result.error) {
+    console.error(`Error loading .env from ${path}: ${result.error.message}`);
+    console.error('Hint: Check for syntax errors in your .env file.');
+    process.exit(1);
+  }
+  const count = Object.keys(result.parsed ?? {}).length;
+  if (count > 0) {
+    process.stderr.write(`[archon] loaded ${count} keys from ${displayPath(path)}${suffix}\n`);
+  }
+}
+
 /**
  * Load archon-owned env files. Call once, immediately after
  * `@archon/paths/strip-cwd-env-boot` at each entry point.
@@ -51,33 +65,6 @@ function displayPath(p: string): string {
  * packages/cli/src/cli.ts:24-30.
  */
 export function loadArchonEnv(cwd: string = process.cwd()): void {
-  const homePath = getArchonEnvPath();
-  if (existsSync(homePath)) {
-    const result = config({ path: homePath, override: true, quiet: true });
-    if (result.error) {
-      console.error(`Error loading .env from ${homePath}: ${result.error.message}`);
-      console.error('Hint: Check for syntax errors in your .env file.');
-      process.exit(1);
-    }
-    const count = Object.keys(result.parsed ?? {}).length;
-    if (count > 0) {
-      process.stderr.write(`[archon] loaded ${count} keys from ${displayPath(homePath)}\n`);
-    }
-  }
-
-  const repoPath = getRepoArchonEnvPath(cwd);
-  if (existsSync(repoPath)) {
-    const result = config({ path: repoPath, override: true, quiet: true });
-    if (result.error) {
-      console.error(`Error loading .env from ${repoPath}: ${result.error.message}`);
-      console.error('Hint: Check for syntax errors in your .env file.');
-      process.exit(1);
-    }
-    const count = Object.keys(result.parsed ?? {}).length;
-    if (count > 0) {
-      process.stderr.write(
-        `[archon] loaded ${count} keys from ${displayPath(repoPath)} (repo scope, overrides user scope)\n`
-      );
-    }
-  }
+  loadEnvFile(getArchonEnvPath());
+  loadEnvFile(getRepoArchonEnvPath(cwd), ' (repo scope, overrides user scope)');
 }
