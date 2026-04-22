@@ -105,3 +105,6 @@ packages/server/.env
 skills-lock.json
 test-results/
 .archon/ralph/
+
+# Atlas Intelligence local — 1Password-backed .env template (not for upstream)
+.env.template
