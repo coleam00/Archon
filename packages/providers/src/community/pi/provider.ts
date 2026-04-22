@@ -1,11 +1,5 @@
 import { createLogger } from '@archon/paths';
-import {
-  AuthStorage,
-  ModelRegistry,
-  SettingsManager,
-  createAgentSession,
-} from '@mariozechner/pi-coding-agent';
-import { getModel, type Api, type Model } from '@mariozechner/pi-ai';
+import type { Api, Model } from '@mariozechner/pi-ai';
 
 import type {
   IAgentProvider,
@@ -16,12 +10,20 @@ import type {
 
 import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig } from './config';
-import { bridgeSession } from './event-bridge';
 import { parsePiModelRef } from './model-ref';
-import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
-import { createNoopResourceLoader } from './resource-loader';
-import { resolvePiSession } from './session-resolver';
-import { createArchonUIBridge, createArchonUIContext } from './ui-context-stub';
+
+// IMPORTANT: Do NOT add static `import { ... } from '@mariozechner/*'` here,
+// and do NOT statically import sibling modules that themselves import runtime
+// values from Pi (options-translator, resource-loader, session-resolver,
+// ui-context-stub, event-bridge). Pi's `@mariozechner/pi-coding-agent/dist/config.js`
+// runs `readFileSync(getPackageJsonPath(), "utf-8")` at module load; inside a
+// compiled Archon binary `getPackageJsonPath()` resolves to
+// `dirname(process.execPath) + "/package.json"` — a path that doesn't exist —
+// and archon crashes at startup before any command runs (v0.3.7 symptom).
+//
+// All Pi SDK value bindings and Pi-dependent helper modules are dynamically
+// imported inside `sendQuery()` below, which runs only when a Pi workflow is
+// actually invoked. Type-only imports above are fine — TS erases them.
 
 /**
  * Map Pi provider id → env var name used by pi-ai's getEnvApiKey().
@@ -55,14 +57,18 @@ function getLog(): ReturnType<typeof createLogger> {
  * Typed wrapper around Pi's `getModel` for a runtime-string provider/model
  * pair. Pi's getModel signature constrains `TModelId` to
  * `keyof MODELS[TProvider]`, which isn't knowable from a runtime string —
- * the cast through `unknown` is the only way to bypass it. Isolating that
- * escape hatch behind one searchable name keeps it auditable.
+ * the local `GetModelFn` alias is the narrowest shape that still lets us
+ * bypass that constraint. Isolating the escape hatch behind one searchable
+ * name keeps it auditable. Takes `getModel` as a parameter because the Pi
+ * SDK is loaded dynamically (see the header comment on this file for why).
  */
-function lookupPiModel(provider: string, modelId: string): Model<Api> | undefined {
-  return (getModel as unknown as (p: string, m: string) => Model<Api> | undefined)(
-    provider,
-    modelId
-  );
+type GetModelFn = (provider: string, modelId: string) => Model<Api> | undefined;
+function lookupPiModel(
+  getModel: GetModelFn,
+  provider: string,
+  modelId: string
+): Model<Api> | undefined {
+  return getModel(provider, modelId);
 }
 
 // Structured-output prompt augmentation is shared across providers. Import
@@ -77,11 +83,12 @@ export { augmentPromptForJsonSchema };
  * (no reuse) with in-memory auth/session/settings, so the server never
  * touches `~/.pi/` and concurrent calls don't collide.
  *
- * v1 capabilities are all false (see `capabilities.ts`): sessionResume,
- * thinkingControl, skills, mcp, etc. map to Pi features but require
- * intentional wiring before they can be declared. Under-declaring is
- * honest; the dag-executor emits warnings for any nodeConfig field not
- * supported.
+ * Capabilities (see `capabilities.ts` for the canonical list): Pi declares
+ * `sessionResume`, `skills`, `toolRestrictions`, `structuredOutput`,
+ * `envInjection`, `effortControl`, and `thinkingControl`. Features Pi does
+ * not currently support through Archon (`mcp`, `hooks`, `agents`,
+ * `costControl`, `fallbackModel`, `sandbox`) stay off; the dag-executor
+ * surfaces a warning for any unsupported nodeConfig field.
  */
 export class PiProvider implements IAgentProvider {
   async *sendQuery(
@@ -90,6 +97,33 @@ export class PiProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    // Lazy-load Pi SDK and all Pi-dependent helper modules here. Must not move
+    // these imports to module scope — see the header comment for the failure
+    // mode (archon compiled binary crashes at startup when Pi's config.js
+    // reads a package.json that doesn't exist next to the executable).
+    //
+    // Class constructors (AuthStorage, ModelRegistry, SettingsManager) are
+    // accessed via `piCodingAgent.X` rather than destructured, because
+    // destructured PascalCase bindings trip eslint's naming-convention rule.
+    const [
+      piCodingAgent,
+      piAi,
+      { bridgeSession },
+      { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools },
+      { createNoopResourceLoader },
+      { resolvePiSession },
+      { createArchonUIBridge, createArchonUIContext },
+    ] = await Promise.all([
+      import('@mariozechner/pi-coding-agent'),
+      import('@mariozechner/pi-ai'),
+      import('./event-bridge'),
+      import('./options-translator'),
+      import('./resource-loader'),
+      import('./session-resolver'),
+      import('./ui-context-stub'),
+    ]);
+    const { createAgentSession } = piCodingAgent;
+
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const piConfig = parsePiConfig(assistantConfig);
 
@@ -128,7 +162,8 @@ export class PiProvider implements IAgentProvider {
 
     // 2. Look up the Model via Pi's static catalog. `lookupPiModel` returns
     //    undefined when not found; we guard explicitly below.
-    const model = lookupPiModel(parsed.provider, parsed.modelId);
+    // Cast to the runtime-string-friendly shape — see `lookupPiModel`'s docblock.
+    const model = lookupPiModel(piAi.getModel as GetModelFn, parsed.provider, parsed.modelId);
     if (!model) {
       throw new Error(
         `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
@@ -156,7 +191,7 @@ export class PiProvider implements IAgentProvider {
     //    OAuth refresh note: Pi refreshes expired access tokens against the
     //    provider's OAuth server and rewrites ~/.pi/agent/auth.json under a
     //    file lock (same mechanism pi CLI uses — safe for concurrent access).
-    const authStorage = AuthStorage.create();
+    const authStorage = piCodingAgent.AuthStorage.create();
 
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const envOverride = envVarName
@@ -247,8 +282,8 @@ export class PiProvider implements IAgentProvider {
     // when piConfig.enableExtensions is true — Pi's community extension
     // ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/ and
     // packages installed via `pi install npm:<pkg>`).
-    const modelRegistry = ModelRegistry.inMemory(authStorage);
-    const settingsManager = SettingsManager.inMemory();
+    const modelRegistry = piCodingAgent.ModelRegistry.inMemory(authStorage);
+    const settingsManager = piCodingAgent.SettingsManager.inMemory();
     // Default ON: extensions (community packages like @plannotator/pi-extension
     // or your own local ones) are a core reason users run Pi. Opt out with
     // `assistants.pi.enableExtensions: false` (or `interactive: false`) in

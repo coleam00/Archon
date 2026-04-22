@@ -3187,6 +3187,75 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       ).toBe(1);
     });
 
+    it('completes on final iteration with XML-wrapped signal (<COMPLETE>SIGNAL</COMPLETE>)', async () => {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount < 3) {
+          yield { type: 'assistant', content: `Iteration ${String(callCount)} progress` };
+          yield { type: 'result', sessionId: `loop-session-${String(callCount)}` };
+        } else {
+          // Final iteration uses <COMPLETE> tag instead of <promise>
+          yield { type: 'assistant', content: 'All clean! <COMPLETE>ALL_CLEAN</COMPLETE>' };
+          yield { type: 'result', sessionId: `loop-session-${String(callCount)}` };
+        }
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-xml-tag',
+          nodes: [
+            {
+              id: 'fix-and-review',
+              loop: {
+                prompt: 'Fix and review. When done, output <COMPLETE>ALL_CLEAN</COMPLETE>.',
+                until: 'ALL_CLEAN',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // 3 iterations run, signal found on iteration 3 → completed, NOT failed
+      expect(mockSendQueryDag.mock.calls.length).toBe(3);
+      expect(
+        (
+          mockDeps.store.completeWorkflowRun as Mock<
+            (id: string, metadata?: Record<string, unknown>) => Promise<void>
+          >
+        ).mock.calls.length
+      ).toBe(1);
+      expect(
+        (mockDeps.store.failWorkflowRun as Mock<(id: string, error: string) => Promise<void>>).mock
+          .calls.length
+      ).toBe(0);
+      // Verify stripping: raw XML completion tags must not appear in user-visible output
+      const allSentMessages = (
+        platform.sendMessage as Mock<(...args: unknown[]) => Promise<void>>
+      ).mock.calls
+        .map((call: unknown[]) => call[1] as string)
+        .join('');
+      expect(allSentMessages).not.toContain('<COMPLETE>');
+      expect(allSentMessages).not.toContain('</COMPLETE>');
+    });
+
     it('loop node output available to downstream nodes via $nodeId.output', async () => {
       let loopCallCount = 0;
       mockSendQueryDag.mockImplementation(function* (prompt: string) {
@@ -5751,5 +5820,262 @@ describe('executeDagWorkflow -- script nodes', () => {
       })
     );
     execSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCP plugin-noise filtering helpers
+// ---------------------------------------------------------------------------
+
+describe('parseMcpFailureServerNames', () => {
+  it('extracts entries (name + segment) from a well-formed message', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    const entries = parseMcpFailureServerNames(
+      'MCP server connection failed: telegram (disconnected), github (timeout)'
+    );
+    expect(entries).toEqual([
+      { name: 'telegram', segment: 'telegram (disconnected)' },
+      { name: 'github', segment: 'github (timeout)' },
+    ]);
+  });
+
+  it('returns empty array for unrelated messages', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('⚠️ Something else')).toEqual([]);
+    expect(parseMcpFailureServerNames('')).toEqual([]);
+  });
+
+  it('deduplicates repeated entries (first segment wins)', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    const entries = parseMcpFailureServerNames(
+      'MCP server connection failed: foo (a), foo (b), bar (c)'
+    );
+    expect(entries).toEqual([
+      { name: 'foo', segment: 'foo (a)' },
+      { name: 'bar', segment: 'bar (c)' },
+    ]);
+  });
+
+  it('handles a single entry without status parens gracefully', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('MCP server connection failed: solo')).toEqual([
+      { name: 'solo', segment: 'solo' },
+    ]);
+  });
+
+  it('drops empty segments from trailing/leading commas', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('MCP server connection failed: a (x), , b (y)')).toEqual([
+      { name: 'a', segment: 'a (x)' },
+      { name: 'b', segment: 'b (y)' },
+    ]);
+  });
+});
+
+describe('loadConfiguredMcpServerNames', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `mcp-names-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('returns empty set when nodeMcpPath is undefined', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const names = await loadConfiguredMcpServerNames(undefined, testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns server names for a valid JSON config (relative path)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(
+      join(testDir, 'mcp.json'),
+      JSON.stringify({ foo: { command: 'x' }, bar: { command: 'y' } })
+    );
+    const names = await loadConfiguredMcpServerNames('mcp.json', testDir);
+    expect([...names].sort()).toEqual(['bar', 'foo']);
+  });
+
+  it('returns server names for an absolute path', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const absolutePath = join(testDir, 'abs.json');
+    await writeFile(absolutePath, JSON.stringify({ baz: {} }));
+    const names = await loadConfiguredMcpServerNames(absolutePath, '/nonexistent/cwd');
+    expect([...names]).toEqual(['baz']);
+  });
+
+  it('returns empty set when file is missing (no crash)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const names = await loadConfiguredMcpServerNames('missing.json', testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns empty set for invalid JSON (provider surfaces its own error)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(join(testDir, 'broken.json'), '{ not-json');
+    const names = await loadConfiguredMcpServerNames('broken.json', testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns empty set when JSON is an array (not an object of servers)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(join(testDir, 'arr.json'), '["foo","bar"]');
+    const names = await loadConfiguredMcpServerNames('arr.json', testDir);
+    expect(names.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCP plugin-noise filtering — end-to-end through executeDagWorkflow
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- MCP failure filtering', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-mcp-filter-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'cmd prompt');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  async function runWithSystemChunk(
+    systemContent: string,
+    nodeMcpPath?: string
+  ): Promise<IWorkflowPlatform> {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'system', content: systemContent };
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess' };
+    });
+
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      createMockDeps(),
+      platform,
+      'conv-mcp-filter',
+      testDir,
+      {
+        name: 'mcp-filter-test',
+        nodes: [{ id: 'review', command: 'my-cmd', ...(nodeMcpPath ? { mcp: nodeMcpPath } : {}) }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    return platform;
+  }
+
+  function mcpMessages(platform: IWorkflowPlatform): string[] {
+    const calls = (platform.sendMessage as Mock<typeof platform.sendMessage>).mock.calls;
+    return calls
+      .map(c => c[1] as string)
+      .filter(m => m.startsWith('MCP server connection failed:') || m.startsWith('⚠️'));
+  }
+
+  it('forwards only workflow-configured failures and preserves status detail', async () => {
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ 'workflow-server': {} }));
+    const platform = await runWithSystemChunk(
+      'MCP server connection failed: workflow-server (timeout), telegram (disconnected)',
+      'mcp.json'
+    );
+
+    const sent = mcpMessages(platform);
+    expect(sent).toEqual(['MCP server connection failed: workflow-server (timeout)']);
+  });
+
+  it('suppresses MCP message entirely when all failures are user plugins', async () => {
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ 'workflow-server': {} }));
+    const platform = await runWithSystemChunk(
+      'MCP server connection failed: telegram (disconnected), notion (timeout)',
+      'mcp.json'
+    );
+
+    expect(mcpMessages(platform)).toEqual([]);
+  });
+
+  it('suppresses everything when node has no mcp: config (all failures are plugin noise)', async () => {
+    const platform = await runWithSystemChunk(
+      'MCP server connection failed: telegram (disconnected)'
+    );
+
+    expect(mcpMessages(platform)).toEqual([]);
+  });
+
+  it('forwards ⚠️ provider warnings verbatim', async () => {
+    const platform = await runWithSystemChunk('⚠️ Haiku does not support MCP');
+
+    expect(mcpMessages(platform)).toEqual(['⚠️ Haiku does not support MCP']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streaming cancel-check policy (during-streaming paused tolerance)
+// ---------------------------------------------------------------------------
+
+describe('shouldContinueStreamingForStatus', () => {
+  it('continues when status is running', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('running')).toBe(true);
+  });
+
+  it('continues when status is paused (sibling approval node in same layer)', async () => {
+    // The key invariant: a concurrent approval node can pause the run while a
+    // streaming AI node is mid-response. The streaming node must finish its
+    // own output — workflow progression is gated by the approval node, not
+    // by tearing down unrelated in-flight streams.
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('paused')).toBe(true);
+  });
+
+  it('aborts when status is null (run deleted)', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus(null)).toBe(false);
+  });
+
+  it('aborts when status is cancelled', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('cancelled')).toBe(false);
+  });
+
+  it('aborts when status is failed', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('failed')).toBe(false);
+  });
+
+  it('aborts when status is completed', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('completed')).toBe(false);
+  });
+
+  it('aborts on any unrecognized state', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('pending')).toBe(false);
+    expect(shouldContinueStreamingForStatus('invalid-status')).toBe(false);
   });
 });

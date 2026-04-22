@@ -55,9 +55,9 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
    the approval node and transitions the run to resumable. Natural-language
-   messages (recommended) and the CLI auto-resume immediately. The explicit
-   `/workflow approve` command records the approval; send a follow-up message
-   to resume.
+   messages, the CLI, and the Web UI approve button all auto-resume the
+   workflow from the paused gate. (The explicit `/workflow approve <run-id>`
+   slash command also auto-resumes when issued in the originating conversation.)
 5. **Reject**: The user rejects.
    - **Without `on_reject`**: The workflow is cancelled immediately.
    - **With `on_reject`**: The executor runs the `on_reject.prompt` via AI (with
@@ -140,7 +140,19 @@ bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
 ### Web UI
 
 Paused workflows show an amber pulsing badge on the dashboard. Click **Approve**
-or **Reject** directly on the workflow card.
+or **Reject** directly on the workflow card. Both actions auto-resume the
+workflow from the paused gate — no follow-up message required.
+
+**Reject with reason**: the Reject dialog includes an optional free-text
+reason field. The trimmed value (empty after trim → omitted) is passed to
+the workflow as `$REJECTION_REASON`, available in the `on_reject.prompt`.
+Rejects on web and chat cards use the same confirmation dialog.
+
+**Cross-platform caveat**: auto-resume via the Web UI only applies when the
+run was originally dispatched from the Web UI (parent conversation is a web
+conversation). If you approve a Slack / Telegram / GitHub-dispatched run
+from the dashboard, the decision is recorded, but the resume flow has to
+happen in the originating platform (re-run the workflow there).
 
 ### REST API
 

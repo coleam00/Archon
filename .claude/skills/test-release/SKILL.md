@@ -79,6 +79,8 @@ About to test:
   Path:     brew (Homebrew tap on macOS)
   Version:  0.3.1 (expected)
   Cleanup:  will uninstall after tests (brew uninstall + untap)
+            If `archon-stable` symlink is detected in Phase 2, it will be
+            restored at the end of Phase 5 by reinstalling the tap formula.
 
 Proceed? (y/N)
 ```
@@ -111,6 +113,18 @@ gh release view v<version> --repo coleam00/Archon --json tagName,assets --jq '{t
 ```
 
 If the release does not exist or has no assets, abort with a clear message. Do not proceed to install a non-existent release.
+
+4. **Detect persistent `archon-stable` install (brew path only).** If the user has renamed a prior brew install to `archon-stable` (the dual-homebrew pattern — see `~/.config/fish/functions/brew-upgrade-archon.fish`), Phase 5's `brew uninstall` will wipe it. Capture the state so Phase 5b can restore it:
+
+```bash
+ARCHON_STABLE_WAS_INSTALLED=""
+if [ -L /opt/homebrew/bin/archon-stable ] || [ -L /usr/local/bin/archon-stable ]; then
+  ARCHON_STABLE_WAS_INSTALLED="yes"
+  echo "Detected persistent archon-stable — will restore after Phase 5 uninstall."
+fi
+```
+
+Export `ARCHON_STABLE_WAS_INSTALLED` into the environment used by Phase 5b. Only applies to the `brew` path — `curl-mac` and `curl-vps` don't go through brew and don't disturb `archon-stable`.
 
 ## Phase 3 — Install
 
@@ -351,6 +365,25 @@ which -a archon
 archon version | head -1
 # should match the dev version captured in Phase 2
 ```
+
+**Restore `archon-stable` if it existed before the test** (dual-homebrew pattern — see Phase 2 item 4):
+
+```bash
+if [ -n "$ARCHON_STABLE_WAS_INSTALLED" ]; then
+  echo "Restoring archon-stable (detected before test)..."
+  brew tap coleam00/archon
+  brew install coleam00/archon/archon
+  BREW_BIN="$(brew --prefix)/bin"
+  if [ -e "$BREW_BIN/archon" ]; then
+    mv "$BREW_BIN/archon" "$BREW_BIN/archon-stable"
+    echo "archon-stable restored: $(archon-stable version 2>/dev/null | head -1)"
+  else
+    echo "WARNING: brew install succeeded but $BREW_BIN/archon missing — check formula"
+  fi
+fi
+```
+
+> **Note on the restored version**: this reinstalls from whatever the tap currently ships, which is typically the release you just tested (so `archon-stable` ends up at the newly-tested version). That's usually what the operator wants — you just verified the new release works, and you want `archon-stable` pointed at it. If you were testing an older version for back-version QA, the restored `archon-stable` will be the *current* tap formula, not the pre-test version. For that rare case, the operator should re-run `brew-upgrade-archon` manually after the test.
 
 ### Path: curl-mac
 
