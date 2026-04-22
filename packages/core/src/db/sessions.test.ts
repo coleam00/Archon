@@ -175,6 +175,17 @@ describe('sessions', () => {
       expect(error).toBeInstanceOf(SessionNotFoundError);
       expect(error.message).toBe('Session not found: non-existent');
     });
+
+    test('clears assistant_session_id when passed null', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateSession('session-123', null);
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_sessions SET assistant_session_id = $1 WHERE id = $2',
+        [null, 'session-123']
+      );
+    });
   });
 
   describe('deactivateSession', () => {

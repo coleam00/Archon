@@ -347,7 +347,10 @@ async function dispatchOrchestratorWorkflow(
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
-async function tryPersistSessionId(sessionId: string, assistantSessionId: string): Promise<void> {
+async function tryPersistSessionId(
+  sessionId: string,
+  assistantSessionId: string | null
+): Promise<void> {
   try {
     await sessionDb.updateSession(sessionId, assistantSessionId);
   } catch (error) {
@@ -983,7 +986,9 @@ async function handleStreamMode(
         getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
         const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
-        if (newSessionId) {
+        if (msg.errorSubtype === 'error_during_execution') {
+          await tryPersistSessionId(session.id, null);
+        } else if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
         return;
@@ -1106,7 +1111,9 @@ async function handleBatchMode(
         getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
         const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
-        if (newSessionId) {
+        if (msg.errorSubtype === 'error_during_execution') {
+          await tryPersistSessionId(session.id, null);
+        } else if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
         return;
