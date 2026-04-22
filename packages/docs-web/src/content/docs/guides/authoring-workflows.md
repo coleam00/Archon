@@ -1021,12 +1021,12 @@ nodes:
 When the workflow reaches `review-gate`, it pauses and notifies you. Approve or reject via:
 
 - **Natural language** (recommended): Just type your response in the conversation — the system detects the paused workflow and auto-resumes
-- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>`
-- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` (records approval; send a follow-up message to resume)
-- **Web UI**: Click the Approve/Reject buttons on the dashboard card
+- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — auto-resumes
+- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — auto-resumes when issued in the originating conversation
+- **Web UI**: Click the Approve/Reject buttons on the dashboard card — auto-resumes for Web-UI-dispatched runs; the Reject dialog includes an optional reason field that flows to `$REJECTION_REASON`
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
 
-After approval via natural language or CLI, the workflow auto-resumes from the next node. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node.
+All four paths auto-resume the workflow from the next node. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web-UI approvals on Slack / Telegram / GitHub-dispatched runs record the decision but do not auto-resume — re-run from the originating platform to continue.
 
 Without `on_reject`: rejecting cancels the workflow.
 With `on_reject`: rejecting triggers an AI rework prompt and re-pauses for re-review.
