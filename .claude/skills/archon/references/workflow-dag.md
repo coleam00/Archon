@@ -177,14 +177,53 @@ nodes:
 
 ## Conditions (`when:`)
 
+Gate whether a node runs based on upstream output. A condition that evaluates to `false` skips the node (fail-closed — skipped nodes propagate their skipped state to dependants).
+
+### Operators
+
+**String comparison** (literal string equality):
 ```yaml
-- id: investigate
-  command: investigate-bug
-  depends_on: [classify]
-  when: "$classify.output.issue_type == 'bug'"
+when: "$nodeId.output == 'VALUE'"
+when: "$nodeId.output != 'VALUE'"
+when: "$nodeId.output.field == 'VALUE'"       # JSON dot notation (requires output_format)
 ```
 
-**Syntax**: `$nodeId.output OPERATOR 'value'` — operators: `==`, `!=` only. Values single-quoted. Invalid expressions skip the node (fail-closed).
+**Numeric comparison** (both sides auto-parsed as numbers; fail-closed if either side is not finite):
+```yaml
+when: "$score.output > '80'"
+when: "$score.output >= '0.9'"
+when: "$score.output < '100'"
+when: "$score.output <= '5'"
+when: "$score.output.confidence >= '0.9'"
+```
+
+All six operators — `==`, `!=`, `<`, `>`, `<=`, `>=` — are supported. Values are single-quoted strings (even for numeric comparisons).
+
+### Compound Expressions
+
+Combine conditions with `&&` (AND) and `||` (OR). **`&&` binds tighter than `||`.** No parentheses supported — structure expressions with that precedence in mind.
+
+```yaml
+when: "$a.output == 'X' && $b.output != 'Y'"
+when: "$a.output == 'X' || $b.output == 'Y'"
+when: "$score.output > '80' && $flag.output == 'true'"
+
+# Precedence: (A && B) || C
+when: "$a.output == 'X' && $b.output == 'Y' || $c.output == 'Z'"
+```
+
+Short-circuit evaluation: `&&` stops at the first false, `||` stops at the first true.
+
+### Dot Notation (JSON Field Access)
+
+`$nodeId.output.field` parses the upstream output as JSON and extracts the named field. Returns empty string if parsing fails or the field is absent — which then fails-closed against any literal value. Requires the upstream node to have `output_format` set (for AI nodes) or to print valid JSON (for bash/script nodes).
+
+### Fail-Closed Rules
+
+- Invalid or unparseable expression → node skipped, warning logged
+- Numeric operator with a non-numeric side → node skipped
+- `$nodeId.output.field` on non-JSON output → field is empty → comparison fails
+- Referenced node did not run (skipped upstream) → substitution is empty → comparison fails
 
 ## Node Output Substitution
 
