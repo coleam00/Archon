@@ -9,11 +9,13 @@ sidebar:
   order: 6
 ---
 
-HarneesLab은 합리적인 기본값, 선택적 YAML config file, 환경 변수 override를 갖춘 계층형 설정 시스템을 지원합니다. 빠른 소개는 [시작하기: 설정](/getting-started/)을 참고하세요.
+HarneesLab은 합리적인 기본값, 선택적 YAML config file, 환경 변수 override를 갖춘 계층형 설정 시스템을 지원합니다. 빠른 소개는 [시작하기: 설정](/getting-started/configuration/)을 참고하세요.
 
 ## 디렉터리 구조
 
 ### 사용자 레벨(~/.archon/)
+
+`~/.archon/`은 compatibility phase의 기본 local home입니다. 새 custom 위치가 필요하면 `HARNEESLAB_HOME`을 설정하고, 기존 `ARCHON_HOME`은 legacy fallback으로 계속 사용할 수 있습니다.
 
 ```
 ~/.archon/
@@ -22,8 +24,8 @@ HarneesLab은 합리적인 기본값, 선택적 YAML config file, 환경 변수 
 │   ├── worktrees/          # Git worktrees for this project
 │   ├── artifacts/          # Workflow artifacts
 │   └── logs/               # Workflow execution logs
-├── archon.db               # SQLite database (when DATABASE_URL not set)
-└── config.yaml             # Global configuration (optional)
+├── archon.db               # SQLite database(DATABASE_URL이 없을 때)
+└── config.yaml             # Global configuration(optional)
 ```
 
 ### Repository 레벨(.archon/)
@@ -32,7 +34,7 @@ HarneesLab은 합리적인 기본값, 선택적 YAML config file, 환경 변수 
 .archon/
 ├── commands/       # Custom commands
 │   └── plan.md
-├── workflows/      # Workflow definitions (YAML files)
+├── workflows/      # workflow definition(YAML file)
 └── config.yaml     # Repo-specific configuration (optional)
 ```
 
@@ -50,7 +52,7 @@ HarneesLab은 합리적인 기본값, 선택적 YAML config file, 환경 변수 
 사용자 전체 preference를 위해 `~/.archon/config.yaml`을 만듭니다.
 
 ```yaml
-# Default AI assistant
+# 기본 AI assistant
 defaultAssistant: claude # must match a registered provider (e.g. claude, codex)
 
 # Assistant defaults
@@ -60,8 +62,8 @@ assistants:
     settingSources:   # Which CLAUDE.md files the SDK loads (default: ['project'])
       - project       # Project-level CLAUDE.md (always recommended)
       - user          # Also load ~/.claude/CLAUDE.md (global preferences)
-    # Optional: absolute path to the Claude Code executable.
-    # Required in compiled HarneesLab binaries when CLAUDE_BIN_PATH is not set.
+    # 선택 사항: Claude Code executable의 absolute path.
+    # compiled HarneesLab binary에서 CLAUDE_BIN_PATH가 없으면 필요합니다.
     # Accepts the native binary (~/.local/bin/claude from the curl installer)
     # or the npm-installed cli.js. Source/dev mode auto-resolves.
     # claudeBinaryPath: /absolute/path/to/claude
@@ -71,7 +73,7 @@ assistants:
     webSearchMode: disabled
     additionalDirectories:
       - /absolute/path/to/other/repo
-    # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
+    # codexBinaryPath: /absolute/path/to/codex  # 선택 사항: Codex CLI path
 
 # Streaming preferences per platform
 streaming:
@@ -109,28 +111,28 @@ assistants:
     model: gpt-5.3-codex
     webSearchMode: live
 
-# Commands configuration
+# command 설정
 commands:
   folder: .archon/commands
   autoLoad: true
 
 # Worktree settings
 worktree:
-  baseBranch: main  # Optional: auto-detected from git when not set
-  copyFiles:  # Optional: Additional files to copy to worktrees
+  baseBranch: main  # 선택 사항: 없으면 git에서 auto-detect
+  copyFiles:  # 선택 사항: worktree에 추가로 복사할 file
     - .env.example -> .env  # Rename during copy
     - .vscode               # Copy entire directory
-  initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
+  initSubmodules: true  # 선택 사항: 기본값 true — .gitmodules를 auto-detect하고 실행
                         # `git submodule update --init --recursive`. Set false to opt out.
 
 # Documentation directory
 docs:
-  path: docs  # Optional: default is docs/
+  path: docs  # 선택 사항: 기본값은 docs/
 
-# Defaults configuration
+# default command/workflow 설정
 defaults:
-  loadDefaultCommands: true   # Load app's bundled default commands at runtime
-  loadDefaultWorkflows: true  # Load app's bundled default workflows at runtime
+  loadDefaultCommands: true   # runtime에 app bundled default command 로드
+  loadDefaultWorkflows: true  # runtime에 app bundled default workflow 로드
 
 # Per-project environment variables for workflow execution (Claude SDK only)
 # Injected into the Claude subprocess env. Use the Web UI Settings panel for secrets.
@@ -181,7 +183,7 @@ assistants:
 
 ### Core
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `HARNEESLAB_HOME` | HarneesLab-managed file의 base directory. `ARCHON_HOME`은 legacy fallback | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090`(worktree에서는 auto-allocated) |
@@ -190,11 +192,11 @@ assistants:
 | `DEFAULT_AI_ASSISTANT` | 기본 AI assistant(registered provider와 일치해야 함) | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | 최대 동시 AI conversation 수 | `10` |
 | `SESSION_RETENTION_DAYS` | N일보다 오래된 inactive session 삭제 | `30` |
-| `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | `1`로 설정하면 Claude Code session 안에서 `archon` 실행 시 stderr warning 숨김 | -- |
+| `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | `1`로 설정하면 Claude Code session 안에서 `hlab` 실행 시 stderr warning 숨김. env 이름은 legacy compatibility 때문에 유지됩니다. | -- |
 
 ### AI Providers -- Claude
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `CLAUDE_USE_GLOBAL_AUTH` | `claude /login`의 global auth 사용(`true`/`false`) | Auto-detect |
 | `CLAUDE_CODE_OAUTH_TOKEN` | 명시적 OAuth token(global auth 대안) | -- |
@@ -206,7 +208,7 @@ assistants:
 
 ### AI Providers -- Codex
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `CODEX_ID_TOKEN` | Codex ID token(`~/.codex/auth.json`에서 가져옴) | -- |
 | `CODEX_ACCESS_TOKEN` | Codex access token | -- |
@@ -215,7 +217,7 @@ assistants:
 
 ### Platform Adapters -- Slack
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `SLACK_BOT_TOKEN` | Slack bot token(`xoxb-...`) | -- |
 | `SLACK_APP_TOKEN` | Socket Mode용 Slack app-level token(`xapp-...`) | -- |
@@ -224,7 +226,7 @@ assistants:
 
 ### Platform Adapters -- Telegram
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | @BotFather에서 받은 Telegram bot token | -- |
 | `TELEGRAM_ALLOWED_USER_IDS` | whitelist용 쉼표 구분 Telegram user ID | Open access |
@@ -232,7 +234,7 @@ assistants:
 
 ### Platform Adapters -- Discord
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `DISCORD_BOT_TOKEN` | Developer Portal에서 받은 Discord bot token | -- |
 | `DISCORD_ALLOWED_USER_IDS` | whitelist용 쉼표 구분 Discord user ID | Open access |
@@ -240,7 +242,7 @@ assistants:
 
 ### Platform Adapters -- GitHub
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | GitHub personal access token(`gh` CLI도 사용) | -- |
 | `GH_TOKEN` | `GITHUB_TOKEN` alias(GitHub CLI가 사용) | -- |
@@ -250,7 +252,7 @@ assistants:
 
 ### Platform Adapters -- Gitea
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `GITEA_URL` | Self-hosted Gitea instance URL(예: `https://gitea.example.com`) | -- |
 | `GITEA_TOKEN` | Gitea personal access token 또는 bot account token | -- |
@@ -260,20 +262,20 @@ assistants:
 
 ### Database
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string(SQLite 사용 시 생략) | `~/.archon/archon.db`의 SQLite |
 
 ### Web UI
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `WEB_UI_ORIGIN` | API route용 CORS origin(공개 노출 시 제한) | `*`(모두 허용) |
 | `WEB_UI_DEV` | 설정되면 static frontend serving을 건너뜀(대신 Vite dev server 사용) | -- |
 
 ### Worktree 관리
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `STALE_THRESHOLD_DAYS` | inactive worktree를 stale로 간주하기 전 일수 | `14` |
 | `MAX_WORKTREES_PER_CODEBASE` | auto-cleanup 전 codebase당 최대 worktree 수 | `25` |
@@ -281,7 +283,7 @@ assistants:
 
 ### Docker / Deployment
 
-| Variable | 설명 | Default |
+| 변수 | 설명 | 기본값 |
 | --- | --- | --- |
 | `HARNEESLAB_DATA` | HarneesLab data(workspaces, worktrees, artifacts)의 host path. `ARCHON_DATA`는 legacy fallback | Docker-managed volume(`archon_data` compatibility default) |
 | `DOMAIN` | Caddy reverse proxy용 public domain(TLS auto-provisioned) | -- |
@@ -299,7 +301,7 @@ Infrastructure configuration(database URL, platform token)은 `.env` file에 저
 | Component | 위치 | 목적 |
 |-----------|----------|---------|
 | **CLI** | `$HARNEESLAB_HOME/.env`, `$ARCHON_HOME/.env`, 또는 `~/.archon/.env` | Global infrastructure config; CWD .env key를 먼저 strip한 뒤 `override: true`로 로드(HarneesLab config가 shell-inherited var보다 우선) |
-| **Server (dev)** | `<archon-repo>/.env` + global `.env` | Repo `.env`는 platform token용; global `.env`는 `override: true`로 로드 |
+| **Server (dev)** | `<harneeslab-repo>/.env` + global `.env` | Repo `.env`는 platform token용; global `.env`는 `override: true`로 로드 |
 | **Server (binary)** | global `.env` | 단일 source of truth(compiled binary에서는 repo `.env` path 사용 불가) |
 
 **동작 방식**: 시작 시 CLI와 server는 현재 작업 디렉터리의 `.env`, `.env.local`, `.env.development`, `.env.production`에서 Bun이 자동 로드한 모든 key와 nested Claude Code session marker(auth var를 제외한 `CLAUDECODE`, `CLAUDE_CODE_*`)를 제거한 뒤 global `.env`를 로드합니다. global `.env` 위치는 `HARNEESLAB_HOME`, `ARCHON_HOME`, `~/.archon` 순서로 결정됩니다. 이렇게 하면 target repo key와 nested-session guard가 어떤 application code도 실행되기 전에 `process.env`에서 완전히 제거됩니다.
@@ -310,7 +312,7 @@ Infrastructure configuration(database URL, platform token)은 `.env` file에 저
 # Create global config
 mkdir -p ~/.archon
 cp .env.example ~/.archon/.env
-# Edit with your values
+# 실제 값으로 편집
 ```
 
 ## Docker 설정
@@ -339,7 +341,7 @@ Repository를 clone하거나 전환할 때 HarneesLab은 다음 우선순위로 
 `.archon/config.yaml` 예시:
 ```yaml
 commands:
-  folder: .claude/commands/archon  # Additional folder to search
+  folder: .claude/commands/archon  # 추가로 검색할 legacy-compatible command folder
   autoLoad: true
 ```
 
@@ -427,8 +429,8 @@ DISCORD_STREAMING_MODE=batch
 
 ### Platform 기본값
 
-| Platform | Default Mode |
-|----------|-------------|
+| Platform | 기본 mode |
+| --- | --- |
 | Telegram | `stream` |
 | Discord  | `batch` |
 | Slack    | `batch` |
@@ -442,7 +444,7 @@ DISCORD_STREAMING_MODE=batch
 시스템이 동시에 처리하는 conversation 수를 제어합니다.
 
 ```ini
-MAX_CONCURRENT_CONVERSATIONS=10  # Default: 10
+MAX_CONCURRENT_CONVERSATIONS=10  # 기본값: 10
 ```
 
 **동작 방식:**
@@ -453,11 +455,11 @@ MAX_CONCURRENT_CONVERSATIONS=10  # Default: 10
 
 **튜닝 가이드:**
 
-| Resources | 권장 설정 |
-|-----------|-------------------|
-| Low resources | 3-5 |
+| Resource | 권장 설정 |
+| --- | --- |
+| 낮은 resource | 3-5 |
 | Standard | 10(default) |
-| High resources | 20-30(API limit monitoring 필요) |
+| 높은 resource | 20-30(API limit monitoring 필요) |
 
 ---
 
@@ -465,23 +467,23 @@ MAX_CONCURRENT_CONVERSATIONS=10  # Default: 10
 
 애플리케이션은 monitoring을 위한 health check endpoint를 제공합니다.
 
-**Basic Health Check:**
+**기본 health check:**
 ```bash
 curl http://localhost:3090/health
 ```
-Returns: `{"status":"ok"}`
+응답: `{"status":"ok"}`
 
-**Database Connectivity:**
+**Database connectivity:**
 ```bash
 curl http://localhost:3090/health/db
 ```
-Returns: `{"status":"ok","database":"connected"}`
+응답: `{"status":"ok","database":"connected"}`
 
-**Concurrency Status:**
+**Concurrency status:**
 ```bash
 curl http://localhost:3090/health/concurrency
 ```
-Returns: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
+응답: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
 
 **사용 사례:**
 - Docker healthcheck configuration
