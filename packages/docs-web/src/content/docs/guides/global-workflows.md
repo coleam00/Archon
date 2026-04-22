@@ -9,7 +9,7 @@ sidebar:
   order: 8
 ---
 
-`~/.archon/.archon/workflows/`에 둔 워크플로는 전역으로 로드됩니다. 모든 프로젝트의 `workflow list`에 표시되며 어느 저장소에서든 실행할 수 있습니다.
+`~/.archon/.archon/workflows/`에 둔 workflow는 전역으로 로드됩니다. 모든 프로젝트의 `workflow list`에 표시되며 어느 저장소에서든 실행할 수 있습니다. HarneesLab은 Archon fork compatibility 때문에 기본 user-level home 경로로 `~/.archon`을 계속 사용합니다.
 
 ## 경로
 
@@ -17,11 +17,13 @@ sidebar:
 ~/.archon/.archon/workflows/
 ```
 
-또는 `ARCHON_HOME`을 설정했다면 다음 경로를 사용합니다.
+또는 `HARNEESLAB_HOME`을 설정했다면 다음 경로를 사용합니다.
 
 ```
-$ARCHON_HOME/.archon/workflows/
+$HARNEESLAB_HOME/.archon/workflows/
 ```
+
+`ARCHON_HOME`은 legacy fallback으로 계속 지원됩니다.
 
 디렉터리가 없다면 생성하세요.
 
@@ -32,18 +34,18 @@ mkdir -p ~/.archon/.archon/workflows
 ## 로드 우선순위
 
 1. **기본 제공 워크플로**(가장 낮은 우선순위)
-2. **전역 워크플로** -- `~/.archon/.archon/workflows/`(파일명이 같으면 기본 제공 워크플로를 덮어씀)
-3. **저장소별 워크플로** -- `.archon/workflows/`(파일명이 같으면 전역 워크플로를 덮어씀)
+2. **전역 workflow** -- `~/.archon/.archon/workflows/`(파일명이 같으면 기본 제공 workflow를 덮어씀)
+3. **저장소별 workflow** -- `.archon/workflows/`(파일명이 같으면 전역 workflow를 덮어씀)
 
-전역 워크플로가 기본 제공 워크플로와 같은 파일명을 가지면 전역 버전이 사용됩니다. 저장소별 워크플로가 전역 워크플로와 같은 파일명을 가지면 저장소별 버전이 사용됩니다.
+전역 workflow가 기본 제공 workflow와 같은 파일명을 가지면 전역 버전이 사용됩니다. 저장소별 workflow가 전역 workflow와 같은 파일명을 가지면 저장소별 버전이 사용됩니다.
 
 ## 실전 예시
 
-전역 워크플로는 프로젝트와 관계없이 항상 적용하고 싶은 개인 기준을 강제할 때 유용합니다.
+전역 workflow는 프로젝트와 관계없이 항상 적용하고 싶은 개인 기준을 강제할 때 유용합니다.
 
 ### 개인 코드 리뷰
 
-모든 프로젝트에서 선호하는 리뷰 체크리스트를 실행하는 워크플로입니다.
+모든 프로젝트에서 선호하는 리뷰 체크리스트를 실행하는 workflow입니다.
 
 ```yaml
 # ~/.archon/.archon/workflows/my-review.yaml
@@ -61,7 +63,7 @@ nodes:
 
 ### 커스텀 린팅 또는 포맷 검사
 
-프로젝트에 종속되지 않는 검사를 실행하는 워크플로입니다.
+프로젝트에 종속되지 않는 검사를 실행하는 workflow입니다.
 
 ```yaml
 # ~/.archon/.archon/workflows/lint-check.yaml
@@ -80,7 +82,7 @@ nodes:
 
 ### 빠른 설명
 
-익숙하지 않은 코드베이스를 이해하기 위한 간단한 워크플로입니다.
+익숙하지 않은 코드베이스를 이해하기 위한 간단한 workflow입니다.
 
 ```yaml
 # ~/.archon/.archon/workflows/explain.yaml
@@ -99,7 +101,7 @@ nodes:
 
 ## Dotfiles와 동기화
 
-설정을 dotfiles 저장소로 관리한다면 전역 워크플로도 함께 포함할 수 있습니다.
+설정을 dotfiles 저장소로 관리한다면 전역 workflow도 함께 포함할 수 있습니다.
 
 ```bash
 # In your dotfiles repo
@@ -124,25 +126,25 @@ mkdir -p ~/.archon/.archon/workflows
 cp ~/dotfiles/archon/.archon/workflows/*.yaml ~/.archon/.archon/workflows/
 ```
 
-이렇게 하면 개인 워크플로를 여러 컴퓨터에서 함께 사용할 수 있습니다.
+이렇게 하면 개인 workflow를 여러 컴퓨터에서 함께 사용할 수 있습니다.
 
 ## CLI 지원
 
 CLI와 서버는 모두 전역 워크플로를 자동으로 발견합니다.
 
 ```bash
-# Lists bundled + global + repo-specific workflows
+# bundled + global + repo-specific workflows 표시
 hlab workflow list
 
-# Run a global workflow from any repo
+# 어느 repo에서든 global workflow 실행
 hlab workflow run my-review
 ```
 
-## Troubleshooting
+## 문제 해결
 
-### 워크플로가 목록에 표시되지 않음
+### Workflow가 목록에 표시되지 않음
 
-1. **경로 확인** -- 디렉터리는 정확히 `~/.archon/.archon/workflows/`여야 합니다(`.archon`이 두 번 나오는 점에 주의). 첫 번째 `.archon`은 Archon home directory이고, 두 번째는 그 안의 표준 config directory structure입니다.
+1. **경로 확인** -- 디렉터리는 정확히 `~/.archon/.archon/workflows/`여야 합니다(`.archon`이 두 번 나오는 점에 주의). 첫 번째 `.archon`은 compatibility home directory이고, 두 번째 `.archon`은 그 안의 표준 config directory structure입니다.
 
    ```bash
    ls ~/.archon/.archon/workflows/
@@ -158,4 +160,4 @@ hlab workflow run my-review
 
 4. **이름 충돌 확인** -- 저장소별 workflow가 같은 파일명을 가지면 전역 workflow를 덮어씁니다. 해당 저장소 안에서는 전역 버전이 표시되지 않습니다.
 
-5. **ARCHON_HOME 확인** -- `ARCHON_HOME`을 커스텀 경로로 설정했다면 전역 workflow는 `~/.archon/.archon/workflows/`가 아니라 `$ARCHON_HOME/.archon/workflows/`에 있어야 합니다.
+5. **HARNEESLAB_HOME / ARCHON_HOME 확인** -- `HARNEESLAB_HOME` 또는 `ARCHON_HOME`을 커스텀 경로로 설정했다면 전역 workflow는 `~/.archon/.archon/workflows/`가 아니라 해당 home directory 아래의 `.archon/workflows/`에 있어야 합니다.

@@ -9,16 +9,16 @@ sidebar:
   order: 4
 ---
 
-DAG workflow node는 사람이 게이트를 승인하거나 거절할 때까지 워크플로 실행을 일시 중지하는 `approval` 필드를 지원합니다. approval node를 사용하면 AI 기반 노드 사이에 사람 검토 단계를 넣을 수 있습니다. 예를 들어 비용이 큰 구현 작업을 시작하기 전에 생성된 계획을 검토할 수 있습니다.
+DAG workflow node는 사람이 게이트를 승인하거나 거절할 때까지 실행을 일시 중지하는 `approval` 필드를 지원합니다. `approval` node를 사용하면 AI 기반 node 사이에 사람 검토 단계를 넣을 수 있습니다. 예를 들어 비용이 큰 구현 작업을 시작하기 전에 생성된 계획을 검토할 수 있습니다.
 
 ## 빠른 시작
 
-> **Web UI 사용자:** workflow 수준에 `interactive: true`를 추가하세요. 이 값이 없으면 workflow가 background worker로 dispatch되어 approval gate 메시지가 chat window에 표시되지 않습니다. [Web Execution Mode](/guides/authoring-workflows/#web-execution-mode)를 참고하세요.
+> **Web UI 사용자:** workflow 수준에 `interactive: true`를 추가하세요. 이 값이 없으면 workflow가 background worker로 dispatch되어 approval gate 메시지가 chat window에 표시되지 않습니다. [Web 실행 모드](/guides/authoring-workflows/#web-execution-mode)를 참고하세요.
 
 ```yaml
 name: plan-approve-implement
 description: Plan, get approval, then implement
-interactive: true   # Required for Web UI: ensures approval gates appear in chat
+interactive: true   # Web UI에서 approval gate가 chat에 표시되도록 필요
 
 nodes:
   - id: plan
@@ -40,37 +40,37 @@ nodes:
 
 ## 동작 방식
 
-1. **Pause**: executor가 workflow run status를 `paused`로 설정하고 approval context(node ID와 message)를 run metadata에 저장합니다.
-2. **Notify**: approval prompt와 승인/거절 방법이 담긴 메시지를 사용자에게 보냅니다.
-3. **Wait**: 사용자가 조치를 취할 때까지 workflow는 paused 상태로 유지됩니다. paused run은 worktree path guard를 막으므로 같은 경로에서 다른 workflow가 시작될 수 없습니다.
-4. **Approve**: 사용자가 승인하면 approval node에 대한 `node_completed` event가 기록되고 run이 재개 가능한 상태로 전환됩니다. 자연어 메시지(권장)와 CLI는 즉시 auto-resume됩니다. 명시적인 `/workflow approve` command는 승인을 기록합니다. 재개하려면 후속 메시지를 보내세요.
-5. **Reject**: 사용자가 거절합니다.
+1. **일시 중지**: executor가 workflow run status를 `paused`로 설정하고 approval context(node ID와 message)를 run metadata에 저장합니다.
+2. **알림 전송**: approval prompt와 승인/거절 방법이 담긴 메시지를 사용자에게 보냅니다.
+3. **대기**: 사용자가 조치를 취할 때까지 workflow는 paused 상태로 유지됩니다. paused run은 worktree path guard를 잡고 있으므로 같은 경로에서 다른 workflow가 시작될 수 없습니다.
+4. **승인**: 사용자가 승인하면 approval node에 대한 `node_completed` event가 기록되고 run이 재개 가능한 상태로 전환됩니다. 자연어 메시지(권장)와 CLI는 즉시 auto-resume됩니다. 명시적인 `/workflow approve` command는 승인을 기록합니다. 재개하려면 후속 메시지를 보내세요.
+5. **거절**: 사용자가 거절합니다.
    - **`on_reject`가 없을 때**: workflow가 즉시 취소됩니다.
    - **`on_reject`가 있을 때**: executor가 `$REJECTION_REASON`을 치환한 뒤 `on_reject.prompt`를 AI로 실행하고, 같은 gate에서 다시 일시 중지합니다. 사용자가 승인하거나 `on_reject.max_attempts`에 도달할 때까지 반복되며, 최대 횟수에 도달하면 workflow가 취소됩니다.
 
-## YAML Schema
+## YAML 스키마
 
 ```yaml
 - id: gate-name
   approval:
     message: "Human-readable prompt shown to the user"
-    capture_response: true    # optional: store comment as $gate-name.output
-    on_reject:                # optional: AI rework on rejection instead of cancel
+    capture_response: true    # 선택: comment를 $gate-name.output으로 저장
+    on_reject:                # 선택: 거절 시 cancel 대신 AI 재작업 실행
       prompt: "Fix based on feedback: $REJECTION_REASON"
-      max_attempts: 3         # optional: default 3, range 1–10
-  depends_on: [upstream-node]  # optional
-  when: "$plan.output != ''"   # optional condition
-  trigger_rule: all_success    # optional (default: all_success)
+      max_attempts: 3         # 선택: default 3, 범위 1-10
+  depends_on: [upstream-node]  # 선택
+  when: "$plan.output != ''"   # 선택 조건
+  trigger_rule: all_success    # 선택(default: all_success)
 ```
 
 ### 필드
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `approval.message` | string | Yes | workflow가 일시 중지될 때 사용자에게 표시되는 메시지 |
-| `approval.capture_response` | boolean | No | `true`이면 사용자의 approval comment가 downstream node에서 사용할 수 있도록 `$<node-id>.output`에 저장됩니다. 기본값: `false` |
-| `approval.on_reject.prompt` | string | No | 사용자가 거절했을 때 AI로 실행할 prompt template입니다. `$REJECTION_REASON`은 reject reason으로 치환됩니다. 실행 후 workflow는 같은 gate에서 다시 일시 중지됩니다 |
-| `approval.on_reject.max_attempts` | integer | No | workflow가 취소되기 전 on_reject prompt가 실행될 수 있는 최대 횟수입니다. 범위: 1–10. 기본값: 3 |
+| 필드 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `approval.message` | string | 예 | workflow가 일시 중지될 때 사용자에게 표시되는 메시지 |
+| `approval.capture_response` | boolean | 아니요 | `true`이면 사용자의 approval comment가 downstream node에서 사용할 수 있도록 `$<node-id>.output`에 저장됩니다. 기본값: `false` |
+| `approval.on_reject.prompt` | string | 아니요 | 사용자가 거절했을 때 AI로 실행할 prompt template입니다. `$REJECTION_REASON`은 reject reason으로 치환됩니다. 실행 후 workflow는 같은 gate에서 다시 일시 중지됩니다 |
+| `approval.on_reject.max_attempts` | integer | 아니요 | workflow가 취소되기 전 `on_reject.prompt`가 실행될 수 있는 최대 횟수입니다. 범위: 1-10. 기본값: 3 |
 
 Approval node는 AI agent를 호출하지 않으므로 AI 전용 필드(`model`, `provider`, `context`, `output_format`, `allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`, `idle_timeout`)를 지원하지 않습니다. (`on_reject.prompt`는 workflow의 default provider를 사용하는 별도 AI node로 실행됩니다.)
 
@@ -80,12 +80,12 @@ Approval node는 AI agent를 호출하지 않으므로 AI 전용 필드(`model`,
 
 ### 자연어(권장)
 
-같은 대화에 답변을 입력하기만 하면 됩니다. 시스템은 paused workflow를 감지하고 메시지를 approval response로 처리합니다.
+같은 대화에 답변을 입력하기만 하면 됩니다. HarneesLab은 paused workflow를 감지하고 메시지를 approval response로 처리합니다.
 
 ```
 User: "Looks good, but add error handling for the edge cases"
-→ System auto-approves, resumes workflow with your message as $gate.output
-  (only if capture_response: true is set)
+-> HarneesLab이 자동 승인하고, 이 메시지를 $gate.output으로 사용해 workflow를 재개합니다
+   (capture_response: true일 때만 해당)
 ```
 
 이 방식은 모든 플랫폼(Web, Slack, Telegram, Discord, GitHub)에서 동작합니다.
@@ -97,15 +97,15 @@ User: "Looks good, but add error handling for the edge cases"
 CLI는 non-interactive 방식이므로 명시적인 command를 사용합니다.
 
 ```bash
-# Approve (resumes the workflow immediately)
-bun run cli workflow approve <run-id>
-bun run cli workflow approve <run-id> --comment "Looks good, proceed"
+# 승인(즉시 workflow 재개)
+hlab workflow approve <run-id>
+hlab workflow approve <run-id> --comment "Looks good, proceed"
 
-# Reject
-# Without on_reject: cancels the workflow
-# With on_reject: records feedback, triggers AI rework, re-pauses
-bun run cli workflow reject <run-id>
-bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
+# 거절
+# on_reject가 없으면 workflow를 취소
+# on_reject가 있으면 feedback을 기록하고 AI 재작업 후 다시 일시 중지
+hlab workflow reject <run-id>
+hlab workflow reject <run-id> --reason "Plan needs more test coverage"
 ```
 
 ### 명시적 Commands(모든 플랫폼)
@@ -122,18 +122,18 @@ Paused workflow는 dashboard에 amber pulsing badge로 표시됩니다. workflow
 ### REST API
 
 ```bash
-# Approve
+# 승인
 curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/approve \
   -H "Content-Type: application/json" \
   -d '{"comment": "Approved"}'
 
-# Reject
+# 거절
 curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/reject \
   -H "Content-Type: application/json" \
   -d '{"reason": "Needs revision"}'
 ```
 
-## Downstream Output
+## 하위 node 출력
 
 기본적으로 사용자의 approval comment는 downstream에서 **사용할 수 없습니다**. `$<node-id>.output`은 빈 문자열입니다. comment를 node output으로 캡처하려면 `capture_response: true`를 설정하세요.
 
@@ -142,7 +142,7 @@ nodes:
   - id: gate
     approval:
       message: "Any special instructions for implementation?"
-      capture_response: true   # Makes the user's comment available as $gate.output
+      capture_response: true   # 사용자 comment를 $gate.output으로 사용할 수 있게 함
     depends_on: [plan]
 
   - id: implement
@@ -180,7 +180,7 @@ nodes:
 3. `rejection_count < max_attempts`이면 `on_reject.prompt`가 AI로 실행되고 workflow가 다시 일시 중지됩니다
 4. `rejection_count >= max_attempts`이면 workflow가 취소됩니다
 
-## Edge Cases
+## 예외 상황
 
 - **여러 approval node**: 지원됩니다. 각 node가 workflow를 독립적으로 일시 중지합니다.
 - **병렬 layer의 approval**: 같은 layer의 다른 node는 정상적으로 완료됩니다. workflow는 layer boundary에서 일시 중지됩니다.

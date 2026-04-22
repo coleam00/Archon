@@ -11,7 +11,7 @@ sidebar:
 
 DAG workflow node는 완료 조건을 만족할 때까지 AI prompt를 반복 실행하는 `loop` 필드를 지원합니다. 각 iteration은 파일 읽기, 코드 작성, 명령 실행, output 생성을 할 수 있는 완전한 AI agent session입니다.
 
-loop node는 자율적인 다단계 작업에 사용합니다. 예를 들어 PRD의 N개 story를 구현하거나, validation이 통과할 때까지 design을 반복 개선하거나, 품질 기준을 만족할 때까지 output을 다듬을 수 있습니다.
+`loop` node는 자율적인 다단계 작업에 사용합니다. 예를 들어 PRD의 N개 story를 구현하거나, validation이 통과할 때까지 design을 반복 개선하거나, 품질 기준을 만족할 때까지 output을 다듬을 수 있습니다.
 
 ## 빠른 시작
 
@@ -50,7 +50,7 @@ loop node는 다음 조건 중 하나가 만족될 때까지 prompt를 반복합
 
 1. **LLM completion signal** — AI가 `<promise>SIGNAL</promise>`을 output하고 SIGNAL이 `until` 값과 일치합니다
 2. **결정적 bash check** — `until_bash` script가 exit code 0으로 종료됩니다
-3. **Max iterations reached** — 최대 반복 횟수에 도달하면 node가 명확한 error와 함께 실패합니다
+3. **최대 iteration 도달** — 최대 반복 횟수에 도달하면 node가 명확한 error와 함께 실패합니다
 
 각 iteration은 tool access를 가진 완전한 AI agent invocation입니다. iteration 사이에서 executor는 workflow cancellation 여부를 확인합니다.
 
@@ -59,23 +59,23 @@ loop node는 다음 조건 중 하나가 만족될 때까지 prompt를 반복합
 ```yaml
 - id: my-loop
   loop:
-    prompt: "..."           # Required. The prompt sent each iteration.
-    until: COMPLETE         # Required. Completion signal string.
-    max_iterations: 10      # Required. Hard limit — node fails if exceeded.
-    fresh_context: true     # Optional. Default: false.
-    until_bash: "..."       # Optional. Bash script checked after each iteration.
-    interactive: true       # Optional. Default: false. Pause after each non-completing
-                            # iteration for user input via /workflow approve.
-    gate_message: "..."     # Required when interactive: true. Message shown to the
-                            # user at each pause with the run ID and approve command.
+    prompt: "..."           # 필수. 각 iteration에 보낼 prompt.
+    until: COMPLETE         # 필수. Completion signal string.
+    max_iterations: 10      # 필수. 초과하면 node 실패.
+    fresh_context: true     # 선택. Default: false.
+    until_bash: "..."       # 선택. 각 iteration 뒤에 확인할 bash script.
+    interactive: true       # 선택. Default: false. 완료되지 않은 iteration 뒤에
+                            # /workflow approve 입력을 기다림.
+    gate_message: "..."     # interactive: true일 때 required. 각 pause마다 run ID와
+                            # approve command와 함께 사용자에게 표시할 메시지.
 ```
 
 ### `prompt`
 
 각 iteration마다 AI에 보내는 prompt text입니다. 모든 표준 variable substitution을 지원합니다.
 
-| Variable | Value |
-|----------|-------|
+| 변수 | 값 |
+|------|----|
 | `$ARGUMENTS` / `$USER_MESSAGE` | 원래 user message |
 | `$ARTIFACTS_DIR` | Workflow artifacts directory |
 | `$BASE_BRANCH` | Repository base branch |
@@ -100,16 +100,17 @@ loop node는 다음 조건 중 하나가 만족될 때까지 prompt를 반복합
 강제 안전 한도입니다. completion signal 없이 이 횟수에 도달하면 node는 성공이 아니라 **실패**합니다. 이를 통해 runaway loop가 token을 무기한 소모하는 일을 막습니다.
 
 작업 범위에 따라 선택하세요.
-- 단순 refinement loop: 3–5
-- Multi-story implementation: 10–15
-- 장시간 실행되는 autonomous agent: 15–20
+
+- 단순 refinement loop: 3-5
+- Multi-story implementation: 10-15
+- 장시간 실행되는 autonomous agent: 15-20
 
 ### `fresh_context`
 
 iteration 사이의 session continuity를 제어합니다.
 
-| Value | Behavior | Use when |
-|-------|----------|----------|
+| 값 | 동작 | 사용 시점 |
+|----|------|-----------|
 | `true` | 각 iteration이 fresh AI session으로 시작합니다. 이전 iteration 기억이 없습니다. | 작업 상태가 disk(files, git)에 있을 때 사용합니다. 긴 loop에서 context window exhaustion을 방지합니다. |
 | `false` (default) | session이 이어집니다. 각 iteration이 이전 conversation을 resume합니다. | agent가 이전에 시도한 내용을 기억해야 하는 iterative refinement에 사용합니다. |
 
@@ -129,7 +130,7 @@ loop:
 
 test suite, lint check, build success처럼 결정적인 완료 기준에 유용합니다. bash script는 `prompt`와 같은 variable substitution(`$ARTIFACTS_DIR`, `$nodeId.output` 등)을 지원합니다. 참고: `$nodeId.output` 값은 `until_bash`에 치환될 때 shell-escaped 처리됩니다.
 
-## Patterns
+## 패턴
 
 ### Stateless agent(Ralph pattern)
 
@@ -200,7 +201,7 @@ AI가 completion을 signal하거나 bash check가 성공하면 loop가 종료됩
 - `idle_timeout` — iteration별 timeout(기본값: 30분)
 - `$nodeId.output` — downstream node는 마지막 iteration의 output을 받습니다
 
-### `interactive` and `gate_message`
+### `interactive`와 `gate_message`
 
 `interactive: true`를 설정하면 iteration 사이에 loop를 일시 중지하고 사람 입력을 기다립니다. 완료되지 않은 각 iteration 뒤에 executor는 다음을 수행합니다.
 
@@ -215,7 +216,7 @@ AI가 completion을 signal하거나 bash check가 성공하면 loop가 종료됩
 ```yaml
 name: guided-refine
 description: Refine output with human review between iterations.
-interactive: true            # Required at workflow level for interactive loops
+interactive: true            # interactive loop에는 workflow level에서도 필요
 nodes:
   - id: refine
     loop:
@@ -244,20 +245,20 @@ nodes:
 
 loop executor는 standard node executor와 독립적으로 자체 AI session을 관리합니다. hooks, MCP, skills, tool restriction이 필요하다면 iterative logic을 command file로 감싸는 command node 사용을 고려하세요.
 
-## Output
+## 출력
 
 loop node의 output(downstream node에서 `$nodeId.output`으로 사용 가능)은 **마지막 iteration의 output만**입니다. 모든 iteration을 이어 붙인 값이 아닙니다.
 
 iteration 전체의 결과를 누적해야 한다면 `$ARTIFACTS_DIR`의 file에 기록하고 downstream node가 그곳에서 읽게 하세요.
 
-## Error Handling
+## 오류 처리
 
-| Scenario | Behavior |
-|----------|----------|
-| Iteration throws an error | Node가 즉시 실패합니다(추가 iteration 없음) |
-| Max iterations exceeded | Node가 설명이 포함된 error와 함께 실패합니다 |
-| Workflow cancelled | iteration 사이에서 감지되며 node가 중지됩니다 |
-| Idle timeout per iteration | 수집된 output으로 iteration이 완료되고 loop는 다음 iteration으로 진행됩니다 |
+| 상황 | 동작 |
+|------|------|
+| Iteration이 error를 throw함 | Node가 즉시 실패합니다(추가 iteration 없음) |
+| `max_iterations` 초과 | Node가 설명이 포함된 error와 함께 실패합니다 |
+| Workflow가 취소됨 | iteration 사이에서 감지되며 node가 중지됩니다 |
+| iteration별 idle timeout | 수집된 output으로 iteration이 완료되고 loop는 다음 iteration으로 진행됩니다 |
 | `retry` configured on node | parse time에 거절됩니다. workflow가 load에 실패합니다 |
 
 ## 함께 보기
