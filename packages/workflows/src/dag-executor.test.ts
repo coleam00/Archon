@@ -5822,3 +5822,214 @@ describe('executeDagWorkflow -- script nodes', () => {
     execSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// MCP plugin-noise filtering helpers
+// ---------------------------------------------------------------------------
+
+describe('parseMcpFailureServerNames', () => {
+  it('extracts entries (name + segment) from a well-formed message', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    const entries = parseMcpFailureServerNames(
+      'MCP server connection failed: telegram (disconnected), github (timeout)'
+    );
+    expect(entries).toEqual([
+      { name: 'telegram', segment: 'telegram (disconnected)' },
+      { name: 'github', segment: 'github (timeout)' },
+    ]);
+  });
+
+  it('returns empty array for unrelated messages', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('⚠️ Something else')).toEqual([]);
+    expect(parseMcpFailureServerNames('')).toEqual([]);
+  });
+
+  it('deduplicates repeated entries (first segment wins)', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    const entries = parseMcpFailureServerNames(
+      'MCP server connection failed: foo (a), foo (b), bar (c)'
+    );
+    expect(entries).toEqual([
+      { name: 'foo', segment: 'foo (a)' },
+      { name: 'bar', segment: 'bar (c)' },
+    ]);
+  });
+
+  it('handles a single entry without status parens gracefully', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('MCP server connection failed: solo')).toEqual([
+      { name: 'solo', segment: 'solo' },
+    ]);
+  });
+
+  it('drops empty segments from trailing/leading commas', async () => {
+    const { parseMcpFailureServerNames } = await import('./dag-executor');
+    expect(parseMcpFailureServerNames('MCP server connection failed: a (x), , b (y)')).toEqual([
+      { name: 'a', segment: 'a (x)' },
+      { name: 'b', segment: 'b (y)' },
+    ]);
+  });
+});
+
+describe('loadConfiguredMcpServerNames', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `mcp-names-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('returns empty set when nodeMcpPath is undefined', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const names = await loadConfiguredMcpServerNames(undefined, testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns server names for a valid JSON config (relative path)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(
+      join(testDir, 'mcp.json'),
+      JSON.stringify({ foo: { command: 'x' }, bar: { command: 'y' } })
+    );
+    const names = await loadConfiguredMcpServerNames('mcp.json', testDir);
+    expect([...names].sort()).toEqual(['bar', 'foo']);
+  });
+
+  it('returns server names for an absolute path', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const absolutePath = join(testDir, 'abs.json');
+    await writeFile(absolutePath, JSON.stringify({ baz: {} }));
+    const names = await loadConfiguredMcpServerNames(absolutePath, '/nonexistent/cwd');
+    expect([...names]).toEqual(['baz']);
+  });
+
+  it('returns empty set when file is missing (no crash)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    const names = await loadConfiguredMcpServerNames('missing.json', testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns empty set for invalid JSON (provider surfaces its own error)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(join(testDir, 'broken.json'), '{ not-json');
+    const names = await loadConfiguredMcpServerNames('broken.json', testDir);
+    expect(names.size).toBe(0);
+  });
+
+  it('returns empty set when JSON is an array (not an object of servers)', async () => {
+    const { loadConfiguredMcpServerNames } = await import('./dag-executor');
+    await writeFile(join(testDir, 'arr.json'), '["foo","bar"]');
+    const names = await loadConfiguredMcpServerNames('arr.json', testDir);
+    expect(names.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCP plugin-noise filtering — end-to-end through executeDagWorkflow
+// ---------------------------------------------------------------------------
+
+describe('executeDagWorkflow -- MCP failure filtering', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-mcp-filter-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'cmd prompt');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  async function runWithSystemChunk(
+    systemContent: string,
+    nodeMcpPath?: string
+  ): Promise<IWorkflowPlatform> {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'system', content: systemContent };
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'sess' };
+    });
+
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      createMockDeps(),
+      platform,
+      'conv-mcp-filter',
+      testDir,
+      {
+        name: 'mcp-filter-test',
+        nodes: [{ id: 'review', command: 'my-cmd', ...(nodeMcpPath ? { mcp: nodeMcpPath } : {}) }],
+      },
+      makeWorkflowRun(),
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    return platform;
+  }
+
+  function mcpMessages(platform: IWorkflowPlatform): string[] {
+    const calls = (platform.sendMessage as Mock<typeof platform.sendMessage>).mock.calls;
+    return calls
+      .map(c => c[1] as string)
+      .filter(m => m.startsWith('MCP server connection failed:') || m.startsWith('⚠️'));
+  }
+
+  it('forwards only workflow-configured failures and preserves status detail', async () => {
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ 'workflow-server': {} }));
+    const platform = await runWithSystemChunk(
+      'MCP server connection failed: workflow-server (timeout), telegram (disconnected)',
+      'mcp.json'
+    );
+
+    const sent = mcpMessages(platform);
+    expect(sent).toEqual(['MCP server connection failed: workflow-server (timeout)']);
+  });
+
+  it('suppresses MCP message entirely when all failures are user plugins', async () => {
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify({ 'workflow-server': {} }));
+    const platform = await runWithSystemChunk(
+      'MCP server connection failed: telegram (disconnected), notion (timeout)',
+      'mcp.json'
+    );
+
+    expect(mcpMessages(platform)).toEqual([]);
+  });
+
+  it('suppresses everything when node has no mcp: config (all failures are plugin noise)', async () => {
+    const platform = await runWithSystemChunk(
+      'MCP server connection failed: telegram (disconnected)'
+    );
+
+    expect(mcpMessages(platform)).toEqual([]);
+  });
+
+  it('forwards ⚠️ provider warnings verbatim', async () => {
+    const platform = await runWithSystemChunk('⚠️ Haiku does not support MCP');
+
+    expect(mcpMessages(platform)).toEqual(['⚠️ Haiku does not support MCP']);
+  });
+});

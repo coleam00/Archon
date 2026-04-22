@@ -5,6 +5,8 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
+import { readFile } from 'fs/promises';
+import { isAbsolute, resolve as resolvePath } from 'path';
 import { execFileAsync } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
@@ -75,6 +77,69 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.dag-executor');
   return cachedLog;
+}
+
+const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
+
+/** A failed MCP server entry parsed from the SDK message. `segment` is the
+ *  original substring (e.g. `"telegram (disconnected)"`) so callers can
+ *  reconstruct a filtered message without losing the status detail. */
+export interface McpFailureEntry {
+  name: string;
+  segment: string;
+}
+
+/**
+ * Parse the SDK's "MCP server connection failed: a (status), b (status)"
+ * message. Best-effort — malformed or prefix-free messages return `[]`.
+ * Entries are ordered and deduped by name; the segment of the first
+ * occurrence wins.
+ */
+export function parseMcpFailureServerNames(message: string): McpFailureEntry[] {
+  if (!message.startsWith(MCP_FAILURE_PREFIX)) return [];
+  const seen = new Set<string>();
+  const entries: McpFailureEntry[] = [];
+  for (const raw of message.slice(MCP_FAILURE_PREFIX.length).split(', ')) {
+    const segment = raw.trim();
+    const name = segment.split(' (')[0]?.trim();
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      entries.push({ name, segment });
+    }
+  }
+  return entries;
+}
+
+/**
+ * Load the set of MCP server names that a node's `mcp:` config file declares.
+ *
+ * Returns an empty set when no `mcp:` is configured or when the file can't be
+ * read/parsed. Used to distinguish workflow-configured failures (surface to
+ * user) from user-plugin failures (silent debug log). We intentionally do not
+ * validate or env-expand here — the provider owns full loading and will
+ * surface its own parse errors via the warning channel if the file is broken.
+ *
+ * Read failures are debug-logged so a transient I/O error (EMFILE/EBUSY) that
+ * leaves us with an empty set — and silently reclassifies a real workflow-MCP
+ * failure as plugin noise — is at least observable.
+ */
+export async function loadConfiguredMcpServerNames(
+  nodeMcpPath: string | undefined,
+  cwd: string
+): Promise<Set<string>> {
+  if (!nodeMcpPath) return new Set();
+  const fullPath = isAbsolute(nodeMcpPath) ? nodeMcpPath : resolvePath(cwd, nodeMcpPath);
+  try {
+    const raw = await readFile(fullPath, 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(Object.keys(parsed as Record<string, unknown>));
+  } catch (err) {
+    getLog().debug({ err, nodeMcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
+    return new Set();
+  }
 }
 
 /** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
@@ -488,6 +553,8 @@ async function executeNodeInternal(
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
 
+  const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
+
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, node.command ?? '<inline>');
 
@@ -815,13 +882,43 @@ async function executeNodeInternal(
         }
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
-        // Forward provider warnings (⚠️) and MCP connection failures to the user.
-        // Providers yield system chunks for user-actionable issues (missing env vars,
-        // Haiku+MCP, structured output failures, etc.)
-        if (
-          msg.content.startsWith('MCP server connection failed:') ||
-          msg.content.startsWith('⚠️')
-        ) {
+        // Providers yield system chunks for user-actionable issues (missing env
+        // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
+        // chunks need filtering: user-level plugin MCPs inherited from
+        // `~/.claude/` (e.g. `telegram`) routinely fail to connect inside the
+        // headless subprocess and aren't actionable for the workflow author.
+        // Other warnings (⚠️) are always actionable and surface verbatim.
+        if (msg.content.startsWith(MCP_FAILURE_PREFIX)) {
+          const failedEntries = parseMcpFailureServerNames(msg.content);
+          const workflowFailures = failedEntries.filter(e => configuredMcpNames.has(e.name));
+          const pluginFailures = failedEntries.filter(e => !configuredMcpNames.has(e.name));
+
+          if (workflowFailures.length > 0) {
+            const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.map(e => e.segment).join(', ')}`;
+            getLog().warn(
+              { nodeId: node.id, systemContent: filteredMsg },
+              'dag.provider_warning_forwarded'
+            );
+            const delivered = await safeSendMessage(
+              platform,
+              conversationId,
+              filteredMsg,
+              nodeContext
+            );
+            if (!delivered) {
+              getLog().error(
+                { nodeId: node.id, workflowRunId: workflowRun.id },
+                'dag.provider_warning_delivery_failed'
+              );
+            }
+          }
+          if (pluginFailures.length > 0) {
+            getLog().debug(
+              { nodeId: node.id, pluginFailures: pluginFailures.map(e => e.name) },
+              'dag.mcp_plugin_connection_suppressed'
+            );
+          }
+        } else if (msg.content.startsWith('⚠️')) {
           getLog().warn(
             { nodeId: node.id, systemContent: msg.content },
             'dag.provider_warning_forwarded'
