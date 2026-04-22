@@ -966,9 +966,10 @@ describe('workflowRunCommand', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('Cannot create worktree: repository registration failed.');
     expect(error.message).toContain('EACCES: permission denied');
-    expect(error.message).toContain(
-      'Check your Archon workspace registration under /home/test/.archon/workspaces'
-    );
+    // Path-separator-agnostic check: on Windows path.join normalizes to `\`,
+    // on POSIX to `/`. Assert the hint prefix + the final segment separately.
+    expect(error.message).toContain('Check your Archon workspace registration under');
+    expect(error.message).toMatch(/workspaces\b/);
     expect(error.message).not.toContain('Remove the stale workspace entry');
   });
 
