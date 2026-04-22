@@ -57,17 +57,18 @@ function getLog(): ReturnType<typeof createLogger> {
  * Typed wrapper around Pi's `getModel` for a runtime-string provider/model
  * pair. Pi's getModel signature constrains `TModelId` to
  * `keyof MODELS[TProvider]`, which isn't knowable from a runtime string —
- * the cast through `unknown` is the only way to bypass it. Isolating that
- * escape hatch behind one searchable name keeps it auditable. Takes
- * `getModel` as a parameter because the Pi SDK is loaded dynamically (see
- * the header comment on this file for why).
+ * the local `GetModelFn` alias is the narrowest shape that still lets us
+ * bypass that constraint. Isolating the escape hatch behind one searchable
+ * name keeps it auditable. Takes `getModel` as a parameter because the Pi
+ * SDK is loaded dynamically (see the header comment on this file for why).
  */
+type GetModelFn = (provider: string, modelId: string) => Model<Api> | undefined;
 function lookupPiModel(
-  getModel: unknown,
+  getModel: GetModelFn,
   provider: string,
   modelId: string
 ): Model<Api> | undefined {
-  return (getModel as (p: string, m: string) => Model<Api> | undefined)(provider, modelId);
+  return getModel(provider, modelId);
 }
 
 /**
@@ -100,11 +101,12 @@ ${JSON.stringify(schema, null, 2)}`;
  * (no reuse) with in-memory auth/session/settings, so the server never
  * touches `~/.pi/` and concurrent calls don't collide.
  *
- * v1 capabilities are all false (see `capabilities.ts`): sessionResume,
- * thinkingControl, skills, mcp, etc. map to Pi features but require
- * intentional wiring before they can be declared. Under-declaring is
- * honest; the dag-executor emits warnings for any nodeConfig field not
- * supported.
+ * Capabilities (see `capabilities.ts` for the canonical list): Pi declares
+ * `sessionResume`, `skills`, `toolRestrictions`, `structuredOutput`,
+ * `envInjection`, `effortControl`, and `thinkingControl`. Features Pi does
+ * not currently support through Archon (`mcp`, `hooks`, `agents`,
+ * `costControl`, `fallbackModel`, `sandbox`) stay off; the dag-executor
+ * surfaces a warning for any unsupported nodeConfig field.
  */
 export class PiProvider implements IAgentProvider {
   async *sendQuery(
@@ -178,7 +180,8 @@ export class PiProvider implements IAgentProvider {
 
     // 2. Look up the Model via Pi's static catalog. `lookupPiModel` returns
     //    undefined when not found; we guard explicitly below.
-    const model = lookupPiModel(piAi.getModel, parsed.provider, parsed.modelId);
+    // Cast to the runtime-string-friendly shape — see `lookupPiModel`'s docblock.
+    const model = lookupPiModel(piAi.getModel as GetModelFn, parsed.provider, parsed.modelId);
     if (!model) {
       throw new Error(
         `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +

@@ -8,9 +8,12 @@
  * any static import chain from `@archon/providers` into the Pi SDK crashes
  * archon at startup with ENOENT before any command runs (v0.3.7 symptom).
  *
- * This test mocks `@mariozechner/pi-coding-agent` and `@mariozechner/pi-ai`
- * so that resolving either from a module's static import chain throws.
- * Registration + provider instantiation must not trigger those mocks.
+ * Detection strategy: replace both Pi SDK packages with `mock.module`
+ * factories that flip a boolean the first time something resolves them.
+ * Walk the same registration path the CLI and server take and assert
+ * neither flag tipped. A throwing factory would abort the failing import
+ * before the `expect` calls run, producing a crash at resolution time with
+ * no assertion context — counters keep failures actionable.
  *
  * Runs in its own `bun test` invocation because Bun's `mock.module` is
  * process-wide and would poison `provider.test.ts`, which installs benign
@@ -18,13 +21,7 @@
  */
 import { expect, mock, test } from 'bun:test';
 
-// Track whether the Pi SDK packages were resolved during module init. Mock
-// factories run when something imports the module — if our lazy-load is
-// working, registration + instantiation must not trigger either factory.
-// We don't throw here because Bun's mock.module runs the factory even for
-// type-only imports during dependency resolution; throwing would poison
-// unrelated import paths. Counter-based detection is sufficient and lets
-// the real test assertions produce actionable failures.
+// Counter-based detection — see the file header for why not `throw`.
 let piCodingAgentLoaded = false;
 let piAiLoaded = false;
 
