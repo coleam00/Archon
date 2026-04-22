@@ -482,17 +482,19 @@ The CLI is standalone, but if you also want to interact via Telegram, Slack, Dis
 
 ## Troubleshooting
 
-### "Cannot create worktree: not in a git repository" (but the repo exists)
+### "Cannot create worktree: repository registration failed" (stale workspace symlink)
 
-The real cause is usually a stale symlink from a previous Archon run with a different path. Look for this in the error output:
+This happens when `~/.archon/workspaces/<owner>/<repo>/source` is a symlink pointing at a previous checkout (common after moving or renaming the repo). The error message includes the exact cleanup path to follow:
 
 ```
-Source symlink at ~/.archon/workspaces/.../source already points to <old-path>, expected <new-path>
+Cannot create worktree: repository registration failed.
+Error: Source symlink at ~/.archon/workspaces/<owner>/<repo>/source already points to <old-path>, expected <new-path>
+Hint: Remove the stale workspace entry at ~/.archon/workspaces/<owner>/<repo> and retry, or use --no-worktree to skip isolation.
 ```
 
-Fix it by manually deleting the stale workspace folder at `~/.archon/workspaces/<github-user>/<repo-name>` and retrying the command.
+Follow the hint — delete the stale workspace folder and re-run, or pass `--no-worktree` to skip isolation for one run.
 
-> In the future, `archon isolation cleanup` will handle this automatically.
+> On Archon versions before this fix, the same root cause surfaced as the misleading "Cannot create worktree: not in a git repository" (even though the repo was valid). If you see that string, upgrade and you'll get the actionable message above.
 
 ---
 
