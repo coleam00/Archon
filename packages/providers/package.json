@@ -19,7 +19,6 @@
     "./registry": "./src/registry.ts"
   },
   "scripts": {
-<<<<<<< HEAD
     "test": "bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts && bun test src/claude/binary-resolver.test.ts && bun test src/claude/binary-resolver-dev.test.ts && bun test src/community/pi/model-ref.test.ts && bun test src/community/pi/config.test.ts && bun test src/community/pi/event-bridge.test.ts && bun test src/community/pi/options-translator.test.ts && bun test src/community/pi/session-resolver.test.ts && bun test src/community/pi/provider.test.ts && bun test src/community/pi/provider-lazy-load.test.ts && bun test src/community/copilot/config.test.ts && bun test src/community/copilot/binary-resolver.test.ts && bun test src/community/copilot/provider.test.ts && bun test src/community/copilot/tool-restrictions.test.ts && bun test src/community/copilot/mcp-translation.test.ts && bun test src/community/copilot/skills-translation.test.ts && bun test src/community/copilot/structured-output.test.ts && bun test src/community/copilot/provider-hardening.test.ts && bun test src/community/copilot/agents-translation.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
