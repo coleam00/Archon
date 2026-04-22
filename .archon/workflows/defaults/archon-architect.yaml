@@ -92,7 +92,8 @@ nodes:
 
       ## Output
 
-      Write a structured assessment to $ARTIFACTS_DIR/architecture-assessment.md with:
+      Produce a structured assessment as your final response (this node cannot
+      write files — the plan node consumes it via $analyze.output). Include:
       - Executive summary (3-5 sentences)
       - Top findings ranked by impact
       - For each finding: file, what's wrong, why it matters, estimated effort
@@ -245,7 +246,7 @@ nodes:
         echo "VALIDATION_STATUS: FAIL"
       fi
     depends_on: [simplify]
-    timeout: 300000
+    timeout: 1800000
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 6: FIX VALIDATION FAILURES (if any)
