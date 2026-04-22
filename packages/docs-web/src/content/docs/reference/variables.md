@@ -27,6 +27,7 @@ These variables are substituted by the workflow executor in all node types (`com
 | `$ISSUE_CONTEXT` | Same as `$CONTEXT` | Alias |
 | `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations |
 | `$REJECTION_REASON` | Reviewer feedback from an approval node rejection | Only available in `on_reject` prompts. Empty string elsewhere |
+| `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
 
 ### Context Variable Behavior
 

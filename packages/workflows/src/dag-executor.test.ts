@@ -3140,6 +3140,125 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(mockSendQueryDag.mock.calls.length).toBe(3);
     });
 
+    it('substitutes $LOOP_PREV_OUTPUT with previous iteration output (empty on iter 1)', async () => {
+      // Iteration 1 emits a distinctive output, iteration 2 emits the completion signal.
+      // We then assert the prompt sent to the AI: iteration 1 strips $LOOP_PREV_OUTPUT
+      // to empty, iteration 2 receives iteration 1's cleaned output.
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          yield { type: 'assistant', content: 'Iter1 output: 2 type errors in users.ts' };
+          yield { type: 'result', sessionId: 'loop-session-1' };
+        } else {
+          yield { type: 'assistant', content: 'All fixed. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'loop-session-2' };
+        }
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-prev-output',
+          nodes: [
+            {
+              id: 'fix-loop',
+              loop: {
+                prompt: 'Previous output: <<$LOOP_PREV_OUTPUT>>. Fix and emit COMPLETE.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                fresh_context: true,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      const promptIter1 = mockSendQueryDag.mock.calls[0][0] as string;
+      const promptIter2 = mockSendQueryDag.mock.calls[1][0] as string;
+      // Iteration 1: $LOOP_PREV_OUTPUT substitutes to empty string.
+      expect(promptIter1).toContain('Previous output: <<>>.');
+      // Iteration 2: receives iteration 1's cleaned output.
+      expect(promptIter2).toContain(
+        'Previous output: <<Iter1 output: 2 type errors in users.ts>>.'
+      );
+    });
+
+    it('strips <promise> tags from $LOOP_PREV_OUTPUT (uses cleaned output)', async () => {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          // Iteration 1 includes a non-completion XML tag in its output. The cleaned
+          // output (after stripCompletionTags) drops <promise>...</promise> blocks.
+          // We use a non-matching signal here so iteration 1 does NOT complete.
+          yield {
+            type: 'assistant',
+            content: 'Real work output. <promise>NOT_DONE_YET</promise>',
+          };
+          yield { type: 'result', sessionId: 'loop-session-1' };
+        } else {
+          yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'loop-session-2' };
+        }
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-prev-clean',
+          nodes: [
+            {
+              id: 'fix-loop',
+              loop: {
+                prompt: 'PREV=[$LOOP_PREV_OUTPUT]',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                fresh_context: true,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      const promptIter2 = mockSendQueryDag.mock.calls[1][0] as string;
+      // The previous-output payload must be the *cleaned* output — no <promise> tags.
+      expect(promptIter2).toContain('PREV=[Real work output.');
+      expect(promptIter2).not.toContain('<promise>');
+    });
+
     it('fails when max_iterations exceeded', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Still working...' };
