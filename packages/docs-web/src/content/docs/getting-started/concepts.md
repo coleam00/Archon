@@ -1,6 +1,6 @@
 ---
 title: 핵심 개념
-description: Archon의 핵심 개념 — workflow, node, command, isolation.
+description: HarneesLab의 핵심 개념 — workflow, node, command, isolation.
 category: getting-started
 audience: [user]
 sidebar:
@@ -29,7 +29,7 @@ nodes:
 
 의존성이 없는 node는 즉시 실행됩니다. 같은 의존성 계층에 있는 node들은 병렬로 실행됩니다. 즉, 독립적인 review node가 세 개 있는 workflow라면 세 node가 동시에 fan out되어 실행되고, 이후 세 node 모두에 의존하는 downstream node에서 다시 합류합니다.
 
-Archon에는 기본 workflow가 함께 제공됩니다. 사용할 수 있는 항목은 `hlab workflow list`로 확인하거나, 실제 예시는 `.archon/workflows/defaults/`에서 살펴볼 수 있습니다.
+HarneesLab에는 upstream Archon에서 이어받은 기본 workflow가 함께 제공됩니다. 사용할 수 있는 항목은 `hlab workflow list`로 확인하거나, 실제 예시는 `.archon/workflows/defaults/`에서 살펴볼 수 있습니다.
 
 ## Nodes
 
@@ -69,7 +69,7 @@ nodes:
 
 ## Commands
 
-**command**는 AI prompt template 역할을 하는 `.archon/commands/` 안의 markdown 파일입니다. workflow node가 `command: investigate-issue`를 참조하면, Archon은 `.archon/commands/investigate-issue.md`를 불러오고 변수를 치환한 뒤 결과를 AI에 보냅니다.
+**command**는 AI prompt template 역할을 하는 `.archon/commands/` 안의 markdown 파일입니다. workflow node가 `command: investigate-issue`를 참조하면, HarneesLab은 `.archon/commands/investigate-issue.md`를 불러오고 변수를 치환한 뒤 결과를 AI에 보냅니다.
 
 command는 variable substitution을 지원합니다. 가장 자주 쓰는 변수는 다음과 같습니다.
 
@@ -83,7 +83,7 @@ command는 variable substitution을 지원합니다. 가장 자주 쓰는 변수
 
 전체 목록은 [Variable Reference](/reference/variables/)를 참고하세요.
 
-Archon에는 investigation, implementation, code review 같은 일반적인 작업을 위한 기본 command가 함께 제공됩니다. `.archon/commands/`에 있는 repo-level command는 같은 이름의 bundled default를 override합니다.
+HarneesLab에는 investigation, implementation, code review 같은 일반적인 작업을 위한 기본 command가 함께 제공됩니다. `.archon/commands/`에 있는 repo-level command는 같은 이름의 bundled default를 override합니다.
 
 ## Isolation (Worktrees)
 

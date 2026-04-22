@@ -47,7 +47,7 @@ bun install
 - [GitHub CLI](https://cli.github.com/) (`gh`)
 - [Claude Code](https://claude.ai/code) (`claude`)
 
-## Claude Code가 필요합니다
+## Claude Code 설정
 
 HarneesLab은 Claude Code를 orchestration하지만, Claude Code를 함께 포함하지는 않습니다. Claude Code는 별도로 설치해야 합니다.
 
@@ -59,7 +59,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 irm https://claude.ai/install.ps1 | iex
 ```
 
-source install(`bun run`)은 `node_modules`를 통해 실행 파일을 자동으로 찾습니다. compiled binary(quick install, Homebrew)는 Claude Code 실행 파일 위치를 직접 지정해야 합니다.
+source install(`bun run`)은 `node_modules`를 통해 실행 파일을 자동으로 찾습니다. compiled HarneesLab binary(quick install, Homebrew)는 Claude Code 실행 파일 위치를 직접 지정해야 합니다.
 
 ```bash
 # After the native installer:
@@ -69,7 +69,7 @@ export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
 export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
 ```
 
-또는 `~/.archon/config.yaml`에 지속 설정으로 저장할 수 있습니다.
+또는 `~/.archon/config.yaml`에 지속 설정으로 저장할 수 있습니다. HarneesLab은 compatibility를 위해 이 기본 경로를 유지합니다.
 
 ```yaml
 assistants:
