@@ -380,15 +380,53 @@ Loop nodes iterate an AI prompt until a completion condition is met. Use them fo
     max_iterations: 10         # Required. Integer >= 1. Fails if exceeded
     fresh_context: true        # Optional. Default: false
     until_bash: "..."          # Optional. Exit 0 = complete
+    interactive: true          # Optional. Pauses between iterations for user input
+    gate_message: "..."        # Required when interactive: true
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `prompt` | string | Yes | Prompt template. Supports all variable substitution (`$ARGUMENTS`, `$nodeId.output`, etc.) |
+| `prompt` | string | Yes | Prompt template. Supports all variable substitution (`$ARGUMENTS`, `$nodeId.output`, `$LOOP_USER_INPUT`, etc.) |
 | `until` | string | Yes | Completion signal to detect in AI output |
 | `max_iterations` | number | Yes | Hard limit. Node **fails** if exceeded |
 | `fresh_context` | boolean | No | Default `false`. `true` = fresh AI session each iteration |
-| `until_bash` | string | No | Shell script run after each iteration. Exit 0 = complete |
+| `until_bash` | string | No | Shell script run after each iteration. Exit 0 = complete. Variable substitution applies; `$nodeId.output` IS shell-quoted here |
+| `interactive` | boolean | No | Default `false`. `true` = pause after each non-completing iteration for user feedback via `/workflow approve <id> <text>` |
+| `gate_message` | string | **Required when `interactive: true`** | Message shown to the user at each pause. Validated at parse time — a loop with `interactive: true` and no `gate_message` fails to load |
+
+### Interactive Loops
+
+Interactive loops pause between iterations so a human can provide feedback that feeds the next iteration. Use them for guided writing/refinement (e.g. PRD co-authoring, iterative design).
+
+```yaml
+name: guided-refine
+description: Refine an output with human feedback between iterations
+interactive: true                # REQUIRED at the workflow level for web UI
+
+nodes:
+  - id: refine
+    loop:
+      prompt: |
+        Review the current draft and improve it based on this feedback:
+        $LOOP_USER_INPUT
+
+        When the output is satisfactory, output: <promise>DONE</promise>
+      until: DONE
+      max_iterations: 5
+      interactive: true          # node level — enables the pause
+      gate_message: |
+        Review the output above. Reply with feedback, or type DONE to finish.
+```
+
+The flow:
+1. Iteration N runs. AI produces output.
+2. If AI signalled completion (`<promise>DONE</promise>`) or `until_bash` exited 0, loop ends.
+3. Otherwise: `gate_message` is sent to the user, workflow pauses (status = `paused`).
+4. User runs `archon workflow approve <run-id> "<their feedback>"` (or replies naturally in chat platforms).
+5. Iteration N+1 runs with `$LOOP_USER_INPUT` substituted to the user's feedback — but **only on that first resumed iteration**. Subsequent iterations in the same resumed session see `$LOOP_USER_INPUT` as empty string.
+6. Repeat.
+
+**Workflow-level `interactive: true` is required** for the gate message to reach the user on the web UI (otherwise the workflow dispatches to a background worker that can't deliver chat messages). The loader emits a warning if a node has `interactive: true` without workflow-level `interactive: true`.
 
 ### Completion Detection
 
