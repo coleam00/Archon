@@ -366,6 +366,148 @@ First iteration is always fresh regardless.
 
 ---
 
+## Approval Nodes
+
+Approval nodes **pause the workflow** until a human approves or rejects the gate. Use them to insert review steps between AI-driven nodes — for example, reviewing a generated plan before committing to expensive implementation work.
+
+### Configuration
+
+```yaml
+- id: review-gate
+  approval:
+    message: "Review the plan above before proceeding with implementation."
+    capture_response: false        # Optional. true = user's comment stored as $review-gate.output
+    on_reject:                     # Optional. AI rework on rejection instead of cancel
+      prompt: "Revise based on feedback: $REJECTION_REASON"
+      max_attempts: 3              # Range 1–10, default 3. After max, workflow is cancelled.
+  depends_on: [plan]
+```
+
+### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `approval.message` | **Yes** | The message shown to the user when the workflow pauses |
+| `approval.capture_response` | No | `true` = user's approval comment stored as `$<node-id>.output` for downstream nodes. Default: `false` (downstream `$<node-id>.output` is empty string) |
+| `approval.on_reject.prompt` | No | Prompt run via AI when the user rejects. `$REJECTION_REASON` is substituted with the reject reason. After running, the workflow re-pauses at the same gate |
+| `approval.on_reject.max_attempts` | No | Max times the on_reject prompt runs before the workflow is cancelled. Range: 1–10. Default: 3 |
+
+### Web UI Requirement
+
+Approval gates delivered on the Web UI require `interactive: true` at the **workflow level** — otherwise the workflow dispatches to a background worker and the gate message never reaches the user's chat window.
+
+```yaml
+name: plan-approve-implement
+interactive: true   # REQUIRED for approval gates on web UI
+nodes:
+  - id: plan
+    command: plan-feature
+  - id: review-gate
+    approval:
+      message: "Approve the plan to proceed."
+    depends_on: [plan]
+  - id: implement
+    command: implement
+    depends_on: [review-gate]
+```
+
+### Approve and Reject Commands
+
+```bash
+# From the CLI
+archon workflow approve <run-id>
+archon workflow approve <run-id> --comment "looks good"
+archon workflow reject <run-id>
+archon workflow reject <run-id> --reason "plan needs more test coverage"
+
+# Cross-platform (Slack / Telegram / Web / GitHub chat)
+/workflow approve <run-id> <optional comment>
+/workflow reject <run-id> <optional reason>
+
+# Natural language (all platforms except CLI — auto-detects paused workflow)
+User: "Looks good, proceed"
+# → auto-approves. With capture_response: true, the message becomes $review-gate.output
+```
+
+### What Does NOT Work on Approval Nodes
+
+AI-specific fields (`model`, `provider`, `hooks`, `mcp`, `skills`, `output_format`, `allowed_tools`, `denied_tools`, `context`, `effort`, `thinking`, etc.) are accepted by the parser but emit a loader warning and are ignored — no AI runs during the pause. (Note: `on_reject.prompt` DOES run AI, using the workflow's default provider/model.)
+
+`retry`, `when`, `trigger_rule`, `depends_on`, `idle_timeout` all work.
+
+---
+
+## Cancel Nodes
+
+Cancel nodes **terminate the workflow run** with a reason string. Useful for guarded exits — a `cancel:` node with a `when:` condition stops the workflow cleanly when preconditions aren't met.
+
+### Configuration
+
+```yaml
+- id: gate-branch
+  cancel: "Refusing to run on main — this workflow modifies files."
+  when: "$check-branch.output == 'main'"
+  depends_on: [check-branch]
+```
+
+When a cancel node runs, Archon:
+- Marks the workflow run as `cancelled` (not `failed`)
+- Stops in-flight parallel nodes via the existing cancellation plumbing
+- Records the reason string in the run's metadata
+- Emits a `node_completed` event for the cancel node itself
+
+### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `cancel` | **Yes** | Non-empty reason string shown to the user and recorded in metadata |
+
+Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `idle_timeout`) all work. AI-specific fields emit a loader warning and are ignored — cancel nodes don't invoke AI.
+
+### When to use `cancel` vs failing a `bash:` check
+
+- **Use `cancel:`** when the precondition failure is **expected** (e.g., wrong branch, required file missing, feature flag disabled). The run shows as `cancelled`, which doesn't trigger the DAG auto-resume path.
+- **Use a `bash:` node that exits non-zero** when the check itself fails (e.g., network error, tool missing). The run shows as `failed`, which auto-resumes on the next invocation.
+
+### Typical Patterns
+
+**Gate on upstream classification:**
+```yaml
+- id: classify
+  prompt: "Is the input safe to proceed? Output 'SAFE' or 'UNSAFE'."
+  allowed_tools: []
+
+- id: stop-if-unsafe
+  cancel: "Refusing to proceed: input flagged UNSAFE by classifier."
+  depends_on: [classify]
+  when: "$classify.output != 'SAFE'"
+
+- id: do-work
+  command: the-work
+  depends_on: [classify]
+  when: "$classify.output == 'SAFE'"
+```
+
+**Stop before expensive step unless precondition met:**
+```yaml
+- id: check-budget
+  bash: |
+    spent=$(gh api /meta --jq '.rate.used // 0')
+    echo "$spent"
+
+- id: abort-if-over
+  cancel: "Aborting — GH API quota exhausted."
+  depends_on: [check-budget]
+  when: "$check-budget.output > '4500'"
+
+- id: run-api-heavy-work
+  command: heavy-work
+  depends_on: [check-budget]
+  when: "$check-budget.output <= '4500'"
+```
+
+---
+
 ## Validate Before Finishing
 
 Before declaring a workflow complete, validate it:
@@ -393,6 +535,9 @@ Use `--json` for machine-readable output. Use `archon validate commands <name>` 
 - Script nodes require `runtime: bun` or `runtime: uv`
 - Named scripts must exist in `.archon/scripts/` or `~/.archon/scripts/` with extension matching declared runtime
 - `retry` on loop node = hard error
+- `approval.message` required and non-empty
+- `cancel` reason required and non-empty
+- Approval `on_reject.max_attempts` must be 1–10 if set
 - `steps:` format rejected (deprecated — use `nodes:` only)
 
 ## Complete Example

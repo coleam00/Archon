@@ -204,6 +204,29 @@ Each node has exactly ONE of: `command`, `prompt`, `bash`, `script`, `loop`, `ap
     until_bash: "bun run test"    # Optional: exit 0 = done
 ```
 
+**Approval node** — pauses the workflow for human review. Requires `interactive: true` at the workflow level for Web UI delivery:
+```yaml
+interactive: true   # workflow level — required for web UI
+
+nodes:
+  - id: review-gate
+    approval:
+      message: "Review the plan above before proceeding."
+      capture_response: true      # Optional: user's comment → $review-gate.output
+      on_reject:                  # Optional: AI rework on rejection instead of cancel
+        prompt: "Revise based on feedback: $REJECTION_REASON"
+        max_attempts: 3           # Range 1-10, default 3
+    depends_on: [plan]
+```
+
+**Cancel node** — terminates the workflow with a reason. Typically gated with `when:`:
+```yaml
+- id: stop-if-unsafe
+  cancel: "Refusing to proceed: input flagged UNSAFE."
+  depends_on: [classify]
+  when: "$classify.output != 'SAFE'"
+```
+
 For the full authoring guide with all fields, conditions, trigger rules, and patterns: Read `references/workflow-dag.md`
 
 ### Creating a Command File
