@@ -56,6 +56,14 @@ describe('classifyIsolationError', () => {
     const result = classifyIsolationError(new Error('unknown error'));
     expect(result).toContain('Could not create isolated workspace');
   });
+
+  test('matches "submodule initialization failed" with opt-out guidance', () => {
+    const result = classifyIsolationError(
+      new Error('Submodule initialization failed: fatal: could not read from remote repository')
+    );
+    expect(result).toContain('Submodule initialization failed');
+    expect(result).toContain('initSubmodules: false');
+  });
 });
 
 describe('isKnownIsolationError', () => {
@@ -85,6 +93,12 @@ describe('isKnownIsolationError', () => {
 
   test('identifies branch not found as known', () => {
     expect(isKnownIsolationError(new Error('branch not found'))).toBe(true);
+  });
+
+  test('identifies submodule initialization failure as known', () => {
+    expect(
+      isKnownIsolationError(new Error('Submodule initialization failed: network unreachable'))
+    ).toBe(true);
   });
 
   test('returns false for unknown errors', () => {

@@ -300,60 +300,77 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
 
 AI agent providers wrap AI SDKs and provide a unified streaming interface. Implement the `IAgentProvider` interface to add new providers.
 
+> **Note:** This section covers built-in providers maintained by the core team (Claude, Codex). For community providers (`builtIn: false`) — which live under `packages/providers/src/community/` and register through `registerCommunityProviders()` — see [Adding a Community Provider](../contributing/adding-a-community-provider/).
+
 ### IAgentProvider Interface
 
-**Location:** `packages/core/src/types/index.ts`
+**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps)
 
 ```typescript
 export interface IAgentProvider {
-  // Send a query and get streaming response
-  sendQuery(prompt: string, cwd: string, resumeSessionId?: string): AsyncGenerator<MessageChunk>;
+  sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    options?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk>;
 
-  // Get the assistant type identifier
   getType(): string;
+
+  getCapabilities(): ProviderCapabilities;
 }
 ```
 
 ### MessageChunk Types
 
+`MessageChunk` is a discriminated union. Only the fields for each variant are present:
+
 ```typescript
-interface MessageChunk {
-  type: 'assistant' | 'result' | 'system' | 'tool' | 'thinking';
-  content?: string; // Text content for assistant/system/thinking
-  sessionId?: string; // Session ID for result type
-  toolName?: string; // Tool name for tool type
-  toolInput?: Record<string, unknown>; // Tool parameters
-}
+export type MessageChunk =
+  | { type: 'assistant'; content: string }
+  | { type: 'system'; content: string }
+  | { type: 'thinking'; content: string }
+  | {
+      type: 'result';
+      sessionId?: string;
+      tokens?: TokenUsage;
+      structuredOutput?: unknown;
+      isError?: boolean;
+      errorSubtype?: string;
+      cost?: number;
+      stopReason?: string;
+      numTurns?: number;
+      modelUsage?: Record<string, unknown>;
+    }
+  | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
+  | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
+  | { type: 'tool_result'; toolName: string; toolOutput: string; toolCallId?: string }
+  | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 ```
 
 ### Implementation Guide
 
-**1. Create provider file:** `packages/core/src/providers/your-assistant.ts`
+**1. Create provider file:** `packages/providers/src/your-assistant/provider.ts`
 
 **2. Implement the interface:**
 
 ```typescript
-import { IAgentProvider, MessageChunk } from '../types';
+import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
 
 export class YourAssistantProvider implements IAgentProvider {
   async *sendQuery(
     prompt: string,
     cwd: string,
-    resumeSessionId?: string
+    resumeSessionId?: string,
+    options?: SendQueryOptions,
   ): AsyncGenerator<MessageChunk> {
     // Initialize or resume session
-    let session;
-    if (resumeSessionId) {
-      log.info({ sessionId: resumeSessionId }, 'session_resumed');
-      session = await this.resumeSession(resumeSessionId);
-    } else {
-      log.info({ cwd }, 'session_started');
-      session = await this.startSession(cwd);
-    }
+    const session = resumeSessionId
+      ? await this.resumeSession(resumeSessionId)
+      : await this.startSession(cwd);
 
     // Send query to AI and stream responses
     for await (const event of this.sdk.streamQuery(session, prompt)) {
-      // Map SDK events to MessageChunk types
       if (event.type === 'text_response') {
         yield { type: 'assistant', content: event.text };
       } else if (event.type === 'tool_call') {
@@ -361,6 +378,7 @@ export class YourAssistantProvider implements IAgentProvider {
           type: 'tool',
           toolName: event.tool,
           toolInput: event.parameters,
+          toolCallId: event.id,
         };
       } else if (event.type === 'thinking') {
         yield { type: 'thinking', content: event.reasoning };
@@ -374,27 +392,40 @@ export class YourAssistantProvider implements IAgentProvider {
   getType(): string {
     return 'your-assistant';
   }
-}
-```
 
-**3. Register in factory:** `packages/core/src/providers/factory.ts`
-
-```typescript
-import { YourAssistantProvider } from './your-assistant';
-
-export function getAgentProvider(type: string): IAgentProvider {
-  switch (type) {
-    case 'claude':
-      return new ClaudeProvider();
-    case 'codex':
-      return new CodexProvider();
-    case 'your-assistant':
-      return new YourAssistantProvider();
-    default:
-      throw new Error(`Unknown provider type: ${type}`);
+  getCapabilities(): ProviderCapabilities {
+    // Declare only what you've actually wired. Under-declaration is honest;
+    // the dag-executor warns users if a workflow node uses a feature you
+    // declared unsupported.
+    return YOUR_ASSISTANT_CAPABILITIES;
   }
 }
 ```
+
+**3. Register via the typed registry:** `packages/providers/src/registry.ts`
+
+Built-in providers are registered by `registerBuiltinProviders()`:
+
+```typescript
+export function registerBuiltinProviders(): void {
+  const builtins: ProviderRegistration[] = [
+    {
+      id: 'your-assistant',
+      displayName: 'Your Assistant',
+      factory: () => new YourAssistantProvider(),
+      capabilities: YOUR_ASSISTANT_CAPABILITIES,
+      isModelCompatible: (model) => /* pattern check */,
+      builtIn: true,
+    },
+    // ...existing entries
+  ];
+  for (const entry of builtins) {
+    if (!registry.has(entry.id)) registry.set(entry.id, entry);
+  }
+}
+```
+
+Community providers use `registerCommunityProviders()` (same file). See the [community provider guide](../contributing/adding-a-community-provider/) for that path.
 
 **4. Add environment variables:** `.env.example`
 
@@ -440,7 +471,7 @@ if (trigger && shouldCreateNewSession(trigger)) {
 
 Different SDKs use different event types. Map them to MessageChunk types:
 
-**Claude Code SDK** (`packages/core/src/providers/claude.ts`):
+**Claude Code SDK** (`packages/providers/src/claude/provider.ts`):
 
 ```typescript
 for await (const msg of query({ prompt, options })) {
@@ -462,7 +493,7 @@ for await (const msg of query({ prompt, options })) {
 }
 ```
 
-**Codex SDK** (`packages/core/src/providers/codex.ts`):
+**Codex SDK** (`packages/providers/src/codex/provider.ts`):
 
 ```typescript
 for await (const event of result.events) {
@@ -1003,7 +1034,7 @@ remote_agent_codebases
 ├── name (VARCHAR)
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
-├── ai_assistant_type (VARCHAR) -- 'claude' | 'codex'
+├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
 └── commands (JSONB) -- {command_name: {path, description}}
 
 remote_agent_conversations
@@ -1238,12 +1269,15 @@ Post single comment on issue with summary
 
 ### Adding a New AI Agent Provider
 
-- [ ] Create `packages/core/src/providers/your-assistant.ts`
-- [ ] Implement `IAgentProvider` interface
-- [ ] Map SDK events to `MessageChunk` types
+This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the folder layout, registration, and capability discipline are covered there in depth.
+
+- [ ] Create `packages/providers/src/your-assistant/provider.ts`
+- [ ] Implement `IAgentProvider` interface (sendQuery + getType + getCapabilities)
+- [ ] Map SDK events to `MessageChunk` discriminated union
 - [ ] Handle session creation and resumption
-- [ ] Implement error handling and recovery
-- [ ] Add to `packages/core/src/providers/factory.ts`
+- [ ] Declare `ProviderCapabilities` honestly — under-declare rather than over-promise
+- [ ] Implement error handling and retry classification (see Claude/Codex patterns)
+- [ ] Register in `registerBuiltinProviders()` at `packages/providers/src/registry.ts`
 - [ ] Add environment variables to `.env.example`
 - [ ] Test session persistence across restarts
 - [ ] Test plan-to-execute transition (new session)
@@ -1364,7 +1398,7 @@ Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, 
 **For detailed implementation examples, see:**
 
 - Platform adapter: `packages/adapters/src/chat/telegram/adapter.ts`, `packages/adapters/src/forge/github/adapter.ts`
-- AI provider: `packages/core/src/providers/claude.ts`, `packages/core/src/providers/codex.ts`
+- AI provider: `packages/providers/src/claude/provider.ts`, `packages/providers/src/codex/provider.ts`
 - Isolation provider: `packages/isolation/src/providers/worktree.ts`
 - Isolation resolver: `packages/isolation/src/resolver.ts`
 - Isolation factory: `packages/isolation/src/factory.ts`

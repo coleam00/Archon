@@ -67,13 +67,8 @@ export function matchesPattern(message: string, patterns: string[]): boolean {
  * Classify an error to determine if it's transient (can retry) or fatal (should fail).
  * FATAL patterns take priority over TRANSIENT patterns to prevent an error message
  * containing both (e.g. "unauthorized: process exited with code 1") from being retried.
- *
- * First-party named error types are checked by name (immune to message rewording).
  */
 export function classifyError(error: Error): ErrorType {
-  // Named first-party errors checked by name — immune to message rewording
-  if (error.name === 'EnvLeakError') return 'FATAL';
-
   const message = error.message.toLowerCase();
 
   if (matchesPattern(message, FATAL_PATTERNS)) {
@@ -154,12 +149,22 @@ export async function loadCommandPrompt(
     config = { defaults: { loadDefaultCommands: true } };
   }
 
-  // Use command folder paths with optional configured folder
+  // Use command folder paths with optional configured folder.
+  // Each scope is walked 1 subfolder deep so `triage/review.md` resolves as
+  // `review` — matching the workflows/scripts convention. Resolution
+  // precedence: repo > home (~/.archon/commands/) > bundled/app defaults.
   const searchPaths = archonPaths.getCommandFolderSearchPaths(configuredFolder);
+  const resolvedSearchPaths: string[] = [
+    ...searchPaths.map(folder => join(cwd, folder)),
+    archonPaths.getHomeCommandsPath(),
+  ];
 
-  // Search repo paths first
-  for (const folder of searchPaths) {
-    const filePath = join(cwd, folder, `${commandName}.md`);
+  for (const dir of resolvedSearchPaths) {
+    const entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
+    const match = entries.find(e => e.commandName === commandName);
+    if (!match) continue;
+
+    const filePath = join(dir, match.relativePath);
     try {
       const content = await readFile(filePath, 'utf-8');
       if (!content.trim()) {
@@ -170,13 +175,10 @@ export async function loadCommandPrompt(
           message: `Command file is empty: ${commandName}.md`,
         };
       }
-      getLog().debug({ commandName, folder }, 'command_loaded');
+      getLog().debug({ commandName, filePath }, 'command_loaded');
       return { success: true, content };
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') {
-        continue;
-      }
       if (err.code === 'EACCES') {
         getLog().error({ commandName, filePath }, 'command_file_permission_denied');
         return {
@@ -185,7 +187,9 @@ export async function loadCommandPrompt(
           message: `Permission denied reading command: ${commandName}.md`,
         };
       }
-      // Other unexpected errors
+      // Other unexpected errors (ENOENT shouldn't happen since the walk just found it,
+      // but if the file was deleted between walk and read we fall through to 'not found'
+      // with a log.)
       getLog().error({ err, commandName, filePath }, 'command_file_read_error');
       return {
         success: false,
@@ -195,7 +199,7 @@ export async function loadCommandPrompt(
     }
   }
 
-  // If not found in repo and app defaults enabled, search app defaults
+  // If not found in repo/home and app defaults enabled, search app defaults
   const loadDefaultCommands = config.defaults?.loadDefaultCommands ?? true;
   if (loadDefaultCommands) {
     if (isBinaryBuild()) {
@@ -207,29 +211,37 @@ export async function loadCommandPrompt(
       }
       getLog().debug({ commandName }, 'command_bundled_not_found');
     } else {
-      // Bun: load from filesystem
+      // Bun: load from filesystem (walk 1 level deep so `defaults/archon-*.md` resolves)
       const appDefaultsPath = archonPaths.getDefaultCommandsPath();
-      const filePath = join(appDefaultsPath, `${commandName}.md`);
-      try {
-        const content = await readFile(filePath, 'utf-8');
-        if (!content.trim()) {
-          getLog().error({ commandName }, 'command_app_default_empty');
-          return {
-            success: false,
-            reason: 'empty_file',
-            message: `App default command file is empty: ${commandName}.md`,
-          };
+      const entries = await archonPaths.findMarkdownFilesRecursive(appDefaultsPath, '', {
+        maxDepth: 1,
+      });
+      const match = entries.find(e => e.commandName === commandName);
+      if (match) {
+        const filePath = join(appDefaultsPath, match.relativePath);
+        try {
+          const content = await readFile(filePath, 'utf-8');
+          if (!content.trim()) {
+            getLog().error({ commandName }, 'command_app_default_empty');
+            return {
+              success: false,
+              reason: 'empty_file',
+              message: `App default command file is empty: ${commandName}.md`,
+            };
+          }
+          getLog().debug({ commandName }, 'command_loaded_app_defaults');
+          return { success: true, content };
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            getLog().warn({ err, commandName }, 'command_app_default_read_error');
+          } else {
+            getLog().debug({ commandName }, 'command_app_default_not_found');
+          }
+          // Fall through to not found
         }
-        getLog().debug({ commandName }, 'command_loaded_app_defaults');
-        return { success: true, content };
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code !== 'ENOENT') {
-          getLog().warn({ err, commandName }, 'command_app_default_read_error');
-        } else {
-          getLog().debug({ commandName }, 'command_app_default_not_found');
-        }
-        // Fall through to not found
+      } else {
+        getLog().debug({ commandName }, 'command_app_default_not_found');
       }
     }
   }
@@ -247,7 +259,8 @@ export async function loadCommandPrompt(
 // ─── Variable Substitution ───────────────────────────────────────────────────
 
 /** Pattern string for context variables - used to create fresh regex instances */
-export const CONTEXT_VAR_PATTERN_STR = '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)';
+export const CONTEXT_VAR_PATTERN_STR =
+  '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
 
 /**
  * Substitute workflow variables in a prompt.
@@ -375,18 +388,26 @@ function escapeRegExp(str: string): string {
 /**
  * Detect whether the AI output contains a completion signal.
  *
- * Supports two formats:
+ * Supports three formats, checked in order:
  * 1. <promise>SIGNAL</promise> - Recommended; prevents false positives in prose
- * 2. Plain SIGNAL - Backwards compatibility; only at end of output or on own line
+ * 2. <anytag>SIGNAL</anytag> - Any XML-wrapped tag; case-insensitive on tag names
+ * 3. Plain SIGNAL - Backwards compatibility; only at end of output or on own line
  *
- * The <promise> tag format uses case-insensitive matching for the tags.
- * Plain signal detection is restrictive to prevent false positives.
+ * Tag matching uses a backreference (\1) so opening and closing tag names must
+ * agree — `<COMPLETE>X</done>` is not treated as a completion, which avoids
+ * false positives when the AI interleaves tags in prose.
+ *
+ * Plain signal detection is restrictive to prevent false positives like "not SIGNAL yet".
  */
 export function detectCompletionSignal(output: string, signal: string): boolean {
-  // Check for <promise>SIGNAL</promise> format (recommended - prevents false positives)
-  // Case-insensitive for tags
-  const promisePattern = new RegExp(`<promise>\\s*${escapeRegExp(signal)}\\s*</promise>`, 'i');
-  if (promisePattern.test(output)) {
+  // Check for XML-like tag wrapping with matching open/close names: <tag>SIGNAL</tag>.
+  // Catches <promise>COMPLETE</promise>, <COMPLETE>ALL_CLEAN</COMPLETE>, <done>X</done>.
+  // The `([a-zA-Z][\w-]*)` capture plus `</\1>` backreference requires tag names to match.
+  const xmlWrappedPattern = new RegExp(
+    `<([a-zA-Z][\\w-]*)[^>]*>\\s*${escapeRegExp(signal)}\\s*</\\1>`,
+    'i'
+  );
+  if (xmlWrappedPattern.test(output)) {
     return true;
   }
   // Plain signal detection - restrictive to prevent false positives like "not COMPLETE yet"
@@ -398,9 +419,24 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
   return endPattern.test(output) || ownLinePattern.test(output);
 }
 
-/** Strip internal completion signal tags before sending to user-facing output. */
-export function stripCompletionTags(content: string): string {
-  return content.replace(/<promise>[\s\S]*?<\/promise>/gi, '').trim();
+/**
+ * Strip internal completion signal tags before sending to user-facing output.
+ * Always strips `<promise>…</promise>` (any content). When `until` is provided,
+ * also strips any XML-wrapped form of that signal with matching tag names
+ * (e.g. `<COMPLETE>ALL_CLEAN</COMPLETE>`). Mismatched tag names are left alone
+ * so regular prose (`<note>ALL_CLEAN</warning>`) isn't accidentally rewritten.
+ */
+export function stripCompletionTags(content: string, until?: string): string {
+  let result = content.replace(/<promise>[\s\S]*?<\/promise>/gi, '');
+  if (until) {
+    // Strip XML-tagged completion signals with matching open/close tag names.
+    const escapedSignal = escapeRegExp(until);
+    result = result.replace(
+      new RegExp(`<([a-zA-Z][\\w-]*)[^>]*>\\s*${escapedSignal}\\s*</\\1>`, 'gi'),
+      ''
+    );
+  }
+  return result.trim();
 }
 
 /**

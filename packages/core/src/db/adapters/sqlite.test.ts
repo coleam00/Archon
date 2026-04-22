@@ -135,4 +135,46 @@ describe('SqliteAdapter', () => {
       ).rejects.toThrow('does not support RETURNING clause on UPDATE/DELETE');
     });
   });
+
+  describe('datetime() chronological vs lexical comparison', () => {
+    // Documents the SQLite-specific bug fixed in getActiveWorkflowRunByPath.
+    // `started_at` is TEXT in "YYYY-MM-DD HH:MM:SS" format. Comparing it
+    // directly to an ISO param "YYYY-MM-DDTHH:MM:SS.mmmZ" with `<` is
+    // LEXICAL: char 11 is space (0x20) in the column vs T (0x54) in the
+    // param, so every column value lex-sorts before every ISO param,
+    // making the comparison ALWAYS true regardless of actual time.
+    //
+    // Wrapping both sides in datetime() forces chronological comparison.
+
+    test('lexical comparison gives wrong answer for SQLite stored format vs ISO param', async () => {
+      db = createTestDb();
+      // Column-format value (afternoon) is chronologically AFTER the ISO
+      // param (morning), but lex compares char-11 (space < T) → wrong.
+      const result = await db.query<{ broken: number }>(
+        `SELECT ('2026-04-14 12:00:00' < $1) AS broken`,
+        ['2026-04-14T10:00:00.000Z']
+      );
+      // Expected by chronology: FALSE. Lex says: TRUE.
+      expect(result.rows[0].broken).toBe(1);
+    });
+
+    test('datetime() wrap on both sides gives chronological comparison', async () => {
+      db = createTestDb();
+      const result = await db.query<{ correct: number }>(
+        `SELECT (datetime('2026-04-14 12:00:00') < datetime($1)) AS correct`,
+        ['2026-04-14T10:00:00.000Z']
+      );
+      // 12:00 < 10:00 is FALSE — datetime() comparison agrees with reality.
+      expect(result.rows[0].correct).toBe(0);
+    });
+
+    test('datetime() handles equality across formats', async () => {
+      db = createTestDb();
+      const result = await db.query<{ equal: number }>(
+        `SELECT (datetime('2026-04-14 10:00:00') = datetime($1)) AS equal`,
+        ['2026-04-14T10:00:00.000Z']
+      );
+      expect(result.rows[0].equal).toBe(1);
+    });
+  });
 });

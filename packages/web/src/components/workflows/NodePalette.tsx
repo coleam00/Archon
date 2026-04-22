@@ -29,6 +29,7 @@ export function NodePalette(): React.ReactElement {
   };
 
   const bundled = commands?.filter((c: CommandEntry) => c.source === 'bundled') ?? [];
+  const global = commands?.filter((c: CommandEntry) => c.source === 'global') ?? [];
   const project = commands?.filter((c: CommandEntry) => c.source === 'project') ?? [];
 
   return (
@@ -74,6 +75,27 @@ export function NodePalette(): React.ReactElement {
             Project
           </h4>
           {project.map((cmd: CommandEntry) => (
+            <div
+              key={cmd.name}
+              draggable
+              onDragStart={(e): void => {
+                onDragStart(e, 'command', cmd.name);
+              }}
+              className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border hover:border-accent hover:bg-accent/5 cursor-grab text-xs text-text-primary mb-1"
+            >
+              <span className="text-[10px] text-text-tertiary font-medium">CMD</span>
+              <span className="truncate">{cmd.name}</span>
+            </div>
+          ))}
+        </>
+      )}
+
+      {global.length > 0 && (
+        <>
+          <h4 className="text-[10px] font-medium text-text-tertiary uppercase tracking-wide mt-2 mb-1">
+            Global (~/.archon/commands/)
+          </h4>
+          {global.map((cmd: CommandEntry) => (
             <div
               key={cmd.name}
               draggable

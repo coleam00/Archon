@@ -20,7 +20,7 @@ Before you start, make sure you have:
 | -------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **Git**                          | `git --version`    | [git-scm.com](https://git-scm.com/)                                                                                 |
 | **Bun** (replaces Node.js + npm) | `bun --version`    | Linux/macOS: `curl -fsSL https://bun.sh/install \| bash` — Windows: `powershell -c "irm bun.sh/install.ps1 \| iex"` |
-| **Claude Code CLI**              | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation)                |
+| **Claude Code CLI**              | `claude --version` | [docs.claude.com/claude-code/installation](https://docs.claude.com/en/docs/claude-code/installation) — in compiled Archon binaries, also set `CLAUDE_BIN_PATH` ([details](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)) |
 | **GitHub account**               | —                  | [github.com](https://github.com/)                                                                                   |
 
 > **Do not run as root.** Archon (and the Claude Code CLI it depends on) does not work when run as the `root` user. If you're on a VPS or server that only has root, create a regular user first:
@@ -383,9 +383,9 @@ assistant: claude
 commands:
   folder: .claude/commands/archon    # additional command search path
 worktree:
-  copyFiles:
-    - .env.example                   # copy into worktrees (same filename)
-    - .env
+  copyFiles:                         # gitignored files/dirs to copy into worktrees
+    - .env                           # (`.archon/` is copied automatically — no need to list it)
+    - plans/
 ```
 
 Without any `.archon/` config, the platform uses sensible defaults (bundled commands and workflows).
@@ -601,6 +601,6 @@ For always-on access from any device, see the [Docker Deployment Guide](/deploym
 ## Further Reading
 
 - [Configuration](/getting-started/configuration/) — All configuration options
-- [AI Assistants](/getting-started/ai-assistants/) — Claude and Codex setup details
+- [AI Assistants](/getting-started/ai-assistants/) — Claude, Codex, and Pi setup details
 - [CLI Reference](/reference/cli/) — Full CLI documentation
 - [Authoring Workflows](/guides/authoring-workflows/) — Creating custom workflows

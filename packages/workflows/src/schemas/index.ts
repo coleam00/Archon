@@ -47,9 +47,11 @@ export {
   isTriggerRule,
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
+  LOOP_NODE_AI_FIELDS,
   effortLevelSchema,
   thinkingConfigSchema,
   sandboxSettingsSchema,
+  agentDefinitionSchema,
 } from './dag-node';
 export type {
   TriggerRule,
@@ -66,6 +68,7 @@ export type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  AgentDefinition,
 } from './dag-node';
 
 // Workflow definition

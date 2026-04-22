@@ -1,0 +1,66 @@
+# E2E smoke test — deterministic nodes (no AI, no API calls)
+# Verifies: bash nodes, script nodes (bun + uv), $nodeId.output substitution,
+#           when conditions, trigger_rule join semantics
+name: e2e-deterministic
+description: "Pure DAG engine test. Exercises bash, script (bun/uv), conditions, and trigger rules with zero API calls."
+
+nodes:
+  # Layer 0 — parallel deterministic nodes
+  - id: bash-echo
+    bash: "echo '{\"status\":\"ok\",\"value\":42}'"
+
+  - id: script-bun
+    script: echo-args
+    runtime: bun
+    timeout: 30000
+
+  - id: script-python
+    script: echo-py
+    runtime: uv
+    timeout: 30000
+
+  # Layer 1 — test $nodeId.output substitution from bash
+  - id: bash-read-output
+    bash: "echo 'upstream-status: $bash-echo.output'"
+    depends_on: [bash-echo]
+
+  # Layer 1 — conditional branches (only one should run)
+  - id: branch-true
+    bash: "echo 'branch-true-ran'"
+    depends_on: [bash-echo]
+    when: "$bash-echo.output.status == 'ok'"
+
+  - id: branch-false
+    bash: "echo 'branch-false-ran'"
+    depends_on: [bash-echo]
+    when: "$bash-echo.output.status == 'fail'"
+
+  # Layer 2 — trigger_rule merge (one_success: branch-false will be skipped)
+  - id: merge-node
+    bash: "echo 'merge-ok: true=$branch-true.output false=$branch-false.output'"
+    depends_on: [branch-true, branch-false]
+    trigger_rule: one_success
+
+  # Layer 3 — final verification: assert all outputs are non-empty
+  - id: verify-all
+    bash: |
+      fail=0
+      for name in bash-echo script-bun script-python bash-read-output branch-true merge-node; do
+        echo "$name output received"
+      done
+      bash_echo="$bash-echo.output"
+      script_bun="$script-bun.output"
+      script_python="$script-python.output"
+      bash_read="$bash-read-output.output"
+      branch_t="$branch-true.output"
+      merge="$merge-node.output"
+      if [ -z "$bash_echo" ]; then echo "FAIL: bash-echo empty"; fail=1; fi
+      if [ -z "$script_bun" ]; then echo "FAIL: script-bun empty"; fail=1; fi
+      if [ -z "$script_python" ]; then echo "FAIL: script-python empty"; fail=1; fi
+      if [ -z "$bash_read" ]; then echo "FAIL: bash-read-output empty"; fail=1; fi
+      if [ -z "$branch_t" ]; then echo "FAIL: branch-true empty"; fail=1; fi
+      if [ -z "$merge" ]; then echo "FAIL: merge-node empty"; fail=1; fi
+      if [ "$fail" -eq 1 ]; then exit 1; fi
+      echo "PASS: all deterministic nodes produced output"
+    depends_on: [bash-read-output, script-bun, script-python, merge-node]
+    trigger_rule: all_success

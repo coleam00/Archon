@@ -44,7 +44,7 @@ mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
 }));
 
-mock.module('../providers/factory', () => ({
+mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
 }));
 

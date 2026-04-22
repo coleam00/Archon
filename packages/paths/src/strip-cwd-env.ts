@@ -41,11 +41,15 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
 export function stripCwdEnv(cwd: string = process.cwd()): void {
   // --- Pass 1: CWD .env files ---
   const cwdKeys = new Set<string>();
+  const strippedFiles: string[] = [];
 
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
     const filepath = resolve(cwd, filename);
-    // dotenv.config with processEnv:{} parses without writing to process.env
-    const result = config({ path: filepath, processEnv: {} });
+    // dotenv.config with processEnv:{} parses without writing to process.env.
+    // quiet:true suppresses dotenv's `[dotenv@...] injecting env …` tip line —
+    // which always reports (0) here because processEnv:{} is a throwaway object
+    // and would mislead operators into thinking the file was empty (see #1302).
+    const result = config({ path: filepath, processEnv: {}, quiet: true });
     if (result.error) {
       // ENOENT is expected (file simply doesn't exist) — all others are unexpected
       const code = (result.error as NodeJS.ErrnoException).code;
@@ -55,14 +59,26 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
         );
       }
     } else if (result.parsed) {
-      for (const key of Object.keys(result.parsed)) {
-        cwdKeys.add(key);
+      const parsedKeys = Object.keys(result.parsed);
+      if (parsedKeys.length > 0) {
+        strippedFiles.push(filename);
+        for (const key of parsedKeys) {
+          cwdKeys.add(key);
+        }
       }
     }
   }
 
   for (const key of cwdKeys) {
     Reflect.deleteProperty(process.env, key);
+  }
+
+  // Tell the operator what we just did — otherwise the delete loop is silent
+  // and users think their env file was loaded (see #1302).
+  if (cwdKeys.size > 0) {
+    process.stderr.write(
+      `[archon] stripped ${cwdKeys.size} keys from ${cwd} (${strippedFiles.join(', ')}) to prevent target repo env from leaking into Archon processes\n`
+    );
   }
 
   // --- Pass 2: Nested Claude Code session markers ---

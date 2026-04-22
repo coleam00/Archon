@@ -86,6 +86,7 @@ describe('IsolationResolver', () => {
   let getCanonicalSpy: ReturnType<typeof spyOn>;
   let findWorktreeByBranchSpy: ReturnType<typeof spyOn>;
   let isAncestorOfSpy: ReturnType<typeof spyOn>;
+  let verifyWorktreeOwnershipSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     worktreeExistsSpy = spyOn(git, 'worktreeExists').mockResolvedValue(true);
@@ -94,6 +95,9 @@ describe('IsolationResolver', () => {
     );
     findWorktreeByBranchSpy = spyOn(git, 'findWorktreeByBranch').mockResolvedValue(null);
     isAncestorOfSpy = spyOn(git, 'isAncestorOf').mockResolvedValue(true);
+    // Default: ownership verification passes. Tests that exercise cross-clone
+    // behavior override this with a rejection.
+    verifyWorktreeOwnershipSpy = spyOn(git, 'verifyWorktreeOwnership').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -101,6 +105,7 @@ describe('IsolationResolver', () => {
     getCanonicalSpy.mockRestore();
     findWorktreeByBranchSpy.mockRestore();
     isAncestorOfSpy.mockRestore();
+    verifyWorktreeOwnershipSpy.mockRestore();
   });
 
   function createResolver(overrides?: Partial<IsolationResolverDeps>): IsolationResolver {
@@ -791,5 +796,241 @@ describe('IsolationResolver', () => {
     });
 
     expect(isAncestorOfSpy).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Cross-checkout ownership guard (#1183, #1188 part 1)
+  //
+  // Two clones of the same remote share codebase_id because identity is
+  // derived from owner/repo. Without these guards, clone B would adopt
+  // worktrees owned by clone A via the DB-driven resolver paths, bypassing
+  // the WorktreeProvider.findExisting guard.
+  // -------------------------------------------------------------------------
+  describe('cross-checkout guard', () => {
+    test('findReusable throws when worktree belongs to a different clone', async () => {
+      const env = makeEnvRow();
+      const updateStatusSpy = mock(() => Promise.resolve());
+      const resolver = createResolver({
+        store: makeMockStore({
+          findActiveByWorkflow: async () => env,
+          updateStatus: updateStatusSpy,
+        }),
+      });
+      // .git file points to a different clone than request.canonicalRepoPath
+      verifyWorktreeOwnershipSpy.mockRejectedValue(
+        new Error(
+          'Worktree at /worktrees/issue-42 belongs to a different clone (/other/clone). ' +
+            'Remove it from that clone or use a different codebase registration.'
+        )
+      );
+
+      await expect(
+        resolver.resolve({
+          existingEnvId: null,
+          codebase: defaultCodebase,
+          hints: { workflowType: 'issue', workflowId: '42' },
+          platformType: 'web',
+        })
+      ).rejects.toThrow(/belongs to a different clone/);
+
+      // DB row is preserved — it legitimately belongs to the other clone
+      expect(updateStatusSpy).not.toHaveBeenCalled();
+    });
+
+    test('findReusable succeeds when worktree belongs to the same clone', async () => {
+      const env = makeEnvRow();
+      const resolver = createResolver({
+        store: makeMockStore({ findActiveByWorkflow: async () => env }),
+      });
+      // Default ownership spy resolves — same-clone match
+
+      const result = await resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        hints: { workflowType: 'issue', workflowId: '42' },
+        platformType: 'web',
+      });
+
+      expect(result.status).toBe('resolved');
+      if (result.status === 'resolved') {
+        expect(result.method.type).toBe('workflow_reuse');
+      }
+      expect(verifyWorktreeOwnershipSpy).toHaveBeenCalledWith(
+        '/worktrees/issue-42',
+        '/repos/myrepo'
+      );
+    });
+
+    test('findLinkedIssueEnv throws when linked env belongs to a different clone', async () => {
+      const linkedEnv = makeEnvRow({
+        workflow_type: 'issue',
+        workflow_id: '100',
+        working_path: '/worktrees/issue-100',
+        branch_name: 'issue-100',
+      });
+      const updateStatusSpy = mock(() => Promise.resolve());
+      const resolver = createResolver({
+        store: makeMockStore({
+          // First path (findReusable) misses — no active env for requested workflowId
+          // Second path (findLinkedIssueEnv) returns linkedEnv for issue 100
+          findActiveByWorkflow: async (_c, type, id) =>
+            type === 'issue' && id === '100' ? linkedEnv : null,
+          updateStatus: updateStatusSpy,
+        }),
+      });
+      verifyWorktreeOwnershipSpy.mockRejectedValue(
+        new Error(
+          'Worktree at /worktrees/issue-100 belongs to a different clone (/other/clone). ' +
+            'Remove it from that clone or use a different codebase registration.'
+        )
+      );
+
+      await expect(
+        resolver.resolve({
+          existingEnvId: null,
+          codebase: defaultCodebase,
+          hints: {
+            workflowType: 'thread',
+            workflowId: 'some-thread',
+            linkedIssues: [100],
+          },
+          platformType: 'web',
+        })
+      ).rejects.toThrow(/belongs to a different clone/);
+
+      // Linked DB row preserved — belongs to the other clone
+      expect(updateStatusSpy).not.toHaveBeenCalled();
+    });
+
+    test('findLinkedIssueEnv succeeds when linked env belongs to the same clone', async () => {
+      const linkedEnv = makeEnvRow({
+        workflow_type: 'issue',
+        workflow_id: '100',
+        working_path: '/worktrees/issue-100',
+        branch_name: 'issue-100',
+      });
+      const resolver = createResolver({
+        store: makeMockStore({
+          findActiveByWorkflow: async (_c, type, id) =>
+            type === 'issue' && id === '100' ? linkedEnv : null,
+        }),
+      });
+      // Default ownership spy resolves — same-clone match
+
+      const result = await resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        hints: {
+          workflowType: 'thread',
+          workflowId: 'some-thread',
+          linkedIssues: [100],
+        },
+        platformType: 'web',
+      });
+
+      expect(result.status).toBe('resolved');
+      if (result.status === 'resolved') {
+        expect(result.method.type).toBe('linked_issue_reuse');
+      }
+    });
+
+    test('tryBranchAdoption throws when discovered worktree belongs to a different clone', async () => {
+      findWorktreeByBranchSpy.mockResolvedValue('/worktrees/feature-auth');
+      verifyWorktreeOwnershipSpy.mockRejectedValue(
+        new Error(
+          'Worktree at /worktrees/feature-auth belongs to a different clone (/other/clone). ' +
+            'Remove it from that clone or use a different codebase registration.'
+        )
+      );
+      const createSpy = mock(async () => makeEnvRow());
+      const resolver = createResolver({ store: makeMockStore({ create: createSpy }) });
+
+      await expect(
+        resolver.resolve({
+          existingEnvId: null,
+          codebase: defaultCodebase,
+          hints: {
+            workflowType: 'pr',
+            workflowId: 'pr-42',
+            prBranch: git.toBranchName('feature-auth'),
+          },
+          platformType: 'web',
+        })
+      ).rejects.toThrow(/belongs to a different clone/);
+
+      // Symmetry with paths 1+2: no DB mutation on cross-clone rejection.
+      // Here it's create (vs updateStatus) because tryBranchAdoption writes
+      // a new row rather than reusing an existing one.
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    test('tryBranchAdoption succeeds when discovered worktree belongs to the same clone', async () => {
+      findWorktreeByBranchSpy.mockResolvedValue('/worktrees/feature-auth');
+      // Default ownership spy resolves — same-clone match
+
+      const resolver = createResolver();
+
+      const result = await resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        hints: {
+          workflowType: 'pr',
+          workflowId: 'pr-42',
+          prBranch: git.toBranchName('feature-auth'),
+        },
+        platformType: 'web',
+      });
+
+      expect(result.status).toBe('resolved');
+      if (result.status === 'resolved') {
+        expect(result.method.type).toBe('branch_adoption');
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Canonical path resolution failures
+  //
+  // getCanonicalRepoPath() runs early in resolve() (before any adoption path)
+  // because every downstream step needs the canonical repo root. Failures
+  // must mirror createNewEnvironment's contract: known infrastructure errors
+  // become a `blocked` result; unknown errors propagate as crashes.
+  // -------------------------------------------------------------------------
+  describe('canonical path resolution failure handling', () => {
+    test('known infrastructure error returns blocked with classified user message', async () => {
+      const eaccesError = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
+      eaccesError.code = 'EACCES';
+      getCanonicalSpy.mockRejectedValue(eaccesError);
+
+      const resolver = createResolver();
+
+      const result = await resolver.resolve({
+        existingEnvId: null,
+        codebase: defaultCodebase,
+        platformType: 'web',
+      });
+
+      expect(result.status).toBe('blocked');
+      if (result.status === 'blocked') {
+        expect(result.reason).toBe('creation_failed');
+        expect(result.userMessage).toMatch(/Permission denied/);
+        expect(result.userMessage).toMatch(/Execution blocked/);
+      }
+    });
+
+    test('unknown error propagates as crash (programming bug visibility)', async () => {
+      // Deliberately not a known isolation pattern so isKnownIsolationError returns false
+      getCanonicalSpy.mockRejectedValue(new Error('Internal invariant violation: foo'));
+
+      const resolver = createResolver();
+
+      await expect(
+        resolver.resolve({
+          existingEnvId: null,
+          codebase: defaultCodebase,
+          platformType: 'web',
+        })
+      ).rejects.toThrow(/Internal invariant violation/);
+    });
   });
 });

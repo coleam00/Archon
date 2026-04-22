@@ -4,18 +4,13 @@
 import { z } from '@hono/zod-openapi';
 
 /** Schema for the safe config subset returned to web clients (mirrors SafeConfig in config-types.ts). */
+const providerDefaultsSchema = z.record(z.string(), z.unknown()).openapi('ProviderDefaults');
+
 export const safeConfigSchema = z
   .object({
     botName: z.string(),
-    assistant: z.enum(['claude', 'codex']),
-    assistants: z.object({
-      claude: z.object({ model: z.string().optional() }),
-      codex: z.object({
-        model: z.string().optional(),
-        modelReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
-        webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
-      }),
-    }),
+    assistant: z.string().min(1),
+    assistants: z.record(z.string(), providerDefaultsSchema),
     streaming: z.object({
       telegram: z.enum(['stream', 'batch']),
       discord: z.enum(['stream', 'batch']),
@@ -34,19 +29,8 @@ export const safeConfigSchema = z
 /** Body for PATCH /api/config/assistants — all fields optional (partial update). */
 export const updateAssistantConfigBodySchema = z
   .object({
-    assistant: z.enum(['claude', 'codex']).optional(),
-    claude: z
-      .object({
-        model: z.string(),
-      })
-      .optional(),
-    codex: z
-      .object({
-        model: z.string(),
-        modelReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
-        webSearchMode: z.enum(['disabled', 'cached', 'live']).optional(),
-      })
-      .optional(),
+    assistant: z.string().min(1).optional(),
+    assistants: z.record(z.string(), providerDefaultsSchema).optional(),
   })
   .openapi('UpdateAssistantConfigBody');
 

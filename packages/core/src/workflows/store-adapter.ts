@@ -10,7 +10,7 @@ import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
-import { getAgentProvider } from '../providers/factory';
+import { getAgentProvider } from '@archon/providers';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 

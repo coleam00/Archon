@@ -5,7 +5,7 @@
  * Optionally uses TITLE_GENERATION_MODEL env var for a cheaper/faster model.
  * Designed to be fire-and-forget — never throws, all errors logged internally.
  */
-import { getAgentProvider } from '../providers/factory';
+import { getAgentProvider } from '@archon/providers';
 import * as conversationDb from '../db/conversations';
 import { createLogger } from '@archon/paths';
 
@@ -26,7 +26,7 @@ const MAX_TITLE_LENGTH = 100;
  *
  * @param conversationDbId - Database UUID of the conversation
  * @param userMessage - The user's message to generate a title from
- * @param assistantType - 'claude' or 'codex'
+ * @param assistantType - Provider identifier (e.g. 'claude', 'codex')
  * @param cwd - Working directory for the AI client
  * @param workflowName - Optional workflow name for additional context
  */
@@ -52,7 +52,7 @@ export async function generateAndSetTitle(
 
     for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, {
       model: titleModel,
-      tools: [], // No tool access — pure text generation
+      nodeConfig: { allowed_tools: [] }, // No tool access — pure text generation
     })) {
       if (chunk.type === 'assistant') {
         generatedTitle += chunk.content;

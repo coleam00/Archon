@@ -17,8 +17,13 @@ export const workflowLoadErrorSchema = z
   })
   .openapi('WorkflowLoadError');
 
-/** Workflow source — project-defined or bundled default. */
-export const workflowSourceSchema = z.enum(['project', 'bundled']).openapi('WorkflowSource');
+/**
+ * Workflow source — project-defined, bundled default, or home-scoped (global).
+ * Precedence for same-named entries: `bundled` < `global` < `project`.
+ */
+export const workflowSourceSchema = z
+  .enum(['project', 'bundled', 'global'])
+  .openapi('WorkflowSource');
 
 /** A workflow entry in the list response, including its source. */
 export const workflowListEntrySchema = z
