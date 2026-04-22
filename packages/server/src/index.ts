@@ -346,8 +346,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
         // Check if bot was mentioned (required for activation)
         // Exception: DMs don't require mention
+        // Set DISCORD_REQUIRE_MENTION=false to respond without @mention
         const isDM = !message.guild;
-        if (!isDM && !discordAdapter.isBotMentioned(message)) {
+        const requireMention = process.env.DISCORD_REQUIRE_MENTION !== 'false';
+        if (!isDM && requireMention && !discordAdapter.isBotMentioned(message)) {
           return; // Ignore messages that don't mention the bot
         }
 
