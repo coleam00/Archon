@@ -7,7 +7,7 @@
  */
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, resolveBashPath } from '@archon/git';
 import { discoverScripts } from './script-discovery';
 import type {
   WorkflowAssistantOptions,
@@ -1359,7 +1359,7 @@ async function executeBashNode(
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
 
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
+    const { stdout, stderr } = await execFileAsync(resolveBashPath(), ['-c', finalScript], {
       cwd,
       timeout,
     });
@@ -2018,7 +2018,7 @@ async function executeLoopNode(
           nodeOutputs,
           true // escapedForBash
         );
-        await execFileAsync('bash', ['-c', substitutedBash], { cwd });
+        await execFileAsync(resolveBashPath(), ['-c', substitutedBash], { cwd });
         bashComplete = true; // exit 0 = complete
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
