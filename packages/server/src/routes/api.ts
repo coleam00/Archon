@@ -27,8 +27,6 @@ import {
   registerRepository,
   ConversationNotFoundError,
   generateAndSetTitle,
-  EnvLeakError,
-  scanPathForSensitiveKeys,
 } from '@archon/core';
 import { removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
@@ -38,6 +36,7 @@ import {
   getDefaultCommandsPath,
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
+  getHomeCommandsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -53,7 +52,7 @@ import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
-import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
+import type { ApprovalContext, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -109,7 +108,6 @@ import {
   codebaseSchema,
   codebaseIdParamsSchema,
   addCodebaseBodySchema,
-  updateCodebaseBodySchema,
   deleteCodebaseResponseSchema,
   codebaseEnvVarsResponseSchema,
   setEnvVarBodySchema,
@@ -122,6 +120,8 @@ import {
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import { providerListResponseSchema } from './schemas/provider.schemas';
+import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -140,7 +140,7 @@ if (BUNDLED_IS_BINARY) {
   }
 }
 
-type WorkflowSource = 'project' | 'bundled';
+type WorkflowSource = 'project' | 'bundled' | 'global';
 
 // =========================================================================
 // OpenAPI route configs (module-scope — pure config, no runtime dependencies)
@@ -467,28 +467,6 @@ const addCodebaseRoute = createRoute({
   },
 });
 
-const updateCodebaseRoute = createRoute({
-  method: 'patch',
-  path: '/api/codebases/{id}',
-  tags: ['Codebases'],
-  summary: 'Update codebase consent flags (e.g. allow_env_keys)',
-  request: {
-    params: codebaseIdParamsSchema,
-    body: {
-      content: { 'application/json': { schema: updateCodebaseBodySchema } },
-      required: true,
-    },
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: codebaseSchema } },
-      description: 'Updated codebase',
-    },
-    404: jsonError('Not found'),
-    500: jsonError('Server error'),
-  },
-});
-
 const deleteCodebaseRoute = createRoute({
   method: 'delete',
   path: '/api/codebases/{id}',
@@ -796,6 +774,19 @@ const patchAssistantConfigRoute = createRoute({
   },
 });
 
+const getProvidersRoute = createRoute({
+  method: 'get',
+  path: '/api/providers',
+  tags: ['System'],
+  summary: 'List registered AI providers',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerListResponseSchema } },
+      description: 'List of registered providers',
+    },
+  },
+});
+
 const getCodebaseEnvironmentsRoute = createRoute({
   method: 'get',
   path: '/api/codebases/{id}/environments',
@@ -829,6 +820,7 @@ const getHealthRoute = createRoute({
               runningWorkflows: z.number(),
               version: z.string().optional(),
               is_docker: z.boolean(),
+              activePlatforms: z.array(z.string()).optional(),
             })
             .openapi('HealthResponse'),
         },
@@ -861,7 +853,8 @@ const getUpdateCheckRoute = createRoute({
 export function registerApiRoutes(
   app: OpenAPIHono,
   webAdapter: WebAdapter,
-  lockManager: ConversationLockManager
+  lockManager: ConversationLockManager,
+  activePlatforms?: readonly string[]
 ): void {
   function apiError(
     c: Context,
@@ -1040,6 +1033,95 @@ export function registerApiRoutes(
     }
 
     return { accepted: true, status: result.status };
+  }
+
+  /**
+   * Re-enter the orchestrator after a paused approval gate is resolved, so a
+   * web-dispatched workflow continues (approve) or runs its on_reject prompt
+   * (reject) without the user having to re-run the workflow command. The CLI's
+   * `workflowApproveCommand` / `workflowRejectCommand` already auto-resume via
+   * `workflowRunCommand({ resume: true })`; this is the web-side equivalent.
+   *
+   * Returns `true` when a resume dispatch was initiated, `false` otherwise (no
+   * parent conversation on the run, parent conversation deleted, parent was on
+   * a non-web platform, or dispatch threw). Failures are non-fatal: the gate
+   * decision is recorded regardless; when this returns `false` the response
+   * text instructs the user to re-run the workflow command.
+   *
+   * **Cross-adapter guard**: only web-sourced parents qualify.
+   * `dispatchToOrchestrator` is wired to the web adapter + its lock manager,
+   * so a Slack / Telegram / GitHub / Discord run being approved from the
+   * dashboard must not route through it — the Slack thread would never see
+   * the resumed output. Non-web parents skip auto-resume and the originating
+   * platform's own re-run flow applies.
+   */
+  async function tryAutoResumeAfterGate(
+    run: WorkflowRun,
+    action: 'approve' | 'reject'
+  ): Promise<boolean> {
+    if (!run.parent_conversation_id) return false;
+    // Literal event names per action — greppable for ops tooling. Keeping the
+    // branch explicit rather than templating avoids the earlier 3-segment
+    // `api.workflow_*.dispatched` shape that broke `{domain}.{action}_{state}`.
+    const events =
+      action === 'approve'
+        ? {
+            dispatched: 'api.workflow_approve_auto_resume_dispatched' as const,
+            skippedNoPlatformConv:
+              'api.workflow_approve_auto_resume_skipped_no_platform_conv' as const,
+            skippedNonWebParent: 'api.workflow_approve_auto_resume_skipped_non_web_parent' as const,
+            failed: 'api.workflow_approve_auto_resume_failed' as const,
+          }
+        : {
+            dispatched: 'api.workflow_reject_auto_resume_dispatched' as const,
+            skippedNoPlatformConv:
+              'api.workflow_reject_auto_resume_skipped_no_platform_conv' as const,
+            skippedNonWebParent: 'api.workflow_reject_auto_resume_skipped_non_web_parent' as const,
+            failed: 'api.workflow_reject_auto_resume_failed' as const,
+          };
+    try {
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      const platformConvId = parentConv?.platform_conversation_id;
+      if (!platformConvId) {
+        // parentConv === null is a data-integrity signal (the parent
+        // conversation was deleted while the run was paused) — worth
+        // surfacing at info level so operators notice. Missing
+        // platform_conversation_id on an existing row shouldn't happen and
+        // stays at debug.
+        const logFn =
+          parentConv === null ? getLog().info.bind(getLog()) : getLog().debug.bind(getLog());
+        logFn(
+          {
+            runId: run.id,
+            parentConversationId: run.parent_conversation_id,
+            parentDeleted: parentConv === null,
+          },
+          events.skippedNoPlatformConv
+        );
+        return false;
+      }
+      if (parentConv.platform_type !== 'web') {
+        getLog().debug(
+          {
+            runId: run.id,
+            parentConversationId: run.parent_conversation_id,
+            platformType: parentConv.platform_type,
+          },
+          events.skippedNonWebParent
+        );
+        return false;
+      }
+      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      await dispatchToOrchestrator(platformConvId, resumeMessage);
+      getLog().info(
+        { runId: run.id, workflowName: run.workflow_name, platformConvId },
+        events.dispatched
+      );
+      return true;
+    } catch (err) {
+      getLog().warn({ err: err as Error, runId: run.id }, events.failed);
+      return false;
+    }
   }
 
   // GET /api/conversations - List conversations
@@ -1531,8 +1613,8 @@ export function registerApiRoutes(
     try {
       // .refine() guarantees exactly one of url/path is present
       const result = body.url
-        ? await cloneRepository(body.url, body.allowEnvKeys)
-        : await registerRepository(body.path ?? '', body.allowEnvKeys);
+        ? await cloneRepository(body.url)
+        : await registerRepository(body.path ?? '');
 
       // Fetch the full codebase record for a consistent response
       const codebase = await codebaseDb.getCodebase(result.codebaseId);
@@ -1542,83 +1624,12 @@ export function registerApiRoutes(
 
       return c.json(codebase, result.alreadyExisted ? 200 : 201);
     } catch (error) {
-      if (error instanceof EnvLeakError) {
-        const path = body.url ?? body.path ?? '';
-        const files = error.report.findings.map(f => f.file);
-        getLog().warn({ path, files }, 'add_codebase_env_leak_refused');
-        return apiError(c, 422, error.message);
-      }
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
         c,
         500,
         `Failed to add codebase: ${(error as Error).message ?? 'unknown error'}`
       );
-    }
-  });
-
-  // PATCH /api/codebases/:id - Update consent flags
-  registerOpenApiRoute(updateCodebaseRoute, async c => {
-    const id = c.req.param('id') ?? '';
-    const body = getValidatedBody(c, updateCodebaseBodySchema);
-    try {
-      const codebase = await codebaseDb.getCodebase(id);
-      if (!codebase) {
-        return apiError(c, 404, 'Codebase not found');
-      }
-
-      // Capture scanner findings for the audit log (best-effort — path may be gone)
-      let files: string[] = [];
-      let keys: string[] = [];
-      let scanStatus: 'ok' | 'skipped' = 'ok';
-      try {
-        const report = scanPathForSensitiveKeys(codebase.default_cwd);
-        files = report.findings.map(f => f.file);
-        keys = Array.from(new Set(report.findings.flatMap(f => f.keys)));
-      } catch (scanErr) {
-        scanStatus = 'skipped';
-        getLog().warn(
-          { err: scanErr, codebaseId: id, path: codebase.default_cwd },
-          'env_leak_consent_scan_skipped'
-        );
-      }
-
-      await codebaseDb.updateCodebaseAllowEnvKeys(id, body.allowEnvKeys);
-
-      // Audit log: emitted unconditionally on every grant/revoke. `scanStatus`
-      // distinguishes "scanned and these are the findings" from "could not
-      // scan, files/keys are empty for that reason" — important for later
-      // security review of the audit trail.
-      getLog().warn(
-        {
-          codebaseId: id,
-          name: codebase.name,
-          path: codebase.default_cwd,
-          files,
-          keys,
-          scanStatus,
-          actor: 'user-ui',
-        },
-        body.allowEnvKeys ? 'env_leak_consent_granted' : 'env_leak_consent_revoked'
-      );
-
-      const updated = await codebaseDb.getCodebase(id);
-      if (!updated) {
-        return apiError(c, 500, 'Codebase updated but not found');
-      }
-      let commands = updated.commands;
-      if (typeof commands === 'string') {
-        try {
-          commands = JSON.parse(commands);
-        } catch (parseErr) {
-          getLog().error({ err: parseErr, codebaseId: id }, 'corrupted_commands_json');
-          commands = {};
-        }
-      }
-      return c.json({ ...updated, commands });
-    } catch (error) {
-      getLog().error({ err: error, codebaseId: id }, 'update_codebase_failed');
-      return apiError(c, 500, 'Failed to update codebase');
     }
   });
 
@@ -1972,9 +1983,20 @@ export function registerApiRoutes(
         status: 'failed',
         metadata: metadataUpdate,
       });
+
+      // Auto-resume: dispatch to the orchestrator so the workflow continues
+      // without requiring the user to re-run the workflow command. Mirrors
+      // what `workflowApproveCommand` does in the CLI. Requires
+      // `parent_conversation_id` on the run (set by orchestrator-agent for any
+      // web-dispatched workflow — foreground, interactive, and background via
+      // the pre-created run) and a web-platform parent (guarded in the helper).
+      const autoResumed = await tryAutoResumeAfterGate(run, 'approve');
+
       return c.json({
         success: true,
-        message: `Workflow approved: ${run.workflow_name}. Send a message to continue the workflow.`,
+        message: autoResumed
+          ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
+          : `Workflow approved: ${run.workflow_name}. Send a message to continue.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
@@ -2018,9 +2040,18 @@ export function registerApiRoutes(
           status: 'failed',
           metadata: { rejection_reason: reason, rejection_count: currentCount + 1 },
         });
+
+        // Auto-resume: dispatch to the orchestrator so the on_reject prompt runs
+        // without requiring the user to re-run the workflow command. Mirrors
+        // what `workflowRejectCommand` does in the CLI. Same cross-adapter
+        // guard as approve — only web parents auto-resume.
+        const autoResumed = await tryAutoResumeAfterGate(run, 'reject');
+
         return c.json({
           success: true,
-          message: `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
+          message: autoResumed
+            ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
+            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
         });
       }
 
@@ -2379,7 +2410,7 @@ export function registerApiRoutes(
         if (codebases.length > 0) workingDir = codebases[0].default_cwd;
       }
 
-      // Collect commands: project-defined override bundled (same name wins)
+      // Collect commands: precedence bundled < global < project (repo-defined wins).
       const commandMap = new Map<string, WorkflowSource>();
 
       // 1. Seed with bundled defaults
@@ -2387,11 +2418,17 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
+      // maxDepth: 1 matches the executor's resolver (resolveCommand /
+      // loadCommandPrompt) — without this cap, the UI palette would surface
+      // commands buried in deep subfolders that the executor silently can't
+      // resolve at runtime.
+      const COMMAND_LIST_DEPTH = { maxDepth: 1 };
+
       // 2. If not binary build, also check filesystem defaults
       if (!isBinaryBuild()) {
         try {
           const defaultsPath = getDefaultCommandsPath();
-          const files = await findMarkdownFilesRecursive(defaultsPath);
+          const files = await findMarkdownFilesRecursive(defaultsPath, '', COMMAND_LIST_DEPTH);
           for (const { commandName } of files) {
             commandMap.set(commandName, 'bundled');
           }
@@ -2403,13 +2440,27 @@ export function registerApiRoutes(
         }
       }
 
-      // 3. Project-defined commands override bundled
+      // 3. Home-scoped commands (~/.archon/commands/) override bundled
+      try {
+        const homeCommandsPath = getHomeCommandsPath();
+        const files = await findMarkdownFilesRecursive(homeCommandsPath, '', COMMAND_LIST_DEPTH);
+        for (const { commandName } of files) {
+          commandMap.set(commandName, 'global');
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().error({ err }, 'commands.list_home_failed');
+        }
+        // ENOENT: home commands dir not created yet — not an error
+      }
+
+      // 4. Project-defined commands override bundled AND global
       if (workingDir) {
         const searchPaths = getCommandFolderSearchPaths();
         for (const folder of searchPaths) {
           const dirPath = join(workingDir, folder);
           try {
-            const files = await findMarkdownFilesRecursive(dirPath);
+            const files = await findMarkdownFilesRecursive(dirPath, '', COMMAND_LIST_DEPTH);
             for (const { commandName } of files) {
               commandMap.set(commandName, 'project');
             }
@@ -2543,13 +2594,31 @@ export function registerApiRoutes(
 
       const updates: Partial<GlobalConfig> = {};
       if (body.assistant !== undefined) {
+        if (!isRegisteredProvider(body.assistant)) {
+          return apiError(
+            c,
+            400,
+            `Unknown provider '${body.assistant}'. Available: ${getProviderInfoList()
+              .map(p => p.id)
+              .join(', ')}`
+          );
+        }
         updates.defaultAssistant = body.assistant;
       }
-      if (body.claude !== undefined || body.codex !== undefined) {
-        updates.assistants = {
-          ...(body.claude ? { claude: body.claude } : {}),
-          ...(body.codex ? { codex: body.codex } : {}),
-        };
+      if (body.assistants !== undefined) {
+        const unknownProviders = Object.keys(body.assistants).filter(
+          id => !isRegisteredProvider(id)
+        );
+        if (unknownProviders.length > 0) {
+          return apiError(
+            c,
+            400,
+            `Unknown provider(s) in assistants: ${unknownProviders.join(', ')}. Available: ${getProviderInfoList()
+              .map(p => p.id)
+              .join(', ')}`
+          );
+        }
+        updates.assistants = body.assistants;
       }
 
       await updateGlobalConfig(updates);
@@ -2563,6 +2632,11 @@ export function registerApiRoutes(
       getLog().error({ err: error }, 'config.assistants_update_failed');
       return apiError(c, 500, 'Failed to update assistant configuration');
     }
+  });
+
+  // GET /api/providers - List registered AI providers
+  registerOpenApiRoute(getProvidersRoute, c => {
+    return c.json({ providers: getProviderInfoList() });
   });
 
   // GET /api/codebases/:id/environments - List isolation environments for a codebase
@@ -2606,6 +2680,7 @@ export function registerApiRoutes(
       runningWorkflows: runningWorkflowRows.length,
       version: appVersion,
       is_docker: isDocker(),
+      activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
     });
   });
 

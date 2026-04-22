@@ -222,7 +222,23 @@ git commit -q --allow-empty -m init
 
 ### Test 3 — SDK path works (assist workflow)
 
-In the same `$TESTREPO`:
+**Prerequisite.** Compiled binaries require Claude Code installed on the host and a configured binary path. Before running this test, ensure one of:
+
+```bash
+# Option A — env var (easy for ad-hoc testing)
+# After the native installer (Anthropic's default):
+export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
+# Or after npm global install:
+export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
+
+# Option B — config file (persistent)
+#   Add to ~/.archon/config.yaml:
+#   assistants:
+#     claude:
+#       claudeBinaryPath: /absolute/path/to/claude
+```
+
+Then in the same `$TESTREPO`:
 
 ```bash
 "$BINARY" workflow run assist "say hello and nothing else" 2>&1 | tee /tmp/archon-test-assist.log
@@ -232,14 +248,33 @@ In the same `$TESTREPO`:
 
 - Exit code 0
 - The Claude subprocess spawns successfully (no `spawn EACCES`, `ENOENT`, or `process exited with code 1` in the early output)
+- No `Claude Code CLI not found` error (that means the resolver rejected the configured path — verify the cli.js actually exists)
 - A response is produced (any response — even just "hello" — proves the SDK round-trip works)
 
 **Common failures:**
 
+- `Claude Code not found` → `CLAUDE_BIN_PATH` / `claudeBinaryPath` is unset or points at a non-existent file. Fix the path and re-run.
+- `Module not found "/Users/runner/..."` → regression of #1210: the resolver was bypassed and the SDK's `import.meta.url` fallback leaked a build-host path. Investigate `packages/providers/src/claude/provider.ts` and the resolver.
 - `Credit balance is too low` → auth is pointing at an exhausted API key (check `CLAUDE_USE_GLOBAL_AUTH` and `~/.archon/.env`)
 - `unable to determine transport target for "pino-pretty"` → #960 regression, binary crashes on TTY
 - `package.json not found (bad installation?)` → #961 regression, `isBinaryBuild` detection broken
 - Process exits before producing output → generic spawn failure, capture stderr
+
+### Test 3b — Resolver error path (run without `CLAUDE_BIN_PATH`)
+
+Quickly verify the resolver fails loud when nothing is configured:
+
+```bash
+(unset CLAUDE_BIN_PATH; "$BINARY" workflow run assist "hello" 2>&1 | tee /tmp/archon-test-no-path.log)
+```
+
+**Pass criteria (when no `~/.archon/config.yaml` configures `claudeBinaryPath`):**
+
+- Error message contains `Claude Code not found`
+- Error message mentions both `CLAUDE_BIN_PATH` and `claudeBinaryPath` as remediation options
+- No `Module not found` stack traces referencing the CI filesystem
+
+If you *do* have `claudeBinaryPath` set globally, skip this test or temporarily rename `~/.archon/config.yaml`.
 
 ### Test 4 — Env-leak gate refuses a leaky .env (optional, for releases including #1036/#1038/#983)
 

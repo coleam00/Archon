@@ -195,7 +195,7 @@ You've just built a mini version of `archon-idea-to-pr` — the same structure, 
 |--------|-------------|-------------|
 | `name` | Identifies the workflow in `archon workflow list` | Required |
 | `description` | Shown in listings and used by the router | Required |
-| `provider` | Sets the AI provider (`claude` or `codex`) | When you need a specific provider |
+| `provider` | Sets the AI provider (any registered provider, e.g. `claude`, `codex`) | When you need a specific provider |
 | `model` | Sets the model for all nodes (`sonnet`, `opus`, `haiku`) | When you want to override the config default |
 | `context` | `fresh` starts a new session; `shared` inherits from prior node | Use `fresh` before verification nodes |
 | `depends_on` | List of node IDs that must complete before this node runs | To express ordering and fan-in |

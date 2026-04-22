@@ -30,7 +30,7 @@ export function calculatePortOffset(path: string): number {
  * Get the port for the Hono server
  * - If PORT env var is set: use it (explicit override, validated)
  * - If running in worktree: auto-allocate deterministic port based on path hash
- * - Otherwise: use default 3000
+ * - Otherwise: use default 3090 (matches the Vite proxy fallback in packages/web/vite.config.ts)
  *
  * Note: Exits process with code 1 if PORT env var is set but invalid (not 1-65535)
  */

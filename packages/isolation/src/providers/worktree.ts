@@ -6,25 +6,25 @@
 
 import { createHash } from 'crypto';
 import { access, rm } from 'fs/promises';
-import { join } from 'path';
+import { isAbsolute, join, normalize as normalizePath, resolve, sep } from 'path';
 
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
-  extractOwnerRepo,
   findWorktreeByBranch,
   getCanonicalRepoPath,
   getWorktreeBase,
-  isProjectScopedWorktreeBase,
   listWorktrees,
   mkdirAsync,
   removeWorktree,
   syncWorkspace,
+  verifyWorktreeOwnership,
   worktreeExists,
   toRepoPath,
   toWorktreePath,
   toBranchName,
 } from '@archon/git';
+import type { WorktreeBaseOverride } from '@archon/git';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import type { RepoPath, WorktreeInfo } from '@archon/git';
 import { copyWorktreeFiles } from '../worktree-copy';
@@ -48,18 +48,101 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * Ceiling for a single git subprocess in worktree operations (create/fetch/checkout/remove/branch-delete).
+ * Generous enough for repos with heavy post-checkout hooks (lint/install) while still catching genuine
+ * hangs (e.g. credential prompts in non-TTY, stalled network fetches). See #1119, #1029.
+ */
+const GIT_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Validate a user-supplied `worktree.path` from `.archon/config.yaml` and return
+ * it as a safe relative path for `getWorktreeBase()`, or `undefined` to fall
+ * through to default path resolution.
+ *
+ * Rules (Fail Fast — malformed values throw; empty/whitespace values are ignored):
+ * - `undefined` / empty-after-trim → `undefined` (no override; default resolution applies)
+ * - Absolute path                  → throw (users must configure globally, not per-repo)
+ * - Contains `..` segment          → throw (escapes repo root)
+ * - Resolved path escapes repoRoot → throw (covers symlink / nested `../` edge cases)
+ *
+ * The path is returned trimmed. The caller composes it via `join(repoRoot, result)`.
+ */
+function resolveRepoLocalOverride(
+  rawPath: string | undefined,
+  repoRoot: string
+): string | undefined {
+  if (rawPath === undefined) return undefined;
+  const trimmed = rawPath.trim();
+  if (!trimmed) return undefined;
+
+  if (isAbsolute(trimmed)) {
+    throw new Error(
+      `.archon/config.yaml worktree.path must be relative to the repo root (got absolute: ${trimmed}). ` +
+        'For an absolute location, set ~/.archon/config.yaml paths.worktrees instead.'
+    );
+  }
+
+  const normalized = normalizePath(trimmed);
+  // A plain `..` or anything that starts with `../` or contains `/../` escapes the repo.
+  if (
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.startsWith('..\\') ||
+    normalized.includes('/../') ||
+    normalized.includes('\\..\\')
+  ) {
+    throw new Error(
+      `.archon/config.yaml worktree.path must stay within the repo (got: ${trimmed}). ` +
+        'Remove any `..` segments.'
+    );
+  }
+
+  // Double-check via resolved absolute paths — catches edge cases like a path that
+  // normalizes clean but still escapes when joined (e.g. leading `./../` on some platforms).
+  // Uses `path.sep` so the "is inside repoRoot" check works on Windows (\\) as well as POSIX (/).
+  const resolved = resolve(repoRoot, normalized);
+  const repoRootResolved = resolve(repoRoot);
+  if (resolved !== repoRootResolved && !resolved.startsWith(repoRootResolved + sep)) {
+    throw new Error(
+      `.archon/config.yaml worktree.path resolves outside the repo root (got: ${trimmed} → ${resolved}).`
+    );
+  }
+
+  return normalized;
+}
+
 export class WorktreeProvider implements IIsolationProvider {
   readonly providerType = 'worktree';
 
   constructor(private loadConfig: RepoConfigLoader = () => Promise.resolve(null)) {}
 
   /**
-   * Create an isolated environment using git worktrees
+   * Create an isolated environment using git worktrees.
+   *
+   * Config is loaded exactly once here and threaded through the rest of the
+   * `create()` call. A malformed `.archon/config.yaml` fails loudly at this
+   * boundary rather than being swallowed — see CLAUDE.md "Fail Fast + Explicit
+   * Errors". Downstream helpers assume they receive either a valid config
+   * object or `null`, never a second chance to reload.
    */
   async create(request: IsolationRequest): Promise<IsolatedEnvironment> {
+    let repoConfig: WorktreeCreateConfig | null;
+    try {
+      repoConfig = await this.loadConfig(request.canonicalRepoPath);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, repoPath: request.canonicalRepoPath }, 'repo_config_load_failed');
+      throw new Error(`Failed to load config: ${err.message}`);
+    }
+
     const branchName = toBranchName(this.generateBranchName(request));
-    const worktreePath = this.getWorktreePath(request, branchName);
-    const envId = this.generateEnvId(request);
+    const worktreePath = this.getWorktreePath(request, branchName, repoConfig);
+    // envId is, by contract, the worktree filesystem path (see `destroy()` docstring).
+    // Assign directly from the resolved path to keep the invariant in sync with
+    // the actual directory created below — computing it via a separate helper would
+    // risk divergence if resolution rules change.
+    const envId = worktreePath;
 
     // Check for existing worktree (adoption)
     const existing = await this.findExisting(request, branchName, worktreePath);
@@ -67,8 +150,8 @@ export class WorktreeProvider implements IIsolationProvider {
       return existing;
     }
 
-    // Create new worktree
-    const { warnings } = await this.createWorktree(request, worktreePath, branchName);
+    // Create new worktree (re-uses the already-loaded repoConfig — no double load).
+    const { warnings } = await this.createWorktree(request, worktreePath, branchName, repoConfig);
 
     return {
       id: envId,
@@ -149,7 +232,7 @@ export class WorktreeProvider implements IIsolationProvider {
       gitArgs.push(worktreePath);
 
       try {
-        await execFileAsync('git', gitArgs, { timeout: 30000 });
+        await execFileAsync('git', gitArgs, { timeout: GIT_OPERATION_TIMEOUT_MS });
         result.worktreeRemoved = true;
       } catch (error) {
         if (!this.isWorktreeMissingError(error)) {
@@ -177,6 +260,26 @@ export class WorktreeProvider implements IIsolationProvider {
         }
       } else {
         result.directoryClean = true;
+      }
+    }
+
+    // Prune stale worktree references — runs even when path is already gone,
+    // because git may still have a stale ref for a manually-deleted worktree
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'worktree', 'prune'], { timeout: 15000 });
+    } catch (_error) {
+      // Best-effort — pruning failure is not critical
+      getLog().debug({ repoPath }, 'worktree_prune_failed');
+    }
+
+    // Post-removal verification: confirm worktree is actually gone from git
+    if (result.worktreeRemoved) {
+      const stillRegistered = await this.isWorktreeRegistered(repoPath, worktreePath);
+      if (stillRegistered) {
+        result.worktreeRemoved = false;
+        const warning = `Worktree at ${worktreePath} was reported removed but is still registered in git`;
+        getLog().warn({ worktreePath, repoPath }, 'worktree_removal_verification_failed');
+        result.warnings.push(warning);
       }
     }
 
@@ -212,6 +315,30 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
+   * Check if a worktree path is still registered in `git worktree list`.
+   * Used for post-removal verification.
+   */
+  private async isWorktreeRegistered(repoPath: string, worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', repoPath, 'worktree', 'list', '--porcelain'],
+        { timeout: 15000 }
+      );
+      // Porcelain output has "worktree <path>" lines with resolved absolute paths
+      const normalizedTarget = resolve(worktreePath);
+      return stdout.split('\n').some(line => {
+        if (!line.startsWith('worktree ')) return false;
+        const listed = line.slice('worktree '.length).trim();
+        return resolve(listed) === normalizedTarget;
+      });
+    } catch (_error) {
+      // If we can't verify, assume it's gone (don't block on verification failure)
+      return false;
+    }
+  }
+
+  /**
    * Delete a branch and track the result. Never throws - branch deletion is best-effort.
    * Returns true if branch was deleted or already gone, false if deletion failed.
    */
@@ -221,7 +348,9 @@ export class WorktreeProvider implements IIsolationProvider {
     result: DestroyResult
   ): Promise<boolean> {
     try {
-      await execFileAsync('git', ['-C', repoPath, 'branch', '-D', branchName], { timeout: 30000 });
+      await execFileAsync('git', ['-C', repoPath, 'branch', '-D', branchName], {
+        timeout: GIT_OPERATION_TIMEOUT_MS,
+      });
       getLog().debug({ repoPath, branchName }, 'branch_deleted');
       return true;
     } catch (error) {
@@ -256,7 +385,7 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<boolean> {
     try {
       await execFileAsync('git', ['-C', repoPath, 'push', 'origin', '--delete', branchName], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
       getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
       return true;
@@ -444,34 +573,29 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Generate unique environment ID
-   */
-  generateEnvId(request: IsolationRequest): string {
-    const branchName = this.generateBranchName(request);
-    return this.getWorktreePath(request, branchName);
-  }
-
-  /**
-   * Get worktree path for request.
+   * Get worktree path for a request, honoring the per-repo override if set.
    *
-   * Path format depends on the worktree base layout:
-   * - Project-scoped: `~/.archon/workspaces/{owner}/{repo}/worktrees/{branch}`
-   * - Legacy global:  `~/.archon/worktrees/{owner}/{repo}/{branch}`
+   * Layouts (see `getWorktreeBase()` in `@archon/git` for resolution):
+   *   - `repo-local`       → `<repoRoot>/<config.path>/{branch}`              (opt-in)
+   *   - `workspace-scoped` → `~/.archon/workspaces/{owner}/{repo}/worktrees/{branch}`  (default)
    *
-   * When the worktree base is project-scoped (under workspaces/owner/repo/worktrees/),
-   * only append the branch name since the base already includes owner/repo.
-   * When using the legacy global worktrees path, append owner/repo/branch to
-   * avoid collisions between repos.
+   * In both layouts the resolved base already carries full repo context, so the
+   * caller simply appends the branch name — no owner/repo namespacing here.
+   *
+   * The per-repo `config.path` is validated via `resolveRepoLocalOverride()`;
+   * unsafe values (absolute, `..` segments, escape-from-repoRoot) throw rather
+   * than silently falling back to the default layout.
    */
-  getWorktreePath(request: IsolationRequest, branchName: string): string {
-    const worktreeBase = getWorktreeBase(request.canonicalRepoPath, request.codebaseName);
-
-    if (isProjectScopedWorktreeBase(request.canonicalRepoPath, request.codebaseName)) {
-      return join(worktreeBase, branchName);
-    }
-
-    const { owner, repo } = this.extractOwnerRepo(request.canonicalRepoPath);
-    return join(worktreeBase, owner, repo, branchName);
+  getWorktreePath(
+    request: IsolationRequest,
+    branchName: string,
+    config?: WorktreeCreateConfig | null
+  ): string {
+    const override: WorktreeBaseOverride = {
+      repoLocal: resolveRepoLocalOverride(config?.path, request.canonicalRepoPath),
+    };
+    const { base } = getWorktreeBase(request.canonicalRepoPath, request.codebaseName, override);
+    return join(base, branchName);
   }
 
   /**
@@ -484,6 +608,28 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<WorktreeEnvironment | null> {
     // Check if worktree already exists at expected path
     if (await worktreeExists(toWorktreePath(worktreePath))) {
+      // Verify the existing worktree belongs to the same repo root before
+      // adopting. Two clones of the same remote resolve to the same worktree
+      // base dir, so a worktree created from clone A is visible from clone B.
+      // Throws on cross-checkout or unverifiable state — surfacing the problem
+      // is safer than falling through to createNewBranch (which would report
+      // a confusing "branch already exists" cascade) or silently adopting.
+      try {
+        await verifyWorktreeOwnership(toWorktreePath(worktreePath), request.canonicalRepoPath);
+      } catch (err) {
+        getLog().warn(
+          {
+            worktreePath,
+            branchName,
+            codebaseId: request.codebaseId,
+            canonicalRepoPath: request.canonicalRepoPath,
+            err: (err as Error).message,
+          },
+          'worktree.adoption_refused_cross_checkout'
+        );
+        throw err;
+      }
+
       getLog().info({ worktreePath, branchName }, 'worktree_adopted');
       return this.buildAdoptedEnvironment(worktreePath, branchName, request);
     }
@@ -495,6 +641,25 @@ export class WorktreeProvider implements IIsolationProvider {
         request.prBranch
       );
       if (existingByBranch) {
+        // Same cross-clone guard as the primary adoption path above — a
+        // worktree matching the PR branch might still belong to a different
+        // clone of the same remote.
+        try {
+          await verifyWorktreeOwnership(existingByBranch, request.canonicalRepoPath);
+        } catch (err) {
+          getLog().warn(
+            {
+              worktreePath: existingByBranch,
+              branchName: request.prBranch,
+              codebaseId: request.codebaseId,
+              canonicalRepoPath: request.canonicalRepoPath,
+              err: (err as Error).message,
+            },
+            'worktree.adoption_refused_cross_checkout'
+          );
+          throw err;
+        }
+
         getLog().info(
           { worktreePath: existingByBranch, branchName: request.prBranch },
           'worktree_adopted'
@@ -526,35 +691,30 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Create the actual worktree.
    * Returns warnings that should be surfaced to the user (non-fatal issues).
+   *
+   * `repoConfig` is the already-loaded config from `create()`. Receiving it here
+   * keeps the work of each public entrypoint tied to exactly one config load —
+   * see the "Fail Fast" comment on `create()`.
    */
   private async createWorktree(
     request: IsolationRequest,
     worktreePath: string,
-    branchName: string
+    branchName: string,
+    worktreeConfig: WorktreeCreateConfig | null
   ): Promise<{ warnings: string[] }> {
     const repoPath = request.canonicalRepoPath;
-
-    let worktreeConfig: WorktreeCreateConfig | null;
-    try {
-      worktreeConfig = await this.loadConfig(repoPath);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, repoPath }, 'repo_config_load_failed');
-      throw new Error(`Failed to load config: ${err.message}`);
-    }
 
     // Sync uses only the configured base branch (or auto-detects via getDefaultBranch).
     // request.fromBranch is the start-point for worktree creation, not a sync target.
     const baseBranch = await this.syncWorkspaceBeforeCreate(repoPath, worktreeConfig?.baseBranch);
 
-    const worktreeBase = getWorktreeBase(repoPath, request.codebaseName);
-
-    if (isProjectScopedWorktreeBase(repoPath, request.codebaseName)) {
-      await mkdirAsync(worktreeBase, { recursive: true });
-    } else {
-      const { owner, repo } = this.extractOwnerRepo(repoPath);
-      await mkdirAsync(join(worktreeBase, owner, repo), { recursive: true });
-    }
+    const override: WorktreeBaseOverride = {
+      repoLocal: resolveRepoLocalOverride(worktreeConfig?.path, repoPath),
+    };
+    const { base: worktreeBase } = getWorktreeBase(repoPath, request.codebaseName, override);
+    // In both layouts the base already carries repo context — creating it
+    // recursively is enough.
+    await mkdirAsync(worktreeBase, { recursive: true });
 
     if (isPRIsolationRequest(request)) {
       // For PRs: fetch and checkout the PR branch (actual or synthetic)
@@ -562,6 +722,14 @@ export class WorktreeProvider implements IIsolationProvider {
     } else {
       // For issues, tasks, threads: create new branch
       await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
+    }
+
+    // Initialize submodules unless explicitly opted out. The check is free
+    // when `.gitmodules` is absent (access-based short-circuit), so repos
+    // without submodules pay nothing. Default-on matches git's own intent
+    // with `clone --recurse-submodules` / `submodule.recurse`.
+    if (worktreeConfig?.initSubmodules !== false) {
+      await this.initSubmodules(worktreePath);
     }
 
     // Copy git-ignored files based on repo config
@@ -756,7 +924,7 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<void> {
     // Fetch the PR's actual branch
     await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', prBranch], {
-      timeout: 30000,
+      timeout: GIT_OPERATION_TIMEOUT_MS,
     });
 
     // Try to create worktree with the branch
@@ -765,14 +933,14 @@ export class WorktreeProvider implements IIsolationProvider {
       await execFileAsync(
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `origin/${prBranch}`],
-        { timeout: 30000 }
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
       // Branch already exists locally - use it directly
       if (err.stderr?.includes('already exists')) {
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch], {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         });
       } else {
         throw error;
@@ -784,7 +952,7 @@ export class WorktreeProvider implements IIsolationProvider {
       await execFileAsync(
         'git',
         ['-C', worktreePath, 'branch', '--set-upstream-to', `origin/${prBranch}`],
-        { timeout: 30000 }
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (trackingError) {
       getLog().warn({ err: trackingError, worktreePath, prBranch }, 'upstream_tracking_failed');
@@ -809,11 +977,11 @@ export class WorktreeProvider implements IIsolationProvider {
     if (prSha) {
       // SHA provided: create at specific commit for reproducible reviews
       await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head`], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prSha], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
       // Create a local tracking branch so it's not detached HEAD
@@ -821,7 +989,7 @@ export class WorktreeProvider implements IIsolationProvider {
         repoPath,
         () =>
           execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
-            timeout: 30000,
+            timeout: GIT_OPERATION_TIMEOUT_MS,
           }),
         reviewBranch
       );
@@ -833,13 +1001,13 @@ export class WorktreeProvider implements IIsolationProvider {
           execFileAsync(
             'git',
             ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head:${reviewBranch}`],
-            { timeout: 30000 }
+            { timeout: GIT_OPERATION_TIMEOUT_MS }
           ),
         reviewBranch
       );
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, reviewBranch], {
-        timeout: 30000,
+        timeout: GIT_OPERATION_TIMEOUT_MS,
       });
     }
   }
@@ -860,7 +1028,7 @@ export class WorktreeProvider implements IIsolationProvider {
       if (err.stderr?.includes('already exists')) {
         getLog().debug({ repoPath, branchName }, 'stale_branch_retry');
         await execFileAsync('git', ['-C', repoPath, 'branch', '-D', branchName], {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         });
         await createCommand();
       } else {
@@ -894,12 +1062,12 @@ export class WorktreeProvider implements IIsolationProvider {
         'git',
         ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', branchName, startPoint],
         {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         }
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
-      // Branch already exists - use existing branch
+      // Branch already exists - reset to intended start-point and use it
       if (err.stderr?.includes('already exists')) {
         const taskFromBranch = request.workflowType === 'task' ? request.fromBranch : undefined;
         if (taskFromBranch) {
@@ -910,12 +1078,62 @@ export class WorktreeProvider implements IIsolationProvider {
               'Either choose a different --branch name or omit --from.'
           );
         }
+
+        // Branch exists but no explicit start-point override — reset it to the
+        // intended start-point before checking out, so we don't inherit stale
+        // commits from a previous run or external tool.
+        getLog().warn(
+          { branchName, startPoint, repoPath },
+          'worktree.branch_exists_resetting_to_start_point'
+        );
+        await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
+          timeout: 10000,
+        });
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
-          timeout: 30000,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
         });
       } else {
         throw error;
       }
+    }
+  }
+
+  /**
+   * Initialize git submodules in a worktree when the repo uses them.
+   *
+   * ENOENT on `.gitmodules` → skip (zero-cost for non-submodule repos).
+   * Any other error (EACCES, EIO, git failure, timeout) → throw. Silent
+   * success on a half-initialized worktree is the exact class of bug this
+   * function exists to prevent; an unreadable `.gitmodules` is materially
+   * the same as a failed git op. The thrown error is classified by
+   * `classifyIsolationError` into an actionable message.
+   */
+  private async initSubmodules(worktreePath: string): Promise<void> {
+    try {
+      await access(join(worktreePath, '.gitmodules'));
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
+        return;
+      }
+      getLog().error({ err, worktreePath }, 'worktree.submodule_check_failed');
+      throw new Error(
+        `Submodule initialization failed: cannot read .gitmodules (${err.code ?? 'unknown error'})`
+      );
+    }
+
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', worktreePath, 'submodule', 'update', '--init', '--recursive'],
+        { timeout: 120000 }
+      );
+      getLog().info({ worktreePath }, 'worktree.submodule_init_completed');
+    } catch (error) {
+      const err = error as Error & { stderr?: string };
+      getLog().error({ err, worktreePath }, 'worktree.submodule_init_failed');
+      const detail = err.stderr?.trim() || err.message;
+      throw new Error(`Submodule initialization failed: ${detail}`);
     }
   }
 
@@ -986,14 +1204,6 @@ export class WorktreeProvider implements IIsolationProvider {
       );
       // Don't throw — the original creation error is more important
     }
-  }
-
-  /**
-   * Extract owner and repo name from a repository path.
-   * Used for legacy global worktree base layout where owner/repo must be appended.
-   */
-  private extractOwnerRepo(repoPath: string): { owner: string; repo: string } {
-    return extractOwnerRepo(toRepoPath(repoPath));
   }
 
   /**

@@ -114,46 +114,30 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 ## Secrets Handling
 
 **Environment files:**
-- All secrets (API keys, tokens, webhook secrets) belong in `.env` files, never in source control.
-- The `.env.example` file in the repository contains placeholder values -- copy it and fill in real values.
-- Never commit `.env` files to git. The repository's `.gitignore` excludes them.
+- All secrets (API keys, tokens, webhook secrets) belong in archon-owned `.env` files (`~/.archon/.env` or `<cwd>/.archon/.env`), never in source control.
+- Never put archon secrets in `<cwd>/.env` — that file is stripped at boot (see below) and `archon setup` never writes to it. Put them in `~/.archon/.env` (home scope) or `<cwd>/.archon/.env` (project scope).
+- Archon's `.gitignore` excludes `.env` files. `<cwd>/.archon/.env` should also be gitignored (project-local secrets).
 
 **Subprocess env isolation:**
-- At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files, plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
-- `~/.archon/.env` is then loaded as the trusted source of Archon configuration. All keys the user sets there pass through to subprocesses — there is no allowlist filtering. The user controls this file and all keys are intentional.
+- At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files (`.env`, `.env.local`, `.env.development`, `.env.production`), plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
+- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
-- CWD `.env` keys are the **only** untrusted source. They belong to the target project, not to Archon.
+- `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 
-### Env-leak gate (target repo `.env` keys)
+### Target repo `.env` isolation
 
-As a second layer of defense, Archon scans target repos for sensitive keys **before spawning** AI subprocesses. A Claude or Codex subprocess started with `cwd=/path/to/target/repo` inherits Bun's auto-loaded `.env` from that CWD — the env-leak gate catches this by scanning the target repo's `.env` files at registration and pre-spawn time.
+Archon prevents target repo `.env` from leaking into subprocesses through structural protection:
 
-**What Archon scans:** auto-loaded filenames `.env`, `.env.local`, `.env.development`, `.env.production`, `.env.development.local`, `.env.production.local`.
+1. **Boot cleanup:** `stripCwdEnv()` removes Bun-auto-loaded CWD `.env` keys from `process.env` before any application code runs.
+2. **Claude Code subprocess:** `executableArgs: ['--no-env-file']` prevents Bun from auto-loading `.env` in the Claude Code subprocess CWD.
+3. **Bun script nodes:** `bun --no-env-file` prevents script node subprocesses from loading target repo `.env`.
+4. **Bash nodes:** Not affected — bash does not auto-load `.env` files.
 
-**Scanned keys:** `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `GEMINI_API_KEY`.
+Archon's own env sources (`~/.archon/.env`, dev `.env`) are loaded after the CWD strip and pass through to subprocesses normally.
 
-:::caution
-Renaming the file to `.env.local`, `.env.development`, etc. **does not work** — Bun auto-loads those too. Only `.env.secrets` (or any non-auto-loaded name) is safe.
-:::
-
-**Where the gate runs:**
-
-| Failure point | When | What you see |
-| --- | --- | --- |
-| Registration (Web UI) | Adding a project via Settings → Add Project | 422 with the "Allow env keys" checkbox shown inline |
-| Registration (CLI) | First `archon workflow run --cwd <repo>` auto-registers | Error message points at `--allow-env-keys` and the global config flag |
-| Pre-spawn | Existing codebase, before each Claude/Codex query | Error message points at Settings → Projects → "Allow env keys" toggle |
-
-**Primary remediation (recommended):**
-1. Remove the key from the target repo's `.env`, or
-2. Rename the file to `.env.secrets` and load it explicitly from your app code.
-
-**Secondary remediation (consent grants):**
-- **Web UI:** Settings → Projects → click "Allow env keys" on the row. Revoke from the same place. Each grant/revoke writes a `warn`-level audit log (`env_leak_consent_granted` / `env_leak_consent_revoked`) including `codebaseId`, `path`, scanned `files`, matched `keys`, `scanStatus` (`'ok'` or `'skipped'`), and `actor`.
-- **CLI:** `archon workflow run <name> "your message" --cwd <repo> --allow-env-keys` grants consent during this run's auto-registration. The grant is persisted (the codebase row is created with `allow_env_keys = true`) and logged as `env_leak_consent_granted` with `actor: 'user-cli'`.
-- **Global bypass:** set `allow_target_repo_keys: true` in `~/.archon/config.yaml` to disable the gate for all codebases on this machine. `env_leak_gate_disabled` is logged at most once per process per source (global vs. repo) the first time `loadConfig` resolves the bypass as active. A repo-level `.archon/config.yaml` with `allow_target_repo_keys: false` re-enables the gate for that repo.
-
-**Startup scan:** When `allow_target_repo_keys` is not set, the server scans every registered codebase with `allow_env_keys = false` and emits one `startup_env_leak_gate_will_block` warning per codebase **that has findings** (i.e. would actually be blocked). This gives you a chance to grant consent before hitting a fatal error mid-workflow. The scan is skipped entirely when the global bypass is active.
+**If you need env vars available during workflow execution**, use managed env injection:
+- `.archon/config.yaml` `env:` section (per-repo, checked into version control)
+- Web UI: Settings → Projects → Env Vars (per-codebase, stored in Archon DB)
 
 **CORS:**
 - API routes use `WEB_UI_ORIGIN` to restrict CORS. The default is `*` (allow all), which is appropriate for local single-developer use. Set a specific origin when exposing the server publicly.

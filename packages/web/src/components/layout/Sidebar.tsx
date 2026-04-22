@@ -11,7 +11,7 @@ import { ProjectDetail } from '@/components/sidebar/ProjectDetail';
 import { AllConversationsView } from '@/components/sidebar/AllConversationsView';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useProject } from '@/contexts/ProjectContext';
-import { addCodebase } from '@/lib/api';
+import { addCodebase, getCodebaseInput } from '@/lib/api';
 
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX = 400;
@@ -120,12 +120,7 @@ export function Sidebar(): React.ReactElement {
     setAddLoading(true);
     setAddError(null);
 
-    // Detect: starts with / or ~ or Windows drive letter → local path; otherwise → URL
-    const isLocalPath =
-      trimmed.startsWith('/') || trimmed.startsWith('~') || /^[A-Za-z]:[/\\]/.test(trimmed);
-    const input = isLocalPath ? { path: trimmed } : { url: trimmed };
-
-    void addCodebase(input)
+    void addCodebase(getCodebaseInput(trimmed))
       .then(codebase => {
         void queryClient.invalidateQueries({ queryKey: ['codebases'] });
         handleSelectProject(codebase.id);

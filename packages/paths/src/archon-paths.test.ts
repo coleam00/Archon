@@ -12,6 +12,10 @@ import {
   getArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
+  getHomeWorkflowsPath,
+  getHomeCommandsPath,
+  getHomeScriptsPath,
+  getLegacyHomeWorkflowsPath,
   getCommandFolderSearchPaths,
   getWorkflowFolderSearchPaths,
   expandTilde,
@@ -220,6 +224,87 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_HOME;
       delete process.env.ARCHON_DOCKER;
       expect(getArchonConfigPath()).toBe(join(homedir(), '.archon', 'config.yaml'));
+    });
+  });
+
+  describe('getHomeWorkflowsPath', () => {
+    test('returns ~/.archon/workflows by default (direct child of ~/.archon/)', () => {
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getHomeWorkflowsPath()).toBe(join(homedir(), '.archon', 'workflows'));
+    });
+
+    test('returns /.archon/workflows in Docker', () => {
+      process.env.ARCHON_DOCKER = 'true';
+      expect(getHomeWorkflowsPath()).toBe(join('/', '.archon', 'workflows'));
+    });
+
+    test('uses ARCHON_HOME when set', () => {
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getHomeWorkflowsPath()).toBe(join('/custom/archon', 'workflows'));
+    });
+
+    test('no double `.archon/` nesting — must sit next to workspaces/ and worktrees/', () => {
+      // Regression guard: the old location was ~/.archon/.archon/workflows/.
+      // New location must NOT reintroduce the double-nested path.
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getHomeWorkflowsPath()).not.toContain(join('.archon', '.archon'));
+    });
+  });
+
+  describe('getHomeCommandsPath', () => {
+    test('returns ~/.archon/commands by default', () => {
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getHomeCommandsPath()).toBe(join(homedir(), '.archon', 'commands'));
+    });
+
+    test('returns /.archon/commands in Docker', () => {
+      process.env.ARCHON_DOCKER = 'true';
+      expect(getHomeCommandsPath()).toBe(join('/', '.archon', 'commands'));
+    });
+
+    test('uses ARCHON_HOME when set', () => {
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getHomeCommandsPath()).toBe(join('/custom/archon', 'commands'));
+    });
+  });
+
+  describe('getHomeScriptsPath', () => {
+    test('returns ~/.archon/scripts by default', () => {
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getHomeScriptsPath()).toBe(join(homedir(), '.archon', 'scripts'));
+    });
+
+    test('returns /.archon/scripts in Docker', () => {
+      process.env.ARCHON_DOCKER = 'true';
+      expect(getHomeScriptsPath()).toBe(join('/', '.archon', 'scripts'));
+    });
+
+    test('uses ARCHON_HOME when set', () => {
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getHomeScriptsPath()).toBe(join('/custom/archon', 'scripts'));
+    });
+  });
+
+  describe('getLegacyHomeWorkflowsPath', () => {
+    // This helper only exists so discovery can DETECT files at the old location
+    // and emit a deprecation warning. It is not a fallback read path.
+    test('returns ~/.archon/.archon/workflows (the retired location)', () => {
+      delete process.env.ARCHON_HOME;
+      delete process.env.ARCHON_DOCKER;
+      expect(getLegacyHomeWorkflowsPath()).toBe(join(homedir(), '.archon', '.archon', 'workflows'));
+    });
+
+    test('honors ARCHON_HOME so migration detection works in custom setups', () => {
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+      expect(getLegacyHomeWorkflowsPath()).toBe(join('/custom/archon', '.archon', 'workflows'));
     });
   });
 

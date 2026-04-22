@@ -5,6 +5,7 @@ import { CheckCircle, ChevronRight, Loader2, Pause, XCircle } from 'lucide-react
 import { cn } from '@/lib/utils';
 import { approveWorkflowRun, getWorkflowRunByWorker, rejectWorkflowRun } from '@/lib/api';
 import { useWorkflowStore } from '@/stores/workflow-store';
+import { ConfirmRunActionDialog } from '@/components/dashboard/ConfirmRunActionDialog';
 import { StatusIcon } from '@/components/workflows/StatusIcon';
 import { formatDurationMs } from '@/lib/format';
 import { isTerminalStatus } from '@/lib/workflow-utils';
@@ -30,14 +31,14 @@ export function WorkflowProgressCard({
     queryKey: ['workflowRunByWorker', workerConversationId],
     queryFn: () => getWorkflowRunByWorker(workerConversationId),
     refetchInterval: (query): number | false => {
-      const status = query.state.data?.run.status;
+      const status = query.state.data?.run?.status;
       if (status === 'completed' || status === 'failed' || status === 'cancelled') return false;
       return 3000;
     },
   });
 
-  const runId = runData?.run.id;
-  const restStatus = runData?.run.status;
+  const runId = runData?.run?.id;
+  const restStatus = runData?.run?.status;
 
   // Live SSE state from Zustand store
   const liveState = useWorkflowStore(state => (runId ? state.workflows.get(runId) : undefined));
@@ -87,7 +88,7 @@ export function WorkflowProgressCard({
     mutationFn: () => approveWorkflowRun(runId ?? ''),
   });
   const rejectMutation = useMutation({
-    mutationFn: () => rejectWorkflowRun(runId ?? ''),
+    mutationFn: (reason?: string) => rejectWorkflowRun(runId ?? '', reason),
   });
   const mutationError = approveMutation.error ?? rejectMutation.error;
 
@@ -220,18 +221,33 @@ export function WorkflowProgressCard({
                   <CheckCircle className="h-3.5 w-3.5" />
                   Approve
                 </button>
-                <button
-                  onClick={() => {
-                    if (window.confirm(`Reject workflow "${workflowName}"?`)) {
-                      rejectMutation.mutate();
-                    }
+                <ConfirmRunActionDialog
+                  trigger={
+                    <button
+                      disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
+                      className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
+                    >
+                      <XCircle className="h-3.5 w-3.5" />
+                      Reject
+                    </button>
+                  }
+                  title="Reject workflow?"
+                  description={
+                    <>
+                      Reject the paused workflow <strong>{workflowName}</strong>. If the approval
+                      node defines an <code>on_reject</code> prompt, it runs with your reason as{' '}
+                      <code>$REJECTION_REASON</code>; otherwise the run is cancelled.
+                    </>
+                  }
+                  confirmLabel="Reject"
+                  reasonInput={{
+                    label: 'Reason (optional)',
+                    placeholder: 'Why are you rejecting? Visible to the on_reject prompt.',
                   }}
-                  disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
-                >
-                  <XCircle className="h-3.5 w-3.5" />
-                  Reject
-                </button>
+                  onConfirm={(reason): void => {
+                    rejectMutation.mutate(reason);
+                  }}
+                />
               </div>
               {(approveMutation.isError || rejectMutation.isError) && (
                 <p className="text-xs text-error">

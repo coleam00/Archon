@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { formatDuration } from '@/lib/format';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import type { WorkflowState } from '@/lib/types';
+import { ConfirmRunActionDialog } from './ConfirmRunActionDialog';
 
 interface WorkflowRunCardProps {
   run: DashboardRunResponse;
@@ -31,7 +32,7 @@ interface WorkflowRunCardProps {
   onAbandon?: (runId: string) => void;
   onDelete?: (runId: string) => void;
   onApprove?: (runId: string) => void;
-  onReject?: (runId: string) => void;
+  onReject?: (runId: string, reason?: string) => void;
 }
 
 const PLATFORM_ICONS: Record<string, React.ReactElement> = {
@@ -318,17 +319,30 @@ export function WorkflowRunCard({
             </button>
           )}
           {run.status === 'paused' && onReject && (
-            <button
-              onClick={(): void => {
-                if (window.confirm(`Reject workflow "${run.workflow_name}"?`)) {
-                  onReject(run.id);
-                }
+            <ConfirmRunActionDialog
+              trigger={
+                <button className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors">
+                  <XCircle className="h-3.5 w-3.5" />
+                  Reject
+                </button>
+              }
+              title="Reject workflow?"
+              description={
+                <>
+                  Reject the paused workflow <strong>{run.workflow_name}</strong>. If the approval
+                  node defines an <code>on_reject</code> prompt, it runs with your reason as{' '}
+                  <code>$REJECTION_REASON</code>; otherwise the run is cancelled.
+                </>
+              }
+              confirmLabel="Reject"
+              reasonInput={{
+                label: 'Reason (optional)',
+                placeholder: 'Why are you rejecting? Visible to the on_reject prompt.',
               }}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors"
-            >
-              <XCircle className="h-3.5 w-3.5" />
-              Reject
-            </button>
+              onConfirm={(reason): void => {
+                onReject(run.id, reason);
+              }}
+            />
           )}
           {run.status === 'failed' && onResume && (
             <button
@@ -342,47 +356,67 @@ export function WorkflowRunCard({
             </button>
           )}
           {run.status === 'running' && onAbandon && (
-            <button
-              onClick={(): void => {
-                if (window.confirm(`Abandon workflow "${run.workflow_name}"?`)) {
-                  onAbandon(run.id);
-                }
+            <ConfirmRunActionDialog
+              trigger={
+                <button className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-warning/80 hover:bg-warning/10 hover:text-warning transition-colors">
+                  <Ban className="h-3.5 w-3.5" />
+                  Abandon
+                </button>
+              }
+              title="Abandon workflow?"
+              description={
+                <>
+                  Mark <strong>{run.workflow_name}</strong> as cancelled. Already-completed nodes
+                  remain in the database; the run will not continue.
+                </>
+              }
+              confirmLabel="Abandon"
+              onConfirm={(): void => {
+                onAbandon(run.id);
               }}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-warning/80 hover:bg-warning/10 hover:text-warning transition-colors"
-            >
-              <Ban className="h-3.5 w-3.5" />
-              Abandon
-            </button>
+            />
           )}
           {(run.status === 'running' || run.status === 'pending') && (
-            <button
-              onClick={(): void => {
-                if (window.confirm(`Cancel workflow "${run.workflow_name}"?`)) {
-                  onCancel(run.id);
-                }
+            <ConfirmRunActionDialog
+              trigger={
+                <button className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors">
+                  <XCircle className="h-3.5 w-3.5" />
+                  Cancel
+                </button>
+              }
+              title="Cancel workflow?"
+              description={
+                <>
+                  Cancel <strong>{run.workflow_name}</strong>. The run will be marked as cancelled
+                  and any in-flight subprocess will be terminated.
+                </>
+              }
+              confirmLabel="Cancel workflow"
+              onConfirm={(): void => {
+                onCancel(run.id);
               }}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors"
-            >
-              <XCircle className="h-3.5 w-3.5" />
-              Cancel
-            </button>
+            />
           )}
           {onDelete && run.status !== 'running' && run.status !== 'pending' && (
-            <button
-              onClick={(): void => {
-                if (
-                  window.confirm(
-                    `Delete workflow run "${run.workflow_name}"? This cannot be undone.`
-                  )
-                ) {
-                  onDelete(run.id);
-                }
+            <ConfirmRunActionDialog
+              trigger={
+                <button className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-tertiary hover:bg-error/10 hover:text-error transition-colors">
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </button>
+              }
+              title="Delete workflow run?"
+              description={
+                <>
+                  Permanently delete the run record for <strong>{run.workflow_name}</strong> and its
+                  events. This cannot be undone.
+                </>
+              }
+              confirmLabel="Delete"
+              onConfirm={(): void => {
+                onDelete(run.id);
               }}
-              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-text-tertiary hover:bg-error/10 hover:text-error transition-colors"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete
-            </button>
+            />
           )}
         </div>
       </div>

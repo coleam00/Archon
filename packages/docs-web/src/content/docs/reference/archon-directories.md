@@ -51,12 +51,16 @@ any-repo/.archon/
 │   └── execute.md
 ├── workflows/                # Workflow definitions (YAML files)
 │   └── pr-review.yaml
+├── scripts/                  # Named scripts for script: nodes (.ts/.js for bun, .py for uv)
+├── state/                    # Cross-run workflow state (gitignored)
 └── config.yaml               # Repo-specific configuration
 ```
 
 **Purpose:**
 - `commands/` - Slash commands (auto-loaded on clone)
 - `workflows/` - YAML workflow definitions, discovered recursively at runtime
+- `scripts/` - Named scripts referenced by `script:` nodes
+- `state/` - Cross-run memory written by workflows (e.g. `repo-triage` dedup state). Gitignored; never committed.
 - `config.yaml` - Project-specific settings
 
 ### Docker: `/.archon/`

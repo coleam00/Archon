@@ -22,8 +22,10 @@ Local development with SQLite is the recommended default. No database setup is n
 ### Prerequisites
 
 - [Bun](https://bun.sh) 1.0+
-- At least one AI assistant configured (Claude Code or Codex)
+- At least one AI assistant installed and configured (Claude Code or Codex — Archon orchestrates them, it does not bundle them)
 - A GitHub token for repository cloning (`GH_TOKEN` / `GITHUB_TOKEN`)
+
+> Source installs (`bun run`) auto-resolve Claude Code's `cli.js` via `node_modules`. Compiled Archon binaries require `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` — see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only).
 
 ### Setup
 
@@ -35,7 +37,7 @@ bun install
 
 # 2. Configure environment
 cp .env.example .env
-nano .env  # Add your AI assistant tokens (Claude or Codex)
+nano .env  # Add your AI assistant tokens (Claude, Codex, or Pi)
 
 # 3. Start server + Web UI (SQLite auto-detected, no database setup needed)
 bun run dev

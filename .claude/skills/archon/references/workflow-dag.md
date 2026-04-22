@@ -170,7 +170,7 @@ Command/prompt nodes only:
     required: [issue_type]
 ```
 
-Enables `$classify.output.issue_type` field access. Works with Claude and Codex.
+Enables `$classify.output.issue_type` field access. SDK-enforced on Claude and Codex; best-effort on Pi (schema is appended to the prompt and JSON is parsed out of the result text).
 
 ## Per-Node Provider and Model
 

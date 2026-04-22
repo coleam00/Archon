@@ -5,6 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { DagNodeData } from './DagNodeComponent';
 import type { CommandEntry, DagNode } from '@/lib/api';
+import { useProviders } from '@/hooks/useProviders';
 
 // Keep in sync with triggerRuleSchema.options in @archon/workflows/schemas/dag-node.ts
 // (api.generated.d.ts is type-only and cannot export runtime values)
@@ -56,6 +57,36 @@ function Field({
       <label className={labelClass}>{label}</label>
       {children}
     </div>
+  );
+}
+
+function ProviderField({
+  node,
+  onUpdate,
+  selectClass: cls,
+}: {
+  node: DagNodeData;
+  onUpdate: (updates: Partial<DagNodeData>) => void;
+  selectClass: string;
+}): React.ReactElement {
+  const { providers } = useProviders();
+  return (
+    <Field label="Provider">
+      <select
+        value={node.provider ?? ''}
+        onChange={(e): void => {
+          onUpdate({ provider: e.target.value || undefined });
+        }}
+        className={cls}
+      >
+        <option value="">Inherit</option>
+        {providers.map(p => (
+          <option key={p.id} value={p.id}>
+            {p.displayName}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }
 
@@ -316,21 +347,7 @@ function ExecutionTab({
     <div className="flex flex-col gap-3 p-3">
       {!isBash && (
         <>
-          <Field label="Provider">
-            <select
-              value={node.provider ?? ''}
-              onChange={(e): void => {
-                onUpdate({
-                  provider: (e.target.value || undefined) as 'claude' | 'codex' | undefined,
-                });
-              }}
-              className={selectClass}
-            >
-              <option value="">Inherit</option>
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
-            </select>
-          </Field>
+          <ProviderField node={node} onUpdate={onUpdate} selectClass={selectClass} />
 
           <Field label="Model">
             <input
@@ -625,11 +642,9 @@ function JsonTextareaField({
 function AdvancedTab({
   node,
   onUpdate,
-  onDelete,
 }: {
   node: DagNodeData;
   onUpdate: (updates: Partial<DagNodeData>) => void;
-  onDelete: () => void;
 }): React.ReactElement {
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -679,12 +694,6 @@ function AdvancedTab({
           onUpdate({ hooks: v });
         }}
       />
-
-      <div className="border-t border-border pt-3 mt-2">
-        <Button variant="destructive" size="sm" onClick={onDelete} className="w-full">
-          Delete Node
-        </Button>
-      </div>
     </div>
   );
 }
@@ -701,14 +710,23 @@ function DagInspector({
   return (
     <div key={node.id} className="flex flex-col h-full border-l border-border bg-surface">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-        <span className="text-xs font-semibold text-text-primary truncate">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+        <span className="flex-1 truncate text-xs font-semibold text-text-primary">
           {node.label || node.id}
         </span>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={onDelete}
+          className="h-6 shrink-0 px-2 text-[10px]"
+          aria-label="Delete node"
+        >
+          Delete
+        </Button>
         <button
           type="button"
           onClick={onClose}
-          className="text-text-tertiary hover:text-text-primary text-sm leading-none px-1"
+          className="shrink-0 px-1 text-sm leading-none text-text-tertiary hover:text-text-primary"
           title="Close inspector"
         >
           x
@@ -753,7 +771,7 @@ function DagInspector({
 
           {!isBash && (
             <TabsContent value="advanced">
-              <AdvancedTab key={node.id} node={node} onUpdate={onUpdate} onDelete={onDelete} />
+              <AdvancedTab key={node.id} node={node} onUpdate={onUpdate} />
             </TabsContent>
           )}
         </ScrollArea>

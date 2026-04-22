@@ -153,7 +153,7 @@ describe('cleanup-service', () => {
 
       // worktreeExists returns false (default)
 
-      await removeEnvironment(envId);
+      const result = await removeEnvironment(envId);
 
       // Should call destroy with branchName and canonicalRepoPath for cleanup
       expect(mockDestroy).toHaveBeenCalledWith('/path/that/does/not/exist', {
@@ -163,6 +163,9 @@ describe('cleanup-service', () => {
       });
       // Should mark as destroyed
       expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      // Should return success result
+      expect(result.worktreeRemoved).toBe(true);
+      expect(result.skippedReason).toBeUndefined();
     });
 
     test('handles git worktree remove failure for missing path', async () => {
@@ -314,6 +317,86 @@ describe('cleanup-service', () => {
         canonicalRepoPath: '/workspace/repo',
         deleteRemoteBranch: undefined,
       });
+    });
+
+    test('returns skippedReason when worktree has uncommitted changes without force', async () => {
+      const envId = 'env-uncommitted';
+
+      mockGetById.mockResolvedValueOnce({
+        id: envId,
+        codebase_id: 'codebase-123',
+        workflow_type: 'issue',
+        workflow_id: '42',
+        provider: 'worktree',
+        working_path: '/workspace/worktrees/issue-42',
+        branch_name: 'issue-42',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'github',
+        metadata: {},
+      });
+
+      mockGetCodebase.mockResolvedValueOnce({
+        id: 'codebase-123',
+        name: 'test-repo',
+        default_cwd: '/workspace/repo',
+      });
+
+      // worktreeExists returns true (path exists)
+      mockWorktreeExists.mockResolvedValueOnce(true);
+      // hasUncommittedChanges returns true
+      mockHasUncommittedChanges.mockResolvedValueOnce(true);
+
+      const result = await removeEnvironment(envId);
+
+      // Should NOT call destroy or mark as destroyed
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      // Should return skipped result
+      expect(result.worktreeRemoved).toBe(false);
+      expect(result.branchDeleted).toBe(false);
+      expect(result.skippedReason).toBe('has uncommitted changes');
+    });
+
+    test('returns warnings from partial destroy', async () => {
+      const envId = 'env-partial';
+
+      mockGetById.mockResolvedValueOnce({
+        id: envId,
+        codebase_id: 'codebase-123',
+        workflow_type: 'issue',
+        workflow_id: '42',
+        provider: 'worktree',
+        working_path: '/workspace/worktrees/issue-42',
+        branch_name: 'issue-42',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'github',
+        metadata: {},
+      });
+
+      mockGetCodebase.mockResolvedValueOnce({
+        id: 'codebase-123',
+        name: 'test-repo',
+        default_cwd: '/workspace/repo',
+      });
+
+      // worktreeExists returns false (default)
+
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        branchDeleted: false,
+        remoteBranchDeleted: null,
+        directoryClean: true,
+        warnings: ["Cannot delete branch 'issue-42': checked out elsewhere"],
+      });
+
+      const result = await removeEnvironment(envId);
+
+      expect(result.worktreeRemoved).toBe(true);
+      expect(result.branchDeleted).toBe(false);
+      expect(result.warnings).toEqual(["Cannot delete branch 'issue-42': checked out elsewhere"]);
+      expect(result.skippedReason).toBeUndefined();
     });
 
     test('re-throws non-directory errors from provider.destroy', async () => {
@@ -626,10 +709,33 @@ describe('runScheduledCleanup', () => {
         metadata: {},
       },
     ]);
-    // First env: internal worktreeExists returns false
-    mockExecFileAsync.mockRejectedValueOnce(new Error('not a git repo'));
-    // Second env: internal worktreeExists returns false
-    mockExecFileAsync.mockRejectedValueOnce(new Error('not a git repo'));
+    // worktreeExists returns false for both (already default)
+    // env-error: removeEnvironment needs getById + getCodebase
+    mockGetById.mockResolvedValueOnce({
+      id: 'env-error',
+      codebase_id: 'codebase-1',
+      working_path: '/bad/path',
+      branch_name: 'bad-branch',
+      status: 'active',
+    });
+    mockGetCodebase.mockResolvedValueOnce({
+      id: 'codebase-1',
+      name: 'test-repo',
+      default_cwd: '/workspace/repo',
+    });
+    // env-good: removeEnvironment needs getById + getCodebase
+    mockGetById.mockResolvedValueOnce({
+      id: 'env-good',
+      codebase_id: 'codebase-1',
+      working_path: '/workspace/repo/worktrees/pr-1',
+      branch_name: 'pr-1',
+      status: 'active',
+    });
+    mockGetCodebase.mockResolvedValueOnce({
+      id: 'codebase-1',
+      name: 'test-repo',
+      default_cwd: '/workspace/repo',
+    });
 
     const report = await runScheduledCleanup();
 

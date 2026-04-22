@@ -127,7 +127,7 @@ function WorkflowBuilderInner(): React.ReactElement {
   // Core state
   const [workflowName, setWorkflowName] = useState('');
   const [workflowDescription, setWorkflowDescription] = useState('');
-  const [provider, setProvider] = useState<'claude' | 'codex' | undefined>(undefined);
+  const [provider, setProvider] = useState<string | undefined>(undefined);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -172,11 +172,30 @@ function WorkflowBuilderInner(): React.ReactElement {
     setHasUnsavedChanges(true);
   }, []);
 
+  // Refs mirror the latest nodes/edges so snapshot-taking callbacks don't
+  // close over stale values when events fire in the same tick as a render.
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  useEffect(() => {
+    nodesRef.current = nodes;
+    edgesRef.current = edges;
+  }, [nodes, edges]);
+
+  const pushSnapshotLatest = useCallback((): void => {
+    pushSnapshot({ nodes: nodesRef.current, edges: edgesRef.current });
+  }, [pushSnapshot]);
+
   const buildDefinition = useCallback((): WorkflowDefinition => {
     const name = workflowName.trim() || 'untitled';
     const description = workflowDescription;
     const dagNodes = reactFlowToDagNodes(nodes, edges);
-    return { name, description, provider, model, nodes: dagNodes };
+    return {
+      name,
+      description,
+      provider,
+      model,
+      nodes: dagNodes,
+    };
   }, [workflowName, workflowDescription, provider, model, nodes, edges]);
 
   const loadWorkflow = useCallback(
@@ -230,14 +249,21 @@ function WorkflowBuilderInner(): React.ReactElement {
     [selectedNodeId, setNodes, markDirty]
   );
 
+  const handleNodeDeleteById = useCallback(
+    (nodeId: string): void => {
+      pushSnapshotLatest();
+      setNodes(nds => nds.filter(n => n.id !== nodeId));
+      setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
+      setSelectedNodeId(prev => (prev === nodeId ? null : prev));
+      markDirty();
+    },
+    [setNodes, setEdges, markDirty, pushSnapshotLatest]
+  );
+
   const handleNodeDelete = useCallback((): void => {
     if (!selectedNodeId) return;
-    pushSnapshot({ nodes, edges });
-    setNodes(nds => nds.filter(n => n.id !== selectedNodeId));
-    setEdges(eds => eds.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId));
-    setSelectedNodeId(null);
-    markDirty();
-  }, [selectedNodeId, setNodes, setEdges, markDirty, pushSnapshot, nodes, edges]);
+    handleNodeDeleteById(selectedNodeId);
+  }, [selectedNodeId, handleNodeDeleteById]);
 
   // Toolbar action handlers
   const handleValidate = useCallback(async (): Promise<void> => {
@@ -355,7 +381,7 @@ function WorkflowBuilderInner(): React.ReactElement {
           position: { x: 200, y: 200 },
           data: { id, label: 'Prompt', nodeType: 'prompt' },
         };
-        pushSnapshot({ nodes, edges });
+        pushSnapshotLatest();
         setNodes(nds => [...nds, newNode]);
         markDirty();
       },
@@ -367,7 +393,7 @@ function WorkflowBuilderInner(): React.ReactElement {
           position: { x: 200, y: 200 },
           data: { id, label: 'Shell', nodeType: 'bash' },
         };
-        pushSnapshot({ nodes, edges });
+        pushSnapshotLatest();
         setNodes(nds => [...nds, newNode]);
         markDirty();
       },
@@ -387,7 +413,7 @@ function WorkflowBuilderInner(): React.ReactElement {
           position: { x: sourceNode.position.x + 30, y: sourceNode.position.y + 30 },
           data: { ...sourceNode.data, id },
         };
-        pushSnapshot({ nodes, edges });
+        pushSnapshotLatest();
         setNodes(nds => [...nds, newNode]);
         markDirty();
       },
@@ -399,9 +425,8 @@ function WorkflowBuilderInner(): React.ReactElement {
       handleToggleValidationPanel,
       handleNodeDelete,
       nodes,
-      edges,
       selectedNodeId,
-      pushSnapshot,
+      pushSnapshotLatest,
       setNodes,
       markDirty,
     ]
@@ -476,10 +501,9 @@ function WorkflowBuilderInner(): React.ReactElement {
                   setNodes={setNodes}
                   setEdges={setEdges}
                   onNodeSelect={setSelectedNodeId}
+                  onNodeDelete={handleNodeDeleteById}
                   onDirty={markDirty}
-                  onPushSnapshot={(): void => {
-                    pushSnapshot({ nodes, edges });
-                  }}
+                  onPushSnapshot={pushSnapshotLatest}
                   commands={commandList}
                 />
               </div>

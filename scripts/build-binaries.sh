@@ -21,6 +21,12 @@ OUTFILE="${OUTFILE:-}"
 
 echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
 
+# Regenerate bundled defaults from .archon/{commands,workflows}/defaults/ so the
+# compiled binary always embeds the current on-disk contents. CI also runs
+# `bun run check:bundled` to catch committed drift.
+echo "Regenerating bundled defaults..."
+bun run scripts/generate-bundled-defaults.ts
+
 # Update build-time constants in source before compiling.
 # The file is restored via an EXIT trap so the dev tree is never left dirty,
 # even if `bun build --compile` fails mid-way. See GitHub issue #979.

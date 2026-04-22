@@ -1,6 +1,6 @@
 {
   "name": "@archon/cli",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "main": "./src/cli.ts",
   "bin": {
@@ -17,6 +17,7 @@
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/providers": "workspace:*",
     "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",

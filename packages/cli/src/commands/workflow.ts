@@ -11,6 +11,7 @@ import {
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
 import { createLogger, getArchonHome } from '@archon/paths';
+import { join } from 'node:path';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -62,8 +63,6 @@ export interface WorkflowRunOptions {
   noWorktree?: boolean;
   resume?: boolean;
   codebaseId?: string; // Passed by resume/approve to skip path-based lookup
-  /** When true, skip the env-leak-gate during auto-registration. */
-  allowEnvKeys?: boolean;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
@@ -77,6 +76,57 @@ function generateConversationId(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `cli-${String(timestamp)}-${random}`;
+}
+
+/**
+ * Parses the "Source symlink at X already points to Y, expected Z" error
+ * thrown by `createProjectSourceSymlink` in @archon/paths. Cross-package
+ * string contract — if that throw site changes wording, this parser silently
+ * stops matching. Returns the workspace dir (parent of the `source` link) so
+ * the caller can emit an exact cleanup path, or null if unrecognized.
+ */
+export function extractStaleWorkspaceEntry(message: string): string | null {
+  const prefix = 'Source symlink at ';
+  const delimiter = ' already points to ';
+  if (!message.startsWith(prefix)) return null;
+
+  const remainder = message.slice(prefix.length);
+  const delimiterIndex = remainder.indexOf(delimiter);
+  if (delimiterIndex === -1) return null;
+
+  const sourcePath = remainder.slice(0, delimiterIndex).trim();
+  const lastSeparator = Math.max(sourcePath.lastIndexOf('/'), sourcePath.lastIndexOf('\\'));
+  return lastSeparator === -1 ? null : sourcePath.slice(0, lastSeparator);
+}
+
+/**
+ * Wraps a codebase auto-registration failure for either the worktree-create or
+ * resume path. Preserves the original error message and delegates hint detail
+ * to `extractStaleWorkspaceEntry`; falls back to a workspace-root pointer when
+ * the error shape is unrecognized.
+ */
+function buildRegistrationFailureError(action: string, error: Error): Error {
+  const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
+  let hint: string;
+  if (staleWorkspaceEntry) {
+    hint = `Hint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry, or use --no-worktree to skip isolation.`;
+  } else {
+    // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
+    // the registration error we're wrapping is the load-bearing one — we'd
+    // rather lose the exact path in the hint than replace it with a secondary
+    // home-resolution error that masks the root cause.
+    try {
+      const workspacesPath = join(getArchonHome(), 'workspaces');
+      hint = `Hint: Check your Archon workspace registration under ${workspacesPath} and retry, or use --no-worktree to skip isolation.`;
+    } catch {
+      hint =
+        'Hint: Check your Archon workspace registration and retry, or use --no-worktree to skip isolation.';
+    }
+  }
+
+  return new Error(
+    `Cannot ${action}: repository registration failed.\nError: ${error.message}\n${hint}`
+  );
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -121,9 +171,9 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
  */
 async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   try {
-    return await discoverWorkflowsWithConfig(cwd, loadConfig, {
-      globalSearchPath: getArchonHome(),
-    });
+    // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically —
+    // no option needed since the discovery helper reads them unconditionally.
+    return await discoverWorkflowsWithConfig(cwd, loadConfig);
   } catch (error) {
     const err = error as Error;
     throw new Error(
@@ -180,7 +230,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
   }
 
   if (workflowEntries.length > 0) {
-    console.log(`\nFound ${String(workflowEntries.length)} workflow(s):\n`);
+    console.log(`\nFound ${workflowEntries.length} workflow(s):\n`);
 
     for (const { workflow } of workflowEntries) {
       console.log(`  ${workflow.name}`);
@@ -193,7 +243,7 @@ export async function workflowListCommand(cwd: string, json?: boolean): Promise<
   }
 
   if (errors.length > 0) {
-    console.log(`\n${String(errors.length)} workflow(s) failed to load:\n`);
+    console.log(`\n${errors.length} workflow(s) failed to load:\n`);
     for (const e of errors) {
       console.log(`  ${e.filename}: ${e.error}`);
     }
@@ -263,6 +313,37 @@ export async function workflowRunCommand(
     );
   }
 
+  // Reconcile workflow-level worktree policy with invocation flags.
+  // The workflow YAML's `worktree.enabled` pins isolation regardless of caller —
+  // a mismatch between policy and flags is a user error we surface loudly
+  // rather than silently applying one side and ignoring the other.
+  const pinnedEnabled = workflow.worktree?.enabled;
+  if (pinnedEnabled === false) {
+    if (options.branchName !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --branch requires an isolated worktree.\n' +
+          "  Drop --branch or change the workflow's worktree.enabled."
+      );
+    }
+    if (options.fromBranch !== undefined) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: false (runs in live checkout).\n` +
+          '  --from/--from-branch only applies when a worktree is created.\n' +
+          "  Drop --from or change the workflow's worktree.enabled."
+      );
+    }
+    // --no-worktree is redundant but not contradictory — silently accept.
+  } else if (pinnedEnabled === true) {
+    if (options.noWorktree) {
+      throw new Error(
+        `Workflow '${workflow.name}' sets worktree.enabled: true (requires a worktree).\n` +
+          '  --no-worktree conflicts with the workflow policy.\n' +
+          "  Drop --no-worktree or change the workflow's worktree.enabled."
+      );
+    }
+  }
+
   console.log(`Running workflow: ${workflowName}`);
   console.log(`Working directory: ${cwd}`);
   console.log('');
@@ -287,6 +368,7 @@ export async function workflowRunCommand(
   // Try to find a codebase for this directory
   let codebase = null;
   let codebaseLookupError: Error | null = null;
+  let codebaseRegistrationError: Error | null = null;
   try {
     codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
   } catch (error) {
@@ -325,13 +407,14 @@ export async function workflowRunCommand(
     const repoRoot = await git.findRepoRoot(cwd);
     if (repoRoot) {
       try {
-        const result = await registerRepository(repoRoot, options.allowEnvKeys, 'register-cli');
+        const result = await registerRepository(repoRoot);
         codebase = await codebaseDb.getCodebase(result.codebaseId);
         if (!result.alreadyExisted) {
           getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
         }
       } catch (error) {
         const err = error as Error;
+        codebaseRegistrationError = err;
         getLog().warn(
           { err, errorType: err.constructor.name, repoRoot },
           'cli.codebase_auto_registration_failed'
@@ -355,6 +438,9 @@ export async function workflowRunCommand(
             `Error: ${codebaseLookupError.message}\n` +
             'Hint: Check your database connection before using --resume.'
         );
+      }
+      if (codebaseRegistrationError) {
+        throw buildRegistrationFailureError('resume', codebaseRegistrationError);
       }
       throw new Error(
         'Cannot resume: Not in a git repository.\n' +
@@ -405,8 +491,14 @@ export async function workflowRunCommand(
     console.log('');
   }
 
-  // Default to worktree isolation unless --no-worktree or --resume
-  const wantsIsolation = !options.resume && !options.noWorktree;
+  // Default to worktree isolation unless --no-worktree or --resume.
+  // Workflow YAML `worktree.enabled` pins the decision — mismatches with CLI
+  // flags are rejected above, so by this point the policy (if set) and flags
+  // agree. `--resume` reuses an existing worktree and takes precedence over
+  // the pinned policy to avoid disturbing a paused run.
+  const flagWantsIsolation = !options.resume && !options.noWorktree;
+  const wantsIsolation =
+    !options.resume && pinnedEnabled !== undefined ? pinnedEnabled : flagWantsIsolation;
 
   if (wantsIsolation && codebase) {
     // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
@@ -509,6 +601,9 @@ export async function workflowRunCommand(
           'Hint: Check your database connection, or use --no-worktree to skip isolation.'
       );
     }
+    if (codebaseRegistrationError) {
+      throw buildRegistrationFailureError('create worktree', codebaseRegistrationError);
+    }
     throw new Error(
       'Cannot create worktree: not in a git repository.\n' +
         'Run from within a git repo, or use --no-worktree to skip isolation.'
@@ -591,6 +686,24 @@ export async function workflowRunCommand(
         renderWorkflowEvent(event, verbose ?? false);
       });
 
+  // Notify Web UI that a workflow is dispatching.
+  // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
+  // but omits the rocket emoji and "(background)" qualifier since the CLI runs synchronously.
+  // In the CLI path there is no separate worker conversation — the CLI itself
+  // is both the dispatcher and the executor, so workerConversationId === conversationId.
+  try {
+    await adapter.sendMessage(conversationId, `Dispatching workflow: **${workflow.name}**`, {
+      category: 'workflow_dispatch_status',
+      segment: 'new',
+      workflowDispatch: { workerConversationId: conversationId, workflowName: workflow.name },
+    });
+  } catch (dispatchError) {
+    getLog().warn(
+      { err: dispatchError as Error, conversationId },
+      'cli.workflow_dispatch_surface_failed'
+    );
+  }
+
   // Execute workflow with workingCwd (may be worktree path)
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
@@ -612,6 +725,22 @@ export async function workflowRunCommand(
   if (result.success && 'paused' in result && result.paused) {
     console.log('\nWorkflow paused — waiting for approval.');
   } else if (result.success) {
+    // Surface workflow result to Web UI as a result card (mirrors orchestrator.ts result message).
+    // Paused workflows are handled in the branch above and intentionally do not get a result card.
+    if ('summary' in result && result.summary) {
+      try {
+        await adapter.sendMessage(conversationId, result.summary, {
+          category: 'workflow_result',
+          segment: 'new',
+          workflowResult: { workflowName: workflow.name, runId: result.workflowRunId },
+        });
+      } catch (surfaceError) {
+        getLog().warn(
+          { err: surfaceError as Error, conversationId },
+          'cli.workflow_result_surface_failed'
+        );
+      }
+    }
     console.log('\nWorkflow completed successfully.');
   } else {
     throw new Error(`Workflow failed: ${result.error}`);
@@ -630,25 +759,25 @@ function formatAge(startedAt: Date | string): string {
   if (Number.isNaN(date.getTime())) return 'unknown';
   const ms = Date.now() - date.getTime();
   const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${String(secs)}s`;
+  if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${String(mins)}m`;
+  if (mins < 60) return `${mins}m`;
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${String(hours)}h ${String(mins % 60)}m`;
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
   const days = Math.floor(hours / 24);
-  return `${String(days)}d ${String(hours % 24)}h`;
+  return `${days}d ${hours % 24}h`;
 }
 
 /**
  * Format a duration in milliseconds as a compact string.
  */
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${String(ms)}ms`;
+  if (ms < 1000) return `${ms}ms`;
   const secs = Math.round(ms / 100) / 10;
-  if (secs < 60) return `${String(secs)}s`;
+  if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
   const remSecs = Math.round(secs % 60);
-  return `${String(mins)}m${String(remSecs)}s`;
+  return `${mins}m${remSecs}s`;
 }
 
 interface NodeSummary {
@@ -732,20 +861,16 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
   }
 
   if (json) {
+    let runsOutput: unknown[] = runs;
     if (verbose) {
       const eventsPerRun = await Promise.all(
         runs.map(run =>
           workflowEventsDb.listWorkflowEvents(run.id).catch(() => [] as WorkflowEventRow[])
         )
       );
-      const runsWithEvents = runs.map((run, i) => ({
-        ...run,
-        events: eventsPerRun[i],
-      }));
-      console.log(JSON.stringify({ runs: runsWithEvents }, null, 2));
-    } else {
-      console.log(JSON.stringify({ runs }, null, 2));
+      runsOutput = runs.map((run, i) => ({ ...run, events: eventsPerRun[i] }));
     }
+    console.log(JSON.stringify({ runs: runsOutput }, null, 2));
     return;
   }
 
@@ -754,7 +879,7 @@ export async function workflowStatusCommand(json?: boolean, verbose?: boolean): 
     return;
   }
 
-  console.log(`\nActive workflows (${String(runs.length)}):\n`);
+  console.log(`\nActive workflows (${runs.length}):\n`);
   for (const run of runs) {
     const age = formatAge(run.started_at);
     console.log(`  ID:     ${run.id}`);
@@ -968,9 +1093,9 @@ export async function workflowCleanupCommand(days: number): Promise<void> {
   try {
     const { count } = await workflowDb.deleteOldWorkflowRuns(days);
     if (count === 0) {
-      console.log(`No workflow runs older than ${String(days)} days to clean up.`);
+      console.log(`No workflow runs older than ${days} days to clean up.`);
     } else {
-      console.log(`Deleted ${String(count)} workflow run(s) older than ${String(days)} days.`);
+      console.log(`Deleted ${count} workflow run(s) older than ${days} days.`);
     }
   } catch (error) {
     const err = error as Error;
