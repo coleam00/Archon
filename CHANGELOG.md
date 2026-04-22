@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-04-22
+
+Hotfix for v0.3.7 — restore working compiled binaries. v0.3.7 was tagged but never shipped any working assets: two distinct bugs (Pi SDK's module-init `package.json` read, and Bun `--bytecode` producing broken output for this project's module graph) made every compiled archon binary crash at startup. The v0.3.7 GitHub Release was deleted immediately (the tag remains for history); v0.3.8 is the first release with working `archon-{darwin,linux}-{arm64,x64}` and `archon-windows-x64.exe` binaries since v0.3.6. Homebrew and `install.sh` were never updated to v0.3.7, so users were not exposed to the broken state.
+
 ### Fixed
 
 - **Compiled archon binaries no longer crash at startup when the Pi provider is bundled.** `@mariozechner/pi-coding-agent/dist/config.js` runs `readFileSync(getPackageJsonPath(), 'utf-8')` at module top-level, which inside a compiled binary resolves to `dirname(process.execPath) + '/package.json'` — a path that doesn't exist next to `/usr/local/bin/archon`, making every archon command (including `archon version`) crash with ENOENT before it ran. The Pi SDK and all Pi-dependent helper modules are now dynamically imported inside `PiProvider.sendQuery()`; registering Pi and instantiating the provider no longer touches Pi's module-init side effects. A regression test (`provider-lazy-load.test.ts`) walks the same `registerCommunityProviders()` + `getAgentProvider('pi')` path the CLI and server take and asserts neither SDK package was resolved. Claude and Codex providers keep their static import style — their SDKs have no equivalent module-init side effect. Unblocks the v0.3.7 release binaries that could not ship because of this bug. (#1355)
