@@ -1670,7 +1670,7 @@ async function executeLoopNode(
       })) {
         if (msg.type === 'assistant') {
           fullOutput += msg.content;
-          const cleaned = stripCompletionTags(msg.content);
+          const cleaned = stripCompletionTags(msg.content, loop.until);
           cleanOutput += cleaned;
           if (platform.getStreamingMode() === 'stream' && cleaned) {
             await safeSendMessage(platform, conversationId, cleaned, msgContext);
