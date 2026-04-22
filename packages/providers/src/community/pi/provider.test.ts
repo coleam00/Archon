@@ -209,6 +209,21 @@ describe('PiProvider', () => {
     expect(new PiProvider().getCapabilities()).toEqual(PI_CAPABILITIES);
   });
 
+  test('sendQuery installs PI_PACKAGE_DIR shim before Pi SDK loads', async () => {
+    // Runtime-safety regression: Pi's config.js reads `getPackageJsonPath()` at
+    // its module init, which resolves to a non-existent path inside compiled
+    // archon binaries. The shim writes a stub package.json to tmpdir and sets
+    // PI_PACKAGE_DIR so Pi's short-circuit kicks in. Must run BEFORE the
+    // dynamic imports in sendQuery — we verify by calling the fast-fail "no
+    // model" path (which returns before any Pi SDK logic executes) and
+    // asserting the env var was set regardless.
+    delete process.env.PI_PACKAGE_DIR;
+    expect(process.env.PI_PACKAGE_DIR).toBeUndefined();
+    await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(process.env.PI_PACKAGE_DIR).toBeDefined();
+    expect(process.env.PI_PACKAGE_DIR).toContain('archon-pi-shim');
+  });
+
   test('throws when no model is configured', async () => {
     const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
     expect(error?.message).toContain('Pi provider requires a model');
