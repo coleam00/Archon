@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, AlertTriangle } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
@@ -9,10 +9,17 @@ import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
 import { ArtifactSummary } from './ArtifactSummary';
 import { ChatInterface } from '@/components/chat/ChatInterface';
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
-import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
+import {
+  getWorkflowRun,
+  getWorkflowRunByWorker,
+  getCodebase,
+  getWorkflow,
+  abandonWorkflowRun,
+} from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
 import type {
@@ -38,6 +45,9 @@ export interface ToolEvent {
 }
 
 const TERMINAL_STATUSES: readonly WorkflowRunStatus[] = ['completed', 'failed', 'cancelled'];
+
+/** A running workflow is considered "stalled" when no new events have arrived in this window. */
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
 
 function isTerminal(status: WorkflowRunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
@@ -225,6 +235,12 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   // matching each with its corresponding tool_completed to get duration.
   const toolEvents = useMemo((): ToolEvent[] => {
     const allEvents = queryData?.events ?? [];
+    const runStatus = queryData?.workflowState.status;
+    // Once the run is terminal, unmatched tool_called events will never get a
+    // tool_completed — mark them with duration:0 so WorkflowLogs stops rendering
+    // them with a spinner.
+    const runIsTerminal = runStatus ? TERMINAL_STATUSES.includes(runStatus) : false;
+
     const completedEvents = allEvents
       .filter(ev => ev.event_type === 'tool_completed')
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
@@ -248,6 +264,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             (c.step_name ?? undefined) === stepName
         );
         if (completed) usedCompleted.add(completed.id);
+        const matchedDuration = completed
+          ? (completed.data.duration_ms as number | undefined)
+          : undefined;
         return {
           id: ev.id,
           name: toolName,
@@ -255,10 +274,10 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           stepName: ev.step_name ?? undefined,
           stepIndex: ev.step_index ?? undefined,
           createdAt: ev.created_at,
-          duration: completed ? (completed.data.duration_ms as number | undefined) : undefined,
+          duration: matchedDuration ?? (runIsTerminal ? 0 : undefined),
         };
       });
-  }, [queryData?.events]);
+  }, [queryData?.events, queryData?.workflowState.status]);
 
   // Fetch codebase name when run data becomes available
   const codebaseId = queryData?.codebaseId ?? null;
@@ -325,7 +344,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   // When a `running` SSE event is missed (no buffering), the first SSE event
   // seen is `completed` — which creates liveWorkflow with steps:[] and
   // startedAt=completionTime. We must preserve initialData's structure in that case.
-  const workflow = ((): WorkflowState | null => {
+  const mergedWorkflow = ((): WorkflowState | null => {
     if (!liveWorkflow) return initialData;
     if (!initialData) return liveWorkflow;
     if (isTerminal(initialData.status) && !isTerminal(liveWorkflow.status)) {
@@ -352,6 +371,22 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       maxIterations: liveWorkflow.maxIterations ?? initialData.maxIterations,
     };
   })();
+
+  // Once the run is terminal, remap dangling "running"/"pending" node states to
+  // "skipped". abandonWorkflow() only mutates the run row; it does not emit
+  // node-terminator events, so without this the DAG viewer keeps showing a
+  // spinner on whatever node was in-flight at cancel time.
+  const workflow: WorkflowState | null =
+    mergedWorkflow && isTerminal(mergedWorkflow.status)
+      ? {
+          ...mergedWorkflow,
+          dagNodes: mergedWorkflow.dagNodes.map(n =>
+            n.status === 'running' || n.status === 'pending'
+              ? { ...n, status: 'skipped' as const }
+              : n
+          ),
+        }
+      : mergedWorkflow;
 
   // Auto-select the first DAG node when workflow data loads and no node is selected.
   // Prefer the currently executing node (for running workflows), otherwise pick the first node.
@@ -469,12 +504,45 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     ? (nodeStartTimes.get(selectedDagNode) ?? null)
     : null;
 
+  // Timestamp of the most recent workflow_event, used to detect stalled runs.
+  // Falls back to startedAt so a freshly started run isn't flagged as stale.
+  const lastEventAt = useMemo((): number | null => {
+    const events = queryData?.events ?? [];
+    let latest = 0;
+    for (const e of events) {
+      const t = new Date(ensureUtc(e.created_at)).getTime();
+      if (t > latest) latest = t;
+    }
+    if (latest > 0) return latest;
+    return initialData?.startedAt ?? null;
+  }, [queryData?.events, initialData?.startedAt]);
+
   // Handler for user-initiated node clicks (graph or sidebar).
   // Increments scroll trigger so WorkflowLogs scrolls to the node's section.
   const handleNodeClick = useCallback((nodeId: string): void => {
     setSelectedDagNode(nodeId);
     setNodeScrollTrigger(prev => prev + 1);
   }, []);
+
+  // Abandon handler — user-triggered only. Keeps us on the right side of the
+  // "No Autonomous Lifecycle Mutation Across Process Boundaries" principle:
+  // we surface the stalled state, the user decides whether to cancel it.
+  const [abandoning, setAbandoning] = useState(false);
+  const handleAbandon = useCallback(async (): Promise<void> => {
+    if (abandoning) return;
+    setAbandoning(true);
+    try {
+      await abandonWorkflowRun(runId);
+      await queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+    } catch (err) {
+      console.error('[WorkflowExecution] Failed to abandon run', {
+        runId,
+        error: err instanceof Error ? err.message : err,
+      });
+    } finally {
+      setAbandoning(false);
+    }
+  }, [runId, abandoning, queryClient]);
 
   if (error) {
     return (
@@ -504,6 +572,12 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const elapsed = startedAt ? Math.max(0, completedAt - startedAt) : 0;
 
   const isRunning = workflow.status === 'running' || workflow.status === 'pending';
+
+  // Stall detection — surfaces runs where the agent has stopped emitting events
+  // (e.g. the Claude SDK subprocess hung) without marking them as failed. Re-runs
+  // every second via the existing setTick interval while the workflow is active.
+  const stalledForMs = isRunning && lastEventAt ? Math.max(0, Date.now() - lastEventAt) : 0;
+  const isStalled = stalledForMs >= STALE_THRESHOLD_MS;
 
   // Pick the platform ID for logs: worker takes precedence over conversation.
   const logsPlatformId = workerPlatformId ?? conversationPlatformId;
@@ -646,6 +720,28 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
               )}
             </TabsList>
           </Tabs>
+        </div>
+      )}
+
+      {isStalled && (
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-warning/10 text-warning">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <div className="flex-1 text-sm">
+            <span className="font-medium">No activity for {formatDurationMs(stalledForMs)}.</span>{' '}
+            <span className="text-text-secondary">
+              The run may be stuck. Abandon it to free the conversation.
+            </span>
+          </div>
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={(): void => {
+              void handleAbandon();
+            }}
+            disabled={abandoning}
+          >
+            {abandoning ? 'Abandoning…' : 'Abandon run'}
+          </Button>
         </div>
       )}
 
