@@ -42,6 +42,8 @@ Determine the user's intent and dispatch to the appropriate guide:
 | **Variable substitution reference** | Read `references/variables.md` |
 | **CLI command reference** | Read `references/cli-commands.md` |
 | **Run an interactive workflow** | Read `references/interactive-workflows.md` — transparent relay protocol |
+| **Workflow good practices / anti-patterns** | Read `references/good-practices.md` — read before designing a non-trivial workflow |
+| **Troubleshoot a failing / stuck workflow** | Read `references/troubleshooting.md` — log locations, common failure modes |
 | **Run a workflow (default)** | Continue with "Running Workflows" below |
 
 If the intent is ambiguous, ask the user to clarify.
