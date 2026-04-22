@@ -158,6 +158,26 @@ type NodeExecutionResult = NodeOutput & { costUsd?: number };
 const lastNodeCancelCheck = new Map<string, number>();
 const CANCEL_CHECK_INTERVAL_MS = 10_000;
 
+/**
+ * Policy for the during-streaming cancel check: should the currently-streaming
+ * node be allowed to continue for a given observed run status?
+ *
+ * - `running`: the normal case → continue.
+ * - `paused`: a concurrent approval node in the same topological layer has
+ *   transitioned the run to paused. The streaming node should finish its own
+ *   output; workflow progression is gated by the approval node, not by tearing
+ *   down unrelated in-flight streams.
+ * - `null` (run deleted), `cancelled`, `failed`, `completed`, or any other
+ *   state → abort the stream.
+ *
+ * Exported for unit testing; the full streaming-cancel branch in
+ * `executeNodeInternal` only fires once per 10s (CANCEL_CHECK_INTERVAL_MS), so
+ * integration-level coverage of the policy is timing-sensitive and flaky.
+ */
+export function shouldContinueStreamingForStatus(status: string | null): boolean {
+  return status === 'running' || status === 'paused';
+}
+
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -698,7 +718,7 @@ async function executeNodeInternal(
         lastNodeCancelCheck.set(nodeKey, tickNow);
         try {
           const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-          if (streamStatus === null || (streamStatus !== 'running' && streamStatus !== 'paused')) {
+          if (!shouldContinueStreamingForStatus(streamStatus)) {
             getLog().info(
               { workflowRunId: workflowRun.id, nodeId: node.id, status: streamStatus ?? 'deleted' },
               'dag.stop_detected_during_streaming'

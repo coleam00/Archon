@@ -6033,3 +6033,49 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
     expect(mcpMessages(platform)).toEqual(['⚠️ Haiku does not support MCP']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Streaming cancel-check policy (during-streaming paused tolerance)
+// ---------------------------------------------------------------------------
+
+describe('shouldContinueStreamingForStatus', () => {
+  it('continues when status is running', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('running')).toBe(true);
+  });
+
+  it('continues when status is paused (sibling approval node in same layer)', async () => {
+    // The key invariant: a concurrent approval node can pause the run while a
+    // streaming AI node is mid-response. The streaming node must finish its
+    // own output — workflow progression is gated by the approval node, not
+    // by tearing down unrelated in-flight streams.
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('paused')).toBe(true);
+  });
+
+  it('aborts when status is null (run deleted)', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus(null)).toBe(false);
+  });
+
+  it('aborts when status is cancelled', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('cancelled')).toBe(false);
+  });
+
+  it('aborts when status is failed', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('failed')).toBe(false);
+  });
+
+  it('aborts when status is completed', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('completed')).toBe(false);
+  });
+
+  it('aborts on any unrecognized state', async () => {
+    const { shouldContinueStreamingForStatus } = await import('./dag-executor');
+    expect(shouldContinueStreamingForStatus('pending')).toBe(false);
+    expect(shouldContinueStreamingForStatus('invalid-status')).toBe(false);
+  });
+});

@@ -293,8 +293,19 @@ export function DashboardPage(): React.ReactElement {
     runAction(deleteWorkflowRun, runId, 'Failed to delete workflow run');
   const handleApprove = (runId: string): Promise<void> =>
     runAction(approveWorkflowRun, runId, 'Failed to approve workflow');
-  const handleReject = (runId: string, reason?: string): Promise<void> =>
-    runAction(id => rejectWorkflowRun(id, reason), runId, 'Failed to reject workflow');
+  // Reject differs from the rest of the lifecycle actions because it takes a
+  // second argument (the optional reason). Inline it rather than squeezing
+  // through `runAction`'s `(id) => Promise` signature with a closure — keeps
+  // `runAction` usefully narrow for the single-arg actions above.
+  async function handleReject(runId: string, reason?: string): Promise<void> {
+    try {
+      setActionError(null);
+      await rejectWorkflowRun(runId, reason);
+      void queryClient.invalidateQueries({ queryKey: ['dashboardRuns'] });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Failed to reject workflow');
+    }
+  }
 
   const totalPages = Math.ceil(total / pageSize);
   const hasMore = page + 1 < totalPages;

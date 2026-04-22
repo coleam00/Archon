@@ -36,10 +36,10 @@ interface Props {
    * so callers can distinguish "no reason given" from "empty string given".
    */
   reasonInput?: ReasonInputConfig;
-  /** Invoked when the user confirms. The current callsites are all
-   *  fire-and-forget wrappers around React Query mutations whose error
-   *  handling lives at the page level (`runAction` in `DashboardPage.tsx`).
-   *  Widen to `Promise<void>` only if a caller needs to await the action. */
+  /** Invoked when the user confirms. Fire-and-forget; callers own error
+   *  surfacing. Widen to `Promise<void>` only if a future caller needs to
+   *  await the action. `reason` is only non-`undefined` when `reasonInput`
+   *  is supplied and the user typed something after trimming. */
   onConfirm: (reason?: string) => void;
 }
 

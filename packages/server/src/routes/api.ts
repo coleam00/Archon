@@ -1038,36 +1038,77 @@ export function registerApiRoutes(
   /**
    * Re-enter the orchestrator after a paused approval gate is resolved, so a
    * web-dispatched workflow continues (approve) or runs its on_reject prompt
-   * (reject) without the user having to type a follow-up message. The CLI's
+   * (reject) without the user having to re-run the workflow command. The CLI's
    * `workflowApproveCommand` / `workflowRejectCommand` already auto-resume via
    * `workflowRunCommand({ resume: true })`; this is the web-side equivalent.
    *
-   * Returns `true` when a resume dispatch was initiated, `false` otherwise
-   * (missing parent conversation, parent conversation not found, or dispatch
-   * threw). Failures are non-fatal: the gate was still recorded; the user can
-   * resume manually by sending any message in the conversation.
+   * Returns `true` when a resume dispatch was initiated, `false` otherwise (no
+   * parent conversation on the run, parent conversation deleted, parent was on
+   * a non-web platform, or dispatch threw). Failures are non-fatal: the gate
+   * decision is recorded regardless; when this returns `false` the response
+   * text instructs the user to re-run the workflow command.
+   *
+   * **Cross-adapter guard**: only web-sourced parents qualify.
+   * `dispatchToOrchestrator` is wired to the web adapter + its lock manager,
+   * so a Slack / Telegram / GitHub / Discord run being approved from the
+   * dashboard must not route through it — the Slack thread would never see
+   * the resumed output. Non-web parents skip auto-resume and the originating
+   * platform's own re-run flow applies.
    */
-  async function tryAutoResumeAfterGate(run: WorkflowRun, logPrefix: string): Promise<boolean> {
+  async function tryAutoResumeAfterGate(
+    run: WorkflowRun,
+    action: 'approve' | 'reject'
+  ): Promise<boolean> {
     if (!run.parent_conversation_id) return false;
+    // Literal event names per action — greppable for ops tooling. Keeping the
+    // branch explicit rather than templating avoids the earlier 3-segment
+    // `api.workflow_*.dispatched` shape that broke `{domain}.{action}_{state}`.
+    const events =
+      action === 'approve'
+        ? {
+            dispatched: 'api.workflow_approve_auto_resume_dispatched' as const,
+            skippedNoPlatformConv:
+              'api.workflow_approve_auto_resume_skipped_no_platform_conv' as const,
+            skippedNonWebParent: 'api.workflow_approve_auto_resume_skipped_non_web_parent' as const,
+            failed: 'api.workflow_approve_auto_resume_failed' as const,
+          }
+        : {
+            dispatched: 'api.workflow_reject_auto_resume_dispatched' as const,
+            skippedNoPlatformConv:
+              'api.workflow_reject_auto_resume_skipped_no_platform_conv' as const,
+            skippedNonWebParent: 'api.workflow_reject_auto_resume_skipped_non_web_parent' as const,
+            failed: 'api.workflow_reject_auto_resume_failed' as const,
+          };
     try {
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
       const platformConvId = parentConv?.platform_conversation_id;
       if (!platformConvId) {
         getLog().debug(
           { runId: run.id, parentConversationId: run.parent_conversation_id },
-          `${logPrefix}.skipped_no_platform_conv`
+          events.skippedNoPlatformConv
+        );
+        return false;
+      }
+      if (parentConv.platform_type !== 'web') {
+        getLog().debug(
+          {
+            runId: run.id,
+            parentConversationId: run.parent_conversation_id,
+            platformType: parentConv.platform_type,
+          },
+          events.skippedNonWebParent
         );
         return false;
       }
       const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
-      void dispatchToOrchestrator(platformConvId, resumeMessage);
+      await dispatchToOrchestrator(platformConvId, resumeMessage);
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
-        `${logPrefix}.dispatched`
+        events.dispatched
       );
       return true;
     } catch (err) {
-      getLog().warn({ err: err as Error, runId: run.id }, `${logPrefix}.failed`);
+      getLog().warn({ err: err as Error, runId: run.id }, events.failed);
       return false;
     }
   }
@@ -1933,11 +1974,12 @@ export function registerApiRoutes(
       });
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
-      // without requiring the user to type a follow-up message. Mirrors what
-      // `workflowApproveCommand` does in the CLI. Requires
-      // `parent_conversation_id` to be set on the run — which orchestrator-agent
-      // now passes for every web-dispatched foreground/interactive workflow.
-      const autoResumed = await tryAutoResumeAfterGate(run, 'api.workflow_approve_auto_resume');
+      // without requiring the user to re-run the workflow command. Mirrors
+      // what `workflowApproveCommand` does in the CLI. Requires
+      // `parent_conversation_id` on the run (set by orchestrator-agent for any
+      // web-dispatched workflow — foreground, interactive, and background via
+      // the pre-created run) and a web-platform parent (guarded in the helper).
+      const autoResumed = await tryAutoResumeAfterGate(run, 'approve');
 
       return c.json({
         success: true,
@@ -1989,9 +2031,10 @@ export function registerApiRoutes(
         });
 
         // Auto-resume: dispatch to the orchestrator so the on_reject prompt runs
-        // without requiring the user to type a follow-up message. Mirrors what
-        // `workflowRejectCommand` does in the CLI.
-        const autoResumed = await tryAutoResumeAfterGate(run, 'api.workflow_reject_auto_resume');
+        // without requiring the user to re-run the workflow command. Mirrors
+        // what `workflowRejectCommand` does in the CLI. Same cross-adapter
+        // guard as approve — only web parents auto-resume.
+        const autoResumed = await tryAutoResumeAfterGate(run, 'reject');
 
         return c.json({
           success: true,

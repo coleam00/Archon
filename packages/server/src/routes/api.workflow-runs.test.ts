@@ -22,7 +22,8 @@ const mockGetWorkflowRunByWorkerPlatformId = mock(
 );
 const mockListWorkflowEvents = mock(async (_runId: string) => [] as MockWorkflowEvent[]);
 const mockGetConversationById = mock(
-  async (_id: string) => null as null | { id: string; platform_conversation_id: string }
+  async (_id: string) =>
+    null as null | { id: string; platform_conversation_id: string; platform_type: string }
 );
 const mockFindConversationByPlatformId = mock(
   async (_id: string) =>
@@ -1389,6 +1390,7 @@ describe('approve/reject auto-resume', () => {
     mockGetConversationById.mockResolvedValueOnce({
       id: 'parent-conv-uuid',
       platform_conversation_id: 'web-plat-abc',
+      platform_type: 'web',
     });
 
     const { app } = makeApp();
@@ -1453,6 +1455,35 @@ describe('approve/reject auto-resume', () => {
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
+  test('approve: skips dispatch when parent conversation is on a non-web platform', async () => {
+    // A Slack/Telegram/GitHub-sourced run being approved via the dashboard
+    // must not route through dispatchToOrchestrator — that helper is wired
+    // to the web adapter + lock manager, so dispatching a Slack thread_ts
+    // or Telegram chat_id would misroute through the wrong adapter.
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      parent_conversation_id: 'slack-parent-conv-uuid',
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'slack-parent-conv-uuid',
+      platform_conversation_id: '1234567890.123456', // a Slack thread_ts
+      platform_type: 'slack',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    // Same fallback text as no-parent case — user re-runs from the originating platform.
+    expect(body.message).toContain('Send a message to continue');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
   test('reject: dispatches resume for on_reject flows when parent is set', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
@@ -1473,6 +1504,7 @@ describe('approve/reject auto-resume', () => {
     mockGetConversationById.mockResolvedValueOnce({
       id: 'parent-conv-uuid',
       platform_conversation_id: 'web-plat-xyz',
+      platform_type: 'web',
     });
 
     const { app } = makeApp();
