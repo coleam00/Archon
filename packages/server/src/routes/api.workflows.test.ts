@@ -253,6 +253,95 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('returns global workflow with source:global when file exists in ~/.archon/workflows/', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-global-get-${Date.now()}`);
+    const globalWorkflowDir = join(testArchonHome, 'workflows');
+    await mkdir(globalWorkflowDir, { recursive: true });
+    await writeFile(
+      join(globalWorkflowDir, 'global-custom.yaml'),
+      'name: global-custom\ndescription: Global workflow\nnodes:\n  - id: run\n    command: assist\n'
+    );
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => []);
+      const response = await app.request('/api/workflows/global-custom');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        source: string;
+        filename: string;
+        workflow: unknown;
+      };
+      expect(body.source).toBe('global');
+      expect(body.filename).toBe('global-custom.yaml');
+      expect(body.workflow).toBeDefined();
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('global workflow takes priority over bundled defaults', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-priority-${Date.now()}`);
+    const globalWorkflowDir = join(testArchonHome, 'workflows');
+    await mkdir(globalWorkflowDir, { recursive: true });
+    await writeFile(
+      join(globalWorkflowDir, 'archon-assist.yaml'),
+      'name: archon-assist\ndescription: Overridden globally\nnodes:\n  - id: run\n    command: assist\n'
+    );
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => []);
+      const response = await app.request('/api/workflows/archon-assist');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { source: string };
+      expect(body.source).toBe('global');
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('project workflow takes priority over global workflow', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-proj-priority-${Date.now()}`);
+    const globalWorkflowDir = join(testArchonHome, 'workflows');
+    const testProjectDir = join(tmpdir(), `wf-proj-priority-${Date.now()}`);
+    const projectWorkflowDir = join(testProjectDir, '.archon', 'workflows');
+    await mkdir(globalWorkflowDir, { recursive: true });
+    await mkdir(projectWorkflowDir, { recursive: true });
+    await writeFile(
+      join(globalWorkflowDir, 'shared.yaml'),
+      'name: shared\ndescription: Global version\nnodes:\n  - id: run\n    command: assist\n'
+    );
+    await writeFile(
+      join(projectWorkflowDir, 'shared.yaml'),
+      'name: shared\ndescription: Project version\nnodes:\n  - id: run\n    command: assist\n'
+    );
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testProjectDir }]);
+      const response = await app.request(`/api/workflows/shared?cwd=${testProjectDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { source: string };
+      expect(body.source).toBe('project');
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
+      await rm(testProjectDir, { recursive: true, force: true });
+    }
+  });
+
   test('returns WorkflowDefinition shape with expected top-level fields', async () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);

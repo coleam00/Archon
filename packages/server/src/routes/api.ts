@@ -37,6 +37,7 @@ import {
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -2260,7 +2261,27 @@ export function registerApiRoutes(
         }
       }
 
-      // 2. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
+      // 2. Try home-scoped global workflow (~/.archon/workflows/<name>.yaml)
+      const globalFilePath = join(getHomeWorkflowsPath(), filename);
+      try {
+        const content = await readFile(globalFilePath, 'utf-8');
+        const result = parseWorkflow(content, filename);
+        if (result.error) {
+          return apiError(c, 500, `Global workflow file is invalid: ${result.error.error}`);
+        }
+        return c.json({
+          workflow: result.workflow,
+          filename,
+          source: 'global' as WorkflowSource,
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().error({ err, name }, 'workflow.fetch_global_failed');
+          return apiError(c, 500, 'Failed to read global workflow');
+        }
+      }
+
+      // 3. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
         const bundledContent = BUNDLED_WORKFLOWS[name];
         const result = parseWorkflow(bundledContent, filename);
