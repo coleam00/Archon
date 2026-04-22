@@ -79,16 +79,11 @@ function generateConversationId(): string {
 }
 
 /**
- * Parse the specific error format thrown by `createProjectSourceSymlink` in
- * `@archon/paths` when a workspace source link already points elsewhere:
- *
- *   Source symlink at <linkPath> already points to <existing>, expected <target>
- *
- * Returns the workspace directory (one level above the `source` symlink, i.e.
- * `.archon/workspaces/<owner>/<repo>/`) so the user has an exact path to clean
- * up. Returns null for any message that doesn't match the known shape — the
- * caller falls back to a generic hint. Tolerates both POSIX and Windows path
- * separators so the hint is accurate on every platform.
+ * Parses the "Source symlink at X already points to Y, expected Z" error
+ * thrown by `createProjectSourceSymlink` in @archon/paths. Cross-package
+ * string contract — if that throw site changes wording, this parser silently
+ * stops matching. Returns the workspace dir (parent of the `source` link) so
+ * the caller can emit an exact cleanup path, or null if unrecognized.
  */
 function extractStaleWorkspaceEntry(message: string): string | null {
   const prefix = 'Source symlink at ';
@@ -105,13 +100,10 @@ function extractStaleWorkspaceEntry(message: string): string | null {
 }
 
 /**
- * Build the truthful error the CLI surfaces when auto-registration failed and
- * the subsequent worktree-creation or resume step has nothing to work with.
- *
- * Before this helper existed, those two sites both threw the generic
- * "not in a git repository" message — false when the registration error is the
- * real cause (e.g. a stale `~/.archon/workspaces/.../source` symlink from a
- * prior cloned path). See #1146.
+ * Wraps a codebase auto-registration failure for either the worktree-create or
+ * resume path. Preserves the original error message and delegates hint detail
+ * to `extractStaleWorkspaceEntry`; falls back to a workspace-root pointer when
+ * the error shape is unrecognized.
  */
 function buildRegistrationFailureError(action: string, error: Error): Error {
   const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
