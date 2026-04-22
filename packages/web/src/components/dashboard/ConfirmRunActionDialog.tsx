@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -68,6 +68,9 @@ export function ConfirmRunActionDialog({
   onConfirm,
 }: Props): React.ReactElement {
   const [reason, setReason] = useState('');
+  // useId() so multiple dialog instances on the same page (e.g. side-by-side
+  // run cards) don't collide on a shared DOM id.
+  const reasonInputId = useId();
 
   return (
     <AlertDialog
@@ -87,14 +90,11 @@ export function ConfirmRunActionDialog({
         </AlertDialogHeader>
         {reasonInput && (
           <div className="space-y-2">
-            <label
-              htmlFor="confirm-run-action-reason"
-              className="text-sm font-medium text-foreground"
-            >
+            <label htmlFor={reasonInputId} className="text-sm font-medium text-foreground">
               {reasonInput.label}
             </label>
             <textarea
-              id="confirm-run-action-reason"
+              id={reasonInputId}
               value={reason}
               onChange={(e): void => {
                 setReason(e.target.value);

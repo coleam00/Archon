@@ -1083,8 +1083,19 @@ export function registerApiRoutes(
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
       const platformConvId = parentConv?.platform_conversation_id;
       if (!platformConvId) {
-        getLog().debug(
-          { runId: run.id, parentConversationId: run.parent_conversation_id },
+        // parentConv === null is a data-integrity signal (the parent
+        // conversation was deleted while the run was paused) — worth
+        // surfacing at info level so operators notice. Missing
+        // platform_conversation_id on an existing row shouldn't happen and
+        // stays at debug.
+        const logFn =
+          parentConv === null ? getLog().info.bind(getLog()) : getLog().debug.bind(getLog());
+        logFn(
+          {
+            runId: run.id,
+            parentConversationId: run.parent_conversation_id,
+            parentDeleted: parentConv === null,
+          },
           events.skippedNoPlatformConv
         );
         return false;

@@ -1712,9 +1712,13 @@ async function executeLoopNode(
   for (let i = startIteration; i <= loop.max_iterations; i++) {
     const iterationStart = Date.now();
 
-    // Check for non-running status between iterations (cancellation, deletion, or future: pause)
+    // Check for non-running status between iterations. `paused` is tolerated
+    // here for the same reason as the streaming check: a sibling approval
+    // node in the same topological layer may pause the run while this loop
+    // is between iterations — the loop should continue its own iterations
+    // regardless of unrelated pauses elsewhere in the DAG.
     const runStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (runStatus === null || runStatus !== 'running') {
+    if (!shouldContinueStreamingForStatus(runStatus)) {
       const effectiveStatus = runStatus ?? 'deleted';
       getLog().info(
         { workflowRunId: workflowRun.id, nodeId: node.id, iteration: i, status: effectiveStatus },
@@ -2883,15 +2887,24 @@ export async function executeDagWorkflow(
     }
   }
 
-  // Helper: bail out if the run was transitioned externally (cancelled, deleted, etc.)
+  /**
+   * Bail out of the final completion/failure write if the run was transitioned
+   * externally. Strict `!== 'running'` check is correct here because we don't
+   * want to mark a paused run as complete — the approval gate is still live.
+   *
+   * Emitter unregister is conditional: terminal states (cancelled / deleted /
+   * completed / failed) unregister to release subscription resources, but
+   * `paused` keeps the emitter registered so SSE stays connected while the
+   * approval gate awaits the user — crucial for resume observability.
+   */
   async function skipIfStatusChanged(logEvent: string): Promise<boolean> {
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (status === null || status !== 'running') {
-      getLog().info({ workflowRunId: workflowRun.id, status: status ?? 'deleted' }, logEvent);
+    if (status === 'running') return false;
+    getLog().info({ workflowRunId: workflowRun.id, status: status ?? 'deleted' }, logEvent);
+    if (status !== 'paused') {
       getWorkflowEventEmitter().unregisterRun(workflowRun.id);
-      return true;
     }
-    return false;
+    return true;
   }
 
   // Single-pass: compute node outcome counts and derive success/failure booleans
