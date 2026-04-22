@@ -1,3 +1,7 @@
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { createLogger } from '@archon/paths';
 import type { Api, Model } from '@mariozechner/pi-ai';
 
@@ -24,6 +28,44 @@ import { parsePiModelRef } from './model-ref';
 // All Pi SDK value bindings and Pi-dependent helper modules are dynamically
 // imported inside `sendQuery()` below, which runs only when a Pi workflow is
 // actually invoked. Type-only imports above are fine — TS erases them.
+//
+// Lazy-loading defers the crash from boot-time to sendQuery-time — but the
+// crash still happens when Pi is actually used. `ensurePiPackageDirShim()`
+// (see below) fixes the *runtime* half: before any dynamic Pi import in
+// sendQuery, write a stub package.json to tmpdir and point Pi at it via
+// its own documented `PI_PACKAGE_DIR` escape hatch.
+
+/**
+ * Write a minimal package.json to a stable tmpdir and set `PI_PACKAGE_DIR`
+ * so Pi's `config.js` short-circuits its `dirname(process.execPath)` walk
+ * (which fails inside a compiled archon binary). Pi only reads three
+ * optional fields from that package.json — `piConfig.name`, `piConfig.configDir`,
+ * and `version` — so the stub is genuinely minimal. Idempotent: the file is
+ * only written once per host (existsSync check), and the env var is set on
+ * every call so multiple PiProvider instances stay consistent.
+ *
+ * Done on each sendQuery rather than at module load so (a) the file write
+ * is paid only when Pi is actually used, and (b) the env var can't get
+ * clobbered between registration and invocation.
+ */
+function ensurePiPackageDirShim(): void {
+  const shimDir = join(tmpdir(), 'archon-pi-shim');
+  const shimPkgJson = join(shimDir, 'package.json');
+  if (!existsSync(shimPkgJson)) {
+    mkdirSync(shimDir, { recursive: true });
+    // `piConfig: {}` is explicit so Pi's defaults (`name: 'pi'`,
+    // `configDir: '.pi'`) kick in — matches Pi's standalone behavior.
+    writeFileSync(
+      shimPkgJson,
+      JSON.stringify({
+        name: 'archon-pi-shim',
+        version: '0.0.0',
+        piConfig: {},
+      })
+    );
+  }
+  process.env.PI_PACKAGE_DIR = shimDir;
+}
 
 /**
  * Map Pi provider id → env var name used by pi-ai's getEnvApiKey().
@@ -115,6 +157,13 @@ export class PiProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    // Install the PI_PACKAGE_DIR shim BEFORE the dynamic imports below: Pi's
+    // config.js runs `readFileSync(getPackageJsonPath())` at its own module
+    // init, and getPackageJsonPath() checks process.env.PI_PACKAGE_DIR first.
+    // Without this, the dynamic import below would crash with ENOENT on
+    // `dirname(process.execPath)/package.json` inside a compiled binary.
+    ensurePiPackageDirShim();
+
     // Lazy-load Pi SDK and all Pi-dependent helper modules here. Must not move
     // these imports to module scope — see the header comment for the failure
     // mode (archon compiled binary crashes at startup when Pi's config.js
