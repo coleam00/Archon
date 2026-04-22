@@ -85,7 +85,7 @@ function generateConversationId(): string {
  * stops matching. Returns the workspace dir (parent of the `source` link) so
  * the caller can emit an exact cleanup path, or null if unrecognized.
  */
-function extractStaleWorkspaceEntry(message: string): string | null {
+export function extractStaleWorkspaceEntry(message: string): string | null {
   const prefix = 'Source symlink at ';
   const delimiter = ' already points to ';
   if (!message.startsWith(prefix)) return null;
@@ -107,9 +107,22 @@ function extractStaleWorkspaceEntry(message: string): string | null {
  */
 function buildRegistrationFailureError(action: string, error: Error): Error {
   const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
-  const hint = staleWorkspaceEntry
-    ? `Hint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry, or use --no-worktree to skip isolation.`
-    : `Hint: Check your Archon workspace registration under ${join(getArchonHome(), 'workspaces')} and retry, or use --no-worktree to skip isolation.`;
+  let hint: string;
+  if (staleWorkspaceEntry) {
+    hint = `Hint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry, or use --no-worktree to skip isolation.`;
+  } else {
+    // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
+    // the registration error we're wrapping is the load-bearing one — we'd
+    // rather lose the exact path in the hint than replace it with a secondary
+    // home-resolution error that masks the root cause.
+    try {
+      const workspacesPath = join(getArchonHome(), 'workspaces');
+      hint = `Hint: Check your Archon workspace registration under ${workspacesPath} and retry, or use --no-worktree to skip isolation.`;
+    } catch {
+      hint =
+        'Hint: Check your Archon workspace registration and retry, or use --no-worktree to skip isolation.';
+    }
+  }
 
   return new Error(
     `Cannot ${action}: repository registration failed.\nError: ${error.message}\n${hint}`

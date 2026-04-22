@@ -2517,3 +2517,51 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(stderrSpy).toHaveBeenCalledWith('[slow] Completed (1m30s)\n');
   });
 });
+
+// ---------------------------------------------------------------------------
+// extractStaleWorkspaceEntry — parser edge cases
+// ---------------------------------------------------------------------------
+
+describe('extractStaleWorkspaceEntry', () => {
+  it('extracts the workspace dir from a POSIX source-symlink error', async () => {
+    const { extractStaleWorkspaceEntry } = await import('./workflow');
+    expect(
+      extractStaleWorkspaceEntry(
+        'Source symlink at /home/user/.archon/workspaces/acme/widget/source already points to /other, expected /here'
+      )
+    ).toBe('/home/user/.archon/workspaces/acme/widget');
+  });
+
+  it('extracts the workspace dir from a Windows source-symlink error (backslash sep)', async () => {
+    const { extractStaleWorkspaceEntry } = await import('./workflow');
+    expect(
+      extractStaleWorkspaceEntry(
+        'Source symlink at C:\\Users\\me\\.archon\\workspaces\\acme\\widget\\source already points to D:\\x, expected D:\\y'
+      )
+    ).toBe('C:\\Users\\me\\.archon\\workspaces\\acme\\widget');
+  });
+
+  it('returns null when the prefix does not match (unrelated error)', async () => {
+    const { extractStaleWorkspaceEntry } = await import('./workflow');
+    expect(extractStaleWorkspaceEntry('ENOENT: no such file or directory')).toBeNull();
+  });
+
+  it('returns null when the prefix matches but the delimiter is missing', async () => {
+    const { extractStaleWorkspaceEntry } = await import('./workflow');
+    expect(
+      extractStaleWorkspaceEntry('Source symlink at /some/path (truncated message)')
+    ).toBeNull();
+  });
+
+  it('returns null when the source path has no path separator at all', async () => {
+    const { extractStaleWorkspaceEntry } = await import('./workflow');
+    expect(
+      extractStaleWorkspaceEntry('Source symlink at bareword already points to /x, expected /y')
+    ).toBeNull();
+  });
+
+  it('returns null on an empty input', async () => {
+    const { extractStaleWorkspaceEntry } = await import('./workflow');
+    expect(extractStaleWorkspaceEntry('')).toBeNull();
+  });
+});
