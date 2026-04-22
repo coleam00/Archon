@@ -52,7 +52,7 @@ export function resolveNodeDisplay(dn: DagNode): {
 } {
   if ('bash' in dn && dn.bash) {
     return {
-      label: 'Shell',
+      label: dn.id,
       nodeType: 'bash',
       bashScript: dn.bash,
       bashTimeout: dn.timeout,
