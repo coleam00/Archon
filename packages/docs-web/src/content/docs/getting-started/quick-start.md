@@ -18,19 +18,19 @@ sidebar:
 ## 첫 Workflow 실행
 
 ```bash
-# List available workflows
+# 사용 가능한 workflow 목록 확인
 hlab workflow list
 
-# Ask HarneesLab to assist with your codebase
-hlab workflow run assist "What does this codebase do?"
+# HarneesLab에 codebase 설명 요청
+hlab workflow run archon-assist "What does this codebase do?"
 
-# Run a code review
-hlab workflow run smart-pr-review
+# PR/code review workflow 실행
+hlab workflow run archon-smart-pr-review
 ```
 
 ## 다음 단계
 
-설치, 인증, Web UI 설정, CLI 설정, troubleshooting까지 포함한 전체 시작 가이드는 [Overview](/getting-started/overview/)를 참고하세요.
+설치, 인증, Web UI 설정, CLI 설정, troubleshooting까지 포함한 전체 시작 가이드는 [개요](/getting-started/overview/)를 참고하세요.
 
 - [개요](/getting-started/overview/) — 전체 onboarding guide
 - [핵심 개념](/getting-started/concepts/) — workflow, node, command, isolation 이해하기
