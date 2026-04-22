@@ -9,11 +9,11 @@ sidebar:
   order: 2
 ---
 
-이 가이드는 Archon의 AI workflow system에서 효과적인 command를 작성하는 방법을 설명합니다. HarneesLab은 Archon fork로서 반복 가능한 agent workflow를 학습하고 실험하기 쉽게 다루며, command는 그 workflow의 구성 요소입니다. 각 command는 AI agent에게 무엇을 해야 하는지 지시하는 prompt template입니다.
+이 가이드는 HarneesLab의 AI workflow system에서 효과적인 command를 작성하는 방법을 설명합니다. HarneesLab은 Archon fork로서 반복 가능한 agent workflow를 학습하고 실험하기 쉽게 다루며, command는 그 workflow의 구성 요소입니다. 각 command는 AI agent에게 무엇을 해야 하는지 지시하는 prompt template입니다.
 
 ## Command란 무엇인가요?
 
-command는 AI agent를 위한 상세 instruction set 역할을 하는 **markdown file**입니다. workflow가 `- command: investigate-issue` 같은 step을 실행하면 Archon은 다음을 수행합니다.
+command는 AI agent를 위한 상세 instruction set 역할을 하는 **markdown file**입니다. workflow가 `- command: investigate-issue` 같은 step을 실행하면 HarneesLab은 다음을 수행합니다.
 
 1. `.archon/commands/investigate-issue.md`에서 command file을 로드합니다
 2. `$ARGUMENTS` 같은 변수를 실제 값으로 치환합니다
@@ -26,7 +26,7 @@ command는 AI agent를 위한 상세 instruction set 역할을 하는 **markdown
 
 ## 파일 형식
 
-command는 working directory 기준 `.archon/commands/`에 있으며 runtime에 로드됩니다.
+command는 working directory 기준 `.archon/commands/`에 있으며 runtime에 로드됩니다. `.archon` 디렉터리 이름은 upstream Archon과의 호환성을 위해 유지됩니다.
 
 > **CLI vs Server:** CLI는 실행한 위치에서 command를 읽습니다(uncommitted changes도 보임). server는 `~/.archon/workspaces/owner/repo/`에서 읽으며, 이 경로는 worktree creation 전에 remote에서만 sync됩니다. 따라서 server가 변경을 인식하려면 commit과 push가 필요합니다.
 
@@ -221,7 +221,7 @@ command를 명확한 phase로 나누세요. 이렇게 하면 AI가 다음을 할
 
 ## Variable Substitution
 
-Archon은 command text를 AI에 보내기 전에 변수를 치환합니다. command에서 가장 자주 쓰는 변수는 다음과 같습니다.
+HarneesLab은 command text를 AI에 보내기 전에 변수를 치환합니다. command에서 가장 자주 쓰는 변수는 다음과 같습니다.
 
 | Variable | Value |
 |----------|-------|
@@ -258,7 +258,7 @@ Archon은 command text를 AI에 보내기 전에 변수를 치환합니다. comm
 
 ### Artifacts 위치
 
-artifacts는 Archon workspace directory의 **repository 밖**에 저장됩니다. 각 workflow run을 위해 미리 생성된 artifacts directory를 참조하려면 `$ARTIFACTS_DIR` 변수를 사용하세요.
+artifacts는 HarneesLab-managed workspace directory의 **repository 밖**에 저장됩니다. 기본 경로는 compatibility 때문에 `~/.archon`을 유지합니다. 각 workflow run을 위해 미리 생성된 artifacts directory를 참조하려면 `$ARTIFACTS_DIR` 변수를 사용하세요.
 
 ```
 ~/.archon/workspaces/owner/repo/artifacts/runs/{workflow-id}/
@@ -641,7 +641,7 @@ Extract:
 
 ## Command 테스트
 
-1. **수동 실행**: `bun run cli workflow run {workflow} "test input"`
+1. **수동 실행**: `hlab workflow run {workflow} "test input"`
 2. **artifact output 확인**: 필요한 모든 내용이 들어 있나요?
 3. **다음 step 시뮬레이션**: 다른 agent가 artifact만 보고 작업할 수 있나요?
 4. **edge cases**: 잘못된 input이나 missing files에서는 어떻게 되나요?
