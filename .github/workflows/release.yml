@@ -138,8 +138,12 @@ jobs:
 
           # Run without CLAUDE_BIN_PATH set. Expect a clean resolver error.
           # Capture both stdout and stderr; we only care that the resolver message is present.
+          # --no-worktree skips isolation: this test exercises the Claude resolver
+          # path, not worktree setup. Without it we hit the worktree auto-sync added
+          # in #1310 first and fail on "neither origin/HEAD nor origin/main exist"
+          # because the fresh `git init` tmp repo has no origin configured.
           set +e
-          OUTPUT=$(env -u CLAUDE_BIN_PATH "$BIN" workflow run archon-assist "hello" 2>&1)
+          OUTPUT=$(env -u CLAUDE_BIN_PATH "$BIN" workflow run archon-assist --no-worktree "hello" 2>&1)
           EXIT_CODE=$?
           set -e
           echo "$OUTPUT"
@@ -181,8 +185,10 @@ jobs:
           git init -q
           git -c user.email=ci@example.com -c user.name=ci commit --allow-empty -q -m init
 
+          # --no-worktree: same rationale as the negative-case test above — this
+          # test exercises the Claude subprocess spawn path, not worktree setup.
           set +e
-          OUTPUT=$(CLAUDE_BIN_PATH="$CLI_PATH" "$BIN" workflow run archon-assist "hello" 2>&1)
+          OUTPUT=$(CLAUDE_BIN_PATH="$CLI_PATH" "$BIN" workflow run archon-assist --no-worktree "hello" 2>&1)
           EXIT_CODE=$?
           set -e
           echo "$OUTPUT"
