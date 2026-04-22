@@ -119,6 +119,16 @@ describe('bundled-defaults', () => {
       expect(content).toContain('workflow_name');
     });
 
+    it('archon-adversarial-dev init-workspace should avoid non-portable sed -i', () => {
+      const content = BUNDLED_WORKFLOWS['archon-adversarial-dev'];
+      expect(content).toContain('STATE_TMP="$ARTIFACTS/state.json.tmp"');
+      expect(content).toContain(
+        'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
+      );
+      expect(content).toContain('mv "$STATE_TMP" "$ARTIFACTS/state.json"');
+      expect(content).not.toMatch(/\bsed\s+-i(?:\s*(?:''|\"\"|\S+))?\b/);
+    });
+
     it('should have valid YAML structure', () => {
       // Workflows are YAML files, should parse without error
       for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
