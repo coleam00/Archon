@@ -6,7 +6,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
-import { rm, readFile, writeFile, unlink, mkdir } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
@@ -2261,23 +2261,41 @@ export function registerApiRoutes(
         }
       }
 
-      // 2. Try home-scoped global workflow (~/.archon/workflows/<name>.yaml)
-      const globalFilePath = join(getHomeWorkflowsPath(), filename);
+      // 2. Try home-scoped global workflow (~/.archon/workflows/<name>.yaml),
+      //    mirroring discovery's 1-level subfolder support (e.g. ~/.archon/workflows/group/foo.yaml).
+      const globalBase = getHomeWorkflowsPath();
+      const globalCandidates: string[] = [join(globalBase, filename)];
       try {
-        const content = await readFile(globalFilePath, 'utf-8');
-        const result = parseWorkflow(content, filename);
-        if (result.error) {
-          return apiError(c, 500, `Global workflow file is invalid: ${result.error.error}`);
+        const entries = await readdir(globalBase);
+        for (const entry of entries) {
+          const entryPath = join(globalBase, entry);
+          try {
+            const entryStat = await stat(entryPath);
+            if (entryStat.isDirectory()) globalCandidates.push(join(entryPath, filename));
+          } catch {
+            // skip unreadable entries
+          }
         }
-        return c.json({
-          workflow: result.workflow,
-          filename,
-          source: 'global' as WorkflowSource,
-        });
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          getLog().error({ err, name }, 'workflow.fetch_global_failed');
-          return apiError(c, 500, 'Failed to read global workflow');
+      } catch {
+        // global dir doesn't exist — globalCandidates stays as [direct path]
+      }
+      for (const globalFilePath of globalCandidates) {
+        try {
+          const content = await readFile(globalFilePath, 'utf-8');
+          const result = parseWorkflow(content, filename);
+          if (result.error) {
+            return apiError(c, 500, `Global workflow file is invalid: ${result.error.error}`);
+          }
+          return c.json({
+            workflow: result.workflow,
+            filename,
+            source: 'global' as WorkflowSource,
+          });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            getLog().error({ err, name }, 'workflow.fetch_global_failed');
+            return apiError(c, 500, 'Failed to read global workflow');
+          }
         }
       }
 

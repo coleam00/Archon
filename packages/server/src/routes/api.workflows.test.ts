@@ -254,6 +254,7 @@ describe('GET /api/workflows/:name', () => {
   });
 
   test('returns global workflow with source:global when file exists in ~/.archon/workflows/', async () => {
+    const previousArchonHome = process.env.ARCHON_HOME;
     const testArchonHome = join(tmpdir(), `archon-home-global-get-${Date.now()}`);
     const globalWorkflowDir = join(testArchonHome, 'workflows');
     await mkdir(globalWorkflowDir, { recursive: true });
@@ -279,12 +280,48 @@ describe('GET /api/workflows/:name', () => {
       expect(body.filename).toBe('global-custom.yaml');
       expect(body.workflow).toBeDefined();
     } finally {
-      delete process.env.ARCHON_HOME;
+      if (previousArchonHome !== undefined) {
+        process.env.ARCHON_HOME = previousArchonHome;
+      } else {
+        delete process.env.ARCHON_HOME;
+      }
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('returns global workflow from one-level subfolder (e.g. ~/.archon/workflows/group/foo.yaml)', async () => {
+    const previousArchonHome = process.env.ARCHON_HOME;
+    const testArchonHome = join(tmpdir(), `archon-home-global-sub-${Date.now()}`);
+    const globalSubDir = join(testArchonHome, 'workflows', 'group');
+    await mkdir(globalSubDir, { recursive: true });
+    await writeFile(
+      join(globalSubDir, 'sub-workflow.yaml'),
+      'name: sub-workflow\ndescription: Subfolder workflow\nnodes:\n  - id: run\n    command: assist\n'
+    );
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => []);
+      const response = await app.request('/api/workflows/sub-workflow');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { source: string; filename: string };
+      expect(body.source).toBe('global');
+      expect(body.filename).toBe('sub-workflow.yaml');
+    } finally {
+      if (previousArchonHome !== undefined) {
+        process.env.ARCHON_HOME = previousArchonHome;
+      } else {
+        delete process.env.ARCHON_HOME;
+      }
       await rm(testArchonHome, { recursive: true, force: true });
     }
   });
 
   test('global workflow takes priority over bundled defaults', async () => {
+    const previousArchonHome = process.env.ARCHON_HOME;
     const testArchonHome = join(tmpdir(), `archon-home-priority-${Date.now()}`);
     const globalWorkflowDir = join(testArchonHome, 'workflows');
     await mkdir(globalWorkflowDir, { recursive: true });
@@ -304,12 +341,17 @@ describe('GET /api/workflows/:name', () => {
       const body = (await response.json()) as { source: string };
       expect(body.source).toBe('global');
     } finally {
-      delete process.env.ARCHON_HOME;
+      if (previousArchonHome !== undefined) {
+        process.env.ARCHON_HOME = previousArchonHome;
+      } else {
+        delete process.env.ARCHON_HOME;
+      }
       await rm(testArchonHome, { recursive: true, force: true });
     }
   });
 
   test('project workflow takes priority over global workflow', async () => {
+    const previousArchonHome = process.env.ARCHON_HOME;
     const testArchonHome = join(tmpdir(), `archon-home-proj-priority-${Date.now()}`);
     const globalWorkflowDir = join(testArchonHome, 'workflows');
     const testProjectDir = join(tmpdir(), `wf-proj-priority-${Date.now()}`);
@@ -336,7 +378,11 @@ describe('GET /api/workflows/:name', () => {
       const body = (await response.json()) as { source: string };
       expect(body.source).toBe('project');
     } finally {
-      delete process.env.ARCHON_HOME;
+      if (previousArchonHome !== undefined) {
+        process.env.ARCHON_HOME = previousArchonHome;
+      } else {
+        delete process.env.ARCHON_HOME;
+      }
       await rm(testArchonHome, { recursive: true, force: true });
       await rm(testProjectDir, { recursive: true, force: true });
     }
