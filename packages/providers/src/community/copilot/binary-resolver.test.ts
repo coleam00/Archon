@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -93,12 +93,20 @@ describe('resolveCopilotCliPath', () => {
   });
 
   test('uses vendor path in binary mode when available', async () => {
-    const vendorDir = join(archonHome, 'vendor', 'copilot');
-    mkdirSync(vendorDir, { recursive: true });
-    const vendorPath = join(vendorDir, 'copilot');
-    writeExecutable(vendorPath);
-
-    await expect(resolver.resolveCopilotCliPath()).resolves.toBe(vendorPath);
+    // Hermetic: stub the executable probe so the test does not depend on
+    // the real filesystem, the platform-specific binary name (`copilot.exe`
+    // on win32), or a system-installed Copilot CLI leaking in via PATH.
+    // Mirrors the sibling Codex resolver test.
+    const spy = spyOn(resolver, 'isExecutableFile').mockImplementation((path: string) =>
+      path.replace(/\\/g, '/').includes('/vendor/copilot/')
+    );
+    try {
+      const result = await resolver.resolveCopilotCliPath();
+      expect(result).toBeDefined();
+      expect(result!.replace(/\\/g, '/')).toContain('/vendor/copilot/');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
