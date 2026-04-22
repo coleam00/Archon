@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
-    "test": "bun test src/lib/ && bun test src/stores/",
+    "test": "bun test src/lib/ && bun test src/stores/ && bun test src/hooks/",
     "generate:types": "openapi-typescript http://localhost:3090/api/openapi.json -o src/lib/api.generated.d.ts"
   },
   "dependencies": {

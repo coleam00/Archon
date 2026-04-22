@@ -82,6 +82,7 @@ interface WorkflowCanvasProps {
   setNodes: React.Dispatch<React.SetStateAction<DagFlowNode[]>>;
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
   onNodeSelect: (nodeId: string | null) => void;
+  onNodeDelete: (nodeId: string) => void;
   onDirty: () => void;
   onPushSnapshot?: () => void;
   commands: CommandEntry[];
@@ -100,12 +101,19 @@ export function WorkflowCanvas({
   setNodes,
   setEdges,
   onNodeSelect,
+  onNodeDelete,
   onDirty,
   onPushSnapshot,
   commands,
 }: WorkflowCanvasProps): React.ReactElement {
   const { screenToFlowPosition } = useReactFlow();
   const [quickAddPosition, setQuickAddPosition] = useState<QuickAddPosition | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    nodeId: string;
+  } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   const nodeTypes: NodeTypes = useMemo(() => ({ dagNode: dagNodeComponent }), []);
 
@@ -164,10 +172,12 @@ export function WorkflowCanvas({
         },
       };
 
+      onPushSnapshot?.();
       setNodes(nds => [...nds, newNode]);
+      onNodeSelect(id);
       onDirty();
     },
-    [screenToFlowPosition, setNodes, onDirty]
+    [screenToFlowPosition, setNodes, onNodeSelect, onDirty, onPushSnapshot]
   );
 
   // Track whether we've already pushed a snapshot for the current drag gesture
@@ -278,16 +288,62 @@ export function WorkflowCanvas({
         },
       };
 
+      onPushSnapshot?.();
       setNodes(nds => [...nds, newNode]);
+      onNodeSelect(id);
       onDirty();
       setQuickAddPosition(null);
     },
-    [quickAddPosition, setNodes, onDirty]
+    [quickAddPosition, setNodes, onNodeSelect, onDirty, onPushSnapshot]
   );
 
   const handleQuickAddClose = useCallback(() => {
     setQuickAddPosition(null);
   }, []);
+
+  // Approximate menu size used for viewport-edge clamping.
+  const CONTEXT_MENU_WIDTH = 160;
+  const CONTEXT_MENU_HEIGHT = 40;
+
+  const handleNodeContextMenu = useCallback(
+    (e: React.MouseEvent, node: DagFlowNode) => {
+      e.preventDefault();
+      onNodeSelect(node.id);
+      const x = Math.min(e.clientX, window.innerWidth - CONTEXT_MENU_WIDTH);
+      const y = Math.min(e.clientY, window.innerHeight - CONTEXT_MENU_HEIGHT);
+      setContextMenu({ x, y, nodeId: node.id });
+    },
+    [onNodeSelect]
+  );
+
+  // Dismiss the context menu on Escape or any click/contextmenu outside it.
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setContextMenu(null);
+    };
+    const onClickOutside = (e: MouseEvent): void => {
+      if (
+        contextMenuRef.current &&
+        e.target instanceof Node &&
+        contextMenuRef.current.contains(e.target)
+      ) {
+        return;
+      }
+      setContextMenu(null);
+    };
+
+    window.addEventListener('keydown', onKey);
+    // Use capture so we beat ReactFlow's own handlers and any stopPropagation.
+    window.addEventListener('mousedown', onClickOutside, true);
+    window.addEventListener('contextmenu', onClickOutside, true);
+    return (): void => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onClickOutside, true);
+      window.removeEventListener('contextmenu', onClickOutside, true);
+    };
+  }, [contextMenu]);
 
   return (
     <div className="relative w-full h-full">
@@ -302,6 +358,7 @@ export function WorkflowCanvas({
         onNodeClick={(_e, node): void => {
           onNodeSelect(node.id);
         }}
+        onNodeContextMenu={handleNodeContextMenu}
         onPaneClick={handlePaneClick}
         nodeTypes={nodeTypes}
         panOnDrag
@@ -323,6 +380,25 @@ export function WorkflowCanvas({
           onClose={handleQuickAddClose}
           commands={commands}
         />
+      )}
+
+      {contextMenu && (
+        <div
+          ref={contextMenuRef}
+          className="fixed z-50 min-w-[140px] rounded-md border border-border bg-surface-elevated py-1 shadow-md"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            type="button"
+            onClick={(): void => {
+              onNodeDelete(contextMenu.nodeId);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left text-xs text-error hover:bg-surface"
+          >
+            Delete node
+          </button>
+        </div>
       )}
     </div>
   );
