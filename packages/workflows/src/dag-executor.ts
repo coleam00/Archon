@@ -264,11 +264,19 @@ async function safeSendMessage(
 }
 
 /**
- * Single-quote a string for safe inline shell use.
- * Replaces each ' with '\'' (end quote, literal single-quote, re-open quote).
+ * Quote a string for safe inline shell use using $'...' ANSI-C quoting.
+ * This format supports escape sequences like \n, \r, \t, etc.
+ * Escapes backslashes first, then single quotes, then newlines/carriage returns.
  */
 function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  // Use $'...' quoting which interprets \n, \r, etc. as escape sequences
+  // Must escape: backslashes (first), single quotes, newlines, carriage returns
+  const escaped = value
+    .replaceAll('\\', '\\\\') // \ -> \\
+    .replaceAll("'", "\\'") // ' -> \'
+    .replaceAll('\n', '\\n') // newline -> \n
+    .replaceAll('\r', '\\r'); // carriage return -> \r
+  return `$'${escaped}'`;
 }
 
 /**
@@ -290,7 +298,7 @@ export function substituteNodeOutputRefs(
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
         getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
-        return escapedForBash ? "''" : '';
+        return escapedForBash ? shellQuote('') : '';
       }
       if (!field) {
         return escapedForBash ? shellQuote(nodeOutput.output) : nodeOutput.output;
@@ -303,13 +311,13 @@ export function substituteNodeOutputRefs(
         // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
         // String(boolean) is 'true' or 'false' — no shell metacharacters.
         if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        return escapedForBash ? "''" : ''; // objects, null, undefined, symbol, bigint → empty
+        return escapedForBash ? shellQuote('') : ''; // objects, null, undefined, symbol, bigint → empty
       } catch (jsonErr) {
         getLog().warn(
           { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100), err: jsonErr as Error },
           'dag_node_output_ref_json_parse_failed'
         );
-        return escapedForBash ? "''" : '';
+        return escapedForBash ? shellQuote('') : '';
       }
     }
   );
@@ -1428,7 +1436,8 @@ async function executeScriptNode(
     if (isInlineScript(finalScript)) {
       // Inline code execution
       if (node.runtime === 'bun') {
-        cmd = 'bun';
+        // Use process.execPath to get the absolute path to the bun executable.
+        cmd = process.execPath;
         // --no-env-file prevents Bun from auto-loading .env from the execution
         // cwd (the target repo). Without this, repo .env leaks into the script
         // subprocess despite Archon's parent process cleanup.
@@ -1516,7 +1525,8 @@ async function executeScriptNode(
         const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
         args = ['run', ...withFlags, scriptDef.path];
       } else {
-        cmd = 'bun';
+        // Use process.execPath to get the absolute path to the bun executable.
+        cmd = process.execPath;
         args = ['--no-env-file', 'run', scriptDef.path];
       }
     }

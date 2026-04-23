@@ -312,10 +312,11 @@ describe('script node deps field — command construction', () => {
     );
 
     const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
+    // Script nodes use process.execPath to resolve bun executable
+    const scriptCall = calls.find(c => (c[0] as string) === process.execPath);
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('bun');
+    expect(cmd).toBe(process.execPath);
     // --no-env-file prevents repo .env auto-load; no dep flags — bun auto-installs
     expect(args).toEqual(['--no-env-file', '-e', node.script]);
     expect(args).not.toContain('--packages');
@@ -346,10 +347,11 @@ describe('script node deps field — command construction', () => {
     );
 
     const calls = mockExecFileAsync.mock.calls;
-    const scriptCall = calls.find(c => (c[0] as string) === 'bun');
+    // Script nodes use process.execPath to resolve bun executable
+    const scriptCall = calls.find(c => (c[0] as string) === process.execPath);
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
-    expect(cmd).toBe('bun');
+    expect(cmd).toBe(process.execPath);
     expect(args).toEqual(['--no-env-file', '-e', 'console.log("hello")']);
   });
 

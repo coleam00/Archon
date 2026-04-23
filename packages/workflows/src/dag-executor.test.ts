@@ -705,29 +705,29 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
 
   it('shell-quotes output when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', 'hello world')]]);
-    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo 'hello world'");
+    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo $'hello world'");
   });
 
   it('escapes shell metacharacters when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', 'hello; rm -rf /')]]);
     expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe(
-      "echo 'hello; rm -rf /'"
+      "echo $'hello; rm -rf /'"
     );
   });
 
   it('escapes single quotes inside output when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', "it's alive")]]);
-    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo 'it'\\''s alive'");
+    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo $'it\\'s alive'");
   });
 
   it('missing ref becomes empty string when escapedForBash=true', () => {
     const outputs = new Map<string, NodeOutput>();
-    expect(substituteNodeOutputRefs('echo $missing.output', outputs, true)).toBe("echo ''");
+    expect(substituteNodeOutputRefs('echo $missing.output', outputs, true)).toBe("echo $''");
   });
 
   it('JSON field escapes shell metacharacters when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ cmd: 'foo; bar' }))]]);
-    expect(substituteNodeOutputRefs('echo $a.output.cmd', outputs, true)).toBe("echo 'foo; bar'");
+    expect(substituteNodeOutputRefs('echo $a.output.cmd', outputs, true)).toBe("echo $'foo; bar'");
   });
 
   it('numeric JSON field is not quoted (safe as-is)', () => {
@@ -742,23 +742,23 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
 
   it('empty string output becomes quoted empty string when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', '')]]);
-    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo ''");
+    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo $''");
   });
 
   it('embedded newline in output is safe when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', 'hello\nworld')]]);
-    // Single-quoted bash strings can contain literal newlines safely
-    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo 'hello\nworld'");
+    // $'...' ANSI-C quoting interprets \n as newline
+    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo $'hello\\nworld'");
   });
 
   it('object JSON field becomes quoted empty string when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ nested: { x: 1 } }))]]);
-    expect(substituteNodeOutputRefs('echo $a.output.nested', outputs, true)).toBe("echo ''");
+    expect(substituteNodeOutputRefs('echo $a.output.nested', outputs, true)).toBe("echo $''");
   });
 
   it('dot notation on invalid JSON returns quoted empty string when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', 'not-json')]]);
-    expect(substituteNodeOutputRefs('$a.output.field', outputs, true)).toBe("''");
+    expect(substituteNodeOutputRefs('$a.output.field', outputs, true)).toBe("$''");
   });
 });
 
@@ -5812,8 +5812,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
     );
 
+    // Script nodes use process.execPath to resolve the bun executable path
     expect(execSpy).toHaveBeenCalledWith(
-      'bun',
+      process.execPath,
       ['--no-env-file', '-e', 'console.log("ok")'],
       expect.objectContaining({
         env: expect.objectContaining({ MY_SECRET: 'abc123' }),
