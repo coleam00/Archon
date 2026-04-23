@@ -5,11 +5,12 @@
 name: e2e-opencode-smoke
 description: "Smoke test for the OpenCode community provider."
 provider: opencode
-model: cpamc/minimax
+model: anthropic/claude-haiku-4-5
 
 nodes:
   - id: simple
     prompt: "Reply with exactly OPENCODE_OK"
+    agent: general
     idle_timeout: 30000
 
   - id: assert
