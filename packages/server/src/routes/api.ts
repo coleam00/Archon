@@ -2272,11 +2272,19 @@ export function registerApiRoutes(
           try {
             const entryStat = await stat(entryPath);
             if (entryStat.isDirectory()) globalCandidates.push(join(entryPath, filename));
-          } catch {
-            // skip unreadable entries
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              getLog().error({ err, entryPath, name }, 'workflow.global_entry_stat_failed');
+              return apiError(c, 500, 'Failed to inspect global workflow directory');
+            }
+            // Entry disappeared between readdir and stat — safe to skip.
           }
         }
-      } catch {
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().error({ err, globalBase, name }, 'workflow.global_dir_list_failed');
+          return apiError(c, 500, 'Failed to list global workflows');
+        }
         // global dir doesn't exist — globalCandidates stays as [direct path]
       }
       for (const globalFilePath of globalCandidates) {
