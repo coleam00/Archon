@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, OpenCode, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All three can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -226,6 +226,90 @@ If you want Codex to be the default AI assistant for new conversations without c
 ```ini
 DEFAULT_AI_ASSISTANT=codex
 ```
+
+## OpenCode (Community Provider)
+
+**SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
+
+OpenCode is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
+
+### Install
+
+OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+
+### Authenticate
+
+OpenCode handles authentication internally — Archon does not pass API keys through config. Configure credentials using one of these methods:
+
+1. **`/connect` TUI command** — Run `opencode` in your terminal, then use the `/connect` command to interactively authenticate with your chosen provider
+2. **Config file** — Store credentials in `~/.config/opencode/opencode.json` with `{env:VAR}` or `{file:PATH}` substitution
+3. **Auth file** — Credentials are persisted in `~/.local/share/opencode/auth.json` after connecting
+
+OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Request-scoped env vars from Archon workflows are still merged into the OpenCode environment.
+
+### Configuration Options
+
+```yaml
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet  # Required: '<provider>/<model>' format
+    agent: build
+    # Optional: connect to an existing OpenCode server
+    # baseUrl: http://localhost:3000
+    # Optional: select a specific agent profile
+```
+
+### Model reference format
+
+OpenCode models use a `<provider>/<model>` format:
+
+```yaml
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet   # via Anthropic
+    # model: openai/gpt-4o                # via OpenAI
+    # model: google/gemini-2.5-pro        # via Google
+```
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Returns `sessionId` and reuses it on resume |
+| MCP servers | ✅ | `mcp: path/to/servers.json` passed through to OpenCode |
+| Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
+| Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
+| Tool restrictions | ✅ | Permission system (allow/ask/deny), glob patterns, per-agent config |
+| Inline sub-agents (`agents:`) | ✅ | Primary+subagents, `@` mentions, child sessions, task_budget |
+| Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
+| Reasoning control | ✅ | `reasoningEffort` (OpenAI), `thinking.budgetTokens` (Anthropic) |
+| Thinking control | ✅ | `thinking.type: enabled/disabled`, budgetTokens, variants |
+| Fallback model | ❌ | no native failover in SDK |
+| Sandbox | ❌ | no native sandbox in SDK; Archon uses worktree isolation |
+| Cost limits (`maxBudgetUsd`) | ❌ | cost tracked in result chunks + `opencode stats` CLI, but no runtime budget enforcement |
+
+Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+
+### Usage in workflows
+
+```yaml
+name: my-workflow
+provider: opencode
+model: anthropic/claude-3-5-sonnet
+
+nodes:
+  - id: analyze
+    prompt: "Analyze the codebase structure"
+    # per-node model override
+    # model: openai/gpt-4o
+```
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [OpenCode on GitHub](https://github.com/opencode-ai/opencode) — upstream project.
 
 ## Pi (Community Provider)
 

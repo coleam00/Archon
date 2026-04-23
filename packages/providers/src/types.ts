@@ -82,6 +82,20 @@ export interface PiProviderDefaults {
   env?: Record<string, string>;
 }
 
+/**
+ * Community provider defaults for OpenCode (opencode-ai).
+ * Minimal shape — extend as capabilities are wired in.
+ */
+export interface OpencodeProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref in '<provider>/<model>' format, e.g. 'anthropic/claude-3-5-sonnet' */
+  model?: string;
+  /** Base URL of an existing OpenCode server to connect to. */
+  baseUrl?: string;
+  /** Agent profile name, e.g. 'build', 'plan', or a custom subagent name. */
+  agent?: string;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 

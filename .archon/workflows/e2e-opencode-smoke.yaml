@@ -1,0 +1,30 @@
+# E2E smoke test — OpenCode community provider
+# Verifies: provider registration, SDK session start, simple prompt response.
+# Auth: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or other provider-specific env var.
+
+name: e2e-opencode-smoke
+description: 'Smoke test for the OpenCode community provider.'
+provider: opencode
+model: anthropic/claude-3-5-haiku
+
+nodes:
+  - id: simple
+    prompt: 'Reply with exactly OPENCODE_OK'
+    idle_timeout: 30000
+
+  - id: assert
+    bash: |
+      output=$(cat <<'ARCHON_OPENCODE_SIMPLE_OUTPUT'
+      $simple.output
+      ARCHON_OPENCODE_SIMPLE_OUTPUT
+      )
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      printf '%s\n' "$output" | rg -F -q -- "OPENCODE_OK" || {
+        printf 'FAIL: expected OPENCODE_OK, got: %s\n' "$output"
+        exit 1
+      }
+      printf 'PASS: simple=%s\n' "$output"
+    depends_on: [simple]

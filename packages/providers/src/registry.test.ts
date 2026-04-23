@@ -12,6 +12,7 @@ import {
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
+import { registerOpencodeProvider } from './community/opencode/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -275,15 +276,17 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
+      // OpenCode and Pi are the community providers bundled.
+      expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
     });
 
     test('is idempotent', () => {
       registerCommunityProviders();
       expect(() => registerCommunityProviders()).not.toThrow();
+      const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
+      expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
     });
   });
@@ -350,6 +353,70 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'pi']);
+    });
+  });
+
+  describe('registerOpencodeProvider (community provider)', () => {
+    test('registers opencode with builtIn: false', () => {
+      registerOpencodeProvider();
+      const reg = getRegistration('opencode');
+      expect(reg.id).toBe('opencode');
+      expect(reg.displayName).toBe('OpenCode (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerOpencodeProvider();
+      expect(() => registerOpencodeProvider()).not.toThrow();
+      const opencodeEntries = getRegisteredProviders().filter(p => p.id === 'opencode');
+      expect(opencodeEntries).toHaveLength(1);
+    });
+
+    test('declares capabilities (sessionResume, mcp, structuredOutput, envInjection, hooks, skills, agents, toolRestrictions, effortControl, thinkingControl supported)', () => {
+      registerOpencodeProvider();
+      const caps = getProviderCapabilities('opencode');
+      // Supported features
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.mcp).toBe(true);
+      expect(caps.structuredOutput).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.hooks).toBe(true);
+      expect(caps.skills).toBe(true);
+      expect(caps.agents).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.thinkingControl).toBe(true);
+      // Not supported (no SDK API for budget enforcement, failover, or sandbox)
+      expect(caps.costControl).toBe(false);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('isModelCompatible accepts provider/model refs, rejects aliases', () => {
+      registerOpencodeProvider();
+      const reg = getRegistration('opencode');
+      expect(reg.isModelCompatible('anthropic/claude-3-5-sonnet')).toBe(true);
+      expect(reg.isModelCompatible('openai/gpt-4o')).toBe(true);
+      expect(reg.isModelCompatible('google/gemini-2.5-pro')).toBe(true);
+      expect(reg.isModelCompatible('sonnet')).toBe(false);
+      expect(reg.isModelCompatible('claude-3.5-sonnet')).toBe(false);
+      expect(reg.isModelCompatible('')).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerOpencodeProvider();
+      const info = getProviderInfoList().find(p => p.id === 'opencode');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins or other community providers', () => {
+      registerOpencodeProvider();
+      registerPiProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'opencode', 'pi']);
     });
   });
 });
