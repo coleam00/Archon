@@ -32,6 +32,40 @@ export interface CodexProviderDefaults {
 }
 
 /**
+ * Community provider defaults for GitHub Copilot (@github/copilot-sdk).
+ * v1 shape; extend as capabilities are wired in.
+ */
+export interface CopilotProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref, e.g. 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5'. */
+  model?: string;
+  /**
+   * Reasoning effort passed to the SDK as `reasoningEffort`. Field name
+   * mirrors `CodexProviderDefaults.modelReasoningEffort` so users get one
+   * consistent key across cross-provider configs.
+   */
+  modelReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /**
+   * Explicit GitHub token. Takes precedence over `gh auth login` state and
+   * the `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` env vars in the
+   * SDK's auth fallback chain. Prefer `gh auth login` or env vars in
+   * practice — keeping tokens out of YAML is the safer default.
+   */
+  githubToken?: string;
+  /**
+   * System prompt injection for every session. Mode defaults to 'append'
+   * (additive, safe) when unset. Maps 1:1 to the SDK's `systemMessage`.
+   */
+  systemMessage?: { content: string; mode?: 'append' | 'replace' | 'customize' };
+  /**
+   * Absolute path to the Copilot CLI binary. Required in compiled Archon
+   * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
+   * the SDK resolve from `$PATH`.
+   */
+  cliPath?: string;
+}
+
+/**
  * Community provider defaults for Pi (@mariozechner/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */
