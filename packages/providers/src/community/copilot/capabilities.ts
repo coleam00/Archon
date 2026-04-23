@@ -1,10 +1,10 @@
 import type { ProviderCapabilities } from '../../types';
 
 /**
- * Copilot capabilities — intentionally conservative. Flipping a flag to `true`
- * means the dag-executor will NOT warn when a workflow node specifies that
- * feature; keep each flag honest by only declaring what's wired in `provider.ts`
- * and `event-bridge.ts`.
+ * Copilot capabilities — each flag declares behavior that is wired end-to-end
+ * through `provider.ts` (translation + SDK integration) and `event-bridge.ts`
+ * (streaming). Flipping a flag to `true` suppresses the dag-executor's
+ * per-capability warning, so keep each flag honest.
  *
  * `effortControl` + `thinkingControl` are both true because Copilot's
  * `reasoningEffort` gates both the model's reasoning budget and the
@@ -13,13 +13,13 @@ import type { ProviderCapabilities } from '../../types';
  */
 export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
-  mcp: false,
+  mcp: true,
   hooks: false,
-  skills: false,
-  agents: false,
-  toolRestrictions: false,
-  structuredOutput: false,
-  envInjection: false,
+  skills: true,
+  agents: true,
+  toolRestrictions: true,
+  structuredOutput: true,
+  envInjection: true,
   costControl: false,
   effortControl: true,
   thinkingControl: true,

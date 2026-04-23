@@ -21,6 +21,7 @@ import { createLogger } from '@archon/paths';
 import type { AssistantMessageEvent, CopilotSession, SessionEvent } from '@github/copilot-sdk';
 
 import type { MessageChunk, TokenUsage } from '../../types';
+import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -148,6 +149,13 @@ export interface EventMapperContext {
   markErrored: (errorMsg: string) => void;
 }
 
+/**
+ * Translate one Copilot SDK `SessionEvent` into zero or more Archon
+ * `MessageChunk`s, mutating the supplied context (tool-call id → name map,
+ * captured usage, terminal error) as a side-effect. Keeping the side-effects
+ * behind a closure lets unit tests drive pure inputs and assert on both the
+ * returned chunks and the context mutations.
+ */
 export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): MessageChunk[] {
   switch (event.type) {
     case 'assistant.message_delta': {
@@ -257,13 +265,19 @@ export type BridgeQueueItem =
 export async function* bridgeSession(
   session: CopilotSession,
   prompt: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  jsonSchema?: Record<string, unknown>
 ): AsyncGenerator<MessageChunk> {
   const log = getLog();
   const queue = new AsyncQueue<BridgeQueueItem>();
   const toolCallIdToName = new Map<string, string>();
   let capturedTokens: TokenUsage | undefined;
   let errorMessage: string | undefined;
+
+  // Structured-output buffer. Populated only when the caller supplied a
+  // schema; parsed into the terminal result chunk after the run completes.
+  const wantsStructured = jsonSchema !== undefined;
+  let assistantBuffer = '';
 
   const ctx: EventMapperContext = {
     toolCallIdToName,
@@ -279,6 +293,9 @@ export async function* bridgeSession(
     try {
       const chunks = mapCopilotEvent(event, ctx);
       for (const chunk of chunks) {
+        if (wantsStructured && chunk.type === 'assistant') {
+          assistantBuffer += chunk.content;
+        }
         queue.push({ kind: 'chunk', chunk });
       }
     } catch (err) {
@@ -325,6 +342,7 @@ export async function* bridgeSession(
     // (older SDK, model quirks, BYOK provider), emit the accumulated final
     // content from sendAndWait's return value so the user doesn't lose output.
     if (!sawAssistantContent && sendResult?.data?.content) {
+      if (wantsStructured) assistantBuffer += sendResult.data.content;
       yield { type: 'assistant', content: sendResult.data.content };
     }
 
@@ -339,6 +357,17 @@ export async function* bridgeSession(
       result.isError = true;
       result.errors = [errorMessage];
     }
+    if (wantsStructured) {
+      const parsed = tryParseStructuredOutput(assistantBuffer);
+      if (parsed !== undefined) {
+        result.structuredOutput = parsed;
+      } else {
+        log.warn(
+          { bufferLength: assistantBuffer.length, sessionId: session.sessionId },
+          'copilot.structured_output_parse_failed'
+        );
+      }
+    }
     yield result;
   } finally {
     queue.close();
@@ -349,6 +378,16 @@ export async function* bridgeSession(
     }
     if (abortSignal) {
       abortSignal.removeEventListener('abort', onAbort);
+    }
+    // Abort before disconnect: if the consumer closed the generator early
+    // (return() / break), sendAndWait is still running in the background.
+    // Without an explicit abort, the finally would wait on sendPromise for up
+    // to SEND_AND_WAIT_TIMEOUT_MS. abort() tells the SDK to cancel the run;
+    // disconnect() tears down the connection.
+    try {
+      await session.abort();
+    } catch (err) {
+      log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_cleanup_failed');
     }
     try {
       await session.disconnect();

@@ -33,7 +33,6 @@ export interface CodexProviderDefaults {
 
 /**
  * Community provider defaults for GitHub Copilot (@github/copilot-sdk).
- * v1 shape; extend as capabilities are wired in.
  */
 export interface CopilotProviderDefaults {
   [key: string]: unknown;
@@ -46,23 +45,33 @@ export interface CopilotProviderDefaults {
    */
   modelReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
   /**
-   * Explicit GitHub token. Takes precedence over `gh auth login` state and
-   * the `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` env vars in the
-   * SDK's auth fallback chain. Prefer `gh auth login` or env vars in
-   * practice — keeping tokens out of YAML is the safer default.
-   */
-  githubToken?: string;
-  /**
-   * System prompt injection for every session. Mode defaults to 'append'
-   * (additive, safe) when unset. Maps 1:1 to the SDK's `systemMessage`.
-   */
-  systemMessage?: { content: string; mode?: 'append' | 'replace' | 'customize' };
-  /**
    * Absolute path to the Copilot CLI binary. Required in compiled Archon
    * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
    * the SDK resolve from `$PATH`.
    */
-  cliPath?: string;
+  copilotCliPath?: string;
+  /**
+   * Override Copilot's config directory. When unset the SDK uses its own
+   * default (typically `~/.copilot`).
+   */
+  configDir?: string;
+  /**
+   * Opt in to Copilot's config discovery from the repo (MCP servers, skills,
+   * etc. declared in the repo's `.copilot/` directory). Disabled by default
+   * so arbitrary repos do not implicitly load MCP servers or skills.
+   * @default false
+   */
+  enableConfigDiscovery?: boolean;
+  /**
+   * Reuse the CLI's logged-in user credentials (from `copilot login`) when
+   * no explicit token is provided via env vars. Defaults to true.
+   * @default true
+   */
+  useLoggedInUser?: boolean;
+  /**
+   * Copilot CLI log level. When unset the SDK picks its own default.
+   */
+  logLevel?: 'none' | 'error' | 'warning' | 'info' | 'debug' | 'all';
 }
 
 /**
