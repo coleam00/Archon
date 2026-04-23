@@ -683,7 +683,7 @@ describe('CodexProvider', () => {
       );
     });
 
-    test('passes abortSignal as signal in TurnOptions', async () => {
+    test('passes a per-attempt AbortSignal in TurnOptions when caller provides one', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
@@ -699,13 +699,16 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(mockRunStreamed).toHaveBeenCalledWith(
-        'test prompt',
-        expect.objectContaining({ signal: controller.signal })
-      );
+      // Signal passed to runStreamed is the per-attempt signal, not the
+      // caller's signal directly. Aborting the caller still propagates via
+      // the forwarding once-listener (covered by separate tests below).
+      const call = mockRunStreamed.mock.calls[0];
+      expect(call[0]).toBe('test prompt');
+      expect(call[1].signal).toBeInstanceOf(AbortSignal);
+      expect(call[1].signal).not.toBe(controller.signal);
     });
 
-    test('passes empty TurnOptions when no outputFormat or abortSignal', async () => {
+    test('passes a per-attempt AbortSignal in TurnOptions even when caller provides none', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'turn.completed', usage: defaultUsage };
@@ -717,7 +720,10 @@ describe('CodexProvider', () => {
         chunks.push(chunk);
       }
 
-      expect(mockRunStreamed).toHaveBeenCalledWith('test prompt', {});
+      expect(mockRunStreamed).toHaveBeenCalledWith(
+        'test prompt',
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      );
     });
 
     test('creates a per-call Codex instance when env is provided', async () => {
@@ -1326,5 +1332,98 @@ describe('sendQuery decomposition behaviors', () => {
     const systemChunks = chunks.filter(c => c.type === 'system');
     expect(systemChunks.length).toBeGreaterThanOrEqual(1);
     expect(systemChunks.some(c => c.type === 'system' && c.content.includes('Task 1'))).toBe(true);
+  }, 5_000);
+
+  // Regression for issue #1266 (crash class A).
+  // Before the fix, buildTurnOptions captured the caller's abortSignal once
+  // before the retry loop, and the same signal object was passed to every
+  // runStreamed attempt. Node.js aborts the spawn-linked signal when a
+  // subprocess crashes, so attempt N's crash left `turnOptions.signal`
+  // already aborted, and attempt N+1 was SIGTERM'd before it could read the
+  // prompt. The fix creates a fresh AbortController per attempt and chains
+  // the caller's signal through a once-listener.
+  test('retry after crash receives a fresh (non-aborted) AbortSignal', async () => {
+    // Capture signals at call-time. Inspecting mockRunStreamed.mock.calls
+    // after the fact reads from a shared turnOptions reference whose .signal
+    // has since been rewritten; that's fine for the implementation (each
+    // spawn() captures the signal at its own call) but misleading here.
+    const signalsAtCallTime: Array<{ signal: AbortSignal; aborted: boolean }> = [];
+    let callCount = 0;
+    mockRunStreamed.mockImplementation((_prompt: unknown, opts: { signal?: AbortSignal }) => {
+      const s = opts.signal!;
+      signalsAtCallTime.push({ signal: s, aborted: s.aborted });
+      callCount++;
+      if (callCount === 1) {
+        return Promise.reject(new Error('codex exec crashed'));
+      }
+      return Promise.resolve({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'recovered', id: 'r' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    const callerController = new AbortController();
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+      abortSignal: callerController.signal,
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(mockRunStreamed).toHaveBeenCalledTimes(2);
+    expect(signalsAtCallTime).toHaveLength(2);
+    // Distinct signal objects per attempt.
+    expect(signalsAtCallTime[1].signal).not.toBe(signalsAtCallTime[0].signal);
+    // Attempt 1's signal was NOT aborted at the moment of spawn, even
+    // though attempt 0 crashed. This is the exact property that was
+    // broken in the old implementation.
+    expect(signalsAtCallTime[1].aborted).toBe(false);
+    // Caller signal was never aborted.
+    expect(callerController.signal.aborted).toBe(false);
+  }, 5_000);
+
+  test('caller abort forwards into the active per-attempt signal', async () => {
+    const callerController = new AbortController();
+
+    let capturedSignal: AbortSignal | undefined;
+    mockRunStreamed.mockImplementation((_prompt, opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      return Promise.resolve({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'partial', id: '1' },
+          };
+          // Caller aborts mid-stream; this must surface on the per-attempt signal.
+          callerController.abort();
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'should not appear', id: '2' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    const consumeGenerator = async (): Promise<void> => {
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        abortSignal: callerController.signal,
+      })) {
+        // consume
+      }
+    };
+
+    await expect(consumeGenerator()).rejects.toThrow('Query aborted');
+    // The signal observed by runStreamed is the per-attempt one, and it
+    // reflects the caller's abort via the forwarding listener.
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal).not.toBe(callerController.signal);
+    expect(capturedSignal?.aborted).toBe(true);
   }, 5_000);
 });
