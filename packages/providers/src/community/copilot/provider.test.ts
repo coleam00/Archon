@@ -102,9 +102,13 @@ const resumeSessionSpy = mock((_id: string, _opts: unknown): Promise<FakeSession
   return Promise.resolve(nextResumeSessionResult);
 });
 
+let lastClientOpts: Record<string, unknown> | undefined;
 class FakeCopilotClient {
   createSession = createSessionSpy;
   resumeSession = resumeSessionSpy;
+  constructor(opts: Record<string, unknown>) {
+    lastClientOpts = opts;
+  }
 }
 
 // Capture the onPermissionRequest passed into createSession.
@@ -156,6 +160,7 @@ describe('CopilotProvider.sendQuery', () => {
     createSessionSpy.mockClear();
     resumeSessionSpy.mockClear();
     approveAllStub.mockClear();
+    lastClientOpts = undefined;
   });
 
   test('defaults to model="auto" when none is configured', async () => {
@@ -440,6 +445,45 @@ describe('CopilotProvider.sendQuery', () => {
     const warnCalls = mockLogger.warn.mock.calls;
     const sawUnsupported = warnCalls.some(args => args[1] === 'copilot.option_not_supported');
     expect(sawUnsupported).toBe(false);
+  });
+
+  test('env token is used when useLoggedInUser is not explicitly enabled', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      env: { GH_TOKEN: 'ghp_testtoken' },
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    expect(lastClientOpts?.githubToken).toBe('ghp_testtoken');
+    expect(lastClientOpts?.useLoggedInUser).toBe(false);
+  });
+
+  test('assistantConfig.useLoggedInUser=true overrides env token', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      env: { GH_TOKEN: 'ghp_testtoken' },
+      assistantConfig: { useLoggedInUser: true },
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    expect(lastClientOpts?.githubToken).toBeUndefined();
+    expect(lastClientOpts?.useLoggedInUser).toBe(true);
   });
 
   test('sendAndWait rejection propagates as thrown error', async () => {

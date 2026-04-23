@@ -483,7 +483,14 @@ export class CopilotProvider implements IAgentProvider {
       env: mergedEnv,
     };
     if (cliPath) clientOpts.cliPath = cliPath;
-    if (githubToken) {
+    // `useLoggedInUser: true` set explicitly in config lets users keep
+    // generic GH_TOKEN/GITHUB_TOKEN exported for other archon subsystems
+    // (GitHub adapter, clone handler) while forcing Copilot to use the
+    // CLI's stored Copilot-scoped OAuth — classic `ghp_` PATs have no
+    // Copilot entitlement and the SDK rejects them with a misleading
+    // "Session was not created with authentication info" error.
+    const preferLoggedIn = copilotConfig.useLoggedInUser === true;
+    if (githubToken && !preferLoggedIn) {
       clientOpts.githubToken = githubToken;
       clientOpts.useLoggedInUser = false;
     } else {
