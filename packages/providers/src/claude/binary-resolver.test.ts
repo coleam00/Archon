@@ -5,6 +5,8 @@
  * with BUNDLED_IS_BINARY=true, which conflicts with other test files.
  */
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -77,11 +79,14 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
   });
 
   test('autodetects native installer path when env and config are unset', async () => {
-    const home = process.env.HOME ?? '/Users/test';
-    const expected =
-      process.platform === 'win32'
-        ? `${home}\\.local\\bin\\claude.exe`
-        : `${home}/.local/bin/claude`;
+    // Mirror the implementation: use os.homedir() + node:path.join so the
+    // expected path matches the platform's actual home dir and separator.
+    const expected = join(
+      homedir(),
+      '.local',
+      'bin',
+      process.platform === 'win32' ? 'claude.exe' : 'claude'
+    );
     // File exists only at the native-installer path.
     fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
       (path: string) => path === expected
