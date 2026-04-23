@@ -45,9 +45,14 @@ nodes:
 
   # ── SCRIPT NODE: TypeScript (bun runtime), no AI, stdout captured as output ──
   # Deterministic parsing the shell would mangle — extracts labels cleanly as JSON.
+  #
+  # NOTE: `$fetch-issue.output` is substituted *raw* into the script body (no shell
+  # quoting — see reference/variables.md). Wrapping it in a String.raw template
+  # preserves backslashes and newlines in the JSON payload without needing any
+  # escaping. Safe here because gh issue view --json emits clean JSON.
   - id: extract-labels
     script: |
-      const raw = process.env.ISSUE_JSON ?? '{}';
+      const raw = String.raw`$fetch-issue.output`;
       try {
         const issue = JSON.parse(raw);
         const labels = (issue.labels ?? []).map((l) => l.name);

@@ -124,7 +124,10 @@ All nodes share these base fields:
 | `command` | One of | string | Name of a command file in `.archon/commands/` |
 | `prompt` | One of | string | Inline AI instructions |
 | `bash` | One of | string | Shell script (runs without AI; stdout captured as `$nodeId.output`) |
+| `script` | One of | string | TypeScript/JS (via bun) or Python (via uv); requires `runtime:` (`bun` or `uv`); optional `deps:` (uv only) and `timeout:` (ms). Stdout captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/) |
 | `loop` | One of | object | Loop configuration (see Loop Options below) |
+| `approval` | One of | object | Human-review gate; pauses the run until approved or rejected. See [Approval Nodes](/guides/approval-nodes/) |
+| `cancel` | One of | string | Terminates the run with the given reason string |
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
 | `when` | No | string | Condition expression; node is skipped if false |
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |

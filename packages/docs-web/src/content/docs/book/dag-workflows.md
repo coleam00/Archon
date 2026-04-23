@@ -230,14 +230,17 @@ The classify-and-route example uses `none_failed_min_one_success` on `implement`
 
 ## Node Types
 
-Archon supports four node types:
+Archon supports seven node types:
 
 | Type | Syntax | When to use |
 |------|--------|-------------|
 | **Command** | `command: my-command` | Load a command from `.archon/commands/my-command.md`. The standard choice. |
 | **Prompt** | `prompt: "inline instructions..."` | Quick, one-off instructions that don't need a reusable command file. |
 | **Bash** | `bash: "shell command"` | Run a shell script without AI. Stdout is captured as `$nodeId.output`. Deterministic operations only. |
+| **Script** | `script: "..." runtime: bun\|uv` | TypeScript (via bun) or Python (via uv) — deterministic typed transforms where bash would need fragile quoting. Stdout is captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/). |
 | **Loop** | `loop: { prompt: "...", until: SIGNAL }` | Repeat an AI prompt until a completion signal appears in the output. See [Loop Nodes](/guides/loop-nodes/). |
+| **Approval** | `approval: { message: "..." }` | Pause the run for human review before continuing. See [Approval Nodes](/guides/approval-nodes/). |
+| **Cancel** | `cancel: "reason string"` | Terminate the run with a reason (useful as a `when:`-gated branch for safety checks). |
 
 **Command** is the most common. Use it for anything you'll reuse across workflows.
 

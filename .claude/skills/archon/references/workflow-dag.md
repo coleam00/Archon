@@ -131,7 +131,7 @@ All node types share these fields:
 | `depends_on` | string[] | `[]` | Node IDs that must settle before this node runs |
 | `when` | string | — | Condition expression. Node **skipped** when false |
 | `trigger_rule` | string | `all_success` | Join semantics for multiple dependencies |
-| `idle_timeout` | number (ms) | 300000 | Per-node idle timeout. On loop nodes, applies per-iteration |
+| `idle_timeout` | number (ms) | 300000 | Idle timeout for AI streaming (`command`, `prompt`) and per-iteration idle for `loop`. Accepted but ignored on `bash` and `script` — use `timeout` there |
 
 **Command, prompt, and bash nodes** (silently ignored on loop nodes, except `retry` which is a hard error):
 

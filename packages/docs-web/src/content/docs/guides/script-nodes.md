@@ -101,12 +101,13 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
 
-Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`,
-`idle_timeout`) all work. AI-specific fields (`model`, `provider`, `context`,
-`output_format`, `allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`,
-`agents`, `effort`, `thinking`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`,
-`betas`, `sandbox`) are accepted by the parser but emit a loader warning and
-are ignored at runtime — no AI is invoked.
+Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all
+work. AI-specific fields (`model`, `provider`, `context`, `output_format`,
+`allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`, `agents`, `effort`,
+`thinking`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`)
+are accepted by the parser but emit a loader warning and are ignored at runtime
+— no AI is invoked. `idle_timeout` is also accepted but ignored: script nodes
+run as one-shot subprocesses, so use `timeout` (hard kill after N ms) instead.
 
 ## Inline vs Named Scripts
 
