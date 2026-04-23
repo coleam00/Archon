@@ -92,8 +92,6 @@ export interface OpencodeProviderDefaults {
   model?: string;
   /** Base URL of an existing OpenCode server to connect to. */
   baseUrl?: string;
-  /** Agent profile name, e.g. 'build', 'plan', or a custom subagent name. */
-  agent?: string;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */

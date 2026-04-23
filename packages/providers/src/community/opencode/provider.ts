@@ -14,6 +14,8 @@ import { parseOpencodeConfig } from './config';
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
 const OPENCODE_START_TIMEOUT_MS = 5000;
+const OPENCODE_DEFAULT_PORT = 4096;
+const OPENCODE_PORT_SEARCH_RANGE = 100; // Try ports 4096-4195
 
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
 const AUTH_PATTERNS = ['unauthorized', 'authentication', 'invalid token', '401', '403', 'api key'];
@@ -60,6 +62,45 @@ function getLog(): ReturnType<typeof createLogger> {
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Check if a port is available by attempting to create a server on it.
+ * Returns true if the port is free, false if it's in use.
+ */
+async function isPortAvailable(port: number): Promise<boolean> {
+  const { createServer } = await import('net');
+  return new Promise(resolve => {
+    const server = createServer();
+    server.once('error', () => {
+      resolve(false);
+    });
+    server.once('listening', () => {
+      server.close();
+      resolve(true);
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+/**
+ * Find an available port starting from the default port.
+ * Searches up to OPENCODE_PORT_SEARCH_RANGE ports.
+ * In test environment, skips port check and returns default port.
+ */
+async function findAvailablePort(startPort: number): Promise<number> {
+  // Skip port check in test environment to avoid network calls
+  if (process.env.NODE_ENV === 'test' || process.env.BUN_TEST === '1') {
+    return startPort;
+  }
+
+  for (let port = startPort; port < startPort + OPENCODE_PORT_SEARCH_RANGE; port++) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  // If all ports in range are taken, return start port and let the SDK fail with a clear error
+  return startPort;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -138,11 +179,68 @@ function normalizeTokens(info: Record<string, unknown> | undefined): TokenUsage 
   };
 }
 
+/**
+ * Try to connect to an existing OpenCode server at the default port.
+ * Returns the client if successful, null if connection fails.
+ */
+async function tryExistingServer(): Promise<OpencodeClientLike | null> {
+  const { createOpencodeClient } = await import('@opencode-ai/sdk');
+  const client = createOpencodeClient({
+    baseUrl: `http://localhost:${OPENCODE_DEFAULT_PORT}`,
+  }) as unknown as OpencodeClientLike;
+
+  try {
+    // Quick health check - try to create a session
+    await client.session.create({ query: { directory: process.cwd() } });
+    getLog().info({ port: OPENCODE_DEFAULT_PORT }, 'opencode.existing_server_found');
+    return client;
+  } catch (error) {
+    const isConnectionRefused =
+      error instanceof Error &&
+      (error.message.includes('Unable to connect') ||
+        error.message.includes('ConnectionRefused') ||
+        error.message.includes('ECONNREFUSED'));
+
+    if (isConnectionRefused) {
+      getLog().debug({ port: OPENCODE_DEFAULT_PORT }, 'opencode.no_existing_server');
+      return null;
+    }
+
+    // Other errors (auth, etc) - let them propagate
+    throw error;
+  }
+}
+
 async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRuntime> {
   if (!embeddedRuntimePromise) {
     embeddedRuntimePromise = (async (): Promise<EmbeddedRuntime> => {
+      // First, try to connect to an existing server
+      const existingClient = await tryExistingServer();
+      if (existingClient) {
+        return {
+          client: existingClient,
+          server: {
+            url: `http://localhost:${OPENCODE_DEFAULT_PORT}`,
+            close: (): void => {
+              /* external server, don't close */
+            },
+          },
+          refCount: 0,
+        };
+      }
+
+      // No existing server - spawn our own
       const { createOpencode } = await import('@opencode-ai/sdk');
+
+      // Find an available port to avoid conflicts
+      const port = await findAvailablePort(OPENCODE_DEFAULT_PORT);
+      getLog().info(
+        { defaultPort: OPENCODE_DEFAULT_PORT, selectedPort: port },
+        'opencode.port_selected'
+      );
+
       const runtime = await createOpencode({
+        port,
         signal,
         timeout: OPENCODE_START_TIMEOUT_MS,
       });
@@ -239,8 +337,7 @@ async function* streamOpencodeSession(
   cwd: string,
   sessionId: string,
   prompt: string,
-  model: { providerID: string; modelID: string } | undefined,
-  agent: string | undefined,
+  model: { providerID: string; modelID: string },
   requestOptions: SendQueryOptions | undefined
 ): AsyncGenerator<MessageChunk> {
   const events = await client.event.subscribe({ query: { directory: cwd } });
@@ -261,13 +358,14 @@ async function* streamOpencodeSession(
     streamController.abort();
   };
 
-  requestOptions?.abortSignal?.addEventListener('abort', abortHandler, { once: true });
+  requestOptions?.abortSignal?.addEventListener('abort', abortHandler, {
+    once: true,
+  });
 
   try {
     const promptBody: Record<string, unknown> = {
       parts: [{ type: 'text', text: prompt }],
-      ...(model ? { model } : {}),
-      ...(agent ? { agent } : {}),
+      model,
       ...(requestOptions?.systemPrompt ? { system: requestOptions.systemPrompt } : {}),
     };
 
@@ -285,7 +383,10 @@ async function* streamOpencodeSession(
     });
 
     for await (const rawEvent of abortableStream(events.stream, streamController.signal)) {
-      const event = rawEvent as { type?: string; properties?: Record<string, unknown> };
+      const event = rawEvent as {
+        type?: string;
+        properties?: Record<string, unknown>;
+      };
       const properties = isRecord(event.properties) ? event.properties : {};
 
       if (event.type === 'message.updated') {
@@ -466,7 +567,6 @@ export class OpencodeProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = parseOpencodeConfig(requestOptions?.assistantConfig ?? {});
     const modelRef = requestOptions?.model ?? assistantConfig.model;
-    const agent = assistantConfig.agent;
     const parsedModelOrNull = modelRef ? parseModelRef(modelRef) : undefined;
 
     if (modelRef && !parsedModelOrNull) {
@@ -475,15 +575,14 @@ export class OpencodeProvider implements IAgentProvider {
       );
     }
 
-    if (!parsedModelOrNull && !agent) {
+    if (!parsedModelOrNull) {
       throw new Error(
-        'OpenCode requires either a model or agent to be specified. ' +
-          'Set model in assistants config (e.g., model: anthropic/claude-3-5-sonnet) ' +
-          'or specify an agent (e.g., agent: build).'
+        'OpenCode requires a model to be specified. ' +
+          'Set model in assistants config (e.g., model: anthropic/claude-3-5-sonnet).'
       );
     }
 
-    const parsedModel = parsedModelOrNull ?? undefined;
+    const parsedModel = parsedModelOrNull;
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
@@ -522,7 +621,6 @@ export class OpencodeProvider implements IAgentProvider {
           sessionId,
           prompt,
           parsedModel,
-          agent,
           requestOptions
         );
         return;
@@ -567,4 +665,12 @@ export class OpencodeProvider implements IAgentProvider {
   getCapabilities(): ProviderCapabilities {
     return OPENCODE_CAPABILITIES;
   }
+}
+
+/**
+ * Reset the embedded runtime state. For testing only.
+ * This clears the cached runtime promise so tests can start fresh.
+ */
+export function resetEmbeddedRuntime(): void {
+  embeddedRuntimePromise = undefined;
 }
