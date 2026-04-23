@@ -1,0 +1,105 @@
+# E2E smoke test — OpenCode provider, every node type
+# Covers: prompt, command, loop (AI node types) + bash, script bun/uv
+#   (deterministic node types) + depends_on / when / trigger_rule / $nodeId.output
+#   (DAG features).
+# Skipped: `approval:` — pauses for human input, incompatible with CI.
+# Auth: OpenCode uses your local opencode.jsonc config.
+# Expected runtime: ~10s on haiku (3 AI round-trips + deterministic nodes).
+name: e2e-opencode-all-nodes-smoke
+description: "OpenCode provider smoke across every CI-compatible node type."
+provider: opencode
+model: cpamc/minimax
+
+nodes:
+  # ─── AI node types ──────────────────────────────────────────────────────
+
+  # 1. prompt: inline prompt (simplest AI node)
+  - id: prompt-node
+    prompt: "Reply with exactly the single word 'ok' and nothing else."
+    allowed_tools: []
+    effort: low
+    idle_timeout: 30000
+
+  # 2. command: named command file (.archon/commands/e2e-echo-command.md)
+  #    The command echoes back $ARGUMENTS (the workflow invocation message).
+  - id: command-node
+    command: e2e-echo-command
+    allowed_tools: []
+    idle_timeout: 30000
+
+  # 3. loop: iterative AI prompt until completion signal
+  #    Bounded by max_iterations: 2 so a misbehaving model can't hang CI.
+  - id: loop-node
+    loop:
+      prompt: "Reply with exactly 'DONE' and nothing else."
+      until: "DONE"
+      max_iterations: 2
+    allowed_tools: []
+    effort: low
+    idle_timeout: 60000
+
+  # ─── Deterministic node types (no AI) ───────────────────────────────────
+
+  # 4. bash: shell script with JSON output (enables $nodeId.output.status
+  #    dot-access downstream)
+  - id: bash-json-node
+    bash: "echo '{\"status\":\"ok\"}'"
+
+  # 5. script: bun (TypeScript/JavaScript runtime)
+  - id: script-bun-node
+    script: echo-args
+    runtime: bun
+    timeout: 30000
+
+  # 6. script: uv (Python runtime)
+  - id: script-python-node
+    script: echo-py
+    runtime: uv
+    timeout: 30000
+
+  # ─── DAG features ───────────────────────────────────────────────────────
+
+  # 7. depends_on + $nodeId.output substitution
+  - id: downstream
+    bash: "echo 'downstream got: $prompt-node.output'"
+    depends_on: [ prompt-node ]
+
+  # 8. when: conditional (JSON dot-access on upstream output)
+  - id: gated
+    bash: "echo 'gated-ok'"
+    depends_on: [ bash-json-node ]
+    when: "$bash-json-node.output.status == 'ok'"
+
+  # 9. trigger_rule: merge multiple deps (all_success semantics)
+  - id: merge
+    bash: "echo 'merge-ok'"
+    depends_on: [ downstream, gated, script-bun-node, script-python-node ]
+    trigger_rule: all_success
+
+  # ─── Final assertion ────────────────────────────────────────────────────
+
+  # 10. Verify every upstream node produced non-empty output.
+  - id: assert
+    bash: |
+      fail=0
+      check() {
+        local name="$1"
+        local value="$2"
+        if [ -z "$value" ]; then
+          echo "FAIL: $name produced empty output"
+          fail=1
+        fi
+      }
+      check prompt-node "$prompt-node.output"
+      check command-node "$command-node.output"
+      check loop-node "$loop-node.output"
+      check bash-json-node "$bash-json-node.output"
+      check script-bun-node "$script-bun-node.output"
+      check script-python-node "$script-python-node.output"
+      check downstream "$downstream.output"
+      check gated "$gated.output"
+      check merge "$merge.output"
+      if [ "$fail" -eq 1 ]; then exit 1; fi
+      echo "PASS: all 9 node types produced output"
+    depends_on: [ merge, loop-node, command-node ]
+    trigger_rule: all_success

@@ -10,7 +10,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   mcp: true,
   hooks: true,
   skills: true,
-  agents: true,
+  agents: false,
   toolRestrictions: true,
   structuredOutput: true,
   envInjection: true,
