@@ -1,0 +1,30 @@
+# E2E smoke test — GitHub Copilot community provider
+# Verifies: Copilot connectivity, streaming bridge yields assistant chunks,
+#   tokens arrive on the terminal result chunk, and $nodeId.output plumbing works.
+# Design: mirrors e2e-pi-smoke.yaml structure.
+# Auth: picks up `gh auth login` state OR COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env.
+#   Requires an active GitHub Copilot subscription.
+name: e2e-copilot-smoke
+description: 'Smoke test for Copilot community provider. Verifies prompt response via sendQuery.'
+provider: copilot
+model: gpt-5-mini
+
+nodes:
+  # 1. Simple prompt — verifies CopilotClient spawns, bridgeSession yields
+  #    assistant chunks via streaming deltas, agent_end produces the terminal
+  #    result chunk with sessionId + tokens.
+  - id: simple
+    prompt: 'What is 2+2? Answer with just the number, nothing else.'
+    effort: low
+    idle_timeout: 30000
+
+  # 2. Assert non-empty output — fails if Copilot returned nothing.
+  - id: assert
+    bash: |
+      output="$simple.output"
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      echo "PASS: simple=$output"
+    depends_on: [simple]
