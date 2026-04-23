@@ -116,8 +116,8 @@ function warnUnsupportedOptions(options: SendQueryOptions | undefined): void {
     }
   }
   // forkSession / persistSession are boolean flags the executor may set in
-  // normal operation; log-warn rather than throw (PR #1111's throw blocked
-  // ordinary session reuse).
+  // normal operation; log-warn rather than throw — throwing would block
+  // ordinary session reuse.
   if (options?.forkSession !== undefined) {
     log.warn({ option: 'forkSession', value: options.forkSession }, 'copilot.option_not_supported');
   }
