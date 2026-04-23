@@ -99,6 +99,7 @@ const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
   // community providers — list each field we're confident is safe to
   // show in the web UI. Unknown providers fall through with no fields.
   pi: ['model'],
+  copilot: ['model'],
 };
 
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
@@ -300,6 +301,7 @@ function getDefaults(): MergedConfig {
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
+    envOverrides: {},
   };
 }
 
@@ -324,6 +326,13 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
           `Available providers: ${getRegisteredProviderNames().join(', ')}`
       );
     }
+  }
+
+  const envCopilotModel = process.env.COPILOT_MODEL;
+  if (envCopilotModel && envCopilotModel.length > 0) {
+    if (!config.assistants.copilot) config.assistants.copilot = {};
+    config.assistants.copilot.model = envCopilotModel;
+    config.envOverrides['copilot.model'] = true;
   }
 
   // Streaming overrides
@@ -597,5 +606,6 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
       loadDefaultCommands: config.defaults.loadDefaultCommands,
       loadDefaultWorkflows: config.defaults.loadDefaultWorkflows,
     },
+    envOverrides: { ...config.envOverrides },
   };
 }

@@ -571,6 +571,32 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                 );
               }
 
+              if (provider.id === 'copilot') {
+                const envOverridden = config.envOverrides['copilot.model'];
+                const currentModel = (providerSettings.model as string | undefined) ?? '';
+                return (
+                  <div
+                    key={provider.id}
+                    className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm"
+                  >
+                    <div className="font-medium">{provider.displayName}</div>
+                    <div className="text-muted-foreground">Community provider settings</div>
+
+                    <label htmlFor="copilot-model">Model</label>
+                    <Input
+                      id="copilot-model"
+                      value={currentModel}
+                      onChange={e => {
+                        updateProviderSettings('copilot', { model: e.target.value });
+                      }}
+                      placeholder="auto"
+                      readOnly={envOverridden}
+                      disabled={envOverridden}
+                    />
+                  </div>
+                );
+              }
+
               return (
                 <div key={provider.id} className="rounded-md border border-border p-3 text-sm">
                   <div className="font-medium">{provider.displayName}</div>

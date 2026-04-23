@@ -205,14 +205,7 @@ export class CopilotProvider implements IAgentProvider {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const copilotConfig = parseCopilotConfig(assistantConfig);
 
-    const model = requestOptions?.model ?? copilotConfig.model;
-    if (!model) {
-      throw new Error(
-        'Copilot provider requires a `model`. Set it on the workflow node or ' +
-          '`assistants.copilot.model` in .archon/config.yaml. Examples: ' +
-          "'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5'."
-      );
-    }
+    const model = requestOptions?.model ?? copilotConfig.model ?? 'auto';
 
     const reasoningEffort = resolveReasoningEffort(requestOptions, copilotConfig);
     const systemMessage = resolveSystemMessage(requestOptions, copilotConfig);
