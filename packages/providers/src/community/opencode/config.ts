@@ -19,5 +19,10 @@ export function parseOpencodeConfig(raw: Record<string, unknown>): OpencodeProvi
     result.baseUrl = raw.baseUrl;
   }
 
+  const opencodeConfig = raw.opencode as Record<string, unknown> | undefined;
+  if (typeof opencodeConfig?.agent === 'string') {
+    result.agent = opencodeConfig.agent;
+  }
+
   return result;
 }

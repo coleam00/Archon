@@ -691,14 +691,15 @@ export class OpencodeProvider implements IAgentProvider {
               /* external client, no cleanup needed */
             },
           }
-        : {
-            client: (await acquireEmbeddedRuntime(requestOptions?.abortSignal)).client,
-            release: (): void => {
-              if (embeddedRuntimePromise) {
-                void embeddedRuntimePromise.then(releaseEmbeddedRuntime);
-              }
-            },
-          };
+        : await (async (): Promise<{ client: OpencodeClientLike; release: () => void }> => {
+            const embedded = await acquireEmbeddedRuntime(requestOptions?.abortSignal);
+            return {
+              client: embedded.client,
+              release: (): void => {
+                releaseEmbeddedRuntime(embedded);
+              },
+            };
+          })();
 
       try {
         const { sessionId, resumed } = await resolveSessionId(runtime.client, cwd, resumeSessionId);

@@ -384,8 +384,9 @@ describe('registry', () => {
       expect(caps.skills).toBe(true);
       expect(caps.agents).toBe(true);
       expect(caps.toolRestrictions).toBe(true);
-      expect(caps.effortControl).toBe(true);
-      expect(caps.thinkingControl).toBe(true);
+      // OpenCode handles effort/thinking via opencode.json agent config, not API
+      expect(caps.effortControl).toBe(false);
+      expect(caps.thinkingControl).toBe(false);
       // Not supported (no SDK API for budget enforcement, failover, or sandbox)
       expect(caps.costControl).toBe(false);
       expect(caps.fallbackModel).toBe(false);
