@@ -355,7 +355,7 @@ async function tryPersistSessionId(
     await sessionDb.updateSession(sessionId, assistantSessionId);
   } catch (error) {
     getLog().error(
-      { err: error as Error, sessionId, newSessionId: assistantSessionId },
+      { err: error as Error, sessionId, assistantSessionId },
       'session_id_persist_failed'
     );
   }
