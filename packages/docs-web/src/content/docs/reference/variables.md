@@ -89,7 +89,7 @@ nodes:
 
 Variables are substituted in a defined order:
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`
+1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
 2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
@@ -108,4 +108,5 @@ Positional arguments (`$1` through `$9`) are substituted separately by the comma
 | `$CONTEXT` / aliases | Yes | No | No |
 | `$LOOP_USER_INPUT` | Yes (loop nodes) | No | No |
 | `$REJECTION_REASON` | Yes (`on_reject` only) | No | No |
+| `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes |

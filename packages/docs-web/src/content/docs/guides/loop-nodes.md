@@ -204,9 +204,14 @@ iteration's output via `$LOOP_PREV_OUTPUT`:
     max_iterations: 3
 ```
 
-The first iteration sees `$LOOP_PREV_OUTPUT` substituted to an empty string;
-iterations 2+ see the previous iteration's cleaned output (after `<promise>`
-tags are stripped).
+In a continuous run, the first iteration sees `$LOOP_PREV_OUTPUT` substituted
+to an empty string; iterations 2+ see the previous iteration's cleaned output
+(after `<promise>` tags are stripped).
+
+When a loop resumes from an interactive approval gate, the first executed
+iteration after the resume also receives an empty `$LOOP_PREV_OUTPUT` even if
+its numeric iteration is 2+ — the prior output lived in a different run and is
+not carried across the gate.
 
 ### Accumulating context
 
