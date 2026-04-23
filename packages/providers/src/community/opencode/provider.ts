@@ -25,7 +25,8 @@ const CRASH_PATTERNS = [
   'disposed',
   'econnreset',
   'socket hang up',
-  'terminated',
+  'connection terminated',
+  'process terminated',
 ];
 
 type RetryableErrorClass = 'rate_limit' | 'auth' | 'crash' | 'unknown' | 'aborted';
@@ -51,6 +52,8 @@ interface EmbeddedRuntime {
   client: OpencodeClientLike;
   server: { url: string; close(): void };
   refCount: number;
+  /** Promise that created this runtime - used to prevent race conditions on release */
+  creationPromise: Promise<EmbeddedRuntime>;
 }
 
 type AgentConfig = NonNullable<NonNullable<NodeConfig['agents']>[string]>;
@@ -246,6 +249,12 @@ function normalizeTokens(info: Record<string, unknown> | undefined): TokenUsage 
 /**
  * Try to connect to an existing OpenCode server at the default port.
  * Returns the client if successful, null if connection fails.
+ *
+ * Note: The OpenCode SDK does not expose a dedicated health endpoint.
+ * Using session.create() as a lightweight connection check. This creates
+ * a transient session that is immediately abandoned - the SDK handles
+ * this gracefully. If the SDK adds a global.health() method in the future,
+ * we should switch to that for a truly stateless health check.
  */
 async function tryExistingServer(): Promise<OpencodeClientLike | null> {
   const { createOpencodeClient } = await import('@opencode-ai/sdk');
@@ -277,7 +286,7 @@ async function tryExistingServer(): Promise<OpencodeClientLike | null> {
 
 async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRuntime> {
   if (!embeddedRuntimePromise) {
-    embeddedRuntimePromise = (async (): Promise<EmbeddedRuntime> => {
+    const promise = (async (): Promise<EmbeddedRuntime> => {
       // First, try to connect to an existing server
       const existingClient = await tryExistingServer();
       if (existingClient) {
@@ -290,6 +299,7 @@ async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRun
             },
           },
           refCount: 0,
+          creationPromise: promise,
         };
       }
 
@@ -312,11 +322,13 @@ async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRun
         client: runtime.client as unknown as OpencodeClientLike,
         server: runtime.server,
         refCount: 0,
+        creationPromise: promise,
       };
     })().catch(error => {
       embeddedRuntimePromise = undefined;
       throw error;
     });
+    embeddedRuntimePromise = promise;
   }
 
   const runtime = await embeddedRuntimePromise;
@@ -328,10 +340,15 @@ function releaseEmbeddedRuntime(runtime: EmbeddedRuntime): void {
   runtime.refCount = Math.max(0, runtime.refCount - 1);
   if (runtime.refCount > 0) return;
 
-  try {
-    runtime.server.close();
-  } finally {
-    embeddedRuntimePromise = undefined;
+  // Only clear the cached promise if this runtime was created by the current promise.
+  // This prevents a race condition where a newer runtime replaces the cached promise
+  // while an older release call is still in flight.
+  if (embeddedRuntimePromise === runtime.creationPromise) {
+    try {
+      runtime.server.close();
+    } finally {
+      embeddedRuntimePromise = undefined;
+    }
   }
 }
 
@@ -600,7 +617,11 @@ async function* abortableStream(
   const iterator = stream[Symbol.asyncIterator]();
 
   while (true) {
-    if (signal.aborted) return;
+    if (signal.aborted) {
+      // Clean up the iterator's resources before returning
+      await iterator.return?.().catch(() => undefined);
+      return;
+    }
 
     const nextPromise = iterator.next();
     const result = await Promise.race([
@@ -617,7 +638,10 @@ async function* abortableStream(
       }),
     ]);
 
-    if (result.done) return;
+    if (result.done) {
+      await iterator.return?.().catch(() => undefined);
+      return;
+    }
     yield result.value;
   }
 }

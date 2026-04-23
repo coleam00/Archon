@@ -15,5 +15,5 @@ nodes:
 
   - id: assert
     bash: "echo \"$simple.output\" | grep -q \"OPENCODE_OK\" && echo \"PASS\" ||
-      echo \"FAIL\""
+      (echo \"FAIL\"; exit 1)"
     depends_on: [ simple ]

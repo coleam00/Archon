@@ -4,7 +4,9 @@ import { OPENCODE_CAPABILITIES } from './capabilities';
 import { OpencodeProvider } from './provider';
 
 export function isOpencodeModelCompatible(model: string): boolean {
-  return model.includes('/');
+  const slashIndex = model.indexOf('/');
+  // Require non-empty segments on both sides of the slash
+  return slashIndex > 0 && slashIndex < model.length - 1;
 }
 
 /**

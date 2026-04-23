@@ -25,8 +25,8 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   structuredOutput: true,
   envInjection: true,
   costControl: false,
-  effortControl: true,
-  thinkingControl: true,
+  effortControl: false,
+  thinkingControl: false, // OpenCode handles effort/thinking via opencode.json agent config, not prompt body
   fallbackModel: false,
   sandbox: false,
 };
