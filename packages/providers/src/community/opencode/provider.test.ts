@@ -597,4 +597,148 @@ describe('OpencodeProvider', () => {
     expect(mockCreateOpencodeClient).toHaveBeenCalled();
     expect(mockCreateOpencode).toHaveBeenCalled();
   });
+
+  test('agent config injects agent name into promptAsync body', async () => {
+    const runtime = makeRuntime();
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      },
+    ];
+
+    const nodeConfig = {
+      agents: {
+        'my-agent': { description: 'Test agent', prompt: 'You are helpful' },
+      },
+    };
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
+      path: { id: 'session-1' },
+      query: { directory: '/tmp' },
+      body: expect.objectContaining({
+        agent: 'my-agent',
+      }),
+    });
+  });
+
+  test('agent config with model override injects model into promptAsync body', async () => {
+    const runtime = makeRuntime();
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      },
+    ];
+
+    const nodeConfig = {
+      agents: {
+        'special-agent': {
+          description: 'Special agent',
+          prompt: 'You are special',
+          model: 'anthropic/claude-3-5-sonnet',
+        },
+      },
+    };
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
+      path: { id: 'session-1' },
+      query: { directory: '/tmp' },
+      body: expect.objectContaining({
+        model: { providerID: 'anthropic', modelID: 'claude-3-5-sonnet' },
+        agent: 'special-agent',
+      }),
+    });
+  });
+
+  test('agent config with tools and disallowedTools produces permissions map', async () => {
+    const runtime = makeRuntime();
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-1' },
+      },
+    ];
+
+    const nodeConfig = {
+      agents: {
+        'tools-agent': {
+          description: 'Limited tools agent',
+          prompt: 'You have limited access',
+          tools: ['read', 'grep'],
+          disallowedTools: ['bash', 'write'],
+        },
+      },
+    };
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
+    expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
+      path: { id: 'session-1' },
+      query: { directory: '/tmp' },
+      body: expect.objectContaining({
+        tools: {
+          read: true,
+          grep: true,
+          bash: false,
+          write: false,
+        },
+        agent: 'tools-agent',
+      }),
+    });
+  });
+
+  test('agent config with invalid model ref throws explicit error', async () => {
+    const nodeConfig = {
+      agents: {
+        'bad-agent': {
+          description: 'Bad agent',
+          prompt: 'This will fail',
+          model: 'invalid-no-slash-format',
+        },
+      },
+    };
+
+    // The error is thrown during generator iteration, caught by consume and returned in error field
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig,
+      })
+    );
+
+    expect(chunks).toEqual([]);
+    expect(error).toBeDefined();
+    expect(error?.message).toContain(
+      "Invalid OpenCode agent model ref for 'bad-agent': 'invalid-no-slash-format'"
+    );
+  });
 });

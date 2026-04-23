@@ -3,6 +3,7 @@ import { createLogger } from '@archon/paths';
 import type {
   IAgentProvider,
   MessageChunk,
+  NodeConfig,
   ProviderCapabilities,
   SendQueryOptions,
   TokenUsage,
@@ -52,6 +53,8 @@ interface EmbeddedRuntime {
   refCount: number;
 }
 
+type AgentConfig = NonNullable<NonNullable<NodeConfig['agents']>[string]>;
+
 let embeddedRuntimePromise: Promise<EmbeddedRuntime> | undefined;
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -69,7 +72,7 @@ function delay(ms: number): Promise<void> {
  * Returns true if the port is free, false if it's in use.
  */
 async function isPortAvailable(port: number): Promise<boolean> {
-  const { createServer } = await import('net');
+  const { createServer } = await import('node:net');
   return new Promise(resolve => {
     const server = createServer();
     server.once('error', () => {
@@ -160,6 +163,67 @@ function parseModelRef(modelRef: string): { providerID: string; modelID: string 
   if (!providerID || !modelID) return null;
 
   return { providerID, modelID };
+}
+
+function selectPrimaryAgent(agents: Record<string, AgentConfig>): string | undefined {
+  const agentNames = Object.keys(agents).sort();
+  return agentNames[0];
+}
+
+function buildToolsPermissionsMap(
+  allowed?: string[],
+  denied?: string[]
+): Record<string, boolean> | undefined {
+  const toolsPermissions: Record<string, boolean> = {};
+
+  for (const tool of allowed ?? []) {
+    toolsPermissions[tool] = true;
+  }
+
+  for (const tool of denied ?? []) {
+    toolsPermissions[tool] = false;
+  }
+
+  return Object.keys(toolsPermissions).length > 0 ? toolsPermissions : undefined;
+}
+
+function adaptAgentConfigForOpencode(nodeConfig?: NodeConfig):
+  | {
+      agent?: string;
+      model?: { providerID: string; modelID: string };
+      tools?: Record<string, boolean>;
+    }
+  | undefined {
+  const agents = nodeConfig?.agents;
+  if (!agents) return undefined;
+
+  const agent = selectPrimaryAgent(agents);
+  if (!agent) return undefined;
+
+  const primaryAgent = agents[agent];
+  const adaptedConfig: {
+    agent?: string;
+    model?: { providerID: string; modelID: string };
+    tools?: Record<string, boolean>;
+  } = { agent };
+
+  if (primaryAgent?.model) {
+    const parsedModel = parseModelRef(primaryAgent.model);
+    if (!parsedModel) {
+      throw new Error(
+        `Invalid OpenCode agent model ref for '${agent}': '${primaryAgent.model}'. Expected format '<provider>/<model>' (for example 'anthropic/claude-3-5-sonnet').`
+      );
+    }
+    adaptedConfig.model = parsedModel;
+  }
+
+  const tools = buildToolsPermissionsMap(primaryAgent?.tools, primaryAgent?.disallowedTools);
+  if (tools) {
+    adaptedConfig.tools = tools;
+  }
+
+  // OpenCode supports per-call agent/model/tool overrides, but not prompt/description injection.
+  return adaptedConfig;
 }
 
 function normalizeTokens(info: Record<string, unknown> | undefined): TokenUsage | undefined {
@@ -338,7 +402,8 @@ async function* streamOpencodeSession(
   sessionId: string,
   prompt: string,
   model: { providerID: string; modelID: string },
-  requestOptions: SendQueryOptions | undefined
+  requestOptions: SendQueryOptions | undefined,
+  nodeConfig?: NodeConfig
 ): AsyncGenerator<MessageChunk> {
   const events = await client.event.subscribe({ query: { directory: cwd } });
   const streamController = new AbortController();
@@ -363,9 +428,14 @@ async function* streamOpencodeSession(
   });
 
   try {
+    const adaptedAgentConfig = adaptAgentConfigForOpencode(
+      nodeConfig ?? requestOptions?.nodeConfig
+    );
     const promptBody: Record<string, unknown> = {
       parts: [{ type: 'text', text: prompt }],
-      model,
+      model: adaptedAgentConfig?.model ?? model,
+      ...(adaptedAgentConfig?.agent ? { agent: adaptedAgentConfig.agent } : {}),
+      ...(adaptedAgentConfig?.tools ? { tools: adaptedAgentConfig.tools } : {}),
       ...(requestOptions?.systemPrompt ? { system: requestOptions.systemPrompt } : {}),
     };
 
@@ -621,7 +691,8 @@ export class OpencodeProvider implements IAgentProvider {
           sessionId,
           prompt,
           parsedModel,
-          requestOptions
+          requestOptions,
+          requestOptions?.nodeConfig
         );
         return;
       } catch (error) {

@@ -8,7 +8,7 @@
 name: e2e-opencode-all-nodes-smoke
 description: "OpenCode provider smoke across every CI-compatible node type."
 provider: opencode
-model: cpamc/minimax
+model: anthropic/claude-haiku-4-5
 
 nodes:
   # ─── AI node types ──────────────────────────────────────────────────────
