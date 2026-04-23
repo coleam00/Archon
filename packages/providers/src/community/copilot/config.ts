@@ -20,6 +20,11 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
     const v = raw.modelReasoningEffort;
     if (v === 'low' || v === 'medium' || v === 'high' || v === 'xhigh') {
       config.modelReasoningEffort = v;
+    } else if (v === 'max') {
+      // Accept Archon's workflow-schema alias for the top tier. Normalizing
+      // at parse time keeps `CopilotProviderDefaults.modelReasoningEffort`
+      // aligned with the SDK's enum (which has no 'max').
+      config.modelReasoningEffort = 'xhigh';
     }
   }
 

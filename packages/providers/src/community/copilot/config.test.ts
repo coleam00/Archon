@@ -31,6 +31,12 @@ describe('parseCopilotConfig', () => {
     expect(parseCopilotConfig({ modelReasoningEffort: 42 })).toEqual({});
   });
 
+  test('normalizes Archon alias `max` to SDK `xhigh`', () => {
+    expect(parseCopilotConfig({ modelReasoningEffort: 'max' })).toEqual({
+      modelReasoningEffort: 'xhigh',
+    });
+  });
+
   test('parses githubToken string', () => {
     expect(parseCopilotConfig({ githubToken: 'ghp_secret' })).toEqual({
       githubToken: 'ghp_secret',

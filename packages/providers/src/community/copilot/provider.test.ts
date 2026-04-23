@@ -27,6 +27,7 @@ mock.module('@archon/paths', () => ({
 interface FakeSession {
   sessionId: string;
   prompt?: string;
+  sendTimeout?: number;
   aborted: boolean;
   disconnected: boolean;
   listener: ((event: SessionEvent) => void) | undefined;
@@ -61,7 +62,7 @@ function makeFakeSession(sessionId = 'sess-1'): FakeSession {
   // Attach the session-shape methods the provider/bridge call:
   const session = fake as FakeSession & {
     on: (h: (e: SessionEvent) => void) => () => void;
-    sendAndWait: (opts: { prompt: string }) => Promise<unknown>;
+    sendAndWait: (opts: { prompt: string }, timeout?: number) => Promise<unknown>;
     disconnect: () => Promise<void>;
     abort: () => Promise<void>;
   };
@@ -71,8 +72,9 @@ function makeFakeSession(sessionId = 'sess-1'): FakeSession {
       fake.listener = undefined;
     };
   };
-  session.sendAndWait = async (opts): Promise<unknown> => {
+  session.sendAndWait = async (opts, timeout): Promise<unknown> => {
     fake.prompt = opts.prompt;
+    fake.sendTimeout = timeout;
     return sendPromise;
   };
   session.disconnect = async (): Promise<void> => {
@@ -213,6 +215,25 @@ describe('CopilotProvider.sendQuery', () => {
     expect(opts.reasoningEffort).toBe('high');
   });
 
+  test('workflow `effort: max` maps to SDK `xhigh`', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      nodeConfig: { effort: 'max' },
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
+    expect(opts.reasoningEffort).toBe('xhigh');
+  });
+
   test('invalid effort value is dropped (not passed to SDK)', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
@@ -271,6 +292,64 @@ describe('CopilotProvider.sendQuery', () => {
       c => c && typeof c === 'object' && 'type' in c && c.type === 'system'
     ) as { content: string } | undefined;
     expect(systemChunk?.content).toContain('Could not resume');
+  });
+
+  test('forkSession=true with resumeSessionId creates fresh session (SDK has no fork)', async () => {
+    const session = makeFakeSession('sess-fresh');
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', 'sess-prior', {
+      model: 'gpt-5',
+      forkSession: true,
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    const chunks = [(await first).value, ...(await collect(gen))];
+
+    // resumeSession MUST NOT be called — we fork to fresh instead.
+    expect(resumeSessionSpy).not.toHaveBeenCalled();
+    expect(createSessionSpy).toHaveBeenCalledTimes(1);
+    const systemChunk = chunks.find(
+      c => c && typeof c === 'object' && 'type' in c && c.type === 'system'
+    ) as { content: string } | undefined;
+    expect(systemChunk?.content).toContain('does not support session forking');
+  });
+
+  test('resumeSessionId without forkSession resumes in place (node-to-node continuation)', async () => {
+    const session = makeFakeSession('sess-resumed');
+    nextResumeSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', 'sess-prior', {
+      model: 'gpt-5',
+      forkSession: false,
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    expect(resumeSessionSpy).toHaveBeenCalledTimes(1);
+    expect(createSessionSpy).not.toHaveBeenCalled();
+  });
+
+  test('sendAndWait receives explicit timeout > SDK default of 60s', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    expect(session.sendTimeout).toBeDefined();
+    expect(session.sendTimeout!).toBeGreaterThan(60_000);
   });
 
   test('terminal result chunk carries sessionId and tokens from usage event', async () => {

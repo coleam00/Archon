@@ -134,8 +134,9 @@ function warnUnsupportedOptions(options: SendQueryOptions | undefined): void {
  *   nodeConfig.effort > config.modelReasoningEffort
  *
  * The SDK enum is `'low' | 'medium' | 'high' | 'xhigh'`. Archon's workflow
- * `effort` allows `'minimal'` too (Codex-flavored), which Copilot doesn't
- * support — we drop it with a warning so the SDK doesn't reject the session.
+ * `effort` schema is `'low' | 'medium' | 'high' | 'max'` (dag-node.ts) — we
+ * map `'max'` to the SDK's `'xhigh'`. Codex-only tiers (`'minimal'`) and the
+ * `'off'` sentinel are dropped with a log-warn.
  */
 function resolveReasoningEffort(
   options: SendQueryOptions | undefined,
@@ -145,6 +146,7 @@ function resolveReasoningEffort(
   if (raw === undefined) return undefined;
   if (typeof raw !== 'string') return undefined;
   if (raw === 'off') return undefined;
+  if (raw === 'max') return 'xhigh';
   if (raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'xhigh') {
     return raw;
   }
@@ -229,7 +231,15 @@ export class CopilotProvider implements IAgentProvider {
 
     let session: CopilotSession;
     let resumeFailed = false;
-    if (resumeSessionId) {
+    let forkedToFresh = false;
+    // Archon's dag-executor sets `forkSession: true` on every reuse so retries
+    // start from the pre-node conversation state. The Copilot SDK has no fork
+    // API — resumeSession mutates the source session in place. When fork is
+    // requested we therefore create a fresh session rather than pollute the
+    // source with retry attempts. That loses the prior conversation context,
+    // but preserves retry correctness (which is what the executor cares about).
+    const wantsFork = requestOptions?.forkSession === true;
+    if (resumeSessionId && !wantsFork) {
       log.debug({ sessionId: resumeSessionId, cwd }, 'copilot.resume_attempt');
       try {
         session = await client.resumeSession(resumeSessionId, sessionOpts);
@@ -242,7 +252,15 @@ export class CopilotProvider implements IAgentProvider {
         session = await client.createSession(sessionOpts);
       }
     } else {
-      log.debug({ cwd, model }, 'copilot.create_session');
+      if (resumeSessionId && wantsFork) {
+        log.warn(
+          { requestedResumeSessionId: resumeSessionId },
+          'copilot.fork_unsupported_creating_fresh_session'
+        );
+        forkedToFresh = true;
+      } else {
+        log.debug({ cwd, model }, 'copilot.create_session');
+      }
       session = await client.createSession(sessionOpts);
     }
 
@@ -250,6 +268,12 @@ export class CopilotProvider implements IAgentProvider {
       yield {
         type: 'system',
         content: '⚠️ Could not resume Copilot session — starting a fresh conversation.',
+      };
+    } else if (forkedToFresh) {
+      yield {
+        type: 'system',
+        content:
+          '⚠️ Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
       };
     }
 

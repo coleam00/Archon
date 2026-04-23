@@ -214,6 +214,20 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
 
 // ─── bridgeSession integration wrapper ────────────────────────────────────
 
+/**
+ * Backstop timeout passed to `session.sendAndWait()`.
+ *
+ * The SDK defaults to 60s, which is far too short — any tool-heavy turn or
+ * workflow node with a larger `idle_timeout` would trip the SDK timer before
+ * Archon's own idle / abort machinery gets a say. The SDK docs also note
+ * that this timeout *only* stops the wait; it does not abort in-flight agent
+ * work — so a small value causes the session to keep running in the
+ * background, orphaned. We therefore set a 60-minute ceiling (2× Archon's
+ * `STEP_IDLE_TIMEOUT_MS`) and rely on `abortSignal → session.abort()` to be
+ * the real cancel path.
+ */
+const SEND_AND_WAIT_TIMEOUT_MS = 60 * 60 * 1000;
+
 export type BridgeQueueItem =
   | { kind: 'chunk'; chunk: MessageChunk }
   | { kind: 'done' }
@@ -285,9 +299,10 @@ export async function* bridgeSession(
     }
   }
 
-  // Kick off sendAndWait; it resolves on `session.idle`.
+  // Kick off sendAndWait; it resolves on `session.idle`. The explicit
+  // timeout overrides the SDK's 60s default — see SEND_AND_WAIT_TIMEOUT_MS.
   let sendResult: AssistantMessageEvent | undefined;
-  const sendPromise = session.sendAndWait({ prompt }).then(
+  const sendPromise = session.sendAndWait({ prompt }, SEND_AND_WAIT_TIMEOUT_MS).then(
     (r: AssistantMessageEvent | undefined) => {
       sendResult = r;
       queue.push({ kind: 'done' });
