@@ -18,7 +18,7 @@ export function registerCopilotProvider(): void {
   if (isRegisteredProvider('copilot')) return;
   registerProvider({
     id: 'copilot',
-    displayName: 'GitHub Copilot (community)',
+    displayName: 'Copilot (GitHub)',
     factory: () => new CopilotProvider(),
     capabilities: COPILOT_CAPABILITIES,
     isModelCompatible: isCopilotModelCompatible,

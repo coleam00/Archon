@@ -153,8 +153,8 @@ export function registerBuiltinProviders(): void {
  * disappear.
  */
 export function registerCommunityProviders(): void {
-  registerPiProvider();
   registerCopilotProvider();
+  registerPiProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

@@ -2509,6 +2509,9 @@ export interface components {
         loadDefaultCommands: boolean;
         loadDefaultWorkflows: boolean;
       };
+      envOverrides: {
+        [key: string]: boolean;
+      };
     };
     ConfigResponse: {
       config: components['schemas']['SafeConfig'];

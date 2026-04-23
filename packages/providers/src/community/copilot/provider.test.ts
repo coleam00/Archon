@@ -158,10 +158,23 @@ describe('CopilotProvider.sendQuery', () => {
     approveAllStub.mockClear();
   });
 
-  test('throws clear error when model is missing', async () => {
+  test('defaults to model="auto" when none is configured', async () => {
+    const session = makeFakeSession('sess-default-auto');
+    nextCreateSessionResult = session;
+
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/tmp', undefined, { assistantConfig: {} });
-    await expect(gen.next()).rejects.toThrow(/requires a `model`/);
+
+    const firstNext = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' }));
+    session.resolveSend(undefined);
+    await firstNext;
+    await collect(gen);
+
+    expect(createSessionSpy).toHaveBeenCalledTimes(1);
+    const opts = createSessionSpy.mock.calls[0]![0] as { model: string };
+    expect(opts.model).toBe('auto');
   });
 
   test('passes model + streaming=true + workingDirectory to createSession', async () => {

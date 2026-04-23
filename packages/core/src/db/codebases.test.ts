@@ -12,6 +12,11 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
+const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
+mock.module('../config/config-loader', () => ({
+  loadConfig: mockLoadConfig,
+}));
+
 import {
   createCodebase,
   getCodebase,
@@ -78,7 +83,8 @@ describe('codebases', () => {
       );
     });
 
-    test('defaults ai_assistant_type to claude', async () => {
+    test('defaults ai_assistant_type to config.assistant', async () => {
+      mockLoadConfig.mockResolvedValueOnce({ assistant: 'copilot' });
       mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
 
       await createCodebase({
@@ -88,7 +94,7 @@ describe('codebases', () => {
 
       expect(mockQuery).toHaveBeenCalledWith(
         expect.any(String),
-        expect.arrayContaining(['claude'])
+        expect.arrayContaining(['copilot'])
       );
     });
   });
