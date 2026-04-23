@@ -97,7 +97,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
     const result = await resolver.resolveCopilotBinaryPath();
     expect(result).toBe(expected);
     expect(mockLogger.info).toHaveBeenCalledWith(
-      { binaryPath: expected, source: 'autodetect' },
+      { source: 'autodetect' },
       'copilot.binary_resolved'
     );
   });
@@ -111,7 +111,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
     const result = await resolver.resolveCopilotBinaryPath();
     expect(result).toBe('/opt/homebrew/bin/copilot');
     expect(mockLogger.info).toHaveBeenCalledWith(
-      { binaryPath: '/opt/homebrew/bin/copilot', source: 'autodetect' },
+      { source: 'autodetect' },
       'copilot.binary_resolved'
     );
   });

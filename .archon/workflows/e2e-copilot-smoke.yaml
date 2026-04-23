@@ -19,12 +19,18 @@ nodes:
     idle_timeout: 30000
 
   # 2. Assert non-empty output — fails if Copilot returned nothing.
+  #    Wrap the AI-controlled value in a quoted here-doc so shell metacharacters
+  #    in the model's response (backticks, $(...), ${}) are treated as data,
+  #    not executable shell.
   - id: assert
     bash: |
-      output="$simple.output"
+      output=$(cat <<'ARCHON_COPILOT_SIMPLE_OUTPUT'
+$simple.output
+ARCHON_COPILOT_SIMPLE_OUTPUT
+      )
       if [ -z "$output" ]; then
-        echo "FAIL: simple node returned empty output"
+        printf 'FAIL: simple node returned empty output\n'
         exit 1
       fi
-      echo "PASS: simple=$output"
+      printf 'PASS: simple=%s\n' "$output"
     depends_on: [simple]

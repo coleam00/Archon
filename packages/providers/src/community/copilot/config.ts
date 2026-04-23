@@ -5,9 +5,10 @@ export type { CopilotProviderDefaults };
 /**
  * Parse raw `assistants.copilot` config into a typed `CopilotProviderDefaults`.
  *
- * Defensive: validates each field's type, silently drops anything malformed,
- * never throws. Mirrors `parseCodexConfig` / `parsePiConfig` — a broken user
+ * Fallback behavior: fields with unexpected types (or enum values outside the
+ * declared set) are silently omitted rather than throwing. A broken user
  * config must not prevent provider registration or workflow discovery.
+ * Callers that want strict validation should validate upstream.
  */
 export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProviderDefaults {
   const config: CopilotProviderDefaults = {};
@@ -28,26 +29,31 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
     }
   }
 
-  if (typeof raw.githubToken === 'string') {
-    config.githubToken = raw.githubToken;
+  if (typeof raw.copilotCliPath === 'string') {
+    config.copilotCliPath = raw.copilotCliPath;
   }
 
-  if (typeof raw.cliPath === 'string') {
-    config.cliPath = raw.cliPath;
+  if (typeof raw.configDir === 'string') {
+    config.configDir = raw.configDir;
+  }
+
+  if (typeof raw.enableConfigDiscovery === 'boolean') {
+    config.enableConfigDiscovery = raw.enableConfigDiscovery;
+  }
+
+  if (typeof raw.useLoggedInUser === 'boolean') {
+    config.useLoggedInUser = raw.useLoggedInUser;
   }
 
   if (
-    raw.systemMessage &&
-    typeof raw.systemMessage === 'object' &&
-    !Array.isArray(raw.systemMessage)
+    raw.logLevel === 'none' ||
+    raw.logLevel === 'error' ||
+    raw.logLevel === 'warning' ||
+    raw.logLevel === 'info' ||
+    raw.logLevel === 'debug' ||
+    raw.logLevel === 'all'
   ) {
-    const sm = raw.systemMessage as Record<string, unknown>;
-    if (typeof sm.content === 'string') {
-      const modeRaw = typeof sm.mode === 'string' ? sm.mode : undefined;
-      const mode: 'append' | 'replace' | 'customize' =
-        modeRaw === 'replace' || modeRaw === 'customize' ? modeRaw : 'append';
-      config.systemMessage = { content: sm.content, mode };
-    }
+    config.logLevel = raw.logLevel;
   }
 
   return config;

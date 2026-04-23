@@ -37,49 +37,50 @@ describe('parseCopilotConfig', () => {
     });
   });
 
-  test('parses githubToken string', () => {
-    expect(parseCopilotConfig({ githubToken: 'ghp_secret' })).toEqual({
-      githubToken: 'ghp_secret',
+  test('parses copilotCliPath string', () => {
+    expect(parseCopilotConfig({ copilotCliPath: '/usr/local/bin/copilot' })).toEqual({
+      copilotCliPath: '/usr/local/bin/copilot',
     });
   });
 
-  test('drops non-string githubToken', () => {
-    expect(parseCopilotConfig({ githubToken: 42 })).toEqual({});
+  test('drops non-string copilotCliPath', () => {
+    expect(parseCopilotConfig({ copilotCliPath: 42 })).toEqual({});
   });
 
-  test('parses cliPath string', () => {
-    expect(parseCopilotConfig({ cliPath: '/usr/local/bin/copilot' })).toEqual({
-      cliPath: '/usr/local/bin/copilot',
+  test('parses configDir string', () => {
+    expect(parseCopilotConfig({ configDir: '/tmp/copilot-config' })).toEqual({
+      configDir: '/tmp/copilot-config',
     });
   });
 
-  test('parses systemMessage with content only (defaults mode to append)', () => {
-    expect(parseCopilotConfig({ systemMessage: { content: 'Be concise.' } })).toEqual({
-      systemMessage: { content: 'Be concise.', mode: 'append' },
+  test('parses enableConfigDiscovery boolean', () => {
+    expect(parseCopilotConfig({ enableConfigDiscovery: true })).toEqual({
+      enableConfigDiscovery: true,
+    });
+    expect(parseCopilotConfig({ enableConfigDiscovery: false })).toEqual({
+      enableConfigDiscovery: false,
     });
   });
 
-  test('parses systemMessage with valid mode values', () => {
-    for (const mode of ['append', 'replace', 'customize'] as const) {
-      expect(parseCopilotConfig({ systemMessage: { content: 'x', mode } })).toEqual({
-        systemMessage: { content: 'x', mode },
-      });
+  test('drops non-boolean enableConfigDiscovery', () => {
+    expect(parseCopilotConfig({ enableConfigDiscovery: 'yes' })).toEqual({});
+    expect(parseCopilotConfig({ enableConfigDiscovery: 1 })).toEqual({});
+  });
+
+  test('parses useLoggedInUser boolean', () => {
+    expect(parseCopilotConfig({ useLoggedInUser: true })).toEqual({ useLoggedInUser: true });
+    expect(parseCopilotConfig({ useLoggedInUser: false })).toEqual({ useLoggedInUser: false });
+  });
+
+  test('parses each valid logLevel enum', () => {
+    for (const v of ['none', 'error', 'warning', 'info', 'debug', 'all'] as const) {
+      expect(parseCopilotConfig({ logLevel: v })).toEqual({ logLevel: v });
     }
   });
 
-  test('falls back to append mode when systemMessage.mode is invalid', () => {
-    expect(parseCopilotConfig({ systemMessage: { content: 'x', mode: 'bogus' } })).toEqual({
-      systemMessage: { content: 'x', mode: 'append' },
-    });
-  });
-
-  test('drops systemMessage without content', () => {
-    expect(parseCopilotConfig({ systemMessage: {} })).toEqual({});
-    expect(parseCopilotConfig({ systemMessage: { mode: 'replace' } })).toEqual({});
-  });
-
-  test('drops array systemMessage (must be object)', () => {
-    expect(parseCopilotConfig({ systemMessage: ['a', 'b'] })).toEqual({});
+  test('drops invalid logLevel', () => {
+    expect(parseCopilotConfig({ logLevel: 'verbose' })).toEqual({});
+    expect(parseCopilotConfig({ logLevel: 42 })).toEqual({});
   });
 
   test('ignores unknown keys', () => {
@@ -90,8 +91,8 @@ describe('parseCopilotConfig', () => {
 
   test('does not throw on malformed input', () => {
     expect(() => parseCopilotConfig({ model: null })).not.toThrow();
-    expect(() => parseCopilotConfig({ systemMessage: null })).not.toThrow();
     expect(() => parseCopilotConfig({ modelReasoningEffort: {} })).not.toThrow();
+    expect(() => parseCopilotConfig({ logLevel: null })).not.toThrow();
   });
 
   test('combines all fields', () => {
@@ -99,16 +100,20 @@ describe('parseCopilotConfig', () => {
       parseCopilotConfig({
         model: 'gpt-5-mini',
         modelReasoningEffort: 'high',
-        githubToken: 'ghp_token',
-        cliPath: '/bin/copilot',
-        systemMessage: { content: 'Hi.', mode: 'replace' },
+        copilotCliPath: '/bin/copilot',
+        configDir: '/etc/copilot',
+        enableConfigDiscovery: true,
+        useLoggedInUser: false,
+        logLevel: 'debug',
       })
     ).toEqual({
       model: 'gpt-5-mini',
       modelReasoningEffort: 'high',
-      githubToken: 'ghp_token',
-      cliPath: '/bin/copilot',
-      systemMessage: { content: 'Hi.', mode: 'replace' },
+      copilotCliPath: '/bin/copilot',
+      configDir: '/etc/copilot',
+      enableConfigDiscovery: true,
+      useLoggedInUser: false,
+      logLevel: 'debug',
     });
   });
 });

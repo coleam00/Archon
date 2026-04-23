@@ -16,6 +16,16 @@
  */
 const CLAUDE_ALIASES = new Set<string>(['sonnet', 'opus', 'haiku']);
 
+/**
+ * Return false for model strings that unambiguously don't belong to Copilot —
+ * Claude aliases (`sonnet`/`opus`/`haiku`), the `'inherit'` sentinel, and
+ * empty strings. Everything else returns true because Copilot accepts a wide
+ * catalog (OpenAI, Anthropic via BYOK, Gemini) with no authoritative list.
+ *
+ * This runs at workflow-validation time when the user names `provider: copilot`
+ * explicitly — the goal is to fail loud on obvious config mistakes, not to
+ * match a catalog.
+ */
 export function isCopilotModelCompatible(model: string): boolean {
   if (typeof model !== 'string') return false;
   if (CLAUDE_ALIASES.has(model)) return false;

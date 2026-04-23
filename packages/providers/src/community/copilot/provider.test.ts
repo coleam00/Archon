@@ -145,7 +145,7 @@ describe('CopilotProvider.getType / getCapabilities', () => {
     expect(c.sessionResume).toBe(true);
     expect(c.effortControl).toBe(true);
     expect(c.thinkingControl).toBe(true);
-    expect(c.mcp).toBe(false);
+    expect(c.mcp).toBe(true);
     expect(c.hooks).toBe(false);
   });
 });
@@ -421,14 +421,14 @@ describe('CopilotProvider.sendQuery', () => {
     expect(session.disconnected).toBe(true);
   });
 
-  test('unsupported option logs warn but does not throw', async () => {
+  test('forkSession + persistSession boolean flags logged at debug (not thrown)', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
-      nodeConfig: { mcp: 'some-config.json' },
+      persistSession: false,
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -436,13 +436,10 @@ describe('CopilotProvider.sendQuery', () => {
     await first;
     await collect(gen);
 
+    // No throw, and no warn-level log for persistSession — debug is fine.
     const warnCalls = mockLogger.warn.mock.calls;
-    const sawUnsupported = warnCalls.some(
-      args =>
-        args[1] === 'copilot.option_not_supported' &&
-        (args[0] as { option: string }).option === 'mcp'
-    );
-    expect(sawUnsupported).toBe(true);
+    const sawUnsupported = warnCalls.some(args => args[1] === 'copilot.option_not_supported');
+    expect(sawUnsupported).toBe(false);
   });
 
   test('sendAndWait rejection propagates as thrown error', async () => {

@@ -9,7 +9,7 @@
  *
  * Resolution order:
  *  1. `COPILOT_BIN_PATH` environment variable
- *  2. `assistants.copilot.cliPath` in config
+ *  2. `assistants.copilot.copilotCliPath` in config
  *  3. `~/.archon/vendor/copilot/<platform-binary>` (user-placed)
  *  4. Autodetect canonical install paths (npm prefix defaults per platform)
  *  5. Throw with install instructions
@@ -63,7 +63,7 @@ export async function resolveCopilotBinaryPath(
           'Please verify the path points to the Copilot CLI binary.'
       );
     }
-    getLog().info({ binaryPath: envPath, source: 'env' }, 'copilot.binary_resolved');
+    getLog().info({ source: 'env' }, 'copilot.binary_resolved');
     return envPath;
   }
 
@@ -71,11 +71,11 @@ export async function resolveCopilotBinaryPath(
   if (configCliPath) {
     if (!fileExists(configCliPath)) {
       throw new Error(
-        `assistants.copilot.cliPath is set to "${configCliPath}" but the file does not exist.\n` +
+        `assistants.copilot.copilotCliPath is set to "${configCliPath}" but the file does not exist.\n` +
           'Please verify the path in .archon/config.yaml points to the Copilot CLI binary.'
       );
     }
-    getLog().info({ binaryPath: configCliPath, source: 'config' }, 'copilot.binary_resolved');
+    getLog().info({ source: 'config' }, 'copilot.binary_resolved');
     return configCliPath;
   }
 
@@ -85,7 +85,7 @@ export async function resolveCopilotBinaryPath(
     const archonHome = getArchonHome();
     const vendorBinaryPath = join(archonHome, COPILOT_VENDOR_DIR, binaryName);
     if (fileExists(vendorBinaryPath)) {
-      getLog().info({ binaryPath: vendorBinaryPath, source: 'vendor' }, 'copilot.binary_resolved');
+      getLog().info({ source: 'vendor' }, 'copilot.binary_resolved');
       return vendorBinaryPath;
     }
   }
@@ -94,7 +94,7 @@ export async function resolveCopilotBinaryPath(
   const autodetectPaths = getAutodetectPaths();
   for (const probePath of autodetectPaths) {
     if (fileExists(probePath)) {
-      getLog().info({ binaryPath: probePath, source: 'autodetect' }, 'copilot.binary_resolved');
+      getLog().info({ source: 'autodetect' }, 'copilot.binary_resolved');
       return probePath;
     }
   }
@@ -113,7 +113,7 @@ export async function resolveCopilotBinaryPath(
       '     # .archon/config.yaml\n' +
       '     assistants:\n' +
       '       copilot:\n' +
-      '         cliPath: /path/to/copilot\n'
+      '         copilotCliPath: /path/to/copilot\n'
   );
 }
 
