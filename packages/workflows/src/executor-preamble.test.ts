@@ -329,11 +329,11 @@ describe('executeWorkflow preamble', () => {
         makeWorkflow(),
         'User message',
         'db-conv-id',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
         true // allowAutoResume
       );
 
@@ -375,11 +375,11 @@ describe('executeWorkflow preamble', () => {
         makeWorkflow(),
         'User message',
         'db-conv-id',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
         true // allowAutoResume
       );
 
@@ -420,11 +420,11 @@ describe('executeWorkflow preamble', () => {
         makeWorkflow(),
         'User message',
         'db-conv-id',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
         true // allowAutoResume
       );
 

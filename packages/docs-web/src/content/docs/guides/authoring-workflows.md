@@ -508,22 +508,22 @@ SDK subprocess retry (claude.ts)  — 3 total attempts, 2 s base backoff
     ↓ only if all SDK retries exhausted
 Node retry (dag-executor)  — default 2 retries, 3 s base backoff
     ↓ only if all node retries exhausted
-Workflow fails → next invocation auto-resumes completed nodes
+Workflow fails → re-run with --resume skips completed nodes
 ```
 
 This means a single transient crash may trigger up to **3 SDK retries** before a single node retry attempt is consumed.
 
-> **DAG resume**: For `nodes:` (DAG) workflows, resume is automatic — the next invocation detects the prior failed run and skips already-completed nodes. No `--resume` flag is needed. See [DAG Resume on Failure](#dag-resume-on-failure) below.
+> **DAG resume**: For `nodes:` (DAG) workflows, re-running with `--resume` detects the prior failed run and skips already-completed nodes. Without `--resume`, each invocation starts fresh. See [DAG Resume on Failure](#dag-resume-on-failure) below.
 
 ---
 
 ## DAG Resume on Failure
 
-When a `nodes:` (DAG) workflow fails, the next invocation automatically resumes from where it left off — no `--resume` flag required.
+When a `nodes:` (DAG) workflow fails, re-running with `--resume` picks up where it left off — Archon skips already-completed nodes and only executes failed and not-yet-run nodes. Without `--resume`, each invocation starts fresh.
 
 **How it works:**
 
-1. On each invocation, Archon checks for a prior failed run of the same workflow at the same working path.
+1. `--resume` checks for a prior failed run of the same workflow at the same working path.
 2. If found, it loads the `node_completed` events from that run to determine which nodes finished successfully.
 3. Completed nodes are skipped; only failed and not-yet-run nodes are executed.
 4. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
@@ -533,7 +533,7 @@ When a `nodes:` (DAG) workflow fails, the next invocation automatically resumes 
 - **Web UI**: click the Abandon or Cancel button on the workflow card. Abandon marks the run `cancelled` and keeps completed-node history. Cancel also terminates any in-flight subprocess.
 - **CLI**: `archon workflow abandon <run-id>` (equivalent to the dashboard Abandon button). Run IDs are listed by `archon workflow status`.
 
-Once the row reaches a terminal status, the next invocation of the same workflow at the same path auto-resumes from completed nodes via the mechanism above.
+Once the row reaches a terminal status, re-running the workflow with `--resume` at the same path will skip already-completed nodes via the mechanism above.
 
 > Not to be confused with `archon workflow cleanup [days]`, which **deletes** old terminal runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. It does not transition `running` rows.
 
@@ -964,7 +964,7 @@ nodes:
 
 ### Pattern: Checkpoint and Resume
 
-For long workflows, DAG resume handles this automatically — completed nodes are skipped on re-invocation:
+For long workflows, DAG resume lets you pick up where you left off — re-run with `--resume` and completed nodes are skipped:
 
 ```yaml
 name: large-migration
@@ -990,7 +990,7 @@ nodes:
     context: fresh
 ```
 
-If the workflow fails at `batch-2`, the next invocation skips `plan` and `batch-1` automatically.
+If the workflow fails at `batch-2`, re-running with `--resume` skips `plan` and `batch-1` and picks up from the failed node.
 
 ### Pattern: Human-in-the-Loop
 

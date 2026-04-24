@@ -119,6 +119,7 @@ mock.module('@archon/core/db/codebases', () => ({
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByWorkflow: mock(() => Promise.resolve(null)),
   create: mock(() => Promise.resolve({ id: 'iso-123' })),
+  listByCodebase: mock(() => Promise.resolve([])),
 }));
 
 mock.module('@archon/core/db/messages', () => ({
@@ -971,6 +972,87 @@ describe('workflowRunCommand', () => {
     expect(error.message).toContain('Check your Archon workspace registration under');
     expect(error.message).toMatch(/workspaces\b/);
     expect(error.message).not.toContain('Remove the stale workspace entry');
+  });
+
+  // -------------------------------------------------------------------------
+  // allowAutoResume forwarding
+  // -------------------------------------------------------------------------
+
+  it('passes allowAutoResume=true to executeWorkflow when --resume is set', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+
+    const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+        errors: [],
+      });
+      (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'conv-123',
+      });
+      (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'cb-123',
+        default_cwd: '/test/path',
+      });
+      (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(
+        undefined
+      );
+      // Resume path calls findResumableRun first — return a run without working_path to skip existsSync
+      (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'prior-run-123',
+        workflow_name: 'assist',
+        working_path: null,
+        status: 'failed',
+      });
+      // listByCodebase is called to match isolation env for the resumable run
+      (isolationDb.listByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce([]);
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'run-123',
+      });
+
+      await workflowRunCommand('/test/path', 'assist', 'hello', { resume: true });
+
+      const calls = (executeWorkflow as ReturnType<typeof mock>).mock.calls;
+      const callArgs = calls[calls.length - 1] as unknown[];
+      // allowAutoResume is argument 12 (0-indexed)
+      expect(callArgs[12]).toBe(true);
+    } finally {
+      consoleSpy.mockRestore();
+    }
+  });
+
+  it('does NOT pass allowAutoResume=true to executeWorkflow when --resume is absent', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-123',
+    });
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', { noWorktree: true });
+
+    const calls = (executeWorkflow as ReturnType<typeof mock>).mock.calls;
+    const callArgs = calls[calls.length - 1] as unknown[];
+    // allowAutoResume (position 12) must be falsy when --resume is not passed
+    expect(callArgs[12]).toBeFalsy();
   });
 
   // -------------------------------------------------------------------------

@@ -358,11 +358,11 @@ describe('executeWorkflow', () => {
         makeWorkflow(),
         'test message',
         'db-conv-1',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        preCreated,
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        preCreated, // preCreatedRun
         true // allowAutoResume
       );
 
@@ -398,11 +398,11 @@ describe('executeWorkflow', () => {
         makeWorkflow(),
         'test message',
         'db-conv-1',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        preCreated,
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        preCreated, // preCreatedRun
         true // allowAutoResume
       );
 
@@ -526,7 +526,26 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('resume logic', () => {
-    it('starts fresh run when findResumableRun returns null', async () => {
+    it('does NOT call findResumableRun when allowAutoResume is omitted (default is fresh)', async () => {
+      const findResumableSpy = mock(async () => makeRun({ status: 'failed' }));
+      const store = makeStore({ findResumableRun: findResumableSpy });
+      const deps = makeDeps(store);
+      // allowAutoResume intentionally omitted — gate must suppress resume detection entirely
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+      expect(findResumableSpy).not.toHaveBeenCalled();
+      expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(result.workflowRunId).toBe('run-123');
+    });
+
+    it('starts fresh run when findResumableRun returns null (allowAutoResume: true)', async () => {
       const store = makeStore({
         findResumableRun: mock(async () => null),
       });
@@ -538,13 +557,19 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        'db-conv-1',
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
+        true // allowAutoResume
       );
       expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);
       expect(result.workflowRunId).toBe('run-123');
     });
 
-    it('starts fresh run when findResumableRun throws', async () => {
+    it('starts fresh run when findResumableRun throws (allowAutoResume: true)', async () => {
       const store = makeStore({
         findResumableRun: mock(async () => {
           throw new Error('DB error');
@@ -558,14 +583,20 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        'db-conv-1',
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
+        true // allowAutoResume
       );
       // Should fall back to creating a fresh run
       expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);
       expect(result.workflowRunId).toBe('run-123');
     });
 
-    it('starts fresh run when prior run has 0 completed nodes', async () => {
+    it('starts fresh run when prior run has 0 completed nodes (allowAutoResume: true)', async () => {
       const failedRun = makeRun({ id: 'prior-run', status: 'failed' });
       const store = makeStore({
         findResumableRun: mock(async () => failedRun),
@@ -579,7 +610,13 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        'db-conv-1',
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
+        true // allowAutoResume
       );
       // Should skip resume and create a fresh run
       expect(store.createWorkflowRun).toHaveBeenCalledTimes(1);

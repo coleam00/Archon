@@ -298,7 +298,7 @@ async function dispatchOrchestratorWorkflow(
         undefined, // isolationContext
         conversation.id, // parentConversationId — enables approve/reject auto-resume
         undefined, // preCreatedRun
-        true // allowAutoResume — orchestrator already found the resumable run
+        true // allowAutoResume — caller confirmed a resumable run exists at working_path
       );
     } else if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation

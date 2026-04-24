@@ -427,7 +427,7 @@ export async function workflowRunCommand(
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
 
-  // Handle --resume: find the most recent failed run and reuse its worktree.
+  // Handle --resume: find the most recent resumable run (failed/paused) and reuse its worktree.
   // allowAutoResume: true (forwarded to executeWorkflow) enables skipping
   // already-completed nodes from the prior run.
   if (options.resume) {
@@ -948,8 +948,9 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
   console.log('');
 
   // Re-execute via workflowRunCommand with --resume.
-  // The executor's implicit findResumableRun detects the prior failed run
-  // and skips already-completed nodes.
+  // Passing resume: true forwards allowAutoResume: true to executeWorkflow,
+  // which enables findResumableRun to detect the prior failed run and skip
+  // already-completed nodes.
   try {
     await workflowRunCommand(run.working_path, run.workflow_name, run.user_message ?? '', {
       resume: true,
