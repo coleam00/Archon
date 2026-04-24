@@ -135,7 +135,7 @@ nodes:
           # --- script node (TypeScript via bun, or Python via uv — no AI, stdout = $<nodeId>.output) ---
           # Use for deterministic data transforms the shell would mangle (JSON parsing, etc.)
           script: |
-            const raw = String.raw`$other-node.output`;
+            const raw = String.raw`$<other-node>.output`;
             const data = JSON.parse(raw);
             console.log(JSON.stringify({ count: data.items.length }));
           runtime: bun                       # required: 'bun' (.ts/.js) or 'uv' (.py)
@@ -176,7 +176,7 @@ nodes:
       3. Every node MUST have a unique kebab-case `id`
       4. Use `depends_on` to define execution order
       5. Use `bash` nodes for deterministic shell operations (file checks, git commands, installs)
-      6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps) — stdout is captured as output, stderr is forwarded as a warning. $nodeId.output is NOT shell-quoted in script bodies — parse with JSON.parse / json.loads, not shell interpolation
+      6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps) — stdout is captured as output, stderr is forwarded as a warning. `$<nodeId>.output` is NOT shell-quoted in script bodies — parse with JSON.parse / json.loads, not shell interpolation
       7. Use `prompt` nodes for AI reasoning tasks
       8. Use `approval` nodes to pause for human review at risky gates (plan→execute boundary, destructive actions)
       9. Use `output_format` on prompt nodes when downstream nodes need structured data
