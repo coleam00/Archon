@@ -415,7 +415,7 @@ nodes:
   - id: implement
     depends_on: [implement-setup]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
     loop:
       prompt: |
         # PIV Loop — Implementation Agent
