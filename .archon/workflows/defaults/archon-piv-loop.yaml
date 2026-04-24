@@ -198,7 +198,7 @@ nodes:
       3. **Read example test files** — understand testing patterns
       4. **Check for any recent changes** — `git log --oneline -10`
 
-      ## Step 2: Write the Plan
+      ## Step 2: Plan File Location
 
       Save the plan to `$ARTIFACTS_DIR/plan.md`.
       The directory already exists (pre-created by the workflow executor).
@@ -395,8 +395,12 @@ nodes:
       echo ""
       echo "=== PLAN_END ==="
 
-      TASK_COUNT=$(grep -c "^### Task [0-9]" "$PLAN_FILE" || true)
-      echo "TASK_COUNT=${TASK_COUNT:-0}"
+      TASK_COUNT=$(grep -c "^### Task [0-9]" "$PLAN_FILE" 2>/dev/null || echo "0")
+      if [ "$TASK_COUNT" -eq 0 ]; then
+        echo "ERROR: No '### Task N:' sections found in $PLAN_FILE. Plan may be malformed."
+        exit 1
+      fi
+      echo "TASK_COUNT=${TASK_COUNT}"
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 3b: IMPLEMENT — Task-by-Task Loop (Ralph pattern)
@@ -571,7 +575,7 @@ nodes:
 
       Fix type errors, lint warnings, missing imports, formatting. Commit any fixes:
       ```bash
-      git add -A && git commit -m "fix: address code review findings" 2>/dev/null || true
+      git add -A && git commit -m "fix: address code review findings" || true
       ```
 
       ## Step 6: Present Review
@@ -696,7 +700,7 @@ nodes:
       ## Step 1: Push Changes
 
       ```bash
-      git push -u origin HEAD 2>&1 || true
+      git push -u origin HEAD 2>&1 || echo "WARNING: Push failed — verify remote authentication and branch state before creating the PR."
       ```
 
       ## Step 2: Generate Summary
