@@ -171,8 +171,17 @@ export function parseModelRef(modelRef: string): { providerID: string; modelID: 
   return { providerID, modelID };
 }
 
+let warnedMultipleAgents = false;
+
 function selectPrimaryAgent(agents: Record<string, AgentConfig>): string | undefined {
   const agentNames = Object.keys(agents);
+  if (agentNames.length > 1 && !warnedMultipleAgents) {
+    warnedMultipleAgents = true;
+    getLog().warn(
+      { agents: agentNames, selected: agentNames[0] },
+      'opencode.multiple_agents_configured_using_first'
+    );
+  }
   return agentNames[0];
 }
 
@@ -260,8 +269,14 @@ async function tryExistingServer(): Promise<OpencodeClientLike | null> {
   }) as unknown as OpencodeClientLike;
 
   try {
-    // Use global.health() for a stateless health check
-    await client.global.health();
+    // Use global.health() for a stateless health check, with 2s timeout
+    const healthPromise = client.global.health();
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('health_check_timeout'));
+      }, 2000);
+    });
+    await Promise.race([healthPromise, timeoutPromise]);
     getLog().info({ port: OPENCODE_DEFAULT_PORT }, 'opencode.existing_server_found');
     return client;
   } catch (error) {
@@ -269,7 +284,8 @@ async function tryExistingServer(): Promise<OpencodeClientLike | null> {
       error instanceof Error &&
       (error.message.includes('Unable to connect') ||
         error.message.includes('ConnectionRefused') ||
-        error.message.includes('ECONNREFUSED'));
+        error.message.includes('ECONNREFUSED') ||
+        error.message === 'health_check_timeout');
 
     if (isConnectionRefused) {
       getLog().debug({ port: OPENCODE_DEFAULT_PORT }, 'opencode.no_existing_server');
@@ -283,11 +299,23 @@ async function tryExistingServer(): Promise<OpencodeClientLike | null> {
 
 async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRuntime> {
   if (!embeddedRuntimePromise) {
-    const promise = (async (): Promise<EmbeddedRuntime> => {
+    // Use a deferred pattern to allow the runtime to reference its own creation promise
+    // resolveRuntime is assigned synchronously before the async callback runs
+    let resolveRuntime: undefined | ((runtime: EmbeddedRuntime) => void);
+    const promise = new Promise<EmbeddedRuntime>(resolve => {
+      resolveRuntime = resolve;
+    }).catch(error => {
+      embeddedRuntimePromise = undefined;
+      throw error;
+    });
+    embeddedRuntimePromise = promise;
+
+    // Now build the runtime, passing the promise for the creationPromise field
+    (async (): Promise<void> => {
       // First, try to connect to an existing server
       const existingClient = await tryExistingServer();
       if (existingClient) {
-        return {
+        resolveRuntime?.({
           client: existingClient,
           server: {
             url: `http://localhost:${OPENCODE_DEFAULT_PORT}`,
@@ -297,7 +325,8 @@ async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRun
           },
           refCount: 0,
           creationPromise: promise,
-        };
+        });
+        return;
       }
 
       // No existing server - spawn our own
@@ -315,17 +344,16 @@ async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRun
         signal,
         timeout: OPENCODE_START_TIMEOUT_MS,
       });
-      return {
+      resolveRuntime?.({
         client: runtime.client as unknown as OpencodeClientLike,
         server: runtime.server,
         refCount: 0,
         creationPromise: promise,
-      };
+      });
     })().catch(error => {
       embeddedRuntimePromise = undefined;
       throw error;
     });
-    embeddedRuntimePromise = promise;
   }
 
   const runtime = await embeddedRuntimePromise;
