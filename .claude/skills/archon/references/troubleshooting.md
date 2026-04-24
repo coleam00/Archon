@@ -123,7 +123,7 @@ Common causes:
 1. Upstream node is an AI node without `output_format` — the output is free-form text, JSON parsing fails, field access returns empty.
 2. Upstream node was **skipped** (its `when:` evaluated false). Downstream `when:` with `==` comparisons against a specific value will fail-closed.
 3. Bash/script node printed to stderr, not stdout. Only stdout is captured.
-4. For script nodes, non-zero exit on a non-existent file / missing import silently drops the output. Check the run log for `node_failed`.
+4. For script nodes, non-zero exit on a non-existent file / missing import silently drops the output. Check the run log for `node_error` entries.
 
 ## Useful Diagnostic Commands
 
