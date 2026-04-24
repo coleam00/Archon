@@ -42,9 +42,51 @@ Determine the user's intent and dispatch to the appropriate guide:
 | **Variable substitution reference** | Read `references/variables.md` |
 | **CLI command reference** | Read `references/cli-commands.md` |
 | **Run an interactive workflow** | Read `references/interactive-workflows.md` — transparent relay protocol |
+| **Workflow good practices / anti-patterns** | Read `references/good-practices.md` — read before designing a non-trivial workflow |
+| **Troubleshoot a failing / stuck workflow** | Read `references/troubleshooting.md` — log locations, common failure modes |
 | **Run a workflow (default)** | Continue with "Running Workflows" below |
 
 If the intent is ambiguous, ask the user to clarify.
+
+---
+
+## Richer Context: [archon.diy](https://archon.diy)
+
+The references in this skill are a distilled subset. The full, canonical docs live at **[archon.diy](https://archon.diy)** (Starlight site from `packages/docs-web/`). If the skill's reference pages don't cover what you need — an edge case, a worked example, a diagram, a deeper section on a feature — fetch the matching page from archon.diy.
+
+### When to reach for the live docs
+
+- You need an end-to-end example that's longer than what the skill shows (e.g. full patterns for hooks, MCP config, sandbox schema, approval flows)
+- You're explaining a concept to the user and want the most readable framing (the `book/` series is written as a tutorial, not a reference)
+- You hit a feature the skill only mentions in passing (e.g. `agents:` inline sub-agents, advanced Codex options, the full SyncHookJSONOutput schema)
+- The user asks "where is this documented?" — point them at the archon.diy URL, not a skill file path
+
+### URL map
+
+| Topic | URL |
+|-------|-----|
+| Landing + install | [archon.diy](https://archon.diy) |
+| Getting started (installation, quick start, concepts) | [archon.diy/getting-started/](https://archon.diy/getting-started/overview/) |
+| The book (tutorial-style walkthrough) | [archon.diy/book/](https://archon.diy/book/) |
+| Workflow authoring guide | [archon.diy/guides/authoring-workflows/](https://archon.diy/guides/authoring-workflows/) |
+| Command authoring guide | [archon.diy/guides/authoring-commands/](https://archon.diy/guides/authoring-commands/) |
+| Node type guides | [archon.diy/guides/loop-nodes/](https://archon.diy/guides/loop-nodes/), [/approval-nodes/](https://archon.diy/guides/approval-nodes/), [/script-nodes/](https://archon.diy/guides/script-nodes/) |
+| Per-node features (Claude only) | [/hooks/](https://archon.diy/guides/hooks/), [/mcp-servers/](https://archon.diy/guides/mcp-servers/), [/skills/](https://archon.diy/guides/skills/) |
+| Global workflows/commands/scripts | [archon.diy/guides/global-workflows/](https://archon.diy/guides/global-workflows/) |
+| Variables reference | [archon.diy/reference/variables/](https://archon.diy/reference/variables/) |
+| CLI reference | [archon.diy/reference/cli/](https://archon.diy/reference/cli/) |
+| Security model (env, sandbox, target-repo `.env` stripping) | [archon.diy/reference/security/](https://archon.diy/reference/security/) |
+| Architecture | [archon.diy/reference/architecture/](https://archon.diy/reference/architecture/) |
+| Configuration (`.archon/config.yaml` full schema) | [archon.diy/reference/configuration/](https://archon.diy/reference/configuration/) |
+| Troubleshooting | [archon.diy/reference/troubleshooting/](https://archon.diy/reference/troubleshooting/) |
+| Adapter setup (Slack/Telegram/GitHub/Web/Discord/Gitea/GitLab) | [archon.diy/adapters/](https://archon.diy/adapters/) |
+| Deployment (Docker, cloud, Windows) | [archon.diy/deployment/](https://archon.diy/deployment/) |
+
+URL shape is `archon.diy/<section>/<page>/` — the paths mirror the filenames under `packages/docs-web/src/content/docs/`.
+
+### Precedence
+
+This skill's reference pages are the primary source for routine workflow authoring, CLI use, and setup. Reach for archon.diy when the skill is incomplete for your case — don't go to the live docs first by default (skill refs load into context faster and are tuned for agents).
 
 ---
 
@@ -202,6 +244,29 @@ Each node has exactly ONE of: `command`, `prompt`, `bash`, `script`, `loop`, `ap
     max_iterations: 10
     fresh_context: true
     until_bash: "bun run test"    # Optional: exit 0 = done
+```
+
+**Approval node** — pauses the workflow for human review. Requires `interactive: true` at the workflow level for Web UI delivery:
+```yaml
+interactive: true   # workflow level — required for web UI
+
+nodes:
+  - id: review-gate
+    approval:
+      message: "Review the plan above before proceeding."
+      capture_response: true      # Optional: user's comment → $review-gate.output
+      on_reject:                  # Optional: AI rework on rejection instead of cancel
+        prompt: "Revise based on feedback: $REJECTION_REASON"
+        max_attempts: 3           # Range 1-10, default 3
+    depends_on: [plan]
+```
+
+**Cancel node** — terminates the workflow with a reason. Typically gated with `when:`:
+```yaml
+- id: stop-if-unsafe
+  cancel: "Refusing to proceed: input flagged UNSAFE."
+  depends_on: [classify]
+  when: "$classify.output != 'SAFE'"
 ```
 
 For the full authoring guide with all fields, conditions, trigger rules, and patterns: Read `references/workflow-dag.md`
