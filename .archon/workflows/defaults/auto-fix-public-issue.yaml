@@ -1,0 +1,349 @@
+name: auto-fix-public-issue
+description: |
+  Demo-first workflow that finds a safe small bugfix in traefik/traefik, pauses for
+  a final approval before any write action, then implements the fix and opens a
+  draft PR on the user's fork.
+
+provider: claude
+model: sonnet
+
+nodes:
+  - id: discover-candidates
+    script: |
+      import { mkdir, writeFile } from 'fs/promises';
+      import { join } from 'path';
+
+      const DEFAULT_REPO = 'traefik/traefik';
+      const DEFAULT_PER_PAGE = 20;
+      const DEFAULT_MAX_PAGES = 4;
+      const DEFAULT_FETCH_RETRIES = 2;
+
+      function getArtifactsDir() {
+        return process.env.ARTIFACTS_DIR ?? process.cwd();
+      }
+
+      function toMetadata(issue) {
+        return {
+          number: issue.number,
+          title: issue.title,
+          body: issue.body ?? '',
+          labels: (issue.labels ?? []).flatMap(label => (label.name ? [label.name] : [])),
+          hasLinkedPr: false,
+          commentCount: issue.comments ?? 0,
+        };
+      }
+
+      function includesAny(text, needles) {
+        return needles.some(needle => text.includes(needle));
+      }
+
+      function getLikelyArea(issue) {
+        const haystack = `${issue.title} ${issue.body} ${issue.labels.join(' ')}`.toLowerCase();
+
+        if (includesAny(haystack, ['docker provider', 'providername=docker', 'containerinspect'])) {
+          return 'pkg/provider/docker';
+        }
+
+        if (includesAny(haystack, ['redis sentinel', 'watchtree', 'area/redis'])) {
+          return 'pkg/provider/redis';
+        }
+
+        if (includesAny(haystack, ['gateway api', 'externalname', 'area/gateway'])) {
+          return 'pkg/provider/kubernetes/gateway';
+        }
+
+        return null;
+      }
+
+      function getLikelyFiles(area) {
+        switch (area) {
+          case 'pkg/provider/docker':
+            return ['pkg/provider/docker/shared.go', 'pkg/provider/docker/shared_test.go'];
+          case 'pkg/provider/redis':
+            return ['pkg/provider/kv/kv.go'];
+          case 'pkg/provider/kubernetes/gateway':
+            return ['pkg/provider/kubernetes/gateway/httproute.go'];
+          default:
+            return [];
+        }
+      }
+
+      function getLikelyTests(area, validationBlocked) {
+        if (validationBlocked) return [];
+
+        switch (area) {
+          case 'pkg/provider/docker':
+            return ['go test ./pkg/provider/docker/...'];
+          case 'pkg/provider/kubernetes/gateway':
+            return ['go test ./pkg/provider/kubernetes/gateway/...'];
+          default:
+            return [];
+        }
+      }
+
+      function scorePublicIssue(issue) {
+        const haystack = `${issue.title}\n${issue.body}\n${issue.labels.join(' ')}`.toLowerCase();
+        const normalizedLabels = issue.labels.map(label => label.toLowerCase());
+        const likelyArea = getLikelyArea(issue);
+        const isFeatureRequest =
+          includesAny(haystack, ['feature request', 'proposal', 'enhancement']) ||
+          normalizedLabels.some(label => includesAny(label, ['enhancement', 'feature']));
+        const isMultiSubsystem =
+          includesAny(haystack, ['provider-wide', 'across the gateway provider', 'consistency']) ||
+          normalizedLabels.filter(label => label.startsWith('area/')).length > 1;
+        const validationBlocked = includesAny(haystack, [
+          'docker swarm',
+          'redis sentinel',
+          '10k route entries',
+          'our topology',
+        ]);
+        const maintainerSuggested =
+          normalizedLabels.includes('contributor/good-first-issue') ||
+          normalizedLabels.includes('contributor/wanted');
+        const hasClearActual = includesAny(haystack, ['actual behavior', 'what did you see instead']);
+        const hasClearExpected = includesAny(haystack, [
+          'expected behavior',
+          'what did you expect to see',
+        ]);
+        const hasRepro = includesAny(haystack, ['steps to reproduce', 'reproduce', 'observe']);
+        const likelyTests = getLikelyTests(likelyArea, validationBlocked);
+        const likelyFiles = getLikelyFiles(likelyArea);
+
+        if (issue.hasLinkedPr) {
+          return {
+            eligible: false,
+            score: 0,
+            riskLevel: 'high',
+            likelyArea,
+            likelyFiles,
+            likelyTests,
+            selectionReason: '',
+            rejectionReason: 'linked-pr',
+          };
+        }
+
+        if (isFeatureRequest) {
+          return {
+            eligible: false,
+            score: 20,
+            riskLevel: 'high',
+            likelyArea,
+            likelyFiles,
+            likelyTests,
+            selectionReason: '',
+            rejectionReason: 'feature request',
+          };
+        }
+
+        if (isMultiSubsystem) {
+          return {
+            eligible: false,
+            score: 45,
+            riskLevel: 'high',
+            likelyArea,
+            likelyFiles,
+            likelyTests,
+            selectionReason: '',
+            rejectionReason: 'multi-subsystem change',
+          };
+        }
+
+        if (validationBlocked) {
+          return {
+            eligible: false,
+            score: 35,
+            riskLevel: 'high',
+            likelyArea,
+            likelyFiles,
+            likelyTests: [],
+            selectionReason: '',
+            rejectionReason: 'validation path is too environment-specific',
+          };
+        }
+
+        let score = 0;
+        if (hasClearActual) score += 20;
+        if (hasClearExpected) score += 20;
+        if (hasRepro) score += 15;
+        if (likelyArea) score += 10;
+        if (likelyFiles.length > 0) score += 10;
+        if (likelyTests.length > 0) score += 15;
+        if (maintainerSuggested && likelyFiles.length > 0 && likelyTests.length > 0) score += 5;
+        score -= Math.min(issue.commentCount, 5);
+
+        const eligible = score >= 70;
+        const riskLevel = score >= 80 ? 'low' : score >= 60 ? 'medium' : 'high';
+
+        return {
+          eligible,
+          score,
+          riskLevel,
+          likelyArea,
+          likelyFiles,
+          likelyTests,
+          selectionReason: eligible
+            ? 'clear expected-vs-actual bugfix with a localized change and a plausible validation path'
+            : '',
+          rejectionReason: eligible ? null : 'score below deterministic safety threshold',
+        };
+      }
+
+      function buildCandidateSelectionArtifact({ runId, repo, issues }) {
+        const candidates = issues
+          .map(issue => {
+            const score = scorePublicIssue(issue);
+            return {
+              issue_number: issue.number,
+              title: issue.title,
+              ...score,
+            };
+          })
+          .sort((left, right) => right.score - left.score);
+
+        return {
+          run_id: runId,
+          repo,
+          candidates,
+        };
+      }
+
+      async function fetchIssuesPage(url, headers) {
+        for (let attempt = 0; attempt <= DEFAULT_FETCH_RETRIES; attempt += 1) {
+          const response = await fetch(url, { headers });
+          if (response.ok) {
+            return response.json();
+          }
+
+          if (response.status >= 500 && attempt < DEFAULT_FETCH_RETRIES) {
+            await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            continue;
+          }
+
+          const body = await response.text();
+          throw new Error(`GitHub issue fetch failed (${response.status}): ${body.slice(0, 200)}`);
+        }
+
+        throw new Error('GitHub issue fetch failed after retries');
+      }
+
+      async function fetchOpenIssues(repo, token, maxPages) {
+        const headers = {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'archon-auto-fix-public-issue',
+        };
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+
+        const issues = [];
+        for (let page = 1; page <= maxPages; page += 1) {
+          const data = await fetchIssuesPage(
+            `https://api.github.com/repos/${repo}/issues?state=open&per_page=${DEFAULT_PER_PAGE}&page=${page}`,
+            headers
+          );
+          issues.push(...data.filter(issue => issue.pull_request === undefined).map(toMetadata));
+          if (data.length < DEFAULT_PER_PAGE) {
+            break;
+          }
+        }
+
+        return issues;
+      }
+
+      async function main() {
+        const token = process.env.GITHUB_TOKEN;
+        const repo = process.env.PUBLIC_ISSUE_REPO ?? DEFAULT_REPO;
+        const maxPages = Number(process.env.PUBLIC_ISSUE_MAX_PAGES ?? DEFAULT_MAX_PAGES);
+        const runId = process.env.WORKFLOW_ID ?? `manual-${Date.now()}`;
+        const artifactsDir = getArtifactsDir();
+
+        const issues = await fetchOpenIssues(repo, token, maxPages);
+        const artifact = buildCandidateSelectionArtifact({ runId, repo, issues });
+        const outputPath = join(artifactsDir, 'candidate-score.json');
+
+        await mkdir(artifactsDir, { recursive: true });
+        await writeFile(outputPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+
+        const best = artifact.candidates.find(candidate => candidate.eligible) ?? null;
+        if (!best) {
+          throw new Error(
+            `No eligible public issue candidates found for ${repo}. See ${outputPath} for scored rejects.`
+          );
+        }
+
+        console.log(
+          JSON.stringify(
+            {
+              repo,
+              scannedIssueCount: issues.length,
+              candidateCount: artifact.candidates.length,
+              selectedIssue: best
+                ? {
+                    issue_number: best.issue_number,
+                    score: best.score,
+                    eligible: best.eligible,
+                    title: best.title,
+                  }
+                : null,
+              artifact: outputPath,
+            },
+            null,
+            2
+          )
+        );
+      }
+
+      await main();
+    runtime: bun
+
+  - id: investigate-selected-issue
+    command: investigate-selected-issue
+    depends_on: [discover-candidates]
+    context: fresh
+
+  - id: build-fix-preview
+    command: build-fix-preview
+    depends_on: [investigate-selected-issue]
+    context: fresh
+
+  - id: final-approval
+    approval:
+      message: "Review fix-preview.md and fix-preview.json, then approve before any fork, branch, code, push, or PR action."
+      capture_response: true
+    depends_on: [build-fix-preview]
+
+  - id: prepare-fork-pr
+    command: prepare-fork-pr
+    depends_on: [final-approval]
+    context: fresh
+
+  - id: implement-issue-codex
+    command: implement-issue-codex
+    depends_on: [prepare-fork-pr]
+    provider: codex
+    model: gpt-5.3-codex
+    context: fresh
+
+  - id: validate-issue-fix
+    command: validate-issue-fix
+    depends_on: [implement-issue-codex]
+    context: fresh
+
+  - id: review-pr-claude
+    command: review-pr-claude
+    depends_on: [validate-issue-fix]
+    provider: claude
+    model: sonnet
+    context: fresh
+
+  - id: run-independent-validation
+    command: run-independent-validation
+    depends_on: [review-pr-claude]
+    provider: claude
+    model: haiku
+    context: fresh
+
+  - id: publish-draft-pr
+    command: publish-draft-pr
+    depends_on: [run-independent-validation]
+    context: fresh

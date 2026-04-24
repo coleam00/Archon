@@ -5,7 +5,7 @@ import type { DagNode } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 export interface DagNodeData extends DagNode {
-  /** For command nodes: the command name. For prompt nodes: display label ("Prompt"). For bash: display label ("Shell"). */
+  /** For command nodes: the command name. For prompt and bash nodes: the node id. */
   label: string;
   nodeType: 'command' | 'prompt' | 'bash';
   promptText?: string;
