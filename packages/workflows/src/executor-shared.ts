@@ -80,6 +80,80 @@ export function classifyError(error: Error): ErrorType {
   return 'UNKNOWN';
 }
 
+// ─── Subprocess Failure Formatting ───────────────────────────────────────────
+
+/** Max characters of stderr/message we keep in user-facing and logged fields. */
+const SUBPROCESS_ERROR_MAX_CHARS = 2000;
+
+/**
+ * Raw ExecFileException shape from Node's `child_process.execFile` (via
+ * `promisify`). `err.message` is always `"Command failed: <cmd> <args>\n<stderr>"` —
+ * for inline scripts via `bash -c <body>` / `bun -e <body>` the entire script body
+ * is embedded in `err.message`, `err.cmd`, and the first line of `err.stack`.
+ */
+export interface RawSubprocessError {
+  message?: string;
+  stderr?: string;
+  stdout?: string;
+  code?: number | string;
+  killed?: boolean;
+  cmd?: string;
+}
+
+/**
+ * Produce a concise, diagnostic-first summary of a failed subprocess.
+ *
+ * User-visible output strips Node's `"Command failed: <cmd>"` prefix (which for
+ * inline scripts contains the full script body) and prefers stderr when present.
+ * Log fields expose a controlled, tail-truncated subset — never the full `err`
+ * object, to prevent Pino's default error serializer from emitting three copies
+ * of the script body (`err.message`, `err.stack`, `err.cmd`).
+ */
+export function formatSubprocessFailure(
+  err: RawSubprocessError,
+  label: string
+): { userMessage: string; logFields: Record<string, unknown> } {
+  const stderr = (err.stderr ?? '').trim();
+  const rawMessage = (err.message ?? '').trim();
+
+  // Strip "Command failed: <cmd line>\n" prefix if present. The first line of
+  // Node's ExecFileException.message contains the entire command line — including
+  // the full substituted script body for `bash -c <body>` / `bun -e <body>`.
+  // We never want that line in user-facing output; fall back to a generic label
+  // rather than re-leaking it.
+  const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
+  const bodyAfterPrefix = hasCommandFailedPrefix
+    ? rawMessage.split('\n').slice(1).join('\n').trim()
+    : rawMessage;
+
+  const diagnostic =
+    stderr ||
+    bodyAfterPrefix ||
+    (hasCommandFailedPrefix ? 'no diagnostic output' : rawMessage) ||
+    'unknown error';
+  const truncated =
+    diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
+      ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
+      : diagnostic;
+
+  const exitSuffix =
+    typeof err.code === 'number' || typeof err.code === 'string'
+      ? ` [exit ${String(err.code)}]`
+      : '';
+
+  const stderrTail =
+    stderr.length > SUBPROCESS_ERROR_MAX_CHARS ? stderr.slice(-SUBPROCESS_ERROR_MAX_CHARS) : stderr;
+
+  return {
+    userMessage: `${label} failed${exitSuffix}: ${truncated}`,
+    logFields: {
+      exitCode: err.code,
+      killed: err.killed === true,
+      stderrTail: stderrTail || undefined,
+    },
+  };
+}
+
 // ─── Credit Exhaustion Detection ────────────────────────────────────────────
 
 /** Patterns that indicate credit/quota exhaustion in streamed assistant output */
