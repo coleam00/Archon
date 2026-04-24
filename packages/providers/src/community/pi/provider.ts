@@ -210,11 +210,11 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 3. Build AuthStorage. `AuthStorage.create()` reads ~/.pi/agent/auth.json
-    //    (or $PI_CODING_AGENT_DIR/auth.json), so any credential the user has
+    // 3. Build AuthStorage. `AuthStorage.create()`, above, read ~/.pi/agent/auth.json
+    //    (or $PI_CODING_AGENT_DIR/auth.json), so any credentials the user has
     //    populated via `pi` → `/login` (OAuth subscriptions: Claude Pro/Max,
     //    ChatGPT Plus, GitHub Copilot, Gemini CLI, Antigravity) or by editing
-    //    the file directly (api_key entries) is picked up transparently.
+    //    the file directly (api_key entries) are picked up transparently.
     //
     //    Per-request env vars override the file via setRuntimeApiKey — this
     //    mirrors Claude's process-env + request-env merge pattern and
@@ -321,11 +321,10 @@ export class PiProvider implements IAgentProvider {
     }
 
     // Settings stay in-memory — only sessions persist, to match Claude/Codex.
-    // Resource loader still suppresses filesystem and —
-    // when piConfig.enableExtensions is true — Pi's community extension
-    // ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/ and
-    // packages installed via `pi install npm:<pkg>`).
-    // discovery except for explicitly-passed skill paths.
+    // Resource loader still suppresses filesystem except for explicitly-passed
+    // skill paths and — when piConfig.enableExtensions is true — Pi's community
+    // extension ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/
+    // and packages installed via `pi install npm:<pkg>`).
     const settingsManager = piCodingAgent.SettingsManager.inMemory();
     // Default ON: extensions (community packages like @plannotator/pi-extension
     // or your own local ones) are a core reason users run Pi. Opt out with
