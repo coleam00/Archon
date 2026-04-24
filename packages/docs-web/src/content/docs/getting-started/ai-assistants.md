@@ -253,10 +253,9 @@ OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, et
 assistants:
   opencode:
     model: anthropic/claude-3-5-sonnet  # Required: '<provider>/<model>' format
-    agent: build
+    agent: build  # Optional: select a specific agent profile
     # Optional: connect to an existing OpenCode server
     # baseUrl: http://localhost:3000
-    # Optional: select a specific agent profile
 ```
 
 ### Model reference format
@@ -282,7 +281,7 @@ assistants:
 | Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
 | Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
 | Tool restrictions | ✅ | Permission system (allow/ask/deny), glob patterns, per-agent config |
-| Inline sub-agents (`agents:`) | ✅ | Primary+subagents, `@` mentions, child sessions, task_budget |
+| Inline sub-agents (`agents:`) | ⚠️ Partial | Primary+subagents, `@` mentions, child sessions, task_budget |
 | Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
 | Reasoning control | ✅ | `reasoningEffort` (OpenAI), `thinking.budgetTokens` (Anthropic) |
 | Thinking control | ✅ | `thinking.type: enabled/disabled`, budgetTokens, variants |

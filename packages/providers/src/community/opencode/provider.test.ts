@@ -24,6 +24,9 @@ type MockRuntime = {
     event: {
       subscribe: ReturnType<typeof mock>;
     };
+    global: {
+      health: ReturnType<typeof mock>;
+    };
   };
   server: {
     url: string;
@@ -63,6 +66,7 @@ function makeRuntime(overrides?: {
   sessionAbort?: ReturnType<typeof mock>;
   subscribe?: ReturnType<typeof mock>;
   close?: ReturnType<typeof mock>;
+  globalHealth?: ReturnType<typeof mock>;
 }): MockRuntime {
   const sessionCreate =
     overrides?.sessionCreate ?? mock(async () => ({ data: { id: 'session-1' } }));
@@ -77,6 +81,8 @@ function makeRuntime(overrides?: {
       stream: createEventStream(scriptedEvents),
     }));
   const close = overrides?.close ?? mock(() => undefined);
+  const globalHealth =
+    overrides?.globalHealth ?? mock(async () => ({ data: { healthy: true, version: '1.0.0' } }));
 
   return {
     client: {
@@ -89,6 +95,9 @@ function makeRuntime(overrides?: {
       },
       event: {
         subscribe,
+      },
+      global: {
+        health: globalHealth,
       },
     },
     server: {
@@ -577,6 +586,13 @@ describe('OpencodeProvider', () => {
       },
       event: {
         subscribe: mock(async () => ({ stream: createEventStream([]) })),
+      },
+      global: {
+        health: mock(async () => {
+          const error = new Error('Unable to connect. Is the computer able to access the url?');
+          (error as Error & { code?: string }).code = 'ConnectionRefused';
+          throw error;
+        }),
       },
     };
 
