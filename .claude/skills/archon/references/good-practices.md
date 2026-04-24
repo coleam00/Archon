@@ -202,7 +202,7 @@ Implement the changes exactly as specified in the plan.
 
 ### ❌ Long flat layers of AI nodes
 
-Ten sibling `prompt:` nodes in one layer all depending on one upstream is a $N/run cost bomb and a latency trap. If the work is parallel and similar, use the `agents:` inline sub-agent map-reduce pattern with a cheap model per item and a single stronger reducer. See `references/dag-advanced.md` and the docs site's Inline sub-agents section.
+Ten sibling `prompt:` nodes in one layer all depending on one upstream is a $N/run cost bomb and a latency trap. If the work is parallel and similar, use the `agents:` inline sub-agent map-reduce pattern with a cheap model per item and a single stronger reducer. See `references/dag-advanced.md` and the [Inline sub-agents section on archon.diy](https://archon.diy/guides/authoring-workflows/#inline-sub-agents) for a worked example.
 
 ### ❌ Hardcoding secrets in YAML or MCP configs
 

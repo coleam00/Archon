@@ -29,7 +29,7 @@ Top-level YAML fields on a workflow object. Per-node overrides (same name under 
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string (required) | Workflow identifier (used in `archon workflow run <name>`) |
-| `description` | string (required) | Human-readable summary. Used for routing; see **Workflow Description Best Practices** in `docs-web/.../authoring-workflows.md` |
+| `description` | string (required) | Human-readable summary. Used for routing; see [Workflow Description Best Practices](https://archon.diy/guides/authoring-workflows/#workflow-description-best-practices) |
 | `provider` | string | AI provider (e.g. `claude`, `codex`, `pi`). Default: from `.archon/config.yaml` |
 | `model` | string | Model override. Claude: `sonnet` \| `opus` \| `haiku` \| `claude-*` \| `inherit`. Codex: any non-Claude model ID |
 | `interactive` | boolean | **Required for web UI** when the workflow has approval gates or `loop.interactive` nodes. Forces foreground execution so gate messages reach the user's chat. Default: `false` (background on web) |
@@ -52,7 +52,7 @@ These fields apply to Claude nodes workflow-wide; each can be overridden per-nod
 | `thinking` | string \| object | Extended thinking. String shorthand: `'adaptive'` \| `'enabled'` \| `'disabled'`. Object form: `{ type: 'enabled', budgetTokens: 8000 }` |
 | `fallbackModel` | string | Model to use if the primary model fails (e.g. `claude-haiku-4-5-20251001`) |
 | `betas` | string[] | SDK beta feature flags (non-empty array). Example: `['context-1m-2025-08-07']` for 1M-context Claude |
-| `sandbox` | object | OS-level filesystem/network restrictions. Nested `network` / `filesystem` sub-objects — see the docs site for the full schema. Layers on top of worktree isolation |
+| `sandbox` | object | OS-level filesystem/network restrictions. Nested `network` / `filesystem` sub-objects — see [archon.diy/guides/authoring-workflows/#claude-sdk-advanced-options](https://archon.diy/guides/authoring-workflows/#claude-sdk-advanced-options) for the full schema. Layers on top of worktree isolation |
 
 Per-node-only (NOT valid at workflow level): `maxBudgetUsd`, `systemPrompt`.
 

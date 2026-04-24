@@ -83,7 +83,7 @@ Archon loads env from three distinct paths at boot, with different trust levels 
 |------|-------|-------|---------|
 | `~/.archon/.env` | User (home) | Trusted — user owns it | Yes, with `override: true` |
 | `<cwd>/.archon/.env` | Repo (per-project, Archon-owned) | Trusted — user owns it | Yes, with `override: true` (overrides home) |
-| `<cwd>/.env` | Target repo | **Untrusted** — belongs to the project being worked on | **Stripped from `process.env`** before subprocess spawn to prevent secret leakage (see [Security Model](../../../packages/docs-web/src/content/docs/reference/security.md) on the docs site) |
+| `<cwd>/.env` | Target repo | **Untrusted** — belongs to the project being worked on | **Stripped from `process.env`** before subprocess spawn to prevent secret leakage (see [archon.diy/reference/security/](https://archon.diy/reference/security/#target-repo-env-isolation) for the full trust model) |
 
 Boot behavior emits observable log lines:
 
