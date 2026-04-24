@@ -117,15 +117,7 @@ env:
 
 Both surfaces inject into: Claude/Codex/Pi subprocess env, `bash:` node subprocess env, `script:` node subprocess env, and direct chat messages that run against the codebase. The worktree isolation layer propagates them as well.
 
-**Env-leak gate** — when a codebase's auto-loaded `<cwd>/.env` contains sensitive keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and 5 others), Archon refuses to register or spawn into that codebase. Remediations (any one):
-
-1. Remove the key from the target `.env`
-2. Rename `.env` → `.env.secrets` (changes the auto-load behavior)
-3. Web UI: Settings → Projects → flip "Allow env keys" to on
-4. CLI: `archon workflow run --allow-env-keys ...`
-5. Global bypass: `allow_target_repo_keys: true` in `~/.archon/config.yaml`
-
-Full details in `reference/security.md` on the docs site.
+> **About keys in the target repo's `<cwd>/.env`**: Archon unconditionally strips the keys auto-loaded from `<cwd>/.env` out of `process.env` at boot (see the Three-Path Env Model above) and the Bun subprocess is invoked with `--no-env-file`, so those values do NOT reach AI / bash / script subprocesses. If a workflow needs a value that currently lives in the target repo's `.env`, surface it through one of the two managed injection options above — don't expect the target `.env` to leak through.
 
 ## Global Configuration
 

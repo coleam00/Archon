@@ -33,7 +33,6 @@ archon workflow run archon-fix-github-issue --resume
 | `--from <name>` / `--from-branch <name>` | Start-point branch for new worktree (default: repo default branch) |
 | `--no-worktree` | Skip isolation — run in the live checkout |
 | `--resume` | Resume the last failed run of this workflow at this cwd (skips completed nodes) |
-| `--allow-env-keys` | Grant env-leak gate consent during auto-registration. Use when the repo's `.env` has sensitive keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) and you've confirmed they should be allowed for this codebase. Audit-logged as `env_leak_consent_granted` |
 | `--cwd <path>` | Working directory override |
 
 **Flag conflicts** (errors):

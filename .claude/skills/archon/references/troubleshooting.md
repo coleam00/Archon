@@ -62,17 +62,6 @@ A node references `$BASE_BRANCH` in its prompt, but neither git auto-detection n
 2. Or pass `--from <branch>` on `archon workflow run`.
 3. Or remove the `$BASE_BRANCH` reference if the node doesn't actually need it.
 
-### "Cannot register: codebase has sensitive env keys"
-
-The env-leak gate blocked the workflow because `<cwd>/.env` contains keys like `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
-
-**Remediations (any one):**
-1. Remove the key from `<cwd>/.env`.
-2. Rename the file to `.env.secrets` — auto-loading no longer applies.
-3. Web UI: Settings → Projects → flip "Allow env keys" on.
-4. CLI: rerun with `archon workflow run --allow-env-keys ...`.
-5. Machine-wide bypass: `allow_target_repo_keys: true` in `~/.archon/config.yaml`.
-
 ### "Claude Code not found" / "Codex CLI binary not found"
 
 Compiled-binary builds of Archon no longer embed Claude Code / Codex — you install them separately and Archon resolves the binary via env var or config.
