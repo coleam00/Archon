@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createLogger } from '@archon/paths';
-import type { Api, Model } from '@mariozechner/pi-ai';
 
 import type {
   IAgentProvider,
@@ -93,24 +92,6 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
   return cachedLog;
-}
-
-/**
- * Typed wrapper around Pi's `getModel` for a runtime-string provider/model
- * pair. Pi's getModel signature constrains `TModelId` to
- * `keyof MODELS[TProvider]`, which isn't knowable from a runtime string —
- * the local `GetModelFn` alias is the narrowest shape that still lets us
- * bypass that constraint. Isolating the escape hatch behind one searchable
- * name keeps it auditable. Takes `getModel` as a parameter because the Pi
- * SDK is loaded dynamically (see the header comment on this file for why).
- */
-type GetModelFn = (provider: string, modelId: string) => Model<Api> | undefined;
-function lookupPiModel(
-  getModel: GetModelFn,
-  provider: string,
-  modelId: string
-): Model<Api> | undefined {
-  return getModel(provider, modelId);
 }
 
 /**
@@ -219,10 +200,9 @@ export class PiProvider implements IAgentProvider {
 
     const authStorage = piCodingAgent.AuthStorage.create();
     const modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
-    // 2. Look up the Model via Pi's Registry. `lookupPiModel` returns
+    // 2. Look up the Model via Pi's Registry. `modelRegistry.find` returns
     //    undefined when not found; we guard explicitly below.
-    // Cast to the runtime-string-friendly shape — see `lookupPiModel`'s docblock.
-    const model = lookupPiModel(modelRegistry.find as GetModelFn, parsed.provider, parsed.modelId);
+    const model = modelRegistry.find(parsed.provider, parsed.modelId);
     if (!model) {
       throw new Error(
         `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
