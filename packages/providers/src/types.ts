@@ -95,6 +95,10 @@ export interface TokenUsage {
   input: number;
   output: number;
   total?: number;
+  /** Input tokens served from provider prompt/cache storage, if reported separately. */
+  cacheRead?: number;
+  /** Input tokens written to provider prompt/cache storage, if reported separately. */
+  cacheWrite?: number;
   cost?: number;
 }
 

@@ -144,9 +144,11 @@ function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
     getLog().warn({ eventType: event.type }, 'codex.usage_null_on_turn_completed');
     return { input: 0, output: 0 };
   }
+  const cacheRead = event.usage.cached_input_tokens;
   return {
     input: event.usage.input_tokens,
     output: event.usage.output_tokens,
+    ...(typeof cacheRead === 'number' && cacheRead > 0 ? { cacheRead } : {}),
   };
 }
 
@@ -310,7 +312,7 @@ async function* streamCodexEvents(
             typeof rawError === 'string'
               ? rawError
               : typeof rawError === 'object' && rawError !== null && 'message' in rawError
-                ? String((rawError as { message: unknown }).message)
+                ? String(rawError.message)
                 : undefined;
 
           const changes = item.changes as { kind: string; path?: string }[] | undefined;
