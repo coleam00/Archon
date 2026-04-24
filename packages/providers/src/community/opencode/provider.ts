@@ -46,6 +46,9 @@ interface OpencodeClientLike {
       stream: AsyncIterable<unknown>;
     }>;
   };
+  global: {
+    health(): Promise<unknown>;
+  };
 }
 
 interface EmbeddedRuntime {
@@ -157,7 +160,7 @@ function enrichOpencodeError(error: unknown, errorClass: RetryableErrorClass): E
   return err;
 }
 
-function parseModelRef(modelRef: string): { providerID: string; modelID: string } | null {
+export function parseModelRef(modelRef: string): { providerID: string; modelID: string } | null {
   const slashIndex = modelRef.indexOf('/');
   if (slashIndex <= 0 || slashIndex === modelRef.length - 1) return null;
 
@@ -169,7 +172,7 @@ function parseModelRef(modelRef: string): { providerID: string; modelID: string 
 }
 
 function selectPrimaryAgent(agents: Record<string, AgentConfig>): string | undefined {
-  const agentNames = Object.keys(agents).sort();
+  const agentNames = Object.keys(agents);
   return agentNames[0];
 }
 
@@ -249,12 +252,6 @@ function normalizeTokens(info: Record<string, unknown> | undefined): TokenUsage 
 /**
  * Try to connect to an existing OpenCode server at the default port.
  * Returns the client if successful, null if connection fails.
- *
- * Note: The OpenCode SDK does not expose a dedicated health endpoint.
- * Using session.create() as a lightweight connection check. This creates
- * a transient session that is immediately abandoned - the SDK handles
- * this gracefully. If the SDK adds a global.health() method in the future,
- * we should switch to that for a truly stateless health check.
  */
 async function tryExistingServer(): Promise<OpencodeClientLike | null> {
   const { createOpencodeClient } = await import('@opencode-ai/sdk');
@@ -263,8 +260,8 @@ async function tryExistingServer(): Promise<OpencodeClientLike | null> {
   }) as unknown as OpencodeClientLike;
 
   try {
-    // Quick health check - try to create a session
-    await client.session.create({ query: { directory: process.cwd() } });
+    // Use global.health() for a stateless health check
+    await client.global.health();
     getLog().info({ port: OPENCODE_DEFAULT_PORT }, 'opencode.existing_server_found');
     return client;
   } catch (error) {
@@ -419,8 +416,7 @@ async function* streamOpencodeSession(
   sessionId: string,
   prompt: string,
   model: { providerID: string; modelID: string },
-  requestOptions: SendQueryOptions | undefined,
-  nodeConfig?: NodeConfig
+  requestOptions: SendQueryOptions | undefined
 ): AsyncGenerator<MessageChunk> {
   const events = await client.event.subscribe({ query: { directory: cwd } });
   const streamController = new AbortController();
@@ -429,6 +425,7 @@ async function* streamOpencodeSession(
   let latestAssistantInfo: Record<string, unknown> | undefined;
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
+  let resultYielded = false;
 
   const abortHandler = (): void => {
     aborted = true;
@@ -445,9 +442,7 @@ async function* streamOpencodeSession(
   });
 
   try {
-    const adaptedAgentConfig = adaptAgentConfigForOpencode(
-      nodeConfig ?? requestOptions?.nodeConfig
-    );
+    const adaptedAgentConfig = adaptAgentConfigForOpencode(requestOptions?.nodeConfig);
     const promptBody: Record<string, unknown> = {
       parts: [{ type: 'text', text: prompt }],
       model: adaptedAgentConfig?.model ?? model,
@@ -557,7 +552,9 @@ async function* streamOpencodeSession(
         if (eventSessionId && eventSessionId !== sessionId) continue;
 
         const rawError = isRecord(properties.error) ? properties.error : properties;
-        throw new Error(JSON.stringify(rawError));
+        const err = new Error(errorMessage(rawError));
+        err.cause = rawError;
+        throw err;
       }
 
       if (event.type === 'session.idle') {
@@ -597,8 +594,15 @@ async function* streamOpencodeSession(
               }
             : {}),
         };
+        resultYielded = true;
         return;
       }
+    }
+
+    // If stream ended without session.idle, yield a terminal result chunk
+    // to ensure downstream DAG executors don't hang waiting for a result.
+    if (!resultYielded && !aborted) {
+      yield { type: 'result', sessionId };
     }
 
     if (aborted) {
@@ -716,8 +720,7 @@ export class OpencodeProvider implements IAgentProvider {
           sessionId,
           prompt,
           parsedModel,
-          requestOptions,
-          requestOptions?.nodeConfig
+          requestOptions
         );
         return;
       } catch (error) {
