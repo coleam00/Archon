@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -306,6 +306,12 @@ describe('GET /api/workflows/:name', () => {
       'name: shared\ndescription: home version\nnodes:\n  - id: plan\n    command: plan\n'
     );
 
+    // Spy on readFile to prove home-scope is not even attempted when project
+    // hit succeeds. `parseWorkflow` is globally mocked, so asserting on
+    // `body.source` alone can't catch a regression that opens both files.
+    const fsPromises = await import('fs/promises');
+    const readFileSpy = spyOn(fsPromises, 'readFile');
+
     const prevArchonHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = tmpHome;
     try {
@@ -318,7 +324,12 @@ describe('GET /api/workflows/:name', () => {
       const body = (await response.json()) as { source: string };
       // Project must shadow home — home lookup should not even be attempted.
       expect(body.source).toBe('project');
+
+      const homePath = join(homeWorkflowsDir, 'shared.yaml');
+      const homeWasRead = readFileSpy.mock.calls.some(args => String(args[0]) === homePath);
+      expect(homeWasRead).toBe(false);
     } finally {
+      readFileSpy.mockRestore();
       if (prevArchonHome === undefined) {
         delete process.env.ARCHON_HOME;
       } else {
