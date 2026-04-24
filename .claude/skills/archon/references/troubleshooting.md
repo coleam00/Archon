@@ -97,7 +97,8 @@ Three possibilities:
 1. **The AI is actually working.** Check `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl` — if you see recent `tool_use` events, it's fine. Wait.
 2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "No Autonomous Lifecycle Mutation" rule — `CLAUDE.md`). Transition it manually:
    - Web UI: Dashboard → Abandon or Cancel button on the run card
-   - CLI: `archon workflow abandon <run-id>` (no subprocess kill, for orphans) or `archon workflow cancel <run-id>` (with subprocess kill, for stuck live runs)
+   - CLI: `archon workflow abandon <run-id>` — marks the DB row cancelled without killing any subprocess. Right tool for orphans since the subprocess is already gone
+   - Chat (Slack / Telegram / Web): `/workflow cancel <run-id>` — actively terminates the subprocess. Use for a still-live run that needs to be interrupted (there is no `archon workflow cancel` CLI subcommand)
 3. **A node is past its `idle_timeout`.** The default is 5 minutes. Override with per-node `idle_timeout: 600000` (10 min) for long-running nodes.
 
 ### Workflow fails mid-way; how do I resume?
@@ -137,10 +138,10 @@ Common causes:
 ## Useful Diagnostic Commands
 
 ```bash
-# What ran recently and how did each run end
-archon workflow list --json | jq '.workflows[] | select(.runs)'
+# All active runs as JSON (running / paused / recently finished, depending on retention)
+archon workflow status --json | jq '.runs[]'
 
-# Current status of any active runs
+# Human-readable status of any active runs
 archon workflow status
 
 # Active worktrees and their last activity

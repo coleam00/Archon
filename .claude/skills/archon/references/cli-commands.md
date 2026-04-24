@@ -76,23 +76,15 @@ archon workflow reject abc123 --reason "Plan misses test coverage"
 archon workflow reject abc123 "Plan misses test coverage"
 ```
 
-### `archon workflow cancel <run-id>`
-
-Cancel a running or paused workflow. Terminates in-flight subprocesses.
-
-```bash
-archon workflow cancel abc123
-```
-
-Different from `abandon`: `cancel` actively terminates; `abandon` marks a row as cancelled without killing any subprocess (use when the subprocess is already gone, e.g. server crash).
-
 ### `archon workflow abandon <run-id>`
 
-Mark a non-terminal workflow run as cancelled without terminating a subprocess. Use when a `running` row is stuck after a server crash or when you want to discard a paused run without rejecting.
+Mark a non-terminal workflow run as cancelled. Use when a `running` row is stuck after a server crash or when you want to discard a paused run without rejecting. This does NOT kill an in-flight subprocess — it only transitions the DB row.
 
 ```bash
 archon workflow abandon abc123
 ```
+
+> **There is no `archon workflow cancel` CLI subcommand.** To actively cancel a running workflow (terminate its subprocess), use the chat slash command `/workflow cancel <run-id>` on the platform that started it (Web UI, Slack, Telegram, etc.), or the Cancel button on the Web UI dashboard. The CLI only offers `abandon`, which is the right tool for orphan cleanup but does not interrupt a live subprocess.
 
 ### `archon workflow resume <run-id> [message]`
 
