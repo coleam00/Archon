@@ -10,25 +10,26 @@ Workflow run logs are written as JSONL per run:
 ~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl
 ```
 
-Each line is a structured event. Common event types:
+Each line is a structured event. The discriminator is the `type` field. Values (see `packages/workflows/src/logger.ts` for the canonical list):
 
-| Event | Meaning |
-|-------|---------|
-| `workflow_started` / `workflow_completed` / `workflow_failed` | Run lifecycle |
-| `node_started` / `node_completed` / `node_failed` / `node_skipped` | Node lifecycle |
-| `assistant` | AI assistant message (has `content` field with the full AI output) |
-| `tool_use` / `tool_result` | SDK tool call + result |
-| `retry_attempt` | Node retry with attempt number and reason |
-| `loop_iteration_started` / `loop_iteration_completed` | Loop bookkeeping |
+| `type` | Meaning |
+|--------|---------|
+| `workflow_start` / `workflow_complete` / `workflow_error` | Run lifecycle |
+| `node_start` / `node_complete` / `node_error` / `node_skipped` | Node lifecycle |
+| `assistant` | AI assistant message — has `content` field with the full AI output |
+| `tool` | SDK tool invocation — has `tool_name`, `tool_input`, `duration_ms`, and optionally `tokens` |
+| `validation` | Workflow-level validation event — has `check` and `result` (`pass` / `fail` / `warn` / `unknown`) |
 
-Find the run ID from `archon workflow status` or `archon workflow list` (most recent run). Then:
+> **Loop iterations and per-attempt retry events are NOT in the JSONL file.** They go through the workflow event emitter (WebSocket / `workflow_events` DB table) under `loop_iteration_started` / `loop_iteration_completed` etc. To see them, query the DB or the Web UI dashboard — not the JSONL log.
+
+Find the run ID from `archon workflow status` (most recent run). Then:
 
 ```bash
 # Last assistant message (what the AI said before failure)
 jq 'select(.type == "assistant") | .content' <log-file> | tail -1
 
-# All failed events
-jq 'select(.event == "node_failed" or .event == "workflow_failed")' <log-file>
+# All error events (node failures + workflow-level failures)
+jq 'select(.type == "node_error" or .type == "workflow_error")' <log-file>
 
 # Full event stream
 cat <log-file> | jq .
@@ -83,7 +84,7 @@ See the Install page on the docs site for full platform-specific install paths.
 
 Three possibilities:
 
-1. **The AI is actually working.** Check `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl` — if you see recent `tool_use` events, it's fine. Wait.
+1. **The AI is actually working.** Check `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl` — if you see recent `tool` or `assistant` events in the tail, it's fine. Wait.
 2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "No Autonomous Lifecycle Mutation" rule — `CLAUDE.md`). Transition it manually:
    - Web UI: Dashboard → Abandon or Cancel button on the run card
    - CLI: `archon workflow abandon <run-id>` — marks the DB row cancelled without killing any subprocess. Right tool for orphans since the subprocess is already gone
