@@ -295,10 +295,10 @@ async function dispatchOrchestratorWorkflow(
         userMessage,
         conversation.id,
         codebase.id,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+        undefined, // issueContext
+        undefined, // isolationContext
+        conversation.id, // parentConversationId — enables approve/reject auto-resume
+        undefined, // preCreatedRun
         inputs
       );
     } else if (workflow.interactive) {
@@ -312,10 +312,10 @@ async function dispatchOrchestratorWorkflow(
         userMessage,
         conversation.id,
         codebase.id,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+        undefined, // issueContext
+        undefined, // isolationContext
+        conversation.id, // parentConversationId — enables approve/reject auto-resume
+        undefined, // preCreatedRun
         inputs
       );
     } else {
@@ -344,10 +344,10 @@ async function dispatchOrchestratorWorkflow(
       userMessage,
       conversation.id,
       codebase.id,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      undefined, // issueContext
+      undefined, // isolationContext
+      conversation.id, // parentConversationId — enables approve/reject auto-resume
+      undefined, // preCreatedRun
       inputs
     );
   }

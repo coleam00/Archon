@@ -6,7 +6,7 @@ area: workflows
 audience: [user]
 status: current
 sidebar:
-  order: 5
+  order: 6
 ---
 
 DAG workflow nodes support a `hooks` field that attaches Claude Agent SDK hooks

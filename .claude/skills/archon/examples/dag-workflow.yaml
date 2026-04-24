@@ -1,7 +1,8 @@
-# Example: Workflow with all four node types
+# Example: Workflow demonstrating multiple node types
 #
-# Demonstrates: bash nodes, structured output, when: conditions,
-# trigger_rule, per-node model, context: fresh, loop nodes, and output substitution.
+# Demonstrates: bash nodes, script nodes (TypeScript via bun), structured output,
+# when: conditions, trigger_rule, per-node model, context: fresh, loop nodes,
+# and output substitution.
 #
 # IMPORTANT: This is a reference example. Design your actual workflow
 # around the user's specific needs — the number of nodes, their types,
@@ -41,6 +42,27 @@ nodes:
         echo "No PR template found"
       fi
     timeout: 5000
+
+  # ── SCRIPT NODE: TypeScript (bun runtime), no AI, stdout captured as output ──
+  # Deterministic parsing the shell would mangle — extracts labels cleanly as JSON.
+  #
+  # NOTE: `$fetch-issue.output` is substituted *raw* into the script body (no shell
+  # quoting — see reference/variables.md). Wrapping it in a String.raw template
+  # preserves backslashes and newlines in the JSON payload without needing any
+  # escaping. Safe here because gh issue view --json emits clean JSON.
+  - id: extract-labels
+    script: |
+      const raw = String.raw`$fetch-issue.output`;
+      try {
+        const issue = JSON.parse(raw);
+        const labels = (issue.labels ?? []).map((l) => l.name);
+        console.log(JSON.stringify({ labels, count: labels.length }));
+      } catch {
+        console.log(JSON.stringify({ labels: [], count: 0 }));
+      }
+    runtime: bun
+    depends_on: [fetch-issue]
+    timeout: 10000
 
   # ── PROMPT NODE: Inline AI prompt with structured output ──
   - id: classify

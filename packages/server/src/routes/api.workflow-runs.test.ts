@@ -22,7 +22,8 @@ const mockGetWorkflowRunByWorkerPlatformId = mock(
 );
 const mockListWorkflowEvents = mock(async (_runId: string) => [] as MockWorkflowEvent[]);
 const mockGetConversationById = mock(
-  async (_id: string) => null as null | { id: string; platform_conversation_id: string }
+  async (_id: string) =>
+    null as null | { id: string; platform_conversation_id: string; platform_type: string }
 );
 const mockFindConversationByPlatformId = mock(
   async (_id: string) =>
@@ -1360,5 +1361,188 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     expect(body.message).toContain('max attempts reached');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-max-attempts');
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Auto-resume: approve/reject endpoints dispatch to orchestrator when the run
+// has parent_conversation_id set (web-dispatched foreground/interactive
+// workflows). Mirrors what the CLI does in workflowApproveCommand/RejectCommand.
+// ---------------------------------------------------------------------------
+
+describe('approve/reject auto-resume', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockUpdateWorkflowRun.mockReset();
+    mockCreateWorkflowEvent.mockReset();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
+    mockCancelWorkflowRun.mockReset();
+  });
+
+  test('approve: dispatches resume when parent_conversation_id is set', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-auto-resume-approve',
+      parent_conversation_id: 'parent-conv-uuid',
+      user_message: 'Deploy feature X',
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-abc',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-auto-resume-approve/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Resuming workflow');
+
+    // dispatchToOrchestrator → lockManager → handleMessage
+    expect(mockHandleMessage).toHaveBeenCalled();
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-plat-abc');
+    expect(dispatchedMessage).toBe('/workflow run deploy Deploy feature X');
+  });
+
+  test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      parent_conversation_id: null,
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Send a message to continue');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockGetConversationById).not.toHaveBeenCalled();
+  });
+
+  test('approve: skips dispatch when parent conversation no longer exists', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      parent_conversation_id: 'deleted-conv-uuid',
+    });
+    mockGetConversationById.mockResolvedValueOnce(null); // conversation deleted
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({}),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Send a message to continue');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('approve: skips dispatch when parent conversation is on a non-web platform', async () => {
+    // A Slack/Telegram/GitHub-sourced run being approved via the dashboard
+    // must not route through dispatchToOrchestrator — that helper is wired
+    // to the web adapter + lock manager, so dispatching a Slack thread_ts
+    // or Telegram chat_id would misroute through the wrong adapter.
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      parent_conversation_id: 'slack-parent-conv-uuid',
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'slack-parent-conv-uuid',
+      platform_conversation_id: '1234567890.123456', // a Slack thread_ts
+      platform_type: 'slack',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    // Same fallback text as no-parent case — user re-runs from the originating platform.
+    expect(body.message).toContain('Send a message to continue');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('reject: dispatches resume for on_reject flows when parent is set', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-auto-resume-reject',
+      parent_conversation_id: 'parent-conv-uuid',
+      user_message: 'Review PR',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review-gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-xyz',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-auto-resume-reject/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'tests missing' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Running on-reject prompt');
+    expect(mockHandleMessage).toHaveBeenCalled();
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-plat-xyz');
+    expect(dispatchedMessage).toBe('/workflow run deploy Review PR');
+  });
+
+  test('reject: does NOT dispatch when the run is being cancelled (no on_reject configured)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      parent_conversation_id: 'parent-conv-uuid', // set, but doesn't matter — reject cancels
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'no' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    // Cancellation path doesn't auto-resume — nothing to resume to.
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-paused-1');
   });
 });

@@ -189,7 +189,7 @@ nodes:
   - id: implement
     depends_on: [validate-prd]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation

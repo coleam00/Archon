@@ -1,6 +1,6 @@
 # Advanced Features: Hooks, MCP, Skills, Retry
 
-These features are available on **command and prompt nodes** (hooks, MCP, skills, tool restrictions) and **command, prompt, and bash nodes** (retry, output_format). Loop nodes do not support these features (`retry` on loop nodes is a hard error; others are silently ignored).
+These features are available on **command and prompt nodes** (hooks, MCP, skills, tool restrictions, `output_format`, `agents`, Claude SDK options) and **command, prompt, bash, and script nodes** (retry). Loop nodes do not support these features (`retry` on loop nodes is a hard error; others are silently ignored). Bash and script nodes silently ignore AI-specific fields (a loader warning lists the ignored fields).
 
 ## Provider Compatibility
 

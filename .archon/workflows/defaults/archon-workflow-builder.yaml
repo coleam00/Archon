@@ -61,7 +61,8 @@ nodes:
       5. Whether this should be a simple DAG or include a loop node
 
       Be specific and concrete. Each proposed node should have a clear type
-      (bash, prompt, command, or loop) and a one-line description of what it does.
+      (bash, prompt, command, script, loop, or approval) and a one-line
+      description of what it does.
     model: haiku
     allowed_tools: []
     output_format:
@@ -115,7 +116,7 @@ nodes:
 
       nodes:
         - id: node-id-kebab-case
-          # Choose ONE of: prompt, bash, command, loop
+          # Choose ONE of: prompt, bash, command, script, loop, approval
 
           # --- prompt node (AI-executed) ---
           prompt: |
@@ -131,6 +132,17 @@ nodes:
           # --- command node (references a .archon/commands/ file) ---
           command: command-name
 
+          # --- script node (TypeScript via bun, or Python via uv — no AI, stdout = $<nodeId>.output) ---
+          # Use for deterministic data transforms the shell would mangle (JSON parsing, etc.)
+          script: |
+            const raw = String.raw`$other-node.output`;
+            const data = JSON.parse(raw);
+            console.log(JSON.stringify({ count: data.items.length }));
+          runtime: bun                       # required: 'bun' (.ts/.js) or 'uv' (.py)
+          # deps: [requests]                 # uv only
+          # Or reference a named script in .archon/scripts/:
+          # script: extract-labels           # no extension; bun resolves .ts/.js, uv resolves .py
+
           # --- loop node (iterative AI execution) ---
           loop:
             prompt: |
@@ -139,17 +151,22 @@ nodes:
             max_iterations: 10
             fresh_context: true  # optional: reset context each iteration
 
+          # --- approval node (human gate — pauses workflow) ---
+          approval:
+            message: "Review the plan above. Approve to continue."
+            # capture_response: true         # store reviewer comment as $<nodeId>.output
+
           # Common options for all node types:
           depends_on: [other-node-id]       # DAG edges
           when: "$<other-node>.output == 'value'"  # conditional execution
           trigger_rule: all_success          # all_success | one_success | all_done
-          timeout: 120000                    # ms, for bash nodes
+          timeout: 120000                    # ms, for bash and script nodes
       ```
 
       ## Variable Reference
       - `$ARGUMENTS` — user's input text
       - `$ARTIFACTS_DIR` — pre-created directory for workflow artifacts
-      - `$<nodeId>.output` — stdout from a bash node or AI response from a prompt node
+      - `$<nodeId>.output` — stdout from a bash/script node or AI response from a prompt node
       - `$<nodeId>.output.field` — JSON field from a node with output_format
       - `$BASE_BRANCH` — base git branch
 
@@ -158,12 +175,14 @@ nodes:
       2. The `description:` MUST follow the "Use when / Triggers / Does / NOT for" pattern
       3. Every node MUST have a unique kebab-case `id`
       4. Use `depends_on` to define execution order
-      5. Use `bash` nodes for deterministic operations (file checks, git commands, installs)
-      6. Use `prompt` nodes for AI reasoning tasks
-      7. Use `output_format` on prompt nodes when downstream nodes need structured data
-      8. Use `allowed_tools: []` on classification/analysis nodes that don't need tools
-      9. Use `denied_tools: [Edit, Bash]` when a node should only use Write (not edit existing files)
-      10. Prefer `model: haiku` for simple classification tasks to save cost
+      5. Use `bash` nodes for deterministic shell operations (file checks, git commands, installs)
+      6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps) — stdout is captured as output, stderr is forwarded as a warning. $nodeId.output is NOT shell-quoted in script bodies — parse with JSON.parse / json.loads, not shell interpolation
+      7. Use `prompt` nodes for AI reasoning tasks
+      8. Use `approval` nodes to pause for human review at risky gates (plan→execute boundary, destructive actions)
+      9. Use `output_format` on prompt nodes when downstream nodes need structured data
+      10. Use `allowed_tools: []` on classification/analysis nodes that don't need tools
+      11. Use `denied_tools: [Edit, Bash]` when a node should only use Write (not edit existing files)
+      12. Prefer `model: haiku` for simple classification tasks to save cost
 
       ## Output
 

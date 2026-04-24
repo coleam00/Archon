@@ -6,7 +6,7 @@ area: workflows
 audience: [user]
 status: current
 sidebar:
-  order: 6
+  order: 7
 ---
 
 DAG workflow nodes support a `mcp` field that attaches MCP (Model Context Protocol)
@@ -194,8 +194,9 @@ and cannot touch the filesystem or run shell commands.
 
 ## Connection Failure Handling
 
-MCP server connections are established when the node starts executing. If a server
-fails to connect, you'll see a message like:
+MCP server connections are established when the node starts executing. If a
+server the **workflow** configured via `mcp:` fails to connect, you'll see a
+message like:
 
 ```
 MCP server connection failed: github (failed)
@@ -203,6 +204,13 @@ MCP server connection failed: github (failed)
 
 The node continues executing but without the tools from the failed server.
 Check your config file path, server command, and environment variables if this happens.
+
+User-level Claude plugin MCPs inherited from `~/.claude/` (e.g. `telegram`,
+`notion`) routinely fail to connect inside the headless workflow subprocess
+and are **not** surfaced here — they're not actionable for the workflow author.
+They appear only in debug logs as `dag.mcp_plugin_connection_suppressed`. Run
+the CLI with `--verbose` (or set `LOG_LEVEL=debug` on the server) if you need
+to see them.
 
 ## Workflow Examples
 
@@ -378,6 +386,7 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 | `MCP config must be a JSON object` | Top-level value is array or string | Wrap in `{ "server-name": { ... } }` |
 | `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |
 | `MCP server connection failed` | Server process crashed or URL unreachable | Check command/URL, test the server standalone |
+| Plugin MCP missing from workflow output | User-level plugin MCPs (from `~/.claude/`) are filtered out of workflow warnings | Run with `--verbose` and look for `dag.mcp_plugin_connection_suppressed` |
 | `mcp config but uses Codex` | Node resolved to Codex provider | Set `provider: claude` on the node or switch default |
 | `Haiku model with MCP servers` | Haiku doesn't support tool search | Use `model: sonnet` or `model: opus` instead |
 

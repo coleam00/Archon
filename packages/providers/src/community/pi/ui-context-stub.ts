@@ -3,8 +3,8 @@ import type {
   ExtensionUIDialogOptions,
   ExtensionWidgetOptions,
   TerminalInputHandler,
+  Theme,
 } from '@mariozechner/pi-coding-agent';
-import { Theme } from '@mariozechner/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 

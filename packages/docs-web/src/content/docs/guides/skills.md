@@ -6,7 +6,7 @@ area: workflows
 audience: [user]
 status: current
 sidebar:
-  order: 7
+  order: 8
 ---
 
 DAG workflow nodes support a `skills` field that preloads named skills into the

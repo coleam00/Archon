@@ -5,6 +5,8 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
+import { readFile } from 'fs/promises';
+import { isAbsolute, resolve as resolvePath } from 'path';
 import { execFileAsync } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
@@ -77,6 +79,69 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
+
+/** A failed MCP server entry parsed from the SDK message. `segment` is the
+ *  original substring (e.g. `"telegram (disconnected)"`) so callers can
+ *  reconstruct a filtered message without losing the status detail. */
+export interface McpFailureEntry {
+  name: string;
+  segment: string;
+}
+
+/**
+ * Parse the SDK's "MCP server connection failed: a (status), b (status)"
+ * message. Best-effort — malformed or prefix-free messages return `[]`.
+ * Entries are ordered and deduped by name; the segment of the first
+ * occurrence wins.
+ */
+export function parseMcpFailureServerNames(message: string): McpFailureEntry[] {
+  if (!message.startsWith(MCP_FAILURE_PREFIX)) return [];
+  const seen = new Set<string>();
+  const entries: McpFailureEntry[] = [];
+  for (const raw of message.slice(MCP_FAILURE_PREFIX.length).split(', ')) {
+    const segment = raw.trim();
+    const name = segment.split(' (')[0]?.trim();
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      entries.push({ name, segment });
+    }
+  }
+  return entries;
+}
+
+/**
+ * Load the set of MCP server names that a node's `mcp:` config file declares.
+ *
+ * Returns an empty set when no `mcp:` is configured or when the file can't be
+ * read/parsed. Used to distinguish workflow-configured failures (surface to
+ * user) from user-plugin failures (silent debug log). We intentionally do not
+ * validate or env-expand here — the provider owns full loading and will
+ * surface its own parse errors via the warning channel if the file is broken.
+ *
+ * Read failures are debug-logged so a transient I/O error (EMFILE/EBUSY) that
+ * leaves us with an empty set — and silently reclassifies a real workflow-MCP
+ * failure as plugin noise — is at least observable.
+ */
+export async function loadConfiguredMcpServerNames(
+  nodeMcpPath: string | undefined,
+  cwd: string
+): Promise<Set<string>> {
+  if (!nodeMcpPath) return new Set();
+  const fullPath = isAbsolute(nodeMcpPath) ? nodeMcpPath : resolvePath(cwd, nodeMcpPath);
+  try {
+    const raw = await readFile(fullPath, 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(Object.keys(parsed));
+  } catch (err) {
+    getLog().debug({ err, nodeMcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
+    return new Set();
+  }
+}
+
 /** Workflow-level Claude SDK options — per-node overrides take precedence via ?? */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
@@ -92,6 +157,26 @@ type NodeExecutionResult = NodeOutput & { costUsd?: number };
 /** Throttle state for cancel checks (reads — no write contention in WAL mode) */
 const lastNodeCancelCheck = new Map<string, number>();
 const CANCEL_CHECK_INTERVAL_MS = 10_000;
+
+/**
+ * Policy for the during-streaming cancel check: should the currently-streaming
+ * node be allowed to continue for a given observed run status?
+ *
+ * - `running`: the normal case → continue.
+ * - `paused`: a concurrent approval node in the same topological layer has
+ *   transitioned the run to paused. The streaming node should finish its own
+ *   output; workflow progression is gated by the approval node, not by tearing
+ *   down unrelated in-flight streams.
+ * - `null` (run deleted), `cancelled`, `failed`, `completed`, or any other
+ *   state → abort the stream.
+ *
+ * Exported for unit testing; the full streaming-cancel branch in
+ * `executeNodeInternal` only fires once per 10s (CANCEL_CHECK_INTERVAL_MS), so
+ * integration-level coverage of the policy is timing-sensitive and flaky.
+ */
+export function shouldContinueStreamingForStatus(status: string | null): boolean {
+  return status === 'running' || status === 'paused';
+}
 
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
 const lastNodeActivityUpdate = new Map<string, number>();
@@ -388,12 +473,11 @@ export function checkTriggerRule(
 
   const upstreams = nodeDeps.map(
     id =>
-      nodeOutputs.get(id) ??
-      ({
+      nodeOutputs.get(id) ?? {
         state: 'failed',
         output: '',
         error: `upstream '${id}' missing from outputs`,
-      } as NodeOutput)
+      }
   );
   const rule: TriggerRule = node.trigger_rule ?? 'all_success';
 
@@ -488,6 +572,8 @@ async function executeNodeInternal(
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
+
+  const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, node.command ?? '<inline>');
@@ -621,12 +707,19 @@ async function executeNodeInternal(
       const tickNow = Date.now();
       const nodeKey = `${workflowRun.id}:${node.id}`;
 
-      // Cancel/pause check — read-only, no write contention in WAL mode (every 10s)
+      // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
+      //
+      // `paused` is tolerated here: an approval node can transition the run to
+      // paused while this concurrent node is mid-stream (same topological layer).
+      // The streaming node should be allowed to finish its own output — the
+      // paused gate owns workflow progression, not individual node lifecycles.
+      // Only truly terminal / unknown states (null, cancelled, failed, completed)
+      // abort the in-flight stream.
       if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
         lastNodeCancelCheck.set(nodeKey, tickNow);
         try {
           const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-          if (streamStatus === null || streamStatus !== 'running') {
+          if (!shouldContinueStreamingForStatus(streamStatus)) {
             getLog().info(
               { workflowRunId: workflowRun.id, nodeId: node.id, status: streamStatus ?? 'deleted' },
               'dag.stop_detected_during_streaming'
@@ -719,7 +812,7 @@ async function executeNodeInternal(
           const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
           await safeSendMessage(platform, conversationId, toolMsg, nodeContext, {
             category: 'tool_call_formatted',
-          } as WorkflowMessageMetadata);
+          });
 
           // Send structured event to adapters that support it (Web UI)
           if (platform.sendStructuredEvent) {
@@ -817,13 +910,43 @@ async function executeNodeInternal(
         }
         break; // Result is the "I'm done" signal — don't wait for subprocess to exit
       } else if (msg.type === 'system' && msg.content) {
-        // Forward provider warnings (⚠️) and MCP connection failures to the user.
-        // Providers yield system chunks for user-actionable issues (missing env vars,
-        // Haiku+MCP, structured output failures, etc.)
-        if (
-          msg.content.startsWith('MCP server connection failed:') ||
-          msg.content.startsWith('⚠️')
-        ) {
+        // Providers yield system chunks for user-actionable issues (missing env
+        // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
+        // chunks need filtering: user-level plugin MCPs inherited from
+        // `~/.claude/` (e.g. `telegram`) routinely fail to connect inside the
+        // headless subprocess and aren't actionable for the workflow author.
+        // Other warnings (⚠️) are always actionable and surface verbatim.
+        if (msg.content.startsWith(MCP_FAILURE_PREFIX)) {
+          const failedEntries = parseMcpFailureServerNames(msg.content);
+          const workflowFailures = failedEntries.filter(e => configuredMcpNames.has(e.name));
+          const pluginFailures = failedEntries.filter(e => !configuredMcpNames.has(e.name));
+
+          if (workflowFailures.length > 0) {
+            const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.map(e => e.segment).join(', ')}`;
+            getLog().warn(
+              { nodeId: node.id, systemContent: filteredMsg },
+              'dag.provider_warning_forwarded'
+            );
+            const delivered = await safeSendMessage(
+              platform,
+              conversationId,
+              filteredMsg,
+              nodeContext
+            );
+            if (!delivered) {
+              getLog().error(
+                { nodeId: node.id, workflowRunId: workflowRun.id },
+                'dag.provider_warning_delivery_failed'
+              );
+            }
+          }
+          if (pluginFailures.length > 0) {
+            getLog().debug(
+              { nodeId: node.id, pluginFailures: pluginFailures.map(e => e.name) },
+              'dag.mcp_plugin_connection_suppressed'
+            );
+          }
+        } else if (msg.content.startsWith('⚠️')) {
           getLog().warn(
             { nodeId: node.id, systemContent: msg.content },
             'dag.provider_warning_forwarded'
@@ -1599,9 +1722,13 @@ async function executeLoopNode(
   for (let i = startIteration; i <= loop.max_iterations; i++) {
     const iterationStart = Date.now();
 
-    // Check for non-running status between iterations (cancellation, deletion, or future: pause)
+    // Check for non-running status between iterations. `paused` is tolerated
+    // here for the same reason as the streaming check: a sibling approval
+    // node in the same topological layer may pause the run while this loop
+    // is between iterations — the loop should continue its own iterations
+    // regardless of unrelated pauses elsewhere in the DAG.
     const runStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (runStatus === null || runStatus !== 'running') {
+    if (!shouldContinueStreamingForStatus(runStatus)) {
       const effectiveStatus = runStatus ?? 'deleted';
       getLog().info(
         { workflowRunId: workflowRun.id, nodeId: node.id, iteration: i, status: effectiveStatus },
@@ -1683,7 +1810,7 @@ async function executeLoopNode(
       })) {
         if (msg.type === 'assistant') {
           fullOutput += msg.content;
-          const cleaned = stripCompletionTags(msg.content);
+          const cleaned = stripCompletionTags(msg.content, loop.until);
           cleanOutput += cleaned;
           if (platform.getStreamingMode() === 'stream' && cleaned) {
             await safeSendMessage(platform, conversationId, cleaned, msgContext);
@@ -1785,7 +1912,7 @@ async function executeLoopNode(
             if (toolMsg) {
               await safeSendMessage(platform, conversationId, toolMsg, msgContext, {
                 category: 'tool_call_formatted',
-              } as WorkflowMessageMetadata);
+              });
             }
             if (platform.sendStructuredEvent) {
               await platform.sendStructuredEvent(conversationId, msg);
@@ -2784,15 +2911,24 @@ export async function executeDagWorkflow(
     }
   }
 
-  // Helper: bail out if the run was transitioned externally (cancelled, deleted, etc.)
+  /**
+   * Bail out of the final completion/failure write if the run was transitioned
+   * externally. Strict `!== 'running'` check is correct here because we don't
+   * want to mark a paused run as complete — the approval gate is still live.
+   *
+   * Emitter unregister is conditional: terminal states (cancelled / deleted /
+   * completed / failed) unregister to release subscription resources, but
+   * `paused` keeps the emitter registered so SSE stays connected while the
+   * approval gate awaits the user — crucial for resume observability.
+   */
   async function skipIfStatusChanged(logEvent: string): Promise<boolean> {
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
-    if (status === null || status !== 'running') {
-      getLog().info({ workflowRunId: workflowRun.id, status: status ?? 'deleted' }, logEvent);
+    if (status === 'running') return false;
+    getLog().info({ workflowRunId: workflowRun.id, status: status ?? 'deleted' }, logEvent);
+    if (status !== 'paused') {
       getWorkflowEventEmitter().unregisterRun(workflowRun.id);
-      return true;
     }
-    return false;
+    return true;
   }
 
   // Single-pass: compute node outcome counts and derive success/failure booleans

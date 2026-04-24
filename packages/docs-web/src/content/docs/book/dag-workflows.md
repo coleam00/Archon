@@ -230,20 +230,23 @@ The classify-and-route example uses `none_failed_min_one_success` on `implement`
 
 ## Node Types
 
-Archon supports four node types:
+Archon supports seven node types. Exactly one mode field is required per node:
 
 | Type | Syntax | When to use |
 |------|--------|-------------|
 | **Command** | `command: my-command` | Load a command from `.archon/commands/my-command.md`. The standard choice. |
 | **Prompt** | `prompt: "inline instructions..."` | Quick, one-off instructions that don't need a reusable command file. |
 | **Bash** | `bash: "shell command"` | Run a shell script without AI. Stdout is captured as `$nodeId.output`. Deterministic operations only. |
+| **Script** | `script: "..." ` + `runtime: bun \| uv` | Run TypeScript/JavaScript (bun) or Python (uv) without AI. Inline code or named reference to `.archon/scripts/`. Stdout captured as `$nodeId.output`. See [Script Nodes](/guides/script-nodes/). |
 | **Loop** | `loop: { prompt: "...", until: SIGNAL }` | Repeat an AI prompt until a completion signal appears in the output. See [Loop Nodes](/guides/loop-nodes/). |
+| **Approval** | `approval: { message: "..." }` | Pause the workflow for a human approve/reject decision. See [Approval Nodes](/guides/approval-nodes/). |
+| **Cancel** | `cancel: "reason string"` | Terminate the workflow run (status: cancelled, not failed). Usually gated with `when:`. |
 
 **Command** is the most common. Use it for anything you'll reuse across workflows.
 
 **Prompt** is convenient for glue nodes — summarizing outputs, formatting data — where the logic is simple and workflow-specific.
 
-**Bash** is powerful for deterministic operations: running tests, checking git status, reading a file, fetching an API. The AI doesn't run the bash command; your shell does. The output becomes a variable for downstream nodes:
+**Bash** is powerful for deterministic shell operations: running tests, checking git status, reading a file, fetching an API. The AI doesn't run the bash command; your shell does. The output becomes a variable for downstream nodes:
 
 ```yaml
 - id: check-tests
@@ -253,6 +256,22 @@ Archon supports four node types:
   command: fix-test-failures
   depends_on: [check-tests]
   prompt: "Test output: $check-tests.output\n\nFix any failures."
+```
+
+**Script** is for deterministic work that needs a real programming language — parsing JSON, transforming data between AI nodes, calling typed HTTP clients. Use `runtime: bun` for TypeScript/JavaScript and `runtime: uv` for Python:
+
+```yaml
+- id: transform
+  script: |
+    const raw = process.env.UPSTREAM ?? '{}';
+    const items = JSON.parse(raw).items ?? [];
+    console.log(JSON.stringify({ count: items.length }));
+  runtime: bun
+
+- id: analyze
+  script: analyze-metrics        # Named script: .archon/scripts/analyze-metrics.py
+  runtime: uv
+  deps: ["pandas>=2.0"]          # uv-only; bun auto-installs imports
 ```
 
 **Loop** is for iterative tasks where you don't know how many steps it will take. The AI runs until it emits a completion signal:
@@ -267,6 +286,32 @@ Archon supports four node types:
     until: COMPLETE
     max_iterations: 20
     fresh_context: true
+```
+
+**Approval** pauses the workflow for human review. The downstream nodes don't run until the user approves in chat, CLI, or web UI:
+
+```yaml
+interactive: true                 # required at workflow level for web UI delivery
+
+nodes:
+  - id: plan
+    command: plan-feature
+  - id: review-gate
+    approval:
+      message: "Review the plan above."
+    depends_on: [plan]
+  - id: implement
+    command: implement
+    depends_on: [review-gate]
+```
+
+**Cancel** terminates the workflow with a reason string. Pair with `when:` for guarded exits — the run shows as `cancelled` rather than `failed`:
+
+```yaml
+- id: gate-branch
+  cancel: "Refusing to run on main — this workflow modifies files."
+  when: "$check-branch.output == 'main'"
+  depends_on: [check-branch]
 ```
 
 ---

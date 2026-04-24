@@ -174,6 +174,7 @@ nodes:
 | `command` | string | Command name to load from `.archon/commands/` |
 | `prompt` | string | Inline prompt string |
 | `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`. Optional `timeout` (ms, default 120000) |
+| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference to `.archon/scripts/`. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until completion signal. See [Loop Nodes](/guides/loop-nodes/) |
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing — in-flight parallel nodes are stopped |
@@ -1021,12 +1022,12 @@ nodes:
 When the workflow reaches `review-gate`, it pauses and notifies you. Approve or reject via:
 
 - **Natural language** (recommended): Just type your response in the conversation — the system detects the paused workflow and auto-resumes
-- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>`
-- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` (records approval; send a follow-up message to resume)
-- **Web UI**: Click the Approve/Reject buttons on the dashboard card
+- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — auto-resumes
+- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — auto-resumes when issued in the originating conversation
+- **Web UI**: Click the Approve/Reject buttons on the dashboard card — auto-resumes for Web-UI-dispatched runs; the Reject dialog includes an optional reason field that flows to `$REJECTION_REASON`
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
 
-After approval via natural language or CLI, the workflow auto-resumes from the next node. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node.
+All four paths auto-resume the workflow from the next node. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web-UI approvals on Slack / Telegram / GitHub-dispatched runs record the decision but do not auto-resume — re-run from the originating platform to continue.
 
 Without `on_reject`: rejecting cancels the workflow.
 With `on_reject`: rejecting triggers an AI rework prompt and re-pauses for re-review.
