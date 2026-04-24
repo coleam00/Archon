@@ -362,7 +362,8 @@ describe('executeWorkflow', () => {
         undefined,
         undefined,
         undefined,
-        preCreated
+        preCreated,
+        true // allowAutoResume
       );
 
       // Find the orphan-cancellation call (there may be other updateWorkflowRun
@@ -401,7 +402,8 @@ describe('executeWorkflow', () => {
         undefined,
         undefined,
         undefined,
-        preCreated
+        preCreated,
+        true // allowAutoResume
       );
 
       // Resume must still complete — the 5-min stale-pending window is the
@@ -602,7 +604,13 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        'db-conv-1',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true // allowAutoResume
       );
       expect(result.success).toBe(false);
       expect(result.error).toContain('Database error resuming');
@@ -776,7 +784,8 @@ describe('executeWorkflow', () => {
         undefined,
         undefined,
         undefined,
-        preCreated
+        preCreated,
+        true // allowAutoResume
       );
 
       expect(result.success).toBe(false);

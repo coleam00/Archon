@@ -328,7 +328,13 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true // allowAutoResume
       );
 
       // No createWorkflowRun — resume used existing run
@@ -368,7 +374,13 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true // allowAutoResume
       );
 
       // No createWorkflowRun — resume used existing run
@@ -407,7 +419,13 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true // allowAutoResume
       );
 
       expect(result.success).toBe(false);

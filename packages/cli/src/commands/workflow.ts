@@ -428,8 +428,8 @@ export async function workflowRunCommand(
   let isolationEnvId: string | undefined;
 
   // Handle --resume: find the most recent failed run and reuse its worktree.
-  // The executor's implicit findResumableRun will detect the failed run and
-  // skip already-completed nodes automatically.
+  // allowAutoResume: true (forwarded to executeWorkflow) enables skipping
+  // already-completed nodes from the prior run.
   if (options.resume) {
     if (!codebase) {
       if (codebaseLookupError) {
@@ -715,7 +715,12 @@ export async function workflowRunCommand(
       workflow,
       userMessage,
       conversation.id,
-      codebase?.id
+      codebase?.id,
+      undefined, // issueContext
+      undefined, // isolationContext
+      undefined, // parentConversationId
+      undefined, // preCreatedRun
+      options.resume === true // allowAutoResume
     );
   } finally {
     unsubscribe?.();

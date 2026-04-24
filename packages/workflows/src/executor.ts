@@ -244,7 +244,8 @@ export async function executeWorkflow(
     prBranch?: string;
   },
   parentConversationId?: string,
-  preCreatedRun?: WorkflowRun
+  preCreatedRun?: WorkflowRun,
+  allowAutoResume?: boolean
 ): Promise<WorkflowExecutionResult> {
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -318,8 +319,9 @@ export async function executeWorkflow(
   let dagPriorCompletedNodes: Map<string, string> | undefined;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
-  // Resume detection: check for prior failed run on same workflow + worktree
-  {
+  // Resume detection: only when caller explicitly opts in (allowAutoResume === true).
+  // Default is a fresh run — callers that want resume pass allowAutoResume: true.
+  if (allowAutoResume) {
     // Step 1: Find prior failed run — non-critical, fall through on DB error
     let resumableRun: Awaited<ReturnType<typeof deps.store.findResumableRun>> = null;
     try {
