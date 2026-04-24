@@ -37,6 +37,7 @@ Determine the user's intent and dispatch to the appropriate guide:
 | **Config / settings** | Read `guides/config.md` — interactive config editor |
 | **Initialize .archon/ in a repo** | Read `references/repo-init.md` |
 | **Create a workflow** | Read `references/workflow-dag.md` — the complete workflow authoring guide |
+| **Quick parameter lookup — which field works on which node type** | Read `references/parameter-matrix.md` — master matrix, intent-based lookup, silent-failure catalog |
 | **Advanced features (hooks/MCP/skills)** | Read `references/dag-advanced.md` |
 | **Create a command file** | Read `references/authoring-commands.md` |
 | **Variable substitution reference** | Read `references/variables.md` |
