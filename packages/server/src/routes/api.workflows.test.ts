@@ -253,6 +253,81 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('returns home-scoped workflow with source:global when project/bundled miss', async () => {
+    const tmpHome = join(tmpdir(), `wf-home-test-${Date.now()}`);
+    const homeWorkflowsDir = join(tmpHome, 'workflows');
+    await mkdir(homeWorkflowsDir, { recursive: true });
+    await writeFile(
+      join(homeWorkflowsDir, 'home-only.yaml'),
+      'name: home-only\ndescription: Home-scoped workflow\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      // No registered codebase → skips project-scope, falls through to home-scope
+      mockListCodebases.mockImplementationOnce(async () => []);
+      const response = await app.request('/api/workflows/home-only');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        source: string;
+        filename: string;
+        workflow: unknown;
+      };
+      expect(body.source).toBe('global');
+      expect(body.filename).toBe('home-only.yaml');
+      expect(body.workflow).toBeDefined();
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test('project-scope shadows home-scope when same filename exists in both', async () => {
+    const testDir = join(tmpdir(), `wf-shadow-test-${Date.now()}`);
+    const projectDir = join(testDir, '.archon', 'workflows');
+    const tmpHome = join(testDir, 'home');
+    const homeWorkflowsDir = join(tmpHome, 'workflows');
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(homeWorkflowsDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'shared.yaml'),
+      'name: shared\ndescription: project version\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+    await writeFile(
+      join(homeWorkflowsDir, 'shared.yaml'),
+      'name: shared\ndescription: home version\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/shared?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { source: string };
+      // Project must shadow home — home lookup should not even be attempted.
+      expect(body.source).toBe('project');
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   test('returns WorkflowDefinition shape with expected top-level fields', async () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
