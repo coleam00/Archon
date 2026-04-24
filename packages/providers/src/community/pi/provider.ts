@@ -253,8 +253,11 @@ export class PiProvider implements IAgentProvider {
       const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
       // No credentials for unmapped providers is not necessarily a problem, e.g., local models.
       getLog().info(
-        { piProvider: parsed.provider },
-        `No Pi credentials found for provider. ${envHint} ${loginHint}`
+        {
+          piProvider: parsed.provider,
+          msg: `No Pi credentials found for provider. ${envHint} ${loginHint}`,
+        },
+        'pi.auth_missing'
       );
     }
 

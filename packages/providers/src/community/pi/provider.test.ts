@@ -251,8 +251,11 @@ describe('PiProvider', () => {
 
     expect(error).toBeUndefined();
     expect(mockLogger.info).toHaveBeenCalledWith(
-      { piProvider: 'unknownprovider' },
-      expect.stringContaining("not in the Archon adapter's env-var table")
+      {
+        piProvider: 'unknownprovider',
+        msg: expect.stringContaining("not in the Archon adapter's env-var table"),
+      },
+      'pi.auth_missing'
     );
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
   });
