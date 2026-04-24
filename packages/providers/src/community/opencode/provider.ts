@@ -299,61 +299,63 @@ async function tryExistingServer(): Promise<OpencodeClientLike | null> {
 
 async function acquireEmbeddedRuntime(signal?: AbortSignal): Promise<EmbeddedRuntime> {
   if (!embeddedRuntimePromise) {
-    // Use a deferred pattern to allow the runtime to reference its own creation promise
-    // resolveRuntime is assigned synchronously before the async callback runs
-    let resolveRuntime: undefined | ((runtime: EmbeddedRuntime) => void);
-    const promise = new Promise<EmbeddedRuntime>(resolve => {
+    // Use a deferred pattern with both resolve and reject to ensure all startup
+    // errors propagate to callers instead of leaving them hanging.
+    let resolveRuntime: ((runtime: EmbeddedRuntime) => void) | undefined;
+    let rejectRuntime: ((error: unknown) => void) | undefined;
+
+    const promise = new Promise<EmbeddedRuntime>((resolve, reject) => {
       resolveRuntime = resolve;
-    }).catch(error => {
-      embeddedRuntimePromise = undefined;
-      throw error;
+      rejectRuntime = reject;
     });
     embeddedRuntimePromise = promise;
 
-    // Now build the runtime, passing the promise for the creationPromise field
+    // Build the runtime, wiring both success and failure paths
     (async (): Promise<void> => {
-      // First, try to connect to an existing server
-      const existingClient = await tryExistingServer();
-      if (existingClient) {
-        resolveRuntime?.({
-          client: existingClient,
-          server: {
-            url: `http://localhost:${OPENCODE_DEFAULT_PORT}`,
-            close: (): void => {
-              /* external server, don't close */
+      try {
+        // First, try to connect to an existing server
+        const existingClient = await tryExistingServer();
+        if (existingClient) {
+          resolveRuntime?.({
+            client: existingClient,
+            server: {
+              url: `http://localhost:${OPENCODE_DEFAULT_PORT}`,
+              close: (): void => {
+                /* external server, don't close */
+              },
             },
-          },
+            refCount: 0,
+            creationPromise: promise,
+          });
+          return;
+        }
+
+        // No existing server - spawn our own
+        const { createOpencode } = await import('@opencode-ai/sdk');
+
+        // Find an available port to avoid conflicts
+        const port = await findAvailablePort(OPENCODE_DEFAULT_PORT);
+        getLog().info(
+          { defaultPort: OPENCODE_DEFAULT_PORT, selectedPort: port },
+          'opencode.port_selected'
+        );
+
+        const runtime = await createOpencode({
+          port,
+          signal,
+          timeout: OPENCODE_START_TIMEOUT_MS,
+        });
+        resolveRuntime?.({
+          client: runtime.client as unknown as OpencodeClientLike,
+          server: runtime.server,
           refCount: 0,
           creationPromise: promise,
         });
-        return;
+      } catch (error) {
+        embeddedRuntimePromise = undefined;
+        rejectRuntime?.(error);
       }
-
-      // No existing server - spawn our own
-      const { createOpencode } = await import('@opencode-ai/sdk');
-
-      // Find an available port to avoid conflicts
-      const port = await findAvailablePort(OPENCODE_DEFAULT_PORT);
-      getLog().info(
-        { defaultPort: OPENCODE_DEFAULT_PORT, selectedPort: port },
-        'opencode.port_selected'
-      );
-
-      const runtime = await createOpencode({
-        port,
-        signal,
-        timeout: OPENCODE_START_TIMEOUT_MS,
-      });
-      resolveRuntime?.({
-        client: runtime.client as unknown as OpencodeClientLike,
-        server: runtime.server,
-        refCount: 0,
-        creationPromise: promise,
-      });
-    })().catch(error => {
-      embeddedRuntimePromise = undefined;
-      throw error;
-    });
+    })();
   }
 
   const runtime = await embeddedRuntimePromise;
@@ -365,13 +367,15 @@ function releaseEmbeddedRuntime(runtime: EmbeddedRuntime): void {
   runtime.refCount = Math.max(0, runtime.refCount - 1);
   if (runtime.refCount > 0) return;
 
-  // Only clear the cached promise if this runtime was created by the current promise.
-  // This prevents a race condition where a newer runtime replaces the cached promise
-  // while an older release call is still in flight.
-  if (embeddedRuntimePromise === runtime.creationPromise) {
-    try {
-      runtime.server.close();
-    } finally {
+  // Always close the server we own. External servers have a no-op close().
+  // This decouples resource cleanup from cache identity checks.
+  try {
+    runtime.server.close();
+  } finally {
+    // Only clear the cached promise if this runtime was created by the current promise.
+    // This prevents a race condition where a newer runtime replaces the cached promise
+    // while an older release call is still in flight.
+    if (embeddedRuntimePromise === runtime.creationPromise) {
       embeddedRuntimePromise = undefined;
     }
   }
