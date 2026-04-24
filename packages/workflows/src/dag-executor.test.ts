@@ -1138,6 +1138,58 @@ describe('executeDagWorkflow -- bash nodes', () => {
     expect(failMsg).toBeDefined();
   });
 
+  // Regression for issue #1389 — bash node error must surface stderr, not the script body
+  it('failure message surfaces stderr and does not leak the "Command failed: bash -c <body>" prefix', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-1389-run-id', {
+      workflow_name: 'bash-1389',
+      conversation_id: 'conv-1389b',
+      user_message: 'test',
+    });
+
+    // Script body contains a unique marker that appears ONLY in the command line
+    // (echoed to stdout, not stderr). The error message must not contain the
+    // marker because the entire "Command failed: bash -c <body>" prefix line
+    // should be stripped.
+    const bashNode: BashNode = {
+      id: 'fail-bash-1389',
+      bash: 'echo UNIQUE_CMDLINE_MARKER_1389; echo "diagnostic from stderr" >&2; exit 1',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-1389b',
+      testDir,
+      { name: 'bash-1389', nodes: [bashNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'fail-bash-1389'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain("Bash node 'fail-bash-1389' failed");
+    expect(errorMsg).toContain('[exit 1]');
+    // The "Command failed: bash -c <body>" prefix (which leaks the body) must not appear.
+    expect(errorMsg).not.toContain('Command failed:');
+    expect(errorMsg).not.toContain('UNIQUE_CMDLINE_MARKER_1389');
+    // But stderr content must be surfaced — it is the actionable diagnostic.
+    expect(errorMsg).toContain('diagnostic from stderr');
+  });
+
   it('variable substitution works in bash scripts', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -6124,6 +6176,61 @@ describe('executeDagWorkflow -- script nodes', () => {
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
     expect(failMsg).toBeDefined();
+  });
+
+  // Regression for issue #1389 — script node error must stay concise and diagnostic-first
+  it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-1389-run-id', {
+      workflow_name: 'script-1389',
+      conversation_id: 'conv-1389s',
+      user_message: 'test',
+    });
+
+    // Build a body that is much larger than the diagnostic stderr, so if the body
+    // ever leaks into errorMsg again (via the old `${err.message}` path) the size
+    // assertion will catch it. Bun's stderr echoes only ~1-3 lines of context.
+    const longPadding = '// padding line '.repeat(200); // ~3.2 KB of harmless comments
+    const scriptNode: ScriptNode = {
+      id: 'fail-script-1389',
+      script: `${longPadding}\nconst x = "marker"; this is not valid javascript`,
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-1389s',
+      testDir,
+      { name: 'script-1389', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'fail-script-1389'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain("Script node 'fail-script-1389' failed");
+    // The "Command failed: bun -e <body>" prefix must not appear.
+    expect(errorMsg).not.toContain('Command failed:');
+    // The padding body (~3.2 KB) must not have been copied wholesale into errorMsg.
+    expect(errorMsg).not.toContain('padding line padding line padding line');
+    // The helper caps diagnostic output at ~2 KB; whole errorMsg should stay well below 4 KB.
+    expect(errorMsg.length).toBeLessThan(4000);
+    // The actionable diagnostic (syntax-error marker) should be preserved.
+    expect(errorMsg.toLowerCase()).toMatch(/error|expected|unexpected|syntax/);
   });
 
   it('timeout kills subprocess', async () => {
