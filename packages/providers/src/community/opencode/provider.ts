@@ -46,9 +46,6 @@ interface OpencodeClientLike {
       stream: AsyncIterable<unknown>;
     }>;
   };
-  global: {
-    health(): Promise<unknown>;
-  };
 }
 
 interface EmbeddedRuntime {
@@ -263,20 +260,30 @@ function normalizeTokens(info: Record<string, unknown> | undefined): TokenUsage 
  * Returns the client if successful, null if connection fails.
  */
 async function tryExistingServer(): Promise<OpencodeClientLike | null> {
-  const { createOpencodeClient } = await import('@opencode-ai/sdk');
-  const client = createOpencodeClient({
-    baseUrl: `http://localhost:${OPENCODE_DEFAULT_PORT}`,
-  }) as unknown as OpencodeClientLike;
+  const baseUrl = `http://localhost:${OPENCODE_DEFAULT_PORT}`;
 
   try {
-    // Use global.health() for a stateless health check, with 2s timeout
-    const healthPromise = client.global.health();
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error('health_check_timeout'));
-      }, 2000);
+    // Direct HTTP health check - the SDK's global.health() is only available in v2
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 2000);
+
+    const response = await fetch(`${baseUrl}/global/health`, {
+      signal: controller.signal,
     });
-    await Promise.race([healthPromise, timeoutPromise]);
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      getLog().debug(
+        { port: OPENCODE_DEFAULT_PORT, status: response.status },
+        'opencode.server_unhealthy'
+      );
+      return null;
+    }
+
+    const { createOpencodeClient } = await import('@opencode-ai/sdk');
+    const client = createOpencodeClient({ baseUrl }) as unknown as OpencodeClientLike;
     getLog().info({ port: OPENCODE_DEFAULT_PORT }, 'opencode.existing_server_found');
     return client;
   } catch (error) {
@@ -285,7 +292,7 @@ async function tryExistingServer(): Promise<OpencodeClientLike | null> {
       (error.message.includes('Unable to connect') ||
         error.message.includes('ConnectionRefused') ||
         error.message.includes('ECONNREFUSED') ||
-        error.message === 'health_check_timeout');
+        error.name === 'AbortError');
 
     if (isConnectionRefused) {
       getLog().debug({ port: OPENCODE_DEFAULT_PORT }, 'opencode.no_existing_server');
