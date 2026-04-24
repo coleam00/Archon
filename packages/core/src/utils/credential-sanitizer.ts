@@ -3,7 +3,7 @@
  * Removes sensitive values from strings to prevent credential leaks
  */
 
-const SENSITIVE_ENV_VARS = ['GH_TOKEN', 'GITHUB_TOKEN'];
+const SENSITIVE_ENV_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GITLAB_TOKEN'];
 
 function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -21,6 +21,11 @@ export function sanitizeCredentials(input: string): string {
 
   // Catch any URL-embedded credentials we might have missed
   result = result.replace(/https:\/\/[^@\s]+@github\.com/g, 'https://[REDACTED]@github.com');
+  // GitLab uses oauth2:<token>@host — match any host to cover self-hosted too
+  result = result.replace(
+    /https:\/\/oauth2:[^@\s]+@[^\s/]+/g,
+    'https://oauth2:[REDACTED]@[host]'
+  );
 
   return result;
 }
