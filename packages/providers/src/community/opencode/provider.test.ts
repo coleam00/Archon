@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -24,9 +24,6 @@ type MockRuntime = {
     event: {
       subscribe: ReturnType<typeof mock>;
     };
-    global: {
-      health: ReturnType<typeof mock>;
-    };
   };
   server: {
     url: string;
@@ -37,6 +34,7 @@ type MockRuntime = {
 const runtimeQueue: MockRuntime[] = [];
 const createdRuntimes: MockRuntime[] = [];
 let scriptedEvents: OpencodeEvent[] = [];
+let mockHealthCheckResponse: { ok: boolean; json: () => Promise<unknown> } | null = null;
 
 function createEventStream(events: OpencodeEvent[]): AsyncIterable<OpencodeEvent> {
   return {
@@ -66,7 +64,6 @@ function makeRuntime(overrides?: {
   sessionAbort?: ReturnType<typeof mock>;
   subscribe?: ReturnType<typeof mock>;
   close?: ReturnType<typeof mock>;
-  globalHealth?: ReturnType<typeof mock>;
 }): MockRuntime {
   const sessionCreate =
     overrides?.sessionCreate ?? mock(async () => ({ data: { id: 'session-1' } }));
@@ -81,8 +78,6 @@ function makeRuntime(overrides?: {
       stream: createEventStream(scriptedEvents),
     }));
   const close = overrides?.close ?? mock(() => undefined);
-  const globalHealth =
-    overrides?.globalHealth ?? mock(async () => ({ data: { healthy: true, version: '1.0.0' } }));
 
   return {
     client: {
@@ -95,9 +90,6 @@ function makeRuntime(overrides?: {
       },
       event: {
         subscribe,
-      },
-      global: {
-        health: globalHealth,
       },
     },
     server: {
@@ -142,10 +134,13 @@ async function consume(
 }
 
 describe('OpencodeProvider', () => {
+  let originalFetch: typeof global.fetch;
+
   beforeEach(() => {
     scriptedEvents = [];
     runtimeQueue.length = 0;
     createdRuntimes.length = 0;
+    mockHealthCheckResponse = null; // Reset health check mock
     mockCreateOpencode.mockClear();
     mockCreateOpencodeClient.mockClear();
     mockLogger.info.mockClear();
@@ -154,6 +149,28 @@ describe('OpencodeProvider', () => {
     mockLogger.debug.mockClear();
     // Reset the embedded runtime state between tests
     resetEmbeddedRuntime();
+
+    // Mock fetch for health checks
+    originalFetch = global.fetch;
+    global.fetch = mock(async (url: string | URL | Request) => {
+      const urlString = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      if (urlString.includes('/global/health')) {
+        // Default: existing server found (healthy)
+        if (mockHealthCheckResponse) {
+          return mockHealthCheckResponse as Response;
+        }
+        // Return healthy response by default
+        return {
+          ok: true,
+          json: async () => ({ healthy: true, version: '1.0.0' }),
+        } as Response;
+      }
+      return originalFetch(url);
+    }) as typeof global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
   });
 
   test('basic text streaming yields assistant chunks', async () => {
@@ -554,7 +571,12 @@ describe('OpencodeProvider', () => {
   });
 
   test('tries existing server before spawning new one', async () => {
-    // First call: createOpencodeClient succeeds (existing server found)
+    // Simulate existing server found via health check
+    mockHealthCheckResponse = {
+      ok: true,
+      json: async () => ({ healthy: true, version: '1.0.0' }),
+    };
+
     const existingRuntime = makeRuntime();
     runtimeQueue.push(existingRuntime);
     scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
@@ -571,35 +593,13 @@ describe('OpencodeProvider', () => {
   });
 
   test('spawns new server when existing server connection fails', async () => {
-    // First call: createOpencodeClient throws connection refused
-    const failingClient = {
-      session: {
-        create: mock(async () => {
-          const error = new Error('Unable to connect. Is the computer able to access the url?');
-          (error as Error & { code?: string }).code = 'ConnectionRefused';
-          throw error;
-        }),
-        get: mock(async () => ({ data: { id: 'resumed-session' } })),
-        promptAsync: mock(async () => undefined),
-        abort: mock(async () => undefined),
-        message: mock(async () => ({ data: { info: {} } })),
-      },
-      event: {
-        subscribe: mock(async () => ({ stream: createEventStream([]) })),
-      },
-      global: {
-        health: mock(async () => {
-          const error = new Error('Unable to connect. Is the computer able to access the url?');
-          (error as Error & { code?: string }).code = 'ConnectionRefused';
-          throw error;
-        }),
-      },
-    };
+    // Health check fails - set mockHealthCheckResponse to simulate failure
+    mockHealthCheckResponse = {
+      ok: false,
+      json: async () => ({ error: 'connection refused' }),
+    } as Response;
 
-    // Second call: createOpencode spawns new server
     const spawnedRuntime = makeRuntime();
-
-    mockCreateOpencodeClient.mockImplementationOnce(() => failingClient);
     runtimeQueue.push(spawnedRuntime);
     scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
 
@@ -609,8 +609,7 @@ describe('OpencodeProvider', () => {
 
     expect(error).toBeUndefined();
     expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
-    // Should have tried client first, then spawned
-    expect(mockCreateOpencodeClient).toHaveBeenCalled();
+    // Should have spawned a new server since health check failed
     expect(mockCreateOpencode).toHaveBeenCalled();
   });
 
