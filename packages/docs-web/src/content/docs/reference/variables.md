@@ -8,11 +8,11 @@ sidebar:
   order: 5
 ---
 
-Archon substitutes variables in command files, inline prompts, and bash scripts before execution. There are three categories of variables: workflow variables (substituted by the workflow engine), positional arguments (substituted by the command handler), and node output references (DAG workflows only).
+Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are three categories of variables: workflow variables (substituted by the workflow engine), positional arguments (substituted by the command handler), and node output references (DAG workflows only).
 
 ## Workflow Variables
 
-These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `loop:`).
+These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`).
 
 | Variable | Resolves to | Notes |
 |----------|-------------|-------|
@@ -63,6 +63,10 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 |---------|-------------|-------|
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
 | `$nodeId.output.field` | A specific JSON field from the node's output | Requires the upstream node to use `output_format` for structured JSON |
+
+### Shell Quoting in `bash:` vs `script:`
+
+`$nodeId.output` values are **auto shell-quoted** (single-quoted, with embedded `'` escaped) when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
 
 ### Example
 

@@ -6,7 +6,7 @@ area: workflows
 audience: [user]
 status: current
 sidebar:
-  order: 6
+  order: 7
 ---
 
 DAG workflow nodes support a `mcp` field that attaches MCP (Model Context Protocol)

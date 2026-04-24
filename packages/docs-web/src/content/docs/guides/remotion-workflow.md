@@ -6,7 +6,7 @@ area: workflows
 audience: [user]
 status: current
 sidebar:
-  order: 9
+  order: 10
 ---
 
 The `archon-remotion-generate` workflow uses AI to create Remotion video compositions.

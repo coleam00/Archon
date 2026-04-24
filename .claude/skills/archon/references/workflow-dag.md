@@ -20,9 +20,9 @@ nodes:
     depends_on: [other-node]        # Node IDs that must complete first
 ```
 
-## Four Node Types (Mutually Exclusive)
+## Node Types (Mutually Exclusive)
 
-Each node must have exactly ONE of these fields:
+Each node must have exactly ONE of these fields: `command`, `prompt`, `bash`, `script`, `loop`, `approval`, or `cancel`.
 
 ### Command Node
 Runs a command file from `.archon/commands/`:
@@ -54,6 +54,54 @@ Runs a shell script without AI:
 - **stderr** forwarded as warning, does not fail the node
 - No AI invoked — AI-specific fields are ignored
 - Use `timeout:` (milliseconds) for execution time limit
+- `$nodeId.output` substitutions are **auto shell-quoted** (safe to embed)
+
+### Script Node
+Runs TypeScript/JavaScript (via `bun`) or Python (via `uv`) without AI. Same stdout/stderr contract as bash nodes.
+
+**Inline script (TypeScript):**
+```yaml
+- id: parse
+  script: |
+    const raw = process.argv.slice(2).join(' ') || '{}';
+    const data = JSON.parse(raw);
+    console.log(JSON.stringify({ items: data.items?.length ?? 0 }));
+  runtime: bun                      # REQUIRED: 'bun' or 'uv'
+  timeout: 30000                    # ms, default: 120000
+```
+
+**Inline script (Python) with uv dependencies:**
+```yaml
+- id: fetch
+  script: |
+    import httpx, json
+    r = httpx.get("https://api.github.com/repos/anthropics/anthropic-cookbook")
+    print(json.dumps({ "stars": r.json()["stargazers_count"] }))
+  runtime: uv
+  deps: ["httpx>=0.27"]             # Optional — 'uv run --with <dep>'. Ignored for bun.
+```
+
+**Named script from `.archon/scripts/`:**
+```yaml
+- id: analyze
+  script: analyze-metrics           # Resolves .archon/scripts/analyze-metrics.py
+  runtime: uv                       # Must match file extension (.ts/.js → bun, .py → uv)
+  deps: ["pandas>=2.0"]
+```
+
+- **Inline vs named**: a `script` value is treated as inline code if it contains a newline or any shell metacharacter (space, or any of: `;` `(` `)` `{` `}` `&` `|` `<` `>` `$` `` ` `` `"` `'`). Otherwise it's a named-script lookup (bare identifier).
+- **Named script resolution**: `<cwd>/.archon/scripts/` (wins) → `~/.archon/scripts/`. 1-level subfolder grouping allowed. Extension determines runtime (`.ts`/`.js` → `bun`, `.py` → `uv`) and MUST match the declared `runtime:`
+- **Dispatch**:
+  - `bun` + inline → `bun --no-env-file -e '<code>'`
+  - `bun` + named → `bun --no-env-file run <path>`
+  - `uv` + inline → `uv run [--with dep ...] python -c '<code>'`
+  - `uv` + named → `uv run [--with dep ...] <path>`
+- **`deps`** is uv-only. Bun auto-installs on import; `deps` with `runtime: bun` emits a validator warning
+- **stdout** captured as `$nodeId.output` (trailing newline trimmed)
+- **stderr** forwarded as warning, does NOT fail the node. Non-zero exit DOES fail it.
+- **`bun --no-env-file`** prevents target repo `.env` from leaking into the subprocess
+- `$nodeId.output` substitutions are **NOT shell-quoted** in script bodies — parse with `JSON.parse` / `json.loads`, don't interpolate into shell syntax
+- AI-specific fields (`model`, `provider`, `hooks`, `mcp`, `skills`, `output_format`, `allowed_tools`, `denied_tools`, `agents`, `effort`, `thinking`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`) emit a loader warning and are ignored
 
 ### Loop Node
 Iterates an AI prompt until a completion signal or max iterations:
@@ -83,7 +131,7 @@ All node types share these fields:
 | `depends_on` | string[] | `[]` | Node IDs that must settle before this node runs |
 | `when` | string | — | Condition expression. Node **skipped** when false |
 | `trigger_rule` | string | `all_success` | Join semantics for multiple dependencies |
-| `idle_timeout` | number (ms) | 300000 | Per-node idle timeout. On loop nodes, applies per-iteration |
+| `idle_timeout` | number (ms) | 300000 | Idle timeout for AI streaming (`command`, `prompt`) and per-iteration idle for `loop`. Accepted but ignored on `bash` and `script` — use `timeout` there |
 
 **Command, prompt, and bash nodes** (silently ignored on loop nodes, except `retry` which is a hard error):
 
@@ -302,7 +350,9 @@ Use `--json` for machine-readable output. Use `archon validate commands <name>` 
 - All `depends_on` reference existing IDs
 - No cycles
 - `$nodeId.output` refs in `when:`, `prompt:`, `loop.prompt:` must point to known IDs
-- Exactly one of `command`, `prompt`, `bash`, `loop` per node
+- Exactly one of `command`, `prompt`, `bash`, `script`, `loop`, `approval`, `cancel` per node
+- Script nodes require `runtime: bun` or `runtime: uv`
+- Named scripts must exist in `.archon/scripts/` or `~/.archon/scripts/` with extension matching declared runtime
 - `retry` on loop node = hard error
 - `steps:` format rejected (deprecated — use `nodes:` only)
 
