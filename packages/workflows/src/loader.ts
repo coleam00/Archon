@@ -3,6 +3,8 @@
  */
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
+import { readFileSync } from 'fs';
+import { resolve as resolvePath, isAbsolute as isAbsolutePath, dirname } from 'path';
 import { createLogger } from '@archon/paths';
 import { isModelCompatible } from './model-validation';
 import {
@@ -27,6 +29,78 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 function parseYaml(content: string): unknown {
   return Bun.YAML.parse(content);
+}
+
+/**
+ * Maximum depth of `$ref` chains we follow. A workflow that nests refs
+ * more than this many levels deep is almost certainly a cycle or a
+ * mistake — we bail out with a validation error instead of blowing the
+ * stack.
+ */
+const MAX_REF_DEPTH = 16;
+
+/**
+ * Inline any `$ref` pointers in a parsed YAML value.
+ *
+ * A ref node has the shape `{ $ref: "<relative-or-absolute-path>" }` and
+ * is replaced in-tree with the parsed contents of the referenced YAML
+ * file. Paths are resolved relative to `baseDir` (the directory holding
+ * the YAML file we are currently parsing), NOT relative to the caller's
+ * process cwd. This keeps workflow YAMLs portable across invocations
+ * from different working directories.
+ *
+ * When `baseDir` is undefined (e.g. bundled defaults embedded at compile
+ * time have no on-disk location), any `$ref` encountered surfaces as a
+ * thrown error — we refuse to silently fall back to `process.cwd()` as
+ * that would produce non-deterministic behavior.
+ */
+function resolveRefs(value: unknown, baseDir: string | undefined, depth = 0): unknown {
+  if (value === null || typeof value !== 'object') return value;
+
+  if (Array.isArray(value)) {
+    return value.map(v => resolveRefs(v, baseDir, depth));
+  }
+
+  const obj = value as Record<string, unknown>;
+
+  // A node is a ref iff it has exactly one key, "$ref", and that key is a string.
+  const keys = Object.keys(obj);
+  if (keys.length === 1 && keys[0] === '$ref' && typeof obj.$ref === 'string') {
+    if (depth >= MAX_REF_DEPTH) {
+      throw new Error(`$ref chain exceeded maximum depth of ${MAX_REF_DEPTH} (possible cycle)`);
+    }
+    if (baseDir === undefined) {
+      throw new Error(
+        `$ref "${obj.$ref}" cannot be resolved: no base directory supplied (bundled/in-memory workflow)`
+      );
+    }
+    const refPath = obj.$ref;
+    const resolved = isAbsolutePath(refPath) ? refPath : resolvePath(baseDir, refPath);
+    if (!resolved.endsWith('.yaml') && !resolved.endsWith('.yml')) {
+      throw new Error(`$ref "${refPath}" must point to a .yaml or .yml file`);
+    }
+    let refContent: string;
+    try {
+      refContent = readFileSync(resolved, 'utf-8');
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      throw new Error(
+        `$ref "${refPath}" could not be read (resolved to ${resolved}): ${e.message} (${e.code ?? 'unknown'})`
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(refContent);
+    } catch (err) {
+      throw new Error(`$ref "${refPath}" failed to parse: ${(err as Error).message}`);
+    }
+    // Recurse: refs inside the loaded fragment resolve relative to the fragment's own dir.
+    return resolveRefs(parsed, dirname(resolved), depth + 1);
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const k of keys) out[k] = resolveRefs(obj[k], baseDir, depth);
+  return out;
 }
 
 /**
@@ -174,10 +248,17 @@ export type ParseResult =
 
 /**
  * Parse and validate a workflow YAML file
+ *
+ * @param content   raw YAML source
+ * @param filename  display name used in error messages
+ * @param yamlDir   absolute directory containing the YAML file on disk.
+ *                  Used to resolve `$ref` pointers relative to the file,
+ *                  not the caller's `process.cwd()`. Omit for content
+ *                  that has no on-disk backing (bundled defaults, tests).
  */
-export function parseWorkflow(content: string, filename: string): ParseResult {
+export function parseWorkflow(content: string, filename: string, yamlDir?: string): ParseResult {
   try {
-    const raw = parseYaml(content) as Record<string, unknown>;
+    const raw = resolveRefs(parseYaml(content), yamlDir) as Record<string, unknown>;
 
     if (!raw || typeof raw !== 'object') {
       return {
