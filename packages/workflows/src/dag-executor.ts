@@ -363,6 +363,7 @@ async function resolveNodeProviderAndModel(
     output_format: node.output_format,
     maxBudgetUsd: node.maxBudgetUsd,
     systemPrompt: node.systemPrompt,
+    settingSources: node.settingSources,
     fallbackModel: fb,
   };
 
