@@ -319,8 +319,7 @@ export async function executeWorkflow(
   let dagPriorCompletedNodes: Map<string, string> | undefined;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
-  // Resume detection: only when caller explicitly opts in (allowAutoResume === true).
-  // Default is a fresh run — callers that want resume pass allowAutoResume: true.
+  // Resume detection: only when caller explicitly opts in; default is a fresh run.
   if (allowAutoResume) {
     // Step 1: Find prior failed run — non-critical, fall through on DB error
     let resumableRun: Awaited<ReturnType<typeof deps.store.findResumableRun>> = null;
@@ -333,7 +332,7 @@ export async function executeWorkflow(
         'workflow_resume_check_failed'
       );
       // Non-critical: fall through to create a new run; notify user so they know resume was skipped
-      // (workflowName is already captured in the warn log above for correlation)
+      // (workflowName is already captured in the error log above for correlation)
       await safeSendMessage(
         platform,
         conversationId,
