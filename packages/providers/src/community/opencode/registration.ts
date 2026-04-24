@@ -1,9 +1,7 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
 import { OPENCODE_CAPABILITIES } from './capabilities';
-import { OpencodeProvider } from './provider';
-
-import { parseModelRef } from './provider';
+import { OpencodeProvider, parseModelRef } from './provider';
 
 export function isOpencodeModelCompatible(model: string): boolean {
   return parseModelRef(model) !== null;

@@ -502,6 +502,7 @@ describe('OpencodeProvider', () => {
     expect(mockLogger.info).not.toHaveBeenCalledWith(expect.any(Object), 'opencode.retrying_query');
   });
 
+  // TODO(#1384): Enable once abort handling is stable in embedded runtime
   test.skip('abort propagates to the OpenCode session and surfaces aborted error', async () => {
     const runtime = makeRuntime({
       subscribe: mock(async () => ({
@@ -518,8 +519,7 @@ describe('OpencodeProvider', () => {
       })
     );
 
-    await Promise.resolve();
-    abortController.abort();
+    queueMicrotask(() => abortController.abort());
 
     const { chunks, error } = await consumption;
 
