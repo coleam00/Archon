@@ -361,6 +361,21 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Parse optional tags — type-narrow, trim, and dedupe so authors can't
+    // ship ["GitLab", "GitLab ", "gitlab"] as three distinct values.
+    let tags: string[] | undefined;
+    if (Array.isArray(raw.tags)) {
+      const cleaned = [
+        ...new Set(
+          raw.tags
+            .filter((t): t is string => typeof t === 'string')
+            .map(t => t.trim())
+            .filter(t => t.length > 0)
+        ),
+      ];
+      tags = cleaned.length > 0 ? cleaned : undefined;
+    }
+
     return {
       workflow: {
         name: raw.name,
@@ -373,6 +388,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         interactive,
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
+        ...(tags ? { tags } : {}),
       },
       error: null,
     };
