@@ -12,6 +12,11 @@ This directory captures the product-team Archon customization. The goal is to ma
 - Read-only planning, review, and approval workflows set `worktree.enabled: false`.
 - Human approval gates remain mandatory for product scope, design handoff, security signoff, QA signoff, deployment readiness, and customer-facing launch readiness.
 
+## User Documentation
+
+- [Cross-Functional Workflow User Guide](./user-guide.md): how to run and operate the workflow set.
+- [Cross-Functional Workflow Personas](./personas.md): role-by-role responsibilities, owned artifacts, and handoffs.
+
 ## Branch Strategy
 
 This customization is maintained on the `product-team-workflows` branch of the fork. Keep it separate from upstream Archon until the team decides whether these templates should remain private/product-specific or be generalized for contribution.
@@ -153,4 +158,3 @@ Then pilot one low-risk request through the full chain:
 6. `docs-impact-and-release-notes`
 7. `devops-release-readiness`
 8. `services-customer-readiness`
-
