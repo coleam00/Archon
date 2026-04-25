@@ -1,0 +1,40 @@
+name: design-brief-to-handoff
+description: |
+  Use when: A PRD is approved and design needs to create a handoff for implementation and QA.
+  Triggers: "create design brief", "design handoff", "prepare UX handoff".
+  Does: Generates design brief -> waits for design input -> checks handoff completeness ->
+        waits for design approval.
+  NOT for: Product requirements, implementation, or final QA validation.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  - id: design-brief
+    command: design-brief
+    context: fresh
+
+  - id: design-input
+    approval:
+      message: "Review the design brief. Add links, decisions, or corrections before handoff validation."
+      capture_response: true
+    depends_on: [design-brief]
+
+  - id: handoff-check
+    command: design-handoff-check
+    depends_on: [design-input]
+    context: fresh
+
+  - id: design-approval
+    approval:
+      message: "Approve design handoff for implementation, or reject with missing design requirements."
+      capture_response: true
+    depends_on: [handoff-check]
+
+  - id: ux-review-template
+    command: design-ui-review
+    depends_on: [design-approval]
+    context: fresh
+
