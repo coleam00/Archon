@@ -1,6 +1,6 @@
 ---
 title: 명령 레퍼런스
-description: Web UI, Telegram, Slack, Discord, GitHub 등 HarneesLab adapter에서 사용할 수 있는 모든 slash command입니다.
+description: Web UI, Telegram, Slack, Discord, GitHub 등 HarneesLab adapter에서 사용할 수 있는 slash command 전체 목록입니다.
 category: reference
 area: handlers
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-Archon에서 사용할 수 있는 모든 slash command입니다. 어떤 platform adapter(Web UI, Telegram, Slack, Discord, GitHub)에서든 `/help`를 입력하면 이 목록을 볼 수 있습니다.
+HarneesLab에서 사용할 수 있는 slash command 전체 목록입니다. Web UI, Telegram, Slack, Discord, GitHub 등 어떤 platform adapter에서든 `/help`를 입력하면 같은 목록을 볼 수 있습니다.
 
 ---
 
@@ -21,8 +21,8 @@ Archon에서 사용할 수 있는 모든 slash command입니다. 어떤 platform
 
 | Command | 설명 |
 |---------|-------------|
-| `/register-project <path>` | local directory를 project로 등록 |
-| `/update-project <name> <path>` | project directory path 업데이트 |
+| `/register-project <path>` | local directory를 HarneesLab project로 등록 |
+| `/update-project <name> <path>` | 등록된 project directory path 업데이트 |
 | `/remove-project <name>` | project registration 제거 |
 
 ## Workflow
@@ -34,13 +34,13 @@ Archon에서 사용할 수 있는 모든 slash command입니다. 어떤 platform
 | `/workflow status` | 활성 workflow 표시 |
 | `/workflow cancel` | 실행 중인 workflow 취소 |
 | `/workflow resume <id>` | 실패한 run 재개(다시 실행하되 완료된 node는 skip) |
-| `/workflow abandon <id>` | terminal이 아닌 run 폐기 |
+| `/workflow abandon <id>` | resume하지 않을 run 폐기 |
 | `/workflow approve <id> [comment]` | approval gate에서 paused workflow run 승인 |
 | `/workflow reject <id> [reason]` | approval gate에서 paused workflow run 거절 |
 | `/workflow run <name> [args]` | workflow를 직접 실행 |
 | `/workflow cleanup [days]` | CLI 전용 -- 오래된 run record 삭제(기본값: 7일) |
 
-> **참고:** Workflow는 `.archon/workflows/`의 YAML file입니다.
+> **참고:** Workflow는 `.archon/workflows/`의 YAML file입니다. `.archon` 경로는 upstream Archon compatibility를 위해 유지됩니다.
 
 ## Session 관리
 
@@ -84,9 +84,9 @@ Archon에서 사용할 수 있는 모든 slash command입니다. 어떤 platform
 ### 직접 질문하기
 
 ```
-You: What's the structure of this repo?
+You: 이 repo 구조를 설명해줘
 
-Bot: [Claude analyzes and responds...]
+Bot: [Claude가 분석하고 응답합니다...]
 ```
 
 ### 상태 확인
@@ -122,13 +122,13 @@ Bot: Session cleared. Starting fresh on next message.
 새 issue를 만들거나 기존 issue/PR에 comment를 남깁니다.
 
 ```
-@your-bot-name can you help me understand the authentication flow?
+@your-bot-name authentication flow를 이해할 수 있게 도와줘
 ```
 
 Bot이 분석으로 응답합니다. 이어서 conversation을 계속할 수 있습니다.
 
 ```
-@your-bot-name can you create a sequence diagram for this?
+@your-bot-name 이 내용을 sequence diagram으로 만들어줘
 ```
 
 Bot은 context를 유지하고 diagram을 제공합니다.
