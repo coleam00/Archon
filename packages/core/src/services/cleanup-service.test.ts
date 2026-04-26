@@ -1458,4 +1458,61 @@ describe('cleanupStaleWorktrees', () => {
       reason: 'has uncommitted changes',
     });
   });
+
+  describe('resolveMainBranch config override', () => {
+    test('uses worktree.baseBranch from .archon/config.yaml instead of auto-detection', async () => {
+      const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
+      const { join } = await import('path');
+      const { tmpdir } = await import('os');
+      const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
+      try {
+        await mkdir(join(tempDir, '.archon'), { recursive: true });
+        await writeFile(
+          join(tempDir, '.archon', 'config.yaml'),
+          'worktree:\n  baseBranch: master\n'
+        );
+
+        // Mock a merged environment
+        mockListByCodebase.mockResolvedValueOnce([
+          {
+            id: 'env-1',
+            branch_name: 'feature-x',
+            working_path: join(tempDir, 'worktrees', 'feature-x'),
+            status: 'active',
+          },
+        ]);
+        mockIsBranchMerged.mockResolvedValueOnce(true);
+        mockHasUncommittedChanges.mockResolvedValueOnce(false);
+        mockGetPrState.mockResolvedValueOnce('MERGED');
+        mockDestroy.mockResolvedValueOnce({
+          worktreeRemoved: true,
+          branchDeleted: true,
+          remoteBranchDeleted: true,
+          directoryClean: true,
+          warnings: [],
+        });
+        mockUpdateStatus.mockResolvedValueOnce(undefined);
+
+        const mergeResult = await cleanupMergedWorktrees('codebase-1', tempDir);
+
+        // isBranchMerged should have been called with 'master' (from config)
+        const branchMergeCalls = mockIsBranchMerged.mock.calls.filter(
+          (call: unknown[]) => call[0] === tempDir
+        );
+        expect(branchMergeCalls).toHaveLength(1);
+        expect(branchMergeCalls[0][2]).toBe('master');
+      } finally {
+        await rm(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    test('falls back to getDefaultBranch when no config exists', async () => {
+      mockListByCodebase.mockResolvedValueOnce([]);
+      mockGetDefaultBranch.mockResolvedValueOnce('main');
+
+      await cleanupMergedWorktrees('codebase-1', '/nonexistent/repo');
+
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/nonexistent/repo');
+    });
+  });
 });
