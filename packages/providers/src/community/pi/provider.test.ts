@@ -81,7 +81,49 @@ const mockAuthCreate = mock(() => ({
   setRuntimeApiKey: mockSetRuntimeApiKey,
   getApiKey: mockGetApiKey,
 }));
-const mockModelRegistryInMemory = mock(() => ({}));
+// ModelRegistry mock. Replaces both the legacy `inMemory()` constructor and
+// pi-ai's `getModel()` lookup — the production code now resolves models via
+// `ModelRegistry.create(authStorage).find(provider, modelId)`, which covers
+// both Pi's built-in catalog and user-defined custom providers from
+// ~/.pi/agent/models.json.
+//
+// `modelRegistryControls` lets each test customize behavior:
+//   - findOverride: return a specific Model<Api> (or undefined) for any lookup
+//   - hasConfiguredAuthOverride: control the fast-fail credential check
+//   - getErrorOverride: simulate a malformed models.json
+// Defaults match the previous mockGetModel/mockGetApiKey behavior so the
+// majority of existing tests don't need changes.
+let modelRegistryControls: {
+  findOverride?: (provider: string, modelId: string) => unknown | undefined;
+  hasConfiguredAuthOverride?: (model: unknown) => boolean;
+  getErrorOverride?: () => string | undefined;
+} = {};
+const mockRegistryFind = mock((provider: string, modelId: string) => {
+  if (modelRegistryControls.findOverride) {
+    return modelRegistryControls.findOverride(provider, modelId);
+  }
+  if (provider === 'nonexistent') return undefined;
+  return { id: modelId, provider, name: `${provider}/${modelId}` };
+});
+const mockRegistryHasConfiguredAuth = mock((model: unknown) => {
+  if (modelRegistryControls.hasConfiguredAuthOverride) {
+    return modelRegistryControls.hasConfiguredAuthOverride(model);
+  }
+  // Default: mirror the old mockGetApiKey behavior — has auth iff some
+  // credential resolution path produces a key.
+  const m = model as { provider: string };
+  return Boolean(
+    runtimeOverrides[m.provider] ??
+    fileCreds[m.provider] ??
+    process.env[`${m.provider.toUpperCase()}_API_KEY`]
+  );
+});
+const mockRegistryGetError = mock(() => modelRegistryControls.getErrorOverride?.());
+const mockModelRegistryCreate = mock((_authStorage: unknown) => ({
+  find: mockRegistryFind,
+  hasConfiguredAuth: mockRegistryHasConfiguredAuth,
+  getError: mockRegistryGetError,
+}));
 
 // SessionManager mocks. Each returns a tagged session-manager stub so tests
 // can assert whether resume resolved to an existing session or fell through
@@ -115,7 +157,7 @@ const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 mock.module('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
-  ModelRegistry: { inMemory: mockModelRegistryInMemory },
+  ModelRegistry: { create: mockModelRegistryCreate },
   SessionManager: {
     create: mockSessionCreate,
     open: mockSessionOpen,
@@ -132,15 +174,11 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
   createLsTool: mockCreateLsTool,
 }));
 
-// getModel is imported from pi-ai. Return a fake model for known refs and
-// undefined for unknown refs so the provider's not-found branch is testable.
-const mockGetModel = mock((provider: string, modelId: string) => {
-  if (provider === 'nonexistent') return undefined;
-  return { id: modelId, provider, name: `${provider}/${modelId}` };
-});
-mock.module('@mariozechner/pi-ai', () => ({
-  getModel: mockGetModel,
-}));
+// pi-ai is no longer dynamically imported by the production code (model
+// resolution moved to ModelRegistry above). The mock module is left in place
+// as an empty object so any straggling `import('@mariozechner/pi-ai')` from
+// helper modules under test resolves cleanly without pulling in the real SDK.
+mock.module('@mariozechner/pi-ai', () => ({}));
 
 // Import AFTER mocks are set — module resolution freezes the mocks.
 import { PiProvider } from './provider';
@@ -177,7 +215,11 @@ describe('PiProvider', () => {
     mockSetFlagValue.mockClear();
     mockResourceLoaderReload.mockClear();
     mockCreateAgentSession.mockClear();
-    mockGetModel.mockClear();
+    mockRegistryFind.mockClear();
+    mockRegistryHasConfiguredAuth.mockClear();
+    mockRegistryGetError.mockClear();
+    mockModelRegistryCreate.mockClear();
+    modelRegistryControls = {};
     mockAuthCreate.mockClear();
     mockSetRuntimeApiKey.mockClear();
     mockGetApiKey.mockClear();
@@ -289,25 +331,142 @@ describe('PiProvider', () => {
       })
     );
     expect(error).toBeUndefined();
-    // Runtime override NOT set — no env var present — so Pi's getApiKey
-    // resolves through the OAuth code path.
+    // Runtime override NOT set — no env var present — so Pi's internal
+    // getApiKey resolves through the OAuth code path when the SDK actually
+    // makes a request. The Archon adapter itself only does the fast-fail
+    // check via modelRegistry.hasConfiguredAuth, which must see the OAuth
+    // credential and return true (no throw).
     expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
-    expect(mockGetApiKey).toHaveBeenCalledWith('anthropic');
+    expect(mockRegistryHasConfiguredAuth).toHaveBeenCalled();
+    const hasAuthArg = mockRegistryHasConfiguredAuth.mock.calls[0]?.[0] as { provider: string };
+    expect(hasAuthArg.provider).toBe('anthropic');
   });
 
-  test('throws when getModel returns undefined', async () => {
+  test('throws when registry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
-    // 'nonexistent' is handled in mockGetModel to return undefined, but
-    // the adapter rejects unknown providers before getModel. To exercise
-    // the not-found branch, use a known provider but unknown modelId by
-    // temporarily swapping mockGetModel to always return undefined.
-    mockGetModel.mockImplementationOnce(() => undefined);
+    // Default mock returns undefined for provider 'nonexistent', but the
+    // adapter rejects malformed model refs before lookup. To exercise the
+    // not-found branch with a known provider, override findOverride to
+    // return undefined for this single call.
+    modelRegistryControls.findOverride = () => undefined;
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/unknown-model-id',
       })
     );
     expect(error?.message).toContain('Pi model not found');
+    expect(error?.message).toContain('models.json');
+  });
+
+  test('custom provider from ~/.pi/agent/models.json resolves via registry.find', async () => {
+    // Regression: pre-fix, the adapter only consulted pi-ai's static catalog
+    // via getModel(), so user-defined providers in models.json (e.g. a private
+    // OpenAI-compatible proxy) failed with 'Pi model not found' even though
+    // `pi` CLI accepted them. Now the adapter goes through ModelRegistry,
+    // which loads custom providers from disk — these tests pin the contract.
+    modelRegistryControls.findOverride = (provider, modelId) => {
+      if (provider === 'sofunny-claude' && modelId === 'claude-sonnet-4-6') {
+        return {
+          id: modelId,
+          provider,
+          name: 'Custom Claude Sonnet via SoFunny proxy',
+          baseUrl: 'https://llm-api-proxy.example.com',
+          api: 'anthropic-messages',
+        };
+      }
+      return undefined;
+    };
+    // Custom providers carry their apiKey inside models.json's provider block,
+    // so registry.hasConfiguredAuth must report true even without anything in
+    // auth.json or env vars.
+    modelRegistryControls.hasConfiguredAuthOverride = () => true;
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'sofunny-claude/claude-sonnet-4-6',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    // ModelRegistry was constructed via create() (not inMemory), so it loads
+    // ~/.pi/agent/models.json on its own — we just verify it was consulted.
+    expect(mockModelRegistryCreate).toHaveBeenCalled();
+    expect(mockRegistryFind).toHaveBeenCalledWith('sofunny-claude', 'claude-sonnet-4-6');
+    // Custom-provider auth comes from models.json, not auth.json/env vars,
+    // so the env-override fast-path must NOT fire setRuntimeApiKey.
+    expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
+    // The resolved model must reach createAgentSession verbatim so Pi's
+    // ModelRegistry can pull baseUrl + apiKey from the custom provider block
+    // when it actually issues the HTTP request.
+    const sessionArgs = mockCreateAgentSession.mock.calls[0]?.[0] as {
+      model: { provider: string; baseUrl?: string };
+    };
+    expect(sessionArgs.model.provider).toBe('sofunny-claude');
+    expect(sessionArgs.model.baseUrl).toBe('https://llm-api-proxy.example.com');
+  });
+
+  test('malformed ~/.pi/agent/models.json yields a system warning but does not abort', async () => {
+    // ModelRegistry exposes parse errors via getError(); built-in providers
+    // still work. Adapter must surface this to the user (system chunk) without
+    // failing the workflow.
+    modelRegistryControls.getErrorOverride = () => 'Invalid JSON at line 3, column 12';
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript([
+      {
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: 'stop',
+            content: [],
+          },
+        ],
+      },
+    ]);
+
+    const { chunks, error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    const systemChunks = chunks.filter(
+      (c): c is { type: 'system'; content: string } =>
+        typeof c === 'object' && c !== null && (c as { type: string }).type === 'system'
+    );
+    expect(systemChunks.some(c => c.content.includes('Invalid JSON at line 3, column 12'))).toBe(
+      true
+    );
+    expect(systemChunks.some(c => c.content.includes('models.json'))).toBe(true);
   });
 
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
