@@ -11,7 +11,7 @@ nodes:
   - id: simple
     prompt: "Reply with exactly OPENCODE_OK"
     agent: general
-    idle_timeout: 30000
+    idle_timeout: 60000
 
   - id: assert
     bash: "echo \"$simple.output\" | grep -q \"OPENCODE_OK\" && echo \"PASS\" ||
