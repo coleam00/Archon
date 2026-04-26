@@ -1,16 +1,16 @@
 ---
-description: Create comprehensive feature implementation plan with codebase analysis and research
+description: codebase 분석과 research를 포함한 포괄적인 feature implementation plan 작성
 argument-hint: <feature description | path/to/prd.md>
 ---
 
-# Create Implementation Plan
+# Implementation Plan 작성
 
 **Input**: $ARGUMENTS
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Transform "$ARGUMENTS" into a battle-tested implementation plan through systematic codebase exploration, pattern extraction, and strategic research.
 
@@ -24,9 +24,9 @@ Transform "$ARGUMENTS" into a battle-tested implementation plan through systemat
 
 ---
 
-## Phase 0: DETECT - Input Type Resolution
+## 0단계: 감지 — 입력 유형 판별
 
-### 0.1 Determine Input Type
+### 0.1 입력 유형 결정
 
 | Input Pattern | Type | Action |
 |---------------|------|--------|
@@ -36,7 +36,7 @@ Transform "$ARGUMENTS" into a battle-tested implementation plan through systemat
 | Free-form text | Description | Use directly as feature input |
 | Empty/blank | Error | STOP - require input |
 
-### 0.2 If PRD File Detected
+### 0.2 PRD 파일이 감지된 경우
 
 1. **Read the PRD file**
 2. **Parse the Implementation Phases table** - find rows with `Status: pending`
@@ -65,7 +65,7 @@ Transform "$ARGUMENTS" into a battle-tested implementation plan through systemat
    Proceeding with Phase #{number}...
    ```
 
-### 0.3 If Free-form Description
+### 0.3 자유 형식 설명인 경우
 
 Proceed directly to Phase 1 with the input as feature description.
 
@@ -77,9 +77,9 @@ Proceed directly to Phase 1 with the input as feature description.
 
 ---
 
-## Phase 1: PARSE - Feature Understanding
+## 1단계: 파싱 — feature 이해
 
-### 1.1 Discover Project Structure
+### 1.1 project 구조 탐색
 
 **CRITICAL**: Do NOT assume `src/` exists. Discover actual structure:
 
@@ -104,7 +104,7 @@ Common alternatives to `src/`:
 - `cmd/`, `internal/`, `pkg/` (Go)
 - Root-level source files (Python, scripts)
 
-### 1.2 Read CLAUDE.md
+### 1.2 CLAUDE.md 읽기
 
 ```bash
 cat CLAUDE.md
@@ -112,7 +112,7 @@ cat CLAUDE.md
 
 Note all coding standards, patterns, and rules that apply to this codebase.
 
-### 1.3 Extract from Input
+### 1.3 입력에서 추출
 
 - Core problem being solved
 - User value and business impact
@@ -120,7 +120,7 @@ Note all coding standards, patterns, and rules that apply to this codebase.
 - Complexity: LOW | MEDIUM | HIGH
 - Affected systems list
 
-### 1.4 Formulate User Story
+### 1.4 user story 정리
 
 ```
 As a <user type>
@@ -141,11 +141,11 @@ So that <benefit/value>
 
 ---
 
-## Phase 2: EXPLORE - Codebase Intelligence
+## 2단계: 탐색 — codebase intelligence
 
 **CRITICAL: Use Task tool with subagent_type="Explore" with thoroughness="very thorough"**
 
-### 2.1 Launch Explore Agent
+### 2.1 explore agent 실행
 
 ```
 Explore the codebase to find patterns, conventions, and integration points
@@ -164,7 +164,7 @@ DISCOVER:
 Return ACTUAL code snippets from codebase, not generic examples.
 ```
 
-### 2.2 Document Discoveries
+### 2.2 발견 사항 문서화
 
 **Format in table:**
 
@@ -186,11 +186,11 @@ Return ACTUAL code snippets from codebase, not generic examples.
 
 ---
 
-## Phase 3: RESEARCH - External Documentation
+## 3단계: Research — 외부 문서
 
 **ONLY AFTER Phase 2 is complete** - solutions must fit existing codebase patterns first.
 
-### 3.1 Search for Documentation
+### 3.1 문서 검색
 
 Use WebSearch tool for:
 - Official documentation for involved libraries (match versions from package.json)
@@ -198,7 +198,7 @@ Use WebSearch tool for:
 - Security considerations and best practices
 - Performance optimization patterns
 
-### 3.2 Format References
+### 3.2 reference 정리
 
 ```markdown
 - [Library Docs v{version}](https://url#specific-section)
@@ -216,9 +216,9 @@ Use WebSearch tool for:
 
 ---
 
-## Phase 4: DESIGN - UX Transformation
+## 4단계: 설계 — UX 전환
 
-### 4.1 Create ASCII Diagrams
+### 4.1 ASCII diagram 작성
 
 **Before State:**
 
@@ -263,7 +263,7 @@ Use WebSearch tool for:
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ```
 
-### 4.2 Document Interaction Changes
+### 4.2 interaction 변경 문서화
 
 | Location | Before | After | User_Action | Impact |
 |----------|--------|-------|-------------|--------|
@@ -279,9 +279,9 @@ Use WebSearch tool for:
 
 ---
 
-## Phase 5: ARCHITECT - Strategic Design
+## 5단계: Architecture 설계 — 전략 설계
 
-### 5.0 Primitives Inventory
+### 5.0 primitive inventory
 
 Before designing the solution, audit existing building blocks:
 
@@ -299,7 +299,7 @@ Before designing the solution, audit existing building blocks:
 |-----------|-----------|-----------|----------------|
 | {name} | `path/to/file.ts:10-30` | Yes/Partial/No | {how it's used or extended} |
 
-### 5.1 Deep Analysis
+### 5.1 심층 분석
 
 Consider (use extended thinking if needed):
 
@@ -310,7 +310,7 @@ Consider (use extended thinking if needed):
 - **SECURITY**: Attack vectors? Data exposure risks? Auth/authz?
 - **MAINTAINABILITY**: Will future devs understand this code?
 
-### 5.2 Document Decisions
+### 5.2 결정 사항 문서화
 
 ```markdown
 APPROACH_CHOSEN: [description]
@@ -334,14 +334,14 @@ NOT_BUILDING (explicit scope limits):
 
 ---
 
-## Phase 6: GENERATE - Write Plan File
+## 6단계: 생성 — plan file 작성
 
-### 6.1 Create Artifact Directory
+### 6.1 artifact directory 생성
 
 ```bash
 ```
 
-### 6.2 Write Plan
+### 6.2 plan 작성
 
 Write to `$ARTIFACTS_DIR/plan.md`:
 
@@ -561,7 +561,7 @@ Execute in order. Each task is atomic and independently verifiable.
 {Additional context, design decisions, trade-offs, future considerations}
 ```
 
-### 6.3 If Input Was PRD
+### 6.3 입력이 PRD인 경우
 
 Also update the PRD file:
 1. Change the phase's Status from `pending` to `in-progress`
@@ -575,9 +575,9 @@ Also update the PRD file:
 
 ---
 
-## Phase 7: VERIFY - Plan Quality Check
+## 7단계: 확인 — plan 품질 확인
 
-### 7.1 Context Completeness
+### 7.1 context 완전성
 
 - [ ] All patterns from Explore agent documented with file:line references
 - [ ] External docs versioned to match package.json
@@ -585,14 +585,14 @@ Also update the PRD file:
 - [ ] Gotchas captured with mitigation strategies
 - [ ] Every task has at least one executable validation command
 
-### 7.2 Implementation Readiness
+### 7.2 implementation 준비도
 
 - [ ] Tasks ordered by dependency (can execute top-to-bottom)
 - [ ] Each task is atomic and independently testable
 - [ ] No placeholders - all content is specific and actionable
 - [ ] Pattern references include actual code snippets (copy-pasted, not invented)
 
-### 7.3 Pattern Faithfulness
+### 7.3 pattern 충실도
 
 - [ ] Every new file mirrors existing codebase style exactly
 - [ ] No unnecessary abstractions introduced
@@ -600,7 +600,7 @@ Also update the PRD file:
 - [ ] Error/logging patterns match existing
 - [ ] Test structure matches existing tests
 
-### 7.4 No Prior Knowledge Test
+### 7.4 사전 지식 없는 테스트
 
 **Could an agent unfamiliar with this codebase implement using ONLY the plan?**
 
@@ -613,7 +613,7 @@ If NO → add missing context to plan.
 
 ---
 
-## Phase 8: OUTPUT - Report to User
+## 8단계: 출력 — 사용자에게 보고
 
 ```markdown
 ## Plan Created
@@ -679,7 +679,7 @@ Plan ready. Proceeding to implementation setup.
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **CONTEXT_COMPLETE**: All patterns, gotchas, integration points documented from actual codebase via Explore agent
 - **IMPLEMENTATION_READY**: Tasks executable top-to-bottom without questions, research, or clarification

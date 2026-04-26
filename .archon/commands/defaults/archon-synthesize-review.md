@@ -1,13 +1,13 @@
 ---
-description: Synthesize all review agent findings into consolidated report and post to GitHub
+description: 모든 review agent findings를 종합 report로 합치고 GitHub에 게시
 argument-hint: (none - reads from review artifacts)
 ---
 
-# Synthesize Review
+# 리뷰 종합
 
 ---
 
-## Your Mission
+## 미션
 
 Read all parallel review agent artifacts, synthesize findings into a consolidated report, create a master artifact, and post a comprehensive review comment to the GitHub PR.
 
@@ -16,21 +16,21 @@ Read all parallel review agent artifacts, synthesize findings into a consolidate
 
 ---
 
-## Phase 1: LOAD - Gather All Findings
+## 1단계: 로드 — 수집 All findings
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ```
 
-### 1.2 Read Scope
+### 1.2 scope 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/scope.md
 ```
 
-### 1.3 Read All Agent Artifacts
+### 1.3 읽기 All Agent artifacts
 
 ```bash
 # Read each agent's findings
@@ -48,9 +48,9 @@ cat $ARTIFACTS_DIR/review/docs-impact-findings.md
 
 ---
 
-## Phase 2: SYNTHESIZE - Combine Findings
+## 2단계: 종합 — findings 통합
 
-### 2.1 Aggregate by Severity
+### 2.1 severity별 집계
 
 Combine all findings across agents:
 - **CRITICAL**: Must fix before merge
@@ -58,14 +58,14 @@ Combine all findings across agents:
 - **MEDIUM**: Consider fixing (options provided)
 - **LOW**: Nice to have (defer or create issue)
 
-### 2.2 Deduplicate
+### 2.2 중복 제거
 
 Check for overlapping findings:
 - Same issue reported by multiple agents
 - Related issues that should be grouped
 - Conflicting recommendations (resolve)
 
-### 2.3 Prioritize
+### 2.3 우선순위 지정
 
 Rank findings by:
 1. Severity (CRITICAL > HIGH > MEDIUM > LOW)
@@ -73,7 +73,7 @@ Rank findings by:
 3. Ease of fix
 4. Risk if not fixed
 
-### 2.4 Compile Statistics
+### 2.4 통계 작성
 
 ```
 Total findings: {n}
@@ -98,7 +98,7 @@ By agent:
 
 ---
 
-## Phase 3: GENERATE - Create Consolidated Artifact
+## 3단계: 생성 — consolidated artifact 생성
 
 Write to `$ARTIFACTS_DIR/review/consolidated-review.md`:
 
@@ -146,7 +146,7 @@ Write to `$ARTIFACTS_DIR/review/consolidated-review.md`:
 **Problem**:
 {description}
 
-**Recommended Fix**:
+**권장 수정**:
 ```typescript
 {fix code}
 ```
@@ -256,9 +256,9 @@ If not addressing in this PR, create issues for:
 
 ---
 
-## Phase 4: POST - GitHub PR Comment
+## 4단계: 게시 — GitHub PR comment
 
-### 4.1 Format for GitHub
+### 4.1 GitHub용 format
 
 Create a GitHub-friendly version of the review:
 
@@ -379,7 +379,7 @@ EOF
 
 ---
 
-## Phase 5: OUTPUT - Confirmation
+## 5단계: 출력 — 확인
 
 Output only a brief confirmation (this will be posted as a comment):
 
@@ -389,7 +389,7 @@ Output only a brief confirmation (this will be posted as a comment):
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ALL_ARTIFACTS_READ**: All 5 agent findings loaded
 - **FINDINGS_SYNTHESIZED**: Combined, deduplicated, prioritized

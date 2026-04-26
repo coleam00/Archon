@@ -1,13 +1,13 @@
 ---
-description: Simplify code changed in this PR — implements fixes directly, commits, and pushes
+description: 이 PR에서 변경된 코드를 단순화 — 직접 수정, commit, push 수행
 argument-hint: (none - operates on the current branch diff against $BASE_BRANCH)
 ---
 
-# Simplify Changed Code
+# 변경 코드 단순화
 
 ---
 
-## IMPORTANT: Output Behavior
+## 중요: 출력 방식
 
 **Your output will be posted as a GitHub comment.** Keep working output minimal:
 - Do NOT narrate each step
@@ -16,15 +16,15 @@ argument-hint: (none - operates on the current branch diff against $BASE_BRANCH)
 
 ---
 
-## Your Mission
+## 미션
 
 Review ALL code changed on this branch and implement simplifications directly. You are not advisory — you edit files, validate, commit, and push.
 
-## Scope
+## 범위
 
 **Only code changed in this PR** — run `git diff $BASE_BRANCH...HEAD --name-only` to get the file list. Do not touch unrelated files.
 
-## What to Simplify
+## 단순화 대상
 
 | Opportunity | What to Look For |
 |-------------|------------------|
@@ -37,7 +37,7 @@ Review ALL code changed on this branch and implement simplifications directly. Y
 | **Obvious comments** | Comments that describe what code clearly shows |
 | **Inconsistent patterns** | Code that doesn't follow project conventions (read CLAUDE.md) |
 
-## Rules
+## 규칙
 
 - **Preserve exact functionality** — simplification must not change behavior
 - **Clarity over brevity** — readable beats compact
@@ -45,23 +45,23 @@ Review ALL code changed on this branch and implement simplifications directly. Y
 - **Follow project conventions** — read CLAUDE.md before making changes
 - **Small, obvious changes** — each simplification should be self-evidently correct
 
-## Process
+## 프로세스
 
-### Phase 1: ANALYZE
+### 1단계: 분석
 
 1. Read CLAUDE.md for project conventions
 2. Get changed files: `git diff $BASE_BRANCH...HEAD --name-only`
 3. Read each changed file
 4. Identify simplification opportunities per file
 
-### Phase 2: IMPLEMENT
+### 2단계: 구현
 
 For each simplification:
 1. Edit the file
 2. Run `bun run type-check` — if it fails, revert that change
 3. Run `bun run lint` — if it fails, fix or revert
 
-### Phase 3: VALIDATE & COMMIT
+### 3단계: VALIDATE & COMMIT
 
 1. Run full validation: `bun run type-check && bun run lint`
 2. If changes were made:
@@ -72,7 +72,7 @@ For each simplification:
    ```
 3. If no simplifications found, skip commit
 
-### Phase 4: REPORT
+### 4단계: 보고
 
 Write report to `$ARTIFACTS_DIR/review/simplify-report.md` and output:
 

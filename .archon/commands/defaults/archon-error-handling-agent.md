@@ -1,13 +1,13 @@
 ---
-description: Review error handling for silent failures, inadequate catch blocks, and poor fallbacks
+description: silent failure, 부실한 catch block, 취약한 fallback을 중심으로 error handling 검토
 argument-hint: (none - reads from scope artifact)
 ---
 
-# Error Handling Agent
+# 오류 처리 Agent
 
 ---
 
-## Your Mission
+## 미션
 
 Hunt for silent failures, inadequate error handling, broad catch blocks, and inappropriate fallback behavior. Produce a structured artifact with findings, fix suggestions with options, and reasoning.
 
@@ -15,15 +15,15 @@ Hunt for silent failures, inadequate error handling, broad catch blocks, and ina
 
 ---
 
-## Phase 1: LOAD - Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ```
 
-### 1.2 Read Scope
+### 1.2 scope 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/scope.md
@@ -31,13 +31,13 @@ cat $ARTIFACTS_DIR/review/scope.md
 
 **CRITICAL**: Check for "NOT Building (Scope Limits)" section. Items listed there are **intentionally excluded** - do NOT flag them as bugs or missing features!
 
-### 1.3 Get PR Diff
+### 1.3 PR diff 가져오기
 
 ```bash
 gh pr diff {number}
 ```
 
-### 1.4 Read CLAUDE.md Error Handling Rules
+### 1.4 읽기 CLAUDE.md 오류 Handling 규칙
 
 ```bash
 cat CLAUDE.md | grep -A 20 -i "error"
@@ -50,9 +50,9 @@ cat CLAUDE.md | grep -A 20 -i "error"
 
 ---
 
-## Phase 2: ANALYZE - Hunt for Issues
+## 2단계: 분석 — issue 탐색
 
-### 2.1 Find All Error Handling Code
+### 2.1 모든 error handling 코드 찾기
 
 Search for:
 - `try { ... } catch` blocks
@@ -63,7 +63,7 @@ Search for:
 - Error event handlers
 - Conditional error state handling
 
-### 2.2 Scrutinize Each Handler
+### 2.2 각 handler 세밀 검토
 
 For every error handling location, evaluate:
 
@@ -87,7 +87,7 @@ For every error handling location, evaluate:
 - Does fallback mask the underlying problem?
 - Is user aware they're seeing fallback behavior?
 
-### 2.3 Find Codebase Error Patterns
+### 2.3 codebase error pattern 찾기
 
 ```bash
 # Find error handling patterns in codebase
@@ -102,7 +102,7 @@ grep -r "console.error" src/ --include="*.ts" -B 2 -A 2 | head -30
 
 ---
 
-## Phase 3: GENERATE - Create Artifact
+## 3단계: 생성 — artifact 생성
 
 Write to `$ARTIFACTS_DIR/review/error-handling-findings.md`:
 
@@ -159,7 +159,7 @@ This catch block could silently hide:
 | B | {e.g., Add logging + user message} | {benefits} | {drawbacks} |
 | C | {e.g., Propagate error instead} | {benefits} | {drawbacks} |
 
-**Recommended**: Option {X}
+**권장**: Option {X}
 
 **Reasoning**:
 {Explain why this option is preferred:
@@ -168,9 +168,9 @@ This catch block could silently hide:
 - Gives users actionable feedback
 - Follows CLAUDE.md rules}
 
-**Recommended Fix**:
+**권장 수정**:
 ```typescript
-// Improved error handling
+// 개선된 error handling
 {corrected code with proper logging, specific catches, user feedback}
 ```
 
@@ -248,7 +248,7 @@ This catch block could silently hide:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ERROR_HANDLERS_FOUND**: All try/catch, .catch, fallbacks identified
 - **EACH_HANDLER_AUDITED**: Logging, feedback, specificity evaluated

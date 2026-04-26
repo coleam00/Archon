@@ -1,15 +1,15 @@
 ---
-description: Synthesize all validation findings into a final PR verdict report
+description: 모든 validation findings를 종합해 최종 PR verdict report 작성
 argument-hint: (none - reads from artifacts)
 ---
 
-# PR Validation Report
+# PR 검증 보고서
 
 Synthesize all code review and E2E testing findings into a comprehensive verdict.
 
 ---
 
-## Phase 1: Gather All Artifacts
+## Phase 1: 수집 All artifacts
 
 Read every artifact produced by earlier workflow nodes:
 
@@ -47,9 +47,9 @@ If screenshots exist, read a few key ones to include visual context in the repor
 
 ---
 
-## Phase 2: Synthesize Findings
+## Phase 2: Synthesize findings
 
-### 2.1 Cross-Reference Code Review with E2E Results
+### 2.1 code review와 E2E 결과 교차 확인
 
 For each bug/gap identified:
 - **Code review (main)**: Did the code analysis find the bug?
@@ -57,7 +57,7 @@ For each bug/gap identified:
 - **Code review (feature)**: Does the code fix look correct?
 - **E2E test (feature)**: Is the bug actually fixed in the UI?
 
-### 2.2 Identify Discrepancies
+### 2.2 불일치 식별
 
 Look for cases where:
 - Code review says it's fixed but E2E shows it's not
@@ -65,7 +65,7 @@ Look for cases where:
 - New issues were found during E2E that code review missed
 - Code review found issues that E2E couldn't test
 
-### 2.3 Determine Final Verdict
+### 2.3 최종 verdict 결정
 
 | Criteria | Required for APPROVE |
 |----------|---------------------|
@@ -78,7 +78,7 @@ Look for cases where:
 
 ---
 
-## Phase 3: Write Final Report
+## Phase 3: 작성 최종 report
 
 Write to `$ARTIFACTS_DIR/validation-report.md`:
 
@@ -179,7 +179,7 @@ _E2E testing was skipped — this PR's changes are not UI-visible. Validation ba
 {Final paragraph: clear recommendation with reasoning. If REQUEST_CHANGES, list the specific changes needed. If NEEDS_DISCUSSION, describe what needs to be discussed.}
 ```
 
-### 3.1 Post Summary to PR (optional)
+### 3.1 PR에 summary 게시(선택)
 
 If the verdict is clear, post a condensed summary to the PR as a comment:
 
@@ -211,7 +211,7 @@ COMMENT
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ALL_ARTIFACTS_READ**: Every available artifact loaded and analyzed
 - **CROSS_REFERENCED**: Code review and E2E results reconciled

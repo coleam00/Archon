@@ -1,15 +1,15 @@
 ---
-description: Execute an implementation plan with rigorous validation loops
+description: 엄격한 validation loop와 함께 implementation plan 실행
 argument-hint: <path/to/plan.md or GitHub issue URL>
 ---
 
-# Implement Plan
+# Plan 구현
 
 **Plan**: $ARGUMENTS
 
 ---
 
-## Your Mission
+## 미션
 
 Execute the plan end-to-end with rigorous self-validation. You are autonomous.
 
@@ -19,9 +19,9 @@ Execute the plan end-to-end with rigorous self-validation. You are autonomous.
 
 ---
 
-## Phase 0: DETECT - Project Environment
+## 0단계: 감지 — project 환경
 
-### 0.1 Identify Package Manager
+### 0.1 package manager 식별
 
 Check for these files to determine the project's toolchain:
 
@@ -37,7 +37,7 @@ Check for these files to determine the project's toolchain:
 
 **Store the detected runner** - use it for all subsequent commands.
 
-### 0.2 Identify Validation Scripts
+### 0.2 validation script 식별
 
 Check `package.json` (or equivalent) for available scripts:
 - Type checking: `type-check`, `typecheck`, `tsc`
@@ -49,9 +49,9 @@ Check `package.json` (or equivalent) for available scripts:
 
 ---
 
-## Phase 1: LOAD - Read the Plan
+## 1단계: 로드 — plan 읽기
 
-### 1.1 Load Plan File
+### 1.1 plan file 로드
 
 ```bash
 cat $ARGUMENTS
@@ -59,7 +59,7 @@ cat $ARGUMENTS
 
 If `$ARGUMENTS` is a GitHub issue URL or number (e.g., `#123`), fetch the issue body which contains the plan.
 
-### 1.2 Extract Key Sections
+### 1.2 핵심 section 추출
 
 Locate and understand:
 
@@ -70,14 +70,14 @@ Locate and understand:
 - **Validation Commands** - How to verify (USE THESE, not hardcoded commands)
 - **Acceptance Criteria** - Definition of done
 
-### 1.3 Validate Plan Exists
+### 1.3 plan 존재 확인
 
 **If plan not found:**
 
 ```
-Error: Plan not found at $ARGUMENTS
+오류: $ARGUMENTS에서 plan을 찾지 못했습니다
 
-Provide a valid plan path or GitHub issue containing the plan.
+유효한 plan path 또는 plan이 포함된 GitHub issue를 제공하세요.
 ```
 
 **PHASE_1_CHECKPOINT:**
@@ -88,9 +88,9 @@ Provide a valid plan path or GitHub issue containing the plan.
 
 ---
 
-## Phase 2: PREPARE - Git State
+## 2단계: 준비 — git 상태
 
-### 2.1 Check Current State
+### 2.1 확인 현재 상태
 
 ```bash
 # What branch are we on?
@@ -104,7 +104,7 @@ git worktree list
 git status --porcelain
 ```
 
-### 2.2 Branch Decision
+### 2.2 branch 결정
 
 ```text
 ┌─ IN WORKTREE?
@@ -128,7 +128,7 @@ git status --porcelain
    └─ STOP: "Stash or commit changes first"
 ```
 
-### 2.3 Sync with Remote
+### 2.3 remote와 sync
 
 ```bash
 git fetch origin
@@ -143,23 +143,23 @@ git pull --rebase origin $BASE_BRANCH 2>/dev/null || true
 
 ---
 
-## Phase 3: EXECUTE - Implement Tasks
+## 3단계: 실행 — task 구현
 
 **For each task in the plan's Step-by-Step Tasks section:**
 
-### 3.1 Read Context
+### 3.1 context 읽기
 
 1. Read the **MIRROR** file reference from the task
 2. Understand the pattern to follow
 3. Read any **IMPORTS** specified
 
-### 3.2 Implement
+### 3.2 구현
 
 1. Make the change exactly as specified
 2. Follow the pattern from MIRROR reference
 3. Handle any **GOTCHA** warnings
 
-### 3.3 Validate Immediately
+### 3.3 즉시 검증
 
 **After EVERY file change, run the type-check command from the plan's Validation Commands section.**
 
@@ -176,7 +176,7 @@ Common patterns:
 3. Re-run type-check
 4. Only proceed when passing
 
-### 3.4 Track Progress
+### 3.4 progress 추적
 
 Log each task as you complete it:
 
@@ -201,9 +201,9 @@ If you must deviate from the plan:
 
 ---
 
-## Phase 4: VALIDATE - Full Verification
+## 4단계: 검증 — 전체 검증
 
-### 4.1 Static Analysis
+### 4.1 static analysis
 
 **Run the type-check and lint commands from the plan's Validation Commands section.**
 
@@ -221,7 +221,7 @@ If lint errors:
 2. Re-check
 3. Manual fix remaining issues
 
-### 4.2 Unit Tests
+### 4.2 unit test
 
 **You MUST write or update tests for new code.** This is not optional.
 
@@ -247,7 +247,7 @@ Common patterns:
 4. Re-run tests
 5. Repeat until green
 
-### 4.3 Build Check
+### 4.3 build 확인
 
 **Run the build command from the plan's Validation Commands section.**
 
@@ -259,7 +259,7 @@ Common patterns:
 
 **Must complete without errors.**
 
-### 4.4 Integration Testing (if applicable)
+### 4.4 integration test(해당 시)
 
 **If the plan involves API/server changes, use the integration test commands from the plan.**
 
@@ -277,7 +277,7 @@ curl -s http://localhost:{port}/health | jq
 kill $SERVER_PID
 ```
 
-### 4.5 Edge Case Testing
+### 4.5 edge case test
 
 Run any edge case tests specified in the plan.
 
@@ -291,15 +291,15 @@ Run any edge case tests specified in the plan.
 
 ---
 
-## Phase 5: REPORT - Create Implementation Report
+## 5단계: 보고 — implementation report 작성
 
-### 5.1 Create Report Directory
+### 5.1 report directory 생성
 
 ```bash
 mkdir -p $ARTIFACTS_DIR/../reports
 ```
 
-### 5.2 Generate Report
+### 5.2 report 생성
 
 **Path**: `$ARTIFACTS_DIR/../reports/{plan-name}-report.md`
 
@@ -392,7 +392,7 @@ Compare the original plan's assessment with what actually happened:
 - [ ] Merge when approved
 ```
 
-### 5.3 Archive Plan
+### 5.3 plan archive
 
 ```bash
 mkdir -p $ARTIFACTS_DIR/../plans/completed
@@ -406,7 +406,7 @@ cp $ARGUMENTS $ARTIFACTS_DIR/../plans/completed/ 2>/dev/null || true
 
 ---
 
-## Phase 6: OUTPUT - Report to User
+## 6단계: 출력 — 사용자에게 보고
 
 ```markdown
 ## Implementation Complete
@@ -449,16 +449,16 @@ cp $ARGUMENTS $ARTIFACTS_DIR/../plans/completed/ 2>/dev/null || true
 
 ---
 
-## Handling Failures
+## 실패 처리
 
-### Type Check Fails
+### type check Fails
 
 1. Read error message carefully
 2. Fix the type issue
 3. Re-run the type-check command
 4. Don't proceed until passing
 
-### Tests Fail
+### Test 실패
 
 1. Identify which test failed
 2. Determine: implementation bug or test bug?
@@ -466,20 +466,20 @@ cp $ARGUMENTS $ARTIFACTS_DIR/../plans/completed/ 2>/dev/null || true
 4. Re-run tests
 5. Repeat until green
 
-### Lint Fails
+### Lint 실패
 
 1. Run the lint fix command for auto-fixable issues
 2. Manually fix remaining issues
 3. Re-run lint
 4. Proceed when clean
 
-### Build Fails
+### Build 실패
 
 1. Usually a type or import issue
 2. Check the error output
 3. Fix and re-run
 
-### Integration Test Fails
+### Integration test 실패
 
 1. Check if server started correctly
 2. Verify endpoint exists
@@ -488,7 +488,7 @@ cp $ARGUMENTS $ARTIFACTS_DIR/../plans/completed/ 2>/dev/null || true
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **TASKS_COMPLETE**: All plan tasks executed
 - **TYPES_PASS**: Type-check command exits 0

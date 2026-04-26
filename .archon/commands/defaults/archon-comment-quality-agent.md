@@ -1,13 +1,13 @@
 ---
-description: Review code comments for accuracy, completeness, and maintainability
+description: 코드 주석의 정확성, 완전성, 유지보수성을 검토
 argument-hint: (none - reads from scope artifact)
 ---
 
-# Comment Quality Agent
+# 주석 품질 Agent
 
 ---
 
-## Your Mission
+## 미션
 
 Analyze code comments for accuracy against actual code, identify comment rot, check documentation completeness, and ensure comments aid long-term maintainability. Produce a structured artifact with findings and recommendations.
 
@@ -15,15 +15,15 @@ Analyze code comments for accuracy against actual code, identify comment rot, ch
 
 ---
 
-## Phase 1: LOAD - Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ```
 
-### 1.2 Read Scope
+### 1.2 scope 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/scope.md
@@ -31,7 +31,7 @@ cat $ARTIFACTS_DIR/review/scope.md
 
 **CRITICAL**: Check for "NOT Building (Scope Limits)" section. Items listed there are **intentionally excluded** - do NOT flag them as missing documentation or comment issues!
 
-### 1.3 Get PR Diff
+### 1.3 PR diff 가져오기
 
 ```bash
 gh pr diff {number}
@@ -49,9 +49,9 @@ Focus on:
 
 ---
 
-## Phase 2: ANALYZE - Review Comments
+## 2단계: 분석 — 주석 검토
 
-### 2.1 Check Comment Accuracy
+### 2.1 주석 정확성 확인
 
 For each comment in changed code:
 - Does the comment accurately describe what the code does?
@@ -60,7 +60,7 @@ For each comment in changed code:
 - Are return value descriptions accurate?
 - Are edge cases documented correctly?
 
-### 2.2 Identify Comment Rot
+### 2.2 오래된 주석 식별
 
 Look for:
 - Comments that describe old behavior
@@ -68,7 +68,7 @@ Look for:
 - Outdated references (old file names, removed functions)
 - Comments that contradict the code
 
-### 2.3 Check Documentation Completeness
+### 2.3 문서 완전성 확인
 
 Evaluate:
 - Are complex functions properly documented?
@@ -77,7 +77,7 @@ Evaluate:
 - Are magic numbers/constants explained?
 - Are important decisions documented?
 
-### 2.4 Assess Maintainability
+### 2.4 유지보수성 평가
 
 Consider:
 - Will future developers understand the "why"?
@@ -93,7 +93,7 @@ Consider:
 
 ---
 
-## Phase 3: GENERATE - Create Artifact
+## 3단계: 생성 — artifact 생성
 
 Write to `$ARTIFACTS_DIR/review/comment-quality-findings.md`:
 
@@ -147,7 +147,7 @@ Write to `$ARTIFACTS_DIR/review/comment-quality-findings.md`:
 | B | {remove comment} | {benefits} | {drawbacks} |
 | C | {expand comment} | {benefits} | {drawbacks} |
 
-**Recommended**: Option {X}
+**권장**: Option {X}
 
 **Reasoning**:
 {Why this option:
@@ -155,7 +155,7 @@ Write to `$ARTIFACTS_DIR/review/comment-quality-findings.md`:
 - Provides value without being redundant
 - Will remain accurate over time}
 
-**Recommended Fix**:
+**권장 수정**:
 ```typescript
 /**
  * {corrected/improved comment}
@@ -241,7 +241,7 @@ Write to `$ARTIFACTS_DIR/review/comment-quality-findings.md`:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **COMMENTS_AUDITED**: All comments in changed code reviewed
 - **ACCURACY_CHECKED**: Comments verified against actual code

@@ -1,16 +1,16 @@
 ---
-description: Post completion report to GitHub issue with results, unaddressed items, and follow-up suggestions
+description: 결과, 미해결 항목, follow-up 제안을 포함한 completion report를 GitHub issue에 게시
 argument-hint: (none - reads from workflow artifacts)
 ---
 
-# Issue Completion Report
+# Issue 완료 보고서
 
 **Input**: $ARGUMENTS
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Compile all workflow artifacts into a final report and post it to the original GitHub issue. Summarize what was done, what wasn't addressed (and why), and suggest follow-up issues if needed.
 
@@ -19,9 +19,9 @@ Compile all workflow artifacts into a final report and post it to the original G
 
 ---
 
-## Phase 1: LOAD — Gather All Artifacts
+## 1단계: 로드 — 모든 artifact 수집
 
-### 1.1 Get Issue Number
+### 1.1 issue 번호 가져오기
 
 Extract issue number from `$ARGUMENTS`:
 
@@ -30,7 +30,7 @@ Extract issue number from `$ARGUMENTS`:
 echo "$ARGUMENTS"
 ```
 
-### 1.2 Get PR Info
+### 1.2 PR 정보 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number 2>/dev/null || echo "unknown")
@@ -38,7 +38,7 @@ PR_URL=$(cat $ARTIFACTS_DIR/.pr-url 2>/dev/null || echo "unknown")
 echo "PR: $PR_NUMBER ($PR_URL)"
 ```
 
-### 1.3 Read All Available Artifacts
+### 1.3 사용 가능한 모든 artifact 읽기
 
 Check for and read each artifact that may exist:
 
@@ -62,7 +62,7 @@ cat $ARTIFACTS_DIR/review/consolidated-review.md 2>/dev/null
 cat $ARTIFACTS_DIR/review/fix-report.md 2>/dev/null
 ```
 
-### 1.4 Get Git Info
+### 1.4 git 정보 가져오기
 
 ```bash
 git branch --show-current
@@ -78,9 +78,9 @@ git log --oneline -5
 
 ---
 
-## Phase 2: COMPILE — Build Report
+## 2단계: 컴파일 — report 구성
 
-### 2.1 Summarize What Was Done
+### 2.1 수행 내용 요약
 
 From the artifacts, compile:
 
@@ -91,7 +91,7 @@ From the artifacts, compile:
 - **Review**: What was reviewed, findings count
 - **Self-fix**: What review findings were fixed
 
-### 2.2 Identify Unaddressed Items
+### 2.2 미해결 항목 식별
 
 From the fix report and consolidated review:
 
@@ -100,7 +100,7 @@ From the fix report and consolidated review:
 - MEDIUM/LOW findings not auto-fixed
 - Any validation issues that persisted
 
-### 2.3 Suggest Follow-up Issues
+### 2.3 follow-up issue 제안
 
 For each unaddressed item, determine if it warrants a follow-up issue:
 
@@ -116,7 +116,7 @@ For each unaddressed item, determine if it warrants a follow-up issue:
 
 ---
 
-## Phase 3: GENERATE — Write Artifact
+## 3단계: 생성 — artifact 작성
 
 Write to `$ARTIFACTS_DIR/completion-report.md`:
 
@@ -219,7 +219,7 @@ Write to `$ARTIFACTS_DIR/completion-report.md`:
 
 ---
 
-## Phase 4: POST — GitHub Issue Comment
+## 4단계: 게시 — GitHub issue comment
 
 Post to the original GitHub issue:
 
@@ -296,7 +296,7 @@ EOF
 
 ---
 
-## Phase 5: OUTPUT — Final Summary
+## 5단계: 출력 — 최종 요약
 
 ```markdown
 ## Issue Resolution Complete
@@ -329,7 +329,7 @@ EOF
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ALL_ARTIFACTS_READ**: All workflow artifacts loaded and parsed
 - **REPORT_COMPILED**: Comprehensive completion report written

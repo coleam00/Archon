@@ -1,9 +1,9 @@
 ---
-description: Start Archon from main branch, use agent-browser to reproduce the bug via E2E testing
+description: main branch에서 Archon을 시작하고 agent-browser로 bug를 E2E 재현
 argument-hint: (none - reads from artifacts)
 ---
 
-# E2E Testing: Main Branch (Reproduce Bug)
+# E2E 테스트: Main Branch(버그 재현)
 
 Start Archon from the **main branch** code and use browser automation to reproduce the bug or gap described in the PR. Take screenshots as evidence.
 
@@ -26,9 +26,9 @@ The session ID is written to `$ARTIFACTS_DIR/.browser-session` for cleanup.
 
 ---
 
-## Phase 1: Load Context
+## Phase 1: 로드 context
 
-### 1.1 Read Artifacts
+### 1.1 artifact 읽기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
@@ -41,7 +41,7 @@ echo "Frontend port: $FRONTEND_PORT"
 echo "Main repo: $CANONICAL_REPO"
 ```
 
-### 1.2 Read PR and Test Plan
+### 1.2 PR과 test plan 읽기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
@@ -53,7 +53,7 @@ gh pr view "$PR_NUMBER" --json title,body
 cat $ARTIFACTS_DIR/code-review-main.md 2>/dev/null || echo "No main branch review available yet"
 ```
 
-### 1.3 Testability Classification
+### 1.3 testability 분류
 
 The testability classifier determined:
 - **Decision**: $classify-testability.output.testable
@@ -67,9 +67,9 @@ Use the test plan above combined with the PR description and code review to buil
 
 ---
 
-## Phase 2: Start Archon on Main Branch
+## Phase 2: 시작 Archon on Main Branch
 
-### 2.1 Create Isolated Main Branch Worktree
+### 2.1 격리된 main branch worktree 생성
 
 **IMPORTANT**: Use a dedicated worktree instead of mutating the canonical repo. This is safe
 for concurrent validation runs — each gets its own isolated checkout.
@@ -88,14 +88,14 @@ echo "Main E2E worktree at: $MAIN_E2E_PATH"
 echo "Base branch: $PR_BASE @ $(git -C "$MAIN_E2E_PATH" log --oneline -1)"
 ```
 
-### 2.2 Install Dependencies
+### 2.2 설치 Dependencies
 
 ```bash
 MAIN_E2E_PATH=$(cat $ARTIFACTS_DIR/.e2e-main-worktree | tr -d '\n')
 cd "$MAIN_E2E_PATH" && bun install --frozen-lockfile 2>/dev/null || bun install
 ```
 
-### 2.3 Start Backend on Custom Port
+### 2.3 custom port에서 backend 시작
 
 **IMPORTANT**: Record the PID so we can kill it later. Server output is logged for debugging.
 
@@ -126,7 +126,7 @@ curl -s "http://localhost:$BACKEND_PORT/api/health" | head -c 200
 echo ""
 ```
 
-### 2.4 Start Frontend on Custom Port
+### 2.4 custom port에서 frontend 시작
 
 ```bash
 MAIN_E2E_PATH=$(cat $ARTIFACTS_DIR/.e2e-main-worktree | tr -d '\n')
@@ -156,7 +156,7 @@ curl -s "http://localhost:$FRONTEND_PORT" | head -c 100
 echo ""
 ```
 
-### 2.5 Seed Test Data (if needed)
+### 2.5 필요 시 test data seed
 
 ```bash
 BACKEND_PORT=$(cat $ARTIFACTS_DIR/.backend-port | tr -d '\n')
@@ -174,13 +174,13 @@ fi
 
 ---
 
-## Phase 3: Browser Testing (Reproduce Bug)
+## Phase 3: browser Testing (Reproduce bug)
 
-### 3.1 Load the Agent-Browser Skill
+### 3.1 agent-browser skill 로드
 
 **YOU MUST LOAD THE AGENT-BROWSER SKILL NOW.** Use `/agent-browser` or invoke the skill. This gives you the full command reference for browser automation.
 
-### 3.2 Core Browser Workflow
+### 3.2 core browser workflow
 
 Follow this pattern for every interaction:
 
@@ -212,7 +212,7 @@ agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-main-01-init
 # agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-main-02-{step}.png"
 ```
 
-### 3.3 Execute Test Plan
+### 3.3 test plan 실행
 
 Follow the test plan derived from the PR description and code review. For EACH test case:
 
@@ -223,7 +223,7 @@ Follow the test plan derived from the PR description and code review. For EACH t
 5. **Read each screenshot** — use the Read tool to visually inspect screenshots
 6. **Document what you see** — note exact error messages, visual glitches, missing elements
 
-### 3.4 API Cross-Verification
+### 3.4 API cross-verification
 
 For bugs involving data integrity or SSE, cross-reference the UI with direct API calls:
 
@@ -242,18 +242,18 @@ curl -s "http://localhost:$BACKEND_PORT/api/conversations" | head -c 500
 
 ---
 
-## Phase 4: Cleanup and Report
+## Phase 4: Cleanup and report
 
 **CRITICAL: You MUST complete cleanup before writing findings. Orphaned processes will accumulate and crash the system.**
 
-### 4.1 Close Browser
+### 4.1 browser 닫기
 
 ```bash
 # ALWAYS use --session to only close YOUR browser, not other workflows'
 agent-browser --session $WORKFLOW_ID close 2>/dev/null || true
 ```
 
-### 4.2 Stop Main Branch Archon (Cross-Platform)
+### 4.2 main branch Archon 종료(cross-platform)
 
 Kill processes by PID (recorded in Phase 2) AND by port (fallback). This works on both Windows and Unix.
 
@@ -289,7 +289,7 @@ sleep 2
 echo "Process cleanup complete"
 ```
 
-### 4.3 Remove Main Branch Worktree
+### 4.3 main branch worktree 제거
 
 ```bash
 CANONICAL_REPO=$(cat $ARTIFACTS_DIR/.canonical-repo | tr -d '\n')
@@ -301,7 +301,7 @@ fi
 echo "Worktree cleanup complete"
 ```
 
-### 4.4 Write Findings
+### 4.4 findings 작성
 
 Write to `$ARTIFACTS_DIR/e2e-main.md`:
 
@@ -343,7 +343,7 @@ Write to `$ARTIFACTS_DIR/e2e-main.md`:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ARCHON_STARTED**: Backend and frontend running on allocated ports
 - **BROWSER_TESTED**: All test cases executed with agent-browser

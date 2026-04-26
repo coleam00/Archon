@@ -1,5 +1,5 @@
 ---
-description: Final workflow summary with decision matrix for follow-up actions
+description: follow-up action decision matrix를 포함한 최종 workflow summary
 argument-hint: (no arguments - reads from workflow artifacts)
 ---
 
@@ -9,7 +9,7 @@ argument-hint: (no arguments - reads from workflow artifacts)
 
 ---
 
-## Your Mission
+## 미션
 
 Create the final summary report for the workflow run:
 1. Summarize what was implemented vs the plan
@@ -23,11 +23,11 @@ Create the final summary report for the workflow run:
 
 ---
 
-## Phase 1: LOAD - Gather ALL Artifacts
+## 1단계: 로드 — 모든 artifact 수집
 
 **CRITICAL**: Read EVERY artifact from the workflow run. Miss nothing.
 
-### 1.1 Scan Workflow Artifacts Directory
+### 1.1 workflow artifacts directory 스캔
 
 ```bash
 # List all artifacts from this workflow run
@@ -49,7 +49,7 @@ done
 - `.pr-number` - PR number registry file
 - `.pr-url` - PR URL registry file
 
-### 1.2 Scan Review Artifacts
+### 1.2 review artifact 스캔
 
 ```bash
 # Read review artifacts from workflow-scoped directory
@@ -73,7 +73,7 @@ done
 - `fix-report.md` - What was fixed
 - `sync-report.md` - Rebase/sync status (if applicable)
 
-### 1.3 Extract Key Data
+### 1.3 핵심 데이터 추출
 
 **From plan-context.md**:
 - Plan title and summary
@@ -97,7 +97,7 @@ done
 - What was actually fixed
 - What was NOT fixed (and why)
 
-### 1.4 Cross-Reference
+### 1.4 cross-reference
 
 Compare across artifacts:
 - Plan vs Implementation: What matched? What deviated?
@@ -114,9 +114,9 @@ Compare across artifacts:
 
 ---
 
-## Phase 2: ANALYZE - Build Follow-Up Matrix
+## 2단계: 분석 — follow-up matrix 작성
 
-### 2.1 Categorize Follow-Up Items
+### 2.1 follow-up item 분류
 
 **From "NOT Building" section** - Future work explicitly deferred:
 
@@ -138,7 +138,7 @@ Compare across artifacts:
 | {issue} | LOW | test | Add edge case test |
 | {issue} | MEDIUM | error-handling | Log instead of silent |
 
-### 2.2 Prioritize by Effort vs Value
+### 2.2 effort/value 기준 우선순위 지정
 
 **Quick Wins** (< 5 min, high value):
 - Documentation updates
@@ -164,9 +164,9 @@ Compare across artifacts:
 
 ---
 
-## Phase 3: GENERATE - Create Decision Matrix
+## 3단계: 생성 — decision matrix 작성
 
-### 3.1 Build Decision Matrix
+### 3.1 decision matrix 구성
 
 Structure the output for easy decision-making:
 
@@ -233,9 +233,9 @@ Structure the output for easy decision-making:
 
 ---
 
-## Phase 4: POST - GitHub PR Comment
+## 4단계: 게시 — GitHub PR comment
 
-### 4.1 Format for GitHub
+### 4.1 GitHub용 format
 
 Create a PR comment with the summary:
 
@@ -327,7 +327,7 @@ These were **intentionally excluded** from scope:
 **Artifacts**: `$ARTIFACTS_DIR/`
 ```
 
-### 4.2 Post to GitHub
+### 4.2 게시 to GitHub
 
 ```bash
 gh pr comment {pr-number} --body "{formatted-summary}"
@@ -340,9 +340,9 @@ gh pr comment {pr-number} --body "{formatted-summary}"
 
 ---
 
-## Phase 5: ARTIFACT - Write Summary
+## 5단계: Artifact — summary 작성
 
-### 5.1 Write Summary Artifact
+### 5.1 summary artifact 작성
 
 Write to `$ARTIFACTS_DIR/workflow-summary.md`:
 
@@ -427,9 +427,9 @@ Posted to: {PR URL}#comment-{id}
 
 ---
 
-## Phase 5.5: ARCHIVE - Create Backward-Compatible Symlink
+## 5.5단계: Archive — backward-compatible symlink 생성
 
-### 5.5.1 Create Symlink for PR-Based Lookup
+### 5.5.1 PR 기반 lookup용 symlink 생성
 
 Create symlink for backward compatibility with PR-based artifact lookup:
 
@@ -449,7 +449,7 @@ This allows legacy tools to find review artifacts at `$ARTIFACTS_DIR/../reviews/
 
 ---
 
-## Phase 6: OUTPUT - Report to User
+## 6단계: 출력 — 사용자에게 보고
 
 ```markdown
 ## Workflow Complete 🎉
@@ -488,7 +488,7 @@ Summary comment added to PR with:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ARTIFACTS_LOADED**: All workflow artifacts read
 - **MATRIX_CREATED**: Follow-up items categorized and prioritized

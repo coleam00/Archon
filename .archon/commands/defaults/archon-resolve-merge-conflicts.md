@@ -1,23 +1,23 @@
 ---
-description: Analyze and resolve merge conflicts in a PR
+description: PR의 merge conflict를 분석하고 해결
 argument-hint: <pr-number|url>
 ---
 
-# Resolve Merge Conflicts
+# Merge Conflict 해결
 
 **Input**: $ARGUMENTS
 
 ---
 
-## Your Mission
+## 미션
 
 Analyze merge conflicts in the PR, automatically resolve simple conflicts where intent is clear, present options for complex conflicts, and push the resolution.
 
 ---
 
-## Phase 1: IDENTIFY - Get PR and Conflict Info
+## 1단계: 식별 — PR 및 conflict 정보 수집
 
-### 1.1 Parse Input
+### 1.1 input 파싱
 
 **Check input format:**
 - Number (`123`, `#123`) → GitHub PR number
@@ -28,7 +28,7 @@ Analyze merge conflicts in the PR, automatically resolve simple conflicts where 
 gh pr view {number} --json number,title,headRefName,baseRefName,mergeable,mergeStateStatus
 ```
 
-### 1.2 Verify Conflicts Exist
+### 1.2 conflict 존재 확인
 
 ```bash
 gh pr view {number} --json mergeable,mergeStateStatus --jq '.mergeable, .mergeStateStatus'
@@ -48,7 +48,7 @@ PR #{number} has no merge conflicts. It's ready for review/merge.
 ```
 **Exit if no conflicts.**
 
-### 1.3 Setup Local Branch
+### 1.3 local branch 설정
 
 ```bash
 # Get branch info
@@ -71,9 +71,9 @@ git pull origin $PR_HEAD
 
 ---
 
-## Phase 2: ANALYZE - Understand the Conflicts
+## 2단계: 분석 — conflict 이해
 
-### 2.1 Attempt Rebase to Surface Conflicts
+### 2.1 conflict 확인을 위한 rebase 시도
 
 ```bash
 git rebase origin/$PR_BASE
@@ -81,7 +81,7 @@ git rebase origin/$PR_BASE
 
 This will stop at the first conflict. Note the output.
 
-### 2.2 Identify Conflicting Files
+### 2.2 conflict file 식별
 
 ```bash
 git diff --name-only --diff-filter=U
@@ -89,7 +89,7 @@ git diff --name-only --diff-filter=U
 
 List all files with conflicts.
 
-### 2.3 Analyze Each Conflict
+### 2.3 각 conflict 분석
 
 For each conflicting file:
 
@@ -109,7 +109,7 @@ cat {file} | grep -A 10 -B 2 "<<<<<<<"
 | **SAME_LINES** | Both changed the exact same lines | ❌ No - needs decision |
 | **STRUCTURAL** | File moved/renamed + modified | ❌ No - needs decision |
 
-### 2.4 Read Both Versions
+### 2.4 양쪽 version 읽기
 
 For complex conflicts, understand what each side was trying to do:
 
@@ -131,9 +131,9 @@ git show :3:{file}
 
 ---
 
-## Phase 3: RESOLVE - Fix the Conflicts
+## 3단계: 해결 — conflict 수정
 
-### 3.1 Auto-Resolve Simple Conflicts
+### 3.1 단순 conflict 자동 해결
 
 For conflicts where intent is clear:
 
@@ -149,7 +149,7 @@ For conflicts where intent is clear:
 3. **Import additions**: Merge both import lists
 4. **Comment changes**: Prefer the more informative version
 
-### 3.2 Present Options for Complex Conflicts
+### 3.2 복잡한 conflict option 제시
 
 For conflicts that need human decision:
 
@@ -172,7 +172,7 @@ For conflicts that need human decision:
 
 **What this does**: {explanation of base branch's intent}
 
-### Option C: Merge Both (Recommended if compatible)
+### Option C: 양쪽 모두 병합 (호환 가능하면 권장)
 ```{language}
 {merged version if possible}
 ```
@@ -193,7 +193,7 @@ The changes are incompatible. Manual review required.
 - Impact on other code}
 ```
 
-### 3.3 Apply Resolutions
+### 3.3 resolution 적용
 
 For each conflict:
 
@@ -205,7 +205,7 @@ For each conflict:
 git add {file}
 ```
 
-### 3.4 Continue Rebase
+### 3.4 rebase 계속
 
 ```bash
 # After resolving all conflicts in current commit
@@ -222,9 +222,9 @@ Repeat for any additional conflicting commits.
 
 ---
 
-## Phase 4: VALIDATE - Verify Resolution
+## 4단계: 검증 — resolution 검증
 
-### 4.1 Check No Remaining Conflicts
+### 4.1 남은 conflict 없음 확인
 
 ```bash
 git diff --check
@@ -232,7 +232,7 @@ git diff --check
 
 Should return empty (no conflict markers remaining).
 
-### 4.2 Verify Code Compiles
+### 4.2 code compile 확인
 
 ```bash
 bun run type-check
@@ -240,7 +240,7 @@ bun run type-check
 
 If type errors related to resolution, fix them.
 
-### 4.3 Run Tests
+### 4.3 test 실행
 
 ```bash
 bun test
@@ -248,7 +248,7 @@ bun test
 
 If tests fail due to resolution, investigate and fix.
 
-### 4.4 Lint Check
+### 4.4 lint check
 
 ```bash
 bun run lint
@@ -264,9 +264,9 @@ Fix any lint issues.
 
 ---
 
-## Phase 5: PUSH - Update the PR
+## 5단계: Push — PR 업데이트
 
-### 5.1 Force Push the Resolved Branch
+### 5.1 해결 branch force push
 
 ```bash
 git push --force-with-lease origin $PR_HEAD
@@ -274,7 +274,7 @@ git push --force-with-lease origin $PR_HEAD
 
 **Note**: `--force-with-lease` is safer than `--force` as it fails if someone else pushed.
 
-### 5.2 Verify PR is Now Mergeable
+### 5.2 PR merge 가능 여부 확인
 
 ```bash
 gh pr view {number} --json mergeable,mergeStateStatus
@@ -288,9 +288,9 @@ Should show `MERGEABLE`.
 
 ---
 
-## Phase 6: REPORT - Document Resolution
+## 6단계: 보고 — resolution 문서화
 
-### 6.1 Create Resolution Artifact
+### 6.1 resolution artifact 생성
 
 Write to `$ARTIFACTS_DIR/../reviews/pr-{number}/conflict-resolution.md` (create dir if needed):
 
@@ -364,7 +364,7 @@ Resolved {N} conflicts in {M} files.
 - **Timestamp**: {ISO timestamp}
 ```
 
-### 6.2 Post GitHub Comment
+### 6.2 GitHub comment 게시
 
 ```bash
 gh pr comment {number} --body "$(cat <<'EOF'
@@ -398,7 +398,7 @@ EOF
 
 ---
 
-## Phase 7: OUTPUT - Final Report
+## 7단계: 출력 — 최종 보고
 
 ```markdown
 ## ✅ Conflicts Resolved
@@ -436,9 +436,9 @@ EOF
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### Rebase Fails Mid-way
+### Rebase 중간 실패
 
 If rebase fails on a commit that can't be resolved:
 
@@ -452,7 +452,7 @@ git rebase --abort
 
 Report the failure with details about which commit and why.
 
-### Push Fails
+### Push 실패
 
 If `--force-with-lease` fails (someone else pushed):
 
@@ -460,7 +460,7 @@ If `--force-with-lease` fails (someone else pushed):
 2. Re-analyze conflicts
 3. Start over
 
-### Validation Fails After Resolution
+### 해결 후 validation 실패
 
 If type-check/tests fail after resolution:
 
@@ -470,7 +470,7 @@ If type-check/tests fail after resolution:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **CONFLICTS_IDENTIFIED**: All conflicting files found
 - **CONFLICTS_RESOLVED**: All conflicts resolved (auto or manual)

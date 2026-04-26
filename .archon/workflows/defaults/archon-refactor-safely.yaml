@@ -112,7 +112,7 @@ nodes:
       - Existing test files and what they cover
       - Critical paths that must remain tested
 
-      ### Recommended Decomposition Strategy
+      ### 권장 분해 전략
       - Suggested module boundaries (which functions group together)
       - Rationale for each grouping (cohesion, shared dependencies)
     depends_on: [scan-scope]

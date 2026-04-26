@@ -1,16 +1,16 @@
 ---
-description: Autonomously generate Ralph PRD files (prd.md + prd.json) from an idea or existing PRD
+description: 아이디어 또는 기존 PRD에서 Ralph PRD 파일(prd.md + prd.json)을 자율 생성
 argument-hint: <feature idea | path/to/existing-prd.md>
 ---
 
-# Ralph PRD Generator (Autonomous)
+# Ralph PRD 생성기(자율)
 
 **Input**: $ARGUMENTS
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Generate production-quality Ralph PRD files — `prd.md` (full context document) and `prd.json` (story tracking) — through systematic codebase exploration and analysis. No interactive questions — make informed decisions autonomously.
 
@@ -18,7 +18,7 @@ Generate production-quality Ralph PRD files — `prd.md` (full context document)
 
 ---
 
-## Phase 0: DETECT — Determine Input Type
+## 0단계: 감지 — 입력 유형 결정
 
 | Input Pattern | Type | Action |
 |---------------|------|--------|
@@ -27,20 +27,20 @@ Generate production-quality Ralph PRD files — `prd.md` (full context document)
 | Free-form text | Feature idea | Generate both prd.md and prd.json |
 | Empty/blank | Error | STOP — require input |
 
-### If existing PRD detected:
+### 기존 PRD가 감지된 경우:
 
 1. Read the PRD file
 2. Extract: problem statement, goals, user context, scope limits, technical requirements
 3. Skip to Phase 3 (Technical Grounding) — the PRD already covers Phases 1-2
 
-### If feature idea:
+### Feature 아이디어인 경우:
 
 1. Store the idea description
 2. Proceed through all phases
 
 ---
 
-## Phase 1: UNDERSTAND — Problem & Context
+## 1단계: 이해 — 문제 및 context
 
 **Autonomously determine:**
 
@@ -60,7 +60,7 @@ Base these on the input description and your understanding of the codebase.
 
 ---
 
-## Phase 2: UX & DESIGN — User Journey
+## 2단계: UX 및 Design — user journey
 
 **Autonomously determine:**
 
@@ -80,11 +80,11 @@ If it's backend-only, describe the API surface.
 
 ---
 
-## Phase 3: TECHNICAL GROUNDING — Codebase Exploration
+## 3단계: 기술적 근거 확인 — codebase 탐색
 
 **This is the critical phase.** Use the Task tool with `subagent_type="Explore"` to systematically explore the codebase.
 
-### 3.1 Find Similar Implementations
+### 3.1 유사 구현 찾기
 
 ```
 Explore the codebase for patterns relevant to: {feature description}
@@ -99,7 +99,7 @@ FIND:
 7. Component patterns (if UI involved)
 ```
 
-### 3.2 Identify Integration Points
+### 3.2 integration point 식별
 
 ```
 Trace data flow and entry points for: {feature description}
@@ -111,7 +111,7 @@ FIND:
 4. Config/env dependencies
 ```
 
-### 3.3 Read Project Rules
+### 3.3 project rule 읽기
 
 ```bash
 cat CLAUDE.md
@@ -127,9 +127,9 @@ Extract: coding standards, naming conventions, testing requirements, lint rules.
 
 ---
 
-## Phase 4: STORY BREAKDOWN — Split Into Iterations
+## 4단계: Story 분해 — iteration으로 분해
 
-### 4.1 Identify Layers
+### 4.1 layer 식별
 
 Break the feature into implementation layers:
 
@@ -141,7 +141,7 @@ Break the feature into implementation layers:
 | Integration | Wiring, config, exports | 1-2 |
 | Tests | Dedicated test stories (if complex) | 0-2 |
 
-### 4.2 Sizing Rules
+### 4.2 sizing 규칙
 
 Each story must be completable in ONE iteration (~15-30 min of AI work):
 
@@ -157,14 +157,14 @@ Each story must be completable in ONE iteration (~15-30 min of AI work):
 - "Add authentication" → split into schema, middleware, login UI, token handling
 - "Refactor module" → split by file or concern
 
-### 4.3 Dependency Ordering
+### 4.3 dependency 순서
 
 - Stories ordered by dependency (lower priority = runs first)
 - Schema before types before backend before UI before integration
 - `dependsOn` must only reference lower-priority stories
 - Validate: no circular dependencies, no forward references
 
-### 4.4 Acceptance Criteria Rules
+### 4.4 acceptance criteria 규칙
 
 **GOOD (verifiable):**
 - "Add `priority` column with type `'high' | 'medium' | 'low'`"
@@ -187,22 +187,22 @@ Every criterion must be pass/fail testable.
 
 ---
 
-## Phase 5: GENERATE — Write PRD Files
+## 5단계: 생성 — PRD 파일 작성
 
-### 5.1 Determine Feature Slug
+### 5.1 feature slug 결정
 
 Generate a kebab-case slug from the feature name:
 - "Workflow Lifecycle Overhaul" → `workflow-lifecycle-overhaul`
 - "Dark Mode Toggle" → `dark-mode-toggle`
 - Max 50 characters
 
-### 5.2 Create Directory
+### 5.2 directory 생성
 
 ```bash
 mkdir -p .archon/ralph/{slug}
 ```
 
-### 5.3 Write prd.md
+### 5.3 prd.md 작성
 
 **Output path**: `.archon/ralph/{slug}/prd.md`
 
@@ -318,7 +318,7 @@ Every story must pass:
 
 **If input was an existing PRD**: Incorporate its content into this structure. Don't lose information — merge the existing PRD's goals, context, and requirements into the appropriate sections. Add the technical context from your codebase exploration (Phase 3).
 
-### 5.4 Write prd.json
+### 5.4 prd.json 작성
 
 **Output path**: `.archon/ralph/{slug}/prd.json`
 
@@ -349,7 +349,7 @@ Every story must pass:
 }
 ```
 
-### 5.5 Commit PRD Files
+### 5.5 PRD 파일 commit
 
 ```bash
 git add .archon/ralph/{slug}/
@@ -365,7 +365,7 @@ git commit -m "docs: add Ralph PRD for {feature name}"
 
 ---
 
-## Phase 6: OUTPUT — Report
+## 6단계: 출력 — 보고
 
 ```
 PRD_DIR=.archon/ralph/{slug}
@@ -387,7 +387,7 @@ FILES_CREATED=prd.md,prd.json
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **CONTEXT_COMPLETE**: prd.md has goals, user context, UX, technical patterns from real codebase exploration
 - **STORIES_SIZED**: Each story completable in one iteration

@@ -1,15 +1,15 @@
 ---
-description: Investigate a GitHub issue or problem - analyze codebase, create plan, post to GitHub
+description: GitHub issue 또는 문제를 조사 — codebase 분석, plan 작성, GitHub에 게시
 argument-hint: <issue-number|url|"description">
 ---
 
-# Investigate Issue
+# Issue 조사
 
 **Input**: $ARGUMENTS
 
 ---
 
-## Your Mission
+## 미션
 
 Investigate the issue/problem and produce a comprehensive implementation plan that:
 
@@ -21,9 +21,9 @@ Investigate the issue/problem and produce a comprehensive implementation plan th
 
 ---
 
-## Phase 1: PARSE - Understand Input
+## 1단계: 파싱 — 입력 이해
 
-### 1.1 Determine Input Type
+### 1.1 입력 유형 결정
 
 **Check the input format:**
 
@@ -36,7 +36,7 @@ Investigate the issue/problem and produce a comprehensive implementation plan th
 gh issue view {number} --json title,body,labels,comments,state,url,author
 ```
 
-### 1.2 Extract Context
+### 1.2 context 추출
 
 **If GitHub issue:**
 - Title: What's the reported problem?
@@ -49,7 +49,7 @@ gh issue view {number} --json title,body,labels,comments,state,url,author
 - Parse as problem description
 - Note: No GitHub posting (artifact only)
 
-### 1.3 Classify Issue Type
+### 1.3 issue type 분류
 
 | Type | Indicators |
 |------|------------|
@@ -59,7 +59,7 @@ gh issue view {number} --json title,body,labels,comments,state,url,author
 | CHORE | "update", "upgrade", "maintenance", "dependency" |
 | DOCUMENTATION | "docs", "readme", "clarify", "example" |
 
-### 1.4 Assess Severity/Priority, Complexity, and Confidence
+### 1.4 severity/priority, complexity, confidence 평가
 
 Each assessment requires a **one-sentence reasoning** explaining WHY you chose that value. This reasoning must be based on concrete findings from your investigation (codebase exploration, git history, integration analysis).
 
@@ -107,9 +107,9 @@ Each assessment requires a **one-sentence reasoning** explaining WHY you chose t
 
 ---
 
-## Phase 2: EXPLORE - Codebase Intelligence
+## 2단계: 탐색 — codebase intelligence
 
-### 2.1 Search for Relevant Code
+### 2.1 관련 코드 검색
 
 Use Task tool with subagent_type="Explore":
 
@@ -132,7 +132,7 @@ Return:
 - Dependencies and data flow
 ```
 
-### 2.2 Document Findings
+### 2.2 findings 문서화
 
 | Area | File:Lines | Notes |
 |------|-----------|-------|
@@ -151,9 +151,9 @@ Return:
 
 ---
 
-## Phase 3: ANALYZE - Form Approach
+## 3단계: 분석 — 접근 방식 구성
 
-### 3.0 First-Principles Analysis
+### 3.0 first-principles 분석
 
 Before diving into bug analysis or enhancement scoping, identify the primitive:
 
@@ -172,7 +172,7 @@ Before diving into bug analysis or enhancement scoping, identify the primitive:
 |-----------|-----------|--------|-------|
 | {abstraction name} | `src/x.ts:10-30` | Yes/No/Partial | {if incomplete: what's missing} |
 
-### 3.1 For BUG Issues - Root Cause Analysis
+### 3.1 BUG issue — root cause analysis
 
 Apply the 5 Whys:
 
@@ -197,7 +197,7 @@ git log --oneline -10 -- {affected-file}
 git blame -L {start},{end} {affected-file}
 ```
 
-### 3.2 For ENHANCEMENT/REFACTOR Issues
+### 3.2 ENHANCEMENT/REFACTOR issue
 
 **Identify:**
 - What needs to be added/changed?
@@ -205,7 +205,7 @@ git blame -L {start},{end} {affected-file}
 - What are the scope boundaries?
 - What should NOT be changed?
 
-### 3.3 For All Issues
+### 3.3 모든 issue
 
 **Determine:**
 - Files to CREATE (new files)
@@ -224,9 +224,9 @@ git blame -L {start},{end} {affected-file}
 
 ---
 
-## Phase 4: GENERATE - Create Artifact
+## 4단계: 생성 — artifact 생성
 
-### 4.1 Artifact Path
+### 4.1 artifact path
 
 ```bash
 ```
@@ -235,7 +235,7 @@ git blame -L {start},{end} {affected-file}
 
 This unified path allows review agents to find the artifact regardless of workflow type.
 
-### 4.2 Artifact Template
+### 4.2 artifact template
 
 Write this structure to the artifact file.
 
@@ -426,7 +426,7 @@ bun run lint
 
 ---
 
-## Phase 5: POST - GitHub Comment
+## 5단계: 게시 — GitHub comment
 
 **Only if input was a GitHub issue (not free-form):**
 
@@ -500,7 +500,7 @@ EOF
 
 ---
 
-## Phase 6: REPORT - Output to User
+## 6단계: 보고 — 사용자에게 출력
 
 ```markdown
 ## Investigation Complete
@@ -544,30 +544,30 @@ Run `/implement-issue {number}` to execute the plan.
 
 ---
 
-## Handling Edge Cases
+## Edge Case 처리
 
-### Issue is already closed
+### Issue가 이미 닫힘
 - Report: "Issue #{number} is already closed"
 - Still create artifact if user wants analysis
 
-### Issue already has linked PR
+### Issue에 이미 연결된 PR이 있음
 - Warn: "PR #{pr} already addresses this issue"
 - Ask if user wants to continue anyway
 
-### Can't determine root cause
+### Root cause를 판단할 수 없음
 - Document what you found
 - Set confidence to LOW
 - Note uncertainty in artifact
 - Proceed with best hypothesis
 
-### Very large scope
+### 범위가 매우 큼
 - Suggest breaking into smaller issues
 - Focus on core problem first
 - Note deferred items in "Out of Scope"
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ARTIFACT_COMPLETE**: All sections filled with specific, actionable content
 - **EVIDENCE_BASED**: Every claim has file:line reference or proof

@@ -1,13 +1,13 @@
 ---
-description: Implement CRITICAL and HIGH fixes from review, add tests, report remaining issues
+description: review에서 나온 CRITICAL/HIGH 수정사항을 구현하고 test 추가 및 남은 issue 보고
 argument-hint: (none - reads from consolidated review artifact)
 ---
 
-# Implement Review Fixes
+# 리뷰 수정사항 구현
 
 ---
 
-## IMPORTANT: Output Behavior
+## 중요: 출력 방식
 
 **Your output will be posted as a GitHub comment.** Keep your working output minimal:
 - Do NOT narrate each step ("Now I'll read the file...", "Let me check...")
@@ -17,7 +17,7 @@ argument-hint: (none - reads from consolidated review artifact)
 
 ---
 
-## Your Mission
+## 미션
 
 Read the consolidated review artifact and implement all CRITICAL and HIGH priority fixes. Add tests for fixed code if missing. Commit and push changes. Report what was fixed, what wasn't (and why), and suggest follow-up issues for remaining items.
 
@@ -27,9 +27,9 @@ Read the consolidated review artifact and implement all CRITICAL and HIGH priori
 
 ---
 
-## Phase 1: LOAD - Get Fix List
+## 1단계: 로드 — 수정 목록 가져오기
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
@@ -39,7 +39,7 @@ HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
 echo "PR: $PR_NUMBER, Branch: $HEAD_BRANCH"
 ```
 
-### 1.2 Checkout the PR Branch
+### 1.2 checkout the PR Branch
 
 **CRITICAL: Work on the PR's actual branch, not a new branch.**
 
@@ -50,7 +50,7 @@ git checkout $HEAD_BRANCH
 git pull origin $HEAD_BRANCH
 ```
 
-### 1.3 Read Consolidated Review
+### 1.3 consolidated review 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/consolidated-review.md
@@ -62,7 +62,7 @@ Extract:
 - MEDIUM issues (for reporting)
 - LOW issues (for reporting)
 
-### 1.4 Read Individual Artifacts for Details
+### 1.4 세부 개별 artifact 읽기
 
 If consolidated doesn't have full fix code, read original artifacts:
 
@@ -73,7 +73,7 @@ cat $ARTIFACTS_DIR/review/test-coverage-findings.md
 cat $ARTIFACTS_DIR/review/docs-impact-findings.md
 ```
 
-### 1.5 Check Current Git State
+### 1.5 현재 git 상태 확인
 
 ```bash
 git status --porcelain
@@ -90,20 +90,20 @@ Verify you are on the correct PR branch (should be `$HEAD_BRANCH`).
 
 ---
 
-## Phase 2: IMPLEMENT - Apply Fixes
+## 2단계: 구현 — 수정 적용
 
-### 2.1 For Each CRITICAL Issue
+### 2.1 각 CRITICAL issue 처리
 
 1. **Read the file**
 2. **Apply the recommended fix**
 3. **Verify fix compiles**: `bun run type-check`
 4. **Track**: Note what was changed
 
-### 2.2 For Each HIGH Issue
+### 2.2 각 HIGH issue 처리
 
 Same process as CRITICAL.
 
-### 2.3 For Test Coverage Gaps
+### 2.3 test coverage gap 처리
 
 If test-coverage-agent identified missing tests for fixed code:
 
@@ -111,7 +111,7 @@ If test-coverage-agent identified missing tests for fixed code:
 2. **Add tests for the fix**
 3. **Verify tests pass**: `bun test {file}`
 
-### 2.4 Handle Unfixable Issues
+### 2.4 수정 불가 issue 처리
 
 If a fix cannot be applied:
 - **Conflict**: Code has changed since review
@@ -129,9 +129,9 @@ Document the reason clearly.
 
 ---
 
-## Phase 3: VALIDATE - Verify Fixes
+## 3단계: 검증 — 수정 검증
 
-### 3.1 Type Check
+### 3.1 type check
 
 ```bash
 bun run type-check
@@ -139,7 +139,7 @@ bun run type-check
 
 Must pass. If not, fix type errors.
 
-### 3.2 Lint
+### 3.2 lint
 
 ```bash
 bun run lint
@@ -147,7 +147,7 @@ bun run lint
 
 Fix any lint errors introduced.
 
-### 3.3 Run Tests
+### 3.3 test 실행
 
 ```bash
 bun test
@@ -155,7 +155,7 @@ bun test
 
 All tests must pass. If new tests fail, fix them.
 
-### 3.4 Build Check
+### 3.4 build 확인
 
 ```bash
 bun run build
@@ -171,16 +171,16 @@ Must succeed.
 
 ---
 
-## Phase 4: COMMIT AND PUSH - Save and Push Changes
+## 4단계: 커밋 및 Push — 변경 저장 및 push
 
-### 4.1 Stage Changes
+### 4.1 stage 변경사항
 
 ```bash
 git add -A
 git status
 ```
 
-### 4.2 Commit
+### 4.2 commit
 
 ```bash
 git commit -m "fix: Address review findings (CRITICAL/HIGH)
@@ -197,7 +197,7 @@ Skipped (see review artifacts):
 Review artifacts: $ARTIFACTS_DIR/review/"
 ```
 
-### 4.3 Push to PR Branch
+### 4.3 PR branch에 push
 
 **Push the fixes to the PR branch so they appear in the PR.**
 
@@ -218,7 +218,7 @@ git push origin $HEAD_BRANCH
 
 ---
 
-## Phase 5: GENERATE - Create Fix Report
+## 5단계: 생성 — fix report 작성
 
 Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
@@ -325,9 +325,9 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
 ---
 
-## Phase 6: POST - GitHub Comment
+## 6단계: 게시 — GitHub comment
 
-### 6.1 Post Fix Report
+### 6.1 fix report 게시
 
 ```bash
 gh pr comment {number} --body "$(cat <<'EOF'
@@ -397,7 +397,7 @@ EOF
 
 ---
 
-## Phase 7: OUTPUT - Final Report
+## 7단계: 출력 — 최종 보고
 
 Output only this summary (keep it brief):
 
@@ -421,22 +421,22 @@ See fix report: `$ARTIFACTS_DIR/review/fix-report.md`
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### Type Check Fails After Fix
+### 수정 후 type check 실패
 
 1. Review the error
 2. Adjust the fix
 3. Re-run type check
 4. If still failing, mark as "Not Fixed" with reason
 
-### Tests Fail
+### Test 실패
 
 1. Check if fix caused the failure
 2. Either: fix the implementation, or fix the test
 3. If unclear, mark as "Not Fixed" for manual review
 
-### Push Fails
+### Push 실패
 
 1. Pull with rebase: `git pull --rebase origin $HEAD_BRANCH`
 2. Resolve any conflicts
@@ -444,7 +444,7 @@ See fix report: `$ARTIFACTS_DIR/review/fix-report.md`
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ON_CORRECT_BRANCH**: Working on PR's head branch, not base branch or new branch
 - **CRITICAL_ADDRESSED**: All CRITICAL issues attempted

@@ -1,15 +1,15 @@
 ---
-description: Commit changes, create PR with template, mark ready for review
+description: 변경사항 commit, template 기반 PR 생성, review 준비 상태 표시
 argument-hint: (no arguments - reads from workflow artifacts)
 ---
 
-# Finalize Pull Request
+# Pull Request 마무리
 
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Finalize the implementation and create the PR:
 1. Commit all changes
@@ -19,9 +19,9 @@ Finalize the implementation and create the PR:
 
 ---
 
-## Phase 1: LOAD - Gather Context
+## 1단계: 로드 — context 수집
 
-### 1.1 Load Workflow Artifacts
+### 1.1 workflow artifacts 로드
 
 ```bash
 cat $ARTIFACTS_DIR/plan-context.md
@@ -37,14 +37,14 @@ Extract:
 - Validation results
 - Deviations from plan (if any)
 
-### 1.2 Check for PR Template
+### 1.2 PR template 확인
 
 **IMPORTANT**: Always check for the project's PR template first. Look for it at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
 
 **If template found**: Use it as the structure, fill in **every section** with implementation details.
 **If no template**: Use the default format defined in Phase 3.
 
-### 1.3 Check for Existing PR
+### 1.3 기존 PR 확인
 
 ```bash
 gh pr list --head $(git branch --show-current) --json number,url,state
@@ -61,15 +61,15 @@ gh pr list --head $(git branch --show-current) --json number,url,state
 
 ---
 
-## Phase 2: COMMIT - Stage and Commit Changes
+## 2단계: 커밋 — 변경사항 stage 및 commit
 
-### 2.1 Check Git Status
+### 2.1 확인 Git 상태
 
 ```bash
 git status --porcelain
 ```
 
-### 2.2 Stage Changes
+### 2.2 stage 변경사항
 
 Stage all implementation changes:
 
@@ -83,7 +83,7 @@ git add -A
 git diff --cached --name-only
 ```
 
-### 2.3 Create Commit
+### 2.3 commit 생성
 
 Create a descriptive commit message:
 
@@ -98,7 +98,7 @@ git commit -m "{summary of implementation}
 "
 ```
 
-### 2.4 Push to Remote
+### 2.4 remote에 push
 
 ```bash
 git push origin HEAD
@@ -113,9 +113,9 @@ git push origin HEAD
 
 ---
 
-## Phase 3: CREATE/UPDATE - Pull Request
+## 3단계: 생성/업데이트 — pull request
 
-### 3.1 Prepare PR Body
+### 3.1 PR body 준비
 
 **If project has PR template**, fill in each section with implementation details:
 - Replace placeholder text with actual content
@@ -173,7 +173,7 @@ git push origin HEAD
 **Workflow ID**: `$WORKFLOW_ID`
 ```
 
-### 3.2 Create or Update PR
+### 3.2 PR 생성 또는 업데이트
 
 **If no PR exists**, create one:
 
@@ -195,7 +195,7 @@ gh pr create \
 gh pr edit {pr-number} --body-file $ARTIFACTS_DIR/pr-body.md
 ```
 
-### 3.3 Ensure Ready for Review
+### 3.3 review 준비 상태 확인
 
 If PR was created as draft, mark ready:
 
@@ -203,13 +203,13 @@ If PR was created as draft, mark ready:
 gh pr ready {pr-number} 2>/dev/null || true
 ```
 
-### 3.4 Capture PR Info
+### 3.4 PR 정보 저장
 
 ```bash
 gh pr view --json number,url,headRefName,baseRefName
 ```
 
-### 3.5 Write PR Number Registry
+### 3.5 PR 번호 registry 작성
 
 Write PR number for downstream review steps:
 
@@ -230,9 +230,9 @@ echo "$PR_URL" > $ARTIFACTS_DIR/.pr-url
 
 ---
 
-## Phase 4: ARTIFACT - Write PR Ready Status
+## 4단계: Artifact — PR ready 상태 작성
 
-### 4.1 Write Final Artifact
+### 4.1 최종 artifact 작성
 
 Write to `$ARTIFACTS_DIR/pr-ready.md`:
 
@@ -298,7 +298,7 @@ Continue to PR review workflow:
 
 ---
 
-## Phase 5: OUTPUT - Report Status
+## 5단계: 출력 — 상태 보고
 
 ```markdown
 ## PR Ready for Review ✅
@@ -346,9 +346,9 @@ Proceeding to comprehensive PR review.
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### Nothing to Commit
+### Commit할 변경 없음
 
 If no changes to commit:
 
@@ -358,7 +358,7 @@ If no changes to commit:
 All changes were already committed. Proceeding to update PR description.
 ```
 
-### Push Fails
+### Push 실패
 
 ```bash
 # Try force push if branch was rebased
@@ -375,7 +375,7 @@ Check:
 3. Remote branch status: `git fetch origin && git status`
 ```
 
-### PR Not Found
+### PR을 찾을 수 없음
 
 ```
 ❌ PR not found: #{number}
@@ -384,7 +384,7 @@ The draft PR may have been closed or deleted. Create a new one:
 `gh pr create --title "..." --body "..."`
 ```
 
-### Template Parsing
+### Template parsing
 
 If template has complex structure that's hard to fill:
 - Use as much of the template as possible
@@ -393,7 +393,7 @@ If template has complex structure that's hard to fill:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **CHANGES_COMMITTED**: All changes in a commit
 - **PUSHED**: Branch pushed to remote

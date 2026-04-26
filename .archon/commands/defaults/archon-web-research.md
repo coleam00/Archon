@@ -1,5 +1,5 @@
 ---
-description: Research web sources for context relevant to a GitHub issue or feature
+description: GitHub issue 또는 feature와 관련된 web source 조사
 argument-hint: <issue-number or search context>
 ---
 
@@ -10,7 +10,7 @@ argument-hint: <issue-number or search context>
 
 ---
 
-## Your Mission
+## 미션
 
 Search the web for information relevant to the issue or feature being worked on. Find official documentation, known issues, best practices, and solutions that will inform implementation.
 
@@ -20,9 +20,9 @@ Search the web for information relevant to the issue or feature being worked on.
 
 ---
 
-## Phase 1: PARSE - Understand What to Research
+## 1단계: 파싱 — research 대상 이해
 
-### 1.1 Get Issue Context
+### 1.1 issue context 가져오기
 
 If input looks like a GitHub issue number:
 
@@ -30,7 +30,7 @@ If input looks like a GitHub issue number:
 gh issue view $ARGUMENTS --json title,body,labels
 ```
 
-### 1.2 Identify Research Targets
+### 1.2 research target 식별
 
 From the issue context, identify:
 
@@ -40,7 +40,7 @@ From the issue context, identify:
 - Version-specific documentation needs
 - Existing primitives in the ecosystem — what built-in or library-level abstractions already solve part of this? (avoids reinventing)
 
-### 1.3 Formulate Search Plan
+### 1.3 search plan 수립
 
 Create 3-5 targeted search queries:
 
@@ -59,9 +59,9 @@ Create 3-5 targeted search queries:
 
 ---
 
-## Phase 2: SEARCH - Execute Research
+## 2단계: 검색 — research 실행
 
-### 2.1 Check for llms.txt
+### 2.1 llms.txt 확인
 
 Many sites publish LLM-optimized documentation:
 
@@ -70,7 +70,7 @@ Try fetching https://{domain}/llms.txt for any known site
 Read the result and fetch relevant sub-pages linked within
 ```
 
-### 2.2 Search Official Documentation
+### 2.2 official documentation 검색
 
 For each technology/library involved:
 
@@ -78,7 +78,7 @@ For each technology/library involved:
 2. Use `site:` operator for known authoritative sources
 3. Look for changelog/release notes for version info
 
-### 2.3 Search for Known Issues
+### 2.3 known issue 검색
 
 If the issue involves errors or bugs:
 
@@ -86,7 +86,7 @@ If the issue involves errors or bugs:
 2. Check GitHub issues for the relevant libraries
 3. Look for Stack Overflow answers
 
-### 2.4 Search for Best Practices
+### 2.4 best practice 검색
 
 If the issue involves implementation decisions:
 
@@ -102,9 +102,9 @@ If the issue involves implementation decisions:
 
 ---
 
-## Phase 3: SYNTHESIZE - Compile Findings
+## 3단계: 종합 — findings 정리
 
-### 3.1 Organize by Relevance
+### 3.1 관련도별 정리
 
 For each finding:
 
@@ -114,7 +114,7 @@ For each finding:
 - **Applies to**: Which part of the issue this informs
 - **Version/date**: Currency of the information
 
-### 3.2 Identify Conflicts or Gaps
+### 3.2 conflict/gap 식별
 
 - Note any conflicting information between sources
 - Flag outdated content
@@ -128,7 +128,7 @@ For each finding:
 
 ---
 
-## Phase 4: GENERATE - Write Artifact
+## 4단계: 생성 — artifact 작성
 
 Write to `$ARTIFACTS_DIR/web-research.md`:
 
@@ -212,7 +212,7 @@ Based on research:
 
 ---
 
-## Phase 5: OUTPUT - Report
+## 5단계: 출력 — 보고
 
 ```markdown
 ## Web Research Complete
@@ -234,7 +234,7 @@ Based on research:
 
 ---
 
-## Quality Standards
+## 품질 기준
 
 | Standard | Requirement |
 |----------|-------------|
@@ -247,7 +247,7 @@ Based on research:
 
 ---
 
-## What NOT To Do
+## 하지 말아야 할 일
 
 - Don't guess when you can search
 - Don't fetch pages without checking search results first
@@ -257,7 +257,7 @@ Based on research:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **RESEARCH_EXECUTED**: At least 3 targeted searches completed
 - **SOURCES_CITED**: All findings have source URLs

@@ -1,10 +1,15 @@
-# Ralph PRD Generator
+---
+description: Ralph autonomous loop용 PRD와 prd.json 생성
+argument-hint: <feature idea>
+---
+
+# Ralph PRD 생성기
 
 **Input**: $ARGUMENTS
 
 ---
 
-## Your Role
+## 역할
 
 You are creating a PRD for the Ralph autonomous loop. You generate TWO files:
 1. `prd.md` - Full context document (goals, persona, UX, success criteria)
@@ -19,7 +24,7 @@ Each Ralph iteration receives the FULL prd.md context plus its specific story fr
 
 ---
 
-## Phase 1: INITIATE
+## 1단계: 시작
 
 **If no input provided**, ask:
 
@@ -35,7 +40,7 @@ Each Ralph iteration receives the FULL prd.md context plus its specific story fr
 
 ---
 
-## Phase 2: FOUNDATION
+## 2단계: Foundation
 
 Ask these questions together:
 
@@ -55,7 +60,7 @@ Ask these questions together:
 
 ---
 
-## Phase 3: UX & DESIGN
+## 3단계: UX 및 Design
 
 Ask:
 
@@ -75,7 +80,7 @@ Ask:
 
 ---
 
-## Phase 4: TECHNICAL GROUNDING
+## 4단계: 기술적 근거 확인
 
 **Use Explore agent:**
 
@@ -104,7 +109,7 @@ FIND:
 
 ---
 
-## Phase 5: STORY BREAKDOWN
+## 5단계: Story 분해
 
 Ask:
 
@@ -124,7 +129,7 @@ Ask:
 
 ---
 
-## Phase 6: GENERATE FILES
+## 6단계: 파일 생성
 
 **Naming Convention**: Use the feature name as a kebab-case slug.
 - Feature: "User Authentication" → slug: `user-authentication`
@@ -136,7 +141,7 @@ Ask:
 mkdir -p .archon/ralph/{feature-slug}
 ```
 
-### File 1: prd.md
+### 파일 1: prd.md
 
 **Output path**: `.archon/ralph/{feature-slug}/prd.md`
 
@@ -263,7 +268,7 @@ Every story must pass:
 *Generated: {ISO timestamp}*
 ```
 
-### File 2: prd.json
+### 파일 2: prd.json
 
 **Output path**: `.archon/ralph/{feature-slug}/prd.json`
 
@@ -292,7 +297,7 @@ Every story must pass:
 }
 ```
 
-### Story Sizing Rules
+### Story sizing 규칙
 
 **Right-sized (ONE iteration):**
 - Add a database column + migration
@@ -304,7 +309,7 @@ Every story must pass:
 - "Build entire feature" → schema, types, backend, UI
 - "Add authentication" → schema, middleware, login UI
 
-### Acceptance Criteria Rules
+### Acceptance criteria 규칙
 
 **GOOD (verifiable):**
 - "Add `priority` column with type 'high' | 'medium' | 'low'"
@@ -318,7 +323,7 @@ Every story must pass:
 
 ---
 
-## Phase 7: OUTPUT
+## 7단계: 출력
 
 After generating both files, report:
 
@@ -370,7 +375,7 @@ echo "# Ralph Progress Log\nStarted: $(date)\n---" > .archon/ralph/{feature-slug
 
 ---
 
-## Question Flow
+## 질문 흐름
 
 ```
 INITIATE → FOUNDATION → UX/DESIGN → TECHNICAL → BREAKDOWN → GENERATE
@@ -382,7 +387,7 @@ INITIATE → FOUNDATION → UX/DESIGN → TECHNICAL → BREAKDOWN → GENERATE
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **CONTEXT_COMPLETE**: prd.md has goals, persona, UX, technical context
 - **STORIES_SIZED**: Each story completable in one iteration

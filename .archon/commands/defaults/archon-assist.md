@@ -1,9 +1,9 @@
 ---
-description: General assistance - questions, debugging, one-off tasks, exploration
+description: 일반 지원 — 질문, 디버깅, 일회성 작업, 탐색
 argument-hint: <any request>
 ---
 
-# Assist Mode
+# 지원 모드
 
 **Request**: $ARGUMENTS
 
@@ -11,7 +11,7 @@ argument-hint: <any request>
 
 You are helping with a request that didn't match a specific workflow.
 
-## Instructions
+## 지침
 
 1. **Understand the request** - What is the user actually asking for?
 2. **Take action** - Use your full Claude Code capabilities to help
@@ -19,7 +19,7 @@ You are helping with a request that didn't match a specific workflow.
 4. **Note the gap** - If this should have been a specific workflow, mention it:
    "Note: Using assist mode. Consider creating a workflow for this use case."
 
-## Capabilities
+## 역량
 
 You have full Claude Code capabilities:
 - Read and write files
@@ -28,6 +28,6 @@ You have full Claude Code capabilities:
 - Make code changes
 - Answer questions
 
-## Request
+## 요청
 
 $ARGUMENTS

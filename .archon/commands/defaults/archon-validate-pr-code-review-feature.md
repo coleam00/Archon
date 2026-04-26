@@ -1,17 +1,17 @@
 ---
-description: Analyze code on the feature branch to verify the PR's fix is correct and optimal
+description: feature branch의 코드를 분석해 PR 수정이 정확하고 최적인지 검증
 argument-hint: (none - reads from artifacts)
 ---
 
-# Code Review: Feature Branch (Post-PR State)
+# 코드 리뷰: Feature Branch(PR 이후 상태)
 
 Analyze the code changes in the PR to verify the fix is correct, complete, and implemented in the best way possible.
 
 ---
 
-## Phase 1: Load Context
+## Phase 1: 로드 context
 
-### 1.1 Read PR Details and Main Branch Analysis
+### 1.1 PR detail과 main branch analysis 읽기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
@@ -23,7 +23,7 @@ gh pr view "$PR_NUMBER" --json title,body,headRefName,baseRefName,labels
 cat $ARTIFACTS_DIR/code-review-main.md
 ```
 
-### 1.2 Read Path Information
+### 1.2 path 정보 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/.worktree-path
@@ -32,16 +32,16 @@ cat $ARTIFACTS_DIR/.feature-branch
 
 ---
 
-## Phase 2: Analyze the Diff
+## Phase 2: 분석 the Diff
 
-### 2.1 Get the Full Diff
+### 2.1 full diff 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
 gh pr diff "$PR_NUMBER"
 ```
 
-### 2.2 Read Changed Files on Feature Branch
+### 2.2 feature branch 변경 파일 읽기
 
 The current working directory IS the feature branch (worktree). Read each changed file:
 
@@ -53,7 +53,7 @@ gh pr view "$PR_NUMBER" --json files -q '.files[].path'
 
 For each file, read the full file in the current working directory to understand the complete context, not just the diff hunks.
 
-### 2.3 Deep Analysis of Each Change
+### 2.3 각 변경 심층 분석
 
 For each changed file:
 
@@ -74,7 +74,7 @@ For each changed file:
    - Error handling appropriate?
    - No unnecessary complexity?
 
-### 2.4 Look for Issues
+### 2.4 issue 탐색
 
 Check for:
 - **Correctness**: Does the fix actually solve the problem?
@@ -86,7 +86,7 @@ Check for:
 - **Overengineering**: More changes than necessary? (YAGNI)
 - **Missing changes**: Files that SHOULD have been changed but weren't?
 
-### 2.5 Compare Alternative Approaches
+### 2.5 대안 비교
 
 Think about whether there's a better way to fix this:
 - Could a simpler approach work?
@@ -95,7 +95,7 @@ Think about whether there's a better way to fix this:
 
 ---
 
-## Phase 3: Write Findings
+## Phase 3: 작성 findings
 
 Write your analysis to `$ARTIFACTS_DIR/code-review-feature.md`:
 
@@ -177,7 +177,7 @@ If the current approach is optimal, say so and explain why.}
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **DIFF_ANALYZED**: Full PR diff reviewed
 - **FILES_READ**: All changed files read in full context

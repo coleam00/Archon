@@ -1,15 +1,15 @@
 ---
-description: Execute plan tasks with type-checking after each change
+description: 각 변경 후 type-check를 수행하며 plan task 실행
 argument-hint: (no arguments - reads from workflow artifacts)
 ---
 
-# Implement Tasks
+# Task 구현
 
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Execute each task from the plan, validating after every change.
 
@@ -22,9 +22,9 @@ Execute each task from the plan, validating after every change.
 
 ---
 
-## Phase 1: LOAD - Read Context
+## 1단계: 로드 — context 읽기
 
-### 1.1 Load Plan Context
+### 1.1 plan context 로드
 
 ```bash
 cat $ARTIFACTS_DIR/plan-context.md
@@ -35,7 +35,7 @@ Extract:
 - Validation commands (especially type-check)
 - Patterns to mirror
 
-### 1.2 Load Plan Confirmation
+### 1.2 plan confirmation 로드
 
 ```bash
 cat $ARTIFACTS_DIR/plan-confirmation.md
@@ -45,7 +45,7 @@ Check:
 - Status is CONFIRMED or PROCEED WITH CAUTION
 - Note any warnings to handle during implementation
 
-### 1.3 Load Original Plan
+### 1.3 original plan 로드
 
 The plan source path is in `plan-context.md`. Read the full plan for detailed task instructions:
 
@@ -53,7 +53,7 @@ The plan source path is in `plan-context.md`. Read the full plan for detailed ta
 cat {plan-source-path}
 ```
 
-### 1.4 Identify Package Manager
+### 1.4 package manager 식별
 
 ```bash
 test -f bun.lockb && echo "bun" || \
@@ -74,11 +74,11 @@ Store the runner for validation commands.
 
 ---
 
-## Phase 2: EXECUTE - Implement Each Task
+## 2단계: 실행 — 각 task 구현
 
 **For each task in the plan's "Tasks" or "Step-by-Step Tasks" section:**
 
-### 2.1 Read Task Context
+### 2.1 task context 읽기
 
 Before implementing each task:
 
@@ -87,7 +87,7 @@ Before implementing each task:
 3. **Note any GOTCHA warnings**
 4. **Check IMPORTS** needed
 
-### 2.2 Implement the Task
+### 2.2 task 구현
 
 Make the change as specified:
 
@@ -95,7 +95,7 @@ Make the change as specified:
 - **UPDATE**: Modify existing file as described
 - **Follow patterns exactly** - match style, naming, structure
 
-### 2.3 Type-Check Immediately
+### 2.3 즉시 type-check
 
 **After EVERY file change:**
 
@@ -112,7 +112,7 @@ Make the change as specified:
 
 **Do NOT accumulate errors** - fix each one before moving to the next task.
 
-### 2.4 Track Progress
+### 2.4 progress 추적
 
 Log each task as completed:
 
@@ -122,7 +122,7 @@ Task 2: CREATE src/features/x/service.ts ✅
 Task 3: UPDATE src/routes/index.ts ✅
 ```
 
-### 2.5 Handle Deviations
+### 2.5 deviation 처리
 
 If you must deviate from the plan:
 
@@ -145,9 +145,9 @@ Common reasons for deviation:
 
 ---
 
-## Phase 3: TESTS - Write Required Tests
+## 3단계: 테스트 — 필수 test 작성
 
-### 3.1 Test Requirements
+### 3.1 test 요구사항
 
 Every new function/feature needs at least one test:
 
@@ -155,7 +155,7 @@ Every new function/feature needs at least one test:
 - **New function added** → Add test for that function
 - **Behavior changed** → Update existing tests
 
-### 3.2 Follow Test Patterns
+### 3.2 test pattern 따르기
 
 Find existing test files to mirror:
 
@@ -165,7 +165,7 @@ find . -name "*.test.ts" -type f | head -5
 
 Read a relevant test file to understand the project's test patterns.
 
-### 3.3 Write Tests
+### 3.3 test 작성
 
 For each new/changed file, write tests that cover:
 
@@ -173,7 +173,7 @@ For each new/changed file, write tests that cover:
 2. **Edge cases** - Boundary conditions from the plan
 3. **Error cases** - What happens with bad input
 
-### 3.4 Run Tests
+### 3.4 test 실행
 
 ```bash
 {runner} test
@@ -193,9 +193,9 @@ For each new/changed file, write tests that cover:
 
 ---
 
-## Phase 4: ARTIFACT - Write Implementation Progress
+## 4단계: Artifact — implementation progress 작성
 
-### 4.1 Write Progress Artifact
+### 4.1 progress artifact 작성
 
 Write to `$ARTIFACTS_DIR/implementation.md`:
 
@@ -294,7 +294,7 @@ Continue to `archon-validate` for full validation suite.
 
 ---
 
-## Phase 5: OUTPUT - Report Progress
+## 5단계: 출력 — progress 보고
 
 ```markdown
 ## Implementation Complete
@@ -335,9 +335,9 @@ Proceed to `archon-validate` for full validation (lint, build, integration tests
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### Type-Check Fails
+### Type-check 실패
 
 Do NOT proceed to next task. Fix the issue:
 
@@ -347,14 +347,14 @@ Do NOT proceed to next task. Fix the issue:
 4. Re-run type-check
 5. Only continue when green
 
-### Test Fails
+### Test 실패
 
 1. Read the failure output
 2. Identify: implementation bug or test bug?
 3. Fix the root cause
 4. Re-run tests
 
-### Pattern File Changed
+### Pattern file 변경됨
 
 If a pattern file has changed since the plan was created:
 
@@ -363,7 +363,7 @@ If a pattern file has changed since the plan was created:
 3. Document as a deviation
 4. Continue
 
-### Task Unclear
+### Task가 불명확함
 
 If a task description is ambiguous:
 
@@ -374,7 +374,7 @@ If a task description is ambiguous:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **TASKS_COMPLETE**: All tasks from plan executed
 - **TYPES_PASS**: Type-check passes after all changes

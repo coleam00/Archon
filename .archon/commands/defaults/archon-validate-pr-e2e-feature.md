@@ -1,9 +1,9 @@
 ---
-description: Start Archon from the feature branch, use agent-browser to verify the fix works correctly
+description: feature branch에서 Archon을 시작하고 agent-browser로 수정 동작 검증
 argument-hint: (none - reads from artifacts)
 ---
 
-# E2E Testing: Feature Branch (Verify Fix)
+# E2E 테스트: Feature Branch(수정 검증)
 
 Start Archon from the **feature branch** (this worktree) and use browser automation to verify that the bug is fixed and the UI/UX is correct. Take screenshots as evidence.
 
@@ -25,7 +25,7 @@ Example: `agent-browser --session $WORKFLOW_ID open "http://..."`, `agent-browse
 
 ---
 
-## Phase 0: Kill Orphaned Processes from Previous E2E Run
+## Phase 0: Kill orphan process from 이전 E2E 실행
 
 Before starting, clean up any leftover processes from the main branch E2E test:
 
@@ -56,9 +56,9 @@ echo "Orphan cleanup complete"
 
 ---
 
-## Phase 1: Load Context
+## Phase 1: 로드 context
 
-### 1.1 Read Artifacts
+### 1.1 artifact 읽기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
@@ -71,7 +71,7 @@ echo "Frontend port: $FRONTEND_PORT"
 echo "Feature branch path: $WORKTREE_PATH"
 ```
 
-### 1.2 Read Main Branch Test Results
+### 1.2 main branch test result 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/e2e-main.md 2>/dev/null || echo "No main branch E2E results available"
@@ -82,7 +82,7 @@ This tells you:
 - Which test cases to re-run
 - What screenshots to compare against
 
-### 1.3 Read Code Reviews
+### 1.3 code review 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/code-review-main.md 2>/dev/null || echo ""
@@ -91,16 +91,16 @@ cat $ARTIFACTS_DIR/code-review-feature.md 2>/dev/null || echo ""
 
 ---
 
-## Phase 2: Start Archon on Feature Branch
+## Phase 2: 시작 Archon on Feature Branch
 
-### 2.1 Install Dependencies (if needed)
+### 2.1 필요 시 dependencies 설치
 
 ```bash
 WORKTREE_PATH=$(cat $ARTIFACTS_DIR/.worktree-path | tr -d '\n')
 cd "$WORKTREE_PATH" && bun install --frozen-lockfile 2>/dev/null || bun install
 ```
 
-### 2.2 Start Backend on Custom Port
+### 2.2 custom port에서 backend 시작
 
 **IMPORTANT**: Record the PID so we can kill it later. Redirect output to /dev/null to prevent terminal spawning.
 
@@ -131,7 +131,7 @@ curl -s "http://localhost:$BACKEND_PORT/api/health" | head -c 200
 echo ""
 ```
 
-### 2.3 Start Frontend on Custom Port
+### 2.3 custom port에서 frontend 시작
 
 ```bash
 WORKTREE_PATH=$(cat $ARTIFACTS_DIR/.worktree-path | tr -d '\n')
@@ -161,7 +161,7 @@ curl -s "http://localhost:$FRONTEND_PORT" | head -c 100
 echo ""
 ```
 
-### 2.4 Seed Test Data (if needed)
+### 2.4 필요 시 test data seed
 
 ```bash
 BACKEND_PORT=$(cat $ARTIFACTS_DIR/.backend-port | tr -d '\n')
@@ -179,13 +179,13 @@ fi
 
 ---
 
-## Phase 3: Browser Testing (Verify Fix)
+## Phase 3: browser Testing (확인 수정)
 
-### 3.1 Load the Agent-Browser Skill
+### 3.1 agent-browser skill 로드
 
 **YOU MUST LOAD THE AGENT-BROWSER SKILL NOW.** Use `/agent-browser` or invoke the skill. This gives you the full command reference for browser automation.
 
-### 3.2 Core Browser Workflow
+### 3.2 core browser workflow
 
 ```bash
 # 1. Open the Archon UI (ALWAYS use --session)
@@ -202,7 +202,7 @@ agent-browser --session $WORKFLOW_ID snapshot -i
 agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-feature-01-initial.png"
 ```
 
-### 3.3 Re-Run All Test Cases from Main
+### 3.3 main의 모든 test case 재실행
 
 For EVERY test case that was run on main, re-run it on the feature branch:
 
@@ -213,7 +213,7 @@ For EVERY test case that was run on main, re-run it on the feature branch:
 5. **Read each screenshot** — use the Read tool to visually inspect
 6. **Compare with main** — explicitly note what's different
 
-### 3.4 Additional UX Validation
+### 3.4 추가 UX validation
 
 Beyond just checking the bug is fixed, validate the overall experience:
 
@@ -229,7 +229,7 @@ Beyond just checking the bug is fixed, validate the overall experience:
    ```
 5. **No regressions** — other features near the fix still work correctly
 
-### 3.5 API Cross-Verification
+### 3.5 API cross-verification
 
 ```bash
 BACKEND_PORT=$(cat $ARTIFACTS_DIR/.backend-port | tr -d '\n')
@@ -240,18 +240,18 @@ curl -s "http://localhost:$BACKEND_PORT/api/conversations" | head -c 500
 
 ---
 
-## Phase 4: Cleanup and Report
+## Phase 4: Cleanup and report
 
 **CRITICAL: You MUST complete cleanup before writing findings. Orphaned processes will accumulate and crash the system.**
 
-### 4.1 Close Browser
+### 4.1 browser 닫기
 
 ```bash
 # ALWAYS use --session to only close YOUR browser, not other workflows'
 agent-browser --session $WORKFLOW_ID close 2>/dev/null || true
 ```
 
-### 4.2 Stop Feature Branch Archon (Cross-Platform)
+### 4.2 feature branch Archon 종료(cross-platform)
 
 Kill processes by PID (recorded in Phase 2) AND by port (fallback). This works on both Windows and Unix.
 
@@ -283,7 +283,7 @@ echo "Cleanup complete — verify ports are free:"
 netstat -ano 2>/dev/null | grep -E ":($BACKEND_PORT|$FRONTEND_PORT) " | grep LISTENING || echo "All ports free"
 ```
 
-### 4.3 Write Findings
+### 4.3 findings 작성
 
 Write to `$ARTIFACTS_DIR/e2e-feature.md`:
 
@@ -338,7 +338,7 @@ Write to `$ARTIFACTS_DIR/e2e-feature.md`:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ARCHON_STARTED**: Backend and frontend running on feature branch code
 - **ALL_TESTS_RERUN**: Every test case from main branch E2E re-executed

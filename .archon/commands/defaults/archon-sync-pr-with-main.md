@@ -1,13 +1,13 @@
 ---
-description: Sync PR branch with latest main (rebase if needed, resolve conflicts if any)
+description: PR branch를 최신 main과 동기화(필요 시 rebase 및 conflict 해결)
 argument-hint: (none - uses PR from scope)
 ---
 
-# Sync PR with Main
+# PR을 Main과 동기화
 
 ---
 
-## Your Mission
+## 미션
 
 Ensure the PR branch is up-to-date with the latest main branch before review. Rebase if needed, resolve conflicts if any arise. This step is silent when no action is needed.
 
@@ -15,15 +15,15 @@ Ensure the PR branch is up-to-date with the latest main branch before review. Re
 
 ---
 
-## Phase 1: CHECK - Determine if Sync Needed
+## 1단계: 점검 — 결정 if sync Needed
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ```
 
-### 1.2 Read Scope
+### 1.2 scope 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/scope.md
@@ -31,7 +31,7 @@ cat $ARTIFACTS_DIR/review/scope.md
 
 Get branch names: `PR_HEAD` and `PR_BASE`.
 
-### 1.3 Fetch and Checkout PR Branch
+### 1.3 fetch and checkout PR Branch
 
 ```bash
 git fetch origin $PR_BASE
@@ -44,7 +44,7 @@ Confirm you are on the PR's branch (`$PR_HEAD`). If not, checkout it:
 git checkout $PR_HEAD
 ```
 
-### 1.4 Check if Behind
+### 1.4 확인 if Behind
 
 ```bash
 # Count commits PR branch is behind main
@@ -72,7 +72,7 @@ Branch is up to date with `{base}`. No sync needed.
 
 ---
 
-## Phase 2: REBASE - Sync with Main
+## 2단계: Rebase — sync with Main
 
 ### 2.1 Attempt Rebase
 
@@ -88,7 +88,7 @@ git rebase origin/$PR_BASE
 | Conflicts | Go to Phase 3 (Resolve) |
 | Other error | Report and abort |
 
-### 2.2 Check for Conflicts
+### 2.2 확인 for conflict
 
 ```bash
 # If rebase stopped, check for conflicts
@@ -104,15 +104,15 @@ If empty → rebase successful, go to Phase 4.
 
 ---
 
-## Phase 3: RESOLVE - Handle Conflicts (If Any)
+## 3단계: 해결 — 처리 conflict (If Any)
 
-### 3.1 Identify Conflicting Files
+### 3.1 conflict file 식별
 
 ```bash
 git diff --name-only --diff-filter=U
 ```
 
-### 3.2 Analyze Each Conflict
+### 3.2 각 conflict 분석
 
 For each conflicting file:
 
@@ -125,7 +125,7 @@ cat {file} | grep -A 10 -B 2 "<<<<<<<"
 - **SIMPLE**: One side added/changed, other didn't touch → Auto-resolve
 - **COMPLEX**: Both sides changed same lines → Need decision
 
-### 3.3 Auto-Resolve Simple Conflicts
+### 3.3 단순 conflict 자동 해결
 
 For conflicts where intent is clear:
 - Both added different things → Keep both
@@ -138,7 +138,7 @@ For conflicts where intent is clear:
 git add {file}
 ```
 
-### 3.4 Resolve Complex Conflicts
+### 3.4 해결 Complex conflict
 
 For conflicts needing decision:
 
@@ -153,7 +153,7 @@ For conflicts needing decision:
 git add {file}
 ```
 
-### 3.5 Continue Rebase
+### 3.5 rebase 계속
 
 ```bash
 git rebase --continue
@@ -169,9 +169,9 @@ Repeat if more commits have conflicts.
 
 ---
 
-## Phase 4: VALIDATE - Verify Sync
+## 4단계: 검증 — 확인 sync
 
-### 4.1 Check No Conflicts Remaining
+### 4.1 확인 No conflict Remaining
 
 ```bash
 git diff --check
@@ -179,19 +179,19 @@ git diff --check
 
 Should return empty.
 
-### 4.2 Type Check
+### 4.2 type check
 
 ```bash
 bun run type-check
 ```
 
-### 4.3 Run Tests
+### 4.3 test 실행
 
 ```bash
 bun test
 ```
 
-### 4.4 Lint
+### 4.4 lint
 
 ```bash
 bun run lint
@@ -207,9 +207,9 @@ bun run lint
 
 ---
 
-## Phase 5: PUSH - Update Remote
+## 5단계: Push — 업데이트 remote
 
-### 5.1 Confirm Branch and Push
+### 5.1 확인 Branch and push
 
 Confirm you're on `$PR_HEAD`, then push:
 
@@ -219,7 +219,7 @@ git push --force-with-lease origin $PR_HEAD
 
 **Note**: `--force-with-lease` is safer - fails if someone else pushed.
 
-### 5.2 Verify Push
+### 5.2 확인 push
 
 ```bash
 git log origin/$PR_HEAD --oneline -3
@@ -233,9 +233,9 @@ Confirm local and remote match.
 
 ---
 
-## Phase 6: REPORT - Document Sync (Only if Rebase/Conflicts Occurred)
+## 6단계: 보고 — sync 문서화(rebase/conflict 발생 시)
 
-### 6.1 Create Sync Artifact
+### 6.1 sync artifact 생성
 
 Write to `$ARTIFACTS_DIR/review/sync-report.md`:
 
@@ -300,7 +300,7 @@ No conflicts encountered during rebase.
 - **Timestamp**: {ISO timestamp}
 ```
 
-### 6.2 Update Scope Artifact
+### 6.2 scope artifact 업데이트
 
 Append to `$ARTIFACTS_DIR/review/scope.md`:
 
@@ -320,9 +320,9 @@ Append to `$ARTIFACTS_DIR/review/scope.md`:
 
 ---
 
-## Phase 7: OUTPUT - Report Status
+## 7단계: 출력 — 상태 보고
 
-### If Rebased (with or without conflicts):
+### Rebase된 경우(conflict 유무 무관):
 
 ```markdown
 ## ✅ PR Synced with Main
@@ -336,7 +336,7 @@ Validation: ✅ Type check | ✅ Tests | ✅ Lint
 Proceeding to parallel review...
 ```
 
-### If Already Up to Date:
+### 이미 최신 상태인 경우:
 
 ```markdown
 ## ✅ PR Already Up to Date
@@ -346,7 +346,7 @@ Branch `{head}` is current with `{base}`. No sync needed.
 Proceeding to parallel review...
 ```
 
-### If Sync Failed:
+### Sync 실패 시:
 
 ```markdown
 ## ❌ Sync Failed
@@ -365,9 +365,9 @@ git rebase --abort
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### Rebase Fails Completely
+### Rebase 완전 실패
 
 ```bash
 git rebase --abort
@@ -375,14 +375,14 @@ git rebase --abort
 
 Report failure with specific error.
 
-### Push Rejected
+### Push 거부됨
 
 If `--force-with-lease` fails:
 1. Someone else pushed to the branch
 2. Fetch and re-attempt rebase
 3. Or report for manual handling
 
-### Validation Fails
+### Validation 실패
 
 If type-check/tests fail after rebase:
 1. Investigate which changes broke
@@ -391,7 +391,7 @@ If type-check/tests fail after rebase:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **UP_TO_DATE**: Branch is synced with base (or was already)
 - **NO_CONFLICTS**: All conflicts resolved (if any existed)

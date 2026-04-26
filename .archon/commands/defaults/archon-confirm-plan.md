@@ -1,15 +1,15 @@
 ---
-description: Verify plan research is still valid - check patterns exist, code hasn't drifted
+description: plan research가 여전히 유효한지 확인 — 패턴 존재 여부와 코드 drift 점검
 argument-hint: (no arguments - reads from workflow artifacts)
 ---
 
-# Confirm Plan Research
+# Plan Research 확인
 
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Verify that the plan's research is still valid before implementation begins.
 
@@ -22,9 +22,9 @@ Plans can become stale:
 
 ---
 
-## Phase 1: LOAD - Read Context Artifact
+## 1단계: 로드 — context artifact 읽기
 
-### 1.1 Load Plan Context
+### 1.1 plan context 로드
 
 ```bash
 cat $ARTIFACTS_DIR/plan-context.md
@@ -37,7 +37,7 @@ If not found, STOP with error:
 Run archon-plan-setup first.
 ```
 
-### 1.2 Extract Verification Targets
+### 1.2 검증 대상 추출
 
 From the context, identify:
 
@@ -53,9 +53,9 @@ From the context, identify:
 
 ---
 
-## Phase 2: VERIFY - Check Patterns Exist
+## 2단계: 확인 — 패턴 존재 확인
 
-### 2.1 Verify Pattern Files
+### 2.1 pattern file 확인
 
 For each file in "Patterns to Mirror":
 
@@ -71,7 +71,7 @@ For each file in "Patterns to Mirror":
 
 3. Compare with what the plan expected (if plan included code snippets)
 
-### 2.2 Document Findings
+### 2.2 findings 문서화
 
 For each pattern file:
 
@@ -82,7 +82,7 @@ For each pattern file:
 | `src/old-file.ts` | ❌ MISSING | File was renamed/deleted |
 | `src/changed.ts` | ⚠️ DRIFTED | Code structure changed significantly |
 
-### 2.3 Severity Assessment
+### 2.3 severity 평가
 
 | Finding | Severity | Action |
 |---------|----------|--------|
@@ -99,9 +99,9 @@ For each pattern file:
 
 ---
 
-## Phase 3: VERIFY - Check Target Locations
+## 3단계: 확인 — 대상 위치 확인
 
-### 3.1 Check Files to Create
+### 3.1 생성할 파일 확인
 
 For each file marked CREATE:
 
@@ -115,7 +115,7 @@ For each file marked CREATE:
    dirname {file-path} | xargs test -d && echo "DIR EXISTS" || echo "DIR WILL BE CREATED"
    ```
 
-### 3.2 Check Files to Update
+### 3.2 수정할 파일 확인
 
 For each file marked UPDATE:
 
@@ -133,9 +133,9 @@ For each file marked UPDATE:
 
 ---
 
-## Phase 4: VERIFY - Check Validation Commands
+## 4단계: 확인 — validation command 확인
 
-### 4.1 Dry Run Validation Commands
+### 4.1 validation command dry run
 
 Test that the validation commands work (without expecting them to pass):
 
@@ -150,7 +150,7 @@ bun run lint --help 2>/dev/null || echo "lint not available"
 bun test --help 2>/dev/null || echo "test not available"
 ```
 
-### 4.2 Document Command Availability
+### 4.2 command 사용 가능 여부 문서화
 
 | Command | Status |
 |---------|--------|
@@ -166,9 +166,9 @@ bun test --help 2>/dev/null || echo "test not available"
 
 ---
 
-## Phase 5: ARTIFACT - Write Confirmation
+## 5단계: Artifact — confirmation 작성
 
-### 5.1 Write Confirmation Artifact
+### 5.1 confirmation artifact 작성
 
 Write to `$ARTIFACTS_DIR/plan-confirmation.md`:
 
@@ -262,9 +262,9 @@ Revise the plan to address blockers, then re-run `archon-plan-setup`.
 
 ---
 
-## Phase 6: OUTPUT - Report to User
+## 6단계: 출력 — 사용자에게 보고
 
-### If Confirmed (no blockers):
+### 확인됨(blocker 없음):
 
 ```markdown
 ## Plan Confirmed ✅
@@ -297,7 +297,7 @@ Confirmation written to: `$ARTIFACTS_DIR/plan-confirmation.md`
 Proceed to `archon-implement-tasks` to execute the plan.
 ```
 
-### If Blocked:
+### Blocked인 경우:
 
 ```markdown
 ## Plan Blocked ❌
@@ -325,7 +325,7 @@ Details written to: `$ARTIFACTS_DIR/plan-confirmation.md`
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **PATTERNS_VERIFIED**: All pattern files exist and are reasonably similar
 - **TARGETS_VALID**: CREATE files don't exist, UPDATE files do exist

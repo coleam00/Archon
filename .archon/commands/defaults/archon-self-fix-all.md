@@ -1,13 +1,13 @@
 ---
-description: Aggressively fix all review findings - lean towards fixing unless clearly a new concern
+description: 모든 review findings를 적극적으로 수정 — 명확히 새로운 concern이 아니면 수정 우선
 argument-hint: (none - reads all review artifacts from $ARTIFACTS_DIR/review/)
 ---
 
-# Self-Fix All Review Findings
+# 모든 리뷰 Findings 자체 수정
 
 ---
 
-## IMPORTANT: Output Behavior
+## 중요: 출력 방식
 
 **Your output will be posted as a GitHub comment.** Keep working output minimal:
 - Do NOT narrate each step
@@ -16,7 +16,7 @@ argument-hint: (none - reads all review artifacts from $ARTIFACTS_DIR/review/)
 
 ---
 
-## Your Mission
+## 미션
 
 Read all review artifacts and fix EVERYTHING surfaced. Unlike conservative auto-fix, you lean aggressively towards fixing. LLMs are fast at generating code — use that advantage to add tests, fix docs, improve error handling, and address all findings.
 
@@ -28,9 +28,9 @@ Read all review artifacts and fix EVERYTHING surfaced. Unlike conservative auto-
 
 ---
 
-## Phase 1: LOAD — Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number and Branch
+### 1.1 PR 번호와 branch 확인
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
@@ -38,7 +38,7 @@ HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
 echo "PR: $PR_NUMBER, Branch: $HEAD_BRANCH"
 ```
 
-### 1.2 Checkout PR Branch
+### 1.2 PR branch checkout
 
 ```bash
 git fetch origin $HEAD_BRANCH
@@ -53,7 +53,7 @@ git branch --show-current
 git status --porcelain
 ```
 
-### 1.3 Read All Review Artifacts
+### 1.3 모든 review artifact 읽기
 
 ```bash
 ls $ARTIFACTS_DIR/review/
@@ -67,7 +67,7 @@ for f in $ARTIFACTS_DIR/review/*.md; do
 done
 ```
 
-### 1.4 Extract All Findings
+### 1.4 추출 All findings
 
 Compile a unified list of ALL findings with severity, location, and suggested fix.
 
@@ -80,11 +80,11 @@ Compile a unified list of ALL findings with severity, location, and suggested fi
 
 ---
 
-## Phase 2: TRIAGE — Decide What to Fix
+## 2단계: 분류 — 수정할 항목 결정
 
 For each finding, decide: **FIX** or **SKIP**.
 
-### FIX (default — lean towards fixing):
+### FIX(기본값 — 수정 우선):
 
 - Real bugs, type errors, silent failures, code quality issues
 - Missing tests for changed or existing code touched by the PR
@@ -95,7 +95,7 @@ For each finding, decide: **FIX** or **SKIP**.
 - Naming improvements
 - Any finding where the fix is concrete and the code is within the PR's touched area
 
-### SKIP only if:
+### 다음 경우에만 SKIP:
 
 - The fix introduces a **genuinely new feature** not related to the PR
 - The fix requires **architectural changes** that affect untouched subsystems
@@ -113,16 +113,16 @@ For each skipped finding, write down **the specific reason**.
 
 ---
 
-## Phase 3: IMPLEMENT — Apply Fixes
+## 3단계: 구현 — 수정 적용
 
-### 3.1 For Each Finding Marked FIX
+### 3.1 FIX로 표시된 각 finding 처리
 
 1. Read the relevant file(s)
 2. Apply the fix following the suggested approach
 3. Run type-check after each fix: `bun run type-check`
 4. Note exactly what was changed
 
-### 3.2 Add Tests
+### 3.2 Add tests
 
 For ANY finding about missing tests:
 
@@ -130,14 +130,14 @@ For ANY finding about missing tests:
 2. Write meaningful tests (not just stubs)
 3. Run them: `bun test {file}`
 
-### 3.3 Fix Documentation
+### 3.3 수정 문서
 
 For ANY finding about docs:
 
 1. Update the relevant documentation
 2. Ensure accuracy with the current code
 
-### 3.4 Handle Blocked Fixes
+### 3.4 처리 blocked Fixes
 
 If a fix cannot be applied (code changed since review, fix would break other things), mark as **BLOCKED** with reason. Do not force a broken fix.
 
@@ -150,7 +150,7 @@ If a fix cannot be applied (code changed since review, fix would break other thi
 
 ---
 
-## Phase 4: VALIDATE — Full Check
+## 4단계: 검증 — 전체 점검
 
 ```bash
 bun run type-check
@@ -172,9 +172,9 @@ All must pass. If something fails after a fix:
 
 ---
 
-## Phase 5: COMMIT AND PUSH
+## 5단계: 커밋 및 Push
 
-### 5.1 Stage and Commit
+### 5.1 Stage 및 commit
 
 Only stage files you actually changed:
 
@@ -216,7 +216,7 @@ git push origin $HEAD_BRANCH
 
 ---
 
-## Phase 6: GENERATE — Write Fix Report
+## 6단계: 생성 — Fix report 작성
 
 Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
@@ -315,7 +315,7 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
 ---
 
-## Phase 7: POST — GitHub Comment
+## 7단계: 게시 — GitHub comment
 
 Post the fix report as a PR comment:
 
@@ -391,7 +391,7 @@ EOF
 
 ---
 
-## Phase 8: OUTPUT — Final Summary
+## 8단계: 출력 — 최종 요약
 
 ```
 ## ⚡ Self-Fix Complete
@@ -414,7 +414,7 @@ Fix report: $ARTIFACTS_DIR/review/fix-report.md
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ON_CORRECT_BRANCH**: Working on PR's head branch
 - **ALL_FINDINGS_ADDRESSED**: Every finding is fixed, skipped (with reason), or blocked (with reason)

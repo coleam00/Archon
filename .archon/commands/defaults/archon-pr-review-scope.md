@@ -1,23 +1,23 @@
 ---
-description: Gather PR context, verify reviewability, and prepare artifacts directory for comprehensive review
+description: PR context 수집, review 가능 여부 확인, comprehensive review용 artifacts directory 준비
 argument-hint: <pr-number|url>
 ---
 
-# PR Review Scope
+# PR 리뷰 범위
 
 **Input**: $ARGUMENTS
 
 ---
 
-## Your Mission
+## 미션
 
 Verify the PR is in a reviewable state, gather all context needed for the parallel review agents, and prepare the artifacts directory structure.
 
 ---
 
-## Phase 1: IDENTIFY - Determine PR
+## 1단계: 식별 — PR 결정
 
-### 1.1 Get PR Number
+### 1.1 가져오기 PR 번호
 
 ```bash
 if [ -f "$ARTIFACTS_DIR/.pr-number" ]; then
@@ -46,7 +46,7 @@ fi
 echo "$PR_NUMBER" > $ARTIFACTS_DIR/.pr-number
 ```
 
-### 1.2 Fetch PR Details
+### 1.2 PR detail 가져오기
 
 ```bash
 gh pr view {number} --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,isDraft,mergeable,mergeStateStatus
@@ -67,11 +67,11 @@ gh pr view {number} --json number,title,body,url,headRefName,baseRefName,files,a
 
 ---
 
-## Phase 2: VERIFY - Pre-Review Checks
+## 2단계: 확인 — pre-review check
 
 **Before launching review agents, verify the PR is in a reviewable state.**
 
-### 2.1 Check for Merge Conflicts
+### 2.1 merge conflict 확인
 
 ```bash
 gh pr view {number} --json mergeable,mergeStateStatus --jq '.mergeable, .mergeStateStatus'
@@ -91,7 +91,7 @@ Please resolve conflicts before requesting a review:
 ```bash
 git fetch origin {base}
 git rebase origin/{base}
-# Resolve conflicts
+# 해결 conflicts
 git push --force-with-lease
 ```
 
@@ -99,7 +99,7 @@ Then re-request the review.
 ```
 **Exit workflow if conflicts detected.**
 
-### 2.2 Check CI Status
+### 2.2 CI 상태 확인
 
 ```bash
 gh pr checks {number} --json name,state,conclusion --jq '.[] | "\(.name): \(.state) (\(.conclusion // "pending"))"'
@@ -114,7 +114,7 @@ gh pr checks {number} --json name,state,conclusion --jq '.[] | "\(.name): \(.sta
 
 **Flag CI status for review report.**
 
-### 2.3 Check Behind Base
+### 2.3 base 뒤처짐 확인
 
 ```bash
 # Get branch names
@@ -147,7 +147,7 @@ git push --force-with-lease
 ```
 ```
 
-### 2.4 Check Draft Status
+### 2.4 draft 상태 확인
 
 ```bash
 gh pr view {number} --json isDraft --jq '.isDraft'
@@ -158,7 +158,7 @@ gh pr view {number} --json isDraft --jq '.isDraft'
 | `false` | Continue normally |
 | `true` | Note in scope, continue (user wants early feedback) |
 
-### 2.5 Check PR Size
+### 2.5 PR size 확인
 
 | Metric | Warning Threshold | Action |
 |--------|-------------------|--------|
@@ -172,7 +172,7 @@ gh pr view {number} --json isDraft --jq '.isDraft'
 Large PRs are harder to review thoroughly. Consider splitting into smaller PRs for better review quality.
 ```
 
-### 2.6 Compile Reviewability Summary
+### 2.6 review 가능성 summary 작성
 
 ```markdown
 ## Pre-Review Status
@@ -195,9 +195,9 @@ Large PRs are harder to review thoroughly. Consider splitting into smaller PRs f
 
 ---
 
-## Phase 3: CONTEXT - Gather Review Context
+## 3단계: 컨텍스트 — review context 수집
 
-### 3.1 Get Full Diff
+### 3.1 full diff 가져오기
 
 ```bash
 gh pr diff {number}
@@ -205,7 +205,7 @@ gh pr diff {number}
 
 Store this for reference - parallel agents will re-fetch as needed.
 
-### 3.2 List Changed Files by Type
+### 3.2 type별 변경 파일 목록화
 
 ```bash
 gh pr view {number} --json files --jq '.files[].path'
@@ -218,7 +218,7 @@ gh pr view {number} --json files --jq '.files[].path'
 - Configuration (`.json`, `.yaml`, `.toml`)
 - Types/interfaces
 
-### 3.3 Check for CLAUDE.md
+### 3.3 CLAUDE.md 확인
 
 ```bash
 cat CLAUDE.md 2>/dev/null | head -100
@@ -226,7 +226,7 @@ cat CLAUDE.md 2>/dev/null | head -100
 
 Note key rules that reviewers should check against.
 
-### 3.4 Identify New Abstractions
+### 3.4 새 abstraction 식별
 
 Scan the diff for new abstractions introduced by this PR:
 
@@ -249,11 +249,11 @@ gh pr diff {number} | grep "^+" | sed 's/^+//' | grep -E "(^interface |^export i
 
 ---
 
-## Phase 3.5: PLAN/ISSUE CONTEXT - Check for Workflow Artifacts
+## 3.5단계: Plan/Issue Context — workflow artifact 확인
 
 **CRITICAL**: If this PR was created by a workflow, there will be artifacts that contain important context for reviewers.
 
-### 3.5.1 Find Workflow Artifacts
+### 3.5.1 workflow artifact 찾기
 
 Check for artifacts from EITHER workflow type:
 
@@ -265,7 +265,7 @@ ls -t $ARTIFACTS_DIR/../runs/*/plan-context.md 2>/dev/null | head -1
 ls -t $ARTIFACTS_DIR/../runs/*/investigation.md 2>/dev/null | head -1
 ```
 
-### 3.5.2 Extract Scope Limits
+### 3.5.2 scope limit 추출
 
 **If plan-context.md exists** (from plan workflow):
 
@@ -283,7 +283,7 @@ sed -n '/## Scope Boundaries/,/^## /p' $ARTIFACTS_DIR/../runs/*/investigation.md
 
 **These are INTENTIONAL exclusions** - do NOT flag them as bugs or missing features!
 
-### 3.5.3 Check Implementation Report
+### 3.5.3 implementation report 확인
 
 ```bash
 # Look for implementation report (either workflow)
@@ -304,22 +304,22 @@ sed -n '/## Deviations/,/^## /p' $ARTIFACTS_DIR/../runs/*/implementation.md | he
 
 ---
 
-## Phase 4: PREPARE - Create Artifacts Directory
+## 4단계: 준비 — artifacts directory 생성
 
-### 4.1 Create Directory Structure
+### 4.1 directory structure 생성
 
 ```bash
 mkdir -p $ARTIFACTS_DIR/review
 ```
 
-### 4.2 Clean Stale Artifacts
+### 4.2 stale artifact 정리
 
 ```bash
 # Remove review directories older than 7 days
 find $ARTIFACTS_DIR/../reviews/pr-* -maxdepth 0 -mtime +7 -exec rm -rf {} \; 2>/dev/null || true
 ```
 
-### 4.3 Create Scope Manifest
+### 4.3 scope manifest 생성
 
 Write `$ARTIFACTS_DIR/review/scope.md`:
 
@@ -442,9 +442,9 @@ _No workflow artifacts found - this appears to be a manual PR._
 
 ---
 
-## Phase 5: OUTPUT - Report to User
+## 5단계: 출력 — 사용자에게 보고
 
-### If Blocked (Conflicts)
+### Blocked인 경우(conflicts)
 
 ```markdown
 ## ❌ Review Blocked: Merge Conflicts
@@ -459,7 +459,7 @@ This PR has merge conflicts that must be resolved before review.
 git fetch origin {base}
 git checkout {head}
 git rebase origin/{base}
-# Resolve conflicts in your editor
+# 해결 conflicts in your editor
 git add .
 git rebase --continue
 git push --force-with-lease
@@ -468,7 +468,7 @@ git push --force-with-lease
 Then re-request the review: `@archon review this PR`
 ```
 
-### If Proceeding
+### 진행 가능한 경우
 
 ```markdown
 ## PR Review Scope Complete
@@ -500,7 +500,7 @@ Launching 5 parallel review agents...
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **PR_IDENTIFIED**: Valid open PR found
 - **NO_CONFLICTS**: Merge conflicts block workflow

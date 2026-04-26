@@ -1,16 +1,16 @@
 ---
-description: Setup for plan execution - read plan, ensure branch ready, write context artifact
+description: plan 실행 준비 — plan 읽기, branch 준비 확인, context artifact 작성
 argument-hint: <path/to/plan.md>
 ---
 
-# Plan Setup
+# Plan 설정
 
 **Plan**: $ARGUMENTS
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Prepare everything needed for plan implementation:
 1. Read and parse the plan (including scope limits)
@@ -22,9 +22,9 @@ Prepare everything needed for plan implementation:
 
 ---
 
-## Phase 1: LOAD - Read the Plan
+## 1단계: 로드 — plan 읽기
 
-### 1.1 Locate Plan File
+### 1.1 plan file 찾기
 
 **Check in order:**
 
@@ -45,7 +45,7 @@ else
 fi
 ```
 
-### 1.2 Load Plan File
+### 1.2 plan file 로드
 
 Read the plan file:
 
@@ -55,7 +55,7 @@ cat $PLAN_PATH
 
 If `$ARGUMENTS` is a GitHub issue URL or number (e.g., `#123`), fetch the issue body instead.
 
-### 1.3 Extract Key Information
+### 1.3 핵심 정보 추출
 
 From the plan, identify and extract:
 
@@ -70,7 +70,7 @@ From the plan, identify and extract:
 
 **CRITICAL**: The "NOT Building" section defines what is **intentionally excluded** from scope. This MUST be captured and passed to review agents so they don't flag intentional exclusions as bugs.
 
-### 1.4 Derive Branch Name
+### 1.4 branch name 도출
 
 Create a branch name from the plan title:
 
@@ -92,9 +92,9 @@ Examples:
 
 ---
 
-## Phase 2: PREPARE - Git State
+## 2단계: 준비 — git 상태
 
-### 2.1 Check Current State
+### 2.1 확인 현재 상태
 
 ```bash
 git branch --show-current
@@ -102,7 +102,7 @@ git status --porcelain
 git remote get-url origin
 ```
 
-### 2.2 Determine Repository Info
+### 2.2 repository 정보 결정
 
 Extract owner/repo from the remote URL for PR creation:
 
@@ -110,7 +110,7 @@ Extract owner/repo from the remote URL for PR creation:
 gh repo view --json nameWithOwner -q .nameWithOwner
 ```
 
-### 2.3 Branch Decision
+### 2.3 branch 결정
 
 Evaluate in order (first matching case wins):
 
@@ -133,7 +133,7 @@ Evaluate in order (first matching case wins):
       └─ NO  → STOP: "On branch {X}, expected {Y}. Switch branches or adjust plan."
 ```
 
-### 2.4 Sync with Remote
+### 2.4 remote와 sync
 
 ```bash
 git fetch origin
@@ -142,7 +142,7 @@ git rebase origin/$BASE_BRANCH || git merge origin/$BASE_BRANCH
 
 If conflicts occur, STOP with error: "Merge conflicts with $BASE_BRANCH. Resolve manually."
 
-### 2.5 Push Branch (if commits exist)
+### 2.5 commit이 있으면 branch push
 
 If there are commits on the branch:
 ```bash
@@ -159,14 +159,14 @@ If no commits yet (fresh branch), skip push - it will happen after implementatio
 
 ---
 
-## Phase 3: ARTIFACT - Write Context File
+## 3단계: Artifact — context file 작성
 
-### 3.1 Create Artifact Directory
+### 3.1 artifact directory 생성
 
 ```bash
 ```
 
-### 3.2 Write Context Artifact
+### 3.2 context artifact 작성
 
 Write to `$ARTIFACTS_DIR/plan-context.md`:
 
@@ -269,7 +269,7 @@ bun run build
 
 ---
 
-## Phase 4: OUTPUT - Report to User
+## 4단계: 출력 — 사용자에게 보고
 
 ```markdown
 ## Plan Setup Complete
@@ -307,9 +307,9 @@ Proceed to `archon-confirm-plan` to verify the plan's research is still valid.
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### Plan File Not Found
+### Plan 파일 없음
 
 ```
 ❌ Plan not found: $ARGUMENTS
@@ -317,7 +317,7 @@ Proceed to `archon-confirm-plan` to verify the plan's research is still valid.
 Verify the path exists and try again.
 ```
 
-### Uncommitted Changes on Base Branch
+### Base branch에 commit되지 않은 변경사항 있음
 
 ```
 ❌ Uncommitted changes on base branch
@@ -330,7 +330,7 @@ Options:
 Then retry.
 ```
 
-### Merge Conflicts
+### Merge conflict
 
 ```
 ❌ Merge conflicts with $BASE_BRANCH
@@ -346,7 +346,7 @@ Then retry.
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **PLAN_LOADED**: Plan file read and parsed
 - **SCOPE_LIMITS_CAPTURED**: "NOT Building" section extracted (even if empty)

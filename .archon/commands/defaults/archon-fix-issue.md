@@ -1,15 +1,15 @@
 ---
-description: Implement a fix from investigation artifact - code changes, validation, and commit (no PR)
+description: investigation artifact 기반 수정 구현 — 코드 변경, 검증, commit 수행(PR 없음)
 argument-hint: <issue-number|artifact-path>
 ---
 
-# Fix Issue
+# Issue 수정
 
 **Input**: $ARGUMENTS
 
 ---
 
-## Your Mission
+## 미션
 
 Execute the implementation plan from `/investigate-issue`:
 
@@ -25,9 +25,9 @@ Execute the implementation plan from `/investigate-issue`:
 
 ---
 
-## Phase 1: LOAD - Get the Artifact
+## 1단계: 로드 — artifact 가져오기
 
-### 1.1 Find Investigation Artifact
+### 1.1 investigation artifact 찾기
 
 Look for the investigation artifact from the previous step:
 
@@ -38,7 +38,7 @@ ls $ARTIFACTS_DIR/investigation.md
 
 **If input is a specific path**, use that path directly.
 
-### 1.2 Load and Parse Artifact
+### 1.2 artifact 로드 및 파싱
 
 ```bash
 cat {artifact-path}
@@ -52,7 +52,7 @@ cat {artifact-path}
 - Validation commands
 - Test cases to add
 
-### 1.3 Validate Artifact Exists
+### 1.3 artifact 존재 확인
 
 **If artifact not found:**
 ```
@@ -68,9 +68,9 @@ Run `/investigate-issue {number}` first to create the implementation plan.
 
 ---
 
-## Phase 2: VALIDATE - Sanity Check
+## 2단계: 검증 — sanity check
 
-### 2.1 Verify Plan Accuracy
+### 2.1 plan 정확성 확인
 
 For each file mentioned in the artifact:
 - Read the actual current code
@@ -90,7 +90,7 @@ Options:
 2. Proceed carefully with manual adjustments
 ```
 
-### 2.2 Confirm Approach Makes Sense
+### 2.2 접근 방식 타당성 확인
 
 Ask yourself:
 - Does the proposed fix actually address the root cause?
@@ -109,9 +109,9 @@ Ask yourself:
 
 ---
 
-## Phase 3: GIT-CHECK - Ensure Correct State
+## 3단계: GIT — CHECK - 확인 Correct 상태
 
-### 3.1 Check Current Git State
+### 3.1 현재 git 상태 확인
 
 ```bash
 # What branch are we on?
@@ -129,7 +129,7 @@ git fetch origin
 git status
 ```
 
-### 3.2 Decision Tree
+### 3.2 decision tree
 
 ```text
 ┌─ IN WORKTREE?
@@ -157,7 +157,7 @@ git status
    └─ STOP: "Uncommitted changes. Please commit or stash first."
 ```
 
-### 3.3 Ensure Up-to-Date
+### 3.3 최신 상태 확인
 
 ```bash
 # If branch tracks remote
@@ -171,9 +171,9 @@ git pull --rebase origin $BASE_BRANCH 2>/dev/null || git pull origin $BASE_BRANC
 
 ---
 
-## Phase 4: DEPENDENCIES - Discover and Install
+## 4단계: 의존성 — 탐색 및 설치
 
-### 4.1 Detect Install Command
+### 4.1 install command 감지
 
 Inspect the worktree for lock/config files and choose the install command:
 
@@ -186,11 +186,11 @@ Inspect the worktree for lock/config files and choose the install command:
 - `Cargo.toml` → `cargo build`
 - `go.mod` → `go mod download`
 
-### 4.2 Run Install
+### 4.2 install 실행
 
 Run the chosen install command from the worktree root before any validation or tests.
 
-### 4.3 Failure Handling
+### 4.3 실패 처리
 
 If install fails, STOP and report the error. Do not proceed to validation with missing dependencies.
 
@@ -200,9 +200,9 @@ If install fails, STOP and report the error. Do not proceed to validation with m
 
 ---
 
-## Phase 5: IMPLEMENT - Make Changes
+## 5단계: 구현 — 변경 수행
 
-### 5.1 Execute Each Step
+### 5.1 각 step 실행
 
 For each step in the artifact's Implementation Plan:
 
@@ -210,7 +210,7 @@ For each step in the artifact's Implementation Plan:
 2. **Make the change** - exactly as specified
 3. **Verify types compile** - `bun run type-check`
 
-### 5.2 Implementation Rules
+### 5.2 implementation 규칙
 
 **DO:**
 - Follow artifact steps in order
@@ -224,7 +224,7 @@ For each step in the artifact's Implementation Plan:
 - Change formatting of untouched lines
 - Deviate from the artifact without noting it
 
-### 5.3 Handle Each File Type
+### 5.3 각 file type 처리
 
 **For UPDATE files:**
 - Read current content
@@ -242,7 +242,7 @@ For each step in the artifact's Implementation Plan:
 - Follow existing test patterns
 - Ensure tests actually test the fix
 
-### 5.4 Track Deviations
+### 5.4 deviation 추적
 
 If you must deviate from the artifact:
 - Note what changed and why
@@ -256,9 +256,9 @@ If you must deviate from the artifact:
 
 ---
 
-## Phase 6: VERIFY - Run Validation
+## 6단계: 확인 — validation 실행
 
-### 6.1 Run Artifact Validation Commands
+### 6.1 artifact validation command 실행
 
 Execute each command from the artifact's Validation section:
 
@@ -268,7 +268,7 @@ bun test {pattern-from-artifact}
 bun run lint
 ```
 
-### 6.2 Check Results
+### 6.2 결과 확인
 
 **All must pass before proceeding.**
 
@@ -278,7 +278,7 @@ If failures:
 3. Re-run validation
 4. Note any fixes in implementation report
 
-### 6.3 Manual Verification (if specified)
+### 6.3 수동 검증(지정된 경우)
 
 Execute any manual verification steps from the artifact.
 
@@ -290,16 +290,16 @@ Execute any manual verification steps from the artifact.
 
 ---
 
-## Phase 7: COMMIT - Save Changes
+## 7단계: 커밋 — 변경 저장
 
-### 7.1 Stage Changes
+### 7.1 stage 변경사항
 
 ```bash
 git add -A
 git status  # Review what's being committed
 ```
 
-### 7.2 Write Commit Message
+### 7.2 commit message 작성
 
 **Format:**
 ```
@@ -337,9 +337,9 @@ EOF
 
 ---
 
-## Phase 8: WRITE - Implementation Report
+## 8단계: 작성 — implementation report
 
-### 8.1 Write Implementation Artifact
+### 8.1 implementation artifact 작성
 
 Write to `$ARTIFACTS_DIR/implementation.md`:
 
@@ -397,7 +397,7 @@ Write to `$ARTIFACTS_DIR/implementation.md`:
 
 ---
 
-## Phase 9: OUTPUT - Report to User
+## 9단계: 출력 — 사용자에게 보고
 
 Skip archiving - artifacts remain in place for review workflow to access.
 
@@ -436,37 +436,37 @@ Proceeding to PR creation...
 
 ---
 
-## Handling Edge Cases
+## Edge Case 처리
 
-### Artifact is outdated
+### Artifact가 오래됨
 - Warn user about drift
 - Suggest re-running `/investigate-issue`
 - Can proceed with caution if changes are minor
 
-### Tests fail after implementation
+### 구현 후 test 실패
 - Debug the failure
 - Fix the code (not the test, unless test is wrong)
 - Re-run validation
 - Note the additional fix in implementation report
 
-### Merge conflicts during rebase
+### Rebase 중 merge conflict
 - Resolve conflicts
 - Re-run full validation
 - Note conflict resolution in implementation report
 
-### Already on a branch with changes
+### 이미 변경사항이 있는 branch에 있음
 - Use the existing branch
 - Warn if branch name doesn't match issue
 - Don't create a new branch
 
-### In a worktree
+### Worktree 안에 있음
 - Use it as-is
 - Assume it was created for this purpose
 - Log that worktree is being used
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **PLAN_EXECUTED**: All investigation steps completed
 - **VALIDATION_PASSED**: All checks green

@@ -1,5 +1,5 @@
 ---
-description: Review test coverage quality, identify gaps, and evaluate test effectiveness
+description: test coverage 품질을 검토하고 gap 및 test 효과성을 평가
 argument-hint: (none - reads from scope artifact)
 ---
 
@@ -7,7 +7,7 @@ argument-hint: (none - reads from scope artifact)
 
 ---
 
-## Your Mission
+## 미션
 
 Analyze test coverage for the PR changes. Identify critical gaps, evaluate test quality, and ensure tests verify behavior (not implementation). Produce a structured artifact with findings and recommendations.
 
@@ -15,15 +15,15 @@ Analyze test coverage for the PR changes. Identify critical gaps, evaluate test 
 
 ---
 
-## Phase 1: LOAD - Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ```
 
-### 1.2 Read Scope
+### 1.2 scope 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/scope.md
@@ -33,13 +33,13 @@ Note which files are source vs test files.
 
 **CRITICAL**: Check for "NOT Building (Scope Limits)" section. Items listed there are **intentionally excluded** - do NOT flag them as bugs or missing test coverage!
 
-### 1.3 Get PR Diff
+### 1.3 PR diff 가져오기
 
 ```bash
 gh pr diff {number}
 ```
 
-### 1.4 Read Existing Tests
+### 1.4 읽기 기존 tests
 
 For each new/modified source file, find corresponding test file:
 
@@ -55,16 +55,16 @@ find src -name "*.test.ts" -o -name "*.spec.ts" | head -20
 
 ---
 
-## Phase 2: ANALYZE - Evaluate Coverage
+## 2단계: 분석 — coverage 평가
 
-### 2.1 Map Source to Tests
+### 2.1 source와 test 매핑
 
 For each changed source file:
 - Does a corresponding test file exist?
 - Are new functions/features tested?
 - Are modified functions' tests updated?
 
-### 2.2 Identify Critical Gaps
+### 2.2 critical gap 식별
 
 Look for untested:
 - Error handling paths
@@ -74,7 +74,7 @@ Look for untested:
 - Async/concurrent behavior
 - Integration points
 
-### 2.3 Evaluate Test Quality
+### 2.3 test 품질 평가
 
 For existing tests, check:
 - Do they test behavior or implementation?
@@ -83,7 +83,7 @@ For existing tests, check:
 - Do they follow DAMP principles?
 - Are assertions meaningful?
 
-### 2.4 Find Test Patterns
+### 2.4 test pattern 찾기
 
 ```bash
 # Find test patterns in codebase
@@ -98,7 +98,7 @@ grep -r "describe\|it\|test\(" src/ --include="*.test.ts" | head -20
 
 ---
 
-## Phase 3: GENERATE - Create Artifact
+## 3단계: 생성 — artifact 생성
 
 Write to `$ARTIFACTS_DIR/review/test-coverage-findings.md`:
 
@@ -162,7 +162,7 @@ Write to `$ARTIFACTS_DIR/review/test-coverage-findings.md`:
 | A | {test approach} | {what it catches} | LOW/MED/HIGH |
 | B | {alternative} | {what it catches} | LOW/MED/HIGH |
 
-**Recommended**: Option {X}
+**권장**: Option {X}
 
 **Reasoning**:
 {Why this test approach:
@@ -171,7 +171,7 @@ Write to `$ARTIFACTS_DIR/review/test-coverage-findings.md`:
 - Good cost/benefit ratio
 - Catches the most critical failures}
 
-**Recommended Test**:
+**권장 test**:
 ```typescript
 describe('{feature}', () => {
   it('should {expected behavior}', () => {
@@ -265,7 +265,7 @@ describe('{feature}', () => {
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **COVERAGE_MAPPED**: Each source file mapped to tests
 - **GAPS_IDENTIFIED**: Missing tests found with criticality scores

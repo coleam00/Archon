@@ -1,21 +1,21 @@
 ---
-description: Post code review findings as a comment on the PR
+description: code review findings를 PR comment로 게시
 argument-hint: (none - reads from artifacts)
 ---
 
-# Post Review to PR
+# PR에 리뷰 게시
 
 ---
 
-## Your Mission
+## 미션
 
 Read the code review findings artifact and post a formatted summary as a comment on the PR.
 
 ---
 
-## Phase 1: LOAD - Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number
+### 1.1 가져오기 PR 번호
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
@@ -27,7 +27,7 @@ PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 Cannot post review without a PR number.
 ```
 
-### 1.2 Read Review Findings
+### 1.2 읽기 review findings
 
 ```bash
 cat $ARTIFACTS_DIR/review/code-review-findings.md
@@ -45,9 +45,9 @@ Run code review first.
 
 ---
 
-## Phase 2: FORMAT - Build PR Comment
+## 2단계: 형식화 — PR comment 작성
 
-### 2.1 Extract Key Information
+### 2.1 핵심 정보 추출
 
 From the review findings, extract:
 - **Verdict**: APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION
@@ -55,7 +55,7 @@ From the review findings, extract:
 - **Findings**: All findings with severity and location
 - **Statistics**: Finding counts by severity
 
-### 2.2 Build Comment Body
+### 2.2 comment body 작성
 
 Format the review as a GitHub-friendly comment:
 
@@ -126,9 +126,9 @@ Format the review as a GitHub-friendly comment:
 
 ---
 
-## Phase 3: POST - Comment on PR
+## 3단계: 게시 — PR에 comment
 
-### 3.1 Post the Comment
+### 3.1 comment 게시
 
 ```bash
 gh pr comment {PR_NUMBER} --body "$(cat <<'EOF'
@@ -137,7 +137,7 @@ EOF
 )"
 ```
 
-### 3.2 Verify
+### 3.2 확인
 
 ```bash
 # Check the comment was posted
@@ -150,7 +150,7 @@ gh pr view {PR_NUMBER} --comments --json comments --jq '.comments | length'
 
 ---
 
-## Phase 4: OUTPUT - Report to User
+## 4단계: 출력 — 사용자에게 보고
 
 ```markdown
 ## Review Posted to PR
@@ -164,24 +164,24 @@ Review comment has been posted to the pull request.
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### PR not found
+### PR을 찾을 수 없음
 - Verify PR number is correct
 - Check if PR is still open
 - Report error to user
 
-### Comment fails to post
+### Comment 게시 실패
 - Check GitHub authentication
 - Try with shorter body if too large
 - Report error with details
 
-### No findings
+### Findings 없음
 - Post a clean review comment: "No issues found. LGTM!"
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **FINDINGS_LOADED**: Review artifact read successfully
 - **COMMENT_FORMATTED**: PR comment built with all findings

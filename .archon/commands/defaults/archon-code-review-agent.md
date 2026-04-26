@@ -1,13 +1,13 @@
 ---
-description: Review code quality, CLAUDE.md compliance, and detect bugs
+description: 코드 품질, CLAUDE.md 준수 여부, 버그를 검토
 argument-hint: (none - reads from scope artifact)
 ---
 
-# Code Review Agent
+# 코드 리뷰 Agent
 
 ---
 
-## Your Mission
+## 미션
 
 Review the PR for code quality, CLAUDE.md compliance, patterns, and bugs. Produce a structured artifact with findings, fix suggestions with multiple options, and reasoning.
 
@@ -15,15 +15,15 @@ Review the PR for code quality, CLAUDE.md compliance, patterns, and bugs. Produc
 
 ---
 
-## Phase 1: LOAD - Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ```
 
-### 1.2 Read Scope
+### 1.2 scope 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/scope.md
@@ -36,13 +36,13 @@ Note:
 
 **CRITICAL**: Check for "NOT Building (Scope Limits)" section. Items listed there are **intentionally excluded** - do NOT flag them as bugs or missing features!
 
-### 1.3 Get PR Diff
+### 1.3 PR diff 가져오기
 
 ```bash
 gh pr diff {number}
 ```
 
-### 1.4 Read CLAUDE.md
+### 1.4 CLAUDE.md 읽기
 
 ```bash
 cat CLAUDE.md
@@ -58,9 +58,9 @@ Note all coding standards, patterns, and rules.
 
 ---
 
-## Phase 2: ANALYZE - Review Code
+## 2단계: 분석 — 코드 검토
 
-### 2.1 Check CLAUDE.md Compliance
+### 2.1 CLAUDE.md 준수 확인
 
 For each changed file, verify:
 - Import patterns match project style
@@ -69,7 +69,7 @@ For each changed file, verify:
 - Type annotations complete
 - Testing patterns followed
 
-### 2.2 Detect Bugs
+### 2.2 버그 탐지
 
 Look for:
 - Logic errors
@@ -80,7 +80,7 @@ Look for:
 - Off-by-one errors
 - Missing error handling
 
-### 2.3 Check Code Quality
+### 2.3 코드 품질 확인
 
 Evaluate:
 - Code duplication
@@ -89,7 +89,7 @@ Evaluate:
 - Clear naming
 - Appropriate comments
 
-### 2.4 Pattern Matching
+### 2.4 패턴 매칭
 
 For each issue found, search codebase for correct patterns:
 
@@ -98,7 +98,7 @@ For each issue found, search codebase for correct patterns:
 grep -r "pattern" src/ --include="*.ts" | head -5
 ```
 
-### 2.5 Check for Primitive Duplication
+### 2.5 primitive 중복 확인
 
 For each new interface, class, type alias, or utility module introduced in the diff:
 
@@ -122,7 +122,7 @@ grep -r "interface {Name}\|class {Name}\|type {Name}" packages/ --include="*.ts"
 
 ---
 
-## Phase 3: GENERATE - Create Artifact
+## 3단계: 생성 — artifact 생성
 
 Write to `$ARTIFACTS_DIR/review/code-review-findings.md`:
 
@@ -172,7 +172,7 @@ Write to `$ARTIFACTS_DIR/review/code-review-findings.md`:
 | A | {approach description} | {benefits} | {drawbacks} |
 | B | {alternative approach} | {benefits} | {drawbacks} |
 
-**Recommended**: Option {A/B}
+**권장**: Option {A/B}
 
 **Reasoning**:
 {Explain why this option is preferred, referencing:
@@ -181,9 +181,9 @@ Write to `$ARTIFACTS_DIR/review/code-review-findings.md`:
 - Best practices
 - Specific project context}
 
-**Recommended Fix**:
+**권장 수정**:
 ```typescript
-// Suggested fix
+// 제안 수정
 {corrected code}
 ```
 
@@ -252,15 +252,15 @@ Write to `$ARTIFACTS_DIR/review/code-review-findings.md`:
 
 ---
 
-## Phase 4: VALIDATE - Check Artifact
+## 4단계: 검증 — artifact 확인
 
-### 4.1 Verify File Exists
+### 4.1 파일 존재 확인
 
 ```bash
 cat $ARTIFACTS_DIR/review/code-review-findings.md | head -20
 ```
 
-### 4.2 Check Structure
+### 4.2 구조 확인
 
 Verify artifact contains:
 - Summary with verdict
@@ -275,7 +275,7 @@ Verify artifact contains:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **CONTEXT_LOADED**: Scope and diff read successfully
 - **ANALYSIS_COMPLETE**: All changed files reviewed

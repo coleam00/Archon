@@ -1,13 +1,13 @@
 ---
-description: Check if PR changes require documentation updates (CLAUDE.md, docs/, agents)
+description: PR 변경에 문서 업데이트(CLAUDE.md, docs/, agents)가 필요한지 확인
 argument-hint: (none - reads from scope artifact)
 ---
 
-# Documentation Impact Agent
+# 문서 영향 Agent
 
 ---
 
-## Your Mission
+## 미션
 
 Analyze if the PR changes require updates to project documentation: CLAUDE.md, docs/ folder, agent definitions, or other documentation. Produce a structured artifact with recommendations.
 
@@ -15,15 +15,15 @@ Analyze if the PR changes require updates to project documentation: CLAUDE.md, d
 
 ---
 
-## Phase 1: LOAD - Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number from Registry
+### 1.1 registry에서 PR 번호 가져오기
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
 ```
 
-### 1.2 Read Scope
+### 1.2 scope 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/review/scope.md
@@ -31,13 +31,13 @@ cat $ARTIFACTS_DIR/review/scope.md
 
 **CRITICAL**: Check for "NOT Building (Scope Limits)" section. Items listed there are **intentionally excluded** - do NOT flag them as missing documentation needs!
 
-### 1.3 Get PR Diff
+### 1.3 PR diff 가져오기
 
 ```bash
 gh pr diff {number}
 ```
 
-### 1.4 Read Current Documentation
+### 1.4 현재 문서 읽기
 
 ```bash
 # Read CLAUDE.md
@@ -58,9 +58,9 @@ ls -la .archon/commands/ 2>/dev/null || true
 
 ---
 
-## Phase 2: ANALYZE - Check Documentation Impact
+## 2단계: 분석 — 문서 영향 확인
 
-### 2.1 CLAUDE.md Impact
+### 2.1 CLAUDE.md 영향
 
 Check if changes affect documented:
 - Commands or slash commands
@@ -72,7 +72,7 @@ Check if changes affect documented:
 - Testing instructions
 - Code patterns/standards
 
-### 2.2 docs/ Folder Impact
+### 2.2 docs/ folder 영향
 
 Check if changes affect:
 - Architecture documentation
@@ -81,7 +81,7 @@ Check if changes affect:
 - API documentation
 - Deployment instructions
 
-### 2.3 Agent/Command Definitions
+### 2.3 agent/command 정의
 
 Check if changes affect:
 - Agent capabilities
@@ -89,7 +89,7 @@ Check if changes affect:
 - Workflow steps
 - Tool usage patterns
 
-### 2.4 README Impact
+### 2.4 README 영향
 
 Check if changes affect:
 - Feature list
@@ -105,7 +105,7 @@ Check if changes affect:
 
 ---
 
-## Phase 3: GENERATE - Create Artifact
+## 3단계: 생성 — artifact 생성
 
 Write to `$ARTIFACTS_DIR/review/docs-impact-findings.md`:
 
@@ -174,7 +174,7 @@ Write to `$ARTIFACTS_DIR/review/docs-impact-findings.md`:
 | A | {minimal update} | {what it covers} | LOW |
 | B | {comprehensive update} | {what it covers} | MED/HIGH |
 
-**Recommended**: Option {X}
+**권장**: Option {X}
 
 **Reasoning**:
 {Why this update approach:
@@ -252,7 +252,7 @@ Write to `$ARTIFACTS_DIR/review/docs-impact-findings.md`:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **DOCS_ANALYZED**: All relevant docs checked
 - **IMPACT_ASSESSED**: Each doc rated for impact

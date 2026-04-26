@@ -1,17 +1,17 @@
 ---
-description: Analyze code on the main/base branch to confirm the bug or gap exists before the PR's changes
+description: PR 변경 전 main/base branch에 bug 또는 gap이 실제로 존재하는지 확인
 argument-hint: (none - reads from artifacts)
 ---
 
-# Code Review: Main Branch (Pre-PR State)
+# 코드 리뷰: Main Branch(PR 이전 상태)
 
 Analyze the codebase on the **main branch** to confirm that the bug, gap, or missing feature described in the PR actually exists.
 
 ---
 
-## Phase 1: Load Context
+## Phase 1: 로드 context
 
-### 1.1 Read PR Details
+### 1.1 PR detail 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/.pr-number
@@ -22,7 +22,7 @@ PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
 gh pr view "$PR_NUMBER" --json title,body,headRefName,baseRefName,labels
 ```
 
-### 1.2 Read Path Information
+### 1.2 path 정보 읽기
 
 ```bash
 cat $ARTIFACTS_DIR/.canonical-repo
@@ -30,7 +30,7 @@ cat $ARTIFACTS_DIR/.worktree-path
 cat $ARTIFACTS_DIR/.pr-base
 ```
 
-### 1.3 Understand What the PR Claims to Fix
+### 1.3 PR이 수정한다고 주장하는 내용 이해
 
 From the PR title, body, and linked issue(s):
 - What bug or gap does the PR claim exists?
@@ -50,9 +50,9 @@ fi
 
 ---
 
-## Phase 2: Analyze Main Branch Code
+## Phase 2: 분석 Main Branch code
 
-### 2.1 Read the Files That the PR Changes
+### 2.1 PR이 변경한 파일 읽기
 
 Get the list of changed files from the PR diff, then read those **same files on the main branch** (the canonical repo path).
 
@@ -71,7 +71,7 @@ CANONICAL_REPO=$(cat $ARTIFACTS_DIR/.canonical-repo | tr -d '\n')
 cat "$CANONICAL_REPO/<file-path>"
 ```
 
-### 2.2 Trace the Bug or Gap
+### 2.2 bug/gap 추적
 
 For each claim in the PR:
 1. **Find the relevant code** on main — read the specific functions, components, hooks
@@ -79,7 +79,7 @@ For each claim in the PR:
 3. **Identify the root cause** — can you see the bug in the code?
 4. **Check related code** — are there adjacent issues the PR might miss?
 
-### 2.3 Assess Severity
+### 2.3 severity 평가
 
 - How impactful is this bug/gap on main?
 - Is it user-facing or internal?
@@ -88,7 +88,7 @@ For each claim in the PR:
 
 ---
 
-## Phase 3: Write Findings
+## Phase 3: 작성 findings
 
 Write your analysis to `$ARTIFACTS_DIR/code-review-main.md`:
 
@@ -141,7 +141,7 @@ Write your analysis to `$ARTIFACTS_DIR/code-review-main.md`:
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **PR_CONTEXT_LOADED**: PR details and linked issue read
 - **MAIN_CODE_ANALYZED**: Changed files read from main branch

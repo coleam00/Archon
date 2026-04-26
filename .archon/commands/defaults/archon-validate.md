@@ -1,15 +1,15 @@
 ---
-description: Run full validation suite - type-check, lint, tests, build
+description: 전체 validation suite 실행 — type-check, lint, tests, build
 argument-hint: (no arguments - reads from workflow artifacts)
 ---
 
-# Validate Implementation
+# Implementation 검증
 
 **Workflow ID**: $WORKFLOW_ID
 
 ---
 
-## Your Mission
+## 미션
 
 Run the complete validation suite and fix any failures.
 
@@ -17,9 +17,9 @@ This is a focused step: run checks, fix issues, repeat until green.
 
 ---
 
-## Phase 1: LOAD - Get Validation Commands
+## 1단계: 로드 — validation command 가져오기
 
-### 1.1 Load Plan Context
+### 1.1 plan context 로드
 
 ```bash
 cat $ARTIFACTS_DIR/plan-context.md
@@ -27,7 +27,7 @@ cat $ARTIFACTS_DIR/plan-context.md
 
 Extract the "Validation Commands" section.
 
-### 1.2 Identify Package Manager
+### 1.2 package manager 식별
 
 ```bash
 test -f bun.lockb && echo "bun" || \
@@ -37,7 +37,7 @@ test -f package-lock.json && echo "npm" || \
 echo "unknown"
 ```
 
-### 1.3 Determine Available Commands
+### 1.3 사용 가능한 command 결정
 
 Check `package.json` for available scripts:
 
@@ -52,11 +52,11 @@ cat package.json | grep -A 20 '"scripts"'
 
 ---
 
-## Phase 2: VALIDATE - Run All Checks
+## 2단계: 검증 — 모든 check 실행
 
 Run each check in order. Fix any failures before proceeding.
 
-### 2.1 Type Check
+### 2.1 type check
 
 ```bash
 {runner} run type-check
@@ -69,7 +69,7 @@ Run each check in order. Fix any failures before proceeding.
 
 **Record result**: ✅ Pass / ❌ Fail (fixed)
 
-### 2.2 Lint Check
+### 2.2 lint check
 
 ```bash
 {runner} run lint
@@ -88,7 +88,7 @@ Run each check in order. Fix any failures before proceeding.
 
 **Record result**: ✅ Pass / ❌ Fail (fixed)
 
-### 2.3 Format Check
+### 2.3 format check
 
 ```bash
 {runner} run format:check
@@ -108,7 +108,7 @@ Run each check in order. Fix any failures before proceeding.
 
 **Record result**: ✅ Pass / ❌ Fail (fixed)
 
-### 2.4 Test Suite
+### 2.4 test suite
 
 ```bash
 {runner} test
@@ -123,7 +123,7 @@ Run each check in order. Fix any failures before proceeding.
 
 **Record result**: ✅ Pass ({N} tests) / ❌ Fail (fixed)
 
-### 2.5 Build Check
+### 2.5 build 확인
 
 ```bash
 {runner} run build
@@ -146,9 +146,9 @@ Run each check in order. Fix any failures before proceeding.
 
 ---
 
-## Phase 3: ARTIFACT - Write Validation Results
+## 3단계: Artifact — validation result 작성
 
-### 3.1 Write Validation Artifact
+### 3.1 작성 validation artifact
 
 Write to `$ARTIFACTS_DIR/validation.md`:
 
@@ -267,9 +267,9 @@ Continue to `archon-finalize-pr` to update PR and mark ready for review.
 
 ---
 
-## Phase 4: OUTPUT - Report Results
+## 4단계: 출력 — 결과 보고
 
-### If All Pass:
+### 모두 통과한 경우:
 
 ```markdown
 ## Validation Complete ✅
@@ -302,7 +302,7 @@ Results written to: `$ARTIFACTS_DIR/validation.md`
 Proceed to `archon-finalize-pr` to update PR and mark ready for review.
 ```
 
-### If Blocked (unfixable issue):
+### Blocked인 경우(수정 불가 issue):
 
 ```markdown
 ## Validation Blocked ❌
@@ -331,7 +331,7 @@ Partial results written to: `$ARTIFACTS_DIR/validation.md`
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **TYPE_CHECK_PASS**: `{runner} run type-check` exits 0
 - **LINT_PASS**: `{runner} run lint` exits 0

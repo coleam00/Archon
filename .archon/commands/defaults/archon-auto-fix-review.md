@@ -1,13 +1,13 @@
 ---
-description: Auto-fix all review findings unless clear YAGNI violations, post fix report
+description: 리뷰 findings를 자동 수정하고 명확한 YAGNI 위반은 제외한 뒤 fix report 작성
 argument-hint: (none - reads all review artifacts from $ARTIFACTS_DIR/review/)
 ---
 
-# Auto-Fix Review Findings
+# 리뷰 Findings 자동 수정
 
 ---
 
-## IMPORTANT: Output Behavior
+## 중요: 출력 방식
 
 **Your output will be posted as a GitHub comment.** Keep working output minimal:
 - Do NOT narrate each step
@@ -17,7 +17,7 @@ argument-hint: (none - reads all review artifacts from $ARTIFACTS_DIR/review/)
 
 ---
 
-## Your Mission
+## 미션
 
 Read all review artifacts produced in this workflow run and fix everything surfaced — unless a finding is a clear YAGNI violation or speculative over-engineering beyond the scope of the original fix. Validate, commit, push, write an artifact, and post a GitHub comment explaining what was fixed and why anything was skipped.
 
@@ -27,9 +27,9 @@ Read all review artifacts produced in this workflow run and fix everything surfa
 
 ---
 
-## Phase 1: LOAD — Get Context
+## 1단계: 로드 — 컨텍스트 수집
 
-### 1.1 Get PR Number and Branch
+### 1.1 PR 번호와 branch 확인
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number)
@@ -37,7 +37,7 @@ HEAD_BRANCH=$(gh pr view $PR_NUMBER --json headRefName --jq '.headRefName')
 echo "PR: $PR_NUMBER, Branch: $HEAD_BRANCH"
 ```
 
-### 1.2 Checkout PR Branch
+### 1.2 PR branch checkout
 
 **Always re-checkout to ensure you are on the right branch.**
 
@@ -54,7 +54,7 @@ git branch --show-current
 git status --porcelain
 ```
 
-### 1.3 Read All Review Artifacts
+### 1.3 모든 review artifact 읽기
 
 Discover whatever review artifacts exist — there may be one or many depending on which review agents ran:
 
@@ -70,7 +70,7 @@ for f in $ARTIFACTS_DIR/review/*.md; do
 done
 ```
 
-### 1.4 Extract Findings
+### 1.4 Findings 추출
 
 From all loaded artifacts, compile a unified list of all findings with their severity, location, and suggested fix.
 
@@ -82,15 +82,15 @@ From all loaded artifacts, compile a unified list of all findings with their sev
 
 ---
 
-## Phase 2: TRIAGE — Decide What to Fix
+## 2단계: 분류 — 수정할 항목 결정
 
 For each finding, decide: **FIX** or **SKIP**.
 
-### Fix if:
+### 수정할 조건:
 - It is a real bug, type error, silent failure, or clear code quality issue
 - The fix is concrete and low-risk
 
-### Skip (YAGNI / out-of-scope) if the finding recommends:
+### 건너뛸 조건(YAGNI / 범위 밖):
 - Adding something not required to fix the original issue (new config options, new abstractions, speculative fallbacks, "what if" edge cases)
 - Refactoring or restructuring code that isn't broken
 - Adding validation for inputs that cannot actually be invalid in this context
@@ -107,20 +107,20 @@ For each skipped finding, write down **the specific reason** — this goes in th
 
 ---
 
-## Phase 3: IMPLEMENT — Apply Fixes
+## 3단계: 구현 — 수정 적용
 
-### 3.1 For Each Finding Marked FIX
+### 3.1 FIX로 표시된 각 finding 처리
 
 1. Read the relevant file(s)
 2. Apply the fix following the suggested approach from the review artifact
 3. Run type-check after each fix: `bun run type-check`
 4. Note exactly what was changed
 
-### 3.2 Handle Unfixable Findings
+### 3.2 수정 불가 finding 처리
 
 If a fix cannot be applied (code changed since review, fix is ambiguous, fix would break other things), mark it as **BLOCKED** and document why. Do not force a broken fix.
 
-### 3.3 Add Tests for Fixed Code
+### 3.3 수정 코드에 test 추가
 
 If the review flagged missing test coverage for something you just fixed, add a targeted test. Run it:
 
@@ -135,7 +135,7 @@ bun test {file}
 
 ---
 
-## Phase 4: VALIDATE — Full Check
+## 4단계: 검증 — 전체 점검
 
 ```bash
 bun run type-check
@@ -155,9 +155,9 @@ All must pass. If something fails after a fix:
 
 ---
 
-## Phase 5: COMMIT AND PUSH
+## 5단계: 커밋 및 Push
 
-### 5.1 Stage and Commit
+### 5.1 Stage 및 commit
 
 Only stage files you actually changed:
 
@@ -189,7 +189,7 @@ git push origin $HEAD_BRANCH
 
 ---
 
-## Phase 6: GENERATE — Write Fix Report
+## 6단계: 생성 — Fix report 작성
 
 Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
@@ -261,7 +261,7 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
 ---
 
-## Phase 7: POST — GitHub Comment
+## 7단계: 게시 — GitHub comment
 
 Post the fix report as a PR comment:
 
@@ -317,7 +317,7 @@ EOF
 
 ---
 
-## Phase 8: OUTPUT — Final Summary
+## 8단계: 출력 — 최종 요약
 
 Output only this:
 
@@ -340,24 +340,24 @@ Fix report: $ARTIFACTS_DIR/review/fix-report.md
 
 ---
 
-## Error Handling
+## 오류 처리
 
-### Type check fails after a fix
+### 수정 후 type check 실패
 1. Review the error
 2. Adjust or revert the fix
 3. If still failing after a reasonable attempt, mark BLOCKED
 
-### Tests fail
+### Test 실패
 1. Check whether the fix caused it or it was pre-existing
 2. Fix the test if the fix is correct
 3. If unclear, mark BLOCKED — do not ship broken tests
 
-### Push fails
+### Push 실패
 1. `git pull --rebase origin $HEAD_BRANCH`
 2. Resolve conflicts if any
 3. Push again
 
-### No review artifacts found
+### Review artifact 없음
 ```
 ❌ No review artifacts found in $ARTIFACTS_DIR/review/
 Cannot proceed without findings.
@@ -365,7 +365,7 @@ Cannot proceed without findings.
 
 ---
 
-## Success Criteria
+## 성공 기준
 
 - **ON_CORRECT_BRANCH**: Working on PR's head branch
 - **ALL_FINDINGS_ADDRESSED**: Every finding is either fixed, skipped (with reason), or blocked (with reason)
