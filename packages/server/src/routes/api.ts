@@ -1863,33 +1863,44 @@ export function registerApiRoutes(
       if (!approval?.nodeId) {
         return apiError(c, 400, 'Workflow run is paused but missing approval context');
       }
-      // For interactive loops, do NOT write node_completed — the executor writes it when
-      // the AI emits the completion signal (actual loop exit). Writing it here would cause
-      // the resume to skip the loop node entirely via priorCompletedNodes.
-      if (approval.type !== 'interactive_loop') {
-        const nodeOutput = approval.captureResponse === true ? comment : '';
-        await workflowEventDb.createWorkflowEvent({
-          workflow_run_id: runId,
-          event_type: 'node_completed',
-          step_name: approval.nodeId,
-          data: { node_output: nodeOutput, approval_decision: 'approved' },
+
+      // For interactive loops, delegate to the orchestrator's natural-language approval
+      // path which handles events, status transition, AND resume in one atomic flow.
+      // Without this, the approve endpoint would set status='failed' but nothing would
+      // trigger the actual workflow resume.
+      if (approval.type === 'interactive_loop') {
+        const conv = await conversationDb.getConversationById(run.conversation_id);
+        if (!conv) {
+          return apiError(c, 404, 'Conversation not found for workflow run');
+        }
+        // Fire-and-forget: dispatch the comment as a message through the orchestrator,
+        // which detects the paused run and handles approval + resume.
+        dispatchToOrchestrator(conv.platform_conversation_id, comment).catch(err => {
+          getLog().error({ err, runId }, 'api.interactive_loop_resume_failed');
+        });
+        return c.json({
+          success: true,
+          message: `Resuming workflow: ${run.workflow_name}`,
         });
       }
+
+      // Standard approval gates: write node_completed so the executor skips the node on resume.
+      const nodeOutput = approval.captureResponse === true ? comment : '';
+      await workflowEventDb.createWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'node_completed',
+        step_name: approval.nodeId,
+        data: { node_output: nodeOutput, approval_decision: 'approved' },
+      });
       await workflowEventDb.createWorkflowEvent({
         workflow_run_id: runId,
         event_type: 'approval_received',
         step_name: approval.nodeId,
         data: { decision: 'approved', comment },
       });
-      // For interactive loops, store user input; for standard approvals, mark as approved
-      // and clear any rejection state.
-      const metadataUpdate =
-        approval.type === 'interactive_loop'
-          ? { loop_user_input: comment }
-          : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
       await workflowDb.updateWorkflowRun(runId, {
         status: 'failed',
-        metadata: metadataUpdate,
+        metadata: { approval_response: 'approved', rejection_reason: '', rejection_count: 0 },
       });
       return c.json({
         success: true,

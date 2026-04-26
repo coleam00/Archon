@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { CheckCircle, ChevronRight, Loader2, Pause, XCircle } from 'lucide-react';
+import { CheckCircle, ChevronRight, Loader2, Pause, Send, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { approveWorkflowRun, getWorkflowRunByWorker, rejectWorkflowRun } from '@/lib/api';
 import { useWorkflowStore } from '@/stores/workflow-store';
@@ -82,9 +82,17 @@ export function WorkflowProgressCard({
     };
   }, [isRunning, startedAt]);
 
+  // Interactive loop response input
+  const [approvalComment, setApprovalComment] = useState('');
+  const isInteractiveLoop = approval?.type === 'interactive_loop';
+
   // Approve/reject mutations
   const approveMutation = useMutation({
-    mutationFn: () => approveWorkflowRun(runId ?? ''),
+    mutationFn: (comment?: string) => approveWorkflowRun(runId ?? '', comment),
+    onSuccess: () => {
+      setApprovalComment('');
+      refetch();
+    },
   });
   const rejectMutation = useMutation({
     mutationFn: () => rejectWorkflowRun(runId ?? ''),
@@ -209,30 +217,72 @@ export function WorkflowProgressCard({
                   {approval?.message ?? 'Waiting for approval'}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    approveMutation.mutate();
-                  }}
-                  disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-success/80 hover:bg-success/10 hover:text-success transition-colors disabled:opacity-50"
-                >
-                  <CheckCircle className="h-3.5 w-3.5" />
-                  Approve
-                </button>
-                <button
-                  onClick={() => {
-                    if (window.confirm(`Reject workflow "${workflowName}"?`)) {
-                      rejectMutation.mutate();
-                    }
-                  }}
-                  disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
-                >
-                  <XCircle className="h-3.5 w-3.5" />
-                  Reject
-                </button>
-              </div>
+              {isInteractiveLoop ? (
+                /* Interactive loop: text input + send button for user response */
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={approvalComment}
+                    onChange={e => {
+                      setApprovalComment(e.target.value);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && approvalComment.trim()) {
+                        approveMutation.mutate(approvalComment.trim());
+                      }
+                    }}
+                    placeholder="Type your response..."
+                    disabled={approveMutation.isPending}
+                    className="flex-1 rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+                  />
+                  <button
+                    onClick={() => {
+                      approveMutation.mutate(approvalComment.trim() || undefined);
+                    }}
+                    disabled={!runId || approveMutation.isPending}
+                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Reject workflow "${workflowName}"?`)) {
+                        rejectMutation.mutate();
+                      }
+                    }}
+                    disabled={!runId || rejectMutation.isPending}
+                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                /* Standard approval gate: approve/reject buttons */
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      approveMutation.mutate(undefined);
+                    }}
+                    disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
+                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-success/80 hover:bg-success/10 hover:text-success transition-colors disabled:opacity-50"
+                  >
+                    <CheckCircle className="h-3.5 w-3.5" />
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Reject workflow "${workflowName}"?`)) {
+                        rejectMutation.mutate();
+                      }
+                    }}
+                    disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
+                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                    Reject
+                  </button>
+                </div>
+              )}
               {(approveMutation.isError || rejectMutation.isError) && (
                 <p className="text-xs text-error">
                   {mutationError instanceof Error

@@ -133,6 +133,7 @@ interface ApprovalPendingEvent {
   runId: string;
   nodeId: string;
   message: string;
+  approvalType?: 'interactive_loop' | 'approval';
 }
 
 interface WorkflowCancelledEvent {
