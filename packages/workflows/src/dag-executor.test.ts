@@ -4787,6 +4787,86 @@ describe('executeDagWorkflow -- approval node', () => {
       1
     );
   });
+
+  it('approval message substitutes $nodeId.output.field references from upstream structured output', async () => {
+    // Repro for: approval gates were rendering literal "$gather-context.output.repo_name"
+    // instead of resolved values, breaking interactive workflows like atlas-onboard.
+    // Parity: prompt/bash/loop/cancel nodes already get substituteNodeOutputRefs;
+    // approval.message must too so the human sees concrete values.
+    const structuredJson = {
+      repo_name: 'hcr-els',
+      app_code: 'CCELS',
+      frontend_port: 3012,
+    };
+
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'gather-context.md'), 'Gather context: $USER_MESSAGE');
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: JSON.stringify(structuredJson) };
+      yield { type: 'result', sessionId: 'sid-approval-sub', structuredOutput: structuredJson };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('approval-sub-run');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-approval-sub',
+      testDir,
+      {
+        name: 'approval-sub-test',
+        nodes: [
+          {
+            id: 'gather-context',
+            command: 'gather-context',
+            output_format: {
+              type: 'object',
+              properties: {
+                repo_name: { type: 'string' },
+                app_code: { type: 'string' },
+                frontend_port: { type: 'number' },
+              },
+            },
+          },
+          {
+            id: 'confirm',
+            depends_on: ['gather-context'],
+            approval: {
+              message:
+                'Repo: $gather-context.output.repo_name | App: $gather-context.output.app_code | Port: $gather-context.output.frontend_port',
+            },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // gather-context AI call ran once; approval node does NOT call AI
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+
+    // pauseWorkflowRun should receive the SUBSTITUTED message, not the literal placeholders
+    const pauseCalls = (
+      store.pauseWorkflowRun as Mock<(id: string, ctx: Record<string, unknown>) => Promise<void>>
+    ).mock.calls;
+    expect(pauseCalls.length).toBe(1);
+    expect(pauseCalls[0][1]).toMatchObject({
+      type: 'approval',
+      nodeId: 'confirm',
+      message: 'Repo: hcr-els | App: CCELS | Port: 3012',
+    });
+  });
 });
 describe('executeDagWorkflow -- env var injection', () => {
   let testDir: string;
