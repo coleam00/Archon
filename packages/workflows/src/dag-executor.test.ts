@@ -4866,6 +4866,32 @@ describe('executeDagWorkflow -- approval node', () => {
       nodeId: 'confirm',
       message: 'Repo: hcr-els | App: CCELS | Port: 3012',
     });
+
+    // The fix touches FOUR emission sites (safeSendMessage / createWorkflowEvent /
+    // pauseWorkflowRun / event-emitter). Assert the other two reachable surfaces too —
+    // a future regression at any one of them would otherwise pass this test silently.
+    // (Per CodeRabbit review of PR coleam00/Archon#1426.)
+
+    // (a) The chat-surface prompt emitted via platform.sendMessage must contain the
+    //     substituted message and must NOT contain literal $gather-context.output refs.
+    const sentMessages = (
+      platform.sendMessage as Mock<(...args: unknown[]) => Promise<void>>
+    ).mock.calls.map((c: unknown[]) => c[1] as string);
+    expect(sentMessages.some(m => m.includes('Repo: hcr-els | App: CCELS | Port: 3012'))).toBe(
+      true
+    );
+    expect(sentMessages.some(m => m.includes('$gather-context.output'))).toBe(false);
+
+    // (b) The persisted approval_requested workflow event's data.message must be substituted.
+    const approvalRequestedEvents = (
+      store.createWorkflowEvent as Mock<() => Promise<void>>
+    ).mock.calls.filter(
+      (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'approval_requested'
+    );
+    expect(approvalRequestedEvents.length).toBe(1);
+    expect((approvalRequestedEvents[0][0] as { data: { message: string } }).data.message).toBe(
+      'Repo: hcr-els | App: CCELS | Port: 3012'
+    );
   });
 });
 describe('executeDagWorkflow -- env var injection', () => {
