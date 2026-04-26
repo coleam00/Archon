@@ -93,6 +93,13 @@ mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
 }));
 
+// Mock repo config loader (cleanup service consults `.archon/config.yaml`
+// for `worktree.baseBranch` before falling back to git auto-detection)
+const mockLoadRepoConfig = mock(() => Promise.resolve({} as Record<string, unknown>));
+mock.module('../config/config-loader', () => ({
+  loadRepoConfig: mockLoadRepoConfig,
+}));
+
 import {
   runScheduledCleanup,
   startCleanupScheduler,
@@ -118,12 +125,14 @@ describe('cleanup-service', () => {
     mockUpdateStatus.mockClear();
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
+    mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
     mockGetLastCommitDate.mockResolvedValue(null);
+    mockLoadRepoConfig.mockResolvedValue({});
   });
 
   describe('removeEnvironment', () => {
@@ -457,12 +466,14 @@ describe('runScheduledCleanup', () => {
     mockGetById.mockClear();
     mockGetCodebase.mockClear();
     mockDeleteOldSessions.mockClear();
+    mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
     mockGetLastCommitDate.mockResolvedValue(null);
+    mockLoadRepoConfig.mockResolvedValue({});
   });
 
   test('returns empty report when no environments exist', async () => {
@@ -776,6 +787,86 @@ describe('runScheduledCleanup', () => {
       error: 'database locked',
     });
   });
+
+  test('uses worktree.baseBranch from repo config and skips git auto-detection', async () => {
+    mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { baseBranch: 'master' } });
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-config',
+        codebase_id: 'codebase-1',
+        workflow_type: 'issue',
+        workflow_id: '42',
+        provider: 'worktree',
+        codebase_default_cwd: '/workspace/repo',
+        working_path: '/path/repo-issue-42',
+        branch_name: 'issue-42',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'github',
+        metadata: {},
+      },
+    ]);
+    mockWorktreeExists.mockResolvedValueOnce(true);
+
+    await runScheduledCleanup();
+
+    expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/repo');
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    expect(mockIsBranchMerged).toHaveBeenCalledWith('/workspace/repo', 'issue-42', 'master');
+  });
+
+  test('falls back to getDefaultBranch when repo config has no baseBranch', async () => {
+    mockLoadRepoConfig.mockResolvedValueOnce({});
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-default',
+        codebase_id: 'codebase-1',
+        workflow_type: 'issue',
+        workflow_id: '43',
+        provider: 'worktree',
+        codebase_default_cwd: '/workspace/repo',
+        working_path: '/path/repo-issue-43',
+        branch_name: 'issue-43',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'github',
+        metadata: {},
+      },
+    ]);
+    mockWorktreeExists.mockResolvedValueOnce(true);
+
+    await runScheduledCleanup();
+
+    expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/repo');
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo');
+    expect(mockIsBranchMerged).toHaveBeenCalledWith('/workspace/repo', 'issue-43', 'main');
+  });
+
+  test('treats whitespace-only baseBranch as unset and falls back to getDefaultBranch', async () => {
+    mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { baseBranch: '   ' } });
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-blank',
+        codebase_id: 'codebase-1',
+        workflow_type: 'issue',
+        workflow_id: '44',
+        provider: 'worktree',
+        codebase_default_cwd: '/workspace/repo',
+        working_path: '/path/repo-issue-44',
+        branch_name: 'issue-44',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'github',
+        metadata: {},
+      },
+    ]);
+    mockWorktreeExists.mockResolvedValueOnce(true);
+
+    await runScheduledCleanup();
+
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo');
+    expect(mockIsBranchMerged).toHaveBeenCalledWith('/workspace/repo', 'issue-44', 'main');
+  });
 });
 
 describe('SESSION_RETENTION_DAYS', () => {
@@ -831,9 +922,11 @@ describe('getWorktreeStatusBreakdown', () => {
     mockGetDefaultBranch.mockClear();
     mockIsBranchMerged.mockClear();
     mockListByCodebaseWithAge.mockClear();
+    mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
+    mockLoadRepoConfig.mockResolvedValue({});
   });
 
   test('returns correct breakdown with mixed environments', async () => {
@@ -917,6 +1010,26 @@ describe('getWorktreeStatusBreakdown', () => {
     expect(breakdown.stale).toBe(0);
     expect(breakdown.active).toBe(0);
   });
+
+  test('uses worktree.baseBranch from repo config for merge detection', async () => {
+    mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { baseBranch: 'master' } });
+    mockListByCodebaseWithAge.mockResolvedValueOnce([
+      {
+        id: 'env-cfg',
+        branch_name: 'feature-branch',
+        created_by_platform: 'github',
+        days_since_activity: 1,
+        working_path: '/path/feature',
+        status: 'active',
+      },
+    ]);
+
+    await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+
+    expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/repo');
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    expect(mockIsBranchMerged).toHaveBeenCalledWith('/workspace/repo', 'feature-branch', 'master');
+  });
 });
 
 describe('cleanupMergedWorktrees', () => {
@@ -932,6 +1045,7 @@ describe('cleanupMergedWorktrees', () => {
     mockWorktreeExists.mockClear();
     mockGetCodebase.mockClear();
     mockUpdateStatus.mockClear();
+    mockLoadRepoConfig.mockClear();
     // Reset defaults
     mockGetDefaultBranch.mockResolvedValue('main');
     mockIsBranchMerged.mockResolvedValue(false);
@@ -941,6 +1055,7 @@ describe('cleanupMergedWorktrees', () => {
     mockGetPrState.mockResolvedValue('NONE');
     mockHasUncommittedChanges.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
+    mockLoadRepoConfig.mockResolvedValue({});
   });
 
   test('removes merged branches without uncommitted changes', async () => {
@@ -1187,6 +1302,25 @@ describe('cleanupMergedWorktrees', () => {
         reason: expect.stringContaining('merge check failed'),
       })
     );
+  });
+
+  test('uses worktree.baseBranch from repo config when comparing merge state', async () => {
+    mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { baseBranch: 'master' } });
+    mockListByCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-cfg',
+        branch_name: 'feature-branch',
+        working_path: '/workspace/repo/worktrees/feature-branch',
+        status: 'active',
+      },
+    ]);
+    mockIsBranchMerged.mockResolvedValueOnce(false);
+
+    await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+
+    expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/repo');
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    expect(mockIsBranchMerged).toHaveBeenCalledWith('/workspace/repo', 'feature-branch', 'master');
   });
 });
 

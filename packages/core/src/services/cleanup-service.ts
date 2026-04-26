@@ -24,6 +24,22 @@ import type { RepoPath, BranchName } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
+import { loadRepoConfig } from '../config/config-loader';
+
+/**
+ * Resolve the base branch for a repo. If `.archon/config.yaml` sets
+ * `worktree.baseBranch`, use that and skip git auto-detection (which fails
+ * loudly when origin/HEAD is unset and the default branch is not main).
+ * Falls back to `getDefaultBranch` for repos without explicit config.
+ */
+async function resolveBaseBranch(repoPath: RepoPath): Promise<BranchName> {
+  const repoConfig = await loadRepoConfig(repoPath);
+  const configured = repoConfig?.worktree?.baseBranch?.trim();
+  if (configured) {
+    return toBranchName(configured);
+  }
+  return await getDefaultBranch(repoPath);
+}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -308,7 +324,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const mainBranch = await getDefaultBranch(mainRepoPath);
+        const mainBranch = await resolveBaseBranch(mainRepoPath);
         const merged = await isBranchMerged(
           mainRepoPath,
           toBranchName(env.branch_name),
@@ -462,7 +478,7 @@ export async function getWorktreeStatusBreakdown(
     activeEnvs: [],
   };
 
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await resolveBaseBranch(repoPath);
 
   for (const env of environments) {
     // Skip Telegram (never shown as stale)
@@ -590,7 +606,7 @@ export async function cleanupMergedWorktrees(
   const result: CleanupOperationResult = { removed: [], skipped: [] };
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await resolveBaseBranch(repoPath);
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrState>();
 
