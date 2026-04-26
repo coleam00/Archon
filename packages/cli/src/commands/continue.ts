@@ -43,8 +43,8 @@ export async function continueCommand(
   const env = await isolationDb.findActiveByBranchName(branch);
   if (!env) {
     throw new Error(
-      `No active worktree found for branch '${branch}'.\n` +
-        "Run 'hlab isolation list' to see available worktrees."
+      `branch '${branch}'의 활성 worktree를 찾지 못했습니다.\n` +
+        "사용 가능한 worktree는 'hlab isolation list'로 확인하세요."
     );
   }
 
@@ -59,15 +59,15 @@ export async function continueCommand(
 
   // 4. Enrich message
   const enrichedMessage = contextPreamble
-    ? `${contextPreamble}\n---\n\n## Your Instruction\n\n${userMessage}`
+    ? `${contextPreamble}\n---\n\n## 사용자 지시\n\n${userMessage}`
     : userMessage;
 
   // 5. Console output
-  console.log(`Continuing on branch: ${branch}`);
+  console.log(`branch에서 계속 진행: ${branch}`);
   console.log(`Workflow: ${workflowName}`);
   console.log(`Path: ${env.working_path}`);
   if (priorRun) {
-    console.log(`Prior run: ${priorRun.id} (${priorRun.workflow_name}, ${priorRun.status})`);
+    console.log(`이전 run: ${priorRun.id} (${priorRun.workflow_name}, ${priorRun.status})`);
   }
   console.log('');
 
@@ -80,9 +80,7 @@ export async function continueCommand(
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, branch, workflowName }, 'cli.continue_run_failed');
-    throw new Error(
-      `Failed to run workflow '${workflowName}' on branch '${branch}': ${err.message}`
-    );
+    throw new Error(`branch '${branch}'에서 workflow '${workflowName}' 실행 실패: ${err.message}`);
   }
 }
 
@@ -106,14 +104,14 @@ async function buildContextPreamble(
     'HEAD',
   ]);
   const header = priorRun
-    ? `Branch: ${branchLine.trim() || '(unknown)'} | Last workflow: ${priorRun.workflow_name} (run ${priorRun.id}, ${priorRun.status})`
+    ? `Branch: ${branchLine.trim() || '(unknown)'} | 마지막 workflow: ${priorRun.workflow_name} (run ${priorRun.id}, ${priorRun.status})`
     : `Branch: ${branchLine.trim() || '(unknown)'}`;
-  sections.push(`## Prior Context\n\n${header}`);
+  sections.push(`## 이전 context\n\n${header}`);
 
   // Recent commits
   const commits = await safeExec('git', ['-C', workingPath, 'log', '--oneline', '-15']);
   if (commits) {
-    sections.push(`### Recent Commits\n\n\`\`\`\n${commits.trim()}\n\`\`\``);
+    sections.push(`### 최근 commits\n\n\`\`\`\n${commits.trim()}\n\`\`\``);
   }
 
   // Changes from base (diff stats vs upstream)
@@ -125,7 +123,7 @@ async function buildContextPreamble(
     'HEAD@{upstream}...HEAD',
   ]);
   if (diffStat) {
-    sections.push(`### Changes from Base\n\n\`\`\`\n${diffStat.trim()}\n\`\`\``);
+    sections.push(`### base 대비 변경사항\n\n\`\`\`\n${diffStat.trim()}\n\`\`\``);
   }
 
   // PR info (gh CLI may not be installed — always optional)
@@ -138,7 +136,7 @@ async function buildContextPreamble(
     try {
       const pr = JSON.parse(prJson) as { number: number; title: string; url: string; body: string };
       sections.push(
-        `### PR\n\n**#${String(pr.number)}**: ${pr.title}\n${pr.url}\n\n${pr.body ? pr.body.slice(0, 500) : '(no description)'}`
+        `### PR\n\n**#${String(pr.number)}**: ${pr.title}\n${pr.url}\n\n${pr.body ? pr.body.slice(0, 500) : '(설명 없음)'}`
       );
     } catch {
       // JSON parse failed — skip PR section
@@ -149,7 +147,7 @@ async function buildContextPreamble(
   if (priorRun) {
     const artifactSummary = await loadArtifactSummary(priorRun.id, codebaseId, workingPath);
     if (artifactSummary) {
-      sections.push(`### Artifacts\n\n${artifactSummary}`);
+      sections.push(`### artifacts\n\n${artifactSummary}`);
     }
   }
 

@@ -186,7 +186,7 @@ CODEX_ACCOUNT_ID=account1
         botDisplayName: 'HarneesLab',
       });
 
-      expect(content).toContain('# Using SQLite (default)');
+      expect(content).toContain('# SQLite 사용 (기본값)');
       expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=true');
       expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
       // PORT is intentionally commented out — server and Vite both default to 3090 when unset (#1152).

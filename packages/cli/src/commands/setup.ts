@@ -257,41 +257,41 @@ const CLI_INSTALL_INSTRUCTIONS = {
   claude: {
     name: 'Claude Code',
     checkCommand: 'claude',
-    instructions: `Claude Code CLI is not installed.
+    instructions: `Claude Code CLI가 설치되어 있지 않습니다.
 
-Install using one of these methods:
+다음 방법 중 하나로 설치하세요:
 
-  Recommended (native installer):
+  권장 (native installer):
     curl -fsSL https://claude.ai/install.sh | bash
 
-  Or via npm:
+  또는 npm:
     npm install -g @anthropic-ai/claude-code
 
-After installation, run: claude /login`,
+설치 후 실행: claude /login`,
   },
   codex: {
     name: 'Codex CLI',
     checkCommand: 'codex',
     instructions:
       process.platform === 'darwin'
-        ? `Codex CLI is not installed.
+        ? `Codex CLI가 설치되어 있지 않습니다.
 
-Install using one of these methods:
+다음 방법 중 하나로 설치하세요:
 
-  Recommended for macOS (no Node.js required):
+  macOS 권장 (Node.js 불필요):
     brew install codex
 
-  Or via npm (requires Node.js 18+):
+  또는 npm (Node.js 18+ 필요):
     npm install -g @openai/codex
 
-After installation, run 'codex' to authenticate.`
-        : `Codex CLI is not installed.
+설치 후 'codex'를 실행해 인증하세요.`
+        : `Codex CLI가 설치되어 있지 않습니다.
 
-Install via npm:
+npm으로 설치하세요:
     npm install -g @openai/codex
 
-Requires Node.js 18 or later.
-After installation, run 'codex' to authenticate.`,
+Node.js 18 이상이 필요합니다.
+설치 후 'codex'를 실행해 인증하세요.`,
   },
 };
 
@@ -336,39 +336,39 @@ export function checkExistingConfig(): ExistingConfig | null {
  */
 async function collectDatabaseConfig(): Promise<SetupConfig['database']> {
   const dbType = await select({
-    message: 'Which database do you want to use?',
+    message: '어떤 database를 사용하시겠습니까?',
     options: [
       {
         value: 'sqlite',
-        label: 'SQLite (default - no setup needed)',
-        hint: 'Recommended for single user',
+        label: 'SQLite (기본값 - 별도 설정 불필요)',
+        hint: '단일 사용자에게 권장',
       },
-      { value: 'postgresql', label: 'PostgreSQL', hint: 'For server deployments' },
+      { value: 'postgresql', label: 'PostgreSQL', hint: '서버 배포용' },
     ],
   });
 
   if (isCancel(dbType)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   if (dbType === 'postgresql') {
     const url = await text({
-      message: 'Enter your PostgreSQL connection string:',
+      message: 'PostgreSQL connection string을 입력하세요:',
       placeholder: 'postgresql://user:pass@localhost:5432/hlab',
       validate: value => {
         if (!value) {
-          return 'Connection string is required';
+          return 'connection string은 필수입니다';
         }
         if (!value.startsWith('postgresql://') && !value.startsWith('postgres://')) {
-          return 'Must be a valid PostgreSQL URL (postgresql:// or postgres://)';
+          return '유효한 PostgreSQL URL이어야 합니다 (postgresql:// 또는 postgres://)';
         }
         return undefined;
       },
     });
 
     if (isCancel(url)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
@@ -433,11 +433,11 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
 
   if (detected) {
     const useDetected = await confirm({
-      message: `Found Claude Code at ${detected}. Write this to CLAUDE_BIN_PATH?`,
+      message: `Claude Code를 ${detected}에서 찾았습니다. 이 경로를 CLAUDE_BIN_PATH에 저장할까요?`,
       initialValue: true,
     });
     if (isCancel(useDetected)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
     if (useDetected) return detected;
@@ -447,23 +447,23 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
     process.platform === 'win32' ? '%USERPROFILE%\\.local\\bin\\claude.exe' : '~/.local/bin/claude';
 
   note(
-    'Compiled HarneesLab binaries need CLAUDE_BIN_PATH set to the Claude Code executable.\n' +
-      'In dev (`bun run`) this is ignored — the SDK resolves it via node_modules.\n\n' +
-      'Recommended (Anthropic default — native installer):\n' +
+    '컴파일된 HarneesLab binary는 Claude Code 실행 파일 경로를 CLAUDE_BIN_PATH로 설정해야 합니다.\n' +
+      'dev(`bun run`)에서는 이 값이 무시됩니다 — SDK가 node_modules를 통해 해결합니다.\n\n' +
+      '권장 (Anthropic 기본값 — native installer):\n' +
       `  macOS/Linux: ${nativeExample}\n` +
       '  Windows:     %USERPROFILE%\\.local\\bin\\claude.exe\n\n' +
-      'Alternative (npm global install):\n' +
+      '대안 (npm global install):\n' +
       '  $(npm root -g)/@anthropic-ai/claude-code/cli.js',
     'Claude binary path'
   );
 
   const customPath = await text({
-    message: 'Absolute path to the Claude Code executable (leave blank to skip):',
+    message: 'Claude Code 실행 파일의 절대 경로 (건너뛰려면 비워두세요):',
     placeholder: nativeExample,
   });
 
   if (isCancel(customPath)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -472,7 +472,7 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
 
   if (!existsSync(trimmed)) {
     log.warning(
-      `Path does not exist: ${trimmed}. Saving anyway — the compiled binary will error on first use until this is correct.`
+      `경로가 존재하지 않습니다: ${trimmed}. 그래도 저장합니다 — 경로를 수정하기 전까지 컴파일된 binary의 첫 Claude 사용 시 오류가 발생합니다.`
     );
   }
   return trimmed;
@@ -484,44 +484,44 @@ async function collectClaudeAuth(): Promise<{
   oauthToken?: string;
 }> {
   const authType = await select({
-    message: 'How do you want to authenticate with Claude?',
+    message: 'Claude 인증은 어떻게 진행하시겠습니까?',
     options: [
       {
         value: 'global',
-        label: 'Use global auth from `claude /login` (Recommended)',
-        hint: 'Simplest - uses your existing Claude login',
+        label: '`claude /login`의 global auth 사용 (권장)',
+        hint: '가장 간단합니다 - 기존 Claude login 사용',
       },
       {
         value: 'apiKey',
-        label: 'Provide API key',
-        hint: 'From console.anthropic.com',
+        label: 'API key 제공',
+        hint: 'console.anthropic.com에서 발급',
       },
       {
         value: 'oauthToken',
-        label: 'Provide OAuth token',
-        hint: 'For advanced use cases',
+        label: 'OAuth token 제공',
+        hint: '고급 사용 사례용',
       },
     ],
   });
 
   if (isCancel(authType)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   if (authType === 'apiKey') {
     const apiKey = await password({
-      message: 'Enter your Claude API key:',
+      message: 'Claude API key를 입력하세요:',
       validate: value => {
         if (!value || value.length < 10) {
-          return 'Please enter a valid API key';
+          return '유효한 API key를 입력하세요';
         }
         return undefined;
       },
     });
 
     if (isCancel(apiKey)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
@@ -530,17 +530,17 @@ async function collectClaudeAuth(): Promise<{
 
   if (authType === 'oauthToken') {
     const oauthToken = await password({
-      message: 'Enter your Claude OAuth token:',
+      message: 'Claude OAuth token을 입력하세요:',
       validate: value => {
         if (!value || value.length < 10) {
-          return 'Please enter a valid OAuth token';
+          return '유효한 OAuth token을 입력하세요';
         }
         return undefined;
       },
     });
 
     if (isCancel(oauthToken)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
@@ -559,11 +559,11 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
 
   if (existingAuth) {
     const useExisting = await confirm({
-      message: 'Found existing Codex auth at ~/.codex/auth.json. Use it?',
+      message: '~/.codex/auth.json에서 기존 Codex auth를 찾았습니다. 사용할까요?',
     });
 
     if (isCancel(useExisting)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
@@ -572,22 +572,22 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
     }
   } else {
     note(
-      'Codex requires authentication tokens.\n\n' +
-        'To get them:\n' +
-        '1. Run `codex login` in your terminal\n' +
-        '2. Complete the login flow\n' +
-        '3. Tokens will be saved to ~/.codex/auth.json\n\n' +
-        'You can skip Codex setup now and run `hlab setup` again later.',
+      'Codex에는 인증 token이 필요합니다.\n\n' +
+        'token을 준비하려면:\n' +
+        '1. 터미널에서 `codex login`을 실행하세요\n' +
+        '2. login flow를 완료하세요\n' +
+        '3. token은 ~/.codex/auth.json에 저장됩니다\n\n' +
+        '지금 Codex setup을 건너뛰고 나중에 `hlab setup`을 다시 실행할 수 있습니다.',
       'Codex Auth'
     );
   }
 
   const enterManually = await confirm({
-    message: 'Enter Codex tokens manually?',
+    message: 'Codex token을 수동으로 입력할까요?',
   });
 
   if (isCancel(enterManually)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -596,54 +596,54 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const idToken = await password({
-    message: 'Enter CODEX_ID_TOKEN:',
+    message: 'CODEX_ID_TOKEN을 입력하세요:',
     validate: value => {
-      if (!value) return 'Token is required';
+      if (!value) return 'token은 필수입니다';
       return undefined;
     },
   });
 
   if (isCancel(idToken)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const accessToken = await password({
-    message: 'Enter CODEX_ACCESS_TOKEN:',
+    message: 'CODEX_ACCESS_TOKEN을 입력하세요:',
     validate: value => {
-      if (!value) return 'Token is required';
+      if (!value) return 'token은 필수입니다';
       return undefined;
     },
   });
 
   if (isCancel(accessToken)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const refreshToken = await password({
-    message: 'Enter CODEX_REFRESH_TOKEN:',
+    message: 'CODEX_REFRESH_TOKEN을 입력하세요:',
     validate: value => {
-      if (!value) return 'Token is required';
+      if (!value) return 'token은 필수입니다';
       return undefined;
     },
   });
 
   if (isCancel(refreshToken)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const accountId = await text({
-    message: 'Enter CODEX_ACCOUNT_ID:',
+    message: 'CODEX_ACCOUNT_ID를 입력하세요:',
     validate: value => {
-      if (!value) return 'Account ID is required';
+      if (!value) return 'account ID는 필수입니다';
       return undefined;
     },
   });
 
   if (isCancel(accountId)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -660,17 +660,16 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
   const assistants = await multiselect({
-    message:
-      'Which built-in AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
+    message: '사용할 built-in AI assistant를 선택하세요 (↑↓ 이동, space 선택, enter 확정)',
     options: [
-      { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
+      { value: 'claude', label: 'Claude (권장)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
     ],
     required: false,
   });
 
   if (isCancel(assistants)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -679,17 +678,17 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
 
   // Check if selected CLI tools are installed
   if (hasClaude && !isCommandAvailable('claude')) {
-    note(CLI_INSTALL_INSTRUCTIONS.claude.instructions, 'Claude Code Not Found');
+    note(CLI_INSTALL_INSTRUCTIONS.claude.instructions, 'Claude Code를 찾지 못했습니다');
     const continueWithoutClaude = await confirm({
-      message: 'Continue setup without Claude?',
+      message: 'Claude 없이 setup을 계속할까요?',
       initialValue: false,
     });
     if (isCancel(continueWithoutClaude)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
     if (!continueWithoutClaude) {
-      cancel('Please install Claude Code and run setup again.');
+      cancel('Claude Code를 설치한 뒤 setup을 다시 실행하세요.');
       process.exit(0);
     }
     hasClaude = false;
@@ -701,55 +700,55 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
       const nodeVersion = getNodeVersion();
       if (!nodeVersion) {
         note(
-          `Node.js is required to install Codex CLI via npm.
+          `npm으로 Codex CLI를 설치하려면 Node.js가 필요합니다.
 
-Install Node.js 18 or later from:
+Node.js 18 이상을 다음 위치에서 설치하세요:
     https://nodejs.org/
 
-Or use a version manager like nvm:
+또는 nvm 같은 version manager를 사용하세요:
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.0/install.sh | bash
     nvm install 18
 
-After installing Node.js, run 'hlab setup' again.`,
-          'Node.js Not Found'
+Node.js 설치 후 'hlab setup'을 다시 실행하세요.`,
+          'Node.js를 찾지 못했습니다'
         );
         const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
+          message: 'Codex 없이 setup을 계속할까요?',
           initialValue: false,
         });
         if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
+          cancel('setup이 취소되었습니다.');
           process.exit(0);
         }
         if (!continueWithoutCodex) {
-          cancel('Please install Node.js 18+ and run setup again.');
+          cancel('Node.js 18+를 설치한 뒤 setup을 다시 실행하세요.');
           process.exit(0);
         }
         hasCodex = false;
       } else if (nodeVersion.major < 18) {
         note(
-          `Node.js ${nodeVersion.major}.${nodeVersion.minor}.${nodeVersion.patch} is installed, but Codex CLI requires Node.js 18 or later.
+          `Node.js ${nodeVersion.major}.${nodeVersion.minor}.${nodeVersion.patch}가 설치되어 있지만, Codex CLI에는 Node.js 18 이상이 필요합니다.
 
-Upgrade Node.js from:
+Node.js를 다음 위치에서 업그레이드하세요:
     https://nodejs.org/
 
-Or use a version manager like nvm:
+또는 nvm 같은 version manager를 사용하세요:
     nvm install 18
     nvm use 18
 
-After upgrading, run 'hlab setup' again.`,
-          'Node.js Version Too Old'
+업그레이드 후 'hlab setup'을 다시 실행하세요.`,
+          'Node.js version이 너무 낮습니다'
         );
         const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
+          message: 'Codex 없이 setup을 계속할까요?',
           initialValue: false,
         });
         if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
+          cancel('setup이 취소되었습니다.');
           process.exit(0);
         }
         if (!continueWithoutCodex) {
-          cancel('Please upgrade Node.js to 18+ and run setup again.');
+          cancel('Node.js를 18+로 업그레이드한 뒤 setup을 다시 실행하세요.');
           process.exit(0);
         }
         hasCodex = false;
@@ -758,17 +757,17 @@ After upgrading, run 'hlab setup' again.`,
 
     // If we still want Codex (Node check passed or on macOS), show install instructions
     if (hasCodex) {
-      note(CLI_INSTALL_INSTRUCTIONS.codex.instructions, 'Codex CLI Not Found');
+      note(CLI_INSTALL_INSTRUCTIONS.codex.instructions, 'Codex CLI를 찾지 못했습니다');
       const continueWithoutCodex = await confirm({
-        message: 'Continue setup without Codex?',
+        message: 'Codex 없이 setup을 계속할까요?',
         initialValue: false,
       });
       if (isCancel(continueWithoutCodex)) {
-        cancel('Setup cancelled.');
+        cancel('setup이 취소되었습니다.');
         process.exit(0);
       }
       if (!continueWithoutCodex) {
-        cancel('Please install Codex CLI and run setup again.');
+        cancel('Codex CLI를 설치한 뒤 setup을 다시 실행하세요.');
         process.exit(0);
       }
       hasCodex = false;
@@ -776,7 +775,9 @@ After upgrading, run 'hlab setup' again.`,
   }
 
   if (!hasClaude && !hasCodex) {
-    log.warning('No AI assistant selected. You can add one later by running `hlab setup` again.');
+    log.warning(
+      '선택한 AI assistant가 없습니다. 나중에 `hlab setup`을 다시 실행해 추가할 수 있습니다.'
+    );
     return {
       claude: false,
       codex: false,
@@ -814,16 +815,16 @@ After upgrading, run 'hlab setup' again.`,
       .filter(p => p.builtIn)
       .map(p => ({
         value: p.id,
-        label: p.id === 'claude' ? `${p.displayName} (Recommended)` : p.displayName,
+        label: p.id === 'claude' ? `${p.displayName} (권장)` : p.displayName,
       }));
 
     const defaultChoice = await select({
-      message: 'Which should be the default AI assistant?',
+      message: '기본 AI assistant로 무엇을 사용할까요?',
       options: providerChoices,
     });
 
     if (isCancel(defaultChoice)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
@@ -849,18 +850,18 @@ After upgrading, run 'hlab setup' again.`,
  */
 async function collectPlatforms(): Promise<SetupConfig['platforms']> {
   const platforms = await multiselect({
-    message: 'Which platforms do you want to connect? (↑↓ navigate, space select, enter confirm)',
+    message: '연결할 platform을 선택하세요 (↑↓ 이동, space 선택, enter 확정)',
     options: [
-      { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
-      { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
-      { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
+      { value: 'github', label: 'GitHub', hint: 'webhook으로 issue/PR에 응답' },
+      { value: 'telegram', label: 'Telegram', hint: 'BotFather 기반 chat bot' },
+      { value: 'slack', label: 'Slack', hint: 'Socket Mode workspace app' },
       { value: 'discord', label: 'Discord', hint: 'Server bot' },
     ],
     required: false,
   });
 
   if (isCancel(platforms)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -877,66 +878,66 @@ async function collectPlatforms(): Promise<SetupConfig['platforms']> {
  */
 async function collectGitHubConfig(): Promise<GitHubConfig> {
   note(
-    'GitHub Personal Access Token Setup\n\n' +
-      '1. Go to github.com/settings/tokens\n' +
-      '2. Click "Generate new token" -> "Fine-grained token"\n' +
-      '3. Set expiration and select your target repository\n' +
-      '4. Under Permissions, enable:\n' +
+    'GitHub Personal Access Token 설정\n\n' +
+      '1. github.com/settings/tokens로 이동하세요\n' +
+      '2. "Generate new token" -> "Fine-grained token"을 클릭하세요\n' +
+      '3. 만료일을 설정하고 대상 repository를 선택하세요\n' +
+      '4. Permissions에서 다음을 활성화하세요:\n' +
       '   - Issues: Read and write\n' +
       '   - Pull requests: Read and write\n' +
       '   - Contents: Read\n' +
-      '5. Generate and copy the token',
-    'GitHub Setup'
+      '5. token을 생성하고 복사하세요',
+    'GitHub 설정'
   );
 
   const token = await password({
-    message: 'Enter your GitHub Personal Access Token:',
+    message: 'GitHub Personal Access Token을 입력하세요:',
     validate: value => {
       if (!value || value.length < 10) {
-        return 'Please enter a valid token';
+        return '유효한 token을 입력하세요';
       }
       return undefined;
     },
   });
 
   if (isCancel(token)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const allowedUsers = await text({
-    message: 'Enter allowed GitHub usernames (comma-separated, or leave empty for all):',
+    message: '허용할 GitHub username을 입력하세요 (쉼표 구분, 전체 허용은 빈 값):',
     placeholder: 'username1,username2',
   });
 
   if (isCancel(allowedUsers)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const customMention = await confirm({
-    message: 'Do you want to set a custom @mention name? (Default: hlab)',
+    message: 'custom @mention 이름을 설정할까요? (기본값: hlab)',
   });
 
   if (isCancel(customMention)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   let botMention: string | undefined;
   if (customMention) {
     const mention = await text({
-      message: 'Enter the @mention name (without @):',
+      message: '@를 제외한 mention 이름을 입력하세요:',
       placeholder: 'hlab',
       validate: value => {
-        if (!value) return 'Mention name is required';
-        if (value.includes('@')) return 'Do not include @ symbol';
+        if (!value) return 'mention 이름은 필수입니다';
+        if (value.includes('@')) return '@ 기호는 포함하지 마세요';
         return undefined;
       },
     });
 
     if (isCancel(mention)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
@@ -945,7 +946,7 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
 
   // Auto-generate webhook secret
   const webhookSecret = generateWebhookSecret();
-  log.success('Generated webhook secret (save this for GitHub webhook config)');
+  log.success('webhook secret을 생성했습니다 (GitHub webhook 설정에 저장하세요)');
 
   return {
     token,
@@ -960,42 +961,42 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
  */
 async function collectTelegramConfig(): Promise<TelegramConfig> {
   note(
-    'Telegram Bot Setup\n\n' +
-      'Step 1: Create your bot\n' +
-      '1. Open Telegram and search for @BotFather\n' +
-      '2. Send /newbot\n' +
-      '3. Choose a display name (e.g., "My HarneesLab Bot")\n' +
-      '4. Choose a username (must end in "bot")\n' +
-      '5. Copy the token BotFather gives you\n\n' +
-      'Step 2: Get your user ID\n' +
-      '1. Search for @userinfobot on Telegram\n' +
-      '2. Send any message\n' +
-      '3. It will reply with your user ID (a number)',
-    'Telegram Setup'
+    'Telegram Bot 설정\n\n' +
+      '1단계: bot 생성\n' +
+      '1. Telegram을 열고 @BotFather를 검색하세요\n' +
+      '2. /newbot을 보내세요\n' +
+      '3. 표시 이름을 선택하세요 (예: "My HarneesLab Bot")\n' +
+      '4. username을 선택하세요 ("bot"으로 끝나야 함)\n' +
+      '5. BotFather가 제공하는 token을 복사하세요\n\n' +
+      '2단계: user ID 확인\n' +
+      '1. Telegram에서 @userinfobot을 검색하세요\n' +
+      '2. 아무 message나 보내세요\n' +
+      '3. user ID(숫자)를 답장으로 받게 됩니다',
+    'Telegram 설정'
   );
 
   const botToken = await password({
-    message: 'Enter your Telegram Bot Token:',
+    message: 'Telegram Bot Token을 입력하세요:',
     validate: value => {
       if (!value?.includes(':')) {
-        return 'Please enter a valid bot token (format: 123456:ABC...)';
+        return '유효한 bot token을 입력하세요 (형식: 123456:ABC...)';
       }
       return undefined;
     },
   });
 
   if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const allowedUserIds = await text({
-    message: 'Enter allowed Telegram user IDs (comma-separated, or leave empty for all):',
+    message: '허용할 Telegram user ID를 입력하세요 (쉼표 구분, 전체 허용은 빈 값):',
     placeholder: '123456789,987654321',
   });
 
   if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -1010,61 +1011,61 @@ async function collectTelegramConfig(): Promise<TelegramConfig> {
  */
 async function collectSlackConfig(): Promise<SlackConfig> {
   note(
-    'Slack App Setup\n\n' +
-      'Slack setup requires creating an app at api.slack.com/apps\n\n' +
-      '1. Create a new app "From scratch"\n' +
-      '2. Enable Socket Mode:\n' +
+    'Slack App 설정\n\n' +
+      'Slack 설정에는 api.slack.com/apps에서 app 생성이 필요합니다\n\n' +
+      '1. 새 app을 "From scratch"로 생성하세요\n' +
+      '2. Socket Mode를 활성화하세요:\n' +
       '   - Settings -> Socket Mode -> Enable\n' +
       '   - Generate an App-Level Token (xapp-...)\n' +
-      '3. Add Bot Token Scopes (OAuth & Permissions):\n' +
+      '3. Bot Token Scope를 추가하세요 (OAuth & Permissions):\n' +
       '   - app_mentions:read, chat:write, channels:history\n' +
       '   - channels:join, im:history, im:write, im:read\n' +
-      '4. Subscribe to Bot Events (Event Subscriptions):\n' +
+      '4. Bot Event를 구독하세요 (Event Subscriptions):\n' +
       '   - app_mention, message.im\n' +
-      '5. Install to Workspace\n' +
-      '   - Copy the Bot User OAuth Token (xoxb-...)\n' +
-      '6. Invite bot to your channel: /invite @YourBotName\n\n' +
-      'Get your user ID: Click profile -> ... -> Copy member ID',
-    'Slack Setup'
+      '5. Workspace에 설치하세요\n' +
+      '   - Bot User OAuth Token(xoxb-...)을 복사하세요\n' +
+      '6. channel에 bot을 초대하세요: /invite @YourBotName\n\n' +
+      'user ID 확인: profile -> ... -> Copy member ID 클릭',
+    'Slack 설정'
   );
 
   const botToken = await password({
-    message: 'Enter your Slack Bot Token (xoxb-...):',
+    message: 'Slack Bot Token(xoxb-...)을 입력하세요:',
     validate: value => {
       if (!value?.startsWith('xoxb-')) {
-        return 'Please enter a valid bot token (starts with xoxb-)';
+        return '유효한 bot token을 입력하세요 (xoxb-로 시작)';
       }
       return undefined;
     },
   });
 
   if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const appToken = await password({
-    message: 'Enter your Slack App Token (xapp-...):',
+    message: 'Slack App Token(xapp-...)을 입력하세요:',
     validate: value => {
       if (!value?.startsWith('xapp-')) {
-        return 'Please enter a valid app token (starts with xapp-)';
+        return '유효한 app token을 입력하세요 (xapp-로 시작)';
       }
       return undefined;
     },
   });
 
   if (isCancel(appToken)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const allowedUserIds = await text({
-    message: 'Enter allowed Slack user IDs (comma-separated, or leave empty for all):',
+    message: '허용할 Slack user ID를 입력하세요 (쉼표 구분, 전체 허용은 빈 값):',
     placeholder: 'U12345678,U87654321',
   });
 
   if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -1080,44 +1081,44 @@ async function collectSlackConfig(): Promise<SlackConfig> {
  */
 async function collectDiscordConfig(): Promise<DiscordConfig> {
   note(
-    'Discord Bot Setup\n\n' +
-      '1. Go to discord.com/developers/applications\n' +
-      '2. Click "New Application" and name it\n' +
-      '3. Go to "Bot" in sidebar:\n' +
-      '   - Click "Reset Token" and copy it\n' +
-      '   - Enable "MESSAGE CONTENT INTENT"\n' +
-      '4. Go to "OAuth2" -> "URL Generator":\n' +
-      '   - Select scope: bot\n' +
-      '   - Select permissions: Send Messages, Read Message History\n' +
-      '   - Open generated URL to add bot to your server\n\n' +
-      'Get your user ID:\n' +
+    'Discord Bot 설정\n\n' +
+      '1. discord.com/developers/applications로 이동하세요\n' +
+      '2. "New Application"을 클릭하고 이름을 지정하세요\n' +
+      '3. sidebar의 "Bot"으로 이동하세요:\n' +
+      '   - "Reset Token"을 클릭하고 복사하세요\n' +
+      '   - "MESSAGE CONTENT INTENT"를 활성화하세요\n' +
+      '4. "OAuth2" -> "URL Generator"로 이동하세요:\n' +
+      '   - scope: bot 선택\n' +
+      '   - permissions: Send Messages, Read Message History 선택\n' +
+      '   - 생성된 URL을 열어 bot을 server에 추가하세요\n\n' +
+      'user ID 확인:\n' +
       '- Discord Settings -> Advanced -> Enable Developer Mode\n' +
-      '- Right-click yourself -> Copy User ID',
-    'Discord Setup'
+      '- 내 계정을 우클릭 -> Copy User ID',
+    'Discord 설정'
   );
 
   const botToken = await password({
-    message: 'Enter your Discord Bot Token:',
+    message: 'Discord Bot Token을 입력하세요:',
     validate: value => {
       if (!value || value.length < 50) {
-        return 'Please enter a valid Discord bot token';
+        return '유효한 Discord bot token을 입력하세요';
       }
       return undefined;
     },
   });
 
   if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
   const allowedUserIds = await text({
-    message: 'Enter allowed Discord user IDs (comma-separated, or leave empty for all):',
+    message: '허용할 Discord user ID를 입력하세요 (쉼표 구분, 전체 허용은 빈 값):',
     placeholder: '123456789012345678,987654321098765432',
   });
 
   if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -1132,11 +1133,11 @@ async function collectDiscordConfig(): Promise<DiscordConfig> {
  */
 async function collectBotDisplayName(): Promise<string> {
   const customName = await confirm({
-    message: 'Do you want to set a custom bot display name? (Default: HarneesLab)',
+    message: 'custom bot 표시 이름을 설정할까요? (기본값: HarneesLab)',
   });
 
   if (isCancel(customName)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -1145,16 +1146,16 @@ async function collectBotDisplayName(): Promise<string> {
   }
 
   const name = await text({
-    message: 'Enter the bot display name:',
+    message: 'bot 표시 이름을 입력하세요:',
     placeholder: 'HarneesLab',
     validate: value => {
-      if (!value) return 'Name is required';
+      if (!value) return '이름은 필수입니다';
       return undefined;
     },
   });
 
   if (isCancel(name)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -1172,8 +1173,8 @@ export function generateEnvContent(config: SetupConfig): string {
   const lines: string[] = [];
 
   // Header
-  lines.push('# HarneesLab Configuration');
-  lines.push('# Generated by `hlab setup`');
+  lines.push('# HarneesLab 설정');
+  lines.push('# `hlab setup`에서 생성됨');
   lines.push('');
 
   // Database
@@ -1181,7 +1182,7 @@ export function generateEnvContent(config: SetupConfig): string {
   if (config.database.type === 'postgresql' && config.database.url) {
     lines.push(`DATABASE_URL=${config.database.url}`);
   } else {
-    lines.push('# Using SQLite (default) - no DATABASE_URL needed');
+    lines.push('# SQLite 사용 (기본값) - DATABASE_URL 불필요');
   }
   lines.push('');
 
@@ -1202,12 +1203,12 @@ export function generateEnvContent(config: SetupConfig): string {
       lines.push(`CLAUDE_BIN_PATH=${config.ai.claudeBinaryPath}`);
     }
   } else {
-    lines.push('# Claude not configured');
+    lines.push('# Claude 미설정');
   }
   lines.push('');
 
   if (config.ai.codex && config.ai.codexTokens) {
-    lines.push('# Codex Authentication');
+    lines.push('# Codex 인증');
     lines.push(`CODEX_ID_TOKEN=${config.ai.codexTokens.idToken}`);
     lines.push(`CODEX_ACCESS_TOKEN=${config.ai.codexTokens.accessToken}`);
     lines.push(`CODEX_REFRESH_TOKEN=${config.ai.codexTokens.refreshToken}`);
@@ -1216,7 +1217,7 @@ export function generateEnvContent(config: SetupConfig): string {
   }
 
   // Default AI Assistant
-  lines.push('# Default AI Assistant');
+  lines.push('# 기본 AI Assistant');
   lines.push(`DEFAULT_AI_ASSISTANT=${config.ai.defaultAssistant}`);
   lines.push('');
 
@@ -1271,7 +1272,7 @@ export function generateEnvContent(config: SetupConfig): string {
 
   // Bot Display Name
   if (config.botDisplayName !== 'HarneesLab') {
-    lines.push('# Bot Display Name');
+    lines.push('# Bot 표시 이름');
     lines.push(`BOT_DISPLAY_NAME=${config.botDisplayName}`);
     lines.push('');
   }
@@ -1282,7 +1283,7 @@ export function generateEnvContent(config: SetupConfig): string {
   // them in sync. Writing a fixed PORT here risked a mismatch if the global .env leaks a PORT
   // that the Vite proxy (which only reads repo-local .env) never sees — see #1152.
   lines.push('# Server');
-  lines.push('# PORT=3090  # Default: 3090. Uncomment to override.');
+  lines.push('# PORT=3090  # 기본값: 3090. 변경하려면 주석 해제.');
   lines.push('');
 
   // Concurrency
@@ -1385,7 +1386,7 @@ function spawnWindowsTerminal(repoPath: string): SpawnResult {
     return { success: true };
   }
 
-  return { success: false, error: 'Could not open terminal. Please run `hlab setup` manually.' };
+  return { success: false, error: '터미널을 열 수 없습니다. `hlab setup`을 직접 실행하세요.' };
 }
 
 /**
@@ -1401,7 +1402,7 @@ function spawnMacTerminal(repoPath: string): SpawnResult {
     return { success: true };
   }
 
-  return { success: false, error: 'Could not open Terminal. Please run `hlab setup` manually.' };
+  return { success: false, error: 'Terminal을 열 수 없습니다. `hlab setup`을 직접 실행하세요.' };
 }
 
 /**
@@ -1457,7 +1458,7 @@ function spawnLinuxTerminal(repoPath: string): SpawnResult {
 
   return {
     success: false,
-    error: 'Could not find a terminal emulator. Please run `hlab setup` manually.',
+    error: 'terminal emulator를 찾을 수 없습니다. `hlab setup`을 직접 실행하세요.',
   };
 }
 
@@ -1486,26 +1487,24 @@ export function spawnTerminalWithSetup(repoPath: string): SpawnResult {
 export async function setupCommand(options: SetupOptions): Promise<void> {
   // Handle --spawn flag
   if (options.spawn) {
-    console.log('Opening setup wizard in a new terminal window...');
+    console.log('새 터미널 창에서 setup 마법사를 엽니다...');
     const result = spawnTerminalWithSetup(options.repoPath);
 
     if (result.success) {
-      console.log('Setup wizard opened. Complete the setup in the new terminal window.');
+      console.log('setup 마법사를 열었습니다. 새 터미널 창에서 setup을 완료하세요.');
     } else {
       console.log('');
-      console.log('Next step: run the setup wizard in a separate terminal.');
+      console.log('다음 단계: 별도 터미널에서 setup 마법사를 실행하세요.');
       console.log('');
       console.log(`    cd ${options.repoPath} && hlab setup`);
       console.log('');
-      console.log(
-        'Come back here and let me know when you finish so I can verify your configuration.'
-      );
+      console.log('완료 후 이곳으로 돌아와 알려주시면 설정을 확인하겠습니다.');
     }
     return;
   }
 
   // Interactive setup flow
-  intro('HarneesLab Setup Wizard');
+  intro('HarneesLab Setup 마법사');
 
   // Check for existing configuration
   const existing = checkExistingConfig();
@@ -1522,24 +1521,24 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
     const summary = [
       `Database: ${existing.hasDatabase ? 'PostgreSQL' : 'SQLite'}`,
-      `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
-      `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
-      `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
+      `Claude: ${existing.hasClaude ? '설정됨' : '미설정'}`,
+      `Codex: ${existing.hasCodex ? '설정됨' : '미설정'}`,
+      `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : '없음'}`,
     ].join('\n');
 
-    note(summary, 'Existing Configuration Found');
+    note(summary, '기존 설정을 찾았습니다');
 
     const modeChoice = await select({
-      message: 'What would you like to do?',
+      message: '무엇을 하시겠습니까?',
       options: [
-        { value: 'add', label: 'Add platforms', hint: 'Keep existing config, add new platforms' },
-        { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
-        { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
+        { value: 'add', label: 'platform 추가', hint: '기존 설정을 유지하고 새 platform 추가' },
+        { value: 'update', label: '설정 업데이트', hint: '기존 설정 수정' },
+        { value: 'fresh', label: '처음부터 시작', hint: '전체 설정 교체' },
       ],
     });
 
     if (isCancel(modeChoice)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
@@ -1553,7 +1552,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
   if (mode === 'add') {
     // For 'add' mode, we keep existing and only collect new platforms
-    s.start('Loading existing configuration...');
+    s.start('기존 설정을 불러오는 중...');
 
     // Read existing config values - for simplicity, start with defaults and merge
     config = {
@@ -1572,10 +1571,10 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       botDisplayName: 'HarneesLab',
     };
 
-    s.stop('Existing configuration loaded');
+    s.stop('기존 설정을 불러왔습니다');
 
     // Collect only new platforms
-    log.info('Select additional platforms to configure');
+    log.info('추가로 설정할 platform을 선택하세요');
     const newPlatforms = await collectPlatforms();
 
     // Merge with existing
@@ -1631,21 +1630,21 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   // Generate and write configuration
-  s.start('Writing configuration files...');
+  s.start('설정 파일을 쓰는 중...');
 
   const envContent = generateEnvContent(config);
   const { globalPath, repoEnvPath } = writeEnvFiles(envContent, options.repoPath);
 
-  s.stop('Configuration files written');
+  s.stop('설정 파일을 썼습니다');
 
   // Offer to install the HarneesLab skill
   const shouldCopySkill = await confirm({
-    message: 'Install the HarneesLab skill in your project? (recommended)',
+    message: '프로젝트에 HarneesLab skill을 설치할까요? (권장)',
     initialValue: true,
   });
 
   if (isCancel(shouldCopySkill)) {
-    cancel('Setup cancelled.');
+    cancel('setup이 취소되었습니다.');
     process.exit(0);
   }
 
@@ -1653,38 +1652,38 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
   if (shouldCopySkill) {
     const skillTargetRaw = await text({
-      message: 'Project path to install the skill:',
+      message: 'skill을 설치할 프로젝트 경로:',
       defaultValue: options.repoPath,
       placeholder: options.repoPath,
     });
 
     if (isCancel(skillTargetRaw)) {
-      cancel('Setup cancelled.');
+      cancel('setup이 취소되었습니다.');
       process.exit(0);
     }
 
     const skillTarget = skillTargetRaw;
-    s.start('Installing HarneesLab skill...');
+    s.start('HarneesLab skill 설치 중...');
     try {
       copyArchonSkill(skillTarget);
     } catch (err) {
-      s.stop('HarneesLab skill installation failed');
-      cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
+      s.stop('HarneesLab skill 설치 실패');
+      cancel(`skill을 설치하지 못했습니다: ${(err as NodeJS.ErrnoException).message}`);
       process.exit(1);
     }
-    s.stop('HarneesLab skill installed');
+    s.stop('HarneesLab skill 설치 완료');
     skillInstalledPath = join(skillTarget, '.claude', 'skills', 'hlab');
   }
 
   // Optional: configure docs directory
   const wantsDocsPath = await confirm({
-    message: 'Configure a non-default docs directory? (default: docs/)',
+    message: '기본값이 아닌 docs 디렉터리를 설정할까요? (기본값: docs/)',
     initialValue: false,
   });
 
   if (!isCancel(wantsDocsPath) && wantsDocsPath) {
     const docsPath = await text({
-      message: 'Where are your project docs? (relative to repo root)',
+      message: '프로젝트 docs는 어디에 있습니까? (repo root 기준 상대 경로)',
       placeholder: 'docs/',
     });
 
@@ -1699,12 +1698,12 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
           writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
         } else {
           note(
-            `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
-            'Docs path not written'
+            `${configPath}에 이미 "docs:" key가 있습니다.\npath: ${docsPath.trim()} 설정은 수동으로 편집하세요`,
+            'docs path를 쓰지 않았습니다'
           );
         }
       } catch (err) {
-        cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
+        cancel(`docs config를 쓰지 못했습니다: ${(err as NodeJS.ErrnoException).message}`);
         process.exit(1);
       }
     }
@@ -1732,40 +1731,40 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   const summaryLines = [
-    `Database: ${config.database.type === 'postgresql' ? 'PostgreSQL' : 'SQLite (default)'}`,
-    `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : 'None configured'}`,
-    `Default: ${config.ai.defaultAssistant}`,
-    `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
+    `Database: ${config.database.type === 'postgresql' ? 'PostgreSQL' : 'SQLite (기본값)'}`,
+    `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : '설정 없음'}`,
+    `기본값: ${config.ai.defaultAssistant}`,
+    `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : '없음'}`,
     '',
-    'Files written:',
+    '작성된 파일:',
     `  ${globalPath}`,
     `  ${repoEnvPath}`,
   ];
 
   if (config.platforms.github && config.github) {
     summaryLines.push('');
-    summaryLines.push('GitHub Webhook Setup:');
+    summaryLines.push('GitHub Webhook 설정:');
     summaryLines.push(`  Secret: ${config.github.webhookSecret}`);
-    summaryLines.push('  Add this secret to your GitHub webhook configuration');
+    summaryLines.push('  이 secret을 GitHub webhook 설정에 추가하세요');
   }
 
   if (skillInstalledPath) {
     summaryLines.push('');
-    summaryLines.push('HarneesLab skill installed:');
+    summaryLines.push('HarneesLab skill 설치 완료:');
     summaryLines.push(`  ${skillInstalledPath}`);
   }
 
-  note(summaryLines.join('\n'), 'Configuration Complete');
+  note(summaryLines.join('\n'), '설정 완료');
 
   // Additional options note
   note(
-    'Other settings you can customize in the global .env:\n' +
+    'global .env에서 조정할 수 있는 기타 설정:\n' +
       '  - PORT (default: 3090)\n' +
       '  - MAX_CONCURRENT_CONVERSATIONS (default: 10)\n' +
       '  - *_STREAMING_MODE (stream | batch per platform)\n\n' +
-      'These defaults work well for most users.',
-    'Additional Options'
+      '이 기본값은 대부분의 사용자에게 적합합니다.',
+    '추가 옵션'
   );
 
-  outro('Setup complete! Run `hlab version` to verify.');
+  outro('setup 완료! `hlab version`으로 확인하세요.');
 }

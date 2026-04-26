@@ -40,12 +40,12 @@ describe('parseChecksum', () => {
   it('should throw for missing filename', () => {
     const checksums = `${validHash}  hlab-linux-x64\n`;
     expect(() => parseChecksum(checksums, 'hlab-web.tar.gz')).toThrow(
-      'Checksum not found for hlab-web.tar.gz'
+      'checksums.txt에서 hlab-web.tar.gz checksum을 찾지 못했습니다'
     );
   });
 
   it('should throw for empty checksums text', () => {
-    expect(() => parseChecksum('', 'hlab-web.tar.gz')).toThrow('Checksum not found');
+    expect(() => parseChecksum('', 'hlab-web.tar.gz')).toThrow('checksum을 찾지 못했습니다');
   });
 
   it('should skip blank lines', () => {
@@ -56,14 +56,14 @@ describe('parseChecksum', () => {
   it('should throw for malformed hash (not 64 hex chars)', () => {
     const checksums = 'short_hash  hlab-web.tar.gz\n';
     expect(() => parseChecksum(checksums, 'hlab-web.tar.gz')).toThrow(
-      'Malformed checksum entry for hlab-web.tar.gz'
+      '잘못된 checksum 항목 (hlab-web.tar.gz)'
     );
   });
 
   it('should throw for uppercase hex hash', () => {
     const checksums = `${'A'.repeat(64)}  hlab-web.tar.gz\n`;
     expect(() => parseChecksum(checksums, 'hlab-web.tar.gz')).toThrow(
-      'Malformed checksum entry for hlab-web.tar.gz'
+      '잘못된 checksum 항목 (hlab-web.tar.gz)'
     );
   });
 });
@@ -83,7 +83,7 @@ describe('serveCommand', () => {
     const exitCode = await serveCommand({});
     expect(exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      'Error: `hlab serve` is for compiled binaries only.'
+      '오류: `hlab serve`는 컴파일된 binary에서만 사용할 수 있습니다.'
     );
   });
 
@@ -96,7 +96,7 @@ describe('serveCommand', () => {
     const exitCode = await serveCommand({ port: NaN });
     expect(exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('--port must be an integer between 1 and 65535')
+      expect.stringContaining('--port는 1~65535 사이의 정수여야 합니다')
     );
   });
 
@@ -104,7 +104,7 @@ describe('serveCommand', () => {
     const exitCode = await serveCommand({ port: 99999 });
     expect(exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('--port must be an integer between 1 and 65535')
+      expect.stringContaining('--port는 1~65535 사이의 정수여야 합니다')
     );
   });
 
@@ -112,7 +112,7 @@ describe('serveCommand', () => {
     const exitCode = await serveCommand({ port: 0 });
     expect(exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('--port must be an integer between 1 and 65535')
+      expect.stringContaining('--port는 1~65535 사이의 정수여야 합니다')
     );
   });
 });
