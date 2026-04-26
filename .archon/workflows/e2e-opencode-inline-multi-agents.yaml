@@ -1,0 +1,46 @@
+# E2E smoke test — OpenCode multi-agent parallel execution
+# Verifies OpenCode's agents: adaptation with true multi-agent support:
+# - ALL configured agents execute in parallel (not just first-wins)
+# - Each agent's output is collected and aggregated
+# - Agent definitions materialized as .opencode/agents/archon-<id>.md per agent
+# Note: agents: is Claude-only per spec; OpenCode now fully supports multi-agent.
+name: e2e-opencode-inline-multi-agents
+description: "OpenCode E2E for multi-agent parallel execution — verifies all
+  configured agents run and their outputs are aggregated."
+provider: opencode
+model: anthropic/claude-haiku-4-5
+
+nodes:
+  # Node with multiple agents: BOTH agents should execute and contribute output
+  - id: multi
+    prompt: "Echo back the token from your agent instruction."
+    idle_timeout: 60000
+    agents:
+      first-agent:
+        description: "Primary agent — returns MULTI_AGENT_OK"
+        prompt: "Return exactly MULTI_AGENT_OK with no extra text."
+      second-agent:
+        description: "Secondary agent — returns SHOULD_APPEAR"
+        prompt: "Return exactly SHOULD_APPEAR with no extra text."
+
+  # Node with a single inline agent (backward compatibility)
+  - id: inline
+    prompt: "Echo back the token from your agent instruction."
+    idle_timeout: 60000
+    depends_on: [ multi ]
+    allowed_tools: [ Bash, Read ]
+    agents:
+      inline-agent:
+        description: "Single agent test — backward compatibility"
+        prompt: "Return exactly INLINE_AGENT_OK with no extra text."
+        tools: [ Bash ]
+
+  - id: assert
+    bash: |
+      echo "$multi.output" | grep -q "MULTI_AGENT_OK" \
+      && echo "$multi.output" | grep -q "SHOULD_APPEAR" \
+      && echo "$inline.output" | grep -q "INLINE_AGENT_OK" \
+      && echo "PASS: both agents in multi node executed parallel, inline agent verified" \
+      || (echo "FAIL: multi/inline agent output assertion failed"; exit 1)
+    timeout: 60000
+    depends_on: [ multi, inline ]

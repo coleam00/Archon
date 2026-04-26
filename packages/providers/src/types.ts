@@ -185,6 +185,8 @@ export interface AgentRequestOptions {
  * Providers translate fields they understand; unknown fields are ignored.
  */
 export interface NodeConfig {
+  /** Node ID from the workflow DAG — used by providers for per-node isolation (e.g., session dirs). */
+  nodeId?: string;
   mcp?: string;
   hooks?: unknown;
   skills?: string[];

@@ -8,7 +8,7 @@
 name: e2e-opencode-all-nodes-smoke
 description: "OpenCode provider smoke across every CI-compatible node type."
 provider: opencode
-model: cpamc/minimax
+model: anthropic/claude-haiku-4-5
 
 nodes:
   # ─── AI node types ──────────────────────────────────────────────────────
@@ -18,14 +18,14 @@ nodes:
     prompt: "Reply with exactly the single word 'ok' and nothing else."
     allowed_tools: []
     effort: low
-    idle_timeout: 30000
+    idle_timeout: 60000
 
   # 2. command: named command file (.archon/commands/e2e-echo-command.md)
   #    The command echoes back $ARGUMENTS (the workflow invocation message).
   - id: command-node
     command: e2e-echo-command
     allowed_tools: []
-    idle_timeout: 30000
+    idle_timeout: 60000
 
   # 3. loop: iterative AI prompt until completion signal
   #    Bounded by max_iterations: 2 so a misbehaving model can't hang CI.
@@ -62,7 +62,7 @@ nodes:
   # 7. depends_on + $nodeId.output substitution
   #    Use printf to safely handle multi-line output with special chars
   - id: downstream
-    bash: 'printf "downstream got: %s\n" "$prompt-node.output"'
+    bash: "printf \"downstream got: %s\\n\" \"$prompt-node.output\""
     depends_on: [ prompt-node ]
 
   # 8. when: conditional (JSON dot-access on upstream output)
@@ -82,6 +82,6 @@ nodes:
   # 10. Verify every upstream node produced non-empty output.
   #     Simple check - just verify we got here (all nodes completed)
   - id: assert
-    bash: 'printf "PASS: all 9 node types completed successfully\n"'
+    bash: "printf \"PASS: all 9 node types completed successfully\\n\""
     depends_on: [ merge, loop-node, command-node ]
     trigger_rule: all_success

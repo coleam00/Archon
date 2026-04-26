@@ -2,6 +2,17 @@ import type { OpencodeProviderDefaults } from '../../types';
 
 export type { OpencodeProviderDefaults };
 
+export function parseModelRef(modelRef: string): { providerID: string; modelID: string } | null {
+  const slashIndex = modelRef.indexOf('/');
+  if (slashIndex <= 0 || slashIndex === modelRef.length - 1) return null;
+
+  const providerID = modelRef.slice(0, slashIndex).trim();
+  const modelID = modelRef.slice(slashIndex + 1).trim();
+  if (!providerID || !modelID) return null;
+
+  return { providerID, modelID };
+}
+
 /**
  * Parse raw YAML-derived config into typed OpenCode defaults.
  * Defensive: invalid fields are dropped silently (matches parseClaudeConfig,
