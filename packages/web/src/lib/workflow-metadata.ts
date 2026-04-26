@@ -7,11 +7,54 @@ export interface ParsedDescription {
   raw: string;
 }
 
+const SECTION_LABELS = [
+  'Use when',
+  '사용할 때',
+  'Triggers',
+  '트리거 예시',
+  '트리거',
+  'Does',
+  '하는 일',
+  'NOT for',
+  'Constraints',
+  '사용하지 않을 때',
+  '제약',
+  'Handles',
+  '처리 범위',
+  'Capability',
+  '역량',
+  'Input',
+  '입력',
+  'Note',
+  '참고',
+];
+
+const SECTION_BOUNDARY = SECTION_LABELS.map(escapeRegExp).join('|');
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function readSection(text: string, labels: readonly string[]): string {
+  return readSections(text, labels)[0] ?? '';
+}
+
+function readSections(text: string, labels: readonly string[]): string[] {
+  const labelPattern = labels.map(escapeRegExp).join('|');
+  const sectionRe = new RegExp(
+    `(?:^|\\n)\\s*(?:${labelPattern}):\\s*(.+?)(?=\\n\\s*(?:${SECTION_BOUNDARY}):|\\n\\n|$)`,
+    'gs'
+  );
+  return [...text.matchAll(sectionRe)].map(match => match[1].trim()).filter(Boolean);
+}
+
 /**
  * Parse a workflow `description` field into structured sections.
  *
- * Recognizes: "Use when:", "Triggers:", "Does:", "NOT for:" / "Constraints:",
- * and less common variants like "Handles:", "Capability:", "Input:".
+ * Recognizes English labels ("Use when:", "Triggers:", "Does:", "NOT for:" /
+ * "Constraints:") and their Korean defaults ("사용할 때:", "트리거 예시:",
+ * "하는 일:", "사용하지 않을 때:"), plus less common variants like "Handles:",
+ * "Capability:", and "Input:".
  *
  * Falls back gracefully — unparsed descriptions return empty sections with the
  * full text in `raw`.
@@ -30,28 +73,16 @@ export function parseWorkflowDescription(description: string): ParsedDescription
   // Normalize line breaks and collapse multi-line sections
   const text = description.replace(/\r\n/g, '\n');
 
-  // Extract "Use when:" section
-  const whenRe =
-    /Use when:\s*(.+?)(?=\n\s*(?:Triggers:|Does:|NOT for:|Constraints:|Handles:|Capability:|Input:|\n\n)|$)/s;
-  const whenMatch = whenRe.exec(text);
-  if (whenMatch) {
-    result.whenToUse = whenMatch[1].trim();
-  }
+  result.whenToUse = readSection(text, ['Use when', '사용할 때']);
 
-  // Fallback: "Handles:" (e.g., archon-assist)
+  // Fallback: "Handles:" / "처리 범위:" (e.g., archon-assist)
   if (!result.whenToUse) {
-    const handlesRe = /Handles:\s*(.+?)(?=\n\s*(?:Capability:|Note:|\n\n)|$)/s;
-    const handlesMatch = handlesRe.exec(text);
-    if (handlesMatch) {
-      result.whenToUse = handlesMatch[1].trim();
-    }
+    result.whenToUse = readSection(text, ['Handles', '처리 범위']);
   }
 
-  // Extract "Triggers:" section — parse quoted strings, fall back to comma-split
-  const triggersRe = /Triggers:\s*(.+?)(?=\n\s*(?:Does:|NOT for:|Constraints:|\n\n)|$)/s;
-  const triggersMatch = triggersRe.exec(text);
-  if (triggersMatch) {
-    const triggerText = triggersMatch[1];
+  // Extract triggers — parse quoted strings, fall back to comma-split
+  const triggerText = readSection(text, ['Triggers', '트리거 예시', '트리거']);
+  if (triggerText) {
     result.triggers = [...triggerText.matchAll(/"([^"]+)"/g)].map(m => m[1]);
     // Fallback: comma-split for unquoted trigger lists
     if (result.triggers.length === 0) {
@@ -62,28 +93,19 @@ export function parseWorkflowDescription(description: string): ParsedDescription
     }
   }
 
-  // Extract "Does:" section
-  const doesRe = /Does:\s*(.+?)(?=\n\s*(?:NOT for:|Constraints:|\n\n)|$)/s;
-  const doesMatch = doesRe.exec(text);
-  if (doesMatch) {
-    result.does = doesMatch[1].trim();
-  }
+  result.does = readSection(text, ['Does', '하는 일']);
 
-  // Fallback: "Capability:" (e.g., archon-assist)
+  // Fallback: "Capability:" / "역량:" (e.g., archon-assist)
   if (!result.does) {
-    const capRe = /Capability:\s*(.+?)(?=\n\s*(?:Note:|\n\n)|$)/s;
-    const capMatch = capRe.exec(text);
-    if (capMatch) {
-      result.does = capMatch[1].trim();
-    }
+    result.does = readSection(text, ['Capability', '역량']);
   }
 
-  // Extract "NOT for:" or "Constraints:" section
-  const constraintsRe = /(?:NOT for|Constraints):\s*(.+?)(?=\n\n|$)/s;
-  const constraintsMatch = constraintsRe.exec(text);
-  if (constraintsMatch) {
-    result.constraints = constraintsMatch[1].trim();
-  }
+  result.constraints = readSections(text, [
+    'NOT for',
+    'Constraints',
+    '사용하지 않을 때',
+    '제약',
+  ]).join('\n');
 
   return result;
 }

@@ -56,6 +56,48 @@ Note: Will inform user when assist mode is used for tracking.`;
     expect(result.does).toBe('Full Claude Code agent with all tools available.');
   });
 
+  test('parses Korean default workflow sections', () => {
+    const description = `사용할 때: pull request를 포괄적으로 code review하고 자동 수정까지 원할 때.
+트리거 예시: "PR 리뷰해줘", "review PR #123", "comprehensive review".
+하는 일: PR을 main과 동기화 -> 전문 review agent 실행 -> findings 종합.
+사용하지 않을 때: PR에 대한 짧은 질문, CI 상태 확인.`;
+
+    const result = parseWorkflowDescription(description);
+
+    expect(result.whenToUse).toBe(
+      'pull request를 포괄적으로 code review하고 자동 수정까지 원할 때.'
+    );
+    expect(result.triggers).toEqual(['PR 리뷰해줘', 'review PR #123', 'comprehensive review']);
+    expect(result.does).toBe('PR을 main과 동기화 -> 전문 review agent 실행 -> findings 종합.');
+    expect(result.constraints).toBe('PR에 대한 짧은 질문, CI 상태 확인.');
+  });
+
+  test('parses mixed Korean and English workflow sections', () => {
+    const description = `사용할 때: 기존 plan을 바탕으로 feature를 구현할 때.
+Triggers: implement plan, feature work, ship this
+Does: Runs implementation loop -> validates changes.
+사용하지 않을 때: plan 작성.`;
+
+    const result = parseWorkflowDescription(description);
+
+    expect(result.whenToUse).toBe('기존 plan을 바탕으로 feature를 구현할 때.');
+    expect(result.triggers).toEqual(['implement plan', 'feature work', 'ship this']);
+    expect(result.does).toBe('Runs implementation loop -> validates changes.');
+    expect(result.constraints).toBe('plan 작성.');
+  });
+
+  test('handles Korean "처리 범위" and "역량" fallbacks', () => {
+    const description = `처리 범위: 질문, 디버깅, 탐색, 일반적인 도움.
+역량: 모든 도구를 사용할 수 있는 전체 Claude Code agent.
+참고: assist mode가 사용되었음을 알린다.`;
+
+    const result = parseWorkflowDescription(description);
+
+    expect(result.whenToUse).toBe('질문, 디버깅, 탐색, 일반적인 도움.');
+    expect(result.does).toBe('모든 도구를 사용할 수 있는 전체 Claude Code agent.');
+    expect(result.triggers).toEqual([]);
+  });
+
   test('returns raw description when no structured sections found', () => {
     const description = 'A simple workflow that does something useful.';
     const result = parseWorkflowDescription(description);
@@ -111,6 +153,17 @@ NOT for: Creating plans (plans should be created separately), bug fixes, code re
     expect(result.whenToUse).toBe('Implementing a feature from an existing plan.');
     expect(result.does).toBe('Implements the plan with validation loops -> creates pull request.');
     expect(result.constraints).toContain('Creating plans');
+  });
+
+  test('preserves repeated Korean constraint sections', () => {
+    const description = `사용할 때: guided development를 안내받고 싶을 때.
+트리거 예시: "piv", "guided development".
+사용하지 않을 때: 계획 없는 자율 구현.
+사용하지 않을 때: PRD 작성.`;
+
+    const result = parseWorkflowDescription(description);
+
+    expect(result.constraints).toBe('계획 없는 자율 구현.\nPRD 작성.');
   });
 });
 
