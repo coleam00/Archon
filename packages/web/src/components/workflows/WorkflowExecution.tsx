@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { MessageSquare } from 'lucide-react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { CheckCircle, MessageSquare, Pause, Send, XCircle } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
 import { StepLogs } from './StepLogs';
@@ -12,7 +12,14 @@ import { ChatInterface } from '@/components/chat/ChatInterface';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
-import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
+import {
+  getWorkflowRun,
+  getWorkflowRunByWorker,
+  getCodebase,
+  getWorkflow,
+  approveWorkflowRun,
+  rejectWorkflowRun,
+} from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
 import type {
@@ -504,6 +511,43 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const elapsed = startedAt ? Math.max(0, completedAt - startedAt) : 0;
 
   const isRunning = workflow.status === 'running' || workflow.status === 'pending';
+  const isPaused = workflow.status === 'paused';
+
+  // Approval context — prefer SSE live state, fall back to REST run metadata
+  const restApproval = useMemo((): { nodeId: string; message: string; type?: string } | null => {
+    if (!isPaused || !queryData) return null;
+    const events = queryData.events ?? [];
+    const approvalEvent = [...events].reverse().find(e => e.event_type === 'approval_requested');
+    if (!approvalEvent) return null;
+    // The approval type is not in the event — infer from loop_iteration events on the same node
+    const hasLoopEvents = events.some(
+      e => e.event_type === 'loop_iteration_started' && e.step_name === approvalEvent.step_name
+    );
+    return {
+      nodeId: approvalEvent.step_name ?? '',
+      message: (approvalEvent.data.message as string) ?? 'Waiting for approval',
+      type: hasLoopEvents ? 'interactive_loop' : 'approval',
+    };
+  }, [isPaused, queryData]);
+
+  const effectiveApproval = liveWorkflow?.approval ?? restApproval;
+  const isInteractiveLoop = effectiveApproval?.type === 'interactive_loop';
+
+  // Approval input and mutations
+  const [approvalComment, setApprovalComment] = useState('');
+  const approveMutation = useMutation({
+    mutationFn: (comment?: string) => approveWorkflowRun(runId, comment),
+    onSuccess: () => {
+      setApprovalComment('');
+      void queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+    },
+  });
+  const rejectMutation = useMutation({
+    mutationFn: () => rejectWorkflowRun(runId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+    },
+  });
 
   // Pick the platform ID for logs: worker takes precedence over conversation.
   const logsPlatformId = workerPlatformId ?? conversationPlatformId;
@@ -646,6 +690,91 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
               )}
             </TabsList>
           </Tabs>
+        </div>
+      )}
+
+      {/* Approval banner — shown when workflow is paused */}
+      {isPaused && effectiveApproval && (
+        <div className="border-b border-border bg-warning/5 px-4 py-3 space-y-2">
+          <div className="flex items-start gap-2">
+            <Pause className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+            <p className="text-sm text-text-secondary">{effectiveApproval.message}</p>
+          </div>
+          {isInteractiveLoop ? (
+            <div className="flex items-center gap-2 ml-6">
+              <input
+                type="text"
+                value={approvalComment}
+                onChange={(e): void => {
+                  setApprovalComment(e.target.value);
+                }}
+                onKeyDown={(e): void => {
+                  if (e.key === 'Enter' && approvalComment.trim()) {
+                    approveMutation.mutate(approvalComment.trim());
+                  }
+                }}
+                placeholder="Type your response..."
+                disabled={approveMutation.isPending}
+                className="flex-1 rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+              />
+              <button
+                onClick={(): void => {
+                  approveMutation.mutate(approvalComment.trim() || undefined);
+                }}
+                disabled={approveMutation.isPending}
+                className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-accent-hover transition-colors disabled:opacity-50"
+              >
+                <Send className="h-3.5 w-3.5" />
+                Send
+              </button>
+              <button
+                onClick={(): void => {
+                  if (window.confirm(`Reject workflow "${workflow.workflowName}"?`)) {
+                    rejectMutation.mutate();
+                  }
+                }}
+                disabled={rejectMutation.isPending}
+                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                Reject
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 ml-6">
+              <button
+                onClick={(): void => {
+                  approveMutation.mutate(undefined);
+                }}
+                disabled={approveMutation.isPending || rejectMutation.isPending}
+                className="flex items-center gap-1.5 rounded-md bg-success/20 px-3 py-1.5 text-sm text-success hover:bg-success/30 transition-colors disabled:opacity-50"
+              >
+                <CheckCircle className="h-3.5 w-3.5" />
+                Approve
+              </button>
+              <button
+                onClick={(): void => {
+                  if (window.confirm(`Reject workflow "${workflow.workflowName}"?`)) {
+                    rejectMutation.mutate();
+                  }
+                }}
+                disabled={approveMutation.isPending || rejectMutation.isPending}
+                className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                Reject
+              </button>
+            </div>
+          )}
+          {(approveMutation.isError || rejectMutation.isError) && (
+            <p className="text-sm text-error ml-6">
+              {approveMutation.error instanceof Error
+                ? approveMutation.error.message
+                : rejectMutation.error instanceof Error
+                  ? rejectMutation.error.message
+                  : 'Action failed — please try again'}
+            </p>
+          )}
         </div>
       )}
 
