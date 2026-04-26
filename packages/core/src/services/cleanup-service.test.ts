@@ -1458,61 +1458,85 @@ describe('cleanupStaleWorktrees', () => {
       reason: 'has uncommitted changes',
     });
   });
+});
 
-  describe('resolveMainBranch config override', () => {
-    test('uses worktree.baseBranch from .archon/config.yaml instead of auto-detection', async () => {
-      const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
-      const { join } = await import('path');
-      const { tmpdir } = await import('os');
-      const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
-      try {
-        await mkdir(join(tempDir, '.archon'), { recursive: true });
-        await writeFile(
-          join(tempDir, '.archon', 'config.yaml'),
-          'worktree:\n  baseBranch: master\n'
-        );
+describe('resolveMainBranch config override', () => {
+  beforeEach(() => {
+    mockListByCodebase.mockClear();
+    mockIsBranchMerged.mockClear();
+    mockIsBranchMerged.mockResolvedValue(false);
+    mockIsPatchEquivalent.mockClear();
+    mockIsPatchEquivalent.mockResolvedValue(false);
+    mockGetPrState.mockClear();
+    mockGetPrState.mockResolvedValue('NONE' as PrStateValue);
+    mockGetDefaultBranch.mockClear();
+    mockGetDefaultBranch.mockResolvedValue('main');
+    mockHasUncommittedChanges.mockClear();
+    mockHasUncommittedChanges.mockResolvedValue(false);
+    mockGetConversationsUsingEnv.mockClear();
+    mockGetById.mockClear();
+    mockWorktreeExists.mockClear();
+    mockWorktreeExists.mockResolvedValue(false);
+    mockDestroy.mockClear();
+    mockUpdateStatus.mockClear();
+  });
 
-        // Mock a merged environment
-        mockListByCodebase.mockResolvedValueOnce([
-          {
-            id: 'env-1',
-            branch_name: 'feature-x',
-            working_path: join(tempDir, 'worktrees', 'feature-x'),
-            status: 'active',
-          },
-        ]);
-        mockIsBranchMerged.mockResolvedValueOnce(true);
-        mockHasUncommittedChanges.mockResolvedValueOnce(false);
-        mockGetPrState.mockResolvedValueOnce('MERGED');
-        mockDestroy.mockResolvedValueOnce({
-          worktreeRemoved: true,
-          branchDeleted: true,
-          remoteBranchDeleted: true,
-          directoryClean: true,
-          warnings: [],
-        });
-        mockUpdateStatus.mockResolvedValueOnce(undefined);
+  test('uses worktree.baseBranch from .archon/config.yaml instead of auto-detection', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
+    try {
+      await mkdir(join(tempDir, '.archon'), { recursive: true });
+      await writeFile(join(tempDir, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: master\n');
 
-        const mergeResult = await cleanupMergedWorktrees('codebase-1', tempDir);
+      // Mock a merged environment
+      mockListByCodebase.mockResolvedValueOnce([
+        {
+          id: 'env-1',
+          branch_name: 'feature-x',
+          working_path: join(tempDir, 'worktrees', 'feature-x'),
+          status: 'active',
+        },
+      ]);
+      mockIsBranchMerged.mockResolvedValueOnce(true);
+      mockHasUncommittedChanges.mockResolvedValueOnce(false);
+      mockGetPrState.mockResolvedValueOnce('MERGED');
+      mockDestroy.mockResolvedValueOnce({
+        worktreeRemoved: true,
+        branchDeleted: true,
+        remoteBranchDeleted: true,
+        directoryClean: true,
+        warnings: [],
+      });
+      mockUpdateStatus.mockResolvedValueOnce(undefined);
 
-        // isBranchMerged should have been called with 'master' (from config)
-        const branchMergeCalls = mockIsBranchMerged.mock.calls.filter(
-          (call: unknown[]) => call[0] === tempDir
-        );
-        expect(branchMergeCalls).toHaveLength(1);
-        expect(branchMergeCalls[0][2]).toBe('master');
-      } finally {
-        await rm(tempDir, { recursive: true, force: true });
-      }
-    });
+      await cleanupMergedWorktrees('codebase-1', tempDir);
 
-    test('falls back to getDefaultBranch when no config exists', async () => {
-      mockListByCodebase.mockResolvedValueOnce([]);
-      mockGetDefaultBranch.mockResolvedValueOnce('main');
+      // getDefaultBranch should NOT have been called — config was used
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      // isBranchMerged should have been called with 'master' (from config)
+      expect(mockIsBranchMerged).toHaveBeenCalledWith(tempDir, 'feature-x', 'master');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 
-      await cleanupMergedWorktrees('codebase-1', '/nonexistent/repo');
+  test('falls back to getDefaultBranch when no config exists', async () => {
+    mockListByCodebase.mockResolvedValueOnce([
+      {
+        id: 'env-fallback',
+        branch_name: 'feature-y',
+        working_path: '/nonexistent/repo/worktrees/feature-y',
+        status: 'active',
+      },
+    ]);
+    mockGetDefaultBranch.mockResolvedValueOnce('main');
 
-      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/nonexistent/repo');
-    });
+    await cleanupMergedWorktrees('codebase-1', '/nonexistent/repo');
+
+    expect(mockGetDefaultBranch).toHaveBeenCalledTimes(1);
+    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/nonexistent/repo');
+    expect(mockIsBranchMerged.mock.calls[0][2]).toBe('main');
   });
 });
