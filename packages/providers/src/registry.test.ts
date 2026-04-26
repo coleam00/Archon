@@ -10,6 +10,7 @@ import {
   registerBuiltinProviders,
   registerCommunityProviders,
   clearRegistry,
+  isClaudeModel,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
@@ -262,6 +263,15 @@ describe('registry', () => {
       expect(reg.isModelCompatible('gpt-4')).toBe(false);
     });
 
+    test('Claude registration matches bracket-suffixed aliases (#1409)', () => {
+      const reg = getRegistration('claude');
+      expect(reg.isModelCompatible('opus[1m]')).toBe(true);
+      expect(reg.isModelCompatible('sonnet[1m]')).toBe(true);
+      expect(reg.isModelCompatible('haiku[1m]')).toBe(true);
+      expect(reg.isModelCompatible('claude-opus-4-6[1m]')).toBe(true);
+      expect(reg.isModelCompatible('claude-opus-4-7[1m]')).toBe(true);
+    });
+
     test('Codex registration rejects Claude model patterns', () => {
       const reg = getRegistration('codex');
       expect(reg.isModelCompatible('sonnet')).toBe(false);
@@ -269,6 +279,45 @@ describe('registry', () => {
       expect(reg.isModelCompatible('inherit')).toBe(false);
       expect(reg.isModelCompatible('gpt-4')).toBe(true);
       expect(reg.isModelCompatible('o3-mini')).toBe(true);
+    });
+
+    test('Codex registration rejects bracket-suffixed Claude aliases (#1409)', () => {
+      const reg = getRegistration('codex');
+      expect(reg.isModelCompatible('opus[1m]')).toBe(false);
+      expect(reg.isModelCompatible('sonnet[1m]')).toBe(false);
+      expect(reg.isModelCompatible('haiku[1m]')).toBe(false);
+      expect(reg.isModelCompatible('claude-opus-4-6[1m]')).toBe(false);
+    });
+  });
+
+  describe('isClaudeModel', () => {
+    test('recognizes bare aliases', () => {
+      expect(isClaudeModel('sonnet')).toBe(true);
+      expect(isClaudeModel('opus')).toBe(true);
+      expect(isClaudeModel('haiku')).toBe(true);
+    });
+
+    test('recognizes bracket-suffixed aliases', () => {
+      expect(isClaudeModel('opus[1m]')).toBe(true);
+      expect(isClaudeModel('sonnet[1m]')).toBe(true);
+      expect(isClaudeModel('haiku[1m]')).toBe(true);
+    });
+
+    test('recognizes full claude- model IDs with and without suffix', () => {
+      expect(isClaudeModel('claude-opus-4-7')).toBe(true);
+      expect(isClaudeModel('claude-opus-4-6[1m]')).toBe(true);
+      expect(isClaudeModel('claude-sonnet-4-6[1m]')).toBe(true);
+    });
+
+    test('recognizes inherit', () => {
+      expect(isClaudeModel('inherit')).toBe(true);
+    });
+
+    test('rejects non-Claude models', () => {
+      expect(isClaudeModel('gpt-4')).toBe(false);
+      expect(isClaudeModel('o3-mini')).toBe(false);
+      expect(isClaudeModel('')).toBe(false);
+      expect(isClaudeModel('opusxyz')).toBe(false);
     });
   });
 

@@ -28,6 +28,7 @@ export {
   registerBuiltinProviders,
   registerCommunityProviders,
   clearRegistry,
+  isClaudeModel,
 } from './registry';
 
 // Error

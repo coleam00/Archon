@@ -23,6 +23,17 @@ describe('model-validation (registry-driven)', () => {
       expect(isModelCompatible('claude', 'claude-opus-4-6')).toBe(true);
     });
 
+    it('should accept bracket-suffixed Claude aliases (#1409)', () => {
+      expect(isModelCompatible('claude', 'opus[1m]')).toBe(true);
+      expect(isModelCompatible('claude', 'sonnet[1m]')).toBe(true);
+      expect(isModelCompatible('claude', 'claude-opus-4-6[1m]')).toBe(true);
+    });
+
+    it('should reject bracket-suffixed Claude aliases with codex provider (#1409)', () => {
+      expect(isModelCompatible('codex', 'opus[1m]')).toBe(false);
+      expect(isModelCompatible('codex', 'sonnet[1m]')).toBe(false);
+    });
+
     it('should reject non-Claude models with claude provider', () => {
       expect(isModelCompatible('claude', 'gpt-5.3-codex')).toBe(false);
       expect(isModelCompatible('claude', 'gpt-4')).toBe(false);
@@ -69,6 +80,12 @@ describe('model-validation (registry-driven)', () => {
       expect(inferProviderFromModel('haiku', 'codex')).toBe('claude');
       expect(inferProviderFromModel('inherit', 'codex')).toBe('claude');
       expect(inferProviderFromModel('claude-opus-4-6', 'codex')).toBe('claude');
+    });
+
+    it('should infer claude from bracket-suffixed aliases (#1409)', () => {
+      expect(inferProviderFromModel('opus[1m]', 'codex')).toBe('claude');
+      expect(inferProviderFromModel('sonnet[1m]', 'codex')).toBe('claude');
+      expect(inferProviderFromModel('claude-opus-4-6[1m]', 'codex')).toBe('claude');
     });
 
     it('should infer codex from non-Claude model names', () => {

@@ -21,6 +21,17 @@ import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
 
+/**
+ * Matches Claude bare aliases with an optional bracket suffix (e.g. `opus[1m]`, `sonnet[1m]`).
+ * The bracket form is a Claude Code routing hint for extended context windows.
+ */
+const CLAUDE_ALIAS_RE = /^(sonnet|opus|haiku)(\[[^\]]+\])?$/;
+
+/** Single source of truth for Claude model recognition. */
+export function isClaudeModel(model: string): boolean {
+  return CLAUDE_ALIAS_RE.test(model) || model.startsWith('claude-') || model === 'inherit';
+}
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -112,10 +123,7 @@ export function registerBuiltinProviders(): void {
       displayName: 'Claude (Anthropic)',
       factory: () => new ClaudeProvider(),
       capabilities: CLAUDE_CAPABILITIES,
-      isModelCompatible: (model: string): boolean => {
-        const aliases = ['sonnet', 'opus', 'haiku'];
-        return aliases.includes(model) || model.startsWith('claude-') || model === 'inherit';
-      },
+      isModelCompatible: (model: string): boolean => isClaudeModel(model),
       builtIn: true,
     },
     {
@@ -123,12 +131,7 @@ export function registerBuiltinProviders(): void {
       displayName: 'Codex (OpenAI)',
       factory: () => new CodexProvider(),
       capabilities: CODEX_CAPABILITIES,
-      isModelCompatible: (model: string): boolean => {
-        const claudeAliases = ['sonnet', 'opus', 'haiku'];
-        return (
-          !claudeAliases.includes(model) && !model.startsWith('claude-') && model !== 'inherit'
-        );
-      },
+      isModelCompatible: (model: string): boolean => !isClaudeModel(model),
       builtIn: true,
     },
   ];
