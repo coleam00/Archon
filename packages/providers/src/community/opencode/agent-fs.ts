@@ -1,9 +1,17 @@
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { createLogger } from '@archon/paths';
+
 import type { NodeConfig } from '../../types';
 
 import { toKebabCase } from './agent-config';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('provider.opencode');
+  return cachedLog;
+}
 
 type AgentConfig = NonNullable<NonNullable<NodeConfig['agents']>[string]>;
 
@@ -73,8 +81,10 @@ export async function materializeAgents(
         .filter(f => f.startsWith('archon-') && !currentArchonFiles.has(f))
         .map(f => rm(join(agentsDir, f), { force: true }))
     );
-  } catch {
-    // Directory might not exist yet — mkdir above handles that
+  } catch (error) {
+    // mkdir above already ensures the directory exists; other errors (e.g. permission
+    // denied) are non-fatal for stale-file cleanup but worth surfacing for diagnostics.
+    getLog().debug({ err: error, agentsDir }, 'opencode.agent_fs_readdir_failed');
   }
 
   // Write all agent files for this request

@@ -26,10 +26,16 @@ async function startEmbeddedOpencode(
   startupPort: number,
   signal?: AbortSignal
 ): Promise<{ client: unknown; server: { url: string; close(): void } }> {
-  // Remove any pre-existing server password env vars so the embedded
-  // server uses the random password from config instead.
-  delete process.env.OPENCODE_SERVER_PASSWORD;
-  delete process.env.OPENCODE_SERVER_USERNAME;
+  // Clear any pre-existing OpenCode server credential env vars so the embedded
+  // server uses the random password generated in buildEmbeddedServerConfig rather
+  // than picking up credentials intended for an external server instance.
+  // Only clear them when they are actually set to avoid unnecessary mutations.
+  if (process.env.OPENCODE_SERVER_PASSWORD !== undefined) {
+    delete process.env.OPENCODE_SERVER_PASSWORD;
+  }
+  if (process.env.OPENCODE_SERVER_USERNAME !== undefined) {
+    delete process.env.OPENCODE_SERVER_USERNAME;
+  }
 
   return await createOpencode({
     hostname: '127.0.0.1',

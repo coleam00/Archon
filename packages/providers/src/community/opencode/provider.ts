@@ -128,9 +128,16 @@ export class OpencodeProvider implements IAgentProvider {
         }
 
         if (isMultiAgent) {
+          if (!nodeId) {
+            throw new Error(
+              'OpenCode multi-agent execution requires a nodeId in nodeConfig. ' +
+                'Ensure the workflow node sets nodeConfig.nodeId.'
+            );
+          }
           yield* streamMultiAgentOpencodeSession(
             runtime.client,
             sessionCwd,
+            nodeId,
             prompt,
             parsedModel,
             requestOptions

@@ -10,6 +10,7 @@ import {
   promptSession,
   resolveSessionId,
 } from './session';
+import { normalizeTokens } from './tokens';
 
 interface ProviderModel {
   providerID: string;
@@ -35,23 +36,6 @@ function getLog(): ReturnType<typeof createLogger> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function normalizeTokens(info: Record<string, unknown> | undefined): TokenUsage | undefined {
-  const tokens = isRecord(info?.tokens) ? info.tokens : undefined;
-  if (!tokens) return undefined;
-
-  const input = typeof tokens.input === 'number' ? tokens.input : 0;
-  const output = typeof tokens.output === 'number' ? tokens.output : 0;
-  const reasoning = typeof tokens.reasoning === 'number' ? tokens.reasoning : 0;
-  const total = input + output + reasoning;
-
-  return {
-    input,
-    output,
-    ...(total > 0 ? { total } : {}),
-    ...(typeof info?.cost === 'number' ? { cost: info.cost } : {}),
-  };
 }
 
 async function readStructuredOutput(
@@ -134,6 +118,7 @@ function collectToolChunksForEmission(states: AgentRunState[]): MessageChunk[] {
 export async function* streamMultiAgentOpencodeSession(
   client: OpencodeClientLike,
   cwd: string,
+  nodeId: string,
   prompt: string,
   model: ProviderModel,
   requestOptions: SendQueryOptions | undefined
@@ -141,11 +126,6 @@ export async function* streamMultiAgentOpencodeSession(
   const agents = getOrderedAgents(requestOptions?.nodeConfig);
   if (agents.length <= 1) {
     throw new Error('streamMultiAgentOpencodeSession requires multiple agents');
-  }
-
-  const nodeId = requestOptions?.nodeConfig?.nodeId;
-  if (!nodeId) {
-    throw new Error('OpenCode multi-agent execution requires nodeConfig.nodeId');
   }
 
   getLog().info({ nodeId, agentCount: agents.length, cwd }, 'opencode.multi_agent_starting');
@@ -391,9 +371,10 @@ export async function* streamMultiAgentOpencodeSession(
             return filtered.length > 0 ? Object.fromEntries(filtered) : undefined;
           });
 
+          // Multi-agent runs span multiple sessions; there is no single canonical
+          // sessionId to resume, so we omit it rather than returning an arbitrary one.
           yield {
             type: 'result',
-            sessionId: states[0]?.sessionId,
             ...(tokens ? { tokens } : {}),
             ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
           };
