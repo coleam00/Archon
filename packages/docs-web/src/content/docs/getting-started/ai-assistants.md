@@ -233,6 +233,8 @@ DEFAULT_AI_ASSISTANT=codex
 
 OpenCode is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
 
+Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random server password per session, and tears it down when the workflow completes. Connecting to an external OpenCode server (`baseUrl`) is not supported.
+
 ### Install
 
 OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
@@ -253,14 +255,13 @@ OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, et
 assistants:
   opencode:
     model: anthropic/claude-3-5-sonnet  # Required: '<provider>/<model>' format
-    agent: build  # Optional: select a specific agent profile
-    # Optional: connect to an existing OpenCode server
-    # baseUrl: http://localhost:3000
+    # or build-in agent
+    agent: general
 ```
 
 ### Model reference format
 
-OpenCode models use a `<provider>/<model>` format:
+OpenCode models use a `<provider>/<model>` format. List all available models via `opencode models`:
 
 ```yaml
 assistants:
@@ -274,20 +275,20 @@ assistants:
 
 | Feature | Support | Notes |
 |---|---|---|
-| Session resume | ✅ | Returns `sessionId` and reuses it on resume |
+| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
 | MCP servers | ✅ | `mcp: path/to/servers.json` passed through to OpenCode |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
 | Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
-| Tool restrictions | ✅ | Permission system (allow/ask/deny), glob patterns, per-agent config |
-| Inline sub-agents (`agents:`) | ⚠️ Partial | Primary+subagents, `@` mentions, child sessions, task_budget |
+| Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
+| Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
 | Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
-| Reasoning control | ✅ | `reasoningEffort` (OpenAI), `thinking.budgetTokens` (Anthropic) |
-| Thinking control | ✅ | `thinking.type: enabled/disabled`, budgetTokens, variants |
-| Fallback model | ❌ | no native failover in SDK |
-| Sandbox | ❌ | no native sandbox in SDK; Archon uses worktree isolation |
-| Cost limits (`maxBudgetUsd`) | ❌ | cost tracked in result chunks + `opencode stats` CLI, but no runtime budget enforcement |
+| Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode put it in cofnig file. |
+| Thinking control | ❌ | No explicit `thinking` field in agent frontmatter; OpenCode auto-enables reasoning when `agents[].model` is a reasoning-capable model (e.g. `anthropic/claude-sonnet-4-5`) |
+| Fallback model | ❌ | No native failover in the SDK |
+| Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |
+| Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
 
 Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
 
@@ -301,7 +302,7 @@ model: anthropic/claude-3-5-sonnet
 nodes:
   - id: analyze
     prompt: "Analyze the codebase structure"
-    # per-node model override
+    # per-node model override:
     # model: openai/gpt-4o
 ```
 
