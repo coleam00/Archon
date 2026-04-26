@@ -500,7 +500,7 @@ assistants:
 
 **Model Validation:**
 - Workflows are validated at load time for provider/model compatibility
-- Claude models: `sonnet`, `opus`, `haiku`, `claude-*`, `inherit`
+- Claude models: `sonnet`, `opus`, `haiku`, `claude-*`, `inherit`; bracket suffixes are also valid (e.g. `opus[1m]`, `sonnet[1m]`) — these are Claude Code routing hints for extended context windows
 - Codex models: Any model except Claude-specific aliases
 - Invalid combinations fail workflow loading with clear error messages
 

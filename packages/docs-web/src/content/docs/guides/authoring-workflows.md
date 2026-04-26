@@ -604,6 +604,7 @@ model: sonnet        # Model override (default: from config assistants.claude.mo
 - `haiku` - Fast, lightweight
 - `claude-*` - Full model IDs (e.g., `claude-3-5-sonnet-20241022`)
 - `inherit` - Use model from previous session
+- Bracket suffix variants (e.g. `opus[1m]`, `sonnet[1m]`) — Claude Code routing hints for extended context windows; treated as Claude aliases
 
 **Codex models:**
 - Any OpenAI model ID (e.g., `gpt-5.3-codex`, `o5-pro`)

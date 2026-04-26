@@ -123,7 +123,7 @@ export function registerBuiltinProviders(): void {
       displayName: 'Claude (Anthropic)',
       factory: () => new ClaudeProvider(),
       capabilities: CLAUDE_CAPABILITIES,
-      isModelCompatible: (model: string): boolean => isClaudeModel(model),
+      isModelCompatible: isClaudeModel,
       builtIn: true,
     },
     {

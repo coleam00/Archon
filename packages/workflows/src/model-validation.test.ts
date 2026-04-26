@@ -85,6 +85,7 @@ describe('model-validation (registry-driven)', () => {
     it('should infer claude from bracket-suffixed aliases (#1409)', () => {
       expect(inferProviderFromModel('opus[1m]', 'codex')).toBe('claude');
       expect(inferProviderFromModel('sonnet[1m]', 'codex')).toBe('claude');
+      expect(inferProviderFromModel('haiku[1m]', 'codex')).toBe('claude');
       expect(inferProviderFromModel('claude-opus-4-6[1m]', 'codex')).toBe('claude');
     });
 
