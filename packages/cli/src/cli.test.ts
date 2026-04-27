@@ -155,8 +155,9 @@ describe('CLI argument parsing', () => {
 
   describe('version flag detection', () => {
     /**
-     * Mirrors the isVersionRequest() helper from cli.ts. Kept in sync so test
-     * failures will catch regressions in the actual CLI logic.
+     * Duplicates the isVersionRequest() helper from cli.ts (which is not
+     * exported — importing cli.ts would execute its top-level main()). Must
+     * be updated manually if the source logic changes.
      */
     const isVersionRequest = (args: string[]): boolean => {
       if (args.length === 1 && args[0] === '-v') return true;
