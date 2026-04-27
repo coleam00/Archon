@@ -76,7 +76,8 @@ describe('applyToolRestrictions', () => {
   test('omits availableTools/excludedTools when nodeConfig has neither', async () => {
     await drain(new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' }));
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.availableTools).toBeUndefined();
     expect(cfg.excludedTools).toBeUndefined();
   });
@@ -89,7 +90,8 @@ describe('applyToolRestrictions', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.availableTools).toEqual(['read_file', 'write_file']);
     expect(cfg.excludedTools).toBeUndefined();
   });
@@ -102,7 +104,8 @@ describe('applyToolRestrictions', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.excludedTools).toEqual(['shell']);
     expect(cfg.availableTools).toBeUndefined();
   });
@@ -118,7 +121,8 @@ describe('applyToolRestrictions', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.availableTools).toEqual(['read_file']);
     expect(cfg.excludedTools).toEqual(['shell']);
   });
@@ -131,7 +135,8 @@ describe('applyToolRestrictions', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.availableTools).toEqual(['read_file']);
     expect(mockResumeSession).toHaveBeenCalledTimes(1);
     expect(mockCreateSession).toHaveBeenCalledTimes(0);

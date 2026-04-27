@@ -71,7 +71,8 @@ describe('applyAgents', () => {
   test('omits customAgents when nodeConfig.agents is absent', async () => {
     await collect(new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' }));
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.customAgents).toBeUndefined();
   });
 
@@ -83,7 +84,8 @@ describe('applyAgents', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.customAgents).toBeUndefined();
   });
 
@@ -103,7 +105,8 @@ describe('applyAgents', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.customAgents).toEqual([
       {
         name: 'code-searcher',
@@ -128,7 +131,8 @@ describe('applyAgents', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     const agents = cfg.customAgents as Array<Record<string, unknown>>;
     expect(agents[0]).not.toHaveProperty('tools');
   });
@@ -163,7 +167,8 @@ describe('applyAgents', () => {
     expect(match?.content).toContain('maxTurns');
 
     // SessionConfig.customAgents still gets the agent with the supported fields only
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     const agents = cfg.customAgents as Array<Record<string, unknown>>;
     expect(agents).toHaveLength(1);
     expect(agents[0]).toEqual({
@@ -185,7 +190,8 @@ describe('applyAgents', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     const agents = cfg.customAgents as Array<{ name: string }>;
     expect(agents.map(a => a.name)).toEqual(['first-one', 'second-one']);
   });
@@ -201,7 +207,8 @@ describe('applyAgents', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.agent).toBeUndefined();
   });
 });

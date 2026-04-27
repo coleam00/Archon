@@ -13,14 +13,20 @@ nodes:
 
   - id: assert
     bash: |
-      output="$simple.output"
-      if [ -z "$output" ]; then
+      # The workflow engine substitutes $simple.output as a literal string
+      # before bash runs. Wrap in single quotes so command substitution
+      # (`$(...)`, backticks) inside a model response is treated as data,
+      # not executed. A literal `'` in the value would cause a syntax
+      # error, which fails the test loudly rather than running arbitrary
+      # shell — strict improvement over double-quoted interpolation.
+      output_raw='$simple.output'
+      if [ -z "$output_raw" ]; then
         echo "FAIL: simple node returned empty output"
         exit 1
       fi
-      echo "$output" | rg -q "COPILOT_OK" || {
-        echo "FAIL: expected COPILOT_OK, got: $output"
+      printf '%s\n' "$output_raw" | grep -F -q -- 'COPILOT_OK' || {
+        printf 'FAIL: expected COPILOT_OK, got: %s\n' "$output_raw"
         exit 1
       }
-      echo "PASS: simple=$output"
+      printf 'PASS: simple=%s\n' "$output_raw"
     depends_on: [simple]

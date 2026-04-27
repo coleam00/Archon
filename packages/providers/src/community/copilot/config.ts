@@ -27,6 +27,13 @@ export interface CopilotProviderDefaults {
   logLevel?: 'none' | 'error' | 'warning' | 'info' | 'debug' | 'all';
 }
 
+/**
+ * Lenient parser: fields with the wrong type (or `logLevel` outside the
+ * enumerated set) are silently dropped rather than throwing. Matches the
+ * fallback behavior of the other provider config loaders so a single bad
+ * key in `.archon/config.yaml` doesn't take the whole provider offline. See
+ * the `drops invalid values silently` test for the contract.
+ */
 export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProviderDefaults {
   const result: CopilotProviderDefaults = {};
 

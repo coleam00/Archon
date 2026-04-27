@@ -67,9 +67,11 @@ async function collectChunks(generator: AsyncGenerator<unknown>): Promise<unknow
 }
 
 let workDir = '';
+let originalCopilotMcpTestToken: string | undefined;
 
 describe('applyMcpServers', () => {
   beforeEach(() => {
+    originalCopilotMcpTestToken = process.env.COPILOT_MCP_TEST_TOKEN;
     registeredHandlers = {};
     capturedSessionConfigs.length = 0;
     mockCreateSession.mockClear();
@@ -78,7 +80,11 @@ describe('applyMcpServers', () => {
 
   afterEach(() => {
     rmSync(workDir, { recursive: true, force: true });
-    delete process.env.COPILOT_MCP_TEST_TOKEN;
+    if (originalCopilotMcpTestToken === undefined) {
+      delete process.env.COPILOT_MCP_TEST_TOKEN;
+    } else {
+      process.env.COPILOT_MCP_TEST_TOKEN = originalCopilotMcpTestToken;
+    }
   });
 
   test('omits mcpServers when nodeConfig.mcp is absent', async () => {
@@ -86,7 +92,8 @@ describe('applyMcpServers', () => {
       new CopilotProvider().sendQuery('hi', workDir, undefined, { model: 'gpt-5' })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.mcpServers).toBeUndefined();
   });
 
@@ -111,7 +118,8 @@ describe('applyMcpServers', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.mcpServers).toEqual({
       'example-server': {
         type: 'local',
@@ -148,7 +156,8 @@ describe('applyMcpServers', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     const servers = cfg.mcpServers as Record<string, { env?: Record<string, string> }>;
     expect(servers['env-server']?.env?.SET_VAR).toBe('secret-value');
     expect(servers['env-server']?.env?.MISSING_VAR).toBe('');

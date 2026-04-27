@@ -279,11 +279,14 @@ function isModelAccessError(errorMessage: string): boolean {
 }
 
 function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): Error {
-  const rawMessage =
-    (error instanceof Error && error.message) ||
-    lastSessionError ||
-    String(error) ||
-    'Unknown error';
+  // A generic `sendAndWait` rejection often hides the actionable detail in
+  // `session.error` (auth/model-access). Combine both for classification and
+  // surface both in the user-visible message.
+  const thrownMessage = error instanceof Error && error.message ? error.message : String(error);
+  const combined = [thrownMessage, lastSessionError]
+    .filter((m): m is string => Boolean(m))
+    .join('\n');
+  const rawMessage = combined || 'Unknown error';
 
   if (isModelAccessError(rawMessage)) {
     return new Error(
@@ -305,7 +308,7 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
     );
   }
 
-  return error instanceof Error ? error : new Error(rawMessage);
+  return error instanceof Error && !lastSessionError ? error : new Error(rawMessage);
 }
 
 class AsyncChunkQueue<T> {
@@ -383,6 +386,12 @@ export class CopilotProvider implements IAgentProvider {
     const queue = new AsyncChunkQueue<MessageChunk>();
 
     let runError: Error | undefined;
+    // Hoisted so the outer generator can abort the SDK run if the caller
+    // stops iterating before the queue closes (e.g. early `break` or thrown
+    // error in the consumer). Without this, `sendAndWait` would keep running
+    // up to the 24h ceiling.
+    let activeSession: Awaited<ReturnType<CopilotClient['createSession']>> | undefined;
+    let runFinished = false;
     (async (): Promise<void> => {
       const assistantConfig = requestOptions?.assistantConfig ?? {};
       const copilotConfig = parseCopilotConfig(assistantConfig);
@@ -429,6 +438,7 @@ export class CopilotProvider implements IAgentProvider {
         session = resumeSessionId
           ? await client.resumeSession(resumeSessionId, sessionConfig)
           : await client.createSession(sessionConfig);
+        activeSession = session;
 
         session.on('assistant.reasoning_delta', event => {
           streamedReasoningIds.add(event.data.reasoningId);
@@ -570,11 +580,24 @@ export class CopilotProvider implements IAgentProvider {
         runError = error as Error;
       })
       .finally(() => {
+        runFinished = true;
         queue.close();
       });
 
-    for await (const chunk of queue) {
-      yield chunk;
+    try {
+      for await (const chunk of queue) {
+        yield chunk;
+      }
+    } finally {
+      // If the consumer stops iterating before the run finishes (early break,
+      // thrown error in caller, generator.return()), drain the SDK session so
+      // we don't keep paying for a sendAndWait that nobody will read.
+      if (!runFinished && activeSession) {
+        queue.close();
+        void activeSession.abort().catch(err => {
+          getLog().warn({ err }, 'copilot.abort_failed');
+        });
+      }
     }
 
     if (runError) throw runError;

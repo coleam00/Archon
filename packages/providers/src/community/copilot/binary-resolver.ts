@@ -1,4 +1,9 @@
-import { existsSync as _existsSync, statSync as _statSync } from 'node:fs';
+import {
+  accessSync as _accessSync,
+  constants as fsConstants,
+  existsSync as _existsSync,
+  statSync as _statSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
@@ -18,7 +23,10 @@ export function isExecutableFile(path: string): boolean {
     const stat = _statSync(path);
     if (!stat.isFile()) return false;
     if (process.platform === 'win32') return true;
-    return (stat.mode & 0o111) !== 0;
+    // accessSync (X_OK) checks current-user executability — mode & 0o111 only
+    // proves *some* exec bit exists (e.g., mode 001 fails for the owner).
+    _accessSync(path, fsConstants.X_OK);
+    return true;
   } catch {
     return false;
   }

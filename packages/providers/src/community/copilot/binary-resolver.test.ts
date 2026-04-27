@@ -36,9 +36,11 @@ function writeExecutable(path: string): void {
 }
 
 let tmpRoot = '';
+let originalCopilotCliPath: string | undefined;
 
 describe('resolveCopilotCliPath', () => {
   beforeEach(() => {
+    originalCopilotCliPath = process.env.COPILOT_CLI_PATH;
     delete process.env.COPILOT_CLI_PATH;
     tmpRoot = mkdtempSync(join(tmpdir(), 'copilot-bin-'));
     archonHome = join(tmpRoot, 'archon-home');
@@ -47,6 +49,11 @@ describe('resolveCopilotCliPath', () => {
 
   afterEach(() => {
     rmSync(tmpRoot, { recursive: true, force: true });
+    if (originalCopilotCliPath === undefined) {
+      delete process.env.COPILOT_CLI_PATH;
+    } else {
+      process.env.COPILOT_CLI_PATH = originalCopilotCliPath;
+    }
   });
 
   test('uses env override when present', async () => {

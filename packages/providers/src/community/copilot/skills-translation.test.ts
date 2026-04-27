@@ -108,7 +108,8 @@ describe('applySkills', () => {
       new CopilotProvider().sendQuery('hi', workDir, undefined, { model: 'gpt-5' })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.skillDirectories).toBeUndefined();
   });
 
@@ -120,7 +121,8 @@ describe('applySkills', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     const dirs = cfg.skillDirectories as string[] | undefined;
     expect(dirs).toHaveLength(2);
     expect(dirs?.[0]).toContain(join('.agents', 'skills', 'alpha'));
@@ -135,7 +137,8 @@ describe('applySkills', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     const dirs = cfg.skillDirectories as string[] | undefined;
     expect(dirs).toHaveLength(1);
     expect(chunks).toContainEqual(
@@ -154,7 +157,8 @@ describe('applySkills', () => {
       })
     );
 
-    const cfg = capturedSessionConfigs[0] ?? {};
+    expect(capturedSessionConfigs).toHaveLength(1);
+    const cfg = capturedSessionConfigs[0]!;
     expect(cfg.skillDirectories).toBeUndefined();
   });
 });
