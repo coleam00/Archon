@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createLogger } from '@archon/paths';
-import type { Api, Model } from '@mariozechner/pi-ai';
 
 import type {
   IAgentProvider,
@@ -96,24 +95,6 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Typed wrapper around Pi's `getModel` for a runtime-string provider/model
- * pair. Pi's getModel signature constrains `TModelId` to
- * `keyof MODELS[TProvider]`, which isn't knowable from a runtime string —
- * the local `GetModelFn` alias is the narrowest shape that still lets us
- * bypass that constraint. Isolating the escape hatch behind one searchable
- * name keeps it auditable. Takes `getModel` as a parameter because the Pi
- * SDK is loaded dynamically (see the header comment on this file for why).
- */
-type GetModelFn = (provider: string, modelId: string) => Model<Api> | undefined;
-function lookupPiModel(
-  getModel: GetModelFn,
-  provider: string,
-  modelId: string
-): Model<Api> | undefined {
-  return getModel(provider, modelId);
-}
-
-/**
  * Append a "respond with JSON matching this schema" instruction to the user
  * prompt so Pi-backed models produce parseable structured output. Pi's SDK
  * has no JSON-mode equivalent to Claude's outputFormat or Codex's
@@ -140,15 +121,7 @@ ${JSON.stringify(schema, null, 2)}`;
 /**
  * Pi community provider — wraps `@mariozechner/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
- * (no reuse) with in-memory auth/session/settings, so the server never
- * touches `~/.pi/` and concurrent calls don't collide.
- *
- * Capabilities (see `capabilities.ts` for the canonical list): Pi declares
- * `sessionResume`, `skills`, `toolRestrictions`, `structuredOutput`,
- * `envInjection`, `effortControl`, and `thinkingControl`. Features Pi does
- * not currently support through Archon (`mcp`, `hooks`, `agents`,
- * `costControl`, `fallbackModel`, `sandbox`) stay off; the dag-executor
- * surfaces a warning for any unsupported nodeConfig field.
+ * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
   async *sendQuery(
@@ -174,7 +147,6 @@ export class PiProvider implements IAgentProvider {
     // destructured PascalCase bindings trip eslint's naming-convention rule.
     const [
       piCodingAgent,
-      piAi,
       { bridgeSession },
       { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools },
       { createNoopResourceLoader },
@@ -182,7 +154,6 @@ export class PiProvider implements IAgentProvider {
       { createArchonUIBridge, createArchonUIContext },
     ] = await Promise.all([
       import('@mariozechner/pi-coding-agent'),
-      import('@mariozechner/pi-ai'),
       import('./event-bridge'),
       import('./options-translator'),
       import('./resource-loader'),
@@ -227,39 +198,74 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 2. Look up the Model via Pi's static catalog. `lookupPiModel` returns
-    //    undefined when not found; we guard explicitly below.
-    // Cast to the runtime-string-friendly shape — see `lookupPiModel`'s docblock.
-    const model = lookupPiModel(piAi.getModel as GetModelFn, parsed.provider, parsed.modelId);
-    if (!model) {
+    // 2. Build AuthStorage + ModelRegistry. Both `create()` calls read from
+    //    disk: AuthStorage reads ~/.pi/agent/auth.json (or
+    //    $PI_CODING_AGENT_DIR/auth.json), and ModelRegistry reads
+    //    ~/.pi/agent/models.json — the user's per-host config including
+    //    custom models for local providers (LM Studio, ollama, llamacpp,
+    //    custom OpenAI-compatible endpoints). Reads are synchronous and
+    //    happen on every sendQuery; we don't cache because the user can
+    //    edit either file between calls and expects pickup without restart
+    //    (Pi's `/login` flow rewrites auth.json under a file lock).
+    //    ModelRegistry captures any models.json load/parse error in its
+    //    internal loadError rather than throwing — surfaced below if the
+    //    requested model is then not found.
+    let authStorage: ReturnType<typeof piCodingAgent.AuthStorage.create>;
+    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.create>;
+    try {
+      authStorage = piCodingAgent.AuthStorage.create();
+      modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
+    } catch (err) {
+      const e = err as Error;
+      getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
       throw new Error(
-        `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
+        `Pi auth storage init failed: ${e.message}. Check that ~/.pi/agent/auth.json ` +
+          '(or $PI_CODING_AGENT_DIR/auth.json) is valid JSON and readable.'
+      );
+    }
+
+    // 3. Look up the model. find() returns undefined when not found; if
+    //    models.json itself failed to load (e.g. a custom provider entry
+    //    missing baseUrl/apiKey), surface the load error so users debugging
+    //    custom-provider configs see the actual reason.
+    const model = modelRegistry.find(parsed.provider, parsed.modelId);
+    if (!model) {
+      const loadError = modelRegistry.getError?.();
+      const loadErrorHint = loadError
+        ? ` ~/.pi/agent/models.json failed to load: ${loadError}`
+        : '';
+      getLog().error(
+        {
+          piProvider: parsed.provider,
+          modelId: parsed.modelId,
+          loadError: loadError ?? null,
+        },
+        'pi.model_not_found'
+      );
+      throw new Error(
+        `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'.${loadErrorHint} ` +
           'See https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/models.generated.ts for the Pi model catalog.'
       );
     }
 
-    // 3. Build AuthStorage. `AuthStorage.create()` reads ~/.pi/agent/auth.json
-    //    (or $PI_CODING_AGENT_DIR/auth.json), so any credential the user has
-    //    populated via `pi` → `/login` (OAuth subscriptions: Claude Pro/Max,
-    //    ChatGPT Plus, GitHub Copilot, Gemini CLI, Antigravity) or by editing
-    //    the file directly (api_key entries) is picked up transparently.
-    //
-    //    Per-request env vars override the file via setRuntimeApiKey — this
-    //    mirrors Claude's process-env + request-env merge pattern and
-    //    ensures codebase-scoped env vars (from .archon/config.yaml `env:`)
-    //    win over the user's global Pi login.
+    // 4. Resolve credentials. authStorage already loaded ~/.pi/agent/auth.json
+    //    so any creds populated via `pi` → `/login` (OAuth subscriptions:
+    //    Claude Pro/Max, ChatGPT Plus, GitHub Copilot, Gemini CLI,
+    //    Antigravity) or by hand-edited api_key entries are picked up
+    //    transparently. Per-request env vars override via setRuntimeApiKey —
+    //    mirrors Claude's process-env + request-env merge so codebase-scoped
+    //    env vars (.archon/config.yaml `env:`) win over the user's global
+    //    Pi login.
     //
     //    Pi's internal resolution order:
     //      1. runtime override  (our setRuntimeApiKey below)
     //      2. auth.json api_key entry
     //      3. auth.json oauth entry  (auto-refreshes expired tokens)
-    //      4. env var fallback  (Pi's getEnvApiKey, e.g. ANTHROPIC_API_KEY)
+    //      4. env var fallback     (Pi's getEnvApiKey, e.g. ANTHROPIC_API_KEY)
     //
     //    OAuth refresh note: Pi refreshes expired access tokens against the
     //    provider's OAuth server and rewrites ~/.pi/agent/auth.json under a
     //    file lock (same mechanism pi CLI uses — safe for concurrent access).
-    const authStorage = piCodingAgent.AuthStorage.create();
-
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const envOverride = envVarName
       ? (requestOptions?.env?.[envVarName] ?? process.env[envVarName])
@@ -268,16 +274,28 @@ export class PiProvider implements IAgentProvider {
       authStorage.setRuntimeApiKey(parsed.provider, envOverride);
     }
 
-    // Fail-fast: resolve creds synchronously before spinning up a session.
-    // Matches Claude's auth-error fast-fail pattern (no retry on auth failures).
     const resolvedKey = await authStorage.getApiKey(parsed.provider);
     if (!resolvedKey) {
-      const envHint = envVarName
-        ? `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
-        : `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`;
-      const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
-      throw new Error(
-        `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+      if (envVarName) {
+        const envHint = `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`;
+        const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
+        throw new Error(
+          `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+        );
+      }
+
+      // Unmapped providers (LM Studio, ollama, llamacpp, custom
+      // OpenAI-compatible endpoints) often don't need credentials at all —
+      // log + continue rather than failing fast so local models work without
+      // ceremony. If the SDK call later fails for a provider that *does*
+      // need creds, the auth_missing breadcrumb is searchable in the log.
+      getLog().info(
+        {
+          piProvider: parsed.provider,
+          envHint: `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`,
+          loginHint: `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`,
+        },
+        'pi.auth_missing'
       );
     }
 
@@ -343,13 +361,11 @@ export class PiProvider implements IAgentProvider {
       };
     }
 
-    // ModelRegistry + settings stay in-memory — only sessions persist, to
-    // match Claude/Codex. Resource loader still suppresses filesystem
-    // discovery by default, except for explicitly-passed skill paths and —
-    // when piConfig.enableExtensions is true — Pi's community extension
-    // ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/ and
-    // packages installed via `pi install npm:<pkg>`).
-    const modelRegistry = piCodingAgent.ModelRegistry.inMemory(authStorage);
+    // Settings stay in-memory — only sessions persist, to match Claude/Codex.
+    // Resource loader still suppresses filesystem except for explicitly-passed
+    // skill paths and — when piConfig.enableExtensions is true — Pi's community
+    // extension ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/
+    // and packages installed via `pi install npm:<pkg>`).
     const settingsManager = piCodingAgent.SettingsManager.inMemory();
     // Default ON: extensions (community packages like @plannotator/pi-extension
     // or your own local ones) are a core reason users run Pi. Opt out with
