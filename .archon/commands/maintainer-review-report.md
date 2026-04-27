@@ -57,7 +57,7 @@ Write `$ARTIFACTS_DIR/final-report.md`:
 - Cited direction clauses: <list>
 - Comment posted to PR: yes
 - Reply window: <YYYY-MM-DD>
-- Awaiting-author label added: yes/no
+- Awaiting-author label added: read `$ARTIFACTS_DIR/.label-applied` — value is `applied` or `skipped`. If `skipped`, surface why by reading `$ARTIFACTS_DIR/.label-error` (gh stderr) and include a one-line explanation. **Do not say `yes` if the file says `skipped`** — say `no, label add failed: <reason>` so the maintainer can decide whether to add it manually.
 
 ### If unclear branch:
 - Gate could not classify confidently.

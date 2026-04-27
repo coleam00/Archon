@@ -45,11 +45,23 @@ if (existsSync(briefsDir)) {
   }
 }
 
+// Deterministic clock — emit today's local date + a precomputed 3-day-out
+// deadline so downstream prompts don't have to do calendar arithmetic
+// (LLMs are unreliable at it) and don't anchor to stale prior_state.last_run_at
+// (which can produce past deadlines on long gaps between runs).
+const todayDate = new Date();
+const today = todayDate.toLocaleDateString('sv-SE'); // YYYY-MM-DD local
+const deadlineDate = new Date(todayDate);
+deadlineDate.setDate(deadlineDate.getDate() + 3);
+const deadline_3d = deadlineDate.toLocaleDateString('sv-SE');
+
 console.log(
   JSON.stringify({
     direction,
     profile,
     prior_state: priorState,
     recent_briefs: recentBriefs,
+    today,
+    deadline_3d,
   }),
 );
