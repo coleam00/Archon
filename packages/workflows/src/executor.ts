@@ -477,92 +477,97 @@ export async function executeWorkflow(
 
   // Path-lock guard: ensure no other workflow run holds this working_path.
   //
+  // Skipped when `workflow.mutates_checkout` is false — the author asserts
+  // that concurrent runs will not race (e.g. all writes are per-run-scoped).
+  //
   // Runs after workflowRun is finalized (pre-created, resumed, or freshly
   // created) so we always have self-ID + started_at for the deterministic
   // older-wins tiebreaker. The query treats `pending` rows older than 5 min
   // as orphaned, so leaks from crashed dispatches or resume orphans don't
   // permanently block the path.
-  try {
-    const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd, {
-      id: workflowRun.id,
-      startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
-    });
-    if (activeWorkflow) {
-      // The lock query found another active row that wins the older-wins
-      // tiebreaker. Mark our own row terminal so it falls out of the
-      // active set immediately — without this, our row sits as
-      // pending/running and blocks the path until the 5-min stale window
-      // (or never, if we'd already promoted it to running via resume).
+  if (workflow.mutates_checkout !== false) {
+    try {
+      const activeWorkflow = await deps.store.getActiveWorkflowRunByPath(cwd, {
+        id: workflowRun.id,
+        startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+      });
+      if (activeWorkflow) {
+        // The lock query found another active row that wins the older-wins
+        // tiebreaker. Mark our own row terminal so it falls out of the
+        // active set immediately — without this, our row sits as
+        // pending/running and blocks the path until the 5-min stale window
+        // (or never, if we'd already promoted it to running via resume).
+        await deps.store
+          .updateWorkflowRun(workflowRun.id, { status: 'cancelled' })
+          .catch((cleanupErr: Error) => {
+            getLog().warn(
+              { err: cleanupErr, workflowRunId: workflowRun?.id, cwd },
+              'workflow.guard_self_cancel_failed'
+            );
+          });
+
+        const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
+        const duration = formatDuration(elapsedMs);
+        const shortId = activeWorkflow.id.slice(0, 8);
+
+        // Status-aware copy. The lock query returns running, paused, and
+        // fresh-pending rows — telling the user to "wait for it to finish"
+        // is wrong for `paused` (waiting on user action via approve/reject).
+        let stateLine: string;
+        let actionLines: string;
+        if (activeWorkflow.status === 'paused') {
+          stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
+          actionLines =
+            `• Approve it: \`/workflow approve ${shortId}\`\n` +
+            `• Reject it: \`/workflow reject ${shortId}\`\n` +
+            `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
+            '• Use a different branch: `--branch <other>`';
+        } else {
+          const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
+          stateLine = `${verb} ${duration}, run \`${shortId}\``;
+          actionLines =
+            '• Wait for it to finish: `/workflow status`\n' +
+            `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
+            '• Use a different branch: `--branch <other>`';
+        }
+        await sendCriticalMessage(
+          platform,
+          conversationId,
+          `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
+            `(${stateLine}).\n${actionLines}`
+        );
+        return {
+          success: false,
+          error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
+        };
+      }
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        { err, conversationId, cwd, pendingRunId: workflowRun.id },
+        'db_active_workflow_check_failed'
+      );
+      // Release the lock token. workflowRun is finalized at this point
+      // (pre-created or resumed or freshly created) and would otherwise sit
+      // as pending/running, blocking the path. For pending the 5-min stale
+      // window would clear it eventually; for a row already promoted to
+      // running (e.g., resumed), nothing would clear it without manual
+      // intervention.
       await deps.store
         .updateWorkflowRun(workflowRun.id, { status: 'cancelled' })
         .catch((cleanupErr: Error) => {
           getLog().warn(
-            { err: cleanupErr, workflowRunId: workflowRun?.id, cwd },
-            'workflow.guard_self_cancel_failed'
+            { err: cleanupErr, workflowRunId: workflowRun?.id },
+            'workflow.guard_query_failure_cleanup_failed'
           );
         });
-
-      const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
-      const duration = formatDuration(elapsedMs);
-      const shortId = activeWorkflow.id.slice(0, 8);
-
-      // Status-aware copy. The lock query returns running, paused, and
-      // fresh-pending rows — telling the user to "wait for it to finish"
-      // is wrong for `paused` (waiting on user action via approve/reject).
-      let stateLine: string;
-      let actionLines: string;
-      if (activeWorkflow.status === 'paused') {
-        stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
-        actionLines =
-          `• Approve it: \`/workflow approve ${shortId}\`\n` +
-          `• Reject it: \`/workflow reject ${shortId}\`\n` +
-          `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
-          '• Use a different branch: `--branch <other>`';
-      } else {
-        const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
-        stateLine = `${verb} ${duration}, run \`${shortId}\``;
-        actionLines =
-          '• Wait for it to finish: `/workflow status`\n' +
-          `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
-          '• Use a different branch: `--branch <other>`';
-      }
       await sendCriticalMessage(
         platform,
         conversationId,
-        `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
-          `(${stateLine}).\n${actionLines}`
+        '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
       );
-      return {
-        success: false,
-        error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
-      };
+      return { success: false, error: 'Database error checking for active workflow' };
     }
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      { err, conversationId, cwd, pendingRunId: workflowRun.id },
-      'db_active_workflow_check_failed'
-    );
-    // Release the lock token. workflowRun is finalized at this point
-    // (pre-created or resumed or freshly created) and would otherwise sit
-    // as pending/running, blocking the path. For pending the 5-min stale
-    // window would clear it eventually; for a row already promoted to
-    // running (e.g., resumed), nothing would clear it without manual
-    // intervention.
-    await deps.store
-      .updateWorkflowRun(workflowRun.id, { status: 'cancelled' })
-      .catch((cleanupErr: Error) => {
-        getLog().warn(
-          { err: cleanupErr, workflowRunId: workflowRun?.id },
-          'workflow.guard_query_failure_cleanup_failed'
-        );
-      });
-    await sendCriticalMessage(
-      platform,
-      conversationId,
-      '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
-    );
-    return { success: false, error: 'Database error checking for active workflow' };
   }
 
   // Resolve external artifact and log directories

@@ -24,6 +24,7 @@ interactive: true # Required for the decline-approval gate
 
 worktree:
   enabled: false # Live checkout — needs to read .archon/maintainer-standup/
+mutates_checkout: false # Read-only + per-run artifact writes; concurrent runs safe
 
 nodes:
   # ═══════════════════════════════════════════════════════════════

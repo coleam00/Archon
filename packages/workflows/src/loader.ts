@@ -61,28 +61,27 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
   const node = result.data;
 
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
-  let nodeType: string | undefined;
-  let aiFields: readonly string[] | undefined;
+  let nonAiNode: { type: string; fields: readonly string[] } | undefined;
   if (isCancelNode(node)) {
-    nodeType = 'cancel';
-    aiFields = BASH_NODE_AI_FIELDS;
+    nonAiNode = { type: 'cancel', fields: BASH_NODE_AI_FIELDS };
   } else if (isApprovalNode(node)) {
-    nodeType = 'approval';
-    aiFields = BASH_NODE_AI_FIELDS;
+    nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
-    nodeType = 'loop';
-    aiFields = LOOP_NODE_AI_FIELDS;
+    nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
   } else if (isScriptNode(node)) {
-    nodeType = 'script';
-    aiFields = SCRIPT_NODE_AI_FIELDS;
+    nonAiNode = { type: 'script', fields: SCRIPT_NODE_AI_FIELDS };
   } else if ('bash' in node && typeof node.bash === 'string') {
-    nodeType = 'bash';
-    aiFields = BASH_NODE_AI_FIELDS;
+    nonAiNode = { type: 'bash', fields: BASH_NODE_AI_FIELDS };
   }
-  if (nodeType !== undefined && aiFields !== undefined) {
-    const presentAiFields = aiFields.filter(f => (raw as Record<string, unknown>)[f] !== undefined);
+  if (nonAiNode) {
+    const presentAiFields = nonAiNode.fields.filter(
+      f => (raw as Record<string, unknown>)[f] !== undefined
+    );
     if (presentAiFields.length > 0) {
-      getLog().warn({ id: node.id, fields: presentAiFields }, `${nodeType}_node_ai_fields_ignored`);
+      getLog().warn(
+        { id: node.id, fields: presentAiFields },
+        `${nonAiNode.type}_node_ai_fields_ignored`
+      );
     }
   }
 
@@ -361,6 +360,21 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Parse mutates_checkout — boolean, omitted means true (run the path-lock guard).
+    // Same parse/warn pattern as `interactive` (invalid non-boolean values are dropped).
+    // When false, the executor skips the path-lock guard and allows concurrent runs on the same checkout.
+    let mutatesCheckout: boolean | undefined;
+    if (raw.mutates_checkout !== undefined) {
+      if (typeof raw.mutates_checkout === 'boolean') {
+        mutatesCheckout = raw.mutates_checkout;
+      } else {
+        getLog().warn(
+          { filename, value: raw.mutates_checkout },
+          'invalid_mutates_checkout_value_ignored'
+        );
+      }
+    }
+
     // Parse optional tags — type-narrow, trim, and dedupe so authors can't
     // ship ["GitLab", "GitLab ", "gitlab"] as three distinct values.
     // An explicit empty array is preserved (suppresses keyword inference in the
@@ -390,6 +404,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         webSearchMode,
         additionalDirectories,
         interactive,
+        ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),

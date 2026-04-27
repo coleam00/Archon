@@ -186,6 +186,44 @@ describe('Workflow Loader', () => {
       expect(result.workflows[0].workflow.tags).toBeUndefined();
     });
 
+    it('should parse mutates_checkout: false correctly', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: test\ndescription: read-only workflow\nmutates_checkout: false\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.mutates_checkout).toBe(false);
+    });
+
+    it('should parse mutates_checkout: true correctly', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: test\ndescription: explicit true\nmutates_checkout: true\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.mutates_checkout).toBe(true);
+    });
+
+    it('should omit mutates_checkout when not set', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      const yaml = `name: test\ndescription: no field\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows[0].workflow.mutates_checkout).toBeUndefined();
+    });
+
+    it('should warn and omit mutates_checkout for invalid value', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      // YAML string "yes" is not a boolean — should be dropped and field omitted
+      const yaml = `name: test\ndescription: typo\nmutates_checkout: "yes"\nnodes:\n  - id: n\n    prompt: p\n`;
+      await writeFile(join(workflowDir, 'test.yaml'), yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0].workflow.mutates_checkout).toBeUndefined();
+    });
+
     it('should parse valid DAG workflow YAML', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
