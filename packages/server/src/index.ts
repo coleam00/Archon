@@ -385,8 +385,24 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
       });
 
-      await discord.start();
-      activePlatforms.push('Discord');
+      // Don't let a Discord login failure (bad token, missing privileged
+      // intents, etc.) bring down the whole server — users running
+      // `archon serve` for the web UI shouldn't lose it because of an
+      // unrelated bot misconfiguration. See #1365.
+      try {
+        await discord.start();
+        activePlatforms.push('Discord');
+      } catch (error) {
+        const err = error as Error;
+        const isPrivilegedIntentError = err.message?.includes('disallowed intents');
+        const hint = isPrivilegedIntentError
+          ? 'Enable "Message Content Intent" in the Discord Developer Portal ' +
+            '(your application > Bot > Privileged Gateway Intents) and restart, ' +
+            'or unset DISCORD_BOT_TOKEN if you do not want the Discord adapter.'
+          : 'Verify DISCORD_BOT_TOKEN is valid, or unset it to disable the Discord adapter.';
+        getLog().error({ err, hint }, 'discord.start_failed_continuing_without_adapter');
+        discord = null;
+      }
     } else {
       getLog().info('discord_adapter_skipped');
     }

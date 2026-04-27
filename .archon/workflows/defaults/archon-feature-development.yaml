@@ -8,7 +8,7 @@ description: |
 nodes:
   - id: implement
     command: archon-implement
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
 
   - id: create-pr
     command: archon-create-pr

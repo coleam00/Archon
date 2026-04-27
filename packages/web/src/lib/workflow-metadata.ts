@@ -163,8 +163,18 @@ export function getWorkflowCategory(name: string, description: string): Workflow
 
 /**
  * Derive tags from the workflow name and parsed description.
+ * If `explicitTags` is provided (including an empty array), those are used
+ * verbatim (deduplicated) and inference is skipped.
  */
-export function getWorkflowTags(name: string, parsed: ParsedDescription): string[] {
+export function getWorkflowTags(
+  name: string,
+  parsed: ParsedDescription,
+  explicitTags?: string[]
+): string[] {
+  if (explicitTags !== undefined) {
+    return [...new Set(explicitTags)];
+  }
+
   const tags: string[] = [];
   const text = `${name} ${parsed.raw}`.toLowerCase();
 

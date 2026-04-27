@@ -42,7 +42,7 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE

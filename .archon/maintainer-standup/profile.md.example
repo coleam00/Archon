@@ -1,0 +1,28 @@
+---
+# Required: your GitHub login (used by gh queries for review-requested / assigned filters).
+gh_handle: your-github-login
+
+# Suggested: drives how broadly the synthesizer classifies the queue.
+#   - main_maintainer / everything   → triage all open PRs, not just yours
+#   - reviewer / focus-area          → narrower coverage
+role: main_maintainer
+scope: everything
+---
+
+# Maintainer Profile — Your Name
+
+One paragraph on how you want the brief tuned. The synthesizer reads this verbatim, so write what you actually want it to do.
+
+Example:
+
+> I'm a sub-maintainer focused on the workflow engine. Show me PRs that touch packages/workflows/ first; deprioritize adapter-only PRs unless they're P1.
+
+## What I want from the brief
+
+- (Whatever level of full-repo coverage you want)
+- (How aggressively to flag polite-decline candidates)
+- (Whether to surface drafts, third-party PRs, etc.)
+
+## Currently focused on
+
+- (Update as priorities shift. Items here rank higher within their P-tier.)

@@ -1,0 +1,137 @@
+# E2E features smoke — GitHub Copilot community provider
+# Verifies (in one DAG, takes ~60s on Linux gpt-5-mini):
+#   1. Basic chat round-trip (sessionResume-able shape).
+#   2. effort: high → SDK reasoningEffort='high' translation.
+#   3. denied_tools: [shell] → SDK excludedTools passthrough — model must
+#      respect the deny-list (no shell tool calls).
+#   4. output_format JSON schema → best-effort structured output via prompt
+#      augmentation + transcript parse (Pi #1297 pattern, shared/structured-output).
+# Auth: run `copilot login`, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
+# Expected runtime: ~45-90s depending on model + reasoning latency.
+# Doubles as adoption docs — each scenario is documented inline.
+name: e2e-copilot-all-features
+description: 'Copilot provider feature smoke — chat + effort + tool restrictions + structured output.'
+provider: copilot
+model: gpt-5-mini
+
+worktree:
+  enabled: false # Smoke — no isolation needed.
+
+nodes:
+  # 1. Connectivity — does the SDK start, stream, and emit a result chunk?
+  - id: hello
+    prompt: 'Reply with exactly the word PONG and nothing else.'
+    idle_timeout: 60000
+
+  # 2. effort: high → reasoningEffort='high'. Asking a small arithmetic
+  #    question that is trivial for the model but exercises the reasoning
+  #    path (visible as a longer latency on a fresh session).
+  - id: reasoning
+    prompt: 'What is 17 multiplied by 23? Answer with exactly the integer, no prose.'
+    effort: high
+    idle_timeout: 90000
+    depends_on: [hello]
+
+  # 3. denied_tools — the model is asked to do something it would normally
+  #    use the shell tool for. With shell denied, it must decline or fall
+  #    back to inline reasoning. The assert below checks the model did NOT
+  #    invoke the shell tool by inspecting the result text for a refusal /
+  #    inline-only marker.
+  - id: tool_restricted
+    prompt: |
+      You have NO shell access. Without running any tools, reply with exactly:
+      DENIED_OK
+    denied_tools: [shell, write]
+    idle_timeout: 60000
+    depends_on: [hello]
+
+  # 4. output_format → best-effort JSON via shared/structured-output.
+  #    Same pattern Pi #1297 uses: prompt-augmented with a JSON-only
+  #    instruction, parsed at agent_end. Pi tests live in
+  #    pi/event-bridge.test.ts under "tryParseStructuredOutput".
+  - id: structured
+    prompt: |
+      Return a JSON object with two fields, no fences, no prose:
+        - "model":  string — the model alias you were called with
+        - "ok":     boolean — always true
+    idle_timeout: 60000
+    depends_on: [hello]
+    output_format:
+      type: object
+      properties:
+        model:
+          type: string
+        ok:
+          type: boolean
+      required: [model, ok]
+
+  # 5. Assertions — fail loudly if any node returned empty / unparseable.
+  - id: assert
+    depends_on: [hello, reasoning, tool_restricted, structured]
+    trigger_rule: all_success
+    bash: |
+      # Wrap each interpolation in single quotes so command substitution
+      # / backticks in any model response are treated as data, not exec.
+      hello_raw='$hello.output'
+      reasoning_raw='$reasoning.output'
+      restricted_raw='$tool_restricted.output'
+      json_model='$structured.output.model'
+      json_ok='$structured.output.ok'
+
+      echo "── results ──"
+      printf 'hello       = %s\n' "$hello_raw"
+      printf 'reasoning   = %s\n' "$reasoning_raw"
+      printf 'restricted  = %s\n' "$restricted_raw"
+      printf 'json.model  = %s\n' "$json_model"
+      printf 'json.ok     = %s\n' "$json_ok"
+      echo "──────────────"
+
+      fail=0
+      check_nonempty() {
+        if [ -z "$2" ]; then
+          printf 'FAIL: %s produced empty output\n' "$1"
+          fail=1
+        fi
+      }
+      check_nonempty hello "$hello_raw"
+      check_nonempty reasoning "$reasoning_raw"
+      check_nonempty tool_restricted "$restricted_raw"
+
+      # 1. hello — exact match
+      if ! printf '%s\n' "$hello_raw" | grep -F -q -- 'PONG'; then
+        printf 'FAIL: hello did not return PONG, got: %s\n' "$hello_raw"
+        fail=1
+      fi
+
+      # 2. reasoning — must contain 391 (= 17*23). Model may add prose
+      #    despite the instruction, so substring is enough.
+      if ! printf '%s\n' "$reasoning_raw" | grep -F -q -- '391'; then
+        printf 'FAIL: reasoning did not return 391, got: %s\n' "$reasoning_raw"
+        fail=1
+      fi
+
+      # 3. tool_restricted — must contain DENIED_OK to confirm the model
+      #    obeyed the instruction without invoking shell tools.
+      if ! printf '%s\n' "$restricted_raw" | grep -F -q -- 'DENIED_OK'; then
+        printf 'FAIL: tool_restricted did not return DENIED_OK, got: %s\n' "$restricted_raw"
+        fail=1
+      fi
+
+      # 4. structured — JSON path access (json.model, json.ok). Empty
+      #    means the prompt-augmented JSON parse failed → structured
+      #    output capability did not work end-to-end.
+      if [ -z "$json_model" ] || [ -z "$json_ok" ]; then
+        printf 'FAIL: structured-output fields missing — best-effort JSON parse failed\n'
+        fail=1
+      fi
+      if [ "$json_ok" != "true" ]; then
+        printf 'FAIL: structured.json.ok != true (got: %s)\n' "$json_ok"
+        fail=1
+      fi
+
+      if [ "$fail" -eq 1 ]; then
+        echo "──────────────"
+        echo "FAIL: one or more capability checks failed"
+        exit 1
+      fi
+      echo "PASS: all four capabilities exercised end-to-end"

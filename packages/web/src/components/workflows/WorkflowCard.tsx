@@ -55,7 +55,7 @@ export function WorkflowCard({
   const parsed = parseWorkflowDescription(workflow.description ?? '');
   const displayName = getWorkflowDisplayName(workflow.name);
   const category = getWorkflowCategory(workflow.name, workflow.description ?? '');
-  const tags = getWorkflowTags(workflow.name, parsed);
+  const tags = getWorkflowTags(workflow.name, parsed, workflow.tags);
   const iconName = getWorkflowIconName(workflow.name, category);
   const CARD_ICON = ICON_MAP[iconName];
 

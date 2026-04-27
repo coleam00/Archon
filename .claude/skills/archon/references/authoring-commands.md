@@ -4,13 +4,28 @@ Commands are plain Markdown files containing AI prompt templates. They are the a
 
 ## File Location
 
+Commands are discovered from three scopes, highest-precedence first:
+
 ```
-.archon/commands/
-├── my-command.md           # Custom command
-├── review-code.md          # Another custom command
-└── defaults/               # Optional: override bundled defaults
-    └── archon-assist.md    # Overrides the bundled archon-assist
+<repoRoot>/.archon/commands/     # 1. Repo-scoped (wins)
+├── my-command.md                #    Custom command for this repo
+├── archon-assist.md             #    Overrides the bundled archon-assist
+└── triage/                      #    Subfolders allowed, 1 level deep
+    └── review.md                #    Resolves as 'review', not 'triage/review'
+
+~/.archon/commands/              # 2. Home-scoped (user-level, shared across all repos)
+├── review-checklist.md          #    Personal helper available in every repo
+└── pr-style-guide.md
+
+<bundled defaults>                # 3. Shipped with Archon (archon-assist, etc.)
 ```
+
+**Resolution rules:**
+
+- Filename-without-extension is the command name (e.g. `my-command.md` → `my-command`).
+- 1-level subfolders are supported for grouping; resolution is still by filename (`triage/review.md` → `review`).
+- Repo scope overrides home scope overrides bundled, by name.
+- Duplicate basenames **within a scope** (e.g. two different `review.md` files in `triage/` and `security/`) are a user error — keep names unique within each scope.
 
 Commands are referenced by name (without `.md`) in workflow YAML files.
 
@@ -78,11 +93,14 @@ Command names must:
 ## Discovery and Priority
 
 When a workflow references `command: my-command`, Archon searches in this order:
-1. `.archon/commands/my-command.md` (repo custom)
-2. `.archon/commands/defaults/my-command.md` (repo default overrides)
+
+1. `<repoRoot>/.archon/commands/my-command.md` (repo scope)
+2. `~/.archon/commands/my-command.md` (home scope — shared across every repo on the machine)
 3. Bundled defaults (shipped with Archon)
 
-First match wins. To override a bundled command, create a file with the same name in your repo.
+First match wins. To override a bundled command, drop a file with the same name at either scope. To override a home-scoped command for a specific repo, drop a file with the same name in that repo's `.archon/commands/`.
+
+> **Web UI note**: Home-scoped commands appear in the workflow builder's node palette under a dedicated "Global (~/.archon/commands/)" section, distinct from project and bundled entries.
 
 ## Referencing Commands from Workflows
 
