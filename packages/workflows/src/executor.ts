@@ -15,6 +15,7 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import { classifyError } from './executor-shared';
+import type { WorkflowInput } from './schemas/workflow';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -171,6 +172,98 @@ async function sendCriticalMessage(
   return false;
 }
 
+const RESERVED_WORKFLOW_INPUT_KEYS = new Set([
+  '1',
+  '2',
+  '3',
+  'ARGUMENTS',
+  'USER_MESSAGE',
+  'WORKFLOW_ID',
+  'ARTIFACTS_DIR',
+  'BASE_BRANCH',
+  'DOCS_DIR',
+  'LOOP_USER_INPUT',
+  'REJECTION_REASON',
+  'CONTEXT',
+  'EXTERNAL_CONTEXT',
+  'ISSUE_CONTEXT',
+]);
+
+// Keys must be identifier-style: start with a letter or underscore, followed by
+// letters, digits, or underscores. Hyphens and dots are disallowed — hyphens
+// cause prefix-match ambiguity in $KEY substitution; dots shadow node outputs.
+const WORKFLOW_INPUT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function assertSafeInputKeys(...sources: (Record<string, unknown> | undefined)[]): void {
+  const invalid = sources
+    .flatMap(source => (source ? Object.keys(source) : []))
+    .filter(key => !WORKFLOW_INPUT_KEY_PATTERN.test(key) || RESERVED_WORKFLOW_INPUT_KEYS.has(key));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid workflow input key(s): ${invalid.join(', ')}. ` +
+        'Keys must match /^[A-Za-z_][A-Za-z0-9_]*$/ and must not shadow reserved workflow variables.'
+    );
+  }
+}
+
+/**
+ * Merge workflow `inputs` defaults with caller-supplied runtime values.
+ * Caller values take precedence; defaults fill gaps.
+ * Validates that all `required: true` inputs are satisfied.
+ */
+function resolveInputs(
+  inputsDef: Record<string, WorkflowInput> | undefined,
+  runtimeInputs: Record<string, string> | undefined
+): Record<string, string> {
+  assertSafeInputKeys(inputsDef, runtimeInputs);
+  const resolved: Record<string, string> = {};
+  if (inputsDef) {
+    for (const [key, spec] of Object.entries(inputsDef)) {
+      if (spec.default !== undefined) resolved[key] = spec.default;
+    }
+  }
+  if (runtimeInputs) {
+    for (const [key, value] of Object.entries(runtimeInputs)) {
+      resolved[key] = value;
+    }
+  }
+  if (inputsDef) {
+    for (const [key, spec] of Object.entries(inputsDef)) {
+      if (spec.required && resolved[key] === undefined) {
+        throw new Error(
+          `Required workflow input "${key}" was not provided. ` +
+            'Supply it via --set (CLI) or the inputs API field.'
+        );
+      }
+    }
+  }
+  return resolved;
+}
+
+const REGEX_META = /[.*+?^${}()|[\]\\]/g;
+function escapeForRegex(s: string): string {
+  return s.replace(REGEX_META, '\\$&');
+}
+
+/**
+ * Apply resolved inputs map to a string value (model, provider, etc.).
+ * Substitutes $KEY patterns using the same word-boundary rule as substituteWorkflowVariables.
+ */
+function applyInputsToString(
+  value: string | undefined,
+  inputs: Record<string, string>
+): string | undefined {
+  if (!value || Object.keys(inputs).length === 0) return value;
+  let result = value;
+  for (const [key, val] of Object.entries(inputs)) {
+    result = result.replace(
+      new RegExp(`\\$${escapeForRegex(key)}(?![A-Za-z0-9_])`, 'g'),
+      () => val
+    );
+  }
+  return result;
+}
+
 /**
  * Resolve the artifacts and log directories for a workflow run.
  * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
@@ -244,7 +337,9 @@ export async function executeWorkflow(
     prBranch?: string;
   },
   parentConversationId?: string,
-  preCreatedRun?: WorkflowRun
+  preCreatedRun?: WorkflowRun,
+  /** Runtime input values supplied by the caller. Merged with workflow `inputs` defaults. */
+  runtimeInputs?: Record<string, string>
 ): Promise<WorkflowExecutionResult> {
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
@@ -276,39 +371,12 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  // Resolve provider and model once (used by all nodes)
-  // When workflow sets a model but not a provider, infer provider from the model.
-  // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
-  let resolvedProvider: string;
-  let providerSource: string;
-  if (workflow.provider) {
-    resolvedProvider = workflow.provider;
-    providerSource = 'workflow definition';
-  } else if (workflow.model) {
-    resolvedProvider = inferProviderFromModel(workflow.model, config.assistant);
-    providerSource = 'inferred from workflow model';
-  } else {
-    resolvedProvider = config.assistant;
-    providerSource = 'config';
-  }
-  const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
-  if (!isModelCompatible(resolvedProvider, resolvedModel)) {
-    throw new Error(
-      `Model "${resolvedModel}" is not compatible with provider "${resolvedProvider}". ` +
-        'Update your workflow or config.'
-    );
-  }
-
-  getLog().info(
-    {
-      workflowName: workflow.name,
-      provider: resolvedProvider,
-      providerSource,
-      model: resolvedModel,
-    },
-    'workflow_provider_resolved'
-  );
+  // resolvedInputs is computed after the resume block so that:
+  // 1. stored metadata inputs (from a prior run) are merged before required-input validation runs
+  // 2. an empty {} runtimeInputs is treated as absent (not as an explicit override)
+  // 3. runtimeInputs still takes precedence when non-empty
+  let resolvedInputs: Record<string, string>;
+  let storedInputsFromResume: Record<string, string> | undefined;
 
   if (configuredCommandFolder) {
     getLog().debug({ configuredCommandFolder }, 'command_folder_configured');
@@ -383,6 +451,23 @@ export async function executeWorkflow(
           workflowRun = await deps.store.resumeWorkflowRun(resumableRun.id);
           dagPriorCompletedNodes = priorNodes;
 
+          // Capture stored inputs from prior run metadata so they can be merged
+          // with runtimeInputs after the resume block (runtimeInputs wins on conflict).
+          const rawStoredInputs = resumableRun.metadata?.resolved_inputs;
+          const storedInputs =
+            rawStoredInputs &&
+            typeof rawStoredInputs === 'object' &&
+            !Array.isArray(rawStoredInputs)
+              ? Object.fromEntries(
+                  Object.entries(rawStoredInputs as Record<string, unknown>).filter(
+                    ([, v]) => typeof v === 'string'
+                  ) as [string, string][]
+                )
+              : undefined;
+          if (storedInputs && Object.keys(storedInputs).length > 0) {
+            storedInputsFromResume = storedInputs;
+          }
+
           if (orphanPreCreated) {
             await deps.store
               .updateWorkflowRun(orphanPreCreated.id, { status: 'cancelled' })
@@ -448,16 +533,72 @@ export async function executeWorkflow(
     }
   }
 
+  // Compute resolvedInputs now that the resume block has had a chance to populate
+  // storedInputsFromResume. Stored inputs are the base; non-empty runtimeInputs override
+  // them. An empty {} runtimeInputs is treated as absent so stored values aren't masked.
+  {
+    const effectiveRuntime =
+      runtimeInputs && Object.keys(runtimeInputs).length > 0 ? runtimeInputs : undefined;
+    const inputsForResolution =
+      storedInputsFromResume || effectiveRuntime
+        ? { ...(storedInputsFromResume ?? {}), ...(effectiveRuntime ?? {}) }
+        : undefined;
+    resolvedInputs = resolveInputs(workflow.inputs, inputsForResolution);
+  }
+
+  // Resolve provider and model now that resolvedInputs is final (resume may have updated it).
+  // Apply runtime inputs so model/provider can be parameterised via $INPUT_NAME.
+  // When workflow sets a model but not a provider, infer provider from the model.
+  // e.g. model: sonnet → provider: claude, even if config.assistant is codex.
+  const effectiveModel = applyInputsToString(workflow.model, resolvedInputs);
+  const effectiveProvider = applyInputsToString(workflow.provider, resolvedInputs);
+
+  let resolvedProvider: string;
+  let providerSource: string;
+  if (effectiveProvider) {
+    resolvedProvider = effectiveProvider;
+    providerSource = 'workflow definition';
+  } else if (effectiveModel) {
+    resolvedProvider = inferProviderFromModel(effectiveModel, config.assistant);
+    providerSource = 'inferred from workflow model';
+  } else {
+    resolvedProvider = config.assistant;
+    providerSource = 'config';
+  }
+  const assistantDefaults = config.assistants[resolvedProvider];
+  const resolvedModel = effectiveModel ?? (assistantDefaults?.model as string | undefined);
+  if (!isModelCompatible(resolvedProvider, resolvedModel)) {
+    throw new Error(
+      `Model "${resolvedModel}" is not compatible with provider "${resolvedProvider}". ` +
+        'Update your workflow or config.'
+    );
+  }
+
+  getLog().info(
+    {
+      workflowName: workflow.name,
+      provider: resolvedProvider,
+      providerSource,
+      model: resolvedModel,
+    },
+    'workflow.provider_resolved'
+  );
+
   if (!workflowRun) {
     // Create workflow run record
     try {
+      const runMetadata: Record<string, unknown> = {};
+      if (issueContext) runMetadata.github_context = issueContext;
+      if (resolvedInputs && Object.keys(resolvedInputs).length > 0) {
+        runMetadata.resolved_inputs = resolvedInputs;
+      }
       workflowRun = await deps.store.createWorkflowRun({
         workflow_name: workflow.name,
         conversation_id: conversationDbId,
         codebase_id: codebaseId,
         user_message: userMessage,
         working_path: cwd,
-        metadata: issueContext ? { github_context: issueContext } : {},
+        metadata: runMetadata,
         parent_conversation_id: parentConversationId,
       });
     } catch (error) {
@@ -472,6 +613,23 @@ export async function executeWorkflow(
         '❌ **Workflow failed**: Unable to start workflow (database error). Please try again later.'
       );
       return { success: false, error: 'Database error creating workflow run' };
+    }
+  } else if (resolvedInputs && Object.keys(resolvedInputs).length > 0) {
+    // preCreatedRun path: workflowRun already existed before this function was
+    // called, so the `if (!workflowRun)` branch above was skipped and
+    // resolved_inputs was never written to its metadata. Persist it now so
+    // resume-path restores work correctly if the run is interrupted.
+    try {
+      await deps.store.updateWorkflowRun(workflowRun.id, {
+        metadata: { ...(workflowRun.metadata ?? {}), resolved_inputs: resolvedInputs },
+      });
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn(
+        { err, workflowRunId: workflowRun.id },
+        'workflow.precreated_run_resolved_inputs_persist_failed'
+      );
+      // Non-fatal: inputs are still in memory for this run; only resume would be affected.
     }
   }
 
@@ -750,7 +908,8 @@ export async function executeWorkflow(
       config,
       configuredCommandFolder,
       issueContext,
-      dagPriorCompletedNodes
+      dagPriorCompletedNodes,
+      resolvedInputs
     );
 
     // executeDagWorkflow throws on fatal errors; check DB status for result

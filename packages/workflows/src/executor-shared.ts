@@ -266,6 +266,7 @@ export const CONTEXT_VAR_PATTERN_STR =
  * Substitute workflow variables in a prompt.
  *
  * Supported variables:
+ * - $INPUT_NAME - Runtime inputs declared in the workflow's `inputs:` block (applied first).
  * - $WORKFLOW_ID - The workflow run ID
  * - $USER_MESSAGE, $ARGUMENTS - The user's trigger message
  * - $ARTIFACTS_DIR - External artifacts directory for this workflow run
@@ -288,7 +289,8 @@ export function substituteWorkflowVariables(
   docsDir: string,
   issueContext?: string,
   loopUserInput?: string,
-  rejectionReason?: string
+  rejectionReason?: string,
+  inputs?: Record<string, string>
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -301,8 +303,17 @@ export function substituteWorkflowVariables(
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
 
-  // Substitute basic variables
-  let result = prompt
+  // Apply runtime inputs first — substitute $KEY patterns before built-in variables.
+  // This allows input values to contain built-in variable references if needed.
+  let result = prompt;
+  if (inputs) {
+    for (const [key, value] of Object.entries(inputs)) {
+      result = result.replace(new RegExp(`\\$${key}(?![A-Za-z0-9_])`, 'g'), value);
+    }
+  }
+
+  // Substitute built-in variables
+  result = result
     .replace(/\$WORKFLOW_ID/g, workflowId)
     .replace(/\$USER_MESSAGE/g, userMessage)
     .replace(/\$ARGUMENTS/g, userMessage)
@@ -356,7 +367,8 @@ export function buildPromptWithContext(
   baseBranch: string,
   docsDir: string,
   issueContext: string | undefined,
-  logLabel: string
+  logLabel: string,
+  inputs?: Record<string, string>
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -365,7 +377,10 @@ export function buildPromptWithContext(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    inputs
   );
 
   if (issueContext && !contextSubstituted) {

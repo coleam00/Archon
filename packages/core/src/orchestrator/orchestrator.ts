@@ -246,6 +246,8 @@ export interface WorkflowRoutingContext {
    * Hints for isolation environment (PR review context, etc.)
    */
   readonly isolationHints?: IsolationHints;
+  /** Runtime input values for workflows declared with an `inputs:` block. */
+  readonly inputs?: Record<string, string>;
 }
 
 /**
@@ -374,7 +376,8 @@ export async function dispatchBackgroundWorkflow(
           ctx.issueContext,
           isolationContext,
           ctx.conversationDbId,
-          preCreatedRun
+          preCreatedRun,
+          ctx.inputs
         );
         // Surface workflow output to parent conversation as a result card
         if ('paused' in result) {

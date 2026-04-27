@@ -687,7 +687,7 @@ function AdvancedTab({
 
       <JsonTextareaField
         label="Hooks (SDK SyncHookJSONOutput)"
-        value={node.hooks as Record<string, unknown> | undefined}
+        value={node.hooks}
         placeholder='{"PreToolUse": [{"matcher": "Bash", "response": {...}}]}'
         rows={5}
         onCommit={(v): void => {

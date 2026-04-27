@@ -221,7 +221,8 @@ async function dispatchOrchestratorWorkflow(
   codebase: Codebase,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  inputs?: Record<string, string>
 ): Promise<void> {
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -296,7 +297,9 @@ async function dispatchOrchestratorWorkflow(
         codebase.id,
         undefined, // issueContext
         undefined, // isolationContext
-        conversation.id // parentConversationId — enables approve/reject auto-resume
+        conversation.id, // parentConversationId — enables approve/reject auto-resume
+        undefined, // preCreatedRun
+        inputs
       );
     } else if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation
@@ -311,7 +314,9 @@ async function dispatchOrchestratorWorkflow(
         codebase.id,
         undefined, // issueContext
         undefined, // isolationContext
-        conversation.id // parentConversationId — enables approve/reject auto-resume
+        conversation.id, // parentConversationId — enables approve/reject auto-resume
+        undefined, // preCreatedRun
+        inputs
       );
     } else {
       await dispatchBackgroundWorkflow(
@@ -324,6 +329,7 @@ async function dispatchOrchestratorWorkflow(
           codebaseId: codebase.id,
           availableWorkflows: [workflow],
           isolationHints,
+          inputs,
         },
         workflow
       );
@@ -340,7 +346,9 @@ async function dispatchOrchestratorWorkflow(
       codebase.id,
       undefined, // issueContext
       undefined, // isolationContext
-      conversation.id // parentConversationId — enables approve/reject auto-resume
+      conversation.id, // parentConversationId — enables approve/reject auto-resume
+      undefined, // preCreatedRun
+      inputs
     );
   }
 }
@@ -539,8 +547,14 @@ export async function handleMessage(
   message: string,
   context?: HandleMessageContext
 ): Promise<void> {
-  const { issueContext, threadContext, parentConversationId, isolationHints, attachedFiles } =
-    context ?? {};
+  const {
+    issueContext,
+    threadContext,
+    parentConversationId,
+    isolationHints,
+    attachedFiles,
+    inputs,
+  } = context ?? {};
   try {
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
@@ -655,6 +669,9 @@ export async function handleMessage(
             return;
           }
           await platform.sendMessage(conversationId, `▶️ Resuming **${workflow.name}**...`);
+          const pausedResumeInputs = pausedRun.metadata?.resolved_inputs as
+            | Record<string, string>
+            | undefined;
           await dispatchOrchestratorWorkflow(
             platform,
             conversationId,
@@ -662,7 +679,10 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            pausedResumeInputs && Object.keys(pausedResumeInputs).length > 0
+              ? pausedResumeInputs
+              : undefined
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -732,7 +752,8 @@ export async function handleMessage(
             conversation,
             result.workflow.definition,
             result.workflow.args ?? message,
-            isolationHints
+            isolationHints,
+            inputs
           );
         }
         return;
@@ -1401,7 +1422,8 @@ async function handleWorkflowRunCommand(
   conversation: Conversation,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  inputs?: Record<string, string>
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -1421,7 +1443,8 @@ async function handleWorkflowRunCommand(
       codebase,
       workflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      inputs
     );
     return;
   }
@@ -1498,7 +1521,8 @@ async function handleWorkflowRunCommand(
       codebase,
       resolvedWorkflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      inputs
     );
     return;
   }

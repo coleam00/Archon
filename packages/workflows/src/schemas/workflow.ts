@@ -50,6 +50,25 @@ export const workflowWorktreePolicySchema = z.object({
 export type WorkflowWorktreePolicy = z.infer<typeof workflowWorktreePolicySchema>;
 
 // ---------------------------------------------------------------------------
+// WorkflowInputs — runtime parameter declarations
+// ---------------------------------------------------------------------------
+
+/**
+ * Declaration for a single workflow input parameter.
+ * Inputs are substituted into prompts and workflow-level fields (model, provider)
+ * via `$INPUT_NAME` syntax at run time.
+ */
+export const workflowInputSchema = z.object({
+  description: z.string().optional(),
+  /** Default value used when the caller does not supply this input. */
+  default: z.string().optional(),
+  /** When true, execution fails if the caller does not supply a value and no default exists. */
+  required: z.boolean().optional(),
+});
+
+export type WorkflowInput = z.infer<typeof workflowInputSchema>;
+
+// ---------------------------------------------------------------------------
 // WorkflowBase — common fields shared by all workflow types
 // ---------------------------------------------------------------------------
 
@@ -68,6 +87,12 @@ export const workflowBaseSchema = z.object({
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
+  /**
+   * Named input parameters for this workflow. Values are substituted at run time
+   * via `$INPUT_NAME` syntax in prompts and in top-level `model`/`provider` fields.
+   * Callers supply values via `--set KEY=VALUE` (CLI) or `inputs` (API/SDK).
+   */
+  inputs: z.record(workflowInputSchema).optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;

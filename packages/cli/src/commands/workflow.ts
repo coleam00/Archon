@@ -67,6 +67,11 @@ export interface WorkflowRunOptions {
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
   conversationId?: string;
+  /**
+   * Runtime input values for workflows that declare an `inputs:` block.
+   * Populated from `--set KEY=VALUE` CLI flags.
+   */
+  inputs?: Record<string, string>;
 }
 
 /**
@@ -715,7 +720,12 @@ export async function workflowRunCommand(
       workflow,
       userMessage,
       conversation.id,
-      codebase?.id
+      codebase?.id,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options.inputs
     );
   } finally {
     unsubscribe?.();

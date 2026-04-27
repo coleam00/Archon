@@ -51,6 +51,8 @@ export interface HandleMessageContext {
   readonly parentConversationId?: string;
   readonly isolationHints?: IsolationHints;
   readonly attachedFiles?: AttachedFile[];
+  /** Runtime input values for workflows declared with an `inputs:` block. */
+  readonly inputs?: Record<string, string>;
 }
 
 export interface Codebase {

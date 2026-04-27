@@ -1084,7 +1084,9 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(), // codebase.id
         undefined, // issueContext
         undefined, // isolationContext
-        expect.anything() // parentConversationId — web approval auto-resume
+        expect.anything(), // parentConversationId — web approval auto-resume
+        undefined, // preCreatedRun
+        undefined // runtimeInputs
       );
     });
 
@@ -1112,7 +1114,9 @@ describe('orchestrator-agent handleMessage', () => {
         expect.anything(),
         undefined, // issueContext
         undefined, // isolationContext
-        expect.anything() // parentConversationId — web approval auto-resume
+        expect.anything(), // parentConversationId — web approval auto-resume
+        undefined, // preCreatedRun
+        undefined // runtimeInputs
       );
     });
 

@@ -204,6 +204,7 @@ async function main(): Promise<number> {
         'download-only': { type: 'boolean' },
         scope: { type: 'string' },
         force: { type: 'boolean' },
+        set: { type: 'string', multiple: true },
       },
       allowPositionals: true,
       strict: false, // Allow unknown flags to pass through
@@ -352,6 +353,26 @@ async function main(): Promise<number> {
               );
               return 1;
             }
+            // Parse --set KEY=VALUE flags into a runtime inputs map
+            const setFlags = values.set as string[] | undefined;
+            let inputs: Record<string, string> | undefined;
+            if (setFlags && setFlags.length > 0) {
+              inputs = {};
+              for (const flag of setFlags) {
+                const eqIndex = flag.indexOf('=');
+                if (eqIndex === -1) {
+                  console.error(`Error: --set flag must be in KEY=VALUE format, got: ${flag}`);
+                  return 1;
+                }
+                const key = flag.slice(0, eqIndex).trim();
+                const value = flag.slice(eqIndex + 1);
+                if (!key) {
+                  console.error(`Error: --set flag has empty key: ${flag}`);
+                  return 1;
+                }
+                inputs[key] = value;
+              }
+            }
             const options = {
               branchName,
               fromBranch,
@@ -359,6 +380,7 @@ async function main(): Promise<number> {
               resume: resumeFlag,
               quiet: values.quiet as boolean | undefined,
               verbose: values.verbose as boolean | undefined,
+              inputs,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
             break;

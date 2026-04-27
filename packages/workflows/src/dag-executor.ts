@@ -135,7 +135,7 @@ export async function loadConfiguredMcpServerNames(
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       return new Set();
     }
-    return new Set(Object.keys(parsed as Record<string, unknown>));
+    return new Set(Object.keys(parsed));
   } catch (err) {
     getLog().debug({ err, nodeMcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
     return new Set();
@@ -473,12 +473,11 @@ export function checkTriggerRule(
 
   const upstreams = nodeDeps.map(
     id =>
-      nodeOutputs.get(id) ??
-      ({
+      nodeOutputs.get(id) ?? {
         state: 'failed',
         output: '',
         error: `upstream '${id}' missing from outputs`,
-      } as NodeOutput)
+      }
   );
   const rule: TriggerRule = node.trigger_rule ?? 'all_success';
 
@@ -568,7 +567,8 @@ async function executeNodeInternal(
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  inputs?: Record<string, string>
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -647,7 +647,8 @@ async function executeNodeInternal(
       baseBranch,
       docsDir,
       issueContext,
-      `dag node '${node.id}' prompt`
+      `dag node '${node.id}' prompt`,
+      inputs
     );
   } catch (error) {
     const err = error as Error;
@@ -811,7 +812,7 @@ async function executeNodeInternal(
           const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
           await safeSendMessage(platform, conversationId, toolMsg, nodeContext, {
             category: 'tool_call_formatted',
-          } as WorkflowMessageMetadata);
+          });
 
           // Send structured event to adapters that support it (Web UI)
           if (platform.sendStructuredEvent) {
@@ -1218,7 +1219,8 @@ async function executeBashNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  inputs?: Record<string, string>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1256,7 +1258,10 @@ async function executeBashNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    inputs
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
@@ -1372,7 +1377,8 @@ async function executeScriptNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  inputs?: Record<string, string>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1410,7 +1416,10 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    inputs
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
@@ -1664,7 +1673,8 @@ async function executeLoopNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
-  workflowLevelOptions?: WorkflowLevelOptions
+  workflowLevelOptions?: WorkflowLevelOptions,
+  inputs?: Record<string, string>
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1774,7 +1784,9 @@ async function executeLoopNode(
         baseBranch,
         docsDir,
         issueContext,
-        i === startIteration ? loopUserInput : ''
+        i === startIteration ? loopUserInput : '',
+        undefined,
+        inputs
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -1900,7 +1912,7 @@ async function executeLoopNode(
             if (toolMsg) {
               await safeSendMessage(platform, conversationId, toolMsg, msgContext, {
                 category: 'tool_call_formatted',
-              } as WorkflowMessageMetadata);
+              });
             }
             if (platform.sendStructuredEvent) {
               await platform.sendStructuredEvent(conversationId, msg);
@@ -1994,7 +2006,10 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined,
+          undefined,
+          inputs
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -2188,7 +2203,8 @@ async function executeApprovalNode(
   config: WorkflowConfig,
   workflowLevelOptions: WorkflowLevelOptions,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  inputs?: Record<string, string>
 ): Promise<NodeOutput> {
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
 
@@ -2246,7 +2262,8 @@ async function executeApprovalNode(
       docsDir,
       issueContext,
       undefined, // loopUserInput
-      rejectionReason
+      rejectionReason,
+      inputs
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal
@@ -2285,7 +2302,8 @@ async function executeApprovalNode(
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
-      issueContext
+      issueContext,
+      inputs
     );
 
     if (output.state === 'failed') {
@@ -2356,7 +2374,8 @@ export async function executeDagWorkflow(
   config: WorkflowConfig,
   configuredCommandFolder?: string,
   issueContext?: string,
-  priorCompletedNodes?: Map<string, string>
+  priorCompletedNodes?: Map<string, string>,
+  inputs?: Record<string, string>
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
   const workflowLevelOptions = {
@@ -2577,7 +2596,8 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               issueContext,
-              config.envVars
+              config.envVars,
+              inputs
             );
             return { nodeId: node.id, output };
           }
@@ -2621,7 +2641,8 @@ export async function executeDagWorkflow(
               nodeOutputs,
               config,
               issueContext,
-              workflowLevelOptions
+              workflowLevelOptions,
+              inputs
             );
             return { nodeId: node.id, output };
           }
@@ -2645,7 +2666,8 @@ export async function executeDagWorkflow(
               config,
               workflowLevelOptions,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              inputs
             );
             return { nodeId: node.id, output };
           }
@@ -2697,7 +2719,8 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               issueContext,
-              config.envVars
+              config.envVars,
+              inputs
             );
             return { nodeId: node.id, output };
           }
@@ -2748,7 +2771,8 @@ export async function executeDagWorkflow(
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              inputs
             );
 
             if (output.state !== 'failed') break;
