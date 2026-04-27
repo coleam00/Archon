@@ -37,6 +37,7 @@ import {
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -2237,7 +2238,7 @@ export function registerApiRoutes(
 
       const filename = `${name}.yaml`;
 
-      // 1. Try user-defined workflow in cwd
+      // 1. Try user-defined workflow in cwd (project scope)
       if (workingDir) {
         const [workflowFolder] = getWorkflowFolderSearchPaths();
         const filePath = join(workingDir, workflowFolder, filename);
@@ -2260,7 +2261,33 @@ export function registerApiRoutes(
         }
       }
 
-      // 2. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
+      // 2. Fall back to home-scoped workflow (`~/.archon/workflows/`).
+      // Mirrors the discovery order in `discoverWorkflowsWithConfig` — this
+      // endpoint previously skipped the home scope, so global workflows were
+      // invisible to the web UI builder (it loads via this single-workflow
+      // endpoint) even though `GET /api/workflows` (list) returned them.
+      {
+        const homeFilePath = join(getHomeWorkflowsPath(), filename);
+        try {
+          const content = await readFile(homeFilePath, 'utf-8');
+          const result = parseWorkflow(content, filename);
+          if (result.error) {
+            return apiError(c, 500, `Home workflow file is invalid: ${result.error.error}`);
+          }
+          return c.json({
+            workflow: result.workflow,
+            filename,
+            source: 'global' as WorkflowSource,
+          });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            getLog().error({ err, name }, 'workflow.fetch_home_failed');
+            return apiError(c, 500, 'Failed to read home-scoped workflow');
+          }
+        }
+      }
+
+      // 3. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
         const bundledContent = BUNDLED_WORKFLOWS[name];
         const result = parseWorkflow(bundledContent, filename);
