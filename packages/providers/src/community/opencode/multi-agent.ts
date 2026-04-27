@@ -365,9 +365,7 @@ export async function* streamMultiAgentOpencodeSession(
               return output !== undefined ? ([state.agent.key, output] as const) : undefined;
             })
           ).then(results => {
-            const filtered = results.filter(
-              (entry): entry is readonly [string, unknown] => entry !== undefined
-            );
+            const filtered = results.filter(entry => entry !== undefined) as [string, unknown][];
             return filtered.length > 0 ? Object.fromEntries(filtered) : undefined;
           });
 
@@ -386,7 +384,11 @@ export async function* streamMultiAgentOpencodeSession(
 
     getLog().info({ nodeId, aborted, eventCount }, 'opencode.multi_agent_loop_exited');
     if (aborted) {
-      throw new Error('OpenCode query aborted');
+      const abortReason = requestOptions?.abortSignal?.reason;
+      throw new Error(
+        `OpenCode query aborted (nodeId: ${nodeId}, agents: ${agents.length}, cwd: ${cwd})` +
+          (abortReason ? `: ${String(abortReason)}` : '')
+      );
     }
     throw new Error('OpenCode multi-agent stream ended before all agents completed');
   } finally {

@@ -1120,7 +1120,7 @@ describe('OpencodeProvider', () => {
     expect(mockCreateOpencode).not.toHaveBeenCalled();
   });
 
-  test('uses agent prompt instead of node prompt when agent is defined', async () => {
+  test('uses node prompt as task when agent is configured', async () => {
     const cwd = await createTempProjectDir();
     const runtime = makeRuntime();
     runtimeQueue.push(runtime);
@@ -1130,25 +1130,26 @@ describe('OpencodeProvider', () => {
       agents: {
         'test-agent': {
           description: 'Test agent',
-          prompt: 'Return exactly AGENT_PROMPT_OK',
+          prompt: 'You are a helpful test agent.',
         },
       },
     };
 
     const { error } = await consume(
-      new OpencodeProvider().sendQuery('node prompt that should be ignored', cwd, undefined, {
+      new OpencodeProvider().sendQuery('node prompt that should be used', cwd, undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig,
       })
     );
 
     expect(error).toBeUndefined();
-    // Verify the agent's prompt was sent to OpenCode, not the node's prompt
+    // The agent's prompt lives in the materialized .md file (system context).
+    // The node prompt is the task sent in the prompt body.
     expect(runtime.client.session.promptAsync).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: cwd },
       body: expect.objectContaining({
-        parts: [{ type: 'text', text: 'Return exactly AGENT_PROMPT_OK' }],
+        parts: [{ type: 'text', text: 'node prompt that should be used' }],
         agent: 'archon-test-agent',
       }),
     });

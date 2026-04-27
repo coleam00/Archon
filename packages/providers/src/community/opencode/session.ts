@@ -294,7 +294,11 @@ export async function* streamOpencodeSession(
     }
 
     if (aborted) {
-      throw new Error('OpenCode query aborted');
+      const abortReason = requestOptions?.abortSignal?.reason;
+      throw new Error(
+        `OpenCode query aborted (session: ${sessionId}, cwd: ${cwd})` +
+          (abortReason ? `: ${String(abortReason)}` : '')
+      );
     }
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
