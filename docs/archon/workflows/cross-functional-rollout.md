@@ -14,6 +14,7 @@ This directory captures the product-team Archon customization. The goal is to ma
 
 ## User Documentation
 
+- [Pilot Pitch: Making AI Coding Real Enough To Judge](./pilot-pitch.md): narrative and case for running the pilot.
 - [Cross-Functional Workflow User Guide](./user-guide.md): how to run and operate the workflow set.
 - [Cross-Functional Workflow Personas](./personas.md): role-by-role responsibilities, owned artifacts, and handoffs.
 
