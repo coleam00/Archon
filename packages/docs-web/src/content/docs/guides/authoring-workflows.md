@@ -126,6 +126,10 @@ worktree:                        # Optional: pin isolation behavior regardless o
                                  #           like triage/reporting. true = must use a worktree;
                                  #           CLI --no-worktree hard-errors. Omit to let the
                                  #           caller decide (current default = worktree).
+tags: [GitLab, Review]           # Optional: explicit Web UI filter tags. Overrides the
+                                 #   keyword-based tag inference. An empty list (`tags: []`)
+                                 #   suppresses inference and shows no tags. Omit to fall
+                                 #   back to inferred tags (the default).
 
 # Required for DAG-based
 nodes:
