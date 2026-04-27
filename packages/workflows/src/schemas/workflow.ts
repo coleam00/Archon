@@ -68,6 +68,7 @@ export const workflowBaseSchema = z.object({
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
+  tags: z.array(z.string().min(1)).optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;

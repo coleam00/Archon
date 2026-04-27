@@ -361,6 +361,25 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Parse optional tags — type-narrow, trim, and dedupe so authors can't
+    // ship ["GitLab", "GitLab ", "gitlab"] as three distinct values.
+    // An explicit empty array is preserved (suppresses keyword inference in the
+    // UI); an absent or invalid block leaves `tags` undefined (falls back to
+    // inference). Same warn-and-ignore pattern as the worktree block above.
+    let tags: string[] | undefined;
+    if (Array.isArray(raw.tags)) {
+      tags = [
+        ...new Set(
+          raw.tags
+            .filter((t): t is string => typeof t === 'string')
+            .map(t => t.trim())
+            .filter(t => t.length > 0)
+        ),
+      ];
+    } else if (raw.tags !== undefined) {
+      getLog().warn({ filename, value: raw.tags }, 'invalid_tags_block_ignored');
+    }
+
     return {
       workflow: {
         name: raw.name,
@@ -373,6 +392,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         interactive,
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
+        ...(tags !== undefined ? { tags } : {}),
       },
       error: null,
     };
