@@ -9,7 +9,7 @@ agent: general
 
 nodes:
   - id: simple
-    prompt: "Reply with exactly OPENCODE_OK"
+    prompt: "Reply with exactly OPENCODE_OK if you see the folder `.archon` exists"
     agent: general
     idle_timeout: 60000
 

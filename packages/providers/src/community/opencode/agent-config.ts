@@ -87,11 +87,14 @@ export function adaptNamedAgentForOpencode(agent: NamedAgentConfig): {
 }
 
 export function resolvePromptForAgent(
-  agent: NamedAgentConfig | undefined,
+  _agent: NamedAgentConfig | undefined,
   nodePrompt: string
 ): string {
-  if (!agent?.config.prompt) return nodePrompt;
-  return agent.config.prompt;
+  // The agent's prompt is materialized into .opencode/agents/*.md as its
+  // system context. OpenCode automatically loads it when the agent is referenced
+  // by name. The node prompt is the user's task — sending the agent prompt here
+  // would duplicate it (once in the agent file, once in the prompt body).
+  return nodePrompt;
 }
 
 /**
