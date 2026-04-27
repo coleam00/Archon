@@ -1,0 +1,144 @@
+name: maintainer-standup
+description: |
+  Use when: Maintainer wants their morning briefing — what changed on dev,
+  what's in the review queue, what to focus on today across PRs and issues.
+  Triggers: "morning standup", "maintainer standup", "what's new today",
+            "daily brief", "morning brief", "what should i work on today",
+            "start my day".
+  Does: Pulls latest dev, fetches all open PRs and assigned issues, cross-
+        references against direction.md to flag polite-decline candidates,
+        compares against prior run state to surface progress (merged, closed,
+        what you shipped), produces a prioritized P1-P4 brief. Saves dated
+        brief + state for next-run continuity.
+  NOT for: Fixing issues (use archon-fix-github-issue), reviewing a specific
+           PR (use archon-comprehensive-pr-review), repo-wide triage automation
+           (use repo-triage).
+
+provider: claude
+model: sonnet
+
+worktree:
+  enabled: false   # Live checkout — needs to git pull and read .archon/maintainer-standup/
+
+nodes:
+  # ── Layer 0: gather facts in parallel ──
+
+  - id: git-status
+    script: maintainer-standup-git-status
+    runtime: bun
+    timeout: 60000
+
+  - id: gh-data
+    script: maintainer-standup-gh-data
+    runtime: bun
+    timeout: 180000
+
+  - id: read-context
+    script: maintainer-standup-read-context
+    runtime: bun
+    timeout: 10000
+
+  # ── Layer 1: synthesize the brief ──
+
+  - id: synthesize
+    command: maintainer-standup
+    depends_on: [git-status, gh-data, read-context]
+    output_format:
+      type: object
+      properties:
+        brief_markdown:
+          type: string
+          description: Human-readable maintainer brief in markdown, with P1-P4 sections.
+        next_state:
+          type: object
+          description: Carry-over state for tomorrow's run.
+          properties:
+            last_run_at:
+              type: string
+              description: ISO-8601 timestamp of this run.
+            last_dev_sha:
+              type: string
+              description: origin/dev SHA at the end of this run.
+            carry_over:
+              type: array
+              description: Items still pending from previous runs (or surfaced this run).
+              items:
+                type: object
+                properties:
+                  kind:
+                    type: string
+                    enum: [pr, issue, task, direction_question]
+                  id:
+                    type: string
+                    description: PR/issue number as string, or task identifier.
+                  note:
+                    type: string
+                    description: Why this is being carried over.
+                  first_seen:
+                    type: string
+                    description: ISO-8601 date when this item first appeared in carry_over (preserved across runs).
+                required: [kind, id, note, first_seen]
+            observed_prs:
+              type: array
+              description: Snapshot of ALL currently-open PRs, used to detect resolved/new PRs next run.
+              items:
+                type: object
+                properties:
+                  number:
+                    type: number
+                  title:
+                    type: string
+                required: [number, title]
+            observed_issues:
+              type: array
+              description: Snapshot of currently-tracked issues (assigned + recent unlabeled).
+              items:
+                type: object
+                properties:
+                  number:
+                    type: number
+                  title:
+                    type: string
+                required: [number, title]
+            direction_questions:
+              type: array
+              description: New "we don't have a stance on this" questions surfaced this run.
+              items:
+                type: string
+          required: [last_run_at, last_dev_sha, carry_over, observed_prs, observed_issues, direction_questions]
+      required: [brief_markdown, next_state]
+
+  # ── Layer 2: persist state and dated brief ──
+
+  - id: persist
+    depends_on: [synthesize]
+    runtime: bun
+    timeout: 15000
+    script: |
+      import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
+      import { resolve } from 'node:path';
+
+      // JSON is valid JS expression syntax — substitute directly without a
+      // template literal. Wrapping in String.raw breaks if the output contains
+      // backticks (e.g. markdown code spans inside brief_markdown).
+      const data = $synthesize.output;
+
+      const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
+      if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true });
+
+      writeFileSync(
+        resolve(baseDir, 'state.json'),
+        JSON.stringify(data.next_state, null, 2) + '\n',
+      );
+
+      const briefsDir = resolve(baseDir, 'briefs');
+      if (!existsSync(briefsDir)) mkdirSync(briefsDir, { recursive: true });
+      const date = new Date().toISOString().slice(0, 10);
+      const briefPath = resolve(briefsDir, `${date}.md`);
+      writeFileSync(briefPath, data.brief_markdown);
+
+      console.log(JSON.stringify({
+        date,
+        state_path: '.archon/maintainer-standup/state.json',
+        brief_path: `.archon/maintainer-standup/briefs/${date}.md`,
+      }));
