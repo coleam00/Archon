@@ -65,8 +65,19 @@ nodes:
   - id: fetch-diff
     bash: |
       PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
+      # Don't redirect stderr — let auth / network / deleted-PR failures surface
+      # as a node failure rather than feeding an empty diff to the gate (which
+      # would produce a confident verdict on no evidence).
+      if ! diff_output=$(gh pr diff "$PR_NUM"); then
+        echo "ERROR: gh pr diff failed for PR #$PR_NUM" >&2
+        exit 1
+      fi
       # Cap at 2500 lines to keep prompt size bounded; gate cares about shape, not every line.
-      gh pr diff "$PR_NUM" 2>/dev/null | head -2500
+      if [ -z "$diff_output" ]; then
+        echo "(empty diff — PR has no changes)"
+      else
+        echo "$diff_output" | head -2500
+      fi
     depends_on: [fetch-pr]
     timeout: 30000
 
@@ -274,8 +285,19 @@ nodes:
         exit 1
       fi
       gh pr comment "$PR_NUM" --body-file "$ARTIFACTS_DIR/decline-comment.md"
-      # Optional: tag the PR so the morning brief can surface "awaiting author"
-      gh pr edit "$PR_NUM" --add-label awaiting-author 2>/dev/null || true
+
+      # Tag the PR so the morning brief can surface "awaiting author".
+      # Failure (label not present in repo, permissions, etc.) is non-fatal,
+      # but record the actual outcome so the report node doesn't claim the
+      # label was applied when it wasn't.
+      if gh pr edit "$PR_NUM" --add-label awaiting-author 2>"$ARTIFACTS_DIR/.label-error"; then
+        echo "applied" > "$ARTIFACTS_DIR/.label-applied"
+        rm -f "$ARTIFACTS_DIR/.label-error"
+      else
+        echo "skipped" > "$ARTIFACTS_DIR/.label-applied"
+        echo "WARN: gh pr edit --add-label failed; see $ARTIFACTS_DIR/.label-error" >&2
+      fi
+
       echo "Posted decline comment to PR #$PR_NUM"
     depends_on: [approve-decline]
     timeout: 30000
@@ -290,8 +312,12 @@ nodes:
         Gate could not classify this PR confidently. Read the raw gate output
         and any artifacts in $ARTIFACTS_DIR/, then decide manually.
 
-        Approve = workflow ends here (no comment posted, no review run).
-        Reject = same outcome but log your reasoning in the run record.
+        Approve (with optional comment) = workflow ends here (no comment posted,
+        no review run). Your comment is captured as $approve-unclear.output and
+        the report node will include it.
+        Reject (with reason) = workflow is cancelled; reasoning is recorded in
+        the run.
+      capture_response: true
     depends_on: [gate]
     when: "$gate.output.verdict == 'unclear'"
 

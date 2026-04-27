@@ -13,7 +13,7 @@ You are the **gatekeeper** for a single GitHub PR. Your job is to decide whether
 
 ## Phase 1: LOAD INPUTS
 
-Three sources of upstream context, all already gathered. Each is provided inline below — no extra tool calls needed to fetch them.
+Three sources of upstream context, all gathered for you below. **You may also `cat .github/PULL_REQUEST_TEMPLATE.md` if you need to compare the PR body's structure against the project's template** — that's the one allowed extra read; everything else lives in the inputs below.
 
 ### PR data (gh pr view JSON)
 
@@ -23,11 +23,11 @@ $fetch-pr.output
 
 ### PR diff (truncated to 2500 lines)
 
-```
+```text
 $fetch-diff.output
 ```
 
-### Maintainer context (direction.md, profile.md, prior state, recent briefs)
+### Maintainer context (direction.md, profile.md, prior state, recent briefs, clock)
 
 ```json
 $read-context.output
@@ -38,6 +38,8 @@ Inside `read-context.output`:
 - `profile` — the running maintainer's profile.md (role, scope, current focus)
 - `prior_state` — last morning-standup state.json (carry_over may already mention this PR)
 - `recent_briefs` — last 3 daily briefs (look here if this PR was previously flagged)
+- `today` — today's local date as `YYYY-MM-DD` (deterministic, set by the gather script)
+- `deadline_3d` — today + 3 calendar days, `YYYY-MM-DD` (precomputed for the decline comment's reply window)
 
 ---
 
@@ -74,7 +76,7 @@ Was `.github/PULL_REQUEST_TEMPLATE.md` filled in?
 - **partial**: Template structure present but several sections empty or perfunctory ("N/A", "TBD", or single-word answers where prose is expected).
 - **empty**: No template, or template skeleton with all sections blank.
 
-The PR body is in `pr_data.body`. The template lives at `.github/PULL_REQUEST_TEMPLATE.md` — read it if needed to compare structure.
+The PR body is in `pr_data.body`. If you need the template's expected structure for comparison, that's the one allowed extra read: `cat .github/PULL_REQUEST_TEMPLATE.md`.
 
 ---
 
@@ -152,7 +154,9 @@ Adapt the wording. Don't paste the templates verbatim if the situation is more n
 
 ### Compute DATE-3-DAYS-OUT
 
-Today is the date in `read-context.output.prior_state.last_run_at` if available, otherwise today's actual date. Add 3 calendar days. Format as `YYYY-MM-DD` (e.g. `2026-04-30`).
+Use `read-context.output.deadline_3d` directly — it's already today-plus-three-calendar-days in `YYYY-MM-DD` form, computed deterministically by the gather script (sv-SE locale → ISO date in local time). Do **not** anchor to `prior_state.last_run_at`; that field can be days or weeks stale and would produce a deadline already in the past.
+
+If for any reason `deadline_3d` is missing or empty, abort the comment draft and surface this to the maintainer in the gate-decision artifact rather than guessing.
 
 ---
 
@@ -211,12 +215,12 @@ If verdict is `decline` or `needs_split`, write the drafted comment in markdown 
 Allowed output shapes (Pi's parser handles either):
 
 1. **Bare JSON** — preferred:
-   ```
+   ```json
    {"verdict":"review","direction_alignment":"aligned",...}
    ```
 
 2. **Fenced JSON** — also fine:
-   ````
+   ````markdown
    ```json
    {"verdict":"review","direction_alignment":"aligned",...}
    ```
