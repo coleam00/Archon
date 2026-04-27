@@ -68,12 +68,12 @@ The `direction` markdown defines what Archon IS / IS NOT. The `profile` markdown
 
 For each PR in `all_open_prs`:
 
-- **P1 (Do today)**: ready-to-merge PRs awaiting your review (`reviewDecision: APPROVED` or null + green CI), security fixes, items breaking dev, blockers for an in-flight release.
+- **P1 (Do today)**: ready-to-merge PRs awaiting your review (`reviewDecision: APPROVED` or null AND `mergeStateStatus: clean`), security fixes, items breaking dev, blockers for an in-flight release. **Note**: `mergeStateStatus` is the only CI/merge signal in the gathered payload (values: `clean`, `unstable`, `dirty`, `blocked`, `behind`, `unknown`). For ambiguous cases run `gh pr checks <number>` to verify CI before classifying as P1.
 - **P2 (This week)**: in-flight PRs needing review or maintainer feedback, PRs with merge conflicts that can be unblocked, PRs from the maintainer's current focus areas that are progressing.
 - **P3 (Whenever)**: low-urgency items, drafts you authored, exploratory PRs, items outside current focus that aren't time-sensitive.
 - **P4 (Polite-decline candidates)**: PRs that conflict with `direction.md`. Each P4 entry MUST cite a specific clause (e.g., `direction.md §single-developer-tool`).
 
-You may use `gh pr view <number>` or `gh pr diff <number>` to drill into PRs whose triage classification cannot be determined from the metadata alone. Be selective — drilling into all 60+ PRs is wasteful. Drill into 5-10 of the most ambiguous or interesting cases.
+You may use `gh pr view <number>`, `gh pr diff <number>`, or `gh pr checks <number>` to drill into PRs whose triage classification cannot be determined from the metadata alone. Be selective — drilling into all 60+ PRs is wasteful. Drill into 5-10 of the most ambiguous or interesting cases.
 
 ### 2e. Triage issues
 

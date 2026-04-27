@@ -123,22 +123,40 @@ nodes:
       // backticks (e.g. markdown code spans inside brief_markdown).
       const data = $synthesize.output;
 
-      const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
-      if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true });
+      // Local YYYY-MM-DD (sv-SE locale gives ISO format in local time) so a
+      // late-night run doesn't write tomorrow's UTC date and confuse next-run
+      // recent_briefs lookups.
+      const date = new Date().toLocaleDateString('sv-SE');
 
-      writeFileSync(
-        resolve(baseDir, 'state.json'),
-        JSON.stringify(data.next_state, null, 2) + '\n',
-      );
+      try {
+        const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
+        if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true });
 
-      const briefsDir = resolve(baseDir, 'briefs');
-      if (!existsSync(briefsDir)) mkdirSync(briefsDir, { recursive: true });
-      const date = new Date().toISOString().slice(0, 10);
-      const briefPath = resolve(briefsDir, `${date}.md`);
-      writeFileSync(briefPath, data.brief_markdown);
+        writeFileSync(
+          resolve(baseDir, 'state.json'),
+          JSON.stringify(data.next_state, null, 2) + '\n',
+        );
 
-      console.log(JSON.stringify({
-        date,
-        state_path: '.archon/maintainer-standup/state.json',
-        brief_path: `.archon/maintainer-standup/briefs/${date}.md`,
-      }));
+        const briefsDir = resolve(baseDir, 'briefs');
+        if (!existsSync(briefsDir)) mkdirSync(briefsDir, { recursive: true });
+        const briefPath = resolve(briefsDir, `${date}.md`);
+        writeFileSync(briefPath, data.brief_markdown);
+
+        console.log(JSON.stringify({
+          date,
+          state_path: '.archon/maintainer-standup/state.json',
+          brief_path: `.archon/maintainer-standup/briefs/${date}.md`,
+        }));
+      } catch (err) {
+        // Synthesis (Sonnet, ~5 min) is the expensive part. If persist fails
+        // (disk full, read-only fs, permission), dump the brief + state to
+        // stderr so the run isn't a total loss — they're recoverable from logs.
+        process.stderr.write(`PERSIST FAILED: ${err.message}\n`);
+        process.stderr.write('--- BEGIN brief_markdown (recoverable from logs) ---\n');
+        process.stderr.write(data.brief_markdown + '\n');
+        process.stderr.write('--- END brief_markdown ---\n');
+        process.stderr.write('--- BEGIN next_state (recoverable from logs) ---\n');
+        process.stderr.write(JSON.stringify(data.next_state, null, 2) + '\n');
+        process.stderr.write('--- END next_state ---\n');
+        process.exit(1);
+      }

@@ -10,13 +10,16 @@
  *     new_commits, diff_stat
  *   }
  */
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-function run(cmd: string): { stdout: string; ok: boolean } {
+// execFileSync (argv array, no shell) — defense-in-depth for git invocations.
+// All args are hardcoded literals or values from `git` output (SHAs); using
+// execFileSync removes any need to reason about shell metacharacters.
+function git(args: string[]): { stdout: string; ok: boolean } {
   try {
-    const out = execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
+    const out = execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
     return { stdout: out, ok: true };
   } catch {
     return { stdout: '', ok: false };
@@ -34,10 +37,10 @@ if (existsSync(stateFile)) {
   }
 }
 
-run('git fetch origin dev');
+git(['fetch', 'origin', 'dev']);
 
-const currentBranch = run('git rev-parse --abbrev-ref HEAD').stdout.trim();
-const isDirty = run('git status --porcelain').stdout.trim().length > 0;
+const currentBranch = git(['rev-parse', '--abbrev-ref', 'HEAD']).stdout.trim();
+const isDirty = git(['status', '--porcelain']).stdout.trim().length > 0;
 
 let pullStatus: 'pulled' | 'fetch_only' | 'pull_failed' | 'not_on_dev' | 'dirty';
 if (currentBranch !== 'dev') {
@@ -45,20 +48,20 @@ if (currentBranch !== 'dev') {
 } else if (isDirty) {
   pullStatus = 'dirty';
 } else {
-  const result = run('git pull --ff-only origin dev');
+  const result = git(['pull', '--ff-only', 'origin', 'dev']);
   pullStatus = result.ok ? 'pulled' : 'pull_failed';
 }
 
-const currentDevSha = run('git rev-parse origin/dev').stdout.trim();
+const currentDevSha = git(['rev-parse', 'origin/dev']).stdout.trim();
 
 let newCommits = '';
 let diffStat = '';
 if (priorSha && priorSha !== currentDevSha) {
   // %h short SHA, %an author name, %s subject
-  const log = run(`git log ${priorSha}..origin/dev --no-decorate --format="%h %an: %s"`);
+  const log = git(['log', `${priorSha}..origin/dev`, '--no-decorate', '--format=%h %an: %s']);
   if (log.ok) {
     newCommits = log.stdout;
-    diffStat = run(`git diff --stat ${priorSha}..origin/dev`).stdout;
+    diffStat = git(['diff', '--stat', `${priorSha}..origin/dev`]).stdout;
   } else {
     newCommits = '(prior SHA not found locally — full diff unavailable)';
   }
