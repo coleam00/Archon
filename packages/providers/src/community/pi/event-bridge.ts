@@ -153,10 +153,14 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
 
 /**
  * Attempt to parse a Pi assistant transcript as the structured-output JSON
- * requested via `outputFormat`. Handles two common model failure modes:
+ * requested via `outputFormat`. Handles three common model failure modes:
  *  - trailing/leading whitespace (always stripped)
  *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
  *    emit despite the "no code fences" instruction in the prompt
+ *  - prose preamble followed by a single trailing JSON object — pattern
+ *    observed on Minimax M2.7 ("Now I have all the inputs. Let me evaluate
+ *    the three gates: ... {...}"). Reasoning models tend to "think out loud"
+ *    before emitting structured output despite explicit JSON-only prompts.
  *
  * Returns the parsed value on success, `undefined` on any failure. Callers
  * treat `undefined` as "structured output unavailable" and degrade via the
@@ -171,11 +175,40 @@ export function tryParseStructuredOutput(text: string): unknown {
     .replace(/^```(?:json)?\s*\n?/i, '')
     .replace(/\n?\s*```\s*$/, '')
     .trim();
+
+  // Tier 1: clean parse — fast path for compliant models (Claude, GPT, Gemini,
+  // most Anthropic-API responses).
   try {
     return JSON.parse(cleaned);
   } catch {
-    return undefined;
+    // Fall through to preamble-tolerant tiers.
   }
+
+  // Tier 2: scan backward to the LAST `{` and parse from there. Catches the
+  // common reasoning-model preamble pattern ("Let me evaluate... {flat JSON}").
+  // For nested JSON in the response, the last `{` lands inside a child object
+  // and parsing fails — Tier 3 picks it up.
+  const lastBrace = cleaned.lastIndexOf('{');
+  if (lastBrace > 0) {
+    try {
+      return JSON.parse(cleaned.slice(lastBrace));
+    } catch {
+      // Fall through.
+    }
+  }
+
+  // Tier 3: scan forward to the FIRST `{` and parse from there. Catches the
+  // preamble + nested JSON case missed by Tier 2 (last `{` was inside a child).
+  const firstBrace = cleaned.indexOf('{');
+  if (firstBrace > 0 && firstBrace !== lastBrace) {
+    try {
+      return JSON.parse(cleaned.slice(firstBrace));
+    } catch {
+      // Final fall through to undefined.
+    }
+  }
+
+  return undefined;
 }
 
 /**
