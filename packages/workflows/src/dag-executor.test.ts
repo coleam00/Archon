@@ -4736,6 +4736,16 @@ describe('executeDagWorkflow -- approval node', () => {
         (call[0] as Record<string, unknown>).step_name === 'review'
     );
     expect(nodeCompletedForApprovalGate.length).toBe(0);
+
+    // The synthetic on_reject node MUST produce a node_completed event with the
+    // distinct ID 'review:on_reject'. This ensures the synthetic node itself is
+    // recorded as completed so it is not re-run on a subsequent resume.
+    const nodeCompletedForSyntheticNode = eventCalls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_completed' &&
+        (call[0] as Record<string, unknown>).step_name === 'review:on_reject'
+    );
+    expect(nodeCompletedForSyntheticNode.length).toBe(1);
   });
 
   it('on_reject cancels when max_attempts exhausted', async () => {

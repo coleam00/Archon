@@ -2254,6 +2254,14 @@ async function executeApprovalNode(
     // does not collide with the approval gate's own ID in getCompletedDagNodeOutputs.
     // If we used node.id here, a resumed run would find the event and treat the
     // approval gate as already completed, bypassing the human gate entirely.
+    //
+    // Note: executeNodeInternal also emits node_started/node_completed WorkflowEmitterEvents
+    // with nodeId = `${node.id}:on_reject`. These flow through SSE into the web UI, where
+    // WorkflowExecution.tsx builds its nodeMap from all node_* events unconditionally.
+    // This means a transient `${node.id}:on_reject` phantom entry may appear in the UI's
+    // execution view during an on_reject cycle. This is cosmetic-only — the approval gate
+    // still re-presents correctly and the human gate contract is preserved. A follow-up can
+    // filter synthetic `:on_reject` IDs from the UI's nodeMap if needed.
     const syntheticNode: PromptNode = {
       id: `${node.id}:on_reject`,
       prompt: substituteNodeOutputRefs(substitutedPrompt, nodeOutputs),
