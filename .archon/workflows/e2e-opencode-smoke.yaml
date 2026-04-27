@@ -1,0 +1,19 @@
+# E2E smoke test — OpenCode community provider
+# Verifies: provider registration, SDK session start, simple prompt response.
+# Auth: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or other provider-specific env var.
+
+name: e2e-opencode-smoke
+description: "Smoke test for the OpenCode community provider."
+provider: opencode
+agent: general
+
+nodes:
+  - id: simple
+    prompt: "Reply with exactly OPENCODE_OK if you see the folder `.archon` exists"
+    agent: general
+    idle_timeout: 60000
+
+  - id: assert
+    bash: "echo \"$simple.output\" | grep -q \"OPENCODE_OK\" && echo \"PASS\" ||
+      (echo \"FAIL\"; exit 1)"
+    depends_on: [ simple ]

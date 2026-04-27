@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, OpenCode, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All three can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -226,6 +226,90 @@ If you want Codex to be the default AI assistant for new conversations without c
 ```ini
 DEFAULT_AI_ASSISTANT=codex
 ```
+
+## OpenCode (Community Provider)
+
+**SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
+
+OpenCode is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
+
+Archon always runs OpenCode as a **managed embedded runtime** — it spawns and owns the OpenCode server process, generates a random server password per session, and tears it down when the workflow completes. Connecting to an external OpenCode server (`baseUrl`) is not supported.
+
+### Install
+
+OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+
+### Authenticate
+
+OpenCode handles authentication internally — Archon does not pass API keys through config. Configure credentials using one of these methods:
+
+1. **`/connect` TUI command** — Run `opencode` in your terminal, then use the `/connect` command to interactively authenticate with your chosen provider
+2. **Config file** — Store credentials in `~/.config/opencode/opencode.json` with `{env:VAR}` or `{file:PATH}` substitution
+3. **Auth file** — Credentials are persisted in `~/.local/share/opencode/auth.json` after connecting
+
+OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, etc.) based on your model selection. Request-scoped env vars from Archon workflows are still merged into the OpenCode environment.
+
+### Configuration Options
+
+```yaml
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet  # Required: '<provider>/<model>' format
+    # or build-in agent
+    agent: general
+```
+
+### Model reference format
+
+OpenCode models use a `<provider>/<model>` format. List all available models via `opencode models`:
+
+```yaml
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet   # via Anthropic
+    # model: openai/gpt-4o                # via OpenAI
+    # model: google/gemini-2.5-pro        # via Google
+```
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
+| MCP servers | ✅ | `mcp: path/to/servers.json` passed through to OpenCode |
+| Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
+| Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
+| Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
+| Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
+| Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
+| Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode put it in cofnig file. |
+| Thinking control | ❌ | No explicit `thinking` field in agent frontmatter; OpenCode auto-enables reasoning when `agents[].model` is a reasoning-capable model (e.g. `anthropic/claude-sonnet-4-5`) |
+| Fallback model | ❌ | No native failover in the SDK |
+| Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |
+| Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
+
+Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+
+### Usage in workflows
+
+```yaml
+name: my-workflow
+provider: opencode
+model: anthropic/claude-3-5-sonnet
+
+nodes:
+  - id: analyze
+    prompt: "Analyze the codebase structure"
+    # per-node model override:
+    # model: openai/gpt-4o
+```
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [OpenCode on GitHub](https://github.com/opencode-ai/opencode) — upstream project.
 
 ## Pi (Community Provider)
 
