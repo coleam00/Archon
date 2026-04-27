@@ -135,8 +135,8 @@ nodes:
           # --- script node (TypeScript via bun, or Python via uv — no AI, stdout = $<nodeId>.output) ---
           # Use for deterministic data transforms the shell would mangle (JSON parsing, etc.)
           script: |
-            const raw = String.raw`$other-node.output`;
-            const data = JSON.parse(raw);
+            // JSON is valid JS expression syntax — assign directly (String.raw breaks on backticks)
+            const data = $other-node.output;
             console.log(JSON.stringify({ count: data.items.length }));
           runtime: bun                       # required: 'bun' (.ts/.js) or 'uv' (.py)
           # deps: [requests]                 # uv only
