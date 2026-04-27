@@ -361,6 +361,21 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       }
     }
 
+    // Parse mutates_checkout — boolean, omitted means true (run the path-lock guard).
+    // Same warn-and-ignore pattern as `interactive`. When false, the executor skips
+    // the path-lock guard and allows concurrent runs on the same checkout.
+    let mutatesCheckout: boolean | undefined;
+    if (raw.mutates_checkout !== undefined) {
+      if (typeof raw.mutates_checkout === 'boolean') {
+        mutatesCheckout = raw.mutates_checkout;
+      } else {
+        getLog().warn(
+          { filename, value: raw.mutates_checkout },
+          'invalid_mutates_checkout_value_ignored'
+        );
+      }
+    }
+
     // Parse optional tags — type-narrow, trim, and dedupe so authors can't
     // ship ["GitLab", "GitLab ", "gitlab"] as three distinct values.
     // An explicit empty array is preserved (suppresses keyword inference in the
@@ -390,6 +405,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         webSearchMode,
         additionalDirectories,
         interactive,
+        ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
         nodes: dagNodes,
         ...(worktreePolicy ? { worktree: worktreePolicy } : {}),
         ...(tags !== undefined ? { tags } : {}),
