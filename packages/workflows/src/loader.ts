@@ -61,28 +61,27 @@ function parseDagNode(raw: unknown, index: number, errors: string[]): DagNode | 
   const node = result.data;
 
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
-  let nodeType: string | undefined;
-  let aiFields: readonly string[] | undefined;
+  let nonAiNode: { type: string; fields: readonly string[] } | undefined;
   if (isCancelNode(node)) {
-    nodeType = 'cancel';
-    aiFields = BASH_NODE_AI_FIELDS;
+    nonAiNode = { type: 'cancel', fields: BASH_NODE_AI_FIELDS };
   } else if (isApprovalNode(node)) {
-    nodeType = 'approval';
-    aiFields = BASH_NODE_AI_FIELDS;
+    nonAiNode = { type: 'approval', fields: BASH_NODE_AI_FIELDS };
   } else if (isLoopNode(node)) {
-    nodeType = 'loop';
-    aiFields = LOOP_NODE_AI_FIELDS;
+    nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
   } else if (isScriptNode(node)) {
-    nodeType = 'script';
-    aiFields = SCRIPT_NODE_AI_FIELDS;
+    nonAiNode = { type: 'script', fields: SCRIPT_NODE_AI_FIELDS };
   } else if ('bash' in node && typeof node.bash === 'string') {
-    nodeType = 'bash';
-    aiFields = BASH_NODE_AI_FIELDS;
+    nonAiNode = { type: 'bash', fields: BASH_NODE_AI_FIELDS };
   }
-  if (nodeType !== undefined && aiFields !== undefined) {
-    const presentAiFields = aiFields.filter(f => (raw as Record<string, unknown>)[f] !== undefined);
+  if (nonAiNode) {
+    const presentAiFields = nonAiNode.fields.filter(
+      f => (raw as Record<string, unknown>)[f] !== undefined
+    );
     if (presentAiFields.length > 0) {
-      getLog().warn({ id: node.id, fields: presentAiFields }, `${nodeType}_node_ai_fields_ignored`);
+      getLog().warn(
+        { id: node.id, fields: presentAiFields },
+        `${nonAiNode.type}_node_ai_fields_ignored`
+      );
     }
   }
 
