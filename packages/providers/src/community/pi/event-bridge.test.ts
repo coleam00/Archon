@@ -439,6 +439,20 @@ describe('tryParseStructuredOutput', () => {
     });
   });
 
+  test('parses preamble + JSON containing `{` inside a string value', () => {
+    // Pins the cascade composition. Tier 2's lastIndexOf('{') lands inside
+    // the string value's brace; slicing to `{ inside","ok":true}` makes
+    // JSON.parse fail. Tier 3 forward-scans to the JSON object's outer
+    // opening `{` and parses cleanly. Preamble must not itself contain
+    // `{`, otherwise Tier 3 lands there instead of on the JSON object.
+    const tricky =
+      'Brief preamble with no extra braces.\n' + '{"key":"value with { inside","ok":true}';
+    expect(tryParseStructuredOutput(tricky)).toEqual({
+      key: 'value with { inside',
+      ok: true,
+    });
+  });
+
   test('returns undefined on malformed JSON', () => {
     expect(tryParseStructuredOutput('{not valid}')).toBeUndefined();
     expect(tryParseStructuredOutput('{"unclosed":')).toBeUndefined();

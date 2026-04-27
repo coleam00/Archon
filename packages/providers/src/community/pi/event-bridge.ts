@@ -176,35 +176,39 @@ export function tryParseStructuredOutput(text: string): unknown {
     .replace(/\n?\s*```\s*$/, '')
     .trim();
 
-  // Tier 1: clean parse — fast path for compliant models (Claude, GPT, Gemini,
-  // most Anthropic-API responses).
+  // Tier 1: clean parse — fast path for fully compliant outputs.
   try {
     return JSON.parse(cleaned);
   } catch {
-    // Fall through to preamble-tolerant tiers.
+    // fall through
   }
 
   // Tier 2: scan backward to the LAST `{` and parse from there. Catches the
-  // common reasoning-model preamble pattern ("Let me evaluate... {flat JSON}").
-  // For nested JSON in the response, the last `{` lands inside a child object
-  // and parsing fails — Tier 3 picks it up.
+  // common preamble-then-flat-JSON pattern. With a flat (non-nested) JSON
+  // response the last `{` is the only `{`, and slicing recovers it.
+  // `lastBrace > 0` excludes position 0, which Tier 1 already attempted.
   const lastBrace = cleaned.lastIndexOf('{');
   if (lastBrace > 0) {
     try {
       return JSON.parse(cleaned.slice(lastBrace));
     } catch {
-      // Fall through.
+      // fall through
     }
   }
 
-  // Tier 3: scan forward to the FIRST `{` and parse from there. Catches the
-  // preamble + nested JSON case missed by Tier 2 (last `{` was inside a child).
+  // Tier 3: scan forward to the FIRST `{`. With a preamble-then-nested-JSON
+  // pattern, Tier 2 lands inside a child object and JSON.parse rejects the
+  // trailing `}}`; the outer `{` is the recovery point. When the only `{`
+  // is at position 0, Tier 1 already tried it. When there's exactly one
+  // `{` past position 0, Tier 2 already tried that exact slice; this tier
+  // re-runs JSON.parse on the same input and fails identically — one
+  // redundant call we accept for a simpler control flow.
   const firstBrace = cleaned.indexOf('{');
-  if (firstBrace > 0 && firstBrace !== lastBrace) {
+  if (firstBrace > 0) {
     try {
       return JSON.parse(cleaned.slice(firstBrace));
     } catch {
-      // Final fall through to undefined.
+      // fall through
     }
   }
 
