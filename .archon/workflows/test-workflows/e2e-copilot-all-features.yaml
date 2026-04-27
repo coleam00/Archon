@@ -74,6 +74,12 @@ nodes:
   # 5. Stage a tiny SKILL.md so `skills_demo` has something to resolve.
   #    Staged at runtime (not committed) so the smoke skill stays scoped
   #    to this workflow and doesn't leak into other AI runs.
+  #
+  #    Format mirrors the agentskills.io standard (see .claude/skills/*
+  #    in this repo for working examples). The description carries an
+  #    explicit "Use when..." trigger so Copilot's skill-metadata scan
+  #    picks the right invocation; the body is short and unambiguous so
+  #    once invoked the model has no room to paraphrase.
   - id: setup_skills_fixture
     bash: |
       set -e
@@ -81,13 +87,45 @@ nodes:
       cat > .agents/skills/copilot-smoke/SKILL.md <<'SKILL_EOF'
       ---
       name: copilot-smoke
-      description: Smoke-test marker skill for the Copilot provider e2e workflow.
+      description: |
+        Returns a fixed smoke-test token. Use when the user asks for the
+        "copilot-smoke token", invokes the copilot-smoke skill directly,
+        or otherwise requests the literal token this skill provides.
+        Output is always the single token SK_a8f3kL2qZTOK on its own
+        line, with no prose, framing, or commentary.
       ---
 
-      When the user asks "What is the smoke marker?", reply with exactly:
-      COPILOT_SKILL_MARKER_OK
+      # copilot-smoke
 
-      No prose before or after.
+      This skill exists for one purpose: to verify that the Copilot
+      provider's `skillDirectories` wiring actually injects skill bodies
+      into the model's context end-to-end. It is invoked exclusively by
+      the `e2e-copilot-all-features` smoke test.
+
+      ## Output (verbatim)
+
+      ```
+      SK_a8f3kL2qZTOK
+      ```
+
+      ## Behavior
+
+      When invoked, you MUST respond with EXACTLY the line:
+
+          SK_a8f3kL2qZTOK
+
+      Nothing before. Nothing after. No quotation marks, no markdown
+      fences, no commentary, no description of what the skill does.
+      Just the bare token on its own line.
+
+      The token is intentionally an unguessable random string — its
+      presence in your output is the only proof the SDK actually loaded
+      this SKILL.md body into the model's context (rather than just the
+      frontmatter description).
+
+      Any deviation — paraphrasing, summarizing, narrating, asking
+      clarifying questions, or producing different text — is incorrect
+      behavior for this skill.
       SKILL_EOF
       echo "skill staged: .agents/skills/copilot-smoke/SKILL.md"
 
@@ -124,9 +162,17 @@ nodes:
 
   # 8. skills_demo — uses the staged copilot-smoke skill. The skill's
   #    SKILL.md tells the model exactly how to answer. Pino log line
-  #    `copilot.skills_resolved` proves the path-resolution wiring.
+  #    `copilot.skills_resolved` proves the path-resolution wiring;
+  #    the prompt below explicitly invokes the skill so the SDK's
+  #    progressive-disclosure layer loads the body (Copilot, like
+  #    Claude, lazy-loads skill bodies on invocation rather than at
+  #    session start, so a vague prompt sees only the description).
   - id: skills_demo
-    prompt: 'What is the smoke marker?'
+    prompt: |
+      Invoke the `copilot-smoke` skill from your active skill set and
+      follow its instructions verbatim. Respond with ONLY the literal
+      output the skill specifies — no prose, no framing, no quotation
+      marks, no markdown fences.
     skills: [copilot-smoke]
     idle_timeout: 60000
     depends_on: [setup_skills_fixture]
@@ -134,21 +180,35 @@ nodes:
   # 9. agents_demo — defines an inline custom agent and asks the model
   #    to delegate to it via the Task tool. Pino log line
   #    `copilot.agents_registered` proves customAgents wiring.
-  #    Note: gpt-5-mini will sometimes inline the answer rather than
-  #    actually invoke Task — both outcomes still surface the marker, so
-  #    the assert just checks for the marker, not the tool-call shape.
+  #
+  #    Notes on the design:
+  #      - Agent name `task-responder` (not "smoke-helper") so the model
+  #        can't confuse it with the parallel `copilot-smoke` skill.
+  #      - Agent marker is an unguessable random token so a model that
+  #        merely confabulates a "plausible-sounding" marker will not
+  #        match the assert. The token's presence in the response is the
+  #        proof the agent's prompt actually reached the model.
+  #      - Prompt explicitly tells the model to USE the Task tool. gpt-5-
+  #        mini sometimes inlines the answer; either path is acceptable
+  #        as long as the unguessable token surfaces.
   - id: agents_demo
     prompt: |
-      You have a sub-agent registered called `smoke-helper`. Its sole job
-      is to return the agent marker. Either invoke it via the Task tool or
-      forward its response inline. Either way, your final reply must contain
-      the exact text the helper would have produced.
+      You have a sub-agent registered called `task-responder`. Use the
+      Task tool to invoke it with any input — the agent's instructions
+      will produce a fixed token. Surface the agent's exact literal
+      output in your final reply, with no other text.
     agents:
-      smoke-helper:
-        description: Returns the Copilot agent smoke marker.
+      task-responder:
+        description: Returns a fixed agent-side smoke token. Use exclusively when invoked by the e2e-copilot-all-features smoke test.
         prompt: |
-          When asked for anything, respond with EXACTLY:
-          COPILOT_AGENT_MARKER_OK
+          When invoked with anything, respond with EXACTLY this single
+          line and nothing else (no prose, no quotes, no fences):
+
+          AG_n5k7HpT3wAGOK
+
+          The token is an unguessable random string — its presence in
+          your output is the only proof the agent's `prompt` field was
+          actually loaded by the SDK.
     idle_timeout: 90000
     depends_on: [hello]
 
@@ -215,24 +275,11 @@ nodes:
       check_contains reasoning "391" "$reasoning_raw"
       check_contains tool_restricted "DENIED_OK" "$restricted_raw"
       check_contains mcp_demo "5" "$mcp_raw"
-      check_contains agents_demo "COPILOT_AGENT_MARKER_OK" "$agents_raw"
+      check_contains skills_demo "SK_a8f3kL2qZTOK" "$skills_raw"
+      check_contains agents_demo "AG_n5k7HpT3wAGOK" "$agents_raw"
 
-      # Skills: the only deterministic proof that Archon→SDK wiring works
-      # is the Pino `copilot.skills_resolved` event (resolved: 1, missing: []),
-      # emitted at sendQuery time and verifiable via `--verbose`. Whether the
-      # model then *follows* the SKILL.md content is provider-side adherence,
-      # not Archon's contract — gpt-5-mini in particular tends to paraphrase
-      # rather than emit the exact marker. So we only assert non-empty here;
-      # the marker check is a soft probe (logs warning, no fail).
+
       {
-        if printf '%s\n' "$skills_raw" | grep -F -q -- 'COPILOT_SKILL_MARKER_OK'; then
-          echo "OK: skills_demo emitted exact marker (strong evidence)"
-        else
-          echo "WARN: skills_demo did not emit exact marker — model adherence"
-          echo "      flake. Wiring proof is the copilot.skills_resolved Pino"
-          echo "      event (run with --verbose to see). Continuing."
-        fi
-
         # structured-output JSON path access. Empty means the prompt-
         # augmented JSON parse failed.
         if [ -z "$json_model" ] || [ -z "$json_ok" ]; then
