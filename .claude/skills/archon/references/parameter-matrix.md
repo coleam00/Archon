@@ -90,6 +90,7 @@ Things that don't fail parsing but don't do what you'd expect:
 11. **Node-level `interactive: true` on an approval node or loop, without workflow-level `interactive: true`** → on the Web UI, gate messages never reach the user. The workflow dispatches to a background worker that can't deliver chat messages.
 12. **Missing env var in MCP config** → warning logged, node continues with empty string substitution.
 13. **`retry` on a loop node** → this one is a **hard parse error** (not silent). Use the loop's own `max_iterations` and `until_bash` for finish-line detection.
+14. **`String.raw\`$nodeId.output\`` in a `script:` body** → silently corrupts when the substituted value contains a backtick (e.g. markdown code spans in AI output or `output_format` payloads). The template literal terminates early, producing a cryptic `Expected ";"` parse error. Use direct assignment instead: `const data = $nodeId.output;` — JSON is valid JS expression syntax and needs no wrapper.
 
 The pattern across these: if you set an AI feature on a non-AI node, it's silently ignored. Watch loader logs for `_ignored` warnings when debugging.
 

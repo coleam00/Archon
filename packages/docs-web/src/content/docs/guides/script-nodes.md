@@ -200,6 +200,25 @@ shell quoting** — unlike `bash:` nodes, where `$nodeId.output` values are
 auto-quoted. Treat substituted values as untrusted input and parse them with
 language features, not by interpolating into shell syntax.
 
+:::caution[Avoid String.raw with `$nodeId.output`]
+The pattern `` String.raw`$nodeId.output` `` looks safe but fails silently when
+the substituted value contains a backtick — common in AI-generated markdown,
+`output_format` payloads, or any output with inline code spans. The backtick
+terminates the template literal early, producing a cryptic `Expected ";"` parse
+error at runtime.
+
+**Use direct assignment instead.** JSON is a strict subset of JavaScript
+expression syntax, so the substituted value is always a valid JS literal:
+
+```typescript
+// Safe — works for any valid JSON, including content with backticks
+const data = $fetch-issue.output;
+
+// Fragile — breaks if output contains a backtick
+const data = JSON.parse(String.raw`$fetch-issue.output`);  // DON'T
+```
+:::
+
 For **named scripts**, variables are not passed automatically. Read them from
 the environment (`process.env.USER_MESSAGE`, `os.environ['USER_MESSAGE']`)
 or accept them via stdin. For **inline scripts**, substituted variables are
