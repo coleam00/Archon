@@ -4674,6 +4674,70 @@ describe('executeDagWorkflow -- approval node', () => {
     expect(pauseCalls.length).toBe(1);
   });
 
+  it('on_reject does not write node_completed for the approval gate node ID', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Fixed based on feedback' };
+      yield { type: 'result', sessionId: 'reject-no-poison-session' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    const workflowRun = makeWorkflowRun('reject-no-poison-run', {
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review',
+          message: 'Approve this plan?',
+          onRejectPrompt: 'Fix based on: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_reason: 'Missing edge case handling',
+        rejection_count: 1,
+      },
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-approval',
+      testDir,
+      {
+        name: 'approval-no-poison',
+        nodes: [
+          {
+            id: 'review',
+            approval: {
+              message: 'Approve this plan?',
+              on_reject: { prompt: 'Fix based on: $REJECTION_REASON', max_attempts: 3 },
+            },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The on_reject synthetic node must NOT produce a node_completed event with
+    // step_name equal to the approval gate's own ID ('review'). If it did, a
+    // subsequent resume would find the event via getCompletedDagNodeOutputs and
+    // skip the approval gate entirely, bypassing the human gate.
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeCompletedForApprovalGate = eventCalls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_completed' &&
+        (call[0] as Record<string, unknown>).step_name === 'review'
+    );
+    expect(nodeCompletedForApprovalGate.length).toBe(0);
+  });
+
   it('on_reject cancels when max_attempts exhausted', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);

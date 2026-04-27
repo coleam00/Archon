@@ -2249,9 +2249,13 @@ async function executeApprovalNode(
       rejectionReason
     );
 
-    // Build a synthetic PromptNode to reuse executeNodeInternal
+    // Build a synthetic PromptNode to reuse executeNodeInternal.
+    // Use a distinct ID so the node_completed event written by executeNodeInternal
+    // does not collide with the approval gate's own ID in getCompletedDagNodeOutputs.
+    // If we used node.id here, a resumed run would find the event and treat the
+    // approval gate as already completed, bypassing the human gate entirely.
     const syntheticNode: PromptNode = {
-      id: node.id,
+      id: `${node.id}:on_reject`,
       prompt: substituteNodeOutputRefs(substitutedPrompt, nodeOutputs),
       ...(node.depends_on ? { depends_on: node.depends_on } : {}),
       ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
