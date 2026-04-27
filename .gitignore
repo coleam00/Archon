@@ -48,6 +48,11 @@ e2e-screenshots/
 # Cross-run workflow state (e.g. issue-triage memory)
 .archon/state/
 
+# Maintainer standup — per-maintainer state and briefs (direction.md is committed)
+.archon/maintainer-standup/profile.md
+.archon/maintainer-standup/state.json
+.archon/maintainer-standup/briefs/
+
 # Agent artifacts (generated, local only)
 .agents/
 .agents/rca-reports/
