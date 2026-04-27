@@ -129,6 +129,7 @@ Progress events (node start/complete/fail/skip, approval gates) are written to s
 | `--from <branch>`, `--from-branch <branch>` | Override base branch (start-point for worktree) |
 | `--no-worktree` | Opt out of isolation -- run directly in live checkout |
 | `--resume` | Resume from last failed run at the working path (skips completed nodes) |
+| `--set <KEY=VALUE>` | Supply a runtime input value for workflows that declare an `inputs:` block. May be specified multiple times (e.g. `--set MODEL=gpt-4o --set PROVIDER=openai`). |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
 

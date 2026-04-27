@@ -60,7 +60,12 @@ clearRegistry();
 registerBuiltinProviders();
 
 // --- Import after mocks ---
-import { executeWorkflow } from './executor';
+import {
+  executeWorkflow,
+  resolveInputs,
+  applyInputsToString,
+  assertSafeInputKeys,
+} from './executor';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun } from './schemas';
@@ -893,5 +898,133 @@ describe('executeWorkflow', () => {
       expect(msg).toContain('running 1m');
       expect(msg).toContain('Wait for it to finish');
     });
+  });
+});
+
+describe('resolveInputs', () => {
+  it('returns empty object when no inputs declared and no runtime inputs', () => {
+    expect(resolveInputs(undefined, undefined)).toEqual({});
+  });
+
+  it('applies declared defaults when no runtime inputs provided', () => {
+    const result = resolveInputs(
+      { MODEL: { default: 'claude-sonnet-4-6' }, PROVIDER: { default: 'anthropic' } },
+      undefined
+    );
+    expect(result).toEqual({ MODEL: 'claude-sonnet-4-6', PROVIDER: 'anthropic' });
+  });
+
+  it('runtime value overrides declared default', () => {
+    const result = resolveInputs({ MODEL: { default: 'claude-sonnet-4-6' } }, { MODEL: 'gpt-4o' });
+    expect(result).toEqual({ MODEL: 'gpt-4o' });
+  });
+
+  it('runtime value not in declared inputs is still included', () => {
+    const result = resolveInputs(undefined, { EXTRA: 'value' });
+    expect(result).toEqual({ EXTRA: 'value' });
+  });
+
+  it('throws for required input with no default and no runtime value', () => {
+    expect(() => resolveInputs({ MODEL: { required: true } }, undefined)).toThrow(
+      /Required workflow input "MODEL"/
+    );
+  });
+
+  it('does not throw for required input when runtime value is supplied', () => {
+    expect(() => resolveInputs({ MODEL: { required: true } }, { MODEL: 'gpt-4o' })).not.toThrow();
+  });
+
+  it('throws for invalid key pattern in runtime inputs (hyphen)', () => {
+    expect(() => resolveInputs(undefined, { 'FOO-BAR': 'x' })).toThrow(
+      /Invalid workflow input key/
+    );
+  });
+
+  it('throws for invalid key pattern in declared inputs (dot)', () => {
+    expect(() => resolveInputs({ 'FOO.BAR': {} }, undefined)).toThrow(/Invalid workflow input key/);
+  });
+
+  it('throws for reserved key WORKFLOW_ID', () => {
+    expect(() => resolveInputs(undefined, { WORKFLOW_ID: 'x' })).toThrow(
+      /Invalid workflow input key/
+    );
+  });
+
+  it('throws for reserved key USER_MESSAGE', () => {
+    expect(() => resolveInputs(undefined, { USER_MESSAGE: 'x' })).toThrow(
+      /Invalid workflow input key/
+    );
+  });
+});
+
+describe('applyInputsToString', () => {
+  it('returns undefined unchanged', () => {
+    expect(applyInputsToString(undefined, { MODEL: 'gpt-4o' })).toBeUndefined();
+  });
+
+  it('returns value unchanged when inputs map is empty', () => {
+    expect(applyInputsToString('use $MODEL', {})).toBe('use $MODEL');
+  });
+
+  it('substitutes $KEY in string', () => {
+    expect(applyInputsToString('use $MODEL', { MODEL: 'gpt-4o' })).toBe('use gpt-4o');
+  });
+
+  it('substitutes multiple keys', () => {
+    expect(applyInputsToString('$PROVIDER/$MODEL', { MODEL: 'gpt-4o', PROVIDER: 'openai' })).toBe(
+      'openai/gpt-4o'
+    );
+  });
+
+  it('word-boundary: $MODEL does not match inside $MODELX', () => {
+    expect(applyInputsToString('use $MODELX', { MODEL: 'gpt-4o' })).toBe('use $MODELX');
+  });
+
+  it('word-boundary: $MODEL matches at end of string', () => {
+    expect(applyInputsToString('use $MODEL', { MODEL: 'gpt-4o' })).toBe('use gpt-4o');
+  });
+
+  it('substitutes $KEY followed by non-identifier character', () => {
+    expect(applyInputsToString('$MODEL.', { MODEL: 'gpt-4o' })).toBe('gpt-4o.');
+  });
+});
+
+describe('assertSafeInputKeys', () => {
+  it('does not throw for valid identifier keys', () => {
+    expect(() => assertSafeInputKeys({ MY_INPUT: 'x', Input2: 'y', _PRIVATE: 'z' })).not.toThrow();
+  });
+
+  it('throws for empty key', () => {
+    expect(() => assertSafeInputKeys({ '': 'x' })).toThrow(/Invalid workflow input key/);
+  });
+
+  it('throws for key starting with a digit', () => {
+    expect(() => assertSafeInputKeys({ '1MODEL': 'x' })).toThrow(/Invalid workflow input key/);
+  });
+
+  it('throws for key containing hyphen', () => {
+    expect(() => assertSafeInputKeys({ 'MY-KEY': 'x' })).toThrow(/Invalid workflow input key/);
+  });
+
+  it('throws for key containing dot', () => {
+    expect(() => assertSafeInputKeys({ 'node.output': 'x' })).toThrow(/Invalid workflow input key/);
+  });
+
+  it('throws for reserved key ARGUMENTS', () => {
+    expect(() => assertSafeInputKeys({ ARGUMENTS: 'x' })).toThrow(/Invalid workflow input key/);
+  });
+
+  it('throws for reserved key ARTIFACTS_DIR', () => {
+    expect(() => assertSafeInputKeys({ ARTIFACTS_DIR: 'x' })).toThrow(/Invalid workflow input key/);
+  });
+
+  it('accepts undefined source without throwing', () => {
+    expect(() => assertSafeInputKeys(undefined, { VALID_KEY: 'x' })).not.toThrow();
+  });
+
+  it('collects invalids across multiple sources', () => {
+    expect(() => assertSafeInputKeys({ 'bad-key': 'x' }, { WORKFLOW_ID: 'y' })).toThrow(
+      /Invalid workflow input key/
+    );
   });
 });

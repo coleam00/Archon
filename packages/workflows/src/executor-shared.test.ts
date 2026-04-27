@@ -252,6 +252,40 @@ describe('substituteWorkflowVariables', () => {
     );
     expect(prompt).toBe('Fix: ');
   });
+
+  it('substitutes runtime inputs before built-in variables', () => {
+    // $MODEL is a runtime input; $USER_MESSAGE is a built-in variable.
+    // Both should be substituted in the same call.
+    const { prompt } = substituteWorkflowVariables(
+      'Run $MODEL on: $USER_MESSAGE',
+      'run-1',
+      'summarise this',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      { MODEL: 'gpt-4o' }
+    );
+    expect(prompt).toBe('Run gpt-4o on: summarise this');
+  });
+
+  it('leaves $INPUT_NAME untouched when not in inputs map', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Use $UNDECLARED',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      {}
+    );
+    expect(prompt).toBe('Use $UNDECLARED');
+  });
 });
 
 describe('buildPromptWithContext', () => {

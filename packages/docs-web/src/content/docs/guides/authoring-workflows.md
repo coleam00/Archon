@@ -789,6 +789,73 @@ prompt: |
 
 ---
 
+## Runtime Inputs
+
+Workflows can declare named inputs that callers supply at run time, eliminating the need for duplicate YAML files that differ only in a single field.
+
+**Declare inputs in your workflow:**
+```yaml
+name: my-workflow
+description: A parameterised workflow
+model: $MODEL
+provider: $PROVIDER
+inputs:
+  MODEL:
+    description: AI model to use
+    default: claude-sonnet-4-6
+    required: false
+  PROVIDER:
+    description: AI provider
+    default: anthropic
+    required: false
+  TICKET:
+    description: Jira ticket number to reference
+    required: true
+nodes:
+  - id: do-work
+    type: task
+    prompt: |
+      Ticket: $TICKET
+      Run a task using $MODEL on $PROVIDER.
+      Request: $USER_MESSAGE
+```
+
+**Supply values at runtime:**
+```bash
+# CLI
+archon workflow run my-workflow \
+  --set MODEL=gpt-4o \
+  --set PROVIDER=openai \
+  --set TICKET=PROJ-42 \
+  "Implement the feature"
+
+# API
+curl -X POST http://localhost:3090/api/workflows/my-workflow/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Implement the feature",
+    "conversationId": "conv-1",
+    "inputs": { "MODEL": "gpt-4o", "PROVIDER": "openai", "TICKET": "PROJ-42" }
+  }'
+```
+
+**Input field reference:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `description` | string | No | Human-readable description of the input |
+| `default` | string | No | Value used when the caller does not supply the input |
+| `required` | boolean | No | If `true`, execution fails immediately if no value is supplied and no default is set |
+
+**Key rules:**
+- Keys must be identifier-style: `/^[A-Za-z_][A-Za-z0-9_]*$/` — no hyphens, dots, or spaces
+- Keys must not shadow built-in variables (`WORKFLOW_ID`, `USER_MESSAGE`, `ARGUMENTS`, etc.)
+- Runtime values take precedence over YAML defaults
+- Input substitution runs before all other variable substitution, so input values can contain other variables (e.g. `default: "Fix $USER_MESSAGE"`)
+- Resolved inputs are persisted in run metadata and automatically restored when a run is resumed after interruption
+
+---
+
 ## Example Workflows
 
 ### Quick Fix

@@ -194,7 +194,7 @@ const RESERVED_WORKFLOW_INPUT_KEYS = new Set([
 // cause prefix-match ambiguity in $KEY substitution; dots shadow node outputs.
 const WORKFLOW_INPUT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-function assertSafeInputKeys(...sources: (Record<string, unknown> | undefined)[]): void {
+export function assertSafeInputKeys(...sources: (Record<string, unknown> | undefined)[]): void {
   const invalid = sources
     .flatMap(source => (source ? Object.keys(source) : []))
     .filter(key => !WORKFLOW_INPUT_KEY_PATTERN.test(key) || RESERVED_WORKFLOW_INPUT_KEYS.has(key));
@@ -211,7 +211,7 @@ function assertSafeInputKeys(...sources: (Record<string, unknown> | undefined)[]
  * Caller values take precedence; defaults fill gaps.
  * Validates that all `required: true` inputs are satisfied.
  */
-function resolveInputs(
+export function resolveInputs(
   inputsDef: Record<string, WorkflowInput> | undefined,
   runtimeInputs: Record<string, string> | undefined
 ): Record<string, string> {
@@ -249,7 +249,7 @@ function escapeForRegex(s: string): string {
  * Apply resolved inputs map to a string value (model, provider, etc.).
  * Substitutes $KEY patterns using the same word-boundary rule as substituteWorkflowVariables.
  */
-function applyInputsToString(
+export function applyInputsToString(
   value: string | undefined,
   inputs: Record<string, string>
 ): string | undefined {

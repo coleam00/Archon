@@ -10,6 +10,31 @@ sidebar:
 
 Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are three categories of variables: workflow variables (substituted by the workflow engine), positional arguments (substituted by the command handler), and node output references (DAG workflows only).
 
+## Runtime Inputs (`$INPUT_NAME`)
+
+Workflows can declare named inputs with optional defaults and required validation. Callers supply values via `--set KEY=VALUE` (CLI) or the `inputs` field (API). Input substitution runs **before** all other variable substitution, so input values can themselves contain built-in variables like `$USER_MESSAGE`.
+
+```yaml
+inputs:
+  MODEL:
+    description: The AI model to use
+    default: claude-sonnet-4-6
+    required: false
+  PROVIDER:
+    description: The AI provider
+    default: anthropic
+```
+
+Once declared, `$MODEL` and `$PROVIDER` can appear anywhere in the workflow — in `prompt:`, `model:`, `provider:`, `bash:`, `command:`, or `script:` fields.
+
+**Key rules:**
+- Keys must match `/^[A-Za-z_][A-Za-z0-9_]*$/` (identifier-style, no hyphens or dots)
+- Keys must not shadow built-in variables (`WORKFLOW_ID`, `USER_MESSAGE`, `ARGUMENTS`, etc.)
+- Runtime values take precedence over YAML defaults
+- Missing `required: true` inputs fail fast before execution starts
+
+See [Authoring Workflows](/guides/authoring-workflows/#runtime-inputs) for a full worked example.
+
 ## Workflow Variables
 
 These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`).
@@ -92,9 +117,10 @@ nodes:
 
 Variables are substituted in a defined order:
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`
-2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
-3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
+1. **Runtime inputs** -- declared `inputs:` values (`$MODEL`, `$PROVIDER`, any custom key)
+2. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`
+3. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
+4. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
 Positional arguments (`$1` through `$9`) are substituted separately by the command handler and are only available when commands are invoked directly, not through workflow nodes.
 
@@ -102,6 +128,7 @@ Positional arguments (`$1` through `$9`) are substituted separately by the comma
 
 | Variable | Workflow nodes | Direct command invocation | `when:` conditions |
 |----------|---------------|--------------------------|-------------------|
+| `$INPUT_NAME` (runtime inputs) | Yes | No | No |
 | `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (as `$ARGUMENTS`) | No |
 | `$1` ... `$9` | No | Yes | No |
 | `$WORKFLOW_ID` | Yes | No | No |

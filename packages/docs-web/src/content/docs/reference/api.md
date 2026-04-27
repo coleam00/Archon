@@ -271,6 +271,26 @@ curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
   -d '{"message": "Explain the auth module", "conversationId": "conv-123"}'
 ```
 
+**Request body fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `message` | `string` | Yes | The user message passed to the workflow |
+| `conversationId` | `string` | Yes | Identifier for the conversation session |
+| `inputs` | `Record<string, string>` | No | Runtime input values for workflows that declare an `inputs:` block. Keys must match declared input names; values override YAML defaults. |
+
+Example with runtime inputs:
+
+```bash
+curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Review the auth module",
+    "conversationId": "conv-123",
+    "inputs": { "MODEL": "gpt-4o", "PROVIDER": "openai" }
+  }'
+```
+
 #### Resume a Failed Run
 
 ```bash
