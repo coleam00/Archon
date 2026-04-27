@@ -258,14 +258,18 @@ assistants:
 
 ### Authenticate
 
-Copilot authentication is delegated to the Copilot CLI / SDK.
+Unlike Claude (OAuth subscription **or** independent `ANTHROPIC_API_KEY`) and Codex (OAuth **or** `OPENAI_API_KEY`), **GitHub Copilot has only one auth model: GitHub OAuth, billed through your Copilot subscription.** There is no PAT-style standalone Copilot credential — Copilot eligibility is bound to the OAuth token's user identity, not to an API key.
 
-Use one of:
+What this means: the options below are different *delivery paths for the same OAuth token*, not separate auth schemes.
 
-- `copilot login`
-- `COPILOT_GITHUB_TOKEN`
-- `GH_TOKEN`
-- `GITHUB_TOKEN`
+| Path | When to use | Notes |
+|---|---|---|
+| `copilot login` | Local dev | Cached interactive OAuth. The SDK reads it via `useLoggedInUser: true`. |
+| `COPILOT_GITHUB_TOKEN=<token>` | CI / scripted | Explicit env. Useful when you've already obtained an OAuth token. |
+| `GH_TOKEN=<token>` | CI / scripted | Alternate env var the SDK accepts. |
+| `GITHUB_TOKEN=<token>` | CI / scripted | **GitHub Actions' workflow-scoped `${{ github.token }}` does NOT carry Copilot scope.** Use only a token with Copilot scope — typically `gh auth token` after `gh auth login --scopes copilot`. |
+
+When any of the three env vars is set, Archon passes the value to `CopilotClient({ githubToken })` and disables `useLoggedInUser`. Otherwise it leaves `useLoggedInUser: true` so the SDK reuses the cached `copilot login` credentials.
 
 Request-scoped env vars still win, so codebase env overrides work the same way they do for the other providers.
 

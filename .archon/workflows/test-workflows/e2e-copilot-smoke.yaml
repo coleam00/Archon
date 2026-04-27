@@ -9,17 +9,16 @@ model: gpt-5-mini
 nodes:
   - id: simple
     prompt: 'Reply with exactly COPILOT_OK'
-    idle_timeout: 30000
+    idle_timeout: 60000 # gpt-5-mini occasionally pauses past the 30s default
 
   - id: assert
     bash: |
-      # The workflow engine substitutes $simple.output as a literal string
-      # before bash runs. Wrap in single quotes so command substitution
-      # (`$(...)`, backticks) inside a model response is treated as data,
-      # not executed. A literal `'` in the value would cause a syntax
-      # error, which fails the test loudly rather than running arbitrary
-      # shell — strict improvement over double-quoted interpolation.
-      output_raw='$simple.output'
+      # $simple.output is shell-quoted by the workflow engine before bash
+      # sees it (#591 + dag-executor.ts substituteNodeOutputRefs with
+      # escapedForBash=true), so assign bare — wrapping in additional
+      # quotes would double-wrap and break on outputs containing
+      # apostrophes or parens.
+      output_raw=$simple.output
       if [ -z "$output_raw" ]; then
         echo "FAIL: simple node returned empty output"
         exit 1
