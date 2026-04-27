@@ -8,7 +8,7 @@ name: e2e-opencode-inline-multi-agents
 description: "OpenCode E2E for multi-agent parallel execution — verifies all
   configured agents run and their outputs are aggregated."
 provider: opencode
-model: cpamc/minimax
+model: opencode/big-pickle
 
 nodes:
   # Node with multiple agents: BOTH agents should execute and contribute output
