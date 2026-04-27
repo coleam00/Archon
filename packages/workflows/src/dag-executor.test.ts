@@ -3140,6 +3140,266 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(mockSendQueryDag.mock.calls.length).toBe(3);
     });
 
+    it('substitutes $LOOP_PREV_OUTPUT with previous iteration output (empty on iter 1)', async () => {
+      // Iteration 1 emits a distinctive output, iteration 2 emits the completion signal.
+      // We then assert the prompt sent to the AI: iteration 1 strips $LOOP_PREV_OUTPUT
+      // to empty, iteration 2 receives iteration 1's cleaned output.
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          yield { type: 'assistant', content: 'Iter1 output: 2 type errors in users.ts' };
+          yield { type: 'result', sessionId: 'loop-session-1' };
+        } else {
+          yield { type: 'assistant', content: 'All fixed. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'loop-session-2' };
+        }
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-prev-output',
+          nodes: [
+            {
+              id: 'fix-loop',
+              loop: {
+                prompt: 'Previous output: <<$LOOP_PREV_OUTPUT>>. Fix and emit COMPLETE.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                fresh_context: true,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      const promptIter1 = mockSendQueryDag.mock.calls[0][0] as string;
+      const promptIter2 = mockSendQueryDag.mock.calls[1][0] as string;
+      // Iteration 1: $LOOP_PREV_OUTPUT substitutes to empty string.
+      expect(promptIter1).toContain('Previous output: <<>>.');
+      // Iteration 2: receives iteration 1's cleaned output.
+      expect(promptIter2).toContain(
+        'Previous output: <<Iter1 output: 2 type errors in users.ts>>.'
+      );
+    });
+
+    it('strips <promise> tags from $LOOP_PREV_OUTPUT (uses cleaned output)', async () => {
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          // Iteration 1 includes a non-completion XML tag in its output. The cleaned
+          // output (after stripCompletionTags) drops <promise>...</promise> blocks.
+          // We use a non-matching signal here so iteration 1 does NOT complete.
+          yield {
+            type: 'assistant',
+            content: 'Real work output. <promise>NOT_DONE_YET</promise>',
+          };
+          yield { type: 'result', sessionId: 'loop-session-1' };
+        } else {
+          yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'loop-session-2' };
+        }
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-prev-clean',
+          nodes: [
+            {
+              id: 'fix-loop',
+              loop: {
+                prompt: 'PREV=[$LOOP_PREV_OUTPUT]',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                fresh_context: true,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      const promptIter2 = mockSendQueryDag.mock.calls[1][0] as string;
+      // The previous-output payload must be the *cleaned* output — no <promise> tags.
+      expect(promptIter2).toContain('PREV=[Real work output.');
+      expect(promptIter2).not.toContain('<promise>');
+    });
+
+    it('$LOOP_PREV_OUTPUT is empty on the first iteration after interactive resume', async () => {
+      // Regression guard for the resume-from-approval path: when an interactive
+      // loop pauses at the approval gate, the prior `lastIterationOutput` lives
+      // in a separate process and is not persisted. On resume, the executor must
+      // substitute $LOOP_PREV_OUTPUT to '' on the first resumed iteration —
+      // never to whatever the paused run produced.
+      //
+      // Wirasm-suggested shape (PR #1367 review): two executeDagWorkflow calls.
+      // The first call pauses at the gate after iteration 1; the second call
+      // resumes with metadata.approval populated and runs iteration 2.
+
+      // ---- Call 1: fresh run, iteration 1 emits no completion → pauses at gate
+      mockSendQueryDag.mockImplementationOnce(function* () {
+        yield { type: 'assistant', content: 'Iter1 output: 2 type errors in users.ts' };
+        yield { type: 'result', sessionId: 'loop-session-1' };
+      });
+      const mockDeps1 = createMockDeps();
+      const platform1 = createMockPlatform();
+      const freshRun = makeWorkflowRun('resume-prev-fresh-run');
+
+      await executeDagWorkflow(
+        mockDeps1,
+        platform1,
+        'conv-dag',
+        testDir,
+        {
+          name: 'interactive-loop-resume-prev-output',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt:
+                  'User: $LOOP_USER_INPUT. PREV=<<$LOOP_PREV_OUTPUT>>. Continue or emit COMPLETE.',
+                until: 'COMPLETE',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review and provide feedback.',
+              },
+            },
+          ],
+        },
+        freshRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // First iteration of a fresh interactive loop: $LOOP_PREV_OUTPUT empty;
+      // $LOOP_USER_INPUT empty (no user has spoken yet).
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      const promptIter1 = mockSendQueryDag.mock.calls[0][0] as string;
+      expect(promptIter1).toContain('PREV=<<>>.');
+      expect(promptIter1).toContain('User: .');
+      // Fresh interactive loop must pause at the gate, not return early.
+      const pauseCalls1 = (
+        mockDeps1.store.pauseWorkflowRun as Mock<
+          (id: string, ctx: Record<string, unknown>) => Promise<void>
+        >
+      ).mock.calls;
+      expect(pauseCalls1.length).toBe(1);
+      expect(pauseCalls1[0][1]).toMatchObject({
+        type: 'interactive_loop',
+        nodeId: 'refine',
+        iteration: 1,
+      });
+
+      // ---- Call 2: resumed run — metadata carries iter 1 + user input.
+      // iter 2 emits the completion signal so the loop exits cleanly.
+      mockSendQueryDag.mockImplementationOnce(function* () {
+        yield { type: 'assistant', content: 'All clear. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-session-2' };
+      });
+      const mockDeps2 = createMockDeps();
+      const platform2 = createMockPlatform();
+      const resumedRun = makeWorkflowRun('resume-prev-resume-run', {
+        metadata: {
+          approval: {
+            type: 'interactive_loop',
+            nodeId: 'refine',
+            iteration: 1,
+            sessionId: 'loop-session-1',
+            message: 'Review and provide feedback.',
+          },
+          loop_user_input: 'looks good, ship it',
+        },
+      });
+
+      await executeDagWorkflow(
+        mockDeps2,
+        platform2,
+        'conv-dag',
+        testDir,
+        {
+          name: 'interactive-loop-resume-prev-output',
+          nodes: [
+            {
+              id: 'refine',
+              loop: {
+                prompt:
+                  'User: $LOOP_USER_INPUT. PREV=<<$LOOP_PREV_OUTPUT>>. Continue or emit COMPLETE.',
+                until: 'COMPLETE',
+                max_iterations: 10,
+                interactive: true,
+                gate_message: 'Review and provide feedback.',
+              },
+            },
+          ],
+        },
+        resumedRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Second executeDagWorkflow call started a fresh sendQuery generator (mock
+      // call index 1 across the two runs). The resumed iteration must NOT carry
+      // the prior process's iter-1 output through $LOOP_PREV_OUTPUT — it must
+      // substitute to ''.
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      const promptResumeIter = mockSendQueryDag.mock.calls[1][0] as string;
+      expect(promptResumeIter).toContain('PREV=<<>>.');
+      expect(promptResumeIter).not.toContain('Iter1 output: 2 type errors');
+      // The resume's user input flows through on the first resumed iteration.
+      expect(promptResumeIter).toContain('User: looks good, ship it.');
+      // Resume call exits via completion, not via a second pause at the gate.
+      const pauseCalls2 = (
+        mockDeps2.store.pauseWorkflowRun as Mock<
+          (id: string, ctx: Record<string, unknown>) => Promise<void>
+        >
+      ).mock.calls;
+      expect(pauseCalls2.length).toBe(0);
+    });
+
     it('fails when max_iterations exceeded', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Still working...' };

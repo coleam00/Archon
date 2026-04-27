@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`$LOOP_PREV_OUTPUT` workflow variable (loop nodes only)** — exposes the previous iteration's cleaned output (after `<promise>` tag stripping) to the current iteration's prompt. Empty on the first iteration and on the first iteration after resuming from an interactive approval gate. Enables `fresh_context: true` loops to reference what the prior pass said or did without carrying full session history. (#1367)
+
 ## [0.3.9] - 2026-04-22
 
 First release with working compiled binaries since v0.3.6. Both v0.3.7 and v0.3.8 were tagged but neither shipped release assets — v0.3.7 was blocked by two genuine binary-runtime bugs (Pi SDK's module-init crash + Bun `--bytecode` producing broken output), and v0.3.8 was blocked by an unrelated CI smoke-test regression where `release.yml`'s Claude resolver test required an `origin` remote that the fresh `git init` test repo didn't have. Both superseded tags remain for history; their GitHub Releases were deleted at the time of tagging so `releases/latest` fell back to v0.3.6 throughout, keeping `install.sh` and Homebrew safe. v0.3.9 is what users actually install.

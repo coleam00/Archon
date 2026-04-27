@@ -252,6 +252,50 @@ describe('substituteWorkflowVariables', () => {
     );
     expect(prompt).toBe('Fix: ');
   });
+
+  it('replaces $LOOP_PREV_OUTPUT with the previous iteration output', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Last pass said:\n$LOOP_PREV_OUTPUT',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      'QA failed: 2 type errors in users.ts'
+    );
+    expect(prompt).toBe('Last pass said:\nQA failed: 2 type errors in users.ts');
+  });
+
+  it('clears $LOOP_PREV_OUTPUT when not provided (first iteration)', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Previous output: $LOOP_PREV_OUTPUT (end)',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('Previous output:  (end)');
+  });
+
+  it('does not affect prompts that omit $LOOP_PREV_OUTPUT', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Plain prompt with no loop variable.',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      'unused previous output'
+    );
+    expect(prompt).toBe('Plain prompt with no loop variable.');
+  });
 });
 
 describe('buildPromptWithContext', () => {

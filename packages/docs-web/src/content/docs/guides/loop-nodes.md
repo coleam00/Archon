@@ -90,10 +90,13 @@ substitution:
 | `$WORKFLOW_ID` | Current workflow run ID |
 | `$nodeId.output` | Output from upstream nodes |
 | `$LOOP_USER_INPUT` | User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations. |
+| `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration. Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference what the previous pass produced or why it failed. |
 
 `$USER_MESSAGE` is particularly important for `fresh_context: true` loops —
 the agent has no memory of prior iterations, so the prompt must include all
-context needed to continue the work.
+context needed to continue the work. `$LOOP_PREV_OUTPUT` complements this by
+exposing the previous iteration's own output without forcing the engine to
+thread the session.
 
 ### `until`
 
@@ -176,6 +179,39 @@ The prompt tells the agent it has no memory and must bootstrap from files.
 **When to use:** Multi-story implementation, long-running tasks where context
 window exhaustion is a risk. The agent reads `.archon/ralph/*/prd.json` or
 similar tracking files to know what's done and what's next.
+
+### Retry-on-failure with `$LOOP_PREV_OUTPUT`
+
+When `fresh_context: true` is needed (to keep each iteration's context window
+small) but the agent still benefits from knowing what the previous pass said —
+typical of implement→validate or generate→review loops — inject the previous
+iteration's output via `$LOOP_PREV_OUTPUT`:
+
+```yaml
+- id: implement-and-qa
+  loop:
+    prompt: |
+      Implement the plan, then run `bun run validate`.
+      If checks fail, fix the failures.
+
+      Previous iteration output (empty on first pass):
+      $LOOP_PREV_OUTPUT
+
+      Use the above to focus your fixes. When all checks pass output:
+      <promise>QA_PASS</promise>
+    until: QA_PASS
+    fresh_context: true
+    max_iterations: 3
+```
+
+In a continuous run, the first iteration sees `$LOOP_PREV_OUTPUT` substituted
+to an empty string; iterations 2+ see the previous iteration's cleaned output
+(after `<promise>` tags are stripped).
+
+When a loop resumes from an interactive approval gate, the first executed
+iteration after the resume also receives an empty `$LOOP_PREV_OUTPUT` even if
+its numeric iteration is 2+ — the prior output lived in a different run and is
+not carried across the gate.
 
 ### Accumulating context
 

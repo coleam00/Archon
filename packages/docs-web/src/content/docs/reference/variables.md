@@ -27,6 +27,7 @@ These variables are substituted by the workflow executor in all node types (`com
 | `$ISSUE_CONTEXT` | Same as `$CONTEXT` | Alias |
 | `$LOOP_USER_INPUT` | User feedback from an interactive loop approval gate | Only populated on the first iteration of a resumed interactive loop. Empty string on all other iterations |
 | `$REJECTION_REASON` | Reviewer feedback from an approval node rejection | Only available in `on_reject` prompts. Empty string elsewhere |
+| `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration (loop nodes only) | Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference the prior pass without carrying the full session history |
 
 ### Context Variable Behavior
 
@@ -92,7 +93,7 @@ nodes:
 
 Variables are substituted in a defined order:
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`
+1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
 2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
@@ -111,4 +112,5 @@ Positional arguments (`$1` through `$9`) are substituted separately by the comma
 | `$CONTEXT` / aliases | Yes | No | No |
 | `$LOOP_USER_INPUT` | Yes (loop nodes) | No | No |
 | `$REJECTION_REASON` | Yes (`on_reject` only) | No | No |
+| `$LOOP_PREV_OUTPUT` | Yes (loop nodes) | No | No |
 | `$nodeId.output` | Yes (DAG nodes) | No | Yes |
