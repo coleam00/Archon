@@ -568,7 +568,7 @@ export async function executeWorkflow(
       );
       return { success: false, error: 'Database error checking for active workflow' };
     }
-  } // end mutates_checkout guard
+  }
 
   // Resolve external artifact and log directories
   const { artifactsDir, logDir } = await resolveProjectPaths(deps, cwd, workflowRun.id, codebaseId);
