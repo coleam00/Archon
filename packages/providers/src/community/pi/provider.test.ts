@@ -253,11 +253,89 @@ describe('PiProvider', () => {
     expect(mockLogger.info).toHaveBeenCalledWith(
       {
         piProvider: 'unknownprovider',
-        msg: expect.stringContaining("not in the Archon adapter's env-var table"),
+        envHint: expect.stringContaining("not in the Archon adapter's env-var table"),
+        loginHint: expect.stringContaining('/login'),
       },
       'pi.auth_missing'
     );
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+  });
+
+  test('ModelRegistry.create receives the AuthStorage instance', async () => {
+    // Headline-fix wiring: ModelRegistry.create must receive the same
+    // AuthStorage instance returned by AuthStorage.create(), so registry
+    // lookups can resolve user-configured custom models from
+    // ~/.pi/agent/models.json (LM Studio, ollama, llamacpp, etc.). Without
+    // this wiring the registry only sees the static built-in catalog.
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(mockAuthCreate).toHaveBeenCalledTimes(1);
+    expect(mockModelRegistryCreate).toHaveBeenCalledTimes(1);
+    const authInstance = mockAuthCreate.mock.results[0]?.value;
+    expect(mockModelRegistryCreate).toHaveBeenCalledWith(authInstance);
+  });
+
+  test('AuthStorage.create() throwing surfaces a contextualized error', async () => {
+    // Both AuthStorage.create() and ModelRegistry.create() read from disk
+    // and can throw on malformed JSON or filesystem errors. Wrap with
+    // try/catch and surface a Pi-framed error so operators see the cause
+    // rather than a raw SDK stack trace.
+    mockAuthCreate.mockImplementationOnce(() => {
+      throw new Error('Unexpected token } in JSON at position 42');
+    });
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(error).toBeDefined();
+    expect(error?.message).toContain('Pi auth storage init failed');
+    expect(error?.message).toContain('Unexpected token');
+    expect(error?.message).toContain('~/.pi/agent/auth.json');
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ piProvider: 'google' }),
+      'pi.auth_storage_init_failed'
+    );
+  });
+
+  test('Pi model not found includes models.json load error when registry reports one', async () => {
+    // ModelRegistry swallows models.json parse/validation errors into an
+    // internal loadError. When find() returns undefined we surface that
+    // error in both the structured log and the throw message so users
+    // debugging a custom-provider config see the actual reason.
+    process.env.GEMINI_API_KEY = 'sk-test';
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryCreate.mockImplementationOnce(() => ({
+      find: mockModelRegistryFind,
+      getError: () => 'Provider lm-studio: "baseUrl" is required when defining custom models.',
+    }));
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'lm-studio/some-model',
+      })
+    );
+
+    expect(error?.message).toContain('Pi model not found');
+    expect(error?.message).toContain('models.json failed to load');
+    expect(error?.message).toContain('"baseUrl" is required');
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        piProvider: 'lm-studio',
+        modelId: 'some-model',
+        loadError: expect.stringContaining('"baseUrl" is required'),
+      }),
+      'pi.model_not_found'
+    );
   });
 
   test('throws when env var missing AND auth.json has no entry', async () => {
