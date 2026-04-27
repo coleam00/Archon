@@ -4730,22 +4730,18 @@ describe('executeDagWorkflow -- approval node', () => {
     // subsequent resume would find the event via getCompletedDagNodeOutputs and
     // skip the approval gate entirely, bypassing the human gate.
     const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const nodeCompletedForApprovalGate = eventCalls.filter(
-      (call: unknown[]) =>
-        (call[0] as Record<string, unknown>).event_type === 'node_completed' &&
-        (call[0] as Record<string, unknown>).step_name === 'review'
+    const nodeCompletedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
     );
-    expect(nodeCompletedForApprovalGate.length).toBe(0);
+    const completedStepNames = nodeCompletedEvents.map(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).step_name
+    );
+    expect(completedStepNames).not.toContain('review');
 
     // The synthetic on_reject node MUST produce a node_completed event with the
     // distinct ID 'review:on_reject'. This ensures the synthetic node itself is
     // recorded as completed so it is not re-run on a subsequent resume.
-    const nodeCompletedForSyntheticNode = eventCalls.filter(
-      (call: unknown[]) =>
-        (call[0] as Record<string, unknown>).event_type === 'node_completed' &&
-        (call[0] as Record<string, unknown>).step_name === 'review:on_reject'
-    );
-    expect(nodeCompletedForSyntheticNode.length).toBe(1);
+    expect(completedStepNames.filter((n: unknown) => n === 'review:on_reject').length).toBe(1);
   });
 
   it('on_reject cancels when max_attempts exhausted', async () => {
