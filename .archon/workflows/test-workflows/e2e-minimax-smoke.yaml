@@ -85,22 +85,42 @@ nodes:
         exit 1
       fi
 
-      # Real proof of routing: Pi writes a session jsonl per call. Find
-      # ANY session jsonl modified in the last 3 minutes (the just-completed
-      # workflow's session) and confirm its model_change event names
-      # provider=minimax, modelId=MiniMax-M2.7. Avoids brittle path-encoding
-      # assumptions about how Pi names per-cwd session directories.
-      recent_session=$(find "$HOME/.pi/agent/sessions" -name '*.jsonl' -mmin -3 -print 2>/dev/null | head -1)
-      if [ -z "$recent_session" ]; then
-        echo "FAIL: no Pi session jsonl modified in the last 3 minutes"
+      # Real proof of routing: Pi writes a session jsonl per call. Find ALL
+      # session jsonls modified in the last 10 minutes (generous window —
+      # smoke's three Pi nodes + assert can collectively take several
+      # minutes on a slow network; capped at 10 to avoid matching old runs).
+      # Check each for the minimax routing signal — any one matching is
+      # sufficient evidence. This avoids:
+      #   - brittle path-encoding assumptions about Pi's per-cwd session dir,
+      #   - non-deterministic `head -1` over `find` output (find doesn't
+      #     guarantee any order),
+      #   - JSON field-order brittleness in a single combined regex
+      #     (`provider` may appear before or after `modelId` in the jsonl).
+      recent_sessions=$(find "$HOME/.pi/agent/sessions" -name '*.jsonl' -mmin -10 -print 2>/dev/null)
+      if [ -z "$recent_sessions" ]; then
+        echo "FAIL: no Pi session jsonl modified in the last 10 minutes"
         exit 1
       fi
-      if grep -q '"provider":"minimax".*"modelId":"MiniMax-M2.7"' "$recent_session"; then
+
+      matched=""
+      while IFS= read -r session; do
+        # Two separate greps for order-independence — JSON field ordering
+        # isn't part of Pi's contract, so a single regex with `.*` between
+        # the two fields would silently false-FAIL if Pi ever reorders.
+        if grep -q '"provider":"minimax"' "$session" \
+           && grep -q '"modelId":"MiniMax-M2.7"' "$session"; then
+          matched="$session"
+          break
+        fi
+      done <<< "$recent_sessions"
+
+      if [ -n "$matched" ]; then
         echo "PASS: Pi session log confirms provider=minimax, modelId=MiniMax-M2.7"
-        echo "      session: $recent_session"
+        echo "      session: $matched"
       else
-        echo "FAIL: Pi session log did not confirm minimax routing — possible misroute"
-        echo "      session: $recent_session"
+        echo "FAIL: no recent Pi session log confirmed minimax routing — possible misroute"
+        echo "      checked sessions:"
+        echo "$recent_sessions" | sed 's/^/        /'
         exit 1
       fi
       echo "PASS: smoke complete"
