@@ -153,10 +153,14 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
 
 /**
  * Attempt to parse a Pi assistant transcript as the structured-output JSON
- * requested via `outputFormat`. Handles two common model failure modes:
+ * requested via `outputFormat`. Handles three common model failure modes:
  *  - trailing/leading whitespace (always stripped)
  *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
  *    emit despite the "no code fences" instruction in the prompt
+ *  - prose preamble followed by a single trailing JSON object — pattern
+ *    observed on Minimax M2.7 ("Now I have all the inputs. Let me evaluate
+ *    the three gates: ... {...}"). Reasoning models tend to "think out loud"
+ *    before emitting structured output despite explicit JSON-only prompts.
  *
  * Returns the parsed value on success, `undefined` on any failure. Callers
  * treat `undefined` as "structured output unavailable" and degrade via the
@@ -171,11 +175,44 @@ export function tryParseStructuredOutput(text: string): unknown {
     .replace(/^```(?:json)?\s*\n?/i, '')
     .replace(/\n?\s*```\s*$/, '')
     .trim();
+
+  // Tier 1: clean parse — fast path for fully compliant outputs.
   try {
     return JSON.parse(cleaned);
   } catch {
-    return undefined;
+    // fall through
   }
+
+  // Tier 2: scan backward to the LAST `{` and parse from there. Catches the
+  // common preamble-then-flat-JSON pattern. With a flat (non-nested) JSON
+  // response the last `{` is the only `{`, and slicing recovers it.
+  // `lastBrace > 0` excludes position 0, which Tier 1 already attempted.
+  const lastBrace = cleaned.lastIndexOf('{');
+  if (lastBrace > 0) {
+    try {
+      return JSON.parse(cleaned.slice(lastBrace));
+    } catch {
+      // fall through
+    }
+  }
+
+  // Tier 3: scan forward to the FIRST `{`. With a preamble-then-nested-JSON
+  // pattern, Tier 2 lands inside a child object and JSON.parse rejects the
+  // trailing `}}`; the outer `{` is the recovery point. When the only `{`
+  // is at position 0, Tier 1 already tried it. When there's exactly one
+  // `{` past position 0, Tier 2 already tried that exact slice; this tier
+  // re-runs JSON.parse on the same input and fails identically — one
+  // redundant call we accept for a simpler control flow.
+  const firstBrace = cleaned.indexOf('{');
+  if (firstBrace > 0) {
+    try {
+      return JSON.parse(cleaned.slice(firstBrace));
+    } catch {
+      // fall through
+    }
+  }
+
+  return undefined;
 }
 
 /**
