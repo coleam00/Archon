@@ -1134,7 +1134,11 @@ describe('executeDagWorkflow -- bash nodes', () => {
     // The mock platform should have received a failure message about no successful nodes
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    // Workflow finishes with a failure message — exact wording depends on
+    // whether failed-node details were collected, so match the common prefix.
+    const failMsg = messages.find((m: string) =>
+      /DAG workflow .* (?:failed:|completed with no successful nodes)/.test(m)
+    );
     expect(failMsg).toBeDefined();
   });
 
@@ -4285,6 +4289,240 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       ).mock.calls;
       expect(pauseCalls.length).toBe(0);
     });
+
+    // ─── until_bash error classification (issue #1241) ──────────────────────
+
+    it('until_bash: aborts loop after 2 consecutive system errors (ENOENT)', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'still working' };
+        yield { type: 'result', sessionId: 'sys-err-loop' };
+      });
+
+      // Reject every until_bash call with an ENOENT — the classifier treats this
+      // as a system error (not a legitimate non-zero exit), so the loop should
+      // bail after the second consecutive failure rather than burning through
+      // max_iterations.
+      const enoentErr: NodeJS.ErrnoException = Object.assign(
+        new Error("spawn 'missing-cmd' ENOENT: no such file or directory"),
+        { code: 'ENOENT' }
+      );
+      const execSpy = spyOn(git, 'execFileAsync').mockRejectedValue(enoentErr);
+
+      try {
+        const mockDeps = createMockDeps();
+        const platform = createMockPlatform();
+        const workflowRun = makeWorkflowRun();
+
+        await executeDagWorkflow(
+          mockDeps,
+          platform,
+          'conv-dag',
+          testDir,
+          {
+            name: 'until-bash-system-error',
+            nodes: [
+              {
+                id: 'sys-err-loop',
+                loop: {
+                  prompt: 'Make progress.',
+                  until: '__never_matches__',
+                  until_bash: 'missing-cmd --check',
+                  max_iterations: 10,
+                },
+              },
+            ],
+          },
+          workflowRun,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+
+        // Two iterations and two until_bash invocations — not ten.
+        // This is the observable signal of the early-abort fast path.
+        expect(execSpy).toHaveBeenCalledTimes(2);
+        expect(mockSendQueryDag.mock.calls.length).toBe(2);
+
+        // The loop node failed → workflow run finalized with no successful nodes,
+        // not completed.
+        const failCalls = (
+          mockDeps.store.failWorkflowRun as Mock<(id: string, err: string) => Promise<void>>
+        ).mock.calls;
+        const completeCalls = (
+          mockDeps.store.completeWorkflowRun as Mock<
+            (id: string, metadata?: Record<string, unknown>) => Promise<void>
+          >
+        ).mock.calls;
+        expect(failCalls.length).toBe(1);
+        // Lock the failWorkflowRun message contract — must surface the system-
+        // error abort, not a generic max_iterations diagnostic.
+        expect(failCalls[0]?.[1]).toMatch(/consecutive system errors/i);
+        expect(failCalls[0]?.[1]).not.toMatch(/max_iterations/i);
+        expect(completeCalls.length).toBe(0);
+
+        // Terminal iteration event must reach createWorkflowEvent so subscribers
+        // see started → failed; the error string must explain the system-error
+        // abort so the user knows what to fix.
+        interface LoopFailedEventData {
+          error?: unknown;
+        }
+        interface LoopFailedEvent {
+          event_type: string;
+          data: LoopFailedEventData;
+        }
+        const eventCalls = (
+          mockDeps.store.createWorkflowEvent as Mock<(event: LoopFailedEvent) => Promise<unknown>>
+        ).mock.calls;
+        const loopFailEvent = eventCalls.find(
+          ([e]) =>
+            e.event_type === 'loop_iteration_failed' &&
+            typeof e.data.error === 'string' &&
+            (e.data.error as string).includes('consecutive system errors')
+        );
+        expect(loopFailEvent).toBeDefined();
+      } finally {
+        execSpy.mockRestore();
+      }
+    });
+
+    it('until_bash: completes in one iteration when exit 0 on first call', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'work done' };
+        yield { type: 'result', sessionId: 'happy-loop' };
+      });
+
+      const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+        stdout: '',
+        stderr: '',
+      });
+
+      try {
+        const mockDeps = createMockDeps();
+        const platform = createMockPlatform();
+        const workflowRun = makeWorkflowRun();
+
+        await executeDagWorkflow(
+          mockDeps,
+          platform,
+          'conv-dag',
+          testDir,
+          {
+            name: 'until-bash-happy',
+            nodes: [
+              {
+                id: 'happy-loop',
+                loop: {
+                  prompt: 'Make progress.',
+                  until: '__never_matches__',
+                  until_bash: 'exit 0',
+                  max_iterations: 5,
+                },
+              },
+            ],
+          },
+          workflowRun,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+
+        // exit 0 on iteration 1 → loop completes immediately.
+        expect(execSpy).toHaveBeenCalledTimes(1);
+        expect(mockSendQueryDag.mock.calls.length).toBe(1);
+
+        const completeCalls = (
+          mockDeps.store.completeWorkflowRun as Mock<
+            (id: string, metadata?: Record<string, unknown>) => Promise<void>
+          >
+        ).mock.calls;
+        expect(completeCalls.length).toBe(1);
+      } finally {
+        execSpy.mockRestore();
+      }
+    });
+
+    it('until_bash: a single non-system error does not trip the system-error counter', async () => {
+      // Three iterations: non-system error, non-system error, then exit 0.
+      // If the system-error counter were incremented on these condition-false
+      // exits, the loop would abort before iteration 3. The PR's contract is
+      // that the counter resets on any non-system error.
+      let bashCall = 0;
+      const conditionFalse: NodeJS.ErrnoException & { killed?: boolean; signal?: string } =
+        Object.assign(new Error('command failed: exit 1'), { code: 1 as unknown as string });
+
+      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async () => {
+        bashCall++;
+        if (bashCall < 3) {
+          throw conditionFalse;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      try {
+        mockSendQueryDag.mockImplementation(function* () {
+          yield { type: 'assistant', content: 'iteration progress' };
+          yield { type: 'result', sessionId: `non-sys-${String(bashCall)}` };
+        });
+
+        const mockDeps = createMockDeps();
+        const platform = createMockPlatform();
+        const workflowRun = makeWorkflowRun();
+
+        await executeDagWorkflow(
+          mockDeps,
+          platform,
+          'conv-dag',
+          testDir,
+          {
+            name: 'until-bash-condition-false',
+            nodes: [
+              {
+                id: 'cond-loop',
+                loop: {
+                  prompt: 'Keep iterating.',
+                  until: '__never_matches__',
+                  until_bash: 'test -f /tmp/sentinel',
+                  max_iterations: 5,
+                },
+              },
+            ],
+          },
+          workflowRun,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+
+        expect(execSpy).toHaveBeenCalledTimes(3);
+        expect(mockSendQueryDag.mock.calls.length).toBe(3);
+
+        const completeCalls = (
+          mockDeps.store.completeWorkflowRun as Mock<
+            (id: string, metadata?: Record<string, unknown>) => Promise<void>
+          >
+        ).mock.calls;
+        expect(completeCalls.length).toBe(1);
+
+        const failCalls = (
+          mockDeps.store.failWorkflowRun as Mock<(id: string, err: string) => Promise<void>>
+        ).mock.calls;
+        expect(failCalls.length).toBe(0);
+      } finally {
+        execSpy.mockRestore();
+      }
+    });
   });
 });
 
@@ -6003,7 +6241,11 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    // Workflow finishes with a failure message — exact wording depends on
+    // whether failed-node details were collected, so match the common prefix.
+    const failMsg = messages.find((m: string) =>
+      /DAG workflow .* (?:failed:|completed with no successful nodes)/.test(m)
+    );
     expect(failMsg).toBeDefined();
   });
 
@@ -6043,7 +6285,11 @@ describe('executeDagWorkflow -- script nodes', () => {
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     // Workflow fails because the only node failed (timeout)
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    // Workflow finishes with a failure message — exact wording depends on
+    // whether failed-node details were collected, so match the common prefix.
+    const failMsg = messages.find((m: string) =>
+      /DAG workflow .* (?:failed:|completed with no successful nodes)/.test(m)
+    );
     expect(failMsg).toBeDefined();
   }, 10000);
 

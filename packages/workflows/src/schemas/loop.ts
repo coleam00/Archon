@@ -15,6 +15,18 @@ export const loopNodeConfigSchema = z
     fresh_context: z.boolean().default(false),
     /** Optional bash script run after each iteration; exit 0 = complete. */
     until_bash: z.string().optional(),
+    /**
+     * Per-iteration cap (ms) on `until_bash` execution. Hung predicates fail
+     * with ETIMEDOUT, which the executor classifies as a system error. Default
+     * is 5 minutes — high enough for typical `bun run test` / `pytest` style
+     * predicates, low enough to bail on a stuck script before it eats real
+     * wall-clock cost across many iterations. Set to `0` to disable the cap.
+     */
+    until_bash_timeout_ms: z
+      .number()
+      .int()
+      .nonnegative("'loop.until_bash_timeout_ms' must be a non-negative integer")
+      .optional(),
     /** When true, pause between iterations for user input via /workflow approve. */
     interactive: z.boolean().optional(),
     /** Message shown to user when paused (required when interactive is true). */
