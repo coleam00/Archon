@@ -54,13 +54,28 @@ nodes:
     context: fresh
     model: opus[1m]
 
+  # Fail fast if implement-tasks produced zero commits — prevents the
+  # downstream 5-agent review pipeline from burning tokens against an
+  # empty branch (the silent-failure cascade).
+  - id: implementation-gate
+    bash: |
+      count=$(git rev-list --count "$BASE_BRANCH"..HEAD 2>/dev/null || echo 0)
+      if [ "$count" -eq 0 ]; then
+        echo "BLOCKED: implement-tasks produced zero commits on $(git branch --show-current) vs $BASE_BRANCH"
+        echo "Skipping validate, finalize-pr, review fan-out, and fix passes."
+        exit 1
+      fi
+      echo "OK: $count commit(s) ahead of $BASE_BRANCH"
+    depends_on: [implement-tasks]
+    timeout: 30000
+
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE
   # ═══════════════════════════════════════════════════════════════════
 
   - id: validate
     command: archon-validate
-    depends_on: [implement-tasks]
+    depends_on: [implementation-gate]
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════════
