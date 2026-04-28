@@ -29,13 +29,15 @@ const MAX_TITLE_LENGTH = 100;
  * @param assistantType - Provider identifier (e.g. 'claude', 'codex')
  * @param cwd - Working directory for the AI client
  * @param workflowName - Optional workflow name for additional context
+ * @param assistantConfig - Optional provider-specific defaults for the selected assistant
  */
 export async function generateAndSetTitle(
   conversationDbId: string,
   userMessage: string,
   assistantType: string,
   cwd: string,
-  workflowName?: string
+  workflowName?: string,
+  assistantConfig?: Record<string, unknown>
 ): Promise<void> {
   try {
     getLog().debug({ conversationDbId, assistantType }, 'title.generate_started');
@@ -52,6 +54,7 @@ export async function generateAndSetTitle(
 
     for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, {
       model: titleModel,
+      assistantConfig,
       nodeConfig: { allowed_tools: [] }, // No tool access — pure text generation
     })) {
       if (chunk.type === 'assistant') {

@@ -165,7 +165,7 @@ nodes:
     provider: claude             # Per-node provider override
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
-    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude only)
+    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Codex and Claude)
     # skills: [remotion-best-practices]  # Optional: per-node skills (Claude only) — see skills guide
 ```
 
@@ -205,7 +205,7 @@ nodes:
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Claude only. See [MCP Servers](/guides/mcp-servers/) |
+| `mcp` | string | — | Path to MCP server config JSON file. Codex and Claude. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Skills to preload. Claude only. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude only. Also settable at workflow level |
@@ -1173,7 +1173,7 @@ Before deploying a workflow:
 8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude only, SDK-enforced)
 9. **`retry:`** — auto-retries transient errors (default: 2 retries / 3 total attempts, 3 s backoff); customize per node
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
-11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude only)
+11. **`mcp:`** — attach per-node MCP servers via JSON config (Codex and Claude)
 12. **`skills:`** — preload skills into Claude nodes for domain expertise
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
 14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
