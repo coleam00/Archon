@@ -18,6 +18,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
 
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
+import * as binaryResolver from './binary-resolver';
 
 describe('shouldPassNoEnvFile', () => {
   test('returns false when cliPath is undefined (dev mode — SDK 0.2.x resolves a native binary)', () => {
@@ -33,6 +34,19 @@ describe('shouldPassNoEnvFile', () => {
     expect(
       shouldPassNoEnvFile('/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js')
     ).toBe(true);
+  });
+
+  test('returns true for .mjs and .cjs paths (also Bun-runnable JS entry points)', () => {
+    expect(shouldPassNoEnvFile('/path/to/cli.mjs')).toBe(true);
+    expect(shouldPassNoEnvFile('/path/to/cli.cjs')).toBe(true);
+  });
+
+  test('returns false for non-Bun-runnable JS-adjacent extensions', () => {
+    // `.ts`/`.tsx`/`.jsx` are deliberately excluded — the SDK never shipped
+    // those as entry points, so accepting them would only widen misconfiguration.
+    expect(shouldPassNoEnvFile('/path/to/cli.ts')).toBe(false);
+    expect(shouldPassNoEnvFile('/path/to/cli.tsx')).toBe(false);
+    expect(shouldPassNoEnvFile('/path/to/cli.jsx')).toBe(false);
   });
 
   test('returns false for a native binary path (curl installer, SDK execs directly)', () => {
@@ -526,6 +540,37 @@ describe('ClaudeProvider', () => {
       // Cleanup
       if (originalKey !== undefined) process.env.CUSTOM_USER_KEY = originalKey;
       else delete process.env.CUSTOM_USER_KEY;
+    });
+
+    test('passes executableArgs: [--no-env-file] when cliPath ends in a Bun-runnable JS extension', async () => {
+      // Belt-and-suspenders integration check: the dev-mode path is exercised
+      // in the test above (executableArgs: undefined). This test exercises the
+      // legacy explicit-cli.js path through the real buildBaseClaudeOptions
+      // codepath, so a regression in the conditional spread would be caught.
+      const spy = spyOn(binaryResolver, 'resolveClaudeBinaryPath').mockResolvedValue(
+        '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+      );
+
+      mockQuery.mockImplementation(async function* () {
+        // empty
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace')) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: {
+          executableArgs?: string[];
+          pathToClaudeCodeExecutable?: string;
+        };
+      };
+      expect(callArgs.options.executableArgs).toEqual(['--no-env-file']);
+      expect(callArgs.options.pathToClaudeCodeExecutable).toBe(
+        '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+      );
+
+      spy.mockRestore();
     });
 
     test('classifies exit code errors as crash and retries up to 3 times', async () => {

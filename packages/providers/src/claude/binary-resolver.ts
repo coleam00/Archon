@@ -53,9 +53,12 @@ const INSTALL_INSTRUCTIONS =
   'See: https://archon.diy/docs/reference/configuration#claude';
 
 /**
- * Resolve the path to the Claude Code SDK's cli.js.
+ * Resolve the path to the Claude Code executable (native binary in SDK 0.2.x;
+ * legacy `cli.js` is still accepted for operators pinned to npm-installed
+ * SDKs that ship a JS entry point).
  *
- * In dev mode: returns undefined (let SDK resolve via node_modules).
+ * In dev mode: returns undefined (let SDK resolve from its bundled per-platform
+ * native binary in `@anthropic-ai/claude-agent-sdk-<platform>`).
  * In binary mode: resolves from env/config, or throws with install instructions.
  */
 export async function resolveClaudeBinaryPath(
