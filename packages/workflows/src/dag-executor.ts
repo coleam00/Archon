@@ -193,6 +193,15 @@ const DEFAULT_NODE_MAX_RETRIES = 2;
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
 /**
+ * Default per-iteration cap on `until_bash` execution. Predicates that
+ * legitimately exceed this (e.g. `bun run test` on a large suite) can opt out
+ * via `loop.until_bash_timeout_ms` — set to a higher value or `0` to disable
+ * the cap entirely. The default is intentionally generous: the goal is to bail
+ * on a stuck script, not to police runtimes.
+ */
+const DEFAULT_UNTIL_BASH_TIMEOUT_MS = 5 * 60_000;
+
+/**
  * Get effective retry config for a DAG node.
  */
 function getEffectiveNodeRetryConfig(node: DagNode): {
@@ -1714,6 +1723,7 @@ async function executeLoopNode(
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
   };
 
+  let consecutiveBashSystemErrors = 0;
   for (let i = startIteration; i <= loop.max_iterations; i++) {
     const iterationStart = Date.now();
 
@@ -2012,16 +2022,91 @@ async function executeLoopNode(
           nodeOutputs,
           true // escapedForBash
         );
-        await execFileAsync('bash', ['-c', substitutedBash], { cwd });
+        // Cap until_bash execution so a stuck predicate bails with ETIMEDOUT
+        // (which the system-error classifier picks up below) instead of
+        // running unbounded each iteration. The cap is per-loop configurable
+        // via `loop.until_bash_timeout_ms`; 0 disables the cap entirely for
+        // workflows that genuinely need long-running predicates.
+        const untilBashTimeoutMs = loop.until_bash_timeout_ms ?? DEFAULT_UNTIL_BASH_TIMEOUT_MS;
+        await execFileAsync(
+          'bash',
+          ['-c', substitutedBash],
+          untilBashTimeoutMs > 0 ? { cwd, timeout: untilBashTimeoutMs } : { cwd }
+        );
         bashComplete = true; // exit 0 = complete
+        consecutiveBashSystemErrors = 0;
       } catch (e) {
-        const bashErr = e as NodeJS.ErrnoException;
-        // ENOENT or other system errors are unexpected — log them
-        if (bashErr.code === 'ENOENT') {
+        const bashErr = e as NodeJS.ErrnoException & { killed?: boolean; signal?: string };
+        // Classify: system error (misconfig) vs condition-false (legitimate non-zero exit)
+        const exitCode = typeof bashErr.code === 'number' ? bashErr.code : null;
+        const isSystemError =
+          bashErr.code === 'ENOENT' ||
+          bashErr.code === 'EACCES' ||
+          bashErr.code === 'ETIMEDOUT' ||
+          bashErr.killed === true ||
+          bashErr.signal != null ||
+          exitCode === 126 ||
+          exitCode === 127;
+
+        if (isSystemError) {
+          consecutiveBashSystemErrors++;
+          // Log only safe metadata — bashErr.message and the bound command can
+          // contain user data / substituted node outputs.
           getLog().warn(
-            { err: bashErr, nodeId: node.id, iteration: i },
-            'loop_node.until_bash_exec_error'
+            {
+              workflowRunId: workflowRun.id,
+              nodeId: node.id,
+              iteration: i,
+              code: bashErr.code,
+              signal: bashErr.signal,
+              killed: bashErr.killed,
+              consecutiveErrors: consecutiveBashSystemErrors,
+            },
+            'loop_node.until_bash_system_error'
           );
+          if (consecutiveBashSystemErrors >= 2) {
+            const errMsg =
+              `until_bash for node '${node.id}' hit ${consecutiveBashSystemErrors} consecutive system errors ` +
+              `(code=${bashErr.code ?? 'none'}, signal=${bashErr.signal ?? 'none'}). ` +
+              'This likely indicates a misconfiguration (e.g. missing command). Stopping loop to prevent cost runaway.';
+            // Emit a terminal iteration event before returning so subscribers
+            // (workflow bridge / UI) see started → failed transition. Without
+            // this, the iteration shows as still in flight after the loop
+            // bails on the system-error fast path.
+            const terminalDuration = Date.now() - iterationStart;
+            getWorkflowEventEmitter().emit({
+              type: 'loop_iteration_failed',
+              runId: workflowRun.id,
+              nodeId: node.id,
+              iteration: i,
+              error: errMsg,
+            });
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'loop_iteration_failed',
+                step_name: node.id,
+                data: {
+                  iteration: i,
+                  error: errMsg,
+                  duration: terminalDuration,
+                  nodeId: node.id,
+                  code: bashErr.code ?? null,
+                  signal: bashErr.signal ?? null,
+                },
+              })
+              .catch((evtErr: Error) => {
+                logEventStoreError(evtErr, i);
+              });
+            return {
+              state: 'failed' as const,
+              output: lastIterationOutput,
+              error: errMsg,
+              costUsd: loopTotalCostUsd,
+            };
+          }
+        } else {
+          consecutiveBashSystemErrors = 0;
         }
         bashComplete = false; // non-zero exit = not complete
       }
@@ -2950,9 +3035,19 @@ export async function executeDagWorkflow(
 
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
-    const failMsg =
-      `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
-      'Check node conditions, trigger rules, and upstream failures.';
+    // Surface the actual failed-node reasons when we have them — otherwise the
+    // run looks like a generic "no successful nodes" miss when really a single
+    // node bailed with a specific diagnostic (e.g. consecutive system errors
+    // from until_bash). Falls back to the generic note if there's no failure
+    // detail to report.
+    const failedNodeDetails = [...nodeOutputs.entries()]
+      .filter(([, o]) => o.state === 'failed')
+      .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
+      .join('; ');
+    const failMsg = failedNodeDetails
+      ? `DAG workflow '${workflow.name}' failed: ${failedNodeDetails}`
+      : `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
+        'Check node conditions, trigger rules, and upstream failures.';
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe.
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
