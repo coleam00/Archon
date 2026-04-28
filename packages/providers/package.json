@@ -26,7 +26,7 @@
     "@archon/paths": "workspace:*",
     "@mariozechner/pi-ai": "^0.67.5",
     "@mariozechner/pi-coding-agent": "^0.67.5",
-    "@openai/codex-sdk": "^0.116.0",
+    "@openai/codex-sdk": "^0.125.0",
     "@sinclair/typebox": "^0.34.41"
   },
   "devDependencies": {

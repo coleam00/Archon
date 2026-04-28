@@ -96,7 +96,8 @@ function isModelAccessError(errorMessage: string): boolean {
   const hasModel = m.includes('model');
   const hasAvailabilitySignal =
     m.includes('not available') || m.includes('not found') || m.includes('access denied');
-  return hasModel && hasAvailabilitySignal;
+  const hasVersionSignal = VERSION_TOO_OLD_PATTERNS.some(p => m.includes(p));
+  return hasModel && (hasAvailabilitySignal || hasVersionSignal);
 }
 
 function buildModelAccessMessage(model?: string): string {
@@ -115,6 +116,11 @@ function buildModelAccessMessage(model?: string): string {
   return `❌ Model "${selectedModel}" is not available for your account.\n\n${fixLine}\n\n${workflowLine}`;
 }
 
+function buildVersionTooOldMessage(model?: string): string {
+  const selectedModel = model?.trim() || 'the configured model';
+  return `❌ Model "${selectedModel}" requires a newer version of Codex.\n\nYour SDK version is outdated. To fix:\n1. Upgrade the @openai/codex-sdk package:\n   bun add @openai/codex-sdk@latest\n2. Or update your Codex CLI to the latest version.\n\nIf using a binary build, also update the codexBinaryPath in your config.`;
+}
+
 const MAX_SUBPROCESS_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
@@ -126,12 +132,17 @@ const AUTH_PATTERNS = [
   '401',
   '403',
 ];
+const VERSION_TOO_OLD_PATTERNS = ['requires a newer version', 'upgrade to the latest'];
 const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'codex exec'];
 
 function classifyCodexError(
   errorMessage: string
-): 'rate_limit' | 'auth' | 'crash' | 'model_access' | 'unknown' {
-  if (isModelAccessError(errorMessage)) return 'model_access';
+): 'rate_limit' | 'auth' | 'crash' | 'model_access' | 'version_too_old' | 'unknown' {
+  if (isModelAccessError(errorMessage)) {
+    const m = errorMessage.toLowerCase();
+    if (VERSION_TOO_OLD_PATTERNS.some(p => m.includes(p))) return 'version_too_old';
+    return 'model_access';
+  }
   const m = errorMessage.toLowerCase();
   if (RATE_LIMIT_PATTERNS.some(p => m.includes(p))) return 'rate_limit';
   if (AUTH_PATTERNS.some(p => m.includes(p))) return 'auth';
@@ -435,9 +446,13 @@ function classifyAndEnrichCodexError(
 ): { enrichedError: Error; errorClass: string; shouldRetry: boolean } {
   const errorClass = classifyCodexError(error.message);
 
-  if (errorClass === 'model_access') {
+  if (errorClass === 'model_access' || errorClass === 'version_too_old') {
+    const message =
+      errorClass === 'version_too_old'
+        ? buildVersionTooOldMessage(model)
+        : buildModelAccessMessage(model);
     return {
-      enrichedError: new Error(buildModelAccessMessage(model)),
+      enrichedError: new Error(message),
       errorClass,
       shouldRetry: false,
     };
