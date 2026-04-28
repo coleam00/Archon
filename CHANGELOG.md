@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PRs created by `archon-architect`, `archon-refactor-safely`, and `archon-issue-review-full` workflows now target the configured base branch.** The inline `create-pr` prompts in `archon-architect.yaml` and `archon-refactor-safely.yaml`, and the `gh pr create` invocation inside the `archon-implement-issue` command (referenced by `archon-issue-review-full`), never instructed `--base $BASE_BRANCH`. GitHub's `gh pr create` defaults to the repo's default branch in that case, so PRs ignored `worktree.baseBranch` from the project's `.archon/config.yaml`. The three prompts/commands now pass `--base $BASE_BRANCH` explicitly. As defense-in-depth against future prompt drift, all seven bundled PR-creating workflows now run a `verify-pr-base` bash node downstream of PR creation that auto-corrects via `gh pr edit --base "$EXPECTED"` if the AI ever drops the flag again. Engine-layer substitution (`executor-shared.ts:294-310`) was already correct and is unchanged.
+
 ## [0.3.9] - 2026-04-22
 
 First release with working compiled binaries since v0.3.6. Both v0.3.7 and v0.3.8 were tagged but neither shipped release assets — v0.3.7 was blocked by two genuine binary-runtime bugs (Pi SDK's module-init crash + Bun `--bytecode` producing broken output), and v0.3.8 was blocked by an unrelated CI smoke-test regression where `release.yml`'s Claude resolver test required an `origin` remote that the fresh `git init` test repo didn't have. Both superseded tags remain for history; their GitHub Releases were deleted at the time of tagging so `releases/latest` fell back to v0.3.6 throughout, keeping `install.sh` and Homebrew safe. v0.3.9 is what users actually install.

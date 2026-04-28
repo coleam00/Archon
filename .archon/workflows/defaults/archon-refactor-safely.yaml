@@ -446,7 +446,9 @@ nodes:
       1. Stage all changes and create a final commit if there are uncommitted changes
       2. Push the branch: `git push -u origin HEAD`
       3. Check if a PR already exists: `gh pr list --head $(git branch --show-current)`
-      4. Create the PR with the format below
+      4. Create the PR targeting `$BASE_BRANCH` as the base branch:
+         `gh pr create --base $BASE_BRANCH --title "..." --body "..."`, then format
+         title/body per the template below
       5. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
 
       ## PR Format
@@ -509,3 +511,17 @@ nodes:
               additionalContext: >
                 Verify this command succeeded. If git push or gh pr create failed,
                 read the error message carefully before retrying.
+
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [create-pr]

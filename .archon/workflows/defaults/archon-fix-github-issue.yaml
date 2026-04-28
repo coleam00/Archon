@@ -187,9 +187,23 @@ nodes:
   # PHASE 7: REVIEW
   # ═══════════════════════════════════════════════════════════════
 
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [create-pr]
+
   - id: review-scope
     command: archon-pr-review-scope
-    depends_on: [create-pr]
+    depends_on: [verify-pr-base]
     context: fresh
 
   - id: review-classify
