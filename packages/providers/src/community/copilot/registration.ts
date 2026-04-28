@@ -1,7 +1,6 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
 import { COPILOT_CAPABILITIES } from './capabilities';
-import { isCopilotModelCompatible } from './model-ref';
 import { CopilotProvider } from './provider';
 
 /**
@@ -21,7 +20,6 @@ export function registerCopilotProvider(): void {
     displayName: 'Copilot (GitHub)',
     factory: () => new CopilotProvider(),
     capabilities: COPILOT_CAPABILITIES,
-    isModelCompatible: isCopilotModelCompatible,
     builtIn: false,
   });
 }
