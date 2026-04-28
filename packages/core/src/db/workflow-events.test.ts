@@ -1,29 +1,14 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { WorkflowEventRow } from './workflow-events';
+import * as archonPaths from '@archon/paths';
+import * as connectionModule from './connection';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = createMockLogger();
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  getArchonHome: mock(() => '/home/test/.archon'),
-  getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),
-  getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
-  getArchonWorktreesPath: mock(() => '/home/test/.archon/worktrees'),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
-}));
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
-
-// Mock the connection module before importing the module under test
-mock.module('./connection', () => ({
-  pool: {
-    query: mockQuery,
-  },
-  getDialect: () => mockPostgresDialect,
-}));
 
 import {
   createWorkflowEvent,
@@ -33,8 +18,26 @@ import {
 } from './workflow-events';
 
 describe('workflow-events', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyCreateLogger: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyPoolQuery: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let spyGetDialect: any;
+
   beforeEach(() => {
+    spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+    spyPoolQuery = spyOn(connectionModule.pool, 'query').mockImplementation(mockQuery as never);
+    spyGetDialect = spyOn(connectionModule, 'getDialect').mockReturnValue(
+      mockPostgresDialect as never
+    );
     mockQuery.mockClear();
+  });
+
+  afterEach(() => {
+    spyCreateLogger?.mockRestore();
+    spyPoolQuery?.mockRestore();
+    spyGetDialect?.mockRestore();
   });
 
   const mockEvent: WorkflowEventRow = {

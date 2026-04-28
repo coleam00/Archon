@@ -2,19 +2,90 @@
  * Unit tests for clone.ts (cloneRepository, registerRepository)
  *
  * Strategy:
- * - mock.module() for DB modules and @archon/paths (safe — no standalone test files for these)
- * - spyOn() for @archon/git (execFileAsync) and fs/promises (access, rm)
- *   to avoid process-global mock.module pollution that would break git.test.ts
- * - Lazy logger pattern means @archon/paths mock must be set up before the module import
+ * - spyOn() for DB modules, @archon/paths, @archon/git, and fs/promises
+ *   to avoid process-global mock.module pollution
+ * - mock.module() kept only for ../utils/commands (no standalone tests, safe)
  */
-import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, afterAll, spyOn } from 'bun:test';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
+import * as dbCodebases from '../db/codebases';
+import * as archonPaths from '@archon/paths';
 import { createMockLogger } from '../test/mocks/logger';
 
-// ── DB mocks ────────────────────────────────────────────────────────────────
-const mockCreateCodebase = mock(() =>
-  Promise.resolve({
+// ── utils/commands mock (no standalone test file — safe to use mock.module) ─
+const mockFindMarkdownFilesRecursive = mock(() => Promise.resolve([]));
+mock.module('../utils/commands', () => ({
+  findMarkdownFilesRecursive: mockFindMarkdownFilesRecursive,
+}));
+
+// ── Import module under test AFTER mock.module registrations ────────────────
+import { cloneRepository, registerRepository } from './clone';
+
+// ── Spy variables ─────────────────────────────────────────────────────────
+const mockLogger = createMockLogger();
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateLogger: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyExpandTilde: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetCommandFolderSearchPaths: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyEnsureProjectStructure: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetProjectSourcePath: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateProjectSourceSymlink: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyParseOwnerRepo: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetCodebaseCommands: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateCodebaseCommands: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFindCodebaseByRepoUrl: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFindCodebaseByDefaultCwd: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFindCodebaseByName: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFsAccess: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFsRm: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyExecFileAsync: any;
+
+function setupSpies(): void {
+  spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+  spyExpandTilde = spyOn(archonPaths, 'expandTilde').mockImplementation(
+    (p: string) => p.replace(/^~/, '/home/test') as never
+  );
+  spyGetCommandFolderSearchPaths = spyOn(
+    archonPaths,
+    'getCommandFolderSearchPaths'
+  ).mockReturnValue(['.archon/commands'] as never);
+  spyEnsureProjectStructure = spyOn(archonPaths, 'ensureProjectStructure').mockResolvedValue(
+    undefined
+  );
+  spyGetProjectSourcePath = spyOn(archonPaths, 'getProjectSourcePath').mockImplementation(
+    (owner: string, repo: string) =>
+      `/home/test/.archon/workspaces/${owner}/${repo}/source` as never
+  );
+  spyCreateProjectSourceSymlink = spyOn(
+    archonPaths,
+    'createProjectSourceSymlink'
+  ).mockResolvedValue(undefined);
+  spyParseOwnerRepo = spyOn(archonPaths, 'parseOwnerRepo').mockImplementation((name: string) => {
+    const parts = name.split('/');
+    return (parts.length === 2 ? { owner: parts[0], repo: parts[1] } : null) as never;
+  });
+
+  spyCreateCodebase = spyOn(dbCodebases, 'createCodebase').mockResolvedValue({
     id: 'codebase-uuid-1',
     name: 'owner/repo',
     repository_url: 'https://github.com/owner/repo',
@@ -23,58 +94,18 @@ const mockCreateCodebase = mock(() =>
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
-  })
-);
-const mockGetCodebaseCommands = mock(() => Promise.resolve({}));
-const mockUpdateCodebaseCommands = mock(() => Promise.resolve());
-const mockFindCodebaseByRepoUrl = mock(() => Promise.resolve(null));
-const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
-const mockFindCodebaseByName = mock(() => Promise.resolve(null));
-const mockUpdateCodebase = mock(() => Promise.resolve());
+  } as never);
+  spyGetCodebaseCommands = spyOn(dbCodebases, 'getCodebaseCommands').mockResolvedValue({});
+  spyUpdateCodebaseCommands = spyOn(dbCodebases, 'updateCodebaseCommands').mockResolvedValue(
+    undefined
+  );
+  spyFindCodebaseByRepoUrl = spyOn(dbCodebases, 'findCodebaseByRepoUrl').mockResolvedValue(null);
+  spyFindCodebaseByDefaultCwd = spyOn(dbCodebases, 'findCodebaseByDefaultCwd').mockResolvedValue(
+    null
+  );
+  spyFindCodebaseByName = spyOn(dbCodebases, 'findCodebaseByName').mockResolvedValue(null);
+  spyUpdateCodebase = spyOn(dbCodebases, 'updateCodebase').mockResolvedValue(undefined);
 
-mock.module('../db/codebases', () => ({
-  createCodebase: mockCreateCodebase,
-  getCodebaseCommands: mockGetCodebaseCommands,
-  updateCodebaseCommands: mockUpdateCodebaseCommands,
-  findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
-  findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
-  findCodebaseByName: mockFindCodebaseByName,
-  updateCodebase: mockUpdateCodebase,
-}));
-
-// ── @archon/paths mock ──────────────────────────────────────────────────────
-const mockLogger = createMockLogger();
-
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-  expandTilde: mock((p: string) => p.replace(/^~/, '/home/test')),
-  getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  ensureProjectStructure: mock(() => Promise.resolve()),
-  getProjectSourcePath: mock(
-    (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
-  ),
-  createProjectSourceSymlink: mock(() => Promise.resolve()),
-  parseOwnerRepo: mock((name: string) => {
-    const parts = name.split('/');
-    return parts.length === 2 ? { owner: parts[0], repo: parts[1] } : null;
-  }),
-}));
-
-// ── utils/commands mock ─────────────────────────────────────────────────────
-const mockFindMarkdownFilesRecursive = mock(() => Promise.resolve([]));
-mock.module('../utils/commands', () => ({
-  findMarkdownFilesRecursive: mockFindMarkdownFilesRecursive,
-}));
-
-// ── Import module under test AFTER mocks are registered ────────────────────
-import { cloneRepository, registerRepository } from './clone';
-
-// ── Spies for fs/promises and @archon/git ──────────────────────────────────
-let spyFsAccess: ReturnType<typeof spyOn>;
-let spyFsRm: ReturnType<typeof spyOn>;
-let spyExecFileAsync: ReturnType<typeof spyOn>;
-
-function setupSpies(): void {
   // Default: .git does NOT exist (no pre-existing clone)
   spyFsAccess = spyOn(fsPromises, 'access').mockRejectedValue(
     Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
@@ -83,10 +114,24 @@ function setupSpies(): void {
   spyExecFileAsync = spyOn(gitUtils, 'execFileAsync').mockResolvedValue({
     stdout: '',
     stderr: '',
-  });
+  } as never);
 }
 
 function restoreSpies(): void {
+  spyCreateLogger?.mockRestore();
+  spyExpandTilde?.mockRestore();
+  spyGetCommandFolderSearchPaths?.mockRestore();
+  spyEnsureProjectStructure?.mockRestore();
+  spyGetProjectSourcePath?.mockRestore();
+  spyCreateProjectSourceSymlink?.mockRestore();
+  spyParseOwnerRepo?.mockRestore();
+  spyCreateCodebase?.mockRestore();
+  spyGetCodebaseCommands?.mockRestore();
+  spyUpdateCodebaseCommands?.mockRestore();
+  spyFindCodebaseByRepoUrl?.mockRestore();
+  spyFindCodebaseByDefaultCwd?.mockRestore();
+  spyFindCodebaseByName?.mockRestore();
+  spyUpdateCodebase?.mockRestore();
   spyFsAccess?.mockRestore();
   spyFsRm?.mockRestore();
   spyExecFileAsync?.mockRestore();
@@ -95,13 +140,13 @@ function restoreSpies(): void {
 function clearMocks(): void {
   // mockReset() clears both call history AND any queued mockResolvedValueOnce values,
   // preventing cross-test bleed when tests queue different return values.
-  mockCreateCodebase.mockReset();
-  mockGetCodebaseCommands.mockReset();
-  mockUpdateCodebaseCommands.mockReset();
-  mockFindCodebaseByRepoUrl.mockReset();
-  mockFindCodebaseByDefaultCwd.mockReset();
-  mockFindCodebaseByName.mockReset();
-  mockUpdateCodebase.mockReset();
+  spyCreateCodebase?.mockReset();
+  spyGetCodebaseCommands?.mockReset();
+  spyUpdateCodebaseCommands?.mockReset();
+  spyFindCodebaseByRepoUrl?.mockReset();
+  spyFindCodebaseByDefaultCwd?.mockReset();
+  spyFindCodebaseByName?.mockReset();
+  spyUpdateCodebase?.mockReset();
   mockFindMarkdownFilesRecursive.mockReset();
   mockLogger.info.mockClear();
   mockLogger.debug.mockClear();
@@ -109,12 +154,12 @@ function clearMocks(): void {
   mockLogger.error.mockClear();
 
   // Restore sensible defaults after reset (mockReset removes all implementations)
-  mockGetCodebaseCommands.mockResolvedValue({});
-  mockUpdateCodebaseCommands.mockResolvedValue(undefined);
-  mockFindCodebaseByRepoUrl.mockResolvedValue(null);
-  mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
-  mockFindCodebaseByName.mockResolvedValue(null);
-  mockUpdateCodebase.mockResolvedValue(undefined);
+  spyGetCodebaseCommands?.mockResolvedValue({});
+  spyUpdateCodebaseCommands?.mockResolvedValue(undefined);
+  spyFindCodebaseByRepoUrl?.mockResolvedValue(null);
+  spyFindCodebaseByDefaultCwd?.mockResolvedValue(null);
+  spyFindCodebaseByName?.mockResolvedValue(null);
+  spyUpdateCodebase?.mockResolvedValue(undefined);
   mockFindMarkdownFilesRecursive.mockResolvedValue([]);
 }
 
@@ -150,18 +195,20 @@ function makeCodebase(
 // ────────────────────────────────────────────────────────────────────────────
 describe('cloneRepository', () => {
   beforeEach(() => {
-    clearMocks();
     restoreSpies();
     setupSpies();
+    clearMocks();
     delete process.env.GH_TOKEN;
+  });
+
+  afterEach(() => {
+    restoreSpies();
   });
 
   // ── URL normalization / happy-path cloning ─────────────────────────────
   describe('HTTPS URL cloning', () => {
     test('clones a standard HTTPS GitHub URL', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ name: 'owner/repo' }));
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
@@ -179,9 +226,7 @@ describe('cloneRepository', () => {
     });
 
     test('strips trailing slash from URL before cloning', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ name: 'owner/repo' }));
 
       await cloneRepository('https://github.com/owner/repo/');
 
@@ -193,9 +238,7 @@ describe('cloneRepository', () => {
     });
 
     test('strips .git suffix when extracting owner/repo but keeps it in clone URL', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ name: 'owner/repo' }));
 
       const result = await cloneRepository('https://github.com/owner/repo.git');
 
@@ -203,7 +246,7 @@ describe('cloneRepository', () => {
     });
 
     test('adds safe.directory after a successful clone', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       await cloneRepository('https://github.com/owner/repo');
 
@@ -214,7 +257,7 @@ describe('cloneRepository', () => {
     });
 
     test('removes the source/ directory before cloning so git has a clean target', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       await cloneRepository('https://github.com/owner/repo');
 
@@ -225,9 +268,7 @@ describe('cloneRepository', () => {
   // ── SSH URL conversion ─────────────────────────────────────────────────
   describe('SSH URL conversion', () => {
     test('converts git@ SSH URL to HTTPS before cloning', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ name: 'owner/repo' }));
 
       await cloneRepository('git@github.com:owner/repo.git');
 
@@ -241,9 +282,7 @@ describe('cloneRepository', () => {
     });
 
     test('extracts correct owner/repo from SSH URL', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ name: 'owner/repo' }));
 
       const result = await cloneRepository('git@github.com:owner/repo.git');
 
@@ -262,7 +301,7 @@ describe('cloneRepository', () => {
     });
 
     test('injects GH_TOKEN into HTTPS clone URL', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       await cloneRepository('https://github.com/owner/private-repo');
 
@@ -273,11 +312,11 @@ describe('cloneRepository', () => {
     });
 
     test('does NOT inject GH_TOKEN into non-github URLs', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
+      spyCreateCodebase.mockResolvedValueOnce(
         makeCodebase({
           name: 'owner/repo',
           repository_url: 'https://gitlab.com/owner/repo',
-        }) as ReturnType<typeof makeCodebase>
+        })
       );
 
       // Override getProjectSourcePath for gitlab
@@ -290,7 +329,7 @@ describe('cloneRepository', () => {
     });
 
     test('converts SSH to HTTPS and injects GH_TOKEN', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       await cloneRepository('git@github.com:owner/repo.git');
 
@@ -315,7 +354,7 @@ describe('cloneRepository', () => {
         repository_url: 'https://github.com/owner/repo',
         default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
       });
-      mockFindCodebaseByRepoUrl.mockResolvedValueOnce(existingCodebase);
+      spyFindCodebaseByRepoUrl.mockResolvedValueOnce(existingCodebase);
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
@@ -330,7 +369,7 @@ describe('cloneRepository', () => {
 
     test('finds existing codebase by URL with .git suffix fallback', async () => {
       // First lookup (no .git) returns null, second (.git) returns codebase
-      mockFindCodebaseByRepoUrl
+      spyFindCodebaseByRepoUrl
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(makeCodebase({ id: 'found-via-git-suffix' }));
 
@@ -341,7 +380,7 @@ describe('cloneRepository', () => {
     });
 
     test('throws when directory exists but no matching codebase is found', async () => {
-      mockFindCodebaseByRepoUrl.mockResolvedValue(null);
+      spyFindCodebaseByRepoUrl.mockResolvedValue(null);
 
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
         'Directory already exists'
@@ -354,11 +393,9 @@ describe('cloneRepository', () => {
     test('delegates absolute path (/) to registerRepository', async () => {
       // registerRepository calls git rev-parse, then creates codebase
       spyExecFileAsync.mockResolvedValue({ stdout: '.git', stderr: '' });
-      mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'myrepo', default_cwd: '/home/user/myrepo' }) as ReturnType<
-          typeof makeCodebase
-        >
+      spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+      spyCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ name: 'myrepo', default_cwd: '/home/user/myrepo' })
       );
 
       const result = await cloneRepository('/home/user/myrepo');
@@ -373,11 +410,9 @@ describe('cloneRepository', () => {
 
     test('delegates tilde path (~/) to registerRepository with expansion', async () => {
       spyExecFileAsync.mockResolvedValue({ stdout: '.git', stderr: '' });
-      mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'myrepo', default_cwd: '/home/test/myrepo' }) as ReturnType<
-          typeof makeCodebase
-        >
+      spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+      spyCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ name: 'myrepo', default_cwd: '/home/test/myrepo' })
       );
 
       const result = await cloneRepository('~/myrepo');
@@ -392,8 +427,8 @@ describe('cloneRepository', () => {
 
     test('delegates relative path (./) to registerRepository', async () => {
       spyExecFileAsync.mockResolvedValue({ stdout: '.git', stderr: '' });
-      mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       const result = await cloneRepository('./my-local-repo');
 
@@ -438,7 +473,7 @@ describe('cloneRepository', () => {
     test('ignores ENOENT from rm() (target directory does not exist yet)', async () => {
       const enoentErr = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       spyFsRm.mockRejectedValueOnce(enoentErr);
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       // Should NOT throw
       const result = await cloneRepository('https://github.com/owner/repo');
@@ -460,23 +495,23 @@ describe('cloneRepository', () => {
         { commandName: 'build', relativePath: 'build.md' },
         { commandName: 'test', relativePath: 'test.md' },
       ]);
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
       expect(result.commandCount).toBe(2);
-      expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(1);
+      expect(spyUpdateCodebaseCommands.mock.calls.length).toBe(1);
     });
 
     test('returns commandCount 0 when no command folders exist', async () => {
       // access() always rejects → no command folder found (and no pre-existing .git)
       spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
       expect(result.commandCount).toBe(0);
-      expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(0);
+      expect(spyUpdateCodebaseCommands.mock.calls.length).toBe(0);
     });
 
     test('returns commandCount 0 when command folder exists but contains no markdown files', async () => {
@@ -488,12 +523,12 @@ describe('cloneRepository', () => {
         return Promise.resolve(undefined);
       });
       mockFindMarkdownFilesRecursive.mockResolvedValue([]);
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
       const result = await cloneRepository('https://github.com/owner/repo');
 
       expect(result.commandCount).toBe(0);
-      expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(0);
+      expect(spyUpdateCodebaseCommands.mock.calls.length).toBe(0);
     });
   });
 
@@ -514,13 +549,11 @@ describe('cloneRepository', () => {
         }
         return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       });
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'codex' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ ai_assistant_type: 'codex' }));
 
       await cloneRepository('https://github.com/owner/repo');
 
-      const createCall = mockCreateCodebase.mock.calls[0] as [
+      const createCall = spyCreateCodebase.mock.calls[0] as [
         {
           name: string;
           ai_assistant_type: string;
@@ -531,13 +564,11 @@ describe('cloneRepository', () => {
 
     test('defaults to claude when neither .codex nor .claude folder exists', async () => {
       spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ ai_assistant_type: 'claude' }));
 
       await cloneRepository('https://github.com/owner/repo');
 
-      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
+      const createCall = spyCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
       expect(createCall[0].ai_assistant_type).toBe('claude');
     });
 
@@ -549,13 +580,11 @@ describe('cloneRepository', () => {
         }
         return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       });
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
-      );
+      spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ ai_assistant_type: 'claude' }));
 
       await cloneRepository('https://github.com/owner/repo');
 
-      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
+      const createCall = spyCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
       expect(createCall[0].ai_assistant_type).toBe('claude');
     });
   });
@@ -564,9 +593,13 @@ describe('cloneRepository', () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe('registerRepository', () => {
   beforeEach(() => {
-    clearMocks();
     restoreSpies();
     setupSpies();
+    clearMocks();
+  });
+
+  afterEach(() => {
+    restoreSpies();
   });
 
   // ── Happy path ─────────────────────────────────────────────────────────
@@ -577,11 +610,9 @@ describe('registerRepository', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockCreateCodebase.mockResolvedValueOnce(
-      makeCodebase({ name: 'owner/repo', default_cwd: '/home/user/myrepo' }) as ReturnType<
-        typeof makeCodebase
-      >
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyCreateCodebase.mockResolvedValueOnce(
+      makeCodebase({ name: 'owner/repo', default_cwd: '/home/user/myrepo' })
     );
 
     const result = await registerRepository('/home/user/myrepo');
@@ -596,14 +627,14 @@ describe('registerRepository', () => {
       id: 'existing-codebase-id',
       default_cwd: '/home/user/myrepo',
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(existingCodebase);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(existingCodebase);
 
     const result = await registerRepository('/home/user/myrepo');
 
     expect(result.alreadyExisted).toBe(true);
     expect(result.codebaseId).toBe('existing-codebase-id');
     // createCodebase should NOT be called
-    expect(mockCreateCodebase.mock.calls.length).toBe(0);
+    expect(spyCreateCodebase.mock.calls.length).toBe(0);
   });
 
   // ── Validation ─────────────────────────────────────────────────────────
@@ -622,17 +653,15 @@ describe('registerRepository', () => {
       if (args.includes('get-url')) return Promise.reject(new Error('No such remote: origin'));
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockCreateCodebase.mockResolvedValueOnce(
-      makeCodebase({ name: 'myrepo', default_cwd: '/home/user/myrepo' }) as ReturnType<
-        typeof makeCodebase
-      >
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyCreateCodebase.mockResolvedValueOnce(
+      makeCodebase({ name: 'myrepo', default_cwd: '/home/user/myrepo' })
     );
 
     const result = await registerRepository('/home/user/myrepo');
 
     // Fallback name is directory basename
-    const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { name: string };
+    const createArg = spyCreateCodebase.mock.calls[0]?.[0] as { name: string };
     expect(createArg.name).toBe('myrepo');
     expect(result).toBeDefined();
   });
@@ -643,8 +672,8 @@ describe('registerRepository', () => {
       if (args.includes('get-url')) return Promise.reject(new Error('No such remote: origin'));
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
     await registerRepository('/home/user/myrepo');
 
@@ -659,8 +688,8 @@ describe('registerRepository', () => {
         return Promise.reject(new Error('permission denied: remote access'));
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
     await registerRepository('/home/user/myrepo');
 
@@ -674,16 +703,14 @@ describe('registerRepository', () => {
         return Promise.resolve({ stdout: 'https://github.com/acme/frontend', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     // Return a codebase with the name we expect registerRepoAtPath to pass
-    mockCreateCodebase.mockResolvedValueOnce(
-      makeCodebase({ name: 'acme/frontend' }) as ReturnType<typeof makeCodebase>
-    );
+    spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ name: 'acme/frontend' }));
 
     await registerRepository('/home/user/frontend');
 
     // Verify the name sent TO createCodebase was derived from the remote URL
-    const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { name: string };
+    const createArg = spyCreateCodebase.mock.calls[0]?.[0] as { name: string };
     expect(createArg.name).toBe('acme/frontend');
   });
 
@@ -694,15 +721,13 @@ describe('registerRepository', () => {
         return Promise.resolve({ stdout: 'git@github.com:acme/backend.git', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockCreateCodebase.mockResolvedValueOnce(
-      makeCodebase({ name: 'acme/backend' }) as ReturnType<typeof makeCodebase>
-    );
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyCreateCodebase.mockResolvedValueOnce(makeCodebase({ name: 'acme/backend' }));
 
     await registerRepository('/home/user/backend');
 
     // Verify SSH owner/repo was correctly parsed and passed to createCodebase
-    const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { name: string };
+    const createArg = spyCreateCodebase.mock.calls[0]?.[0] as { name: string };
     expect(createArg.name).toBe('acme/backend');
   });
 
@@ -725,27 +750,31 @@ describe('registerRepository', () => {
     mockFindMarkdownFilesRecursive.mockResolvedValue([
       { commandName: 'deploy', relativePath: 'deploy.md' },
     ]);
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
     const result = await registerRepository('/home/user/myrepo');
 
     expect(result.commandCount).toBe(1);
-    expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(1);
+    expect(spyUpdateCodebaseCommands.mock.calls.length).toBe(1);
   });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
 describe('normalizeRepoUrl (via cloneRepository)', () => {
   beforeEach(() => {
-    clearMocks();
     restoreSpies();
     setupSpies();
+    clearMocks();
     delete process.env.GH_TOKEN;
   });
 
+  afterEach(() => {
+    restoreSpies();
+  });
+
   const expectCloneTargetPath = async (url: string): Promise<string> => {
-    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
     await cloneRepository(url);
     // The target path is the second positional arg to `git clone <url> <path>`
     const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
@@ -778,10 +807,14 @@ describe('normalizeRepoUrl (via cloneRepository)', () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe('name-based deduplication', () => {
   beforeEach(() => {
-    clearMocks();
     restoreSpies();
     setupSpies();
+    clearMocks();
     delete process.env.GH_TOKEN;
+  });
+
+  afterEach(() => {
+    restoreSpies();
   });
 
   test('should return existing codebase when registering same owner/repo via different path', async () => {
@@ -799,16 +832,16 @@ describe('name-based deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     // Name-based lookup finds existing codebase
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    spyFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
 
     const result = await registerRepository('/home/user/repo');
 
     expect(result.alreadyExisted).toBe(true);
     expect(result.codebaseId).toBe('existing-id');
     // createCodebase should NOT be called
-    expect(mockCreateCodebase.mock.calls.length).toBe(0);
+    expect(spyCreateCodebase.mock.calls.length).toBe(0);
   });
 
   test('should update default_cwd to local path when local is registered after clone', async () => {
@@ -824,14 +857,14 @@ describe('name-based deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
 
     const result = await registerRepository('/home/user/repo');
 
     // updateCodebase should be called with the local path
-    expect(mockUpdateCodebase.mock.calls.length).toBe(1);
-    const updateArgs = mockUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
+    expect(spyUpdateCodebase.mock.calls.length).toBe(1);
+    const updateArgs = spyUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
     expect(updateArgs[0]).toBe('existing-id');
     expect(updateArgs[1].default_cwd).toBe('/home/user/repo');
     expect(result.defaultCwd).toBe('/home/user/repo');
@@ -847,16 +880,16 @@ describe('name-based deduplication', () => {
     });
     // Clone same repo — name-based lookup finds existing
     // .git does NOT exist (proceed to clone), but name dedup catches it
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
-    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    spyFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    spyCreateCodebase.mockResolvedValueOnce(makeCodebase());
 
     const result = await cloneRepository('https://github.com/owner/repo');
 
     // default_cwd should stay as local path (managed path is NOT "better")
     expect(result.defaultCwd).toBe('/home/user/repo');
     // updateCodebase should NOT be called with default_cwd (no downgrade)
-    if (mockUpdateCodebase.mock.calls.length > 0) {
-      const updateArgs = mockUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
+    if (spyUpdateCodebase.mock.calls.length > 0) {
+      const updateArgs = spyUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
       expect(updateArgs[1].default_cwd).toBeUndefined();
     }
   });
@@ -875,14 +908,14 @@ describe('name-based deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    spyFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    spyFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
 
     await registerRepository('/home/user/repo');
 
     // updateCodebase should be called with repository_url
-    expect(mockUpdateCodebase.mock.calls.length).toBe(1);
-    const updateArgs = mockUpdateCodebase.mock.calls[0] as [
+    expect(spyUpdateCodebase.mock.calls.length).toBe(1);
+    const updateArgs = spyUpdateCodebase.mock.calls[0] as [
       string,
       { repository_url?: string | null },
     ];
@@ -893,20 +926,24 @@ describe('name-based deduplication', () => {
 // ────────────────────────────────────────────────────────────────────────────
 describe('RegisterResult shape', () => {
   beforeEach(() => {
-    clearMocks();
     restoreSpies();
     setupSpies();
+    clearMocks();
     delete process.env.GH_TOKEN;
   });
 
+  afterEach(() => {
+    restoreSpies();
+  });
+
   test('cloneRepository result contains all expected fields', async () => {
-    mockCreateCodebase.mockResolvedValueOnce(
+    spyCreateCodebase.mockResolvedValueOnce(
       makeCodebase({
         id: 'abc-123',
         name: 'owner/repo',
         repository_url: 'https://github.com/owner/repo',
         default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
-      }) as ReturnType<typeof makeCodebase>
+      })
     );
 
     const result = await cloneRepository('https://github.com/owner/repo');
@@ -923,7 +960,7 @@ describe('RegisterResult shape', () => {
 
   test('pre-existing codebase result has alreadyExisted: true and commandCount: 0', async () => {
     spyFsAccess.mockResolvedValue(undefined); // .git exists
-    mockFindCodebaseByRepoUrl.mockResolvedValueOnce(makeCodebase({ id: 'existing-999' }));
+    spyFindCodebaseByRepoUrl.mockResolvedValueOnce(makeCodebase({ id: 'existing-999' }));
 
     const result = await cloneRepository('https://github.com/owner/repo');
 

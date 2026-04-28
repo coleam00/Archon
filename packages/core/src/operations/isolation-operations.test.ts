@@ -1,47 +1,80 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
+import { createMockLogger } from '../test/mocks/logger';
 
 // ---------------------------------------------------------------------------
-// Mock modules before importing the module under test
+// Import namespace modules for spyOn (must come before module under test)
 // ---------------------------------------------------------------------------
 
-const mockWorktreeExists = mock(() => Promise.resolve(true));
-const mockToWorktreePath = mock((p: string) => p);
-mock.module('@archon/git', () => ({
-  worktreeExists: mockWorktreeExists,
-  toWorktreePath: mockToWorktreePath,
-}));
+import * as git from '@archon/git';
+import * as isolationDb from '../db/isolation-environments';
+import * as cleanupService from '../services/cleanup-service';
+import * as archonPaths from '@archon/paths';
 
-const mockListAllActiveWithCodebase = mock(() => Promise.resolve([]));
-const mockListByCodebaseWithAge = mock(() => Promise.resolve([]));
-const mockUpdateStatus = mock(() => Promise.resolve());
-mock.module('../db/isolation-environments', () => ({
-  listAllActiveWithCodebase: mockListAllActiveWithCodebase,
-  listByCodebaseWithAge: mockListByCodebaseWithAge,
-  updateStatus: mockUpdateStatus,
-}));
+// ---------------------------------------------------------------------------
+// Import module under test (static import — spyOn intercepts at call time)
+// ---------------------------------------------------------------------------
 
-const mockCleanupStale = mock(() => Promise.resolve({ removed: 0, errors: [] }));
-const mockCleanupMerged = mock(() => Promise.resolve({ removed: 0, errors: [] }));
-mock.module('../services/cleanup-service', () => ({
-  cleanupStaleWorktrees: mockCleanupStale,
-  cleanupMergedWorktrees: mockCleanupMerged,
-}));
+import {
+  listEnvironments,
+  cleanupStaleEnvironments,
+  cleanupMergedEnvironments,
+} from './isolation-operations';
 
-const mockLogger = {
-  fatal: mock(() => undefined),
-  error: mock(() => undefined),
-  warn: mock(() => undefined),
-  info: mock(() => undefined),
-  debug: mock(() => undefined),
-  trace: mock(() => undefined),
-};
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
+// ---------------------------------------------------------------------------
+// Spy variables
+// ---------------------------------------------------------------------------
 
-// Import AFTER mocks
-const { listEnvironments, cleanupStaleEnvironments, cleanupMergedEnvironments } =
-  await import('./isolation-operations');
+const mockLogger = createMockLogger();
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateLogger: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyWorktreeExists: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyToWorktreePath: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyListAllActiveWithCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyListByCodebaseWithAge: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateStatus: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCleanupStaleWorktrees: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCleanupMergedWorktrees: any;
+
+beforeEach(() => {
+  spyCreateLogger = spyOn(archonPaths, 'createLogger').mockReturnValue(mockLogger as never);
+  spyWorktreeExists = spyOn(git, 'worktreeExists').mockResolvedValue(true);
+  spyToWorktreePath = spyOn(git, 'toWorktreePath').mockImplementation((p: string) => p as never);
+  spyListAllActiveWithCodebase = spyOn(isolationDb, 'listAllActiveWithCodebase').mockResolvedValue(
+    []
+  );
+  spyListByCodebaseWithAge = spyOn(isolationDb, 'listByCodebaseWithAge').mockResolvedValue([]);
+  spyUpdateStatus = spyOn(isolationDb, 'updateStatus').mockResolvedValue(undefined);
+  spyCleanupStaleWorktrees = spyOn(cleanupService, 'cleanupStaleWorktrees').mockResolvedValue({
+    removed: 0,
+    errors: [],
+  } as never);
+  spyCleanupMergedWorktrees = spyOn(cleanupService, 'cleanupMergedWorktrees').mockResolvedValue({
+    removed: 0,
+    errors: [],
+  } as never);
+  mockLogger.info.mockClear();
+  mockLogger.warn.mockClear();
+  mockLogger.error.mockClear();
+});
+
+afterEach(() => {
+  spyCreateLogger.mockRestore();
+  spyWorktreeExists.mockRestore();
+  spyToWorktreePath.mockRestore();
+  spyListAllActiveWithCodebase.mockRestore();
+  spyListByCodebaseWithAge.mockRestore();
+  spyUpdateStatus.mockRestore();
+  spyCleanupStaleWorktrees.mockRestore();
+  spyCleanupMergedWorktrees.mockRestore();
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -73,61 +106,61 @@ function makeEnvWithAge(overrides: Record<string, unknown> = {}) {
 
 describe('listEnvironments', () => {
   beforeEach(() => {
-    mockListAllActiveWithCodebase.mockClear();
-    mockListByCodebaseWithAge.mockClear();
-    mockWorktreeExists.mockClear();
-    mockUpdateStatus.mockClear();
+    spyListAllActiveWithCodebase.mockClear();
+    spyListByCodebaseWithAge.mockClear();
+    spyWorktreeExists.mockClear();
+    spyUpdateStatus.mockClear();
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
   });
 
   test('returns empty result when no active environments', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([]);
+    spyListAllActiveWithCodebase.mockResolvedValueOnce([]);
 
     const result = await listEnvironments();
 
     expect(result.codebases).toHaveLength(0);
     expect(result.totalEnvironments).toBe(0);
     expect(result.ghostsReconciled).toBe(0);
-    expect(mockListByCodebaseWithAge).not.toHaveBeenCalled();
+    expect(spyListByCodebaseWithAge).not.toHaveBeenCalled();
   });
 
   test('marks missing worktree as destroyed and increments ghostsReconciled', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
-    mockListByCodebaseWithAge
+    spyListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
+    spyListByCodebaseWithAge
       .mockResolvedValueOnce([
         makeEnvWithAge({ id: 'env-ghost', working_path: '/worktrees/ghost' }),
       ])
       // Re-fetch after ghost cleanup returns empty
       .mockResolvedValueOnce([]);
-    mockWorktreeExists.mockResolvedValueOnce(false); // ghost
+    spyWorktreeExists.mockResolvedValueOnce(false); // ghost
 
     const result = await listEnvironments();
 
-    expect(mockUpdateStatus).toHaveBeenCalledWith('env-ghost', 'destroyed');
+    expect(spyUpdateStatus).toHaveBeenCalledWith('env-ghost', 'destroyed');
     expect(result.ghostsReconciled).toBe(1);
     expect(result.totalEnvironments).toBe(0); // re-fetch returned empty
   });
 
   test('does not re-fetch when no ghosts found', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
-    mockListByCodebaseWithAge.mockResolvedValueOnce([makeEnvWithAge()]);
-    mockWorktreeExists.mockResolvedValueOnce(true); // not a ghost
+    spyListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
+    spyListByCodebaseWithAge.mockResolvedValueOnce([makeEnvWithAge()]);
+    spyWorktreeExists.mockResolvedValueOnce(true); // not a ghost
 
     await listEnvironments();
 
     // listByCodebaseWithAge called only once — no re-fetch needed
-    expect(mockListByCodebaseWithAge).toHaveBeenCalledTimes(1);
+    expect(spyListByCodebaseWithAge).toHaveBeenCalledTimes(1);
   });
 
   test('handles worktreeExists error in reconcileGhosts without crashing', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
-    mockListByCodebaseWithAge.mockResolvedValue([makeEnvWithAge({ id: 'env-err' })]);
-    mockWorktreeExists.mockRejectedValueOnce(new Error('permission denied'));
+    spyListAllActiveWithCodebase.mockResolvedValueOnce([makeActiveEnv()]);
+    spyListByCodebaseWithAge.mockResolvedValue([makeEnvWithAge({ id: 'env-err' })]);
+    spyWorktreeExists.mockRejectedValueOnce(new Error('permission denied'));
 
     // Should not throw — error is swallowed per the try/catch in reconcileGhosts
     await expect(listEnvironments()).resolves.toBeDefined();
-    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(spyUpdateStatus).not.toHaveBeenCalled();
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ envId: 'env-err' }),
       'isolation.ghost_reconciliation_failed'
@@ -135,12 +168,12 @@ describe('listEnvironments', () => {
   });
 
   test('returns live environments grouped by codebase', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+    spyListAllActiveWithCodebase.mockResolvedValueOnce([
       makeActiveEnv({ codebase_id: 'cb-1', codebase_repository_url: 'https://github.com/a/b' }),
     ]);
     const env = makeEnvWithAge({ id: 'env-live' });
-    mockListByCodebaseWithAge.mockResolvedValueOnce([env]);
-    mockWorktreeExists.mockResolvedValueOnce(true);
+    spyListByCodebaseWithAge.mockResolvedValueOnce([env]);
+    spyWorktreeExists.mockResolvedValueOnce(true);
 
     const result = await listEnvironments();
 
@@ -154,14 +187,14 @@ describe('listEnvironments', () => {
 
 describe('cleanupStaleEnvironments', () => {
   beforeEach(() => {
-    mockListAllActiveWithCodebase.mockClear();
-    mockWorktreeExists.mockClear();
-    mockCleanupStale.mockClear();
+    spyListAllActiveWithCodebase.mockClear();
+    spyWorktreeExists.mockClear();
+    spyCleanupStaleWorktrees.mockClear();
   });
 
   test('reconciles ghosts then delegates to cleanupStaleWorktrees', async () => {
     // listAllActiveWithCodebase returns envs with codebase_id matching 'cb-1'
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+    spyListAllActiveWithCodebase.mockResolvedValueOnce([
       {
         ...makeActiveEnv({ codebase_id: 'cb-1' }),
         id: 'env-1',
@@ -170,32 +203,35 @@ describe('cleanupStaleEnvironments', () => {
         workflow_id: 'wf-1',
       },
     ]);
-    mockWorktreeExists.mockResolvedValueOnce(true); // not a ghost
-    mockCleanupStale.mockResolvedValueOnce({ removed: 1, errors: [] });
+    spyWorktreeExists.mockResolvedValueOnce(true); // not a ghost
+    spyCleanupStaleWorktrees.mockResolvedValueOnce({ removed: 1, errors: [] });
 
     const result = await cleanupStaleEnvironments('cb-1', '/main');
 
-    expect(mockCleanupStale).toHaveBeenCalledWith('cb-1', '/main');
+    expect(spyCleanupStaleWorktrees).toHaveBeenCalledWith('cb-1', '/main');
     expect(result.removed).toBe(1);
   });
 });
 
 describe('cleanupMergedEnvironments', () => {
   beforeEach(() => {
-    mockCleanupMerged.mockClear();
+    spyCleanupMergedWorktrees.mockClear();
   });
 
   test('delegates to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: 2, errors: [] });
+    spyCleanupMergedWorktrees.mockResolvedValueOnce({ removed: 2, errors: [] });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
-    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
+    expect(spyCleanupMergedWorktrees).toHaveBeenCalledWith('cb-1', '/main', {});
     expect(result.removed).toBe(2);
   });
 
   test('passes through errors from cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: 0, errors: ['branch-a: git error'] });
+    spyCleanupMergedWorktrees.mockResolvedValueOnce({
+      removed: 0,
+      errors: ['branch-a: git error'],
+    });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
@@ -203,10 +239,12 @@ describe('cleanupMergedEnvironments', () => {
   });
 
   test('forwards includeClosed option to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: 1, errors: [] });
+    spyCleanupMergedWorktrees.mockResolvedValueOnce({ removed: 1, errors: [] });
 
     await cleanupMergedEnvironments('cb-1', '/main', { includeClosed: true });
 
-    expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', { includeClosed: true });
+    expect(spyCleanupMergedWorktrees).toHaveBeenCalledWith('cb-1', '/main', {
+      includeClosed: true,
+    });
   });
 });

@@ -62,6 +62,11 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/** Reset the cached logger — exported for test isolation only */
+export function resetLogCacheForTest(): void {
+  cachedLog = undefined;
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 /** Max assistant text chunks to keep in batch mode (oldest are dropped) */
