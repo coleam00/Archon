@@ -32,6 +32,10 @@ export default defineConfig({
           autogenerate: { directory: 'getting-started' },
         },
         {
+          label: 'Blog',
+          autogenerate: { directory: 'blog' },
+        },
+        {
           label: 'Guides',
           autogenerate: { directory: 'guides' },
         },
