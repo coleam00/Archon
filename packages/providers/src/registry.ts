@@ -106,16 +106,21 @@ export function isRegisteredProvider(id: string): boolean {
  * Must be called at process entrypoints (server, CLI) before any provider lookups.
  */
 export function registerBuiltinProviders(): void {
+  // Claude alias predicate: bare aliases (sonnet/opus/haiku), optionally with a
+  // bracketed beta suffix (opus[1m], sonnet[1m]); explicit claude-* model IDs;
+  // and the "inherit" sentinel. Bundled workflows use the bracketed form, so
+  // missing it here would misroute them to the negation predicate (Codex).
+  const CLAUDE_ALIAS_RE = /^(sonnet|opus|haiku)(\[[^\]]+\])?$/;
+  const isClaudeAlias = (model: string): boolean =>
+    CLAUDE_ALIAS_RE.test(model) || model.startsWith('claude-') || model === 'inherit';
+
   const builtins: ProviderRegistration[] = [
     {
       id: 'claude',
       displayName: 'Claude (Anthropic)',
       factory: () => new ClaudeProvider(),
       capabilities: CLAUDE_CAPABILITIES,
-      isModelCompatible: (model: string): boolean => {
-        const aliases = ['sonnet', 'opus', 'haiku'];
-        return aliases.includes(model) || model.startsWith('claude-') || model === 'inherit';
-      },
+      isModelCompatible: isClaudeAlias,
       builtIn: true,
     },
     {
@@ -123,12 +128,9 @@ export function registerBuiltinProviders(): void {
       displayName: 'Codex (OpenAI)',
       factory: () => new CodexProvider(),
       capabilities: CODEX_CAPABILITIES,
-      isModelCompatible: (model: string): boolean => {
-        const claudeAliases = ['sonnet', 'opus', 'haiku'];
-        return (
-          !claudeAliases.includes(model) && !model.startsWith('claude-') && model !== 'inherit'
-        );
-      },
+      // Defined as the explicit negation of `isClaudeAlias` so the two
+      // predicates can't silently drift apart.
+      isModelCompatible: (model: string): boolean => !isClaudeAlias(model),
       builtIn: true,
     },
   ];

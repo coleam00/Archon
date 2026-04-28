@@ -262,6 +262,19 @@ describe('registry', () => {
       expect(reg.isModelCompatible('gpt-4')).toBe(false);
     });
 
+    test('Claude registration matches bracketed beta aliases (e.g. opus[1m])', () => {
+      const reg = getRegistration('claude');
+      // Bundled workflows use this form; if Claude doesn't claim them,
+      // Codex's negation predicate catches them and the run misroutes.
+      expect(reg.isModelCompatible('opus[1m]')).toBe(true);
+      expect(reg.isModelCompatible('sonnet[1m]')).toBe(true);
+      expect(reg.isModelCompatible('haiku[1m]')).toBe(true);
+      expect(reg.isModelCompatible('claude-opus-4-6[1m]')).toBe(true);
+      // Bracketed suffix on a non-Claude name should NOT match.
+      expect(reg.isModelCompatible('gpt-4[1m]')).toBe(false);
+      expect(reg.isModelCompatible('foo[bar]')).toBe(false);
+    });
+
     test('Codex registration rejects Claude model patterns', () => {
       const reg = getRegistration('codex');
       expect(reg.isModelCompatible('sonnet')).toBe(false);
@@ -269,6 +282,14 @@ describe('registry', () => {
       expect(reg.isModelCompatible('inherit')).toBe(false);
       expect(reg.isModelCompatible('gpt-4')).toBe(true);
       expect(reg.isModelCompatible('o3-mini')).toBe(true);
+    });
+
+    test('Codex registration also rejects bracketed Claude beta aliases', () => {
+      const reg = getRegistration('codex');
+      expect(reg.isModelCompatible('opus[1m]')).toBe(false);
+      expect(reg.isModelCompatible('sonnet[1m]')).toBe(false);
+      expect(reg.isModelCompatible('haiku[1m]')).toBe(false);
+      expect(reg.isModelCompatible('claude-opus-4-6[1m]')).toBe(false);
     });
   });
 
