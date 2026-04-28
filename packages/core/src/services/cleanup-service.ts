@@ -21,6 +21,8 @@ import {
   toBranchName,
 } from '@archon/git';
 import type { RepoPath, BranchName } from '@archon/git';
+import { readFile } from 'fs/promises';
+import { join } from 'path';
 import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
@@ -30,6 +32,26 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('cleanup');
   return cachedLog;
+}
+
+/**
+ * Resolve the main branch for a repository, respecting worktree.baseBranch from
+ * .archon/config.yaml before falling back to git auto-detection.
+ */
+async function resolveMainBranch(repoPath: RepoPath): Promise<BranchName> {
+  try {
+    const content = await readFile(join(repoPath, '.archon', 'config.yaml'), 'utf-8');
+    const config = Bun.YAML.parse(content) as Record<string, unknown> | null;
+    const worktree = (config as Record<string, Record<string, unknown>> | null)?.worktree;
+    const configured = (worktree?.baseBranch as string | undefined)?.trim();
+    if (configured) {
+      return toBranchName(configured);
+    }
+  } catch (_err: unknown) {
+    // Config load failure (missing file, parse error) is non-fatal — fall through to auto-detection
+    getLog().debug({ repoPath, err: _err }, 'config_load_fallback');
+  }
+  return getDefaultBranch(repoPath);
 }
 
 // Configuration constants (configurable via env vars)
@@ -308,7 +330,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const mainBranch = await getDefaultBranch(mainRepoPath);
+        const mainBranch = await resolveMainBranch(mainRepoPath);
         const merged = await isBranchMerged(
           mainRepoPath,
           toBranchName(env.branch_name),
@@ -462,7 +484,7 @@ export async function getWorktreeStatusBreakdown(
     activeEnvs: [],
   };
 
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await resolveMainBranch(repoPath);
 
   for (const env of environments) {
     // Skip Telegram (never shown as stale)
@@ -590,7 +612,7 @@ export async function cleanupMergedWorktrees(
   const result: CleanupOperationResult = { removed: [], skipped: [] };
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await resolveMainBranch(repoPath);
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrState>();
 
