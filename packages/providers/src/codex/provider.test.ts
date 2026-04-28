@@ -1,4 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -72,7 +75,7 @@ describe('CodexProvider', () => {
       const caps = client.getCapabilities();
       expect(caps).toEqual({
         sessionResume: true,
-        mcp: false,
+        mcp: true,
         hooks: false,
         skills: false,
         agents: false,
@@ -783,6 +786,118 @@ describe('CodexProvider', () => {
       }
     });
 
+    test('passes workflow MCP config as Codex mcp_servers overrides', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-'));
+      const originalToken = process.env.ARCHON_CODEX_MCP_TOKEN;
+      process.env.ARCHON_CODEX_MCP_TOKEN = 'token-from-process';
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({
+            figma: {
+              type: 'http',
+              url: 'http://127.0.0.1:3845/mcp',
+              headers: { Authorization: 'Bearer $ARCHON_CODEX_MCP_TOKEN' },
+              startup_timeout_sec: 20,
+            },
+            local: {
+              type: 'stdio',
+              command: 'npx',
+              args: ['-y', 'figma-mcp'],
+              env: { TOKEN: '$ARCHON_CODEX_MCP_TOKEN' },
+            },
+          })
+        );
+
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          // consume
+        }
+
+        expect(MockCodex).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: {
+              mcp_servers: {
+                figma: {
+                  url: 'http://127.0.0.1:3845/mcp',
+                  http_headers: { Authorization: 'Bearer token-from-process' },
+                  startup_timeout_sec: 20,
+                },
+                local: {
+                  command: 'npx',
+                  args: ['-y', 'figma-mcp'],
+                  env: { TOKEN: 'token-from-process' },
+                },
+              },
+            },
+          })
+        );
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          { serverNames: ['figma', 'local'], mcpPath: 'mcp.json' },
+          'codex.mcp_config_loaded'
+        );
+      } finally {
+        if (originalToken === undefined) {
+          delete process.env.ARCHON_CODEX_MCP_TOKEN;
+        } else {
+          process.env.ARCHON_CODEX_MCP_TOKEN = originalToken;
+        }
+        await rm(testDir, { recursive: true, force: true });
+      }
+    });
+
+    test('uses request env when expanding workflow MCP config variables', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-env-'));
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({
+            figma: {
+              command: 'figma-mcp',
+              env: { TOKEN: '$FIGMA_TOKEN' },
+            },
+          })
+        );
+
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
+          env: { FIGMA_TOKEN: 'from-codebase-env' },
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          // consume
+        }
+
+        expect(MockCodex).toHaveBeenCalledWith(
+          expect.objectContaining({
+            config: {
+              mcp_servers: {
+                figma: {
+                  command: 'figma-mcp',
+                  env: { TOKEN: 'from-codebase-env' },
+                },
+              },
+            },
+          })
+        );
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
+    });
+
     test('reuses the singleton Codex instance across sequential calls without env', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
@@ -916,6 +1031,42 @@ describe('CodexProvider', () => {
         { message: 'MCP client connection timeout' },
         'stream_error'
       );
+    });
+
+    test('surfaces MCP client errors when workflow MCP is configured', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-error-'));
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({ figma: { command: 'figma-mcp' } })
+        );
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'error', message: 'MCP client connection timeout' };
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', testDir, undefined, {
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          chunks.push(chunk);
+        }
+
+        expect(chunks[0]).toEqual({
+          type: 'system',
+          content: '\u26A0\uFE0F MCP client connection timeout',
+        });
+        expect(chunks[1]).toEqual({
+          type: 'result',
+          sessionId: 'new-thread-id',
+          tokens: { input: 10, output: 5 },
+        });
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
     });
 
     test('handles turn.failed events', async () => {

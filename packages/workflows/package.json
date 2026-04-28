@@ -11,6 +11,7 @@
     "./deps": "./src/deps.ts",
     "./event-emitter": "./src/event-emitter.ts",
     "./workflow-discovery": "./src/workflow-discovery.ts",
+    "./model-validation": "./src/model-validation.ts",
     "./script-discovery": "./src/script-discovery.ts",
     "./command-validation": "./src/command-validation.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",

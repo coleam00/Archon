@@ -23,7 +23,12 @@ mock.module('@archon/paths', () => ({
     if (folder) paths.unshift(folder);
     return paths;
   },
+  getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
   getDefaultCommandsPath: () => '/nonexistent/defaults',
+  getDefaultWorkflowsPath: () => '/nonexistent/defaults/workflows',
+  getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
+  getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
+  getArchonHome: () => '/nonexistent/home',
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
@@ -38,7 +43,7 @@ import {
   substituteNodeOutputRefs,
   executeDagWorkflow,
 } from './dag-executor';
-import { loadMcpConfig } from '@archon/providers/claude/provider';
+import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
@@ -118,7 +123,7 @@ const mockClaudeCapabilities = () => ({
 /** Limited capabilities for Codex mock */
 const mockCodexCapabilities = () => ({
   sessionResume: true,
-  mcp: false,
+  mcp: true,
   hooks: false,
   skills: false,
   agents: false,
@@ -2188,6 +2193,15 @@ describe('loadMcpConfig', () => {
     expect(result.serverNames).toEqual(['github']);
     expect(result.servers).toEqual(config);
     expect(result.missingVars).toEqual([]);
+  });
+
+  it('loads standard mcpServers-wrapped config JSON', async () => {
+    const servers = { figma: { url: 'http://127.0.0.1:3845/mcp' } };
+    await writeFile(join(testDir, 'wrapped.json'), JSON.stringify({ mcpServers: servers }));
+
+    const result = await loadMcpConfig('wrapped.json', testDir);
+    expect(result.serverNames).toEqual(['figma']);
+    expect(result.servers).toEqual(servers);
   });
 
   it('loads multiple servers from one config', async () => {
