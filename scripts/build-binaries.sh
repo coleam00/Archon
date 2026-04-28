@@ -34,6 +34,42 @@ BUNDLED_BUILD_FILE="packages/paths/src/bundled-build.ts"
 trap 'echo "Restoring ${BUNDLED_BUILD_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}" || echo "WARNING: failed to restore ${BUNDLED_BUILD_FILE} — working tree may be dirty" >&2' EXIT
 
 echo "Updating build-time constants (version=${VERSION}, is_binary=true)..."
+
+# Compute SHA-256 of the web dist tarball when available (CI publishes it before binaries).
+is_release_build() {
+  [ -n "${CI:-}" ] || { [ -n "$TARGET" ] && [ -n "$OUTFILE" ]; }
+}
+
+is_valid_sha256() {
+  printf '%s' "$1" | grep -Eq '^[0-9a-f]{64}$'
+}
+
+WEB_DIST_SHA256=""
+if [ -f "archon-web.tar.gz" ]; then
+  # `|| true` is intentional under `set -euo pipefail`: if shasum is missing or
+  # the file is unreadable, we want WEB_DIST_SHA256 to land empty so the
+  # is_valid_sha256 check below can decide between fail-closed (release/CI) and
+  # warn-and-fallback (dev). Without this, pipefail would abort the script
+  # before that policy check ever runs. Don't simplify away.
+  WEB_DIST_SHA256="$(shasum -a 256 archon-web.tar.gz 2>/dev/null | cut -d' ' -f1 || true)"
+  if is_valid_sha256 "$WEB_DIST_SHA256"; then
+    echo "Embedded web dist SHA-256: ${WEB_DIST_SHA256}"
+  else
+    if is_release_build; then
+      echo "ERROR: invalid SHA-256 for archon-web.tar.gz (${WEB_DIST_SHA256:-empty}) — refusing CI/release build" >&2
+      exit 1
+    fi
+    echo "WARNING: failed to compute a valid SHA-256 for archon-web.tar.gz — remote fallback will be used" >&2
+    WEB_DIST_SHA256=""
+  fi
+else
+  if is_release_build; then
+    echo "ERROR: archon-web.tar.gz not found — refusing to build CI/release binary without embedded web dist checksum" >&2
+    exit 1
+  fi
+  echo "WARNING: archon-web.tar.gz not found — BUNDLED_WEB_DIST_SHA256 will be empty (remote fallback)" >&2
+fi
+
 cat > "$BUNDLED_BUILD_FILE" << EOF
 /**
  * Build-time constants embedded into compiled binaries.
@@ -46,6 +82,8 @@ cat > "$BUNDLED_BUILD_FILE" << EOF
 export const BUNDLED_IS_BINARY = true;
 export const BUNDLED_VERSION = '${VERSION}';
 export const BUNDLED_GIT_COMMIT = '${GIT_COMMIT}';
+/** SHA-256 of archon-web.tar.gz, embedded at build time by scripts/build-binaries.sh */
+export const BUNDLED_WEB_DIST_SHA256 = '${WEB_DIST_SHA256}';
 EOF
 
 # Determine which targets to build
