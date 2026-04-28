@@ -344,7 +344,8 @@ async function* streamCodexEvents(
       // means the SDK recovered, so the captured error is dropped; loop
       // closure without a terminal means the captured error caused the
       // stream to abort and is surfaced as the failure cause.
-      if (!errorEvent.message.includes('MCP client')) {
+      const isMcpClientError = errorEvent.message.toLowerCase().includes('mcp client');
+      if (!isMcpClientError) {
         lastNonMcpError = errorEvent.message;
       } else if (surfaceMcpClientErrors) {
         // MCP was explicitly configured for this node — surface MCP client
@@ -695,7 +696,7 @@ export class CodexProvider implements IAgentProvider {
     }
 
     for (const warning of providerWarnings) {
-      yield { type: 'system', content: `Warning: ${warning.message}` };
+      yield { type: 'system', content: `⚠️ ${warning.message}` };
     }
 
     // 1. Initialize SDK and build thread options

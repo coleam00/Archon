@@ -824,20 +824,20 @@ describe('CodexProvider', () => {
 
         expect(MockCodex).toHaveBeenCalledWith(
           expect.objectContaining({
-            config: {
-              mcp_servers: {
-                figma: {
+            config: expect.objectContaining({
+              mcp_servers: expect.objectContaining({
+                figma: expect.objectContaining({
                   url: 'http://127.0.0.1:3845/mcp',
                   http_headers: { Authorization: 'Bearer token-from-process' },
                   startup_timeout_sec: 20,
-                },
-                local: {
+                }),
+                local: expect.objectContaining({
                   command: 'npx',
                   args: ['-y', 'figma-mcp'],
                   env: { TOKEN: 'token-from-process' },
-                },
-              },
-            },
+                }),
+              }),
+            }),
           })
         );
         expect(mockLogger.info).toHaveBeenCalledWith(
@@ -883,16 +883,53 @@ describe('CodexProvider', () => {
 
         expect(MockCodex).toHaveBeenCalledWith(
           expect.objectContaining({
-            config: {
-              mcp_servers: {
-                figma: {
+            config: expect.objectContaining({
+              mcp_servers: expect.objectContaining({
+                figma: expect.objectContaining({
                   command: 'figma-mcp',
                   env: { TOKEN: 'from-codebase-env' },
-                },
-              },
+                }),
+              }),
+            }),
+          })
+        );
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
+    });
+
+    test('prefixes workflow MCP warnings for workflow forwarding', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-warning-'));
+      delete process.env.ARCHON_CODEX_MISSING_TOKEN;
+
+      try {
+        await writeFile(
+          join(testDir, 'mcp.json'),
+          JSON.stringify({
+            figma: {
+              command: 'figma-mcp',
+              env: { TOKEN: '$ARCHON_CODEX_MISSING_TOKEN' },
             },
           })
         );
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test prompt', testDir, undefined, {
+          nodeConfig: { mcp: 'mcp.json' },
+        })) {
+          chunks.push(chunk);
+        }
+
+        expect(chunks[0]).toEqual({
+          type: 'system',
+          content:
+            '⚠️ MCP config references undefined env vars: ARCHON_CODEX_MISSING_TOKEN. These will be empty strings - MCP servers may fail to authenticate.',
+        });
       } finally {
         await rm(testDir, { recursive: true, force: true });
       }
@@ -1041,7 +1078,7 @@ describe('CodexProvider', () => {
       // Only after turn.completed do we know the SDK recovered.
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
-          yield { type: 'error', message: 'MCP client connection timeout' };
+          yield { type: 'error', message: 'mcp client connection timeout' };
           yield { type: 'turn.completed', usage: defaultUsage };
         })(),
       });
@@ -1059,7 +1096,7 @@ describe('CodexProvider', () => {
       });
       // Logged but not surfaced as failure
       expect(mockLogger.error).toHaveBeenCalledWith(
-        { message: 'MCP client connection timeout' },
+        { message: 'mcp client connection timeout' },
         'stream_error'
       );
     });

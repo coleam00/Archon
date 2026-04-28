@@ -1,13 +1,5 @@
-import { createLogger } from '@archon/paths';
 import { readFile } from 'fs/promises';
 import { isAbsolute, resolve } from 'path';
-
-/** Lazy-initialized logger. */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('provider.mcp');
-  return cachedLog;
-}
 
 type EnvSource = Record<string, string | undefined>;
 
@@ -17,6 +9,12 @@ export interface LoadedMcpConfig {
   missingVars: string[];
 }
 
+function describeJsonType(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
+}
+
 /**
  * Expand $VAR_NAME references in string-valued records from the supplied
  * environment source.
@@ -24,14 +22,15 @@ export interface LoadedMcpConfig {
 function expandEnvVarsInRecord(
   record: Record<string, unknown>,
   missingVars: string[],
-  envSource: EnvSource
+  envSource: EnvSource,
+  fieldPath: string
 ): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, val] of Object.entries(record)) {
     if (typeof val !== 'string') {
-      getLog().warn({ key, valueType: typeof val }, 'mcp_env_value_coerced_to_string');
-      result[key] = String(val);
-      continue;
+      throw new Error(
+        `MCP config ${fieldPath}.${key} must be a string (got ${describeJsonType(val)})`
+      );
     }
     result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
       const envVal = envSource[varName];
@@ -54,23 +53,40 @@ function expandEnvVars(
   const result: Record<string, unknown> = {};
   const missingVars: string[] = [];
   for (const [serverName, serverConfig] of Object.entries(config)) {
-    if (typeof serverConfig !== 'object' || serverConfig === null) {
-      getLog().warn({ serverName, valueType: typeof serverConfig }, 'mcp_server_config_not_object');
-      continue;
+    if (typeof serverConfig !== 'object' || serverConfig === null || Array.isArray(serverConfig)) {
+      throw new Error(
+        `MCP server "${serverName}" must be a JSON object (got ${describeJsonType(serverConfig)})`
+      );
     }
     const server = { ...(serverConfig as Record<string, unknown>) };
-    if (server.env && typeof server.env === 'object') {
+    if (server.env !== undefined) {
+      if (typeof server.env !== 'object' || server.env === null || Array.isArray(server.env)) {
+        throw new Error(
+          `MCP config ${serverName}.env must be a JSON object of string values (got ${describeJsonType(server.env)})`
+        );
+      }
       server.env = expandEnvVarsInRecord(
         server.env as Record<string, unknown>,
         missingVars,
-        envSource
+        envSource,
+        `${serverName}.env`
       );
     }
-    if (server.headers && typeof server.headers === 'object') {
+    if (server.headers !== undefined) {
+      if (
+        typeof server.headers !== 'object' ||
+        server.headers === null ||
+        Array.isArray(server.headers)
+      ) {
+        throw new Error(
+          `MCP config ${serverName}.headers must be a JSON object of string values (got ${describeJsonType(server.headers)})`
+        );
+      }
       server.headers = expandEnvVarsInRecord(
         server.headers as Record<string, unknown>,
         missingVars,
-        envSource
+        envSource,
+        `${serverName}.headers`
       );
     }
     result[serverName] = server;
@@ -83,8 +99,14 @@ function normalizeMcpConfig(
   mcpPath: string
 ): Record<string, unknown> {
   const keys = Object.keys(parsed);
-  if (keys.length !== 1 || keys[0] !== 'mcpServers') {
+  if (!keys.includes('mcpServers')) {
     return parsed;
+  }
+
+  if (keys.length > 1) {
+    throw new Error(
+      `MCP config cannot mix top-level "mcpServers" with other keys: ${mcpPath}. Use either a direct server map or { "mcpServers": { ... } }.`
+    );
   }
 
   const servers = parsed.mcpServers;

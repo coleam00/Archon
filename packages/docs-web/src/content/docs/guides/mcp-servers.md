@@ -172,7 +172,7 @@ A single config file can define multiple servers:
 
 ## Provider Tool Wiring
 
-Claude nodes automatically add tool wildcards to `allowedTools`. For servers
+Claude nodes automatically add tool wildcards to `allowed_tools`. For servers
 named `github` and `postgres`, the node gets:
 
 - `mcp__github__*`
