@@ -2032,6 +2032,52 @@ async function executeLoopNode(
       );
     }
 
+    // Empty assistant output is an iteration failure for AI loops — same
+    // contract as the single-shot AI-node guard in executeNodeInternal. A
+    // provider stream that closed cleanly with zero content typically means
+    // a silent rejection or interruption; left unchecked, an interactive
+    // loop would pause with a blank gate or burn the full max_iterations
+    // budget producing nothing. Idle-timeout exits are exempt — the
+    // notification above has already told the user the iteration completed
+    // via timeout, and flipping that to a failure would contradict it.
+    if (!iterationIdleTimedOut && fullOutput.trim() === '') {
+      const iterationDuration = Date.now() - iterationStart;
+      const emptyError =
+        'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
+      getLog().error(
+        { nodeId: node.id, iteration: i, durationMs: iterationDuration },
+        'loop_node.iteration_empty_output'
+      );
+      getWorkflowEventEmitter().emit({
+        type: 'loop_iteration_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        iteration: i,
+        error: emptyError,
+      });
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'loop_iteration_failed',
+          step_name: node.id,
+          data: {
+            iteration: i,
+            error: emptyError,
+            duration: iterationDuration,
+            nodeId: node.id,
+          },
+        })
+        .catch((evtErr: Error) => {
+          logEventStoreError(evtErr, i);
+        });
+      return {
+        state: 'failed',
+        output: '',
+        error: `Loop iteration ${i} failed: ${emptyError}`,
+        costUsd: loopTotalCostUsd,
+      };
+    }
+
     // Batch mode: send accumulated output
     if (platform.getStreamingMode() === 'batch' && cleanOutput) {
       await safeSendMessage(platform, conversationId, cleanOutput, msgContext);
@@ -2661,19 +2707,17 @@ export async function executeDagWorkflow(
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
             // Resolve per-node provider/model overrides (same logic as other node types).
-            // Provider is explicit; model passes through to the SDK.
+            // Provider is explicit; model passes through to the SDK. Throw on an
+            // unknown provider so the outer catch below emits the standard
+            // node_failed event + user-facing message — the same path
+            // resolveNodeProviderAndModel uses for non-loop nodes.
             const loopProvider: string = node.provider ?? workflowProvider;
             if (!isRegisteredProvider(loopProvider)) {
-              return {
-                nodeId: node.id,
-                output: {
-                  state: 'failed' as const,
-                  output: '',
-                  error: `Node '${node.id}': unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
-                    .map(p => p.id)
-                    .join(', ')}`,
-                },
-              };
+              throw new Error(
+                `Node '${node.id}': unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
+                  .map(p => p.id)
+                  .join(', ')}`
+              );
             }
             const loopAssistantConfig = config.assistants[loopProvider];
             const loopModel: string | undefined =
