@@ -1233,14 +1233,21 @@ describe('executeDagWorkflow -- bash nodes', () => {
       { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
     );
 
-    expect(execSpy).toHaveBeenCalledWith(
-      'bash',
-      ['-c', 'echo ok'],
-      expect.objectContaining({
-        env: expect.objectContaining({ MY_SECRET: 'abc123' }),
-      })
-    );
-    execSpy.mockRestore();
+    // Expected bash command is platform-aware: `bash` on Linux/macOS, absolute
+    // Git Bash path on Windows (per resolveBashPath() — coleam00/Archon#1326).
+    // Wrap the assertion + mockRestore in try/finally so the spy doesn't leak
+    // into subsequent tests if the assertion fails.
+    try {
+      expect(execSpy).toHaveBeenCalledWith(
+        git.resolveBashPath(),
+        ['-c', 'echo ok'],
+        expect.objectContaining({
+          env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+        })
+      );
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 
   it('bash node output with shell metacharacters does not inject into downstream bash script', async () => {

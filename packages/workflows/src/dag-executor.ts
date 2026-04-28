@@ -1319,8 +1319,9 @@ async function executeBashNode(
     ...(envVars ?? {}),
   };
 
+  const bashPath = resolveBashPath();
   try {
-    const { stdout, stderr } = await execFileAsync(resolveBashPath(), ['-c', finalScript], {
+    const { stdout, stderr } = await execFileAsync(bashPath, ['-c', finalScript], {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -1373,7 +1374,7 @@ async function executeBashNode(
     if (isTimeout) {
       errorMsg = `Bash node '${node.id}' timed out after ${String(timeout)}ms`;
     } else if (err.message?.includes('ENOENT')) {
-      errorMsg = `Bash node '${node.id}' failed: bash executable not found in PATH`;
+      errorMsg = `Bash node '${node.id}' failed: bash executable not found at '${bashPath}'. Set ARCHON_BASH_PATH if Git Bash is installed elsewhere (e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).`;
     } else if (err.message?.includes('EACCES')) {
       errorMsg = `Bash node '${node.id}' failed: permission denied (check cwd permissions)`;
     } else {
@@ -2108,18 +2109,26 @@ async function executeLoopNode(
           nodeOutputs,
           true // escapedForBash
         );
-        await execFileAsync(resolveBashPath(), ['-c', substitutedBash], { cwd });
+        const loopBashPath = resolveBashPath();
+        await execFileAsync(loopBashPath, ['-c', substitutedBash], { cwd });
         bashComplete = true; // exit 0 = complete
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
-        // ENOENT or other system errors are unexpected — log them
-        if (bashErr.code === 'ENOENT') {
-          getLog().warn(
+        // System-level errors (ENOENT/EACCES) mean the bash binary itself is
+        // unreachable or unexecutable — that's environment breakage, not a
+        // condition-not-met outcome. Surface immediately so the loop fails
+        // fast instead of burning iterations against a broken binary.
+        if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES') {
+          getLog().error(
             { err: bashErr, nodeId: node.id, iteration: i },
             'loop_node.until_bash_exec_error'
           );
+          throw new Error(
+            `Loop node '${node.id}' until_bash failed: cannot execute bash at '${resolveBashPath()}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash is installed elsewhere.`
+          );
         }
-        bashComplete = false; // non-zero exit = not complete
+        // Non-zero exit from the bash script = condition not met yet, keep looping.
+        bashComplete = false;
       }
     }
 
