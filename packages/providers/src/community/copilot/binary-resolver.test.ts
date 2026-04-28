@@ -20,10 +20,12 @@ import * as resolver from './binary-resolver';
 describe('resolveCopilotBinaryPath (binary mode)', () => {
   const originalEnv = process.env.COPILOT_BIN_PATH;
   let fileExistsSpy: ReturnType<typeof spyOn>;
+  let isExecutableFileSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     delete process.env.COPILOT_BIN_PATH;
     fileExistsSpy?.mockRestore();
+    isExecutableFileSpy?.mockRestore();
     mockLogger.info.mockClear();
   });
 
@@ -34,41 +36,42 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
       delete process.env.COPILOT_BIN_PATH;
     }
     fileExistsSpy?.mockRestore();
+    isExecutableFileSpy?.mockRestore();
   });
 
-  test('uses COPILOT_BIN_PATH env var when set and file exists', async () => {
+  test('uses COPILOT_BIN_PATH env var when set and file is executable', async () => {
     process.env.COPILOT_BIN_PATH = '/usr/local/bin/copilot';
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(true);
 
     const result = await resolver.resolveCopilotBinaryPath();
     expect(result).toBe('/usr/local/bin/copilot');
   });
 
-  test('throws when COPILOT_BIN_PATH is set but file does not exist', async () => {
+  test('throws when COPILOT_BIN_PATH is set but path is not executable', async () => {
     process.env.COPILOT_BIN_PATH = '/nonexistent/copilot';
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(false);
 
-    await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow('does not exist');
+    await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow('is not an executable file');
   });
 
-  test('uses config cliPath when file exists', async () => {
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+  test('uses config cliPath when file is executable', async () => {
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(true);
 
     const result = await resolver.resolveCopilotBinaryPath('/custom/copilot/path');
     expect(result).toBe('/custom/copilot/path');
   });
 
-  test('throws when config cliPath file does not exist', async () => {
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+  test('throws when config cliPath is not executable', async () => {
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(false);
 
     await expect(resolver.resolveCopilotBinaryPath('/nonexistent/copilot')).rejects.toThrow(
-      'does not exist'
+      'is not an executable file'
     );
   });
 
   test('env var takes precedence over config path', async () => {
     process.env.COPILOT_BIN_PATH = '/env/copilot';
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(true);
 
     const result = await resolver.resolveCopilotBinaryPath('/config/copilot');
     expect(result).toBe('/env/copilot');
@@ -146,5 +149,46 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
     await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow(
       'Copilot CLI binary not found'
     );
+  });
+});
+
+describe('isExecutableFile', () => {
+  // These tests run real fs ops against fixtures in os.tmpdir(). They exercise
+  // the actual statSync / accessSync code path rather than mocking fs.
+  const fs = require('node:fs') as typeof import('node:fs');
+  const os = require('node:os') as typeof import('node:os');
+  const path = require('node:path') as typeof import('node:path');
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'archon-copilot-resolver-'));
+  const execFile = path.join(tmpRoot, 'has-exec-bit');
+  const noExecFile = path.join(tmpRoot, 'no-exec-bit');
+  const dirPath = path.join(tmpRoot, 'a-directory');
+  const missingPath = path.join(tmpRoot, 'does-not-exist');
+
+  fs.writeFileSync(execFile, '#!/bin/sh\necho hi\n');
+  fs.chmodSync(execFile, 0o755);
+  fs.writeFileSync(noExecFile, 'plain text\n');
+  fs.chmodSync(noExecFile, 0o644);
+  fs.mkdirSync(dirPath);
+
+  afterAll(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  test('returns true for a regular file with the exec bit set', () => {
+    expect(resolver.isExecutableFile(execFile)).toBe(true);
+  });
+
+  test('returns false for a regular file without the exec bit (POSIX only)', () => {
+    if (process.platform === 'win32') return; // win32 has no Unix exec bits
+    expect(resolver.isExecutableFile(noExecFile)).toBe(false);
+  });
+
+  test('returns false for a directory', () => {
+    expect(resolver.isExecutableFile(dirPath)).toBe(false);
+  });
+
+  test('returns false for a missing path', () => {
+    expect(resolver.isExecutableFile(missingPath)).toBe(false);
   });
 });
