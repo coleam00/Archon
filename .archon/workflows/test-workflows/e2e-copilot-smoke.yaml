@@ -1,0 +1,31 @@
+# E2E smoke test — GitHub Copilot community provider
+# Verifies: provider registration, SDK session start, simple prompt response.
+# Auth: run `copilot login`, or provide COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
+name: e2e-copilot-smoke
+description: 'Smoke test for the GitHub Copilot community provider.'
+provider: copilot
+model: gpt-5-mini
+
+nodes:
+  - id: simple
+    prompt: 'Reply with exactly COPILOT_OK'
+    idle_timeout: 60000 # gpt-5-mini occasionally pauses past the 30s default
+
+  - id: assert
+    bash: |
+      # $simple.output is shell-quoted by the workflow engine before bash
+      # sees it (#591 + dag-executor.ts substituteNodeOutputRefs with
+      # escapedForBash=true), so assign bare — wrapping in additional
+      # quotes would double-wrap and break on outputs containing
+      # apostrophes or parens.
+      output_raw=$simple.output
+      if [ -z "$output_raw" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      printf '%s\n' "$output_raw" | grep -F -q -- 'COPILOT_OK' || {
+        printf 'FAIL: expected COPILOT_OK, got: %s\n' "$output_raw"
+        exit 1
+      }
+      printf 'PASS: simple=%s\n' "$output_raw"
+    depends_on: [simple]

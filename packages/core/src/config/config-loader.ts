@@ -98,6 +98,7 @@ const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
   codex: ['model', 'modelReasoningEffort', 'webSearchMode'],
   // community providers — list each field we're confident is safe to
   // show in the web UI. Unknown providers fall through with no fields.
+  copilot: ['model'],
   pi: ['model'],
 };
 
