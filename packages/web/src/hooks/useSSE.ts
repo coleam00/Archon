@@ -9,7 +9,7 @@ import type {
   WorkflowOutputPreviewEvent,
   DagNodeEvent,
 } from '@/lib/types';
-import { SSE_BASE_URL } from '@/lib/api';
+import { getSSEStreamUrl } from '@/lib/api';
 
 function parseSSEEvent(raw: string): SSEEvent | null {
   try {
@@ -74,7 +74,7 @@ export function useSSE(
     if (!conversationId) return;
 
     const eventSource = new EventSource(
-      `${SSE_BASE_URL}/api/stream/${encodeURIComponent(conversationId)}`
+      getSSEStreamUrl(encodeURIComponent(conversationId))
     );
 
     eventSource.onopen = (): void => {

@@ -15,9 +15,18 @@ export type DagNode = components['schemas']['DagNode'];
  * Uses the page hostname so it works from any network interface.
  */
 const apiPort = (import.meta.env.VITE_API_PORT as string | undefined) ?? '3090';
-export const SSE_BASE_URL = import.meta.env.DEV
-  ? `http://${window.location.hostname}:${apiPort}`
-  : '';
+
+export function getSSEBaseUrl(hostname?: string): string {
+  if (!import.meta.env.DEV) return '';
+  const resolvedHostname = hostname ?? (typeof window !== 'undefined' ? window.location.hostname : 'localhost');
+  return `http://${resolvedHostname}:${apiPort}`;
+}
+
+export const SSE_BASE_URL = getSSEBaseUrl();
+
+export function getSSEStreamUrl(streamPath: string): string {
+  return `${SSE_BASE_URL}/api/stream/${streamPath}`;
+}
 
 export { getCodebaseInput } from '@/lib/codebase-input';
 
