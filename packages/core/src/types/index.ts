@@ -160,6 +160,20 @@ export interface IPlatformAdapter {
 
   /** Retract previously streamed text (used when workflow routing intercepts) */
   emitRetract?(conversationId: string): Promise<void>;
+
+  /**
+   * Add a reaction (emoji) to a message
+   * @param conversationId - The conversation ID (for Slack: "channel:timestamp")
+   * @param reaction - Emoji name (Slack shortname, e.g., "eyes", "white_check_mark", "x")
+   */
+  addReaction?(conversationId: string, reaction: string): Promise<void>;
+
+  /**
+   * Remove a reaction from a message
+   * @param conversationId - The conversation ID (for Slack: "channel:timestamp")
+   * @param reaction - Emoji name to remove
+   */
+  removeReaction?(conversationId: string, reaction: string): Promise<void>;
 }
 
 /**

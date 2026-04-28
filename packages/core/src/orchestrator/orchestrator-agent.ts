@@ -544,6 +544,9 @@ export async function handleMessage(
   try {
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
+    // React with 👀 to acknowledge message received
+    await platform.addReaction?.(conversationId, 'eyes');
+
     // 1. Get/create conversation and inherit thread context
     let conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
@@ -833,6 +836,9 @@ export async function handleMessage(
     const aiClient = getAgentProvider(conversation.ai_assistant_type);
     getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
 
+    // React with 🔄 when work begins
+    await platform.addReaction?.(conversationId, 'arrows_counterclockwise');
+
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
@@ -902,9 +908,24 @@ export async function handleMessage(
     }
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
+
+    // Remove intermediate reactions before adding final status
+    await platform.removeReaction?.(conversationId, 'eyes');
+    await platform.removeReaction?.(conversationId, 'arrows_counterclockwise');
+
+    // React with ✅ on success
+    await platform.addReaction?.(conversationId, 'white_check_mark');
   } catch (error) {
     const err = toError(error);
     getLog().error({ err, conversationId }, 'orchestrator_message_failed');
+
+    // Remove intermediate reactions before adding final status
+    await platform.removeReaction?.(conversationId, 'eyes');
+    await platform.removeReaction?.(conversationId, 'arrows_counterclockwise');
+
+    // React with ❌ on failure
+    await platform.addReaction?.(conversationId, 'x');
+
     const userMessage = classifyAndFormatError(err);
     try {
       await platform.sendMessage(conversationId, userMessage);
