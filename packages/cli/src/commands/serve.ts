@@ -1,6 +1,12 @@
 import { dirname } from 'path';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'fs';
-import { createLogger, getWebDistDir, BUNDLED_IS_BINARY, BUNDLED_VERSION } from '@archon/paths';
+import {
+  createLogger,
+  getWebDistDir,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+  BUNDLED_WEB_DIST_SHA256,
+} from '@archon/paths';
 
 const log = createLogger('cli.serve');
 
@@ -8,6 +14,14 @@ const GITHUB_REPO = 'coleam00/Archon';
 
 function toError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));
+}
+
+export function parseEmbeddedChecksum(checksum: string): string {
+  const normalized = checksum.trim();
+  if (!/^[0-9a-f]{64}$/.test(normalized)) {
+    throw new Error(`Malformed embedded checksum: "${checksum}"`);
+  }
+  return normalized;
 }
 
 export interface ServeOptions {
@@ -85,33 +99,47 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
   log.info({ version, targetDir }, 'web_dist.download_started');
   console.log(`Web UI not found locally — downloading from release v${version}...`);
 
-  // Download checksums and tarball in parallel
-  console.log(`Downloading ${tarballUrl}...`);
-  const [checksumsRes, tarballRes] = await Promise.all([
-    fetch(checksumsUrl).catch((err: unknown) => {
+  // Determine expected hash: prefer build-time embedded hash (independent trust anchor)
+  // over the remote checksums.txt (same-source, weaker guarantee).
+  let expectedHash: string;
+  let tarballRes: Response;
+  if (BUNDLED_WEB_DIST_SHA256) {
+    expectedHash = parseEmbeddedChecksum(BUNDLED_WEB_DIST_SHA256);
+    log.info({ source: 'embedded' }, 'web_dist.checksum_resolved');
+    console.log(`Downloading ${tarballUrl}...`);
+    tarballRes = await fetch(tarballUrl).catch((err: unknown) => {
+      throw new Error(`Network error fetching tarball from ${tarballUrl}: ${toError(err).message}`);
+    });
+  } else {
+    // Fallback: download checksums and tarball in parallel (dev mode or pre-build binaries)
+    console.log(`Downloading ${tarballUrl}...`);
+    const [checksumsRes, fetchedTarballRes] = await Promise.all([
+      fetch(checksumsUrl).catch((err: unknown) => {
+        throw new Error(
+          `Network error fetching checksums from ${checksumsUrl}: ${toError(err).message}`
+        );
+      }),
+      fetch(tarballUrl).catch((err: unknown) => {
+        throw new Error(
+          `Network error fetching tarball from ${tarballUrl}: ${toError(err).message}`
+        );
+      }),
+    ]);
+    if (!checksumsRes.ok) {
       throw new Error(
-        `Network error fetching checksums from ${checksumsUrl}: ${(err as Error).message}`
+        `Failed to download checksums: ${checksumsRes.status} ${checksumsRes.statusText}`
       );
-    }),
-    fetch(tarballUrl).catch((err: unknown) => {
-      throw new Error(
-        `Network error fetching tarball from ${tarballUrl}: ${(err as Error).message}`
-      );
-    }),
-  ]);
-  if (!checksumsRes.ok) {
-    throw new Error(
-      `Failed to download checksums: ${checksumsRes.status} ${checksumsRes.statusText}`
-    );
+    }
+    const checksumsText = await checksumsRes.text();
+    expectedHash = parseChecksum(checksumsText, 'archon-web.tar.gz');
+    log.info({ source: 'remote' }, 'web_dist.checksum_resolved');
+    tarballRes = fetchedTarballRes;
   }
+
   if (!tarballRes.ok) {
     throw new Error(`Failed to download web UI: ${tarballRes.status} ${tarballRes.statusText}`);
   }
-  const [checksumsText, tarballBuffer] = await Promise.all([
-    checksumsRes.text(),
-    tarballRes.arrayBuffer(),
-  ]);
-  const expectedHash = parseChecksum(checksumsText, 'archon-web.tar.gz');
+  const tarballBuffer = await tarballRes.arrayBuffer();
 
   // Verify checksum
   const hasher = new Bun.CryptoHasher('sha256');
@@ -156,7 +184,7 @@ async function downloadWebDist(version: string, targetDir: string): Promise<void
   } catch (err) {
     cleanupAndThrow(
       tmpDir,
-      `Failed to move extracted web UI from ${tmpDir} to ${targetDir}: ${(err as Error).message}`
+      `Failed to move extracted web UI from ${tmpDir} to ${targetDir}: ${toError(err).message}`
     );
   }
   console.log(`Extracted to ${targetDir}`);
