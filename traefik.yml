@@ -1,0 +1,43 @@
+# Traefik static configuration for Archon.
+# Replaces Caddyfile.example — Traefik handles TLS via Let's Encrypt.
+#
+# For local testing, comment out certificatesResolvers and set
+# entryPoints.websecure to port 80 without TLS.
+
+api:
+  dashboard: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # email is set via TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL env var
+      # email: ""
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+
+providers:
+  docker:
+    exposedByDefault: false
+  file:
+    filename: /etc/traefik/dynamic.yml
+
+log:
+  level: INFO
+  format: common
+
+accessLog: {}
