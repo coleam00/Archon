@@ -20,11 +20,16 @@ import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
 
 describe('shouldPassNoEnvFile', () => {
-  test('returns true when cliPath is undefined (dev mode — SDK spawns cli.js via Bun)', () => {
-    expect(shouldPassNoEnvFile(undefined)).toBe(true);
+  test('returns false when cliPath is undefined (dev mode — SDK 0.2.x resolves a native binary)', () => {
+    // Pre-0.2.x the SDK shipped cli.js and dev mode = JS. Since 0.2.x the
+    // SDK ships per-platform native binaries via optional deps. The flag
+    // (a Bun runtime option) is meaningless to native binaries and gets
+    // rejected as `error: unknown option '--no-env-file'`. CWD .env leak
+    // protection comes from stripCwdEnv() at entry, not from this flag.
+    expect(shouldPassNoEnvFile(undefined)).toBe(false);
   });
 
-  test('returns true for an explicit cli.js path (npm-installed, SDK spawns via Bun/Node)', () => {
+  test('returns true for an explicit cli.js path (legacy npm-installed cli.js, SDK spawns via Bun)', () => {
     expect(
       shouldPassNoEnvFile('/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js')
     ).toBe(true);
@@ -505,8 +510,10 @@ describe('ClaudeProvider', () => {
       const callArgs = mockQuery.mock.calls[0][0] as {
         options: { env: NodeJS.ProcessEnv; executableArgs?: string[] };
       };
-      // --no-env-file prevents Bun from auto-loading .env in subprocess CWD
-      expect(callArgs.options.executableArgs).toEqual(['--no-env-file']);
+      // executableArgs is omitted when cliPath is undefined (dev mode, SDK
+      // 0.2.x resolves a native binary). CWD .env leak protection comes
+      // from stripCwdEnv() at entry, not from the --no-env-file flag.
+      expect(callArgs.options.executableArgs).toBeUndefined();
       expect(callArgs.options.env.CUSTOM_USER_KEY).toBe('user-trusted-value');
       // Windows uses "Path" casing in spread objects and USERPROFILE instead of HOME
       const envPath = callArgs.options.env.PATH ?? callArgs.options.env.Path;
