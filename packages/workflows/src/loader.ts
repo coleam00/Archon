@@ -277,9 +277,10 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       typeof raw.provider === 'string' && raw.provider.length > 0 ? raw.provider : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
 
-    // Validate provider identity at load time. Model strings are NOT validated here —
-    // they pass through to the SDK at run time, which is the source of truth for what
-    // model names exist (vendor SDKs ship new models faster than Archon can update).
+    // Validate provider identity at load time, both at the workflow level and
+    // per node. Model strings are NOT validated — they pass through to the SDK
+    // at run time, which is the source of truth for what model names exist
+    // (vendor SDKs ship new models faster than Archon can update).
     if (provider && !isRegisteredProvider(provider)) {
       return {
         workflow: null,
@@ -291,6 +292,20 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
           errorType: 'validation_error',
         },
       };
+    }
+    for (const node of dagNodes) {
+      if (node.provider !== undefined && !isRegisteredProvider(node.provider)) {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${getRegisteredProviders()
+              .map(p => p.id)
+              .join(', ')}`,
+            errorType: 'validation_error',
+          },
+        };
+      }
     }
 
     // Validate modelReasoningEffort — warn and ignore invalid values (preserve original behavior)

@@ -896,11 +896,10 @@ describe('CodexProvider', () => {
     });
 
     test('error event followed by stream close yields fail-stop result.isError', async () => {
-      // This is the silent-rejection path the redesign closes: the SDK
-      // sends an error event (e.g. "model not supported") and the
-      // iterator closes without turn.completed or turn.failed. We
-      // synthesize a fail-stop result so the dag-executor's existing
-      // isError path catches the failure \u2014 same shape as Claude.
+      // The SDK sends an error event (e.g. "model not supported") and the
+      // iterator closes without turn.completed or turn.failed. The provider
+      // synthesizes a fail-stop result so the dag-executor's msg.isError
+      // branch catches the failure \u2014 same chunk shape as Claude.
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'error', message: "'opus[1m]' model is not supported" };
@@ -1021,6 +1020,35 @@ describe('CodexProvider', () => {
         isError: true,
         errorSubtype: 'codex_turn_failed',
         errors: ['Unknown error'],
+      });
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { errorMessage: 'Unknown error' },
+        'turn_failed'
+      );
+    });
+
+    test('iterator that closes with zero events yields codex_stream_incomplete with default message', async () => {
+      // Bare-stream-close fallback: no error event, no terminal event,
+      // iterator just ends. Locks in the default message used when there is
+      // no captured non-MCP error to attribute the failure to.
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          // no events
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]).toEqual({
+        type: 'result',
+        sessionId: 'new-thread-id',
+        isError: true,
+        errorSubtype: 'codex_stream_incomplete',
+        errors: ['Codex stream closed without turn.completed or turn.failed'],
       });
     });
 

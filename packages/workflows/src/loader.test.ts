@@ -348,10 +348,9 @@ nodes:
     });
 
     it('should accept any model string with a known provider (SDK validates at run time)', async () => {
-      // The redesign drops cross-provider model inference and the model
-      // allow-lists. Whatever the user wrote in `model:` passes through to
-      // the SDK; the SDK is the source of truth for what model strings
-      // exist. Errors surface at run time, not load time.
+      // Whatever the user wrote in `model:` passes through to the SDK; the
+      // SDK is the source of truth for what model strings exist. Errors
+      // surface at run time, not load time.
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 

@@ -196,11 +196,11 @@ async function* streamCodexEvents(
   const state: CodexStreamState = {};
   let accumulatedText = '';
 
-  // Track whether the SDK reached a terminal event. If the iterator closes
-  // without one (e.g. the model was rejected before the turn even started),
-  // we synthesize a fail-stop result so the dag-executor's existing isError
-  // path catches the failure — matching Claude's contract.
-  let sawTerminal = false;
+  // If the iterator closes without a terminal event (e.g. the model was
+  // rejected before the turn even started), we synthesize a fail-stop result
+  // after the loop so the dag-executor's `msg.isError` branch catches it
+  // — matching Claude's contract. Both terminal branches below `return`,
+  // so reaching the post-loop block can only mean no terminal fired.
   let lastNonMcpError: string | undefined;
 
   for await (const event of events) {
@@ -233,7 +233,6 @@ async function* streamCodexEvents(
     }
 
     if (event.type === 'turn.failed') {
-      sawTerminal = true;
       const errorObj = (event as { error?: { message?: string } }).error;
       const errorMessage = errorObj?.message ?? 'Unknown error';
       getLog().error({ errorMessage }, 'turn_failed');
@@ -408,7 +407,6 @@ async function* streamCodexEvents(
     }
 
     if (event.type === 'turn.completed') {
-      sawTerminal = true;
       getLog().debug('turn_completed');
       const usage = extractUsageFromCodexEvent(event as TurnCompletedEvent);
 
@@ -444,21 +442,23 @@ async function* streamCodexEvents(
     }
   }
 
-  // Stream closed without turn.completed or turn.failed. Common cause:
-  // model rejected by the API (model not supported, auth refused) before
-  // the turn started. Surface as a fail-stop so the dag-executor's
-  // existing msg.isError path catches it and the node fails loudly.
-  if (!sawTerminal) {
-    const message = lastNonMcpError ?? 'Codex stream closed without turn.completed or turn.failed';
-    getLog().error({ message }, 'stream_incomplete');
-    yield {
-      type: 'result',
-      sessionId: threadId ?? undefined,
-      isError: true,
-      errorSubtype: 'codex_stream_incomplete',
-      errors: [message],
-    };
-  }
+  // Reaching here means the iterator closed without yielding turn.completed
+  // or turn.failed (both branches `return` immediately). Common cause: model
+  // rejected by the API (model not supported, auth refused) before the turn
+  // started. Surface as a fail-stop. The dag-executor's `msg.isError` branch
+  // (dag-executor.ts: throws `Node '<id>' failed: SDK returned <subtype>`)
+  // turns this into a thrown node failure — distinct from the empty-output
+  // guard further down, which returns `{ state: 'failed' }` for AI nodes
+  // that streamed nothing but never raised an isError.
+  const message = lastNonMcpError ?? 'Codex stream closed without turn.completed or turn.failed';
+  getLog().error({ message }, 'stream_incomplete');
+  yield {
+    type: 'result',
+    sessionId: threadId ?? undefined,
+    isError: true,
+    errorSubtype: 'codex_stream_incomplete',
+    errors: [message],
+  };
 }
 
 // ─── Error Classification & Retry ────────────────────────────────────────

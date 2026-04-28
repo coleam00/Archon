@@ -1113,7 +1113,11 @@ async function executeNodeInternal(
     // rejection or interruption that didn't produce a result.isError chunk.
     // Bash/script/approval nodes don't reach this path; they have their
     // own dispatch and never stream through this loop.
-    if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
+    //
+    // Idle-timeout exits are exempt: the timeout warning at line 1017 has
+    // already told the user the node "completed via idle timeout"; flipping
+    // that to a failure here would directly contradict the on-screen message.
+    if (nodeOutputText.trim() === '' && structuredOutput === undefined && !nodeIdleTimedOut) {
       const duration = Date.now() - nodeStartTime;
       const emptyError = `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
       getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');

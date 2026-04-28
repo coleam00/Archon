@@ -486,10 +486,10 @@ describe('executeWorkflow', () => {
     });
 
     it('passes provider+model through to the SDK without re-routing on model name', async () => {
-      // The redesign deliberately removes cross-provider model inference. A
-      // workflow that sets provider:codex with a Claude-looking model name
-      // (or any other unusual string) gets the request forwarded to the
-      // codex SDK as-is — the SDK decides whether to accept it.
+      // Provider is explicit; the model string is forwarded verbatim to
+      // whichever SDK the resolved provider names. A workflow that sets
+      // provider:codex with a Claude-looking model gets the request handed
+      // to the codex SDK as-is — the SDK decides whether to accept it.
       const store = makeStore();
       const deps = makeDeps(store);
       await executeWorkflow(
