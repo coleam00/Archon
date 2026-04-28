@@ -653,21 +653,36 @@ export async function workflowRunCommand(
   }
 
   // Auto-generate title for CLI workflow conversations (fire-and-forget)
-  const workflowConfig = await loadConfig(cwd);
-  const titleAssistantType = resolveTitleAssistantType(
-    workflow,
-    workflowConfig.assistant,
-    conversation.ai_assistant_type
-  );
-  const titleAssistantConfig = workflowConfig.assistants?.[titleAssistantType] ?? {};
-  void generateAndSetTitle(
-    conversation.id,
-    userMessage,
-    titleAssistantType,
-    workingCwd,
-    workflowName,
-    titleAssistantConfig
-  );
+  void (async (): Promise<void> => {
+    let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+    try {
+      workflowConfig = await loadConfig(cwd);
+    } catch (error) {
+      getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
+    }
+
+    try {
+      const titleAssistantType = resolveTitleAssistantType(
+        workflow,
+        workflowConfig?.assistant,
+        conversation.ai_assistant_type
+      );
+      const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+      await generateAndSetTitle(
+        conversation.id,
+        userMessage,
+        titleAssistantType,
+        workingCwd,
+        workflowName,
+        titleAssistantConfig
+      );
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, conversationId: conversation.id },
+        'workflow.title_generation_failed'
+      );
+    }
+  })();
 
   // Register cleanup handlers for graceful termination
   let terminating = false;

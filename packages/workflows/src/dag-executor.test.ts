@@ -2204,6 +2204,18 @@ describe('loadMcpConfig', () => {
     expect(result.servers).toEqual(servers);
   });
 
+  it('rejects mixed mcpServers wrapper and top-level metadata', async () => {
+    const servers = { figma: { url: 'http://127.0.0.1:3845/mcp' } };
+    await writeFile(
+      join(testDir, 'mixed-wrapper.json'),
+      JSON.stringify({ $schema: 'https://example.com/schema.json', mcpServers: servers })
+    );
+
+    await expect(loadMcpConfig('mixed-wrapper.json', testDir)).rejects.toThrow(
+      'cannot mix top-level "mcpServers" with other keys'
+    );
+  });
+
   it('loads multiple servers from one config', async () => {
     const config = {
       github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
@@ -2297,6 +2309,42 @@ describe('loadMcpConfig', () => {
   it('throws on non-object JSON (string)', async () => {
     await writeFile(join(testDir, 'str.json'), '"hello"');
     await expect(loadMcpConfig('str.json', testDir)).rejects.toThrow('must be a JSON object');
+  });
+
+  it('throws on array-valued server config', async () => {
+    await writeFile(join(testDir, 'server-array.json'), JSON.stringify({ figma: [] }));
+
+    await expect(loadMcpConfig('server-array.json', testDir)).rejects.toThrow(
+      'MCP server "figma" must be a JSON object'
+    );
+  });
+
+  it('throws on non-string env values', async () => {
+    await writeFile(
+      join(testDir, 'env-number.json'),
+      JSON.stringify({ figma: { command: 'figma-mcp', env: { TOKEN: 123 } } })
+    );
+
+    await expect(loadMcpConfig('env-number.json', testDir)).rejects.toThrow(
+      'MCP config figma.env.TOKEN must be a string'
+    );
+  });
+
+  it('throws on non-string header values', async () => {
+    await writeFile(
+      join(testDir, 'header-array.json'),
+      JSON.stringify({
+        figma: {
+          type: 'http',
+          url: 'http://127.0.0.1:3845/mcp',
+          headers: { Authorization: ['Bearer token'] },
+        },
+      })
+    );
+
+    await expect(loadMcpConfig('header-array.json', testDir)).rejects.toThrow(
+      'MCP config figma.headers.Authorization must be a string'
+    );
   });
 });
 

@@ -331,7 +331,8 @@ async function* streamCodexEvents(
     if (event.type === 'error') {
       const errorEvent = event as { message: string };
       getLog().error({ message: errorEvent.message }, 'stream_error');
-      if (surfaceMcpClientErrors || !errorEvent.message.includes('MCP client')) {
+      const isMcpClientError = errorEvent.message.toLowerCase().includes('mcp client');
+      if (surfaceMcpClientErrors || !isMcpClientError) {
         yield { type: 'system', content: `⚠️ ${errorEvent.message}` };
       }
       continue;
@@ -654,7 +655,7 @@ export class CodexProvider implements IAgentProvider {
     }
 
     for (const warning of providerWarnings) {
-      yield { type: 'system', content: `Warning: ${warning.message}` };
+      yield { type: 'system', content: `⚠️ ${warning.message}` };
     }
 
     // 1. Initialize SDK and build thread options
