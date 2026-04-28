@@ -1,14 +1,30 @@
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
- * These tests mock @archon/git's execFileAsync to verify command construction
- * without actually running uv/bun, and are isolated from dag-executor.test.ts
- * to avoid mock.module() pollution.
+ * Script nodes invoke uv/bun via ./subprocess (which uses spawn + process-tree
+ * kill on timeout), so command construction is verified by mocking
+ * `./subprocess`. We also mock `@archon/git`'s `execFileAsync` because other
+ * code paths in dag-executor still use it (until_bash predicate evaluation,
+ * etc.).
  */
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
 import { mkdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { subprocess } from './subprocess';
+
+// --- Spy on subprocess.exec ---
+//
+// Using spyOn instead of mock.module here is intentional: mock.module is
+// process-global in bun, and `./subprocess` is also covered by subprocess.test.ts
+// which expects the real implementation. spyOn keeps the override scoped to
+// this file's invocation and the module exports `subprocess` as an object
+// specifically so it can be spied on.
+
+const mockSubprocessExec = spyOn(subprocess, 'exec').mockImplementation(
+  async (_cmd: string, _args: string[], _opts?: unknown) =>
+    ({ stdout: '', stderr: '' }) as { stdout: string; stderr: string }
+);
 
 // --- Mock @archon/git BEFORE any imports that depend on it ---
 
@@ -172,6 +188,7 @@ describe('script node deps field — command construction', () => {
     );
     await mkdir(testDir, { recursive: true });
     mockExecFileAsync.mockClear();
+    mockSubprocessExec.mockClear();
     mockSendQuery.mockClear();
     mockGetAgentProvider.mockClear();
   });
@@ -208,7 +225,7 @@ describe('script node deps field — command construction', () => {
       minimalConfig
     );
 
-    const calls = mockExecFileAsync.mock.calls;
+    const calls = mockSubprocessExec.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
@@ -247,7 +264,7 @@ describe('script node deps field — command construction', () => {
       minimalConfig
     );
 
-    const calls = mockExecFileAsync.mock.calls;
+    const calls = mockSubprocessExec.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
@@ -279,7 +296,7 @@ describe('script node deps field — command construction', () => {
       minimalConfig
     );
 
-    const calls = mockExecFileAsync.mock.calls;
+    const calls = mockSubprocessExec.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
@@ -311,7 +328,7 @@ describe('script node deps field — command construction', () => {
       minimalConfig
     );
 
-    const calls = mockExecFileAsync.mock.calls;
+    const calls = mockSubprocessExec.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'bun');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
@@ -345,7 +362,7 @@ describe('script node deps field — command construction', () => {
       minimalConfig
     );
 
-    const calls = mockExecFileAsync.mock.calls;
+    const calls = mockSubprocessExec.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'bun');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
@@ -383,7 +400,7 @@ describe('script node deps field — command construction', () => {
       minimalConfig
     );
 
-    const calls = mockExecFileAsync.mock.calls;
+    const calls = mockSubprocessExec.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
@@ -428,7 +445,7 @@ describe('script node deps field — command construction', () => {
       minimalConfig
     );
 
-    const calls = mockExecFileAsync.mock.calls;
+    const calls = mockSubprocessExec.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'uv');
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
