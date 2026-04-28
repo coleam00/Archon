@@ -82,6 +82,23 @@ export interface PiProviderDefaults {
   env?: Record<string, string>;
 }
 
+/**
+ * Community provider defaults for opencode (@opencode-ai/sdk).
+ * v1 shape — extend as capabilities are wired in.
+ */
+export interface OpencodeProviderDefaults {
+  [key: string]: unknown;
+  /** Default model in '<providerID>/<modelID>' format, e.g. 'ollama/qwen3:8b'. */
+  model?: string;
+  /**
+   * Directory containing the opencode binary. When set, prepended to PATH
+   * before the opencode server is started. Useful when opencode is installed
+   * outside the default PATH (e.g. compiled Archon builds).
+   * @default undefined — opencode must be on PATH
+   */
+  opencodeBinaryDir?: string;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 

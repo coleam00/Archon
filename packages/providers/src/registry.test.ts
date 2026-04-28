@@ -275,9 +275,8 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
       expect(isRegisteredProvider('pi')).toBe(true);
+      expect(isRegisteredProvider('opencode')).toBe(true);
     });
 
     test('is idempotent', () => {

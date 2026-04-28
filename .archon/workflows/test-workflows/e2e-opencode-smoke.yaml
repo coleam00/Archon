@@ -1,0 +1,22 @@
+# E2E smoke test — opencode community provider
+# Verifies: opencode server starts, event bridge yields assistant chunks,
+#   session.idle triggers result chunk.
+name: e2e-opencode-smoke
+description: 'Smoke test for opencode community provider. Verifies prompt response via sendQuery.'
+provider: opencode
+model: requesty/google/gemini-3-flash-preview
+
+nodes:
+  - id: simple
+    prompt: 'What is 2+2? Reply with just the number, nothing else.'
+    idle_timeout: 60000
+
+  - id: assert
+    bash: |
+      output="$simple.output"
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      echo "PASS: got response: $output"
+    depends_on: [simple]
