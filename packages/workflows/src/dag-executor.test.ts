@@ -5490,6 +5490,71 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(failedData.error).toContain('permission denied');
   });
 
+  it('uses rejected Claude usage-limit details instead of SDK success subtype', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(function* () {
+      callCount++;
+      if (callCount === 1) {
+        yield { type: 'assistant', content: 'ok' };
+        yield { type: 'result', sessionId: 'sid-ok' };
+        return;
+      }
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: {
+          status: 'rejected',
+          resetsAt: Math.floor(Date.now() / 1000) + 3600,
+          rateLimitType: 'weekly',
+          overageStatus: 'rejected',
+        },
+      };
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'success',
+        sessionId: 'sid-rate-limit',
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'rate-limit-test',
+        nodes: [
+          { id: 'ok', prompt: 'first step' },
+          { id: 'step1', command: 'my-cmd', depends_on: ['ok'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const failCalls = (store.failWorkflowRun as Mock<(id: string, msg: string) => Promise<void>>)
+      .mock.calls;
+    expect(failCalls.length).toBeGreaterThan(0);
+
+    const failureMessage = failCalls[0][1];
+    expect(failureMessage).toContain('Claude usage limit hit');
+    expect(failureMessage).toContain('weekly');
+    expect(failureMessage).toContain('resets at');
+    expect(failureMessage).toContain('overage rejected');
+    expect(failureMessage).not.toContain('SDK returned success');
+  });
+
   it('forwards workflow-level effort to node when no per-node override', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
