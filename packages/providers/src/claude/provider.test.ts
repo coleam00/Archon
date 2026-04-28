@@ -16,6 +16,16 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
+// Force the binary resolver to return undefined for these tests. The real
+// resolver autodetects an installed Claude binary on the dev machine, which
+// would change executableArgs/`--no-env-file` semantics depending on whether
+// the test host happens to have a native install. Tests here pin the
+// "no path resolved" branch on purpose.
+mock.module('./binary-resolver', () => ({
+  resolveClaudeBinaryPath: async () => undefined,
+  fileExists: () => false,
+}));
+
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
 

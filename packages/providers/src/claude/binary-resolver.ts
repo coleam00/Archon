@@ -6,20 +6,24 @@
  * own node_modules location; in compiled binaries that path is frozen to
  * the build host's filesystem and does not exist on end-user machines.
  *
- * Resolution order (binary mode only):
+ * Resolution order (applies in both dev and binary mode — see note below):
  * 1. `CLAUDE_BIN_PATH` environment variable
  * 2. `assistants.claude.claudeBinaryPath` in config
  * 3. Autodetect canonical install path (native installer default)
  * 4. Throw with install instructions
  *
- * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the caller
- * omits `pathToClaudeCodeExecutable` entirely and the SDK resolves via its
- * normal node_modules lookup.
+ * Dev mode used to short-circuit at step 0 (return undefined so the SDK
+ * resolved via its own node_modules lookup). claude-agent-sdk 0.2.121
+ * dropped the bundled `cli.js` in favor of a native platform binary, and
+ * `shouldPassNoEnvFile` then incorrectly forwarded `--no-env-file` to that
+ * native binary (which rejects it). Honoring env/config/autodetect in dev
+ * mode too returns a real path so the JS-vs-binary detection downstream
+ * can see what's actually being spawned.
  */
 import { existsSync as _existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
+import { createLogger } from '@archon/paths';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {
@@ -53,16 +57,14 @@ const INSTALL_INSTRUCTIONS =
   'See: https://archon.diy/docs/reference/configuration#claude';
 
 /**
- * Resolve the path to the Claude Code SDK's cli.js.
+ * Resolve the path to the Claude Code executable.
  *
- * In dev mode: returns undefined (let SDK resolve via node_modules).
- * In binary mode: resolves from env/config, or throws with install instructions.
+ * Returns env override, config override, autodetected native install, or
+ * throws install instructions. Same chain in dev and binary mode.
  */
 export async function resolveClaudeBinaryPath(
   configClaudeBinaryPath?: string
 ): Promise<string | undefined> {
-  if (!BUNDLED_IS_BINARY) return undefined;
-
   // 1. Environment variable override
   const envPath = process.env.CLAUDE_BIN_PATH;
   if (envPath) {
