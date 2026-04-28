@@ -53,7 +53,12 @@ export function tryParseStructuredOutput(text: string): unknown {
     .replace(/\n?\s*```\s*$/, '')
     .trim();
   try {
-    return JSON.parse(cleaned);
+    const parsed: unknown = JSON.parse(cleaned);
+    // Schema augmentation always asks for an object — bare `null`, numbers,
+    // and strings are valid JSON but not "structured output". Treat them as
+    // missing so the dag-executor's structured_output_missing path engages.
+    if (parsed === null || typeof parsed !== 'object') return undefined;
+    return parsed;
   } catch {
     return undefined;
   }
