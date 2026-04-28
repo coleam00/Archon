@@ -4483,17 +4483,21 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(result).toBe('Final summary text');
   });
 
-  it('returns undefined when the single terminal node produces no output', async () => {
+  it('fails node when the AI stream closes with no assistant output', async () => {
+    // Empty assistant output on AI nodes (`command:`/`prompt:`) typically
+    // indicates a silent provider rejection or stream interruption that
+    // didn't yield a result.isError chunk. Treat it as a node failure
+    // rather than a successful empty completion.
     mockSendQueryDag.mockImplementation(async function* () {
-      // No assistant content — empty output
       yield { type: 'result', sessionId: 'sess-empty' };
     });
 
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
-    const result = await executeDagWorkflow(
+    await executeDagWorkflow(
       mockDeps,
       platform,
       'conv-dag',
@@ -4509,7 +4513,120 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       minimalConfig
     );
 
-    expect(result).toBeUndefined();
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents.length).toBeGreaterThan(0);
+    const failedData = (nodeFailedEvents[0][0] as Record<string, unknown>).data as Record<
+      string,
+      unknown
+    >;
+    expect(failedData.error).toContain('produced no assistant output');
+    // Workflow-level failure must propagate, not just the node event.
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('does NOT fail node when stream yields no assistant text but a structuredOutput is present', async () => {
+    // Output-format nodes legitimately produce zero free-form text — the
+    // useful payload is the structuredOutput field. The empty-output guard
+    // must spare them.
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        sessionId: 'sess-structured',
+        structuredOutput: { category: 'math' },
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'structured-only-dag',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'Classify this',
+            output_format: { type: 'object', properties: {} },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents.length).toBe(0);
+    const nodeCompletedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
+    );
+    expect(nodeCompletedEvents.length).toBeGreaterThan(0);
+  });
+
+  it('fails the run when a node specifies an unknown provider (defense-in-depth at execution time)', async () => {
+    // Loader-time validation also catches this (loader.ts iterates dagNodes
+    // after parsing), but the dag-executor's resolveNodeProviderAndModel
+    // throws as defense-in-depth in case a code path bypasses the loader.
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'unknown-provider-dag',
+        nodes: [
+          {
+            id: 'bad',
+            command: 'my-cmd',
+            provider: 'claud', // typo
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    // The "unknown provider" detail surfaces on the node_failed event; the
+    // workflow-level fail message is a generic "no successful nodes" summary.
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents.length).toBeGreaterThan(0);
+    const nodeFailedData = (nodeFailedEvents[0][0] as Record<string, unknown>).data as Record<
+      string,
+      unknown
+    >;
+    expect(nodeFailedData.error).toContain("unknown provider 'claud'");
   });
 
   it('excludes intermediate nodes with dependents from terminal set (fan-in DAG)', async () => {
@@ -5660,6 +5777,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(function* () {
       callCount++;
+      yield { type: 'assistant', content: `Step ${String(callCount)} output` };
       yield { type: 'result', sessionId: `sid-${String(callCount)}`, cost: 0.001 };
     });
 
@@ -5701,6 +5819,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
 
   it('omits total_cost_usd from completeWorkflowRun when no cost yielded', async () => {
     mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Some output' };
       yield { type: 'result', sessionId: 'sid-no-cost' };
     });
 

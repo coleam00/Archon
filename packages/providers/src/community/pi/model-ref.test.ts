@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { isPiModelCompatible, parsePiModelRef } from './model-ref';
+import { parsePiModelRef } from './model-ref';
 
 describe('parsePiModelRef', () => {
   test('parses simple provider/model', () => {
@@ -46,23 +46,5 @@ describe('parsePiModelRef', () => {
 
   test('rejects empty string', () => {
     expect(parsePiModelRef('')).toBeUndefined();
-  });
-});
-
-describe('isPiModelCompatible', () => {
-  test('accepts valid provider/model refs', () => {
-    expect(isPiModelCompatible('google/gemini-2.5-pro')).toBe(true);
-    expect(isPiModelCompatible('anthropic/claude-opus-4-5')).toBe(true);
-    expect(isPiModelCompatible('openrouter/qwen/qwen3-coder')).toBe(true);
-  });
-
-  test('rejects Claude aliases', () => {
-    expect(isPiModelCompatible('sonnet')).toBe(false);
-    expect(isPiModelCompatible('opus')).toBe(false);
-    expect(isPiModelCompatible('haiku')).toBe(false);
-  });
-
-  test('rejects claude-prefixed models without provider', () => {
-    expect(isPiModelCompatible('claude-sonnet-4')).toBe(false);
   });
 });

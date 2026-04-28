@@ -468,10 +468,11 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
     });
 
-    it('infers claude provider when workflow sets a claude model alias', async () => {
+    it('passes workflow.model through unchanged when workflow.provider is unset', async () => {
       const store = makeStore();
       const deps = makeDeps(store);
-      // config.assistant defaults to 'claude', model 'sonnet' is a claude alias
+      // Provider falls back to config.assistant ('claude'); model is forwarded
+      // verbatim. The SDK is the source of truth for what model strings work.
       await executeWorkflow(
         deps,
         makePlatform(),
@@ -484,7 +485,26 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
     });
 
-    it('throws when model is incompatible with explicit provider', async () => {
+    it('passes provider+model through to the SDK without re-routing on model name', async () => {
+      // Provider is explicit; the model string is forwarded verbatim to
+      // whichever SDK the resolved provider names. A workflow that sets
+      // provider:codex with a Claude-looking model gets the request handed
+      // to the codex SDK as-is — the SDK decides whether to accept it.
+      const store = makeStore();
+      const deps = makeDeps(store);
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ provider: 'codex', model: 'sonnet' }),
+        'test message',
+        'db-conv-1'
+      );
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws when workflow.provider is not a registered provider', async () => {
       const store = makeStore();
       const deps = makeDeps(store);
       await expect(
@@ -493,11 +513,11 @@ describe('executeWorkflow', () => {
           makePlatform(),
           'conv-1',
           '/tmp',
-          makeWorkflow({ provider: 'codex', model: 'sonnet' }),
+          makeWorkflow({ provider: 'claud', model: 'sonnet' }),
           'test message',
           'db-conv-1'
         )
-      ).rejects.toThrow('not compatible');
+      ).rejects.toThrow(/unknown provider 'claud'/);
     });
   });
 

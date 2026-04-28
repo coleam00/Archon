@@ -30,13 +30,3 @@ export function parsePiModelRef(raw: string): PiModelRef | undefined {
 
   return { provider, modelId };
 }
-
-/**
- * Registry-level `isModelCompatible` check.
- * Syntactic only — Pi's actual model catalog is validated at `sendQuery` time
- * via `getModel(provider, modelId)`, which is more trustworthy than keeping
- * an Archon-side allowlist in sync.
- */
-export function isPiModelCompatible(model: string): boolean {
-  return parsePiModelRef(model) !== undefined;
-}

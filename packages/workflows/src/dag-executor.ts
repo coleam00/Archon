@@ -21,7 +21,11 @@ import type {
   ProviderCapabilities,
   TokenUsage,
 } from '@archon/providers/types';
-import { getProviderCapabilities } from '@archon/providers';
+import {
+  getProviderCapabilities,
+  getRegisteredProviders,
+  isRegisteredProvider,
+} from '@archon/providers';
 import type {
   DagNode,
   ApprovalNode,
@@ -49,7 +53,6 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
-import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import {
   logNodeStart,
   logNodeComplete,
@@ -341,7 +344,17 @@ async function resolveNodeProviderAndModel(
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
-  const provider: string = node.provider ?? inferProviderFromModel(node.model, workflowProvider);
+  // Provider is explicit: node.provider ?? workflow.provider. Model never
+  // influences provider selection. Model strings pass through to the SDK.
+  const provider: string = node.provider ?? workflowProvider;
+  if (!isRegisteredProvider(provider)) {
+    throw new Error(
+      `Node '${node.id}': unknown provider '${provider}'. ` +
+        `Registered: ${getRegisteredProviders()
+          .map(p => p.id)
+          .join(', ')}`
+    );
+  }
 
   const providerAssistantConfig = config.assistants[provider];
   const model: string | undefined =
@@ -349,12 +362,6 @@ async function resolveNodeProviderAndModel(
     (provider === workflowProvider
       ? workflowModel
       : (providerAssistantConfig?.model as string | undefined));
-
-  if (!isModelCompatible(provider, model)) {
-    throw new Error(
-      `Node '${node.id}': model "${model ?? 'default'}" is not compatible with provider "${provider}"`
-    );
-  }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -1099,6 +1106,49 @@ async function executeNodeInternal(
       lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
 
       return { state: 'failed', output: nodeOutputText, error: creditError };
+    }
+
+    // Empty assistant output is a failure for AI nodes — a provider stream
+    // that closed cleanly with zero content typically means a silent
+    // rejection or interruption that didn't produce a result.isError chunk.
+    // Bash/script/approval nodes don't reach this path; they have their
+    // own dispatch and never stream through this loop.
+    //
+    // Idle-timeout exits are exempt: the timeout warning at line 1017 has
+    // already told the user the node "completed via idle timeout"; flipping
+    // that to a failure here would directly contradict the on-screen message.
+    if (nodeOutputText.trim() === '' && structuredOutput === undefined && !nodeIdleTimedOut) {
+      const duration = Date.now() - nodeStartTime;
+      const emptyError = `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
+      getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');
+      await logNodeError(logDir, workflowRun.id, node.id, emptyError);
+
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'node_failed',
+          step_name: node.id,
+          data: { error: emptyError, duration_ms: duration },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+            'workflow_event_persist_failed'
+          );
+        });
+
+      emitter.emit({
+        type: 'node_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        nodeName: node.command ?? node.id,
+        error: emptyError,
+      });
+
+      lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
+      lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
+
+      return { state: 'failed', output: '', error: emptyError };
     }
 
     const duration = Date.now() - nodeStartTime;
@@ -1982,6 +2032,52 @@ async function executeLoopNode(
       );
     }
 
+    // Empty assistant output is an iteration failure for AI loops — same
+    // contract as the single-shot AI-node guard in executeNodeInternal. A
+    // provider stream that closed cleanly with zero content typically means
+    // a silent rejection or interruption; left unchecked, an interactive
+    // loop would pause with a blank gate or burn the full max_iterations
+    // budget producing nothing. Idle-timeout exits are exempt — the
+    // notification above has already told the user the iteration completed
+    // via timeout, and flipping that to a failure would contradict it.
+    if (!iterationIdleTimedOut && fullOutput.trim() === '') {
+      const iterationDuration = Date.now() - iterationStart;
+      const emptyError =
+        'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
+      getLog().error(
+        { nodeId: node.id, iteration: i, durationMs: iterationDuration },
+        'loop_node.iteration_empty_output'
+      );
+      getWorkflowEventEmitter().emit({
+        type: 'loop_iteration_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        iteration: i,
+        error: emptyError,
+      });
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'loop_iteration_failed',
+          step_name: node.id,
+          data: {
+            iteration: i,
+            error: emptyError,
+            duration: iterationDuration,
+            nodeId: node.id,
+          },
+        })
+        .catch((evtErr: Error) => {
+          logEventStoreError(evtErr, i);
+        });
+      return {
+        state: 'failed',
+        output: '',
+        error: `Loop iteration ${i} failed: ${emptyError}`,
+        costUsd: loopTotalCostUsd,
+      };
+    }
+
     // Batch mode: send accumulated output
     if (platform.getStreamingMode() === 'batch' && cleanOutput) {
       await safeSendMessage(platform, conversationId, cleanOutput, msgContext);
@@ -2610,26 +2706,25 @@ export async function executeDagWorkflow(
 
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
-            // Resolve per-node provider/model overrides (same logic as other node types)
-            const loopProvider: string =
-              node.provider ?? inferProviderFromModel(node.model, workflowProvider);
+            // Resolve per-node provider/model overrides (same logic as other node types).
+            // Provider is explicit; model passes through to the SDK. Throw on an
+            // unknown provider so the outer catch below emits the standard
+            // node_failed event + user-facing message — the same path
+            // resolveNodeProviderAndModel uses for non-loop nodes.
+            const loopProvider: string = node.provider ?? workflowProvider;
+            if (!isRegisteredProvider(loopProvider)) {
+              throw new Error(
+                `Node '${node.id}': unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
+                  .map(p => p.id)
+                  .join(', ')}`
+              );
+            }
             const loopAssistantConfig = config.assistants[loopProvider];
             const loopModel: string | undefined =
               node.model ??
               (loopProvider === workflowProvider
                 ? workflowModel
                 : (loopAssistantConfig?.model as string | undefined));
-
-            if (!isModelCompatible(loopProvider, loopModel)) {
-              return {
-                nodeId: node.id,
-                output: {
-                  state: 'failed' as const,
-                  output: '',
-                  error: `Node '${node.id}': model "${loopModel ?? 'default'}" is not compatible with provider "${loopProvider}"`,
-                },
-              };
-            }
 
             const output = await executeLoopNode(
               deps,
