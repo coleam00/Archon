@@ -69,6 +69,40 @@ const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
 
+// ─── Reaction Helpers ───────────────────────────────────────────────────────
+
+/**
+ * Safely add a reaction to a message.
+ * Errors are logged but not thrown to avoid breaking core message handling.
+ */
+async function safeAddReaction(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  reaction: string
+): Promise<void> {
+  try {
+    await platform.addReaction?.(conversationId, reaction);
+  } catch (error) {
+    getLog().warn({ err: error, conversationId, reaction }, 'reaction_add_failed');
+  }
+}
+
+/**
+ * Safely remove a reaction from a message.
+ * Errors are logged but not thrown to avoid breaking core message handling.
+ */
+async function safeRemoveReaction(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  reaction: string
+): Promise<void> {
+  try {
+    await platform.removeReaction?.(conversationId, reaction);
+  } catch (error) {
+    getLog().warn({ err: error, conversationId, reaction }, 'reaction_remove_failed');
+  }
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WorkflowInvocation {
@@ -545,7 +579,7 @@ export async function handleMessage(
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
     // React with 👀 to acknowledge message received
-    await platform.addReaction?.(conversationId, 'eyes');
+    await safeAddReaction(platform, conversationId, 'eyes');
 
     // 1. Get/create conversation and inherit thread context
     let conversation = await db.getOrCreateConversation(
@@ -837,7 +871,7 @@ export async function handleMessage(
     getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
 
     // React with 🔄 when work begins
-    await platform.addReaction?.(conversationId, 'arrows_counterclockwise');
+    await safeAddReaction(platform, conversationId, 'arrows_counterclockwise');
 
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
@@ -909,22 +943,32 @@ export async function handleMessage(
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
 
-    // Remove intermediate reactions before adding final status
-    await platform.removeReaction?.(conversationId, 'eyes');
-    await platform.removeReaction?.(conversationId, 'arrows_counterclockwise');
+    // Reaction cleanup and final status (ensures even on early returns)
+    try {
+      // Remove intermediate reactions before adding final status
+      await safeRemoveReaction(platform, conversationId, 'eyes');
+      await safeRemoveReaction(platform, conversationId, 'arrows_counterclockwise');
 
-    // React with ✅ on success
-    await platform.addReaction?.(conversationId, 'white_check_mark');
+      // React with ✅ on success
+      await safeAddReaction(platform, conversationId, 'white_check_mark');
+    } finally {
+      // No additional cleanup needed
+    }
   } catch (error) {
     const err = toError(error);
     getLog().error({ err, conversationId }, 'orchestrator_message_failed');
 
-    // Remove intermediate reactions before adding final status
-    await platform.removeReaction?.(conversationId, 'eyes');
-    await platform.removeReaction?.(conversationId, 'arrows_counterclockwise');
+    // Reaction cleanup and final status (ensures even on exceptions)
+    try {
+      // Remove intermediate reactions before adding final status
+      await safeRemoveReaction(platform, conversationId, 'eyes');
+      await safeRemoveReaction(platform, conversationId, 'arrows_counterclockwise');
 
-    // React with ❌ on failure
-    await platform.addReaction?.(conversationId, 'x');
+      // React with ❌ on failure
+      await safeAddReaction(platform, conversationId, 'x');
+    } finally {
+      // No additional cleanup needed
+    }
 
     const userMessage = classifyAndFormatError(err);
     try {
