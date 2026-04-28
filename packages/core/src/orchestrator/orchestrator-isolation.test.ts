@@ -175,7 +175,10 @@ function makeCodebase(overrides?: Partial<Codebase>): Codebase {
   return {
     id: 'cb-1',
     name: 'test-repo',
+    repository_url: null,
     default_cwd: '/workspace/test-repo',
+    default_branch: null,
+    ai_assistant_type: 'claude',
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
