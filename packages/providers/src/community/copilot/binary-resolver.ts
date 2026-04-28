@@ -18,7 +18,12 @@
  * the SDK find its own bundled CLI via `node_modules/.bin/copilot`. Mirrors
  * `codex/binary-resolver.ts` and `claude/binary-resolver.ts`.
  */
-import { existsSync as _existsSync } from 'node:fs';
+import {
+  accessSync as _accessSync,
+  constants as fsConstants,
+  existsSync as _existsSync,
+  statSync as _statSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
@@ -26,6 +31,29 @@ import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {
   return _existsSync(path);
+}
+
+/**
+ * True if `path` is a regular file the current user can execute. On win32,
+ * Node's `stat.mode` does not track Unix exec bits, so we fall back to
+ * "is a file" — which matches how `where` / `PATH` resolution works there.
+ *
+ * Use for env- and config-supplied paths so a user pointing at a directory
+ * or a non-executable file fails loudly at resolve time, before the SDK
+ * tries to spawn it.
+ */
+export function isExecutableFile(path: string): boolean {
+  try {
+    const stat = _statSync(path);
+    if (!stat.isFile()) return false;
+    if (process.platform === 'win32') return true;
+    // accessSync(X_OK) checks current-user executability — `mode & 0o111`
+    // alone proves *some* exec bit exists (e.g., mode 001 fails for owner).
+    _accessSync(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -57,10 +85,10 @@ export async function resolveCopilotBinaryPath(
   // 1. Environment variable override
   const envPath = process.env.COPILOT_BIN_PATH;
   if (envPath) {
-    if (!fileExists(envPath)) {
+    if (!isExecutableFile(envPath)) {
       throw new Error(
-        `COPILOT_BIN_PATH is set to "${envPath}" but the file does not exist.\n` +
-          'Please verify the path points to the Copilot CLI binary.'
+        `COPILOT_BIN_PATH is set to "${envPath}" but it is not an executable file.\n` +
+          'Please verify the path points to the Copilot CLI executable (chmod +x if needed).'
       );
     }
     getLog().info({ source: 'env' }, 'copilot.binary_resolved');
@@ -69,10 +97,10 @@ export async function resolveCopilotBinaryPath(
 
   // 2. Config file override
   if (configCliPath) {
-    if (!fileExists(configCliPath)) {
+    if (!isExecutableFile(configCliPath)) {
       throw new Error(
-        `assistants.copilot.copilotCliPath is set to "${configCliPath}" but the file does not exist.\n` +
-          'Please verify the path in .archon/config.yaml points to the Copilot CLI binary.'
+        `assistants.copilot.copilotCliPath is set to "${configCliPath}" but it is not an executable file.\n` +
+          'Please verify the path in .archon/config.yaml points to the Copilot CLI executable (chmod +x if needed).'
       );
     }
     getLog().info({ source: 'config' }, 'copilot.binary_resolved');
