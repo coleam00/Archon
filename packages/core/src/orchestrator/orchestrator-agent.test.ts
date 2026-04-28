@@ -902,10 +902,12 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockSendQuery.mockClear();
     mockGetCodebaseEnvVars.mockReset();
     mockLoadConfig.mockReset();
+    mockListCodebases.mockReset();
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
     mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
     mockLoadConfig.mockImplementation(() =>
       Promise.resolve({
         assistants: { claude: {}, codex: {} },
@@ -1042,6 +1044,61 @@ describe('discoverAllWorkflows — remote sync', () => {
     );
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
     expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
+  });
+
+  describe('provider cwd resolution', () => {
+    function getCwdPassedToProvider(): string {
+      expect(mockSendQuery).toHaveBeenCalled();
+      return mockSendQuery.mock.calls[0][1] as string;
+    }
+
+    test('passes codebase.default_cwd to provider when conversation is codebase-scoped', async () => {
+      const codebase = makeCodebaseForSync();
+      const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+      await handleMessage(makePlatform(), 'conv-1', 'What files are in src/?');
+
+      expect(getCwdPassedToProvider()).toBe('/repos/test-repo');
+    });
+
+    test('prefers conversation.cwd over codebase.default_cwd when set (worktree)', async () => {
+      const codebase = makeCodebaseForSync();
+      const conversation = makeConversation({
+        codebase_id: 'codebase-1',
+        cwd: '/home/test/.archon/workspaces/owner/repo/worktrees/feature-branch',
+      });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+
+      await handleMessage(makePlatform(), 'conv-1', 'What files are in src/?');
+
+      expect(getCwdPassedToProvider()).toBe(
+        '/home/test/.archon/workspaces/owner/repo/worktrees/feature-branch'
+      );
+    });
+
+    test('falls back to getArchonWorkspacesPath when conversation has no codebase', async () => {
+      const conversation = makeConversation({ codebase_id: null, cwd: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+
+      await handleMessage(makePlatform(), 'conv-1', 'Hello');
+
+      expect(getCwdPassedToProvider()).toBe('/home/test/.archon/workspaces');
+    });
+
+    test('falls back to getArchonWorkspacesPath when codebase_id is set but codebase not in list', async () => {
+      const conversation = makeConversation({ codebase_id: 'codebase-1', cwd: null });
+      mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+      mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
+
+      await handleMessage(makePlatform(), 'conv-1', 'Hello');
+
+      expect(getCwdPassedToProvider()).toBe('/home/test/.archon/workspaces');
+    });
   });
 });
 
