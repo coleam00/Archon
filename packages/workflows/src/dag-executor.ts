@@ -1223,6 +1223,66 @@ async function executeBashNode(
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
 
+  // Pre-execution cancel check — avoid starting work if workflow is already
+  // cancelled. Fail closed: if the status probe itself errors, skip the node
+  // rather than spawning a subprocess we can't tear down on cancel.
+  try {
+    const preStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    if (preStatus !== 'running') {
+      const effectiveStatus = preStatus ?? 'deleted';
+      getLog().info(
+        { nodeId: node.id, status: effectiveStatus },
+        'bash_node.cancelled_before_exec'
+      );
+      // Return `skipped`, not `completed`: a sibling that paused the run (or
+      // an external cancel) shouldn't make this node satisfy `all_success`
+      // for downstream nodes. `skipped` propagates correctly through
+      // checkTriggerRule and avoids handing downstream a synthetic output.
+      return {
+        state: 'skipped',
+        output: `Bash node '${node.id}' skipped: workflow ${effectiveStatus}`,
+      };
+    }
+  } catch (err) {
+    const probeErr = err as Error;
+    getLog().error(
+      { err: probeErr, workflowRunId: workflowRun.id, nodeId: node.id },
+      'bash_node.status_check_failed'
+    );
+    // Fail closed but mark the node as `failed`, not `completed` — a transient
+    // status-probe failure must not silently turn skipped work into a synthetic
+    // success that downstream nodes can consume. Emit/persist a node_failed
+    // event before returning so consumers that derive DAG state from
+    // node_started → node_completed/failed transitions can attribute the
+    // workflow failure to this node instead of seeing it disappear.
+    const probeFailMsg = `Bash node '${node.id}' skipped: workflow status probe failed (${probeErr.message})`;
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: node.id,
+        data: { error: probeFailMsg, type: 'bash', reason: 'status_probe_failed' },
+      })
+      .catch((dbErr: Error) => {
+        getLog().error(
+          { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error: probeFailMsg,
+    });
+    return {
+      state: 'failed',
+      output: '',
+      error: probeFailMsg,
+    };
+  }
+
   getLog().info({ nodeId: node.id, type: 'bash' }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<bash>');
 
@@ -1381,6 +1441,63 @@ async function executeScriptNode(
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
+
+  // Pre-execution cancel check — avoid starting work if workflow is already
+  // cancelled. Fail closed: if the status probe itself errors, skip the node
+  // rather than spawning a subprocess we can't tear down on cancel.
+  try {
+    const preStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    if (preStatus !== 'running') {
+      const effectiveStatus = preStatus ?? 'deleted';
+      getLog().info(
+        { nodeId: node.id, status: effectiveStatus },
+        'script_node.cancelled_before_exec'
+      );
+      // Return `skipped`, not `completed`: see executeBashNode for rationale.
+      return {
+        state: 'skipped',
+        output: `Script node '${node.id}' skipped: workflow ${effectiveStatus}`,
+      };
+    }
+  } catch (err) {
+    const probeErr = err as Error;
+    getLog().error(
+      { err: probeErr, workflowRunId: workflowRun.id, nodeId: node.id },
+      'script_node.status_check_failed'
+    );
+    // Fail closed but mark the node as `failed`, not `completed` — a transient
+    // status-probe failure must not silently turn skipped work into a synthetic
+    // success that downstream nodes can consume. Emit/persist a node_failed
+    // event before returning so consumers that derive DAG state from
+    // node_started → node_completed/failed transitions can attribute the
+    // workflow failure to this node instead of seeing it disappear.
+    const probeFailMsg = `Script node '${node.id}' skipped: workflow status probe failed (${probeErr.message})`;
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: node.id,
+        data: { error: probeFailMsg, type: 'script', reason: 'status_probe_failed' },
+      })
+      .catch((dbErr: Error) => {
+        getLog().error(
+          { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+    getWorkflowEventEmitter().emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      error: probeFailMsg,
+    });
+    return {
+      state: 'failed',
+      output: '',
+      error: probeFailMsg,
+    };
+  }
 
   getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<script>');
@@ -2424,6 +2541,12 @@ export async function executeDagWorkflow(
   // Note: accumulates cost for this invocation only. If this is a resume, nodes skipped
   // from the prior run are not included — total_cost_usd will reflect resumed-portion cost only.
   let totalCostUsd = 0;
+  // Once the executor observes a non-running status (mid-layer watcher or the
+  // between-layer probe), latch it so the finalization paths below don't
+  // re-query the store and risk flipping back to 'running' (e.g. another
+  // process resumes the run mid-shutdown). skipIfStatusChanged consults this
+  // first.
+  let latchedStopStatus: string | null = null;
 
   for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
     const layer = layers[layerIdx];
@@ -2433,8 +2556,33 @@ export async function executeDagWorkflow(
       lastSequentialSessionId = undefined; // reset — parallel nodes can't share sessions
     }
 
-    // Execute all nodes in the layer concurrently
-    const layerResults = await Promise.allSettled(
+    // Mid-layer cancel watcher: poll cancel status during layer execution so we don't
+    // wait for the slowest node in the layer before noticing a user cancellation.
+    let layerCancelPoll: ReturnType<typeof setInterval> | undefined;
+    const cancelWatcher = new Promise<string>(resolve => {
+      layerCancelPoll = setInterval(async () => {
+        try {
+          const s = await deps.store.getWorkflowRunStatus(workflowRun.id);
+          const effectiveStatus = s ?? 'deleted';
+          if (effectiveStatus !== 'running') {
+            resolve(effectiveStatus);
+          }
+        } catch (err) {
+          getLog().warn(
+            { err: err as Error, workflowRunId: workflowRun.id },
+            'dag.layer_cancel_status_check_failed'
+          );
+          // Non-fatal — keep polling
+        }
+      }, 10_000);
+    });
+
+    // Execute all nodes in the layer concurrently, racing against cancel watcher.
+    // Held in a variable so a mid-layer stop can still await it before
+    // breaking — otherwise the in-flight tasks keep running unsupervised after
+    // executeDagWorkflow returns, and a resume can pick up the same nodes
+    // concurrently because their outputs aren't persisted yet.
+    const layerSettledPromise = Promise.allSettled(
       layer.map(async (node): Promise<{ nodeId: string; output: NodeExecutionResult }> => {
         try {
           // 0. Skip if this node completed successfully in a prior run (resume path)
@@ -2849,6 +2997,43 @@ export async function executeDagWorkflow(
         }
       })
     );
+    const raceResult = await Promise.race([layerSettledPromise, cancelWatcher]);
+    if (layerCancelPoll) clearInterval(layerCancelPoll);
+
+    if (!Array.isArray(raceResult)) {
+      const effectiveStatus = raceResult;
+      latchedStopStatus = effectiveStatus;
+      getLog().info(
+        {
+          workflowRunId: workflowRun.id,
+          layerIdx,
+          totalLayers: layers.length,
+          status: effectiveStatus,
+        },
+        'dag.cancel_detected_mid_layer'
+      );
+      await safeSendMessage(
+        platform,
+        conversationId,
+        `⚠️ **Workflow ${effectiveStatus}** during layer ${String(layerIdx + 1)}/${String(layers.length)}. Waiting for in-flight nodes to settle before exiting.`,
+        { workflowId: workflowRun.id }
+      );
+      // Drain in-flight layer tasks so their outputs are persisted before the
+      // executor returns. Without this, a follow-up resume can re-dispatch the
+      // same nodes concurrently because their `node_completed` events haven't
+      // been written yet — duplicate side effects on every approval flow.
+      const drainedResults = await layerSettledPromise;
+      for (const result of drainedResults) {
+        if (result.status === 'fulfilled') {
+          const { nodeId, output } = result.value;
+          if (output.costUsd !== undefined) totalCostUsd += output.costUsd;
+          nodeOutputs.set(nodeId, output);
+        }
+      }
+      break;
+    }
+
+    const layerResults = raceResult;
 
     // Process layer results — store all outputs, track failures
     let layerHadFailure = false;
@@ -2884,6 +3069,7 @@ export async function executeDagWorkflow(
       const dagStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
       if (dagStatus === null || dagStatus !== 'running') {
         const effectiveStatus = dagStatus ?? 'deleted';
+        latchedStopStatus = effectiveStatus;
         getLog().info(
           {
             workflowRunId: workflowRun.id,
@@ -2924,11 +3110,29 @@ export async function executeDagWorkflow(
    * approval gate awaits the user — crucial for resume observability.
    */
   async function skipIfStatusChanged(logEvent: string): Promise<boolean> {
-    const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
+    // Trust the latched stop signal if we already saw one — the loop wouldn't
+    // have broken otherwise. Re-querying for the skip decision lets a
+    // concurrent resume race us into completing a run that's actively being
+    // cancelled / paused / deleted.
+    const status = latchedStopStatus ?? (await deps.store.getWorkflowRunStatus(workflowRun.id));
     if (status === 'running') return false;
     getLog().info({ workflowRunId: workflowRun.id, status: status ?? 'deleted' }, logEvent);
     if (status !== 'paused') {
-      getWorkflowEventEmitter().unregisterRun(workflowRun.id);
+      // Before unregistering the emitter, re-query the live status: a newer
+      // resume invocation may have already flipped the run back to
+      // `running`, and unregistering by runId would suppress that resume's
+      // workflow/node events for connected subscribers.
+      const liveStatus = await deps.store
+        .getWorkflowRunStatus(workflowRun.id)
+        .catch(() => undefined);
+      if (liveStatus !== 'running') {
+        getWorkflowEventEmitter().unregisterRun(workflowRun.id);
+      } else {
+        getLog().info(
+          { workflowRunId: workflowRun.id, latched: status, live: liveStatus },
+          'dag.skip_unregister_run_resumed'
+        );
+      }
     }
     return true;
   }

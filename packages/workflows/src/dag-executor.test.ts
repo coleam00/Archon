@@ -1243,6 +1243,51 @@ describe('executeDagWorkflow -- bash nodes', () => {
     execSpy.mockRestore();
   });
 
+  it('does not start or complete a workflow that is already paused before a bash node executes', async () => {
+    const store = createMockStore();
+    (store.getWorkflowRunStatus as Mock<() => Promise<string | null>>).mockResolvedValue('paused');
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-paused-run-id');
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({
+      stdout: 'should-not-run\n',
+      stderr: '',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-bash-paused',
+      testDir,
+      { name: 'bash-paused-test', nodes: [{ id: 'stats', bash: 'echo blocked' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(execSpy).not.toHaveBeenCalled();
+    interface EventTypeOnly {
+      event_type: string;
+    }
+    const eventTypes = (
+      store.createWorkflowEvent as Mock<(event: EventTypeOnly) => Promise<void>>
+    ).mock.calls.map((call: [EventTypeOnly]) => call[0].event_type);
+    expect(eventTypes).not.toContain('node_started');
+    expect(eventTypes).not.toContain('node_failed');
+    expect(eventTypes).not.toContain('run_failed');
+    expect(eventTypes).not.toContain('run_cancelled');
+    expect((store.completeWorkflowRun as Mock<() => Promise<void>>).mock.calls.length).toBe(0);
+    expect((store.failWorkflowRun as Mock<() => Promise<void>>).mock.calls.length).toBe(0);
+    expect((store.cancelWorkflowRun as Mock<() => Promise<void>>).mock.calls.length).toBe(0);
+
+    execSpy.mockRestore();
+  });
+
   it('bash node output with shell metacharacters does not inject into downstream bash script', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
