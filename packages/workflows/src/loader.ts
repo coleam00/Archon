@@ -4,7 +4,7 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
 import { createLogger } from '@archon/paths';
-import { isModelCompatible } from './model-validation';
+import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import {
   dagNodeSchema,
   BASH_NODE_AI_FIELDS,
@@ -277,13 +277,17 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       typeof raw.provider === 'string' && raw.provider.length > 0 ? raw.provider : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
 
-    // Validate model/provider compatibility at workflow level
-    if (provider && model && !isModelCompatible(provider, model)) {
+    // Validate provider identity at load time. Model strings are NOT validated here —
+    // they pass through to the SDK at run time, which is the source of truth for what
+    // model names exist (vendor SDKs ship new models faster than Archon can update).
+    if (provider && !isRegisteredProvider(provider)) {
       return {
         workflow: null,
         error: {
           filename,
-          error: `Model "${model}" is not compatible with provider "${provider}"`,
+          error: `Unknown provider '${provider}'. Registered: ${getRegisteredProviders()
+            .map(p => p.id)
+            .join(', ')}`,
           errorType: 'validation_error',
         },
       };

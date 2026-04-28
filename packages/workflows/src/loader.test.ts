@@ -28,7 +28,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Bootstrap provider registry (needed by isModelCompatible in dag-node schema)
+// Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
 import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
@@ -326,13 +326,13 @@ nodes:
       expect(workflows[0].provider).toBeUndefined();
     });
 
-    it('should treat invalid provider as undefined (executor handles fallback)', async () => {
+    it('should reject unknown provider at load time', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
 
       const yamlInvalidProvider = `name: invalid-provider
 description: Invalid provider specified
-provider: invalid
+provider: claud
 nodes:
   - id: test
     command: test
@@ -340,33 +340,38 @@ nodes:
       await writeFile(join(workflowDir, 'test.yaml'), yamlInvalidProvider);
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      // Unknown providers are accepted (validated against registry at execution time)
-      expect(workflows).toHaveLength(1);
-      expect(workflows[0].provider).toBe('invalid');
-    });
-
-    it('should reject claude model with codex provider at load time', async () => {
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-
-      const invalidYaml = `name: invalid-model
-description: Invalid model/provider pairing
-provider: codex
-model: sonnet
-nodes:
-  - id: test
-    command: test
-`;
-      await writeFile(join(workflowDir, 'invalid.yaml'), invalidYaml);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
 
       expect(result.workflows).toHaveLength(0);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].errorType).toBe('validation_error');
-      expect(result.errors[0].error).toContain('not compatible');
+      expect(result.errors[0].error).toContain("Unknown provider 'claud'");
+    });
+
+    it('should accept any model string with a known provider (SDK validates at run time)', async () => {
+      // The redesign drops cross-provider model inference and the model
+      // allow-lists. Whatever the user wrote in `model:` passes through to
+      // the SDK; the SDK is the source of truth for what model strings
+      // exist. Errors surface at run time, not load time.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `name: any-model
+description: Any model string with a known provider
+provider: claude
+model: claude-opus-4-7[1m]
+nodes:
+  - id: test
+    command: test
+`;
+      await writeFile(join(workflowDir, 'any-model.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const workflows = result.workflows.map(ws => ws.workflow);
+
+      expect(result.errors).toHaveLength(0);
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].provider).toBe('claude');
+      expect(workflows[0].model).toBe('claude-opus-4-7[1m]');
     });
 
     it('should parse codex options fields', async () => {

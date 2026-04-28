@@ -196,6 +196,13 @@ async function* streamCodexEvents(
   const state: CodexStreamState = {};
   let accumulatedText = '';
 
+  // Track whether the SDK reached a terminal event. If the iterator closes
+  // without one (e.g. the model was rejected before the turn even started),
+  // we synthesize a fail-stop result so the dag-executor's existing isError
+  // path catches the failure — matching Claude's contract.
+  let sawTerminal = false;
+  let lastNonMcpError: string | undefined;
+
   for await (const event of events) {
     if (abortSignal?.aborted) {
       getLog().info('query_aborted_between_events');
@@ -213,18 +220,31 @@ async function* streamCodexEvents(
     if (event.type === 'error') {
       const errorEvent = event as { message: string };
       getLog().error({ message: errorEvent.message }, 'stream_error');
+      // MCP client errors are non-fatal — Codex retries internally and may
+      // still reach turn.completed. Other errors are captured; whether they
+      // are fatal is decided when the stream terminates: turn.completed
+      // means the SDK recovered, so the captured error is dropped; loop
+      // closure without a terminal means the captured error caused the
+      // stream to abort and is surfaced as the failure cause.
       if (!errorEvent.message.includes('MCP client')) {
-        yield { type: 'system', content: `⚠️ ${errorEvent.message}` };
+        lastNonMcpError = errorEvent.message;
       }
       continue;
     }
 
     if (event.type === 'turn.failed') {
+      sawTerminal = true;
       const errorObj = (event as { error?: { message?: string } }).error;
       const errorMessage = errorObj?.message ?? 'Unknown error';
       getLog().error({ errorMessage }, 'turn_failed');
-      yield { type: 'system', content: `❌ Turn failed: ${errorMessage}` };
-      break;
+      yield {
+        type: 'result',
+        sessionId: threadId ?? undefined,
+        isError: true,
+        errorSubtype: 'codex_turn_failed',
+        errors: [errorMessage],
+      };
+      return;
     }
 
     if (event.type === 'item.completed') {
@@ -388,6 +408,7 @@ async function* streamCodexEvents(
     }
 
     if (event.type === 'turn.completed') {
+      sawTerminal = true;
       getLog().debug('turn_completed');
       const usage = extractUsageFromCodexEvent(event as TurnCompletedEvent);
 
@@ -419,8 +440,24 @@ async function* streamCodexEvents(
         tokens: usage,
         ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       };
-      break;
+      return;
     }
+  }
+
+  // Stream closed without turn.completed or turn.failed. Common cause:
+  // model rejected by the API (model not supported, auth refused) before
+  // the turn started. Surface as a fail-stop so the dag-executor's
+  // existing msg.isError path catches it and the node fails loudly.
+  if (!sawTerminal) {
+    const message = lastNonMcpError ?? 'Codex stream closed without turn.completed or turn.failed';
+    getLog().error({ message }, 'stream_incomplete');
+    yield {
+      type: 'result',
+      sessionId: threadId ?? undefined,
+      isError: true,
+      errorSubtype: 'codex_stream_incomplete',
+      errors: [message],
+    };
   }
 }
 
