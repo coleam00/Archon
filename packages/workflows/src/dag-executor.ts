@@ -7,7 +7,7 @@
  */
 import { readFile } from 'fs/promises';
 import { isAbsolute, resolve as resolvePath } from 'path';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, resolveBashPath } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
   IWorkflowPlatform,
@@ -1320,7 +1320,7 @@ async function executeBashNode(
   };
 
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
+    const { stdout, stderr } = await execFileAsync(resolveBashPath(), ['-c', finalScript], {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -2108,7 +2108,7 @@ async function executeLoopNode(
           nodeOutputs,
           true // escapedForBash
         );
-        await execFileAsync('bash', ['-c', substitutedBash], { cwd });
+        await execFileAsync(resolveBashPath(), ['-c', substitutedBash], { cwd });
         bashComplete = true; // exit 0 = complete
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
