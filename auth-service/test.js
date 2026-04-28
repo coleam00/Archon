@@ -47,4 +47,17 @@ const wrongSig = createHmac('sha256', 'wrong-secret').update('authenticated').di
 assert.equal(verifyCookie(`authenticated.${wrongSig}`), null, 'wrong secret returns null');
 
 console.log('signCookie/verifyCookie: all assertions passed');
+
+// ── normalizeRedirect / safeDecodeURIComponent ────────────────────────────
+const { normalizeRedirect, safeDecodeURIComponent } = require('./server.js');
+
+assert.equal(safeDecodeURIComponent('%2Fchat'), '/chat', 'valid uri component decodes');
+assert.equal(safeDecodeURIComponent('%E0%A4%A'), null, 'malformed uri component returns null');
+
+assert.equal(normalizeRedirect('%2Fchat%2F123'), '/chat/123', 'valid encoded redirect path');
+assert.equal(normalizeRedirect('/dashboard'), '/dashboard', 'raw safe path remains unchanged');
+assert.equal(normalizeRedirect('%2F%2Fevil.com'), '/', 'encoded protocol-relative path blocked');
+assert.equal(normalizeRedirect('%E0%A4%A'), '/', 'malformed redirect falls back to root');
+
+console.log('normalizeRedirect/safeDecodeURIComponent: all assertions passed');
 console.log('All tests passed.');
