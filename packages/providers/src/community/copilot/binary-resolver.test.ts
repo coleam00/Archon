@@ -143,12 +143,42 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
     );
   });
 
-  test('throws with install instructions when binary not found anywhere', async () => {
+  test('falls back to PATH lookup when no canonical path matches', async () => {
     fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+    const resolveFromPathSpy = spyOn(resolver, 'resolveFromPath').mockReturnValue(
+      '/some/non-canonical/bin/copilot'
+    );
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(true);
+
+    const result = await resolver.resolveCopilotBinaryPath();
+    expect(result).toBe('/some/non-canonical/bin/copilot');
+    expect(mockLogger.info).toHaveBeenCalledWith({ source: 'path' }, 'copilot.binary_resolved');
+    resolveFromPathSpy.mockRestore();
+  });
+
+  test('rejects PATH lookup result that is not executable', async () => {
+    // PATH returned a stale shim or non-exec file — must NOT be returned;
+    // resolver must continue to the install-instructions throw.
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+    const resolveFromPathSpy = spyOn(resolver, 'resolveFromPath').mockReturnValue(
+      '/stale/shim/copilot'
+    );
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(false);
 
     await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow(
       'Copilot CLI binary not found'
     );
+    resolveFromPathSpy.mockRestore();
+  });
+
+  test('throws with install instructions when binary not found anywhere', async () => {
+    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+    const resolveFromPathSpy = spyOn(resolver, 'resolveFromPath').mockReturnValue(undefined);
+
+    await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow(
+      'Copilot CLI binary not found'
+    );
+    resolveFromPathSpy.mockRestore();
   });
 });
 

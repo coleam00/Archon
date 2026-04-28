@@ -12,7 +12,8 @@
  *  2. `assistants.copilot.copilotCliPath` in config
  *  3. `~/.archon/vendor/copilot/<platform-binary>` (user-placed)
  *  4. Autodetect canonical install paths (npm prefix defaults per platform)
- *  5. Throw with install instructions
+ *  5. PATH lookup via `which` / `where`
+ *  6. Throw with install instructions
  *
  * In dev mode (`BUNDLED_IS_BINARY=false`) this returns undefined and lets
  * the SDK find its own bundled CLI via `node_modules/.bin/copilot`. Mirrors
@@ -24,9 +25,31 @@ import {
   existsSync as _existsSync,
   statSync as _statSync,
 } from 'node:fs';
+import { execFileSync as _execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
+
+/**
+ * Resolve `copilot` via the OS path lookup (`which` / `where`). Wrapper is
+ * exported so tests can spy on it without spawning real subprocesses.
+ * Returns the first hit on PATH, or undefined when the lookup yields nothing
+ * or fails (the lookup tool itself missing, etc.).
+ */
+export function resolveFromPath(): string | undefined {
+  const lookupCmd = process.platform === 'win32' ? 'where' : 'which';
+  const executable = process.platform === 'win32' ? 'copilot.exe' : 'copilot';
+  try {
+    const output = _execFileSync(lookupCmd, [executable], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const first = output.split(/\r?\n/)[0]?.trim();
+    return first || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {
@@ -127,7 +150,17 @@ export async function resolveCopilotBinaryPath(
     }
   }
 
-  // 5. Not found — throw with install instructions
+  // 5. PATH lookup via which/where — catches non-canonical installs
+  // (volta, asdf, fnm, custom prefixes, etc.) the canonical-paths list
+  // can't enumerate. Validate with isExecutableFile so a stale shim doesn't
+  // hand back a non-executable path.
+  const fromPath = resolveFromPath();
+  if (fromPath && isExecutableFile(fromPath)) {
+    getLog().info({ source: 'path' }, 'copilot.binary_resolved');
+    return fromPath;
+  }
+
+  // 6. Not found — throw with install instructions
   const vendorPath = `~/.archon/${COPILOT_VENDOR_DIR}/`;
   throw new Error(
     'Copilot CLI binary not found. The Copilot provider requires the\n' +
