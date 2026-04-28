@@ -47,8 +47,9 @@ async function resolveMainBranch(repoPath: RepoPath): Promise<BranchName> {
     if (configured) {
       return toBranchName(configured);
     }
-  } catch {
+  } catch (_err: unknown) {
     // Config load failure (missing file, parse error) is non-fatal — fall through to auto-detection
+    getLog().debug({ repoPath, err: _err }, 'config_load_fallback');
   }
   return getDefaultBranch(repoPath);
 }

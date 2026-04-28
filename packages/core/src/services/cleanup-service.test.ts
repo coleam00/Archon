@@ -744,6 +744,49 @@ describe('runScheduledCleanup', () => {
     expect(report.removed).toContain('env-good (path missing)');
   });
 
+  test('resolveMainBranch is called for merge checking in runScheduledCleanup', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
+    try {
+      await mkdir(join(tempDir, '.archon'), { recursive: true });
+      await writeFile(
+        join(tempDir, '.archon', 'config.yaml'),
+        'worktree:\n  baseBranch: develop\n'
+      );
+
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([
+        {
+          id: 'env-resolve-test',
+          working_path: join(tempDir, 'worktrees', 'feature-a'),
+          branch_name: 'feature-a',
+          status: 'active',
+          created_by_platform: 'github',
+          created_at: new Date(),
+          codebase_default_cwd: tempDir,
+          codebase_id: 'codebase-1',
+          workflow_type: 'issue',
+          workflow_id: '1',
+          provider: 'worktree',
+          metadata: {},
+        },
+      ]);
+      // Path exists
+      mockWorktreeExists.mockResolvedValueOnce(true);
+      // Not merged
+      mockIsBranchMerged.mockResolvedValueOnce(false);
+
+      await runScheduledCleanup();
+
+      // Should use 'develop' from config, NOT call getDefaultBranch
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockIsBranchMerged).toHaveBeenCalledWith(tempDir, 'feature-a', 'develop');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test('deletes old sessions during scheduled cleanup', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([]);
     mockDeleteOldSessions.mockResolvedValueOnce(5);
@@ -904,6 +947,38 @@ describe('getWorktreeStatusBreakdown', () => {
 
     expect(breakdown.stale).toBe(0);
     expect(breakdown.active).toBe(1);
+  });
+
+  test('resolveMainBranch is called for merge checking in getWorktreeStatusBreakdown', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
+    try {
+      await mkdir(join(tempDir, '.archon'), { recursive: true });
+      await writeFile(join(tempDir, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: trunk\n');
+
+      mockListByCodebaseWithAge.mockResolvedValueOnce([
+        {
+          id: 'env-breakdown-test',
+          branch_name: 'feature-b',
+          created_by_platform: 'github',
+          days_since_activity: 5,
+          working_path: '/path-b',
+          status: 'active',
+        },
+      ]);
+      mockIsBranchMerged.mockResolvedValueOnce(false);
+
+      const breakdown = await getWorktreeStatusBreakdown('codebase-1', tempDir);
+
+      // Should use 'trunk' from config, NOT call getDefaultBranch
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockIsBranchMerged).toHaveBeenCalledWith(tempDir, 'feature-b', 'trunk');
+      expect(breakdown.active).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test('returns empty breakdown for empty codebase', async () => {
@@ -1517,6 +1592,98 @@ describe('resolveMainBranch config override', () => {
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
       // isBranchMerged should have been called with 'master' (from config)
       expect(mockIsBranchMerged).toHaveBeenCalledWith(tempDir, 'feature-x', 'master');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back to getDefaultBranch when config has invalid YAML syntax', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
+    try {
+      await mkdir(join(tempDir, '.archon'), { recursive: true });
+      // Write invalid YAML that will cause a parse error
+      await writeFile(join(tempDir, '.archon', 'config.yaml'), ': invalid: yaml: [unterminated');
+
+      mockListByCodebase.mockResolvedValueOnce([
+        {
+          id: 'env-bad-yaml',
+          branch_name: 'feature-z',
+          working_path: join(tempDir, 'worktrees', 'feature-z'),
+          status: 'active',
+        },
+      ]);
+      mockGetDefaultBranch.mockResolvedValueOnce('main');
+
+      await cleanupMergedWorktrees('codebase-1', tempDir);
+
+      // Should fall back to getDefaultBranch since YAML parse failed
+      expect(mockGetDefaultBranch).toHaveBeenCalledTimes(1);
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith(tempDir);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back to getDefaultBranch when baseBranch is non-string type', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
+    try {
+      await mkdir(join(tempDir, '.archon'), { recursive: true });
+      // baseBranch is a number, not a string — .trim() will throw at runtime
+      await writeFile(join(tempDir, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: 42\n');
+
+      mockListByCodebase.mockResolvedValueOnce([
+        {
+          id: 'env-numeric-base',
+          branch_name: 'feature-w',
+          working_path: join(tempDir, 'worktrees', 'feature-w'),
+          status: 'active',
+        },
+      ]);
+      mockGetDefaultBranch.mockResolvedValueOnce('main');
+
+      await cleanupMergedWorktrees('codebase-1', tempDir);
+
+      // baseBranch=42 is a number at runtime; calling .trim() on it throws TypeError,
+      // which is caught and falls back to getDefaultBranch
+      expect(mockGetDefaultBranch).toHaveBeenCalledTimes(1);
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith(tempDir);
+      expect(mockIsBranchMerged).toHaveBeenCalledWith(tempDir, 'feature-w', 'main');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back to getDefaultBranch when baseBranch is null', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('fs/promises');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const tempDir = await mkdtemp(join(tmpdir(), 'archon-cleanup-test-'));
+    try {
+      await mkdir(join(tempDir, '.archon'), { recursive: true });
+      // baseBranch is explicitly null
+      await writeFile(join(tempDir, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: null\n');
+
+      mockListByCodebase.mockResolvedValueOnce([
+        {
+          id: 'env-null-base',
+          branch_name: 'feature-v',
+          working_path: join(tempDir, 'worktrees', 'feature-v'),
+          status: 'active',
+        },
+      ]);
+      mockGetDefaultBranch.mockResolvedValueOnce('develop');
+
+      await cleanupMergedWorktrees('codebase-1', tempDir);
+
+      // null?.trim() returns undefined, so should fall back
+      expect(mockGetDefaultBranch).toHaveBeenCalledTimes(1);
+      expect(mockIsBranchMerged).toHaveBeenCalledWith(tempDir, 'feature-v', 'develop');
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
