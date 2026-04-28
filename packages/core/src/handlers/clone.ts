@@ -163,6 +163,15 @@ async function registerRepoAtPath(
   };
 }
 
+/** True when both strings are valid URLs with the same host. */
+function isSameHost(a: string, b: string): boolean {
+  try {
+    return new URL(a).host === new URL(b).host;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Normalize a repo URL: strip trailing slashes and convert SSH to HTTPS.
  */
@@ -243,8 +252,9 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication if GitHub token is available
+  // Build clone command with authentication if a provider token is available
   let cloneUrl = workingUrl;
+  let disableCredentialHelper = false;
   const ghToken = process.env.GH_TOKEN;
 
   if (ghToken && workingUrl.includes('github.com')) {
@@ -255,7 +265,25 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
     } else if (!workingUrl.startsWith('http')) {
       cloneUrl = `https://${ghToken}@${workingUrl}`;
     }
-    getLog().debug('clone_authenticated');
+    getLog().debug('clone_authenticated_github');
+  }
+
+  // GitLab auth. GITLAB_URL defaults to https://gitlab.com; setting it to a
+  // self-hosted URL (e.g. https://gitlab.example.com) enables self-hosted.
+  const gitlabToken = process.env.GITLAB_TOKEN;
+  const gitlabBase = process.env.GITLAB_URL ?? 'https://gitlab.com';
+  if (gitlabToken && isSameHost(workingUrl, gitlabBase)) {
+    try {
+      const u = new URL(workingUrl);
+      // GitLab project/personal access tokens require the `oauth2:` username.
+      cloneUrl = `${u.protocol}//oauth2:${gitlabToken}@${u.host}${u.pathname}${u.search}`;
+      // Prevents macOS Keychain (or any system credential helper) from
+      // intercepting and overriding the oauth2 credentials we just embedded.
+      disableCredentialHelper = true;
+      getLog().debug('clone_authenticated_gitlab');
+    } catch {
+      // URL parse failed; fall through and let git surface the error
+    }
   }
 
   // Remove the empty source/ directory before cloning (git clone requires non-existent target)
@@ -268,8 +296,16 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
     }
   }
 
+  const cloneArgs = disableCredentialHelper
+    ? ['-c', 'credential.helper=', 'clone', cloneUrl, targetPath]
+    : ['clone', cloneUrl, targetPath];
+
   try {
-    await execFileAsync('git', ['clone', cloneUrl, targetPath]);
+    // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
+    // immediate, readable error instead of a hung stdin credential prompt.
+    await execFileAsync('git', cloneArgs, {
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
   } catch (error) {
     const safeErr = sanitizeError(error as Error);
     throw new Error(`Failed to clone repository: ${safeErr.message}`);
