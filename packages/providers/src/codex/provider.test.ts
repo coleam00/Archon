@@ -114,6 +114,29 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('preserves cached input tokens from Codex usage', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield {
+            type: 'turn.completed',
+            usage: { input_tokens: 100, cached_input_tokens: 80, output_tokens: 25 },
+          };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]).toEqual({
+        type: 'result',
+        sessionId: 'new-thread-id',
+        tokens: { input: 100, output: 25, cacheRead: 80 },
+      });
+    });
+
     test('yields tool events from command_execution items', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
