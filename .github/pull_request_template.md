@@ -86,13 +86,26 @@ bun run validate
 - Evidence provided (test/log/trace/screenshot):
 - If any command is intentionally skipped, explain why:
 
+## Archon Artifacts
+
+- Product PRD / requirements:
+- Design handoff / UX review:
+- Implementation report:
+- Security review / signoff:
+- QA validation report:
+- Docs impact / release notes:
+- DevOps deployment / rollback plan:
+- Services customer readiness:
+
 ## Security Impact (required)
 
 - New permissions/capabilities? (`Yes/No`)
 - New external network calls? (`Yes/No`)
 - Secrets/tokens handling changed? (`Yes/No`)
 - File system access scope changed? (`Yes/No`)
+- Customer data, PII, audit logs, payments, webhooks, public APIs, file transfer, admin features, or dependency changes? (`Yes/No`)
 - If any `Yes`, describe risk and mitigation:
+- If any `Yes`, run or link `security-risk-gate`:
 
 ## Compatibility / Migration
 
@@ -120,6 +133,16 @@ What was personally validated beyond CI:
 - Fast rollback command/path:
 - Feature flags or config toggles (if any):
 - Observable failure symptoms:
+
+## Cross-Functional Signoff
+
+- Product: `Approved / Not needed / Pending`
+- Design: `Approved / Not needed / Pending`
+- Security: `Approved / Not needed / Pending`
+- QA: `Approved / Not needed / Pending`
+- Docs: `Approved / Not needed / Pending`
+- DevOps: `Approved / Not needed / Pending`
+- Services: `Approved / Not needed / Pending`
 
 ## Risks and Mitigations
 

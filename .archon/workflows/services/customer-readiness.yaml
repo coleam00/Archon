@@ -1,0 +1,34 @@
+name: services-customer-readiness
+description: |
+  Use when: Professional Services needs to prepare customer rollout, implementation, and enablement notes.
+  Triggers: "customer readiness", "services review", "implementation readiness", "customer impact".
+  Does: Reviews customer impact -> creates implementation readiness checklist ->
+        waits for services approval.
+  NOT for: Product scope approval, engineering implementation, or deployment execution.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  - id: customer-impact
+    command: services-customer-impact
+    context: fresh
+
+  - id: implementation-readiness
+    command: services-implementation-readiness
+    depends_on: [customer-impact]
+    context: fresh
+
+  - id: services-approval
+    approval:
+      message: "Approve customer readiness for launch, or reject with enablement/customer blockers."
+      capture_response: true
+    depends_on: [implementation-readiness]
+
+  - id: feedback-loop
+    command: services-feedback-to-product
+    depends_on: [services-approval]
+    context: fresh
+

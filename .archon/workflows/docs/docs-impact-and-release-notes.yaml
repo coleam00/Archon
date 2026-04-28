@@ -1,0 +1,35 @@
+name: docs-impact-and-release-notes
+description: |
+  Use when: A feature, PR, or release candidate needs documentation impact review and release notes.
+  Triggers: "docs impact", "release notes", "update docs for this", "documentation review".
+  Does: Reviews docs impact -> drafts help/user-guide delta when needed -> drafts release notes ->
+        waits for docs approval.
+  NOT for: Product requirements or QA validation.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  - id: docs-impact
+    command: docs-impact
+    context: fresh
+
+  - id: help-update
+    command: docs-help-update
+    depends_on: [docs-impact]
+    context: fresh
+
+  - id: release-notes
+    command: docs-release-notes
+    depends_on: [docs-impact, help-update]
+    trigger_rule: all_done
+    context: fresh
+
+  - id: docs-approval
+    approval:
+      message: "Approve documentation and release notes for customer-facing launch, or reject with required edits."
+      capture_response: true
+    depends_on: [release-notes]
+

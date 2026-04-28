@@ -1,0 +1,40 @@
+name: qa-pr-validation
+description: |
+  Use when: QA needs to validate a PR, release candidate, or implemented feature.
+  Triggers: "QA validation", "validate this PR", "test plan", "release candidate QA".
+  Does: Creates test plan -> selects regression areas -> captures QA execution evidence ->
+        generates validation report -> requires QA approval.
+  NOT for: Code implementation, product scope approval, or deployment planning.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  - id: test-plan
+    command: qa-test-plan
+    context: fresh
+
+  - id: regression-selection
+    command: qa-regression-selection
+    depends_on: [test-plan]
+    context: fresh
+
+  - id: qa-execution-gate
+    approval:
+      message: "Run or attach QA execution evidence. Approve to generate the validation report."
+      capture_response: true
+    depends_on: [regression-selection]
+
+  - id: validation-report
+    command: qa-pr-validation-report
+    depends_on: [qa-execution-gate]
+    context: fresh
+
+  - id: qa-approval
+    approval:
+      message: "Approve QA validation for release candidate, or reject with blocking defects."
+      capture_response: true
+    depends_on: [validation-report]
+

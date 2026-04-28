@@ -1,0 +1,37 @@
+name: devops-release-readiness
+description: |
+  Use when: A release candidate needs deployment, rollback, and operational readiness review.
+  Triggers: "release readiness", "deployment readiness", "prepare deployment", "rollback plan".
+  Does: Reviews deployment readiness -> creates rollback plan -> waits for DevOps approval.
+  NOT for: Product requirements, implementation, or QA execution.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  - id: deployment-readiness
+    command: devops-deployment-readiness
+    context: fresh
+
+  - id: rollback-plan
+    command: devops-rollback-plan
+    depends_on: [deployment-readiness]
+    context: fresh
+
+  - id: devops-approval
+    approval:
+      message: "Approve deployment readiness, or reject with operational blockers."
+      capture_response: true
+    depends_on: [rollback-plan]
+
+  - id: readiness-summary
+    prompt: |
+      Write `$ARTIFACTS_DIR/devops/infra-risk-review.md`.
+
+      Include deployment verdict, rollback readiness, approval response, monitoring needs,
+      and remaining operational risks.
+    depends_on: [devops-approval]
+    context: fresh
+
