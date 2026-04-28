@@ -37,7 +37,7 @@ Fields: `gh_handle`, `since_date`, `all_open_prs`, `review_requested`, `authored
 $read-context.output
 ```
 
-Fields: `direction` (markdown string), `profile` (markdown string), `prior_state` (object or null), `recent_briefs` (array of `{date, content}`).
+Fields: `direction` (markdown string), `profile` (markdown string), `prior_state` (object or null), `recent_briefs` (array of `{date, content}`), `today` (`YYYY-MM-DD`), `deadline_3d` (`YYYY-MM-DD`), `reviewed_prs` (map of PR number → `{ reviewed_at, gate_verdict, run_id }` recording past maintainer-review-pr runs — see Phase 2h).
 
 ---
 
@@ -86,6 +86,18 @@ If any PR raises a "we don't have a stance on this" question that `direction.md`
 ### 2g. Carry-over aging
 
 Items that have been in `prior_state.carry_over` for multiple runs (check `first_seen` dates) are higher priority — surface them prominently and consider escalating their P-level.
+
+### 2h. Review-history awareness (cross-workflow memory)
+
+`read-context.output.reviewed_prs` is a map of PR number → `{ reviewed_at, gate_verdict, run_id }` recording past maintainer-review-pr runs. When listing PRs in any P1-P4 (or Polite-decline) section, append a marker if the PR has an entry:
+
+- **Reviewed (review branch)**: `✓ reviewed Nd ago` — N is days between `read-context.output.today` and `reviewed_at` (`YYYY-MM-DD` slice). Use `0d` for today, `1d` for yesterday, etc.
+- **Declined (decline / needs_split branch)**: `✓ declined Nd ago` — same age math, distinct verb so the brief reads correctly when a PR was politely declined rather than reviewed.
+- **Unclear**: `✓ triaged Nd ago (unclear)` — for `gate_verdict: 'unclear'` runs.
+
+**Staleness check**: compare `reviewed_at` to the PR's `updatedAt` (in `gh-data.output.all_open_prs`). If `updatedAt > reviewed_at`, append `⚠ contributor pushed since` so the maintainer knows the prior review may need re-running. Only flag when the gap is real and meaningful — same-day commits don't need a warning.
+
+PRs not in `reviewed_prs` get no marker (their absence is itself the signal: "not yet reviewed via the workflow").
 
 ---
 
