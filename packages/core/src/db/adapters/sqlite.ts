@@ -153,6 +153,7 @@ export class SqliteAdapter implements IDatabase {
   private initSchema(): void {
     this.createSchema();
     this.migrateColumns();
+    this.migrateCodebaseIdentity();
   }
 
   /**
@@ -214,6 +215,26 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_session_columns_failed');
+    }
+  }
+
+  /**
+   * Add a unique index on (name, default_cwd) to codebases so that multiple
+   * local clones of the same remote get distinct codebase_id values.
+   * Uses CREATE UNIQUE INDEX IF NOT EXISTS — idempotent for databases that
+   * already have the index (new installs get it from createSchema).
+   */
+  private migrateCodebaseIdentity(): void {
+    try {
+      this.db.run(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_codebases_name_cwd ON remote_agent_codebases (name, default_cwd)'
+      );
+    } catch (e: unknown) {
+      const err = e as Error;
+      getLog().error({ err }, 'db.sqlite_migration_codebase_identity_failed');
+      throw new Error(
+        'Failed to enforce unique codebase identity. Resolve duplicate (name, default_cwd) rows in remote_agent_codebases before restarting.'
+      );
     }
   }
 
@@ -375,6 +396,10 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_sessions(parent_session_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_conversation_started
         ON remote_agent_sessions(conversation_id, started_at DESC);
+
+      -- From PG migration 022: composite codebase identity (name + path)
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_codebases_name_cwd
+        ON remote_agent_codebases (name, default_cwd);
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

@@ -1,5 +1,5 @@
 -- Remote Coding Agent - Combined Schema
--- Version: Combined (final state after migrations 001-020)
+-- Version: Combined (final state after migrations 001-022)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
 -- 8 Tables:
@@ -312,3 +312,7 @@ ALTER TABLE remote_agent_sessions
 -- From migration 021: allow_env_keys on codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- From migration 022: composite codebase identity (name + path)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codebases_name_cwd
+  ON remote_agent_codebases (name, default_cwd);

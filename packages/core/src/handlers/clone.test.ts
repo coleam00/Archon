@@ -29,6 +29,7 @@ const mockGetCodebaseCommands = mock(() => Promise.resolve({}));
 const mockUpdateCodebaseCommands = mock(() => Promise.resolve());
 const mockFindCodebaseByRepoUrl = mock(() => Promise.resolve(null));
 const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
+const mockFindCodebaseByNameAndPath = mock(() => Promise.resolve(null));
 const mockFindCodebaseByName = mock(() => Promise.resolve(null));
 const mockUpdateCodebase = mock(() => Promise.resolve());
 
@@ -38,6 +39,7 @@ mock.module('../db/codebases', () => ({
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
   findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
+  findCodebaseByNameAndPath: mockFindCodebaseByNameAndPath,
   findCodebaseByName: mockFindCodebaseByName,
   updateCodebase: mockUpdateCodebase,
 }));
@@ -100,6 +102,7 @@ function clearMocks(): void {
   mockUpdateCodebaseCommands.mockReset();
   mockFindCodebaseByRepoUrl.mockReset();
   mockFindCodebaseByDefaultCwd.mockReset();
+  mockFindCodebaseByNameAndPath.mockReset();
   mockFindCodebaseByName.mockReset();
   mockUpdateCodebase.mockReset();
   mockFindMarkdownFilesRecursive.mockReset();
@@ -113,6 +116,7 @@ function clearMocks(): void {
   mockUpdateCodebaseCommands.mockResolvedValue(undefined);
   mockFindCodebaseByRepoUrl.mockResolvedValue(null);
   mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
+  mockFindCodebaseByNameAndPath.mockResolvedValue(null);
   mockFindCodebaseByName.mockResolvedValue(null);
   mockUpdateCodebase.mockResolvedValue(undefined);
   mockFindMarkdownFilesRecursive.mockResolvedValue([]);
@@ -776,7 +780,7 @@ describe('normalizeRepoUrl (via cloneRepository)', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-describe('name-based deduplication', () => {
+describe('composite identity deduplication', () => {
   beforeEach(() => {
     clearMocks();
     restoreSpies();
@@ -784,15 +788,8 @@ describe('name-based deduplication', () => {
     delete process.env.GH_TOKEN;
   });
 
-  test('should return existing codebase when registering same owner/repo via different path', async () => {
-    // Existing codebase registered via clone (managed path)
-    const existingCodebase = makeCodebase({
-      id: 'existing-id',
-      name: 'owner/repo',
-      repository_url: 'https://github.com/owner/repo',
-      default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
-    });
-    // registerRepository: rev-parse succeeds, path not in DB, remote URL returns owner/repo
+  test('should create distinct codebase when same remote is registered from a different path', async () => {
+    // First clone exists at a managed path — but composite lookup (name + new path) returns null
     spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
@@ -800,69 +797,107 @@ describe('name-based deduplication', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    // Name-based lookup finds existing codebase
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    // Composite lookup: no match for (owner/repo, /home/user/repo)
+    mockFindCodebaseByNameAndPath.mockResolvedValueOnce(null);
+    // Name-only lookup: finds existing, but path differs and is NOT managed
+    mockFindCodebaseByName.mockResolvedValueOnce(
+      makeCodebase({
+        id: 'existing-id',
+        name: 'owner/repo',
+        default_cwd: '/home/user/other-checkout',
+      })
+    );
+    // New codebase created for the distinct clone
+    mockCreateCodebase.mockResolvedValueOnce(
+      makeCodebase({
+        id: 'new-clone-id',
+        name: 'owner/repo',
+        default_cwd: '/home/user/repo',
+      }) as ReturnType<typeof makeCodebase>
+    );
 
     const result = await registerRepository('/home/user/repo');
 
-    expect(result.alreadyExisted).toBe(true);
-    expect(result.codebaseId).toBe('existing-id');
-    // createCodebase should NOT be called
-    expect(mockCreateCodebase.mock.calls.length).toBe(0);
+    expect(result.alreadyExisted).toBe(false);
+    expect(result.codebaseId).toBe('new-clone-id');
+    expect(mockCreateCodebase.mock.calls.length).toBe(1);
   });
 
-  test('should update default_cwd to local path when local is registered after clone', async () => {
-    const existingCodebase = makeCodebase({
-      id: 'existing-id',
-      name: 'owner/repo',
-      repository_url: 'https://github.com/owner/repo',
-      default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
-    });
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
-      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
-      if (args.includes('get-url'))
-        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
-      return Promise.resolve({ stdout: '', stderr: '' });
-    });
-    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
-
-    const result = await registerRepository('/home/user/repo');
-
-    // updateCodebase should be called with the local path
-    expect(mockUpdateCodebase.mock.calls.length).toBe(1);
-    const updateArgs = mockUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
-    expect(updateArgs[0]).toBe('existing-id');
-    expect(updateArgs[1].default_cwd).toBe('/home/user/repo');
-    expect(result.defaultCwd).toBe('/home/user/repo');
-  });
-
-  test('should not downgrade default_cwd from local to managed path', async () => {
-    // Existing codebase registered via local path
+  test('should reuse existing codebase when re-registering the same path', async () => {
     const existingCodebase = makeCodebase({
       id: 'existing-id',
       name: 'owner/repo',
       repository_url: 'https://github.com/owner/repo',
       default_cwd: '/home/user/repo',
     });
-    // Clone same repo — name-based lookup finds existing
-    // .git does NOT exist (proceed to clone), but name dedup catches it
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
-    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    // Composite lookup: exact match for (owner/repo, /home/user/repo)
+    mockFindCodebaseByNameAndPath.mockResolvedValueOnce(existingCodebase);
 
-    const result = await cloneRepository('https://github.com/owner/repo');
+    const result = await registerRepository('/home/user/repo');
 
-    // default_cwd should stay as local path (managed path is NOT "better")
+    expect(result.alreadyExisted).toBe(true);
+    expect(result.codebaseId).toBe('existing-id');
+    expect(mockCreateCodebase.mock.calls.length).toBe(0);
+  });
+
+  test('should upgrade managed path to local path when local is registered after clone', async () => {
+    const managedCodebase = makeCodebase({
+      id: 'existing-id',
+      name: 'owner/repo',
+      repository_url: null,
+      default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+    });
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    // access(): command folder at local path succeeds
+    spyFsAccess.mockImplementation((path: string) => {
+      const normalized = typeof path === 'string' ? path.replace(/\\/g, '/') : '';
+      if (normalized.includes('.archon/commands')) {
+        return Promise.resolve(undefined);
+      }
+      return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    });
+    mockFindMarkdownFilesRecursive.mockResolvedValue([
+      { commandName: 'deploy', relativePath: 'deploy.md' },
+    ]);
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    // Composite lookup: no match (name matches but path differs)
+    mockFindCodebaseByNameAndPath.mockResolvedValueOnce(null);
+    // Name-only lookup finds the managed-path codebase
+    mockFindCodebaseByName.mockResolvedValueOnce(managedCodebase);
+
+    const result = await registerRepository('/home/user/repo');
+
+    // Should upgrade the existing managed record to the local path
+    expect(result.alreadyExisted).toBe(true);
+    expect(result.codebaseId).toBe('existing-id');
     expect(result.defaultCwd).toBe('/home/user/repo');
-    // updateCodebase should NOT be called with default_cwd (no downgrade)
-    if (mockUpdateCodebase.mock.calls.length > 0) {
-      const updateArgs = mockUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
-      expect(updateArgs[1].default_cwd).toBeUndefined();
-    }
+    // Batched update: default_cwd + repository_url in one call
+    expect(mockUpdateCodebase.mock.calls.length).toBe(1);
+    const updateArgs = mockUpdateCodebase.mock.calls[0] as [
+      string,
+      { default_cwd?: string; repository_url?: string | null },
+    ];
+    expect(updateArgs[0]).toBe('existing-id');
+    expect(updateArgs[1].default_cwd).toBe('/home/user/repo');
+    expect(updateArgs[1].repository_url).toBe('https://github.com/owner/repo');
+    // Commands loaded from new local path
+    expect(result.commandCount).toBe(1);
+    expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(1);
   });
 
   test('should fill in repository_url on existing codebase if missing', async () => {
-    // Existing codebase registered locally without remote URL
     const existingCodebase = makeCodebase({
       id: 'existing-id',
       name: 'owner/repo',
@@ -876,17 +911,44 @@ describe('name-based deduplication', () => {
       return Promise.resolve({ stdout: '', stderr: '' });
     });
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
-    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    // Composite lookup: exact match (same name AND same path)
+    mockFindCodebaseByNameAndPath.mockResolvedValueOnce(existingCodebase);
 
     await registerRepository('/home/user/repo');
 
-    // updateCodebase should be called with repository_url
     expect(mockUpdateCodebase.mock.calls.length).toBe(1);
     const updateArgs = mockUpdateCodebase.mock.calls[0] as [
       string,
       { repository_url?: string | null },
     ];
     expect(updateArgs[1].repository_url).toBe('https://github.com/owner/repo');
+  });
+
+  test('backward compat: existing single-clone installs found by path continue to work', async () => {
+    // User has ~/myproject registered as "owner/repo" — the directory name
+    // doesn't match the remote-derived name. findCodebaseByDefaultCwd catches it.
+    const existingCodebase = makeCodebase({
+      id: 'legacy-id',
+      name: 'owner/repo',
+      default_cwd: '/home/user/myproject',
+    });
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    // Path-based lookup finds it immediately — registerRepoAtPath is never reached
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(existingCodebase);
+
+    const result = await registerRepository('/home/user/myproject');
+
+    expect(result.alreadyExisted).toBe(true);
+    expect(result.codebaseId).toBe('legacy-id');
+    // Neither composite nor name lookup should be called
+    expect(mockFindCodebaseByNameAndPath.mock.calls.length).toBe(0);
+    expect(mockFindCodebaseByName.mock.calls.length).toBe(0);
+    expect(mockCreateCodebase.mock.calls.length).toBe(0);
   });
 });
 
