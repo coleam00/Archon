@@ -782,7 +782,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `DELETE /api/workflows/:name` - Delete a user-defined workflow; bundled defaults cannot be deleted
 
 **Workflow Run Lifecycle:**
-- `POST /api/workflows/runs/{runId}/resume` - Mark a failed run as ready for auto-resume on next invocation
+- `POST /api/workflows/runs/{runId}/resume` - Mark a failed run as ready for resume; the next invocation with `--resume` (CLI) or via the Web UI will skip already-completed nodes
 - `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled)
 - `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
 
