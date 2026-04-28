@@ -8,6 +8,7 @@
 import { readFile } from 'fs/promises';
 import { isAbsolute, resolve as resolvePath } from 'path';
 import { execFileAsync } from '@archon/git';
+import { subprocess } from './subprocess';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
   IWorkflowPlatform,
@@ -1270,7 +1271,7 @@ async function executeBashNode(
   };
 
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
+    const { stdout, stderr } = await subprocess.exec('bash', ['-c', finalScript], {
       cwd,
       timeout,
       env: subprocessEnv,
@@ -1526,7 +1527,7 @@ async function executeScriptNode(
       }
     }
 
-    const { stdout, stderr } = await execFileAsync(cmd, args, {
+    const { stdout, stderr } = await subprocess.exec(cmd, args, {
       cwd,
       timeout,
       env: subprocessEnv,
