@@ -182,7 +182,8 @@ Runs TypeScript/JavaScript (via `bun`) or Python (via `uv`) without AI. Same std
 - **stdout** captured as `$nodeId.output` (trailing newline trimmed)
 - **stderr** forwarded as warning, does NOT fail the node. Non-zero exit DOES fail it.
 - **`bun --no-env-file`** prevents target repo `.env` from leaking into the subprocess
-- `$nodeId.output` substitutions are **NOT shell-quoted** in script bodies — parse with `JSON.parse` / `json.loads`, don't interpolate into shell syntax
+- `$nodeId.output` substitutions are **NOT shell-quoted** in script bodies — assign directly (`const data = $nodeId.output;`) or parse with `JSON.parse` / `json.loads`; don't interpolate into shell syntax
+- **CAUTION — `String.raw\`$nodeId.output\`` is fragile**: if the substituted value contains a backtick (common in AI-generated markdown, `output_format` payloads, or any content with code spans), the template literal terminates early and produces a cryptic `Expected ";"` parse error. Use direct assignment instead — JSON is valid JS expression syntax and needs no wrapper.
 - AI-specific fields (`model`, `provider`, `hooks`, `mcp`, `skills`, `output_format`, `allowed_tools`, `denied_tools`, `agents`, `effort`, `thinking`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`) emit a loader warning and are ignored
 
 ### Loop Node

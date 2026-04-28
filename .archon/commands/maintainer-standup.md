@@ -29,7 +29,9 @@ Fields: `current_dev_sha`, `prior_dev_sha`, `current_branch`, `is_dirty`, `pull_
 $gh-data.output
 ```
 
-Fields: `gh_handle`, `since_date`, `all_open_prs`, `review_requested`, `authored_by_me`, `issues_assigned`, `recent_unlabeled_issues`, `recently_closed_prs`, `recently_closed_issues`, `my_recent_commits`.
+Fields: `gh_handle`, `since_date`, `all_open_prs`, `review_requested`, `authored_by_me`, `issues_assigned`, `recent_unlabeled_issues`, `recently_closed_prs`, `recently_closed_issues`, `my_recent_commits`, `replies_since_last_run`.
+
+`replies_since_last_run` is an array of `{ number, kind, comments }` grouping contributor replies on PRs and issues since the last run. `kind` is one of `issue` / `pr_conversation` / `pr_review`; the maintainer's own comments are filtered out. Use this as the source for the **"Replies waiting on you"** brief section (see Phase 3).
 
 ### Local context (direction doc, maintainer profile, prior state, recent briefs)
 
@@ -37,7 +39,7 @@ Fields: `gh_handle`, `since_date`, `all_open_prs`, `review_requested`, `authored
 $read-context.output
 ```
 
-Fields: `direction` (markdown string), `profile` (markdown string), `prior_state` (object or null), `recent_briefs` (array of `{date, content}`).
+Fields: `direction` (markdown string), `profile` (markdown string), `prior_state` (object or null), `recent_briefs` (array of `{date, content}`), `today` (`YYYY-MM-DD`), `deadline_3d` (`YYYY-MM-DD`), `reviewed_prs` (map of PR number → `{ reviewed_at, gate_verdict, run_id }` recording past maintainer-review-pr runs — see Phase 2h).
 
 ---
 
@@ -87,6 +89,18 @@ If any PR raises a "we don't have a stance on this" question that `direction.md`
 
 Items that have been in `prior_state.carry_over` for multiple runs (check `first_seen` dates) are higher priority — surface them prominently and consider escalating their P-level.
 
+### 2h. Review-history awareness (cross-workflow memory)
+
+`read-context.output.reviewed_prs` is a map of PR number → `{ reviewed_at, gate_verdict, run_id }` recording past maintainer-review-pr runs. When listing PRs in any P1-P4 (or Polite-decline) section, append a marker if the PR has an entry:
+
+- **Reviewed (review branch)**: `✓ reviewed Nd ago` — N is days between `read-context.output.today` and `reviewed_at` (`YYYY-MM-DD` slice). Use `0d` for today, `1d` for yesterday, etc.
+- **Declined (decline / needs_split branch)**: `✓ declined Nd ago` — same age math, distinct verb so the brief reads correctly when a PR was politely declined rather than reviewed.
+- **Unclear**: `✓ triaged Nd ago (unclear)` — for `gate_verdict: 'unclear'` runs.
+
+**Staleness check**: compare `reviewed_at` to the PR's `updatedAt` (in `gh-data.output.all_open_prs`). If `updatedAt > reviewed_at`, append `⚠ contributor pushed since` so the maintainer knows the prior review may need re-running. Only flag when the gap is real and meaningful — same-day commits don't need a warning.
+
+PRs not in `reviewed_prs` get no marker (their absence is itself the signal: "not yet reviewed via the workflow").
+
 ---
 
 ## Phase 3: GENERATE OUTPUT
@@ -111,6 +125,11 @@ A maintainer-ready markdown brief. Adapt sections — omit empty ones, add other
 - **PR #N** — [title] — merged ✓ / closed
 - **Issue #N** — [title] — closed
 - (Omit section if nothing resolved.)
+
+## Replies waiting on you
+- **PR #N** — @author replied (N comments since last run): [one-line excerpt of latest comment]. [URL]
+- **Issue #N** — @author commented: [excerpt]. [URL]
+- (Sort by recency; surface inline-review-comment kinds first since they usually need a code-level response. Omit section if `replies_since_last_run` is empty.)
 
 ## P1 — Do today
 - **PR #N** — [title] ([+X/-Y]) — [why P1, e.g. "ready to merge, awaiting your review"]

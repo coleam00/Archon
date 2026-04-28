@@ -52,6 +52,7 @@ e2e-screenshots/
 .archon/maintainer-standup/profile.md
 .archon/maintainer-standup/state.json
 .archon/maintainer-standup/briefs/
+.archon/maintainer-standup/reviewed-prs.json
 
 # Agent artifacts (generated, local only)
 .agents/

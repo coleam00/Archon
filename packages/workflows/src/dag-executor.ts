@@ -1261,8 +1261,13 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv =
-    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
+  const subprocessEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ARTIFACTS_DIR: artifactsDir,
+    LOG_DIR: logDir,
+    BASE_BRANCH: baseBranch,
+    ...(envVars ?? {}),
+  };
 
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
@@ -1766,6 +1771,10 @@ async function executeLoopNode(
       // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
       // Pass loopUserInput on the first resumed iteration; '' on all others (non-interactive
       // or subsequent iterations) so $LOOP_USER_INPUT substitutes to empty string explicitly.
+      // $LOOP_PREV_OUTPUT carries the previous iteration's cleaned output and is empty on
+      // the first iteration (no prior output exists). Across an interactive resume, the
+      // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
+      // the resume also receives an empty $LOOP_PREV_OUTPUT.
       const { prompt: substitutedPrompt } = substituteWorkflowVariables(
         loop.prompt,
         workflowRun.id,
@@ -1774,7 +1783,9 @@ async function executeLoopNode(
         baseBranch,
         docsDir,
         issueContext,
-        i === startIteration ? loopUserInput : ''
+        i === startIteration ? loopUserInput : '',
+        undefined, // rejectionReason
+        i === startIteration ? '' : lastIterationOutput
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -2249,9 +2260,21 @@ async function executeApprovalNode(
       rejectionReason
     );
 
-    // Build a synthetic PromptNode to reuse executeNodeInternal
+    // Build a synthetic PromptNode to reuse executeNodeInternal.
+    // Use a distinct ID so the node_completed event written by executeNodeInternal
+    // does not collide with the approval gate's own ID in getCompletedDagNodeOutputs.
+    // If we used node.id here, a resumed run would find the event and treat the
+    // approval gate as already completed, bypassing the human gate entirely.
+    //
+    // Note: executeNodeInternal also emits node_started/node_completed WorkflowEmitterEvents
+    // with nodeId = `${node.id}:on_reject`. These flow through SSE into the web UI, where
+    // WorkflowExecution.tsx builds its nodeMap from all node_* events unconditionally.
+    // This means a transient `${node.id}:on_reject` phantom entry may appear in the UI's
+    // execution view during an on_reject cycle. This is cosmetic-only — the approval gate
+    // still re-presents correctly and the human gate contract is preserved. A follow-up can
+    // filter synthetic `:on_reject` IDs from the UI's nodeMap if needed.
     const syntheticNode: PromptNode = {
-      id: node.id,
+      id: `${node.id}:on_reject`,
       prompt: substituteNodeOutputRefs(substitutedPrompt, nodeOutputs),
       ...(node.depends_on ? { depends_on: node.depends_on } : {}),
       ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
@@ -2294,9 +2317,12 @@ async function executeApprovalNode(
     // Fall through to re-pause at the approval gate
   }
 
-  // Standard approval gate — send message and pause
+  // Standard approval gate — send message and pause.
+  // Resolve $nodeId.output[.field] references so the human sees concrete values
+  // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
+  const renderedMessage = substituteNodeOutputRefs(node.approval.message, nodeOutputs);
   const approvalMsg =
-    `⏸ **Approval required**: ${node.approval.message}\n\n` +
+    `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
     `Approve: \`/workflow approve ${workflowRun.id}\` | Reject: \`/workflow reject ${workflowRun.id}\``;
   await safeSendMessage(platform, conversationId, approvalMsg, msgContext);
@@ -2306,7 +2332,7 @@ async function executeApprovalNode(
       workflow_run_id: workflowRun.id,
       event_type: 'approval_requested',
       step_name: node.id,
-      data: { message: node.approval.message },
+      data: { message: renderedMessage },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -2316,7 +2342,7 @@ async function executeApprovalNode(
     });
 
   await deps.store.pauseWorkflowRun(workflowRun.id, {
-    message: node.approval.message,
+    message: renderedMessage,
     nodeId: node.id,
     type: 'approval',
     captureResponse: node.approval.capture_response,
@@ -2328,7 +2354,7 @@ async function executeApprovalNode(
     type: 'approval_pending',
     runId: workflowRun.id,
     nodeId: node.id,
-    message: node.approval.message,
+    message: renderedMessage,
   });
 
   // Return completed — the between-layer status check will see 'paused' and break.

@@ -24,6 +24,7 @@ interactive: true # Required for the decline-approval gate
 
 worktree:
   enabled: false # Live checkout — needs to read .archon/maintainer-standup/
+mutates_checkout: false # Read-only + per-run artifact writes; concurrent runs safe
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -322,11 +323,61 @@ nodes:
     when: "$gate.output.verdict == 'unclear'"
 
   # ═══════════════════════════════════════════════════════════════
-  # PHASE 5: FINAL REPORT (whichever branch ran)
+  # PHASE 5: RECORD REVIEW IN SHARED STATE
+  # ═══════════════════════════════════════════════════════════════
+
+  # Append this run's PR number + verdict + timestamp to
+  # .archon/maintainer-standup/reviewed-prs.json so the morning standup
+  # brief can mark "✓ reviewed Nd ago" next to PRs that have already
+  # been triaged. Cross-workflow memory; gitignored, per-maintainer.
+  #
+  # Runs deterministically (no AI) after whichever branch fired. Inline
+  # script for the same reason persist is inline in maintainer-standup:
+  # JSON is valid JS expression syntax so $gate.output substitutes
+  # directly without a String.raw template literal. Records the gate
+  # verdict (review / decline / needs_split / unclear), not the
+  # synthesis verdict — keeps the contract narrow.
+  - id: record-review
+    runtime: bun
+    timeout: 10000
+    depends_on: [post-review, post-decline, approve-unclear]
+    trigger_rule: one_success
+    script: |
+      import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+      import { resolve } from 'node:path';
+
+      const gate = $gate.output;
+
+      const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
+      if (!existsSync(baseDir)) mkdirSync(baseDir, { recursive: true });
+
+      const prPath = resolve(process.cwd(), '$ARTIFACTS_DIR/.pr-number');
+      const prNumber = readFileSync(prPath, 'utf8').trim();
+
+      const reviewedPath = resolve(baseDir, 'reviewed-prs.json');
+      let reviewed = {};
+      if (existsSync(reviewedPath)) {
+        try {
+          reviewed = JSON.parse(readFileSync(reviewedPath, 'utf8'));
+        } catch {
+          reviewed = {};
+        }
+      }
+
+      reviewed[prNumber] = {
+        reviewed_at: new Date().toISOString(),
+        gate_verdict: gate.verdict,
+        run_id: '$WORKFLOW_ID',
+      };
+
+      writeFileSync(reviewedPath, JSON.stringify(reviewed, null, 2) + '\n');
+      console.log(`Recorded review of PR #${prNumber} (gate: ${gate.verdict})`);
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: FINAL REPORT (whichever branch ran)
   # ═══════════════════════════════════════════════════════════════
 
   - id: report
     command: maintainer-review-report
-    depends_on: [post-review, post-decline, approve-unclear]
-    trigger_rule: one_success
+    depends_on: [record-review]
     context: fresh

@@ -179,6 +179,134 @@ if (ghHandle) {
   }
 }
 
+// ── Replies since last run (contributor comments on PRs/issues) ──
+// Fetches all conversation + inline review comments since the last run,
+// filters out the maintainer's own comments, and groups by PR/issue number.
+// Lets the synthesizer surface "@author replied on PR #N" items for the
+// maintainer to triage today.
+//
+// GitHub endpoints:
+//   - /repos/{o}/{r}/issues/comments   conversation comments on PRs and issues
+//                                      (same endpoint; issue_url disambiguates)
+//   - /repos/{o}/{r}/pulls/comments    inline code-review comments
+// Both accept ?since=ISO8601.
+type GhComment = {
+  user?: { login?: string };
+  created_at?: string;
+  body?: string;
+  html_url?: string;
+  issue_url?: string;
+  pull_request_url?: string;
+};
+
+type GroupedReply = {
+  number: number;
+  kind: 'issue' | 'pr_conversation' | 'pr_review';
+  comments: {
+    author: string;
+    created_at: string;
+    body_excerpt: string;
+    url: string;
+  }[];
+};
+
+function ownerRepo(): { owner: string; repo: string } | null {
+  try {
+    const url = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+      .toString()
+      .trim();
+    // ssh: git@github.com:owner/repo.git ; https: https://github.com/owner/repo.git
+    const m = url.match(/[:/]([^:/]+)\/([^/]+?)(?:\.git)?$/);
+    if (!m) return null;
+    return { owner: m[1], repo: m[2] };
+  } catch {
+    return null;
+  }
+}
+
+function extractNumber(url: string | undefined): number | null {
+  if (!url) return null;
+  const m = url.match(/\/(?:issues|pulls)\/(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+const repliesByNumber: Record<number, GroupedReply> = {};
+const repoIds = ownerRepo();
+
+if (repoIds && lastRunAt) {
+  const openPrNumbers = new Set(
+    (allOpenPrs as Array<{ number?: number }>)
+      .map((p) => p.number)
+      .filter((n): n is number => typeof n === 'number'),
+  );
+
+  const addComment = (
+    num: number,
+    kind: GroupedReply['kind'],
+    c: GhComment,
+    fallbackUrl: string,
+  ): void => {
+    const author = c.user?.login;
+    if (!author) return;
+    if (ghHandle && author.toLowerCase() === ghHandle.toLowerCase()) return;
+    // Skip GitHub bots — coderabbitai, codex-connector, dependabot, etc. The
+    // "[bot]" suffix is the canonical GitHub convention for bot accounts and
+    // is reliable across all bot integrations. Maintainer wants human replies
+    // worth responding to, not the constant churn of automated review tooling.
+    if (author.endsWith('[bot]')) return;
+    if (!repliesByNumber[num]) repliesByNumber[num] = { number: num, kind, comments: [] };
+    // Upgrade kind toward pr_review (most actionable) when both arrive on the same PR.
+    if (kind === 'pr_review') repliesByNumber[num].kind = 'pr_review';
+    repliesByNumber[num].comments.push({
+      author,
+      created_at: c.created_at ?? '',
+      body_excerpt: (c.body ?? '').slice(0, 240).replace(/\s+/g, ' ').trim(),
+      url: c.html_url ?? fallbackUrl,
+    });
+  };
+
+  // /issues/comments covers PR + issue conversations under one endpoint.
+  // Disambiguate by checking whether the parsed number is an open PR.
+  const issueComments = parseJson<GhComment[]>(
+    exec('gh', [
+      'api',
+      `repos/${repoIds.owner}/${repoIds.repo}/issues/comments?since=${lastRunAt}&per_page=100`,
+      '--paginate',
+    ]),
+    [],
+  );
+  for (const c of issueComments) {
+    const num = extractNumber(c.issue_url);
+    if (!num) continue;
+    const kind: GroupedReply['kind'] = openPrNumbers.has(num) ? 'pr_conversation' : 'issue';
+    addComment(num, kind, c, c.issue_url ?? '');
+  }
+
+  // /pulls/comments are inline code-review comments — most specific signal,
+  // usually need a code-level response.
+  const reviewComments = parseJson<GhComment[]>(
+    exec('gh', [
+      'api',
+      `repos/${repoIds.owner}/${repoIds.repo}/pulls/comments?since=${lastRunAt}&per_page=100`,
+      '--paginate',
+    ]),
+    [],
+  );
+  for (const c of reviewComments) {
+    const num = extractNumber(c.pull_request_url);
+    if (!num) continue;
+    addComment(num, 'pr_review', c, c.pull_request_url ?? '');
+  }
+}
+
+const repliesSinceLastRun = Object.values(repliesByNumber).sort((a, b) => {
+  const aLatest = a.comments[a.comments.length - 1]?.created_at ?? '';
+  const bLatest = b.comments[b.comments.length - 1]?.created_at ?? '';
+  return bLatest.localeCompare(aLatest); // newest first
+});
+
 console.log(
   JSON.stringify({
     gh_handle: ghHandle,
@@ -191,5 +319,6 @@ console.log(
     recently_closed_prs: recentlyClosedPrs,
     recently_closed_issues: recentlyClosedIssues,
     my_recent_commits: myRecentCommits,
+    replies_since_last_run: repliesSinceLastRun,
   }),
 );

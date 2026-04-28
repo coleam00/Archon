@@ -298,6 +298,43 @@ describe('executeWorkflow', () => {
       expect(sentMessage).toContain('--branch');
     });
 
+    it('skips path-lock check when mutates_checkout is false', async () => {
+      const getActiveSpy = mock(async () =>
+        makeRun({ id: 'other-run', status: 'running' as const })
+      );
+      const store = makeStore({ getActiveWorkflowRunByPath: getActiveSpy });
+      const deps = makeDeps(store);
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ mutates_checkout: false }),
+        'test message',
+        'db-conv-1'
+      );
+      // Guard skipped: spy never called, run succeeds
+      expect(getActiveSpy).not.toHaveBeenCalled();
+      expect(result.workflowRunId).toBe('run-123');
+    });
+
+    it('still enforces path lock when mutates_checkout is true', async () => {
+      const otherRun = makeRun({ id: 'other-run-456', status: 'running' as const });
+      const store = makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) });
+      const deps = makeDeps(store);
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({ mutates_checkout: true }),
+        'test message',
+        'db-conv-1'
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('already active');
+    });
+
     it('still returns failure when guard self-cancel update throws (best-effort)', async () => {
       const selfRun = makeRun({ id: 'self-run', status: 'pending' });
       const otherRun = makeRun({ id: 'other-run', status: 'running' });
