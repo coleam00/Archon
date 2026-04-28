@@ -29,7 +29,9 @@ Fields: `current_dev_sha`, `prior_dev_sha`, `current_branch`, `is_dirty`, `pull_
 $gh-data.output
 ```
 
-Fields: `gh_handle`, `since_date`, `all_open_prs`, `review_requested`, `authored_by_me`, `issues_assigned`, `recent_unlabeled_issues`, `recently_closed_prs`, `recently_closed_issues`, `my_recent_commits`.
+Fields: `gh_handle`, `since_date`, `all_open_prs`, `review_requested`, `authored_by_me`, `issues_assigned`, `recent_unlabeled_issues`, `recently_closed_prs`, `recently_closed_issues`, `my_recent_commits`, `replies_since_last_run`.
+
+`replies_since_last_run` is an array of `{ number, kind, comments }` grouping contributor replies on PRs and issues since the last run. `kind` is one of `issue` / `pr_conversation` / `pr_review`; the maintainer's own comments are filtered out. Use this as the source for the **"Replies waiting on you"** brief section (see Phase 3).
 
 ### Local context (direction doc, maintainer profile, prior state, recent briefs)
 
@@ -111,6 +113,11 @@ A maintainer-ready markdown brief. Adapt sections — omit empty ones, add other
 - **PR #N** — [title] — merged ✓ / closed
 - **Issue #N** — [title] — closed
 - (Omit section if nothing resolved.)
+
+## Replies waiting on you
+- **PR #N** — @author replied (N comments since last run): [one-line excerpt of latest comment]. [URL]
+- **Issue #N** — @author commented: [excerpt]. [URL]
+- (Sort by recency; surface inline-review-comment kinds first since they usually need a code-level response. Omit section if `replies_since_last_run` is empty.)
 
 ## P1 — Do today
 - **PR #N** — [title] ([+X/-Y]) — [why P1, e.g. "ready to merge, awaiting your review"]
