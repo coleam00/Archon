@@ -62,6 +62,7 @@ import {
 import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
+import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
 import { closeDatabase } from '@archon/core';
@@ -104,6 +105,7 @@ Commands:
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
+  skill install [path]       Install the bundled Archon skill into .claude/skills/archon
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version                    Show version info
@@ -132,6 +134,8 @@ Examples:
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
+  archon skill install
+  archon skill install /path/to/project
 `);
 }
 
@@ -236,7 +240,7 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve'];
+  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve', 'skill'];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
@@ -567,6 +571,26 @@ async function main(): Promise<number> {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
         return await serveCommand({ port: servePort, downloadOnly });
+      }
+
+      case 'skill': {
+        switch (subcommand) {
+          case 'install': {
+            // Optional positional path; otherwise install into the resolved cwd.
+            const targetArg = positionals[2];
+            const targetPath = targetArg ? resolve(targetArg) : cwd;
+            return await skillInstallCommand(targetPath);
+          }
+
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing skill subcommand');
+            } else {
+              console.error(`Unknown skill subcommand: ${subcommand}`);
+            }
+            console.error('Available: install');
+            return 1;
+        }
       }
 
       default:
