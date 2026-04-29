@@ -38,19 +38,27 @@ nodes:
 
       echo "$MR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
 
-      # Resolve GitLab project ID from git remote (URL-encode namespace/project path)
+      # Resolve GitLab hostname and numeric project ID from git remote
       REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
       if [ -z "$REMOTE_URL" ]; then
         echo "ERROR: No git remote 'origin' found"
         exit 1
       fi
-      # Extract namespace/project from SSH or HTTPS remote URL
+      # Extract hostname from SSH (git@host:path) or HTTPS (https://host/path)
+      GL_HOST=$(echo "$REMOTE_URL" | sed -E 's#^.*@([^:/]+)[:/].*#\1#; s#^https?://([^/]+)/.*#\1#')
+      # Extract namespace/project path
       PROJECT_PATH=$(echo "$REMOTE_URL" | sed -E 's#^(https?://[^/]+/|.*:)##; s#\.git$##')
-      PROJECT_ID_ENCODED=$(echo "$PROJECT_PATH" | sed 's|/|%2F|g')
-      echo "$PROJECT_ID_ENCODED" > "$ARTIFACTS_DIR/.project-id"
+      # Resolve numeric project ID (avoids URL-encoding issues with glab)
+      PROJECT_ID=$(glab api --hostname "$GL_HOST" "projects?search=$(basename "$PROJECT_PATH")" | jq -r ".[] | select(.path_with_namespace==\"$PROJECT_PATH\") | .id")
+      if [ -z "$PROJECT_ID" ]; then
+        echo "ERROR: Could not resolve project ID for $PROJECT_PATH on $GL_HOST"
+        exit 1
+      fi
+      echo "$PROJECT_ID" > "$ARTIFACTS_DIR/.project-id"
+      echo "$GL_HOST" > "$ARTIFACTS_DIR/.gl-host"
 
       # Fetch full MR details via GitLab API
-      glab api "projects/$PROJECT_ID_ENCODED/merge_requests/$MR_NUMBER"
+      glab api --hostname "$GL_HOST" "projects/$PROJECT_ID/merge_requests/$MR_NUMBER"
 
   - id: find-ports
     bash: |
@@ -73,8 +81,9 @@ nodes:
 
       # Get MR branch info
       MR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
-      PROJECT_ID_ENCODED=$(cat "$ARTIFACTS_DIR/.project-id")
-      MR_JSON=$(glab api "projects/$PROJECT_ID_ENCODED/merge_requests/$MR_NUMBER")
+      PROJECT_ID=$(cat "$ARTIFACTS_DIR/.project-id")
+      GL_HOST=$(cat "$ARTIFACTS_DIR/.gl-host")
+      MR_JSON=$(glab api --hostname "$GL_HOST" "projects/$PROJECT_ID/merge_requests/$MR_NUMBER")
       PR_HEAD=$(echo "$MR_JSON" | jq -r '.source_branch')
       PR_BASE=$(echo "$MR_JSON" | jq -r '.target_branch')
 
