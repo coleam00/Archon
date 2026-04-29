@@ -265,13 +265,6 @@ export interface ProviderRegistration {
   /** Static capability declaration — used for dag-executor warnings */
   capabilities: ProviderCapabilities;
 
-  /**
-   * Model compatibility check. Returns true if the model string
-   * is valid for this provider. Used by workflow validation and
-   * provider inference from model names.
-   */
-  isModelCompatible: (model: string) => boolean;
-
   /** Whether this is a built-in (maintained by core team) or community provider */
   builtIn: boolean;
 }

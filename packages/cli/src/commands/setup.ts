@@ -35,7 +35,6 @@ import {
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { parse as parseDotenv } from 'dotenv';
 import { join, dirname } from 'path';
-import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
@@ -1448,8 +1447,18 @@ export function writeScopedEnv(
  * Copy the bundled Archon skill files to <targetPath>/.claude/skills/archon/
  *
  * Always overwrites existing files to ensure the latest skill version is installed.
+ *
+ * The `bundled-skill` module is dynamically imported here so that its 18 top-level
+ * `import … with { type: 'text' }` statements only execute when this function is
+ * actually called. Compiled binaries (`bun build --compile`) still statically
+ * analyze the literal-string `import()` and embed the chunk; linked-source
+ * installs (`bun link`) don't touch the source skill files unless the user runs
+ * `archon setup`. Without this indirection, every `archon` invocation —
+ * including `archon --help` — fails at module load when the source skill files
+ * are missing from disk.
  */
-export function copyArchonSkill(targetPath: string): void {
+export async function copyArchonSkill(targetPath: string): Promise<void> {
+  const { BUNDLED_SKILL_FILES } = await import('../bundled-skill');
   const skillRoot = join(targetPath, '.claude', 'skills', 'archon');
   for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
     const dest = join(skillRoot, relativePath);
@@ -1841,7 +1850,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     const skillTarget = skillTargetRaw;
     s.start('Installing Archon skill...');
     try {
-      copyArchonSkill(skillTarget);
+      await copyArchonSkill(skillTarget);
     } catch (err) {
       s.stop('Archon skill installation failed');
       cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);

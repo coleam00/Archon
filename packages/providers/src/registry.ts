@@ -84,7 +84,7 @@ export function getRegisteredProviders(): ProviderRegistration[] {
 }
 
 /**
- * Get API-safe provider info (excludes factory and isModelCompatible).
+ * Get API-safe provider info (excludes the factory).
  */
 export function getProviderInfoList(): ProviderInfo[] {
   return getRegisteredProviders().map(({ id, displayName, capabilities, builtIn }) => ({
@@ -113,10 +113,6 @@ export function registerBuiltinProviders(): void {
       displayName: 'Claude (Anthropic)',
       factory: () => new ClaudeProvider(),
       capabilities: CLAUDE_CAPABILITIES,
-      isModelCompatible: (model: string): boolean => {
-        const aliases = ['sonnet', 'opus', 'haiku'];
-        return aliases.includes(model) || model.startsWith('claude-') || model === 'inherit';
-      },
       builtIn: true,
     },
     {
@@ -124,12 +120,6 @@ export function registerBuiltinProviders(): void {
       displayName: 'Codex (OpenAI)',
       factory: () => new CodexProvider(),
       capabilities: CODEX_CAPABILITIES,
-      isModelCompatible: (model: string): boolean => {
-        const claudeAliases = ['sonnet', 'opus', 'haiku'];
-        return (
-          !claudeAliases.includes(model) && !model.startsWith('claude-') && model !== 'inherit'
-        );
-      },
       builtIn: true,
     },
   ];

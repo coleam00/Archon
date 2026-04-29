@@ -1,7 +1,6 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
 import { PI_CAPABILITIES } from './capabilities';
-import { isPiModelCompatible } from './model-ref';
 import { PiProvider } from './provider';
 
 /**
@@ -20,7 +19,6 @@ export function registerPiProvider(): void {
     displayName: 'Pi (community)',
     factory: () => new PiProvider(),
     capabilities: PI_CAPABILITIES,
-    isModelCompatible: isPiModelCompatible,
     builtIn: false,
   });
 }

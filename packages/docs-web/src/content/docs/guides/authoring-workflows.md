@@ -602,16 +602,15 @@ provider: claude     # Any registered provider (default: from config)
 model: sonnet        # Model override (default: from config assistants.claude.model)
 ```
 
-**Claude models:**
-- `sonnet` - Fast, balanced (recommended)
-- `opus` - Powerful, expensive
-- `haiku` - Fast, lightweight
-- `claude-*` - Full model IDs (e.g., `claude-3-5-sonnet-20241022`)
-- `inherit` - Use model from previous session
+**Model strings:** Whatever you write in `model:` is forwarded verbatim to the resolved provider's SDK. Archon doesn't keep an internal allow-list, because vendor SDKs ship new models faster than this doc can. The provider's API decides whether the string is valid at request time.
 
-**Codex models:**
-- Any OpenAI model ID (e.g., `gpt-5.3-codex`, `o5-pro`)
-- Cannot use Claude model aliases
+Common shapes you'll see in practice:
+
+- **Claude (Anthropic):** family aliases (`sonnet`, `opus`, `haiku`), full model IDs (`claude-opus-4-7`, `claude-3-5-sonnet-20241022`), context-window suffixed forms (`opus[1m]`, `claude-opus-4-7[1m]`), or `inherit` to reuse the previous session's model.
+- **Codex (OpenAI):** any OpenAI model ID — `gpt-5.3-codex`, `gpt-5.2`, `o5-pro`, etc.
+- **Pi (community):** `<backend>/<model-id>` refs — e.g. `google/gemini-2.5-pro`, `openrouter/qwen/qwen3-coder`.
+
+If the SDK rejects the string at request time, the node fails loudly with the SDK's error message — Archon never silently re-routes a model from one provider to another based on the string.
 
 ### Codex-Specific Options
 
@@ -676,17 +675,18 @@ nodes:
 **Platforms:** `interactive` only affects the web platform. CLI, Slack, Telegram, and
 GitHub always run workflows in foreground mode regardless of this setting.
 
-### Model Validation
+### Provider Validation
 
-Workflows are validated at load time:
-- Provider/model compatibility checked
-- Invalid combinations fail with clear error messages
-- Validation errors shown in `/workflow list`
+Workflows are validated at load time for **provider identity only**:
+- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`).
+- Validation errors are shown in `/workflow list`.
 
 Example validation error:
 ```
-Model "sonnet" is not compatible with provider "codex"
+Unknown provider 'claud'. Registered: claude, codex, pi
 ```
+
+Model strings are not validated at load time — they're forwarded to the SDK as-is and validated by the upstream API at request time.
 
 ### Resource Validation (CLI)
 
