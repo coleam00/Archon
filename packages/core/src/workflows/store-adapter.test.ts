@@ -1,58 +1,111 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import type { IWorkflowStore } from '@archon/workflows/store';
 
-// Mock DB modules before importing store-adapter
-const mockCreateWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
-const mockGetWorkflowRun = mock(() => Promise.resolve(null));
-const mockGetActiveWorkflowRunByPath = mock(() => Promise.resolve(null));
-const mockFailOrphanedRuns = mock(() => Promise.resolve({ count: 0 }));
-const mockFindResumableRun = mock(() => Promise.resolve(null));
-const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
-const mockUpdateWorkflowRun = mock(() => Promise.resolve());
-const mockUpdateWorkflowActivity = mock(() => Promise.resolve());
-const mockGetWorkflowRunStatus = mock(() => Promise.resolve('running'));
-const mockCompleteWorkflowRun = mock(() => Promise.resolve());
-const mockFailWorkflowRun = mock(() => Promise.resolve());
-const mockCancelWorkflowRun = mock(() => Promise.resolve());
-const mockPauseWorkflowRun = mock(() => Promise.resolve());
+// Import modules to spy on BEFORE importing module under test
+import * as dbWorkflows from '../db/workflows';
+import * as dbWorkflowEvents from '../db/workflow-events';
+import * as dbCodebases from '../db/codebases';
+import * as providers from '@archon/providers';
+import * as configLoader from '../config/config-loader';
 
-mock.module('../db/workflows', () => ({
-  createWorkflowRun: mockCreateWorkflowRun,
-  getWorkflowRun: mockGetWorkflowRun,
-  getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
-  failOrphanedRuns: mockFailOrphanedRuns,
-  findResumableRun: mockFindResumableRun,
-  resumeWorkflowRun: mockResumeWorkflowRun,
-  updateWorkflowRun: mockUpdateWorkflowRun,
-  updateWorkflowActivity: mockUpdateWorkflowActivity,
-  getWorkflowRunStatus: mockGetWorkflowRunStatus,
-  completeWorkflowRun: mockCompleteWorkflowRun,
-  failWorkflowRun: mockFailWorkflowRun,
-  cancelWorkflowRun: mockCancelWorkflowRun,
-  pauseWorkflowRun: mockPauseWorkflowRun,
-}));
+import { createWorkflowStore, createWorkflowDeps } from './store-adapter';
 
-const mockCreateWorkflowEvent = mock(() => Promise.resolve());
-const mockGetCompletedDagNodeOutputs = mock(() => Promise.resolve(new Map<string, string>()));
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-  getCompletedDagNodeOutputs: mockGetCompletedDagNodeOutputs,
-}));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetActiveWorkflowRunByPath: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFailOrphanedRuns: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFindResumableRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyResumeWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyUpdateWorkflowActivity: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetWorkflowRunStatus: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCompleteWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyFailWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCancelWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyPauseWorkflowRun: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyCreateWorkflowEvent: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetCompletedDagNodeOutputs: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetCodebase: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyGetAgentProvider: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let spyLoadConfig: any;
 
-const mockGetCodebase = mock(() => Promise.resolve(null));
-mock.module('../db/codebases', () => ({
-  getCodebase: mockGetCodebase,
-}));
+beforeEach(() => {
+  spyCreateWorkflowRun = spyOn(dbWorkflows, 'createWorkflowRun').mockResolvedValue({
+    id: 'run-1',
+  } as never);
+  spyGetWorkflowRun = spyOn(dbWorkflows, 'getWorkflowRun').mockResolvedValue(null);
+  spyGetActiveWorkflowRunByPath = spyOn(
+    dbWorkflows,
+    'getActiveWorkflowRunByPath'
+  ).mockResolvedValue(null);
+  spyFailOrphanedRuns = spyOn(dbWorkflows, 'failOrphanedRuns').mockResolvedValue({ count: 0 });
+  spyFindResumableRun = spyOn(dbWorkflows, 'findResumableRun').mockResolvedValue(null);
+  spyResumeWorkflowRun = spyOn(dbWorkflows, 'resumeWorkflowRun').mockResolvedValue({
+    id: 'run-1',
+  } as never);
+  spyUpdateWorkflowRun = spyOn(dbWorkflows, 'updateWorkflowRun').mockResolvedValue(undefined);
+  spyUpdateWorkflowActivity = spyOn(dbWorkflows, 'updateWorkflowActivity').mockResolvedValue(
+    undefined
+  );
+  spyGetWorkflowRunStatus = spyOn(dbWorkflows, 'getWorkflowRunStatus').mockResolvedValue(
+    'running' as never
+  );
+  spyCompleteWorkflowRun = spyOn(dbWorkflows, 'completeWorkflowRun').mockResolvedValue(undefined);
+  spyFailWorkflowRun = spyOn(dbWorkflows, 'failWorkflowRun').mockResolvedValue(undefined);
+  spyCancelWorkflowRun = spyOn(dbWorkflows, 'cancelWorkflowRun').mockResolvedValue(undefined);
+  spyPauseWorkflowRun = spyOn(dbWorkflows, 'pauseWorkflowRun').mockResolvedValue(undefined);
+  spyCreateWorkflowEvent = spyOn(dbWorkflowEvents, 'createWorkflowEvent').mockResolvedValue(
+    undefined
+  );
+  spyGetCompletedDagNodeOutputs = spyOn(
+    dbWorkflowEvents,
+    'getCompletedDagNodeOutputs'
+  ).mockResolvedValue(new Map<string, string>());
+  spyGetCodebase = spyOn(dbCodebases, 'getCodebase').mockResolvedValue(null);
+  spyGetAgentProvider = spyOn(providers, 'getAgentProvider').mockReturnValue({} as never);
+  spyLoadConfig = spyOn(configLoader, 'loadConfig').mockResolvedValue({
+    assistant: 'claude',
+  } as never);
+});
 
-mock.module('@archon/providers', () => ({
-  getAgentProvider: mock(() => ({})),
-}));
-
-mock.module('../config/config-loader', () => ({
-  loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
-}));
-
-const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
+afterEach(() => {
+  spyCreateWorkflowRun.mockRestore();
+  spyGetWorkflowRun.mockRestore();
+  spyGetActiveWorkflowRunByPath.mockRestore();
+  spyFailOrphanedRuns.mockRestore();
+  spyFindResumableRun.mockRestore();
+  spyResumeWorkflowRun.mockRestore();
+  spyUpdateWorkflowRun.mockRestore();
+  spyUpdateWorkflowActivity.mockRestore();
+  spyGetWorkflowRunStatus.mockRestore();
+  spyCompleteWorkflowRun.mockRestore();
+  spyFailWorkflowRun.mockRestore();
+  spyCancelWorkflowRun.mockRestore();
+  spyPauseWorkflowRun.mockRestore();
+  spyCreateWorkflowEvent.mockRestore();
+  spyGetCompletedDagNodeOutputs.mockRestore();
+  spyGetCodebase.mockRestore();
+  spyGetAgentProvider.mockRestore();
+  spyLoadConfig.mockRestore();
+});
 
 describe('createWorkflowStore', () => {
   test('returns object with all IWorkflowStore methods', () => {
@@ -82,22 +135,22 @@ describe('createWorkflowStore', () => {
   });
 
   test('delegates getWorkflowRunStatus to DB and returns typed status', async () => {
-    mockGetWorkflowRunStatus.mockResolvedValueOnce('completed');
+    spyGetWorkflowRunStatus.mockResolvedValueOnce('completed');
     const store = createWorkflowStore();
     const result = await store.getWorkflowRunStatus('run-123');
     expect(result).toBe('completed');
-    expect(mockGetWorkflowRunStatus).toHaveBeenCalledWith('run-123');
+    expect(spyGetWorkflowRunStatus).toHaveBeenCalledWith('run-123');
   });
 
   test('delegates getWorkflowRunStatus returns null for missing run', async () => {
-    mockGetWorkflowRunStatus.mockResolvedValueOnce(null);
+    spyGetWorkflowRunStatus.mockResolvedValueOnce(null);
     const store = createWorkflowStore();
     const result = await store.getWorkflowRunStatus('nonexistent');
     expect(result).toBeNull();
   });
 
   test('createWorkflowEvent catches and logs unexpected throws', async () => {
-    mockCreateWorkflowEvent.mockRejectedValueOnce(new Error('DB connection lost'));
+    spyCreateWorkflowEvent.mockRejectedValueOnce(new Error('DB connection lost'));
     const store = createWorkflowStore();
     // Should not throw — the wrapper guarantees the non-throwing contract
     await expect(
@@ -112,22 +165,22 @@ describe('createWorkflowStore', () => {
 
   test('delegates getCompletedDagNodeOutputs to DB', async () => {
     const expected = new Map([['step1', 'output text']]);
-    mockGetCompletedDagNodeOutputs.mockResolvedValueOnce(expected);
+    spyGetCompletedDagNodeOutputs.mockResolvedValueOnce(expected);
     const store = createWorkflowStore();
     const result = await store.getCompletedDagNodeOutputs('run-123');
     expect(result).toBe(expected);
-    expect(mockGetCompletedDagNodeOutputs).toHaveBeenCalledWith('run-123');
+    expect(spyGetCompletedDagNodeOutputs).toHaveBeenCalledWith('run-123');
   });
 
   test('delegates cancelWorkflowRun to DB', async () => {
-    mockCancelWorkflowRun.mockResolvedValueOnce(undefined);
+    spyCancelWorkflowRun.mockResolvedValueOnce(undefined);
     const store = createWorkflowStore();
     await store.cancelWorkflowRun('run-123');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123');
+    expect(spyCancelWorkflowRun).toHaveBeenCalledWith('run-123');
   });
 
   test('delegates getCodebase to DB', async () => {
-    mockGetCodebase.mockResolvedValueOnce({
+    spyGetCodebase.mockResolvedValueOnce({
       id: 'cb-1',
       name: 'owner/repo',
       repository_url: 'https://github.com/owner/repo',
