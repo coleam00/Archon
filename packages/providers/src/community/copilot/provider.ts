@@ -432,7 +432,14 @@ export class CopilotProvider implements IAgentProvider {
         cwd,
         env: mergedEnv,
         githubToken,
-        useLoggedInUser: githubToken ? false : (copilotConfig.useLoggedInUser ?? true),
+        // Precedence: explicit config wins over an env token. Default behavior
+        // is unchanged when the user sets nothing — env token present →
+        // useLoggedInUser:false, otherwise true. But if the user explicitly
+        // sets `useLoggedInUser: true` (e.g. they have GH_TOKEN exported for a
+        // different gh CLI account and want Copilot to use the logged-in
+        // session), that intent is now honored instead of being silently
+        // overridden.
+        useLoggedInUser: copilotConfig.useLoggedInUser ?? !githubToken,
         logLevel: copilotConfig.logLevel,
       });
 

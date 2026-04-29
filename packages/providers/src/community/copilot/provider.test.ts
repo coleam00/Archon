@@ -223,4 +223,44 @@ describe('CopilotProvider', () => {
     expect(error?.message).toContain('Copilot authentication failed');
     expect(error?.message).toContain('copilot login');
   });
+
+  describe('useLoggedInUser precedence', () => {
+    test('defaults to true when neither env token nor explicit config is set', async () => {
+      await collect(new CopilotProvider().sendQuery('hi', '/repo', undefined, { model: 'gpt-5' }));
+      expect(createdClients[0]?.useLoggedInUser).toBe(true);
+    });
+
+    test('defaults to false when an env token is present and config is silent', async () => {
+      await collect(
+        new CopilotProvider().sendQuery('hi', '/repo', undefined, {
+          model: 'gpt-5',
+          env: { GH_TOKEN: 'env-token' },
+        })
+      );
+      expect(createdClients[0]?.useLoggedInUser).toBe(false);
+    });
+
+    test('honors explicit useLoggedInUser:true even when an env token is present', async () => {
+      // Real-world case: user has GH_TOKEN exported for a different gh CLI
+      // account and wants Copilot to use their logged-in subscription instead.
+      await collect(
+        new CopilotProvider().sendQuery('hi', '/repo', undefined, {
+          model: 'gpt-5',
+          env: { GH_TOKEN: 'env-token' },
+          assistantConfig: { useLoggedInUser: true },
+        })
+      );
+      expect(createdClients[0]?.useLoggedInUser).toBe(true);
+    });
+
+    test('honors explicit useLoggedInUser:false when no env token is present', async () => {
+      await collect(
+        new CopilotProvider().sendQuery('hi', '/repo', undefined, {
+          model: 'gpt-5',
+          assistantConfig: { useLoggedInUser: false },
+        })
+      );
+      expect(createdClients[0]?.useLoggedInUser).toBe(false);
+    });
+  });
 });
