@@ -7,7 +7,7 @@ import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, BUNDLED_VERSION } from '@archon/paths';
-import { getDefaultBranch, toRepoPath } from '@archon/git';
+import { getDefaultBranch, detectForge, toRepoPath } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
@@ -275,6 +275,38 @@ export async function executeWorkflow(
   }
 
   const docsDir = config.docsPath ?? 'docs/';
+
+  // Auto-detect forge type from git remote URL.
+  // Defaults to 'github' for backwards compatibility if detection fails.
+  let forgeType = 'github';
+  let forgeApiBase = 'https://api.github.com';
+  try {
+    const forgeInfo = await detectForge(toRepoPath(cwd));
+    // Only override defaults if detection returned a known forge type.
+    // 'unknown' means the hostname didn't match any known forge, so keep
+    // the github defaults for backwards compatibility.
+    if (forgeInfo.type !== 'unknown') {
+      forgeType = forgeInfo.type;
+      forgeApiBase = forgeInfo.apiBase;
+    }
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, errorType: (error as Error).constructor.name, cwd },
+      'workflow.forge_detect_failed'
+    );
+  }
+
+  // Resolve path to forge-cli.ts helper script (runs via bun, no external deps)
+  const forgeCli = join(archonPaths.getAppArchonBasePath(), 'scripts', 'forge-cli.ts');
+
+  // Inject forge env vars into config.envVars so they flow through all paths
+  // (baseOptions.env for AI nodes, subprocessEnv for bash/script nodes)
+  config.envVars = {
+    ...config.envVars,
+    FORGE_TYPE: forgeType,
+    FORGE_API_BASE: forgeApiBase,
+    FORGE_CLI: forgeCli,
+  };
 
   // Resolve provider and model once (used by all nodes).
   // Provider is explicit: node.provider ?? workflow.provider ?? config.assistant.

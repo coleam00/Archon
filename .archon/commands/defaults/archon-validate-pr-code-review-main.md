@@ -19,7 +19,7 @@ cat $ARTIFACTS_DIR/.pr-number
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
-gh pr view "$PR_NUMBER" --json title,body,headRefName,baseRefName,labels
+bun "$FORGE_CLI" pr view "$PR_NUMBER" --json title,body,headRefName,baseRefName,labels
 ```
 
 ### 1.2 Read Path Information
@@ -37,14 +37,14 @@ From the PR title, body, and linked issue(s):
 - What is the expected behavior vs actual behavior?
 - Which files/components are involved?
 
-If the PR body references a GitHub issue, fetch it:
+If the PR body references a $FORGE_NAME issue, fetch it:
 
 ```bash
 # Extract issue number from PR body (looks for "Fixes #N", "Closes #N", etc.)
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
-ISSUE_NUMBER=$(gh pr view "$PR_NUMBER" --json body -q '.body' | grep -oE '(Fixes|Closes|Resolves)\s*#[0-9]+' | grep -oE '[0-9]+' | head -1)
+ISSUE_NUMBER=$(bun "$FORGE_CLI" pr view "$PR_NUMBER" --json body -q '.body' | grep -oE '(Fixes|Closes|Resolves)\s*#[0-9]+' | grep -oE '[0-9]+' | head -1)
 if [ -n "$ISSUE_NUMBER" ]; then
-  gh issue view "$ISSUE_NUMBER" --json title,body,labels,comments
+  bun "$FORGE_CLI" issue view "$ISSUE_NUMBER" --json title,body,labels,comments
 fi
 ```
 
@@ -58,7 +58,7 @@ Get the list of changed files from the PR diff, then read those **same files on 
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
-gh pr view "$PR_NUMBER" --json files -q '.files[].path'
+bun "$FORGE_CLI" pr view "$PR_NUMBER" --json files -q '.files[].path'
 ```
 
 **CRITICAL**: Read the files from the **canonical repo** (main branch), NOT from the current worktree (feature branch). The canonical repo path is in `$ARTIFACTS_DIR/.canonical-repo`.

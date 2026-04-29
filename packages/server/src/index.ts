@@ -708,6 +708,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
  * Helps diagnose expired tokens or missing auth before workflows fail.
  */
 async function checkGhAuth(): Promise<void> {
+  // Skip gh auth check when user has a non-GitHub forge configured and no GitHub token.
+  // This avoids a spurious warning for Gitea/GitLab-only setups.
+  const hasGhToken = !!(process.env.GH_TOKEN || process.env.GITHUB_TOKEN);
+  const hasOtherForge = !!(process.env.GITEA_URL || process.env.GITLAB_URL);
+  if (!hasGhToken && hasOtherForge) {
+    getLog().info('gh_auth.skipped — no GitHub token configured, using alternate forge');
+    return;
+  }
+
   const { execFileAsync } = await import('@archon/git');
   try {
     await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });

@@ -340,7 +340,7 @@ EOF
 
 ## Phase 8: PR - Create Pull Request
 
-**Before creating a PR**, check if one already exists for this issue or branch using `gh pr list`. If a PR already exists, skip creation and use the existing one.
+**Before creating a PR**, check if one already exists for this issue or branch using `bun "$FORGE_CLI" pr list`. If a PR already exists, skip creation and use the existing one.
 
 ### 8.1 Push to Remote
 
@@ -366,16 +366,16 @@ Look for the project's PR template at `.github/pull_request_template.md`, `.gith
 Write the prepared body to `$ARTIFACTS_DIR/pr-body.md`, then:
 
 ```bash
-gh pr create --title "Fix: {title} (#{number})" \
-  --body-file $ARTIFACTS_DIR/pr-body.md \
+bun "$FORGE_CLI" pr create --title "Fix: {title} (#{number})" \
+  --body "$(<$ARTIFACTS_DIR/pr-body.md)" \
   --base $BASE_BRANCH
 ```
 
 ### 8.3 Get PR Number
 
 ```bash
-PR_URL=$(gh pr view --json url -q '.url')
-PR_NUMBER=$(gh pr view --json number -q '.number')
+PR_URL=$(bun "$FORGE_CLI" pr view --json url -q '.url')
+PR_NUMBER=$(bun "$FORGE_CLI" pr view --json number -q '.number')
 ```
 
 **PHASE_8_CHECKPOINT:**

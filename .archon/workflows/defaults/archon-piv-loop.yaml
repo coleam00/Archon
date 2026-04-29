@@ -14,7 +14,7 @@ description: |
   4. VALIDATE: Automated code review -> iterative human feedback & fixes (arbitrary rounds)
 
   The PIV loop comes AFTER a PRD exists. Each PIV loop focuses on ONE granular feature or bug fix.
-  Input: A description of what to build, a path to an existing plan, or a GitHub issue number.
+  Input: A description of what to build, a path to an existing plan, or a $FORGE_NAME issue number.
 
 provider: claude
 interactive: true
@@ -50,8 +50,8 @@ nodes:
         - If it's an existing plan → summarize it and ask if they want to refine or proceed
         - If it's a PRD → identify the specific phase/feature to focus on
 
-        **If it's a GitHub issue** (`#123` format):
-        - Fetch it: `gh issue view {number} --json title,body,labels,comments`
+        **If it's a $FORGE_NAME issue** (`#123` format):
+        - Fetch it: `bun "$FORGE_CLI" issue view {number} --json title,body,labels,comments`
         - Summarize the issue context
 
         **If it's free text**:
@@ -715,7 +715,7 @@ nodes:
       ## Step 3: Create PR (if not already created)
 
       ```bash
-      gh pr view HEAD --json url 2>/dev/null || echo "NO_PR"
+      bun "$FORGE_CLI" pr view HEAD --json url 2>/dev/null || echo "NO_PR"
       ```
 
       If no PR exists:
@@ -724,7 +724,7 @@ nodes:
       cat .github/pull_request_template.md 2>/dev/null || echo "NO_TEMPLATE"
       ```
 
-      Create with `gh pr create --draft --base $BASE_BRANCH`:
+      Create with `bun "$FORGE_CLI" pr create --draft --base $BASE_BRANCH`:
       - Title from the plan's feature name
       - Body summarizing the implementation
       - Use a HEREDOC for the body

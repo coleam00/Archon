@@ -27,8 +27,9 @@ nodes:
         PR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '[0-9]+' | head -1)
       fi
       if [ -z "$PR_NUMBER" ]; then
-        # Try getting PR from current branch
-        PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+        # Try finding PR for current branch via pr list
+        CURRENT_BRANCH=$(git branch --show-current)
+        PR_NUMBER=$(bun "$FORGE_CLI" pr list --head "$CURRENT_BRANCH" --json number 2>/dev/null | bun -e "const d=await Bun.stdin.json();console.log(Array.isArray(d)?d[0]?.number??'':d.number??'')")
       fi
 
       if [ -z "$PR_NUMBER" ]; then
@@ -39,7 +40,7 @@ nodes:
       echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
 
       # Fetch full PR details
-      gh pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+      bun "$FORGE_CLI" pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
 
   - id: find-ports
     bash: |
@@ -60,10 +61,16 @@ nodes:
       WORKTREE_PATH=$(pwd)
       FEATURE_BRANCH=$(git branch --show-current)
 
-      # Get PR branch info
+      # Extract PR branch info from fetch-pr output (already fetched, avoid redundant API calls)
       PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
-      PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
-      PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+      PR_HEAD=$(echo '$fetch-pr.output' | bun -e "const d=await Bun.stdin.json();console.log(d.headRefName??'')")
+      PR_BASE=$(echo '$fetch-pr.output' | bun -e "const d=await Bun.stdin.json();console.log(d.baseRefName??'')")
+
+      # Fallback: if parsing from output failed, fetch explicitly
+      if [ -z "$PR_HEAD" ] || [ -z "$PR_BASE" ]; then
+        PR_HEAD=$(bun "$FORGE_CLI" pr view "$PR_NUMBER" --json headRefName | bun -e "const d=await Bun.stdin.json();console.log(d.headRefName??'')")
+        PR_BASE=$(bun "$FORGE_CLI" pr view "$PR_NUMBER" --json baseRefName | bun -e "const d=await Bun.stdin.json();console.log(d.baseRefName??'')")
+      fi
 
       echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
       echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"

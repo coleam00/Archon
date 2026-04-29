@@ -57,7 +57,7 @@ From the review findings, extract:
 
 ### 2.2 Build Comment Body
 
-Format the review as a GitHub-friendly comment:
+Format the review as a $FORGE_NAME-compatible comment:
 
 ```markdown
 ## 🔍 Code Review
@@ -131,7 +131,7 @@ Format the review as a GitHub-friendly comment:
 ### 3.1 Post the Comment
 
 ```bash
-gh pr comment {PR_NUMBER} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment {PR_NUMBER} --body "$(cat <<'EOF'
 {formatted comment body}
 EOF
 )"
@@ -141,7 +141,7 @@ EOF
 
 ```bash
 # Check the comment was posted
-gh pr view {PR_NUMBER} --comments --json comments --jq '.comments | length'
+bun "$FORGE_CLI" pr view {PR_NUMBER} --comments --json comments --jq '.comments | length'
 ```
 
 **PHASE_3_CHECKPOINT:**
@@ -172,7 +172,7 @@ Review comment has been posted to the pull request.
 - Report error to user
 
 ### Comment fails to post
-- Check GitHub authentication
+- Check $FORGE_NAME authentication
 - Try with shorter body if too large
 - Report error with details
 
