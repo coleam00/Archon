@@ -1812,6 +1812,69 @@ branch refs/heads/feature/auth
     });
   });
 
+  describe('forge detection', () => {
+    test('detects github from https remote', () => {
+      expect(git.detectForgeType('https://github.com/owner/repo.git')).toBe('github');
+    });
+
+    test('detects github from ssh remote', () => {
+      expect(git.detectForgeType('git@github.com:owner/repo.git')).toBe('github');
+    });
+
+    test('detects gitlab from https remote', () => {
+      expect(git.detectForgeType('https://gitlab.com/group/repo.git')).toBe('gitlab');
+    });
+
+    test('detects gitlab from self-managed ssh remote', () => {
+      expect(git.detectForgeType('git@gitlab.internal.local:group/repo.git')).toBe('gitlab');
+    });
+
+    test('returns unknown for unsupported forge', () => {
+      expect(git.detectForgeType('https://bitbucket.org/team/repo.git')).toBe('unknown');
+    });
+
+    test('resolves github forge context', () => {
+      expect(
+        git.resolveForgeContext({
+          remoteUrl: 'https://github.com/owner/repo.git',
+          env: {} as NodeJS.ProcessEnv,
+        })
+      ).toEqual({
+        type: 'github',
+        apiBase: 'https://api.github.com',
+        webBase: 'https://github.com',
+        cli: 'gh',
+      });
+    });
+
+    test('resolves gitlab context from GITLAB_URL override', () => {
+      expect(
+        git.resolveForgeContext({
+          remoteUrl: 'git@gitlab.company.local:group/repo.git',
+          env: { GITLAB_URL: 'https://gitlab.company.local' } as NodeJS.ProcessEnv,
+        })
+      ).toEqual({
+        type: 'gitlab',
+        apiBase: 'https://gitlab.company.local/api/v4',
+        webBase: 'https://gitlab.company.local',
+        cli: 'glab',
+      });
+    });
+
+    test('resolves unknown context for unsupported forge', () => {
+      expect(
+        git.resolveForgeContext({
+          remoteUrl: 'https://example.org/scm/repo.git',
+          env: {} as NodeJS.ProcessEnv,
+        })
+      ).toEqual({
+        type: 'unknown',
+        apiBase: '',
+        webBase: '',
+      });
+    });
+  });
+
   // ==========================================================================
   // types.ts
   // ==========================================================================

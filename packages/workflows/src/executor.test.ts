@@ -776,7 +776,13 @@ describe('executeWorkflow', () => {
 
       // The config passed to executeDagWorkflow (arg index 12) should have merged envVars
       const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[12] as WorkflowConfig | undefined;
-      expect(configArg?.envVars).toEqual({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
+      expect(configArg?.envVars).toEqual({
+        FILE_KEY: 'file_val',
+        DB_KEY: 'db_val',
+        FORGE_TYPE: 'unknown',
+        FORGE_API_BASE: '',
+        FORGE_WEB_URL: '',
+      });
     });
 
     it('does not call getCodebaseEnvVars when no codebaseId', async () => {

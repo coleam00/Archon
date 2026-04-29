@@ -4,7 +4,8 @@
   "type": "module",
   "main": "./src/cli.ts",
   "bin": {
-    "archon": "./src/cli.ts"
+    "archon": "./src/cli.ts",
+    "archon-forge": "./src/forge.ts"
   },
   "scripts": {
     "cli": "bun src/cli.ts",

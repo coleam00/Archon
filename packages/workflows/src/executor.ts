@@ -7,7 +7,7 @@ import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, BUNDLED_VERSION } from '@archon/paths';
-import { getDefaultBranch, toRepoPath } from '@archon/git';
+import { getDefaultBranch, toRepoPath, getRemoteUrl, resolveForgeContext } from '@archon/git';
 import type { WorkflowDefinition, WorkflowRun, WorkflowExecutionResult } from './schemas';
 import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
@@ -249,9 +249,32 @@ export async function executeWorkflow(
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
+
+  let forgeEnvVars: Record<string, string> = {};
+  try {
+    const remoteUrl = await getRemoteUrl(toRepoPath(cwd));
+    const forge = resolveForgeContext({ remoteUrl, env: process.env });
+    forgeEnvVars = {
+      FORGE_TYPE: forge.type,
+      FORGE_API_BASE: forge.apiBase,
+      FORGE_WEB_URL: forge.webBase,
+      ...(forge.cli ? { FORGE_CLI: forge.cli } : {}),
+    };
+  } catch (error) {
+    getLog().debug(
+      { err: error as Error, cwd },
+      'workflow.forge_context_resolution_failed_using_defaults'
+    );
+    forgeEnvVars = {
+      FORGE_TYPE: 'unknown',
+      FORGE_API_BASE: '',
+      FORGE_WEB_URL: '',
+    };
+  }
+
   const config: WorkflowConfig = {
     ...fileConfig,
-    envVars: { ...fileConfig.envVars, ...dbEnvVars },
+    envVars: { ...fileConfig.envVars, ...dbEnvVars, ...forgeEnvVars },
   };
   const configuredCommandFolder = config.commands.folder;
 

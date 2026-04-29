@@ -390,7 +390,7 @@ ${issue.description ?? ''}
 
 ${userComment}
 
-Use 'glab issue view ${String(issue.iid)}' for full details if needed.`;
+Use the forge wrapper command (for example: 'archon-forge issue view ${String(issue.iid)}') for full details if needed.`;
   }
 
   private buildMRContext(mr: GitLabMergeRequest, userComment: string): string {
@@ -406,7 +406,7 @@ ${mr.description ?? ''}
 
 ${userComment}
 
-Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String(mr.iid)}' for the diff.`;
+Use forge wrapper commands (for example: 'archon-forge mr view ${String(mr.iid)}' and 'archon-forge mr diff ${String(mr.iid)}') for details and diff.`;
   }
 
   // ---------------------------------------------------------------------------
@@ -737,17 +737,17 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         getLog().debug({ command: finalMessage }, 'gitlab.slash_command_processing');
 
         if (isMR && mergeRequest) {
-          contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;
+          contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'archon-forge mr view ${String(mergeRequest.iid)}' for full details if needed.`;
         } else if (issue) {
-          contextToAppend = `GitLab Issue #${String(issue.iid)}: "${issue.title}"\nUse 'glab issue view ${String(issue.iid)}' for full details if needed.`;
+          contextToAppend = `GitLab Issue #${String(issue.iid)}: "${issue.title}"\nUse the forge wrapper command (for example: 'archon-forge issue view ${String(issue.iid)}') for full details if needed.`;
         }
       } else {
         if (isMR && mergeRequest) {
           finalMessage = this.buildMRContext(mergeRequest, strippedComment);
-          contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'glab mr view ${String(mergeRequest.iid)}' for full details if needed.`;
+          contextToAppend = `GitLab Merge Request !${String(mergeRequest.iid)}: "${mergeRequest.title}"\nUse 'archon-forge mr view ${String(mergeRequest.iid)}' for full details if needed.`;
         } else if (issue) {
           finalMessage = this.buildIssueContext(issue, strippedComment);
-          contextToAppend = `GitLab Issue #${String(issue.iid)}: "${issue.title}"\nUse 'glab issue view ${String(issue.iid)}' for full details if needed.`;
+          contextToAppend = `GitLab Issue #${String(issue.iid)}: "${issue.title}"\nUse the forge wrapper command (for example: 'archon-forge issue view ${String(issue.iid)}') for full details if needed.`;
         }
       }
 

@@ -288,7 +288,7 @@ describe('CLI git repo check', () => {
    */
   describe('command categorization', () => {
     // Mirror the actual noGitCommands array from cli.ts
-    const noGitCommands = ['version', 'help'];
+    const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve'];
 
     // Helper that mirrors the CLI's logic
     const requiresGitRepo = (command: string | undefined): boolean => {

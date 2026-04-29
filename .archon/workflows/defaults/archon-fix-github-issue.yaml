@@ -33,7 +33,7 @@ nodes:
 
       Rules:
       - If the message contains an explicit issue number (e.g., "#709", "issue 709", "709"), extract that number.
-      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list` to search for matching issues and pick the best match.
+      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `archon-forge issue list` to search for matching issues and pick the best match.
 
       CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation. Example correct output: 709
 
@@ -45,7 +45,7 @@ nodes:
         echo "Failed to extract issue number from: $extract-issue-number.output" >&2
         exit 1
       fi
-      gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
+      archon-forge issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
     depends_on: [extract-issue-number]
 
   - id: classify
@@ -166,18 +166,18 @@ nodes:
          - `$ARTIFACTS_DIR/investigation.md` or `$ARTIFACTS_DIR/plan.md`
          - `$ARTIFACTS_DIR/implementation.md`
          - `$ARTIFACTS_DIR/validation.md`
-      4. Check if a PR already exists for this branch: `gh pr list --head $(git branch --show-current)`
+      4. Check if a PR already exists for this branch: `archon-forge pr list --head $(git branch --show-current)`
          - If PR exists, skip creation and capture its number
       5. Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
-      6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
+      6. Create a DRAFT PR: `archon-forge pr create --draft --base $BASE_BRANCH`
          - Title: concise, imperative mood, under 70 chars
          - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
          - Link to issue: include `Fixes #...` or `Closes #...`
       7. Capture PR identifiers:
          ```bash
-         PR_NUMBER=$(gh pr view --json number -q '.number')
+         PR_NUMBER=$(archon-forge pr view --json number -q '.number')
          echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
-         PR_URL=$(gh pr view --json url -q '.url')
+         PR_URL=$(archon-forge pr view --json url -q '.url')
          echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
          ```
     depends_on: [validate]

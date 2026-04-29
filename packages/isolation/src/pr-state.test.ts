@@ -26,6 +26,30 @@ mock.module('@archon/git', () => ({
   execFileAsync: mockExecFileAsync,
   toRepoPath: (p: string) => p,
   toBranchName: (b: string) => b,
+  getRemoteUrl: async (_repoPath: string) => {
+    const { stdout } = await mockExecFileAsync('git', ['remote', 'get-url', 'origin']);
+    return stdout.trim() || null;
+  },
+  resolveForgeContext: ({ remoteUrl }: { remoteUrl?: string | null }) => {
+    const lower = (remoteUrl ?? '').toLowerCase();
+    if (lower.includes('github.com')) {
+      return {
+        type: 'github',
+        apiBase: 'https://api.github.com',
+        webBase: 'https://github.com',
+        cli: 'gh',
+      };
+    }
+    if (lower.includes('gitlab')) {
+      return {
+        type: 'gitlab',
+        apiBase: 'https://gitlab.com/api/v4',
+        webBase: 'https://gitlab.com',
+        cli: 'glab',
+      };
+    }
+    return { type: 'unknown', apiBase: '', webBase: '' };
+  },
 }));
 
 import { getPrState, type PrState } from './pr-state';
@@ -35,8 +59,10 @@ const BRANCH = 'feature-branch';
 
 function setupGhResponse(remoteUrl: string, ghStdout: string | Error): void {
   mockExecFileAsync.mockReset();
-  mockExecFileAsync.mockImplementation((cmd: string, _args: string[]) => {
-    if (cmd === 'git') return Promise.resolve({ stdout: remoteUrl, stderr: '' });
+  mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    if (cmd === 'git' && args.includes('remote') && args.includes('get-url')) {
+      return Promise.resolve({ stdout: remoteUrl, stderr: '' });
+    }
     if (cmd === 'gh') {
       if (ghStdout instanceof Error) return Promise.reject(ghStdout);
       return Promise.resolve({ stdout: ghStdout, stderr: '' });

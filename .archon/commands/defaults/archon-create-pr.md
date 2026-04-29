@@ -24,7 +24,7 @@ ISSUE_NUM=$(echo "$BRANCH" | grep -oE '[0-9]+' | tail -1)
 If an issue number was found, search for open PRs that already reference it:
 
 ```bash
-gh pr list \
+archon-forge pr list \
   --search "Fixes #${ISSUE_NUM} OR Closes #${ISSUE_NUM}" \
   --state open \
   --json number,url,headRefName
@@ -147,7 +147,7 @@ cat > $ARTIFACTS_DIR/pr-body.md <<'EOF'
 [body from above]
 EOF
 
-gh pr create \
+archon-forge pr create \
   --title "[title]" \
   --body-file $ARTIFACTS_DIR/pr-body.md \
   --base $BASE_BRANCH
@@ -156,7 +156,7 @@ gh pr create \
 Or if the content is simple:
 
 ```bash
-gh pr create --fill --base $BASE_BRANCH
+archon-forge pr create --fill --base $BASE_BRANCH
 ```
 
 After creating the PR, capture its identifiers for downstream steps. Only write artifacts if PR creation succeeded — never persist stale data from a pre-existing PR:
@@ -164,9 +164,9 @@ After creating the PR, capture its identifiers for downstream steps. Only write 
 ```bash
 # After creating the PR, capture and persist the PR number for downstream steps
 # IMPORTANT: Only write artifacts after confirmed successful PR creation
-if gh pr view --json number,url -q '.number,.url' > /dev/null 2>&1; then
-  PR_NUMBER=$(gh pr view --json number -q '.number')
-  PR_URL=$(gh pr view --json url -q '.url')
+if archon-forge pr view --json number,url -q '.number,.url' > /dev/null 2>&1; then
+  PR_NUMBER=$(archon-forge pr view --json number -q '.number')
+  PR_URL=$(archon-forge pr view --json url -q '.url')
   echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
   echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
 else
@@ -210,7 +210,7 @@ Nothing to create a PR for.
 ### Branch Already Has PR
 
 ```bash
-gh pr view --web
+archon-forge pr view --web
 ```
 
 Opens the existing PR instead of creating a duplicate.

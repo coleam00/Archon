@@ -1,11 +1,11 @@
 /**
- * PR state lookup via the `gh` CLI.
+ * PR state lookup via forge CLI (currently GitHub `gh` only).
  *
  * Used by cleanup to detect squash-merged or closed PRs that git ancestry
- * checks miss. The `gh` CLI is a soft dependency — if it's missing or fails,
- * we return 'NONE' and let callers fall back to git-only signals.
+ * checks miss. CLI dependency is soft — if unavailable or failing, we return
+ * 'NONE' and let callers fall back to git-only signals.
  */
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, resolveForgeContext, getRemoteUrl } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 
@@ -19,11 +19,11 @@ function getLog(): ReturnType<typeof createLogger> {
 export type PrState = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
 
 /**
- * Look up the PR state for a branch in the GitHub remote.
+ * Look up PR state for a branch when the forge supports it.
  *
  * Returns:
  *   - 'MERGED' / 'CLOSED' / 'OPEN' if a PR exists with that head branch
- *   - 'NONE' if no PR exists, gh is unavailable, or the remote is not GitHub
+ *   - 'NONE' if no PR exists, CLI is unavailable, or forge is unsupported
  *
  * The optional `cache` map dedupes lookups within a single cleanup invocation.
  */
@@ -37,13 +37,9 @@ export async function getPrState(
     return cached;
   }
 
-  // Check whether the remote is on GitHub. Non-GitHub remotes are out of scope.
   let remoteUrl = '';
   try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], {
-      timeout: 10000,
-    });
-    remoteUrl = stdout.trim();
+    remoteUrl = (await getRemoteUrl(repoPath)) ?? '';
   } catch (error) {
     getLog().debug(
       { err: error as Error, repoPath, branch },
@@ -53,17 +49,23 @@ export async function getPrState(
     return 'NONE';
   }
 
-  if (!remoteUrl.toLowerCase().includes('github.com')) {
-    getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_github_only');
+  const forge = resolveForgeContext({ remoteUrl });
+  if (forge.type !== 'github') {
+    getLog().debug(
+      { repoPath, branch, remoteUrl, forgeType: forge.type },
+      'isolation.pr_state_forge_unsupported'
+    );
     cache?.set(branch, 'NONE');
     return 'NONE';
   }
+
+  const gh = forge.cli ?? 'gh';
 
   let result: PrState = 'NONE';
   let ghStdout = '';
   try {
     const { stdout } = await execFileAsync(
-      'gh',
+      gh,
       ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'state', '--limit', '1'],
       { timeout: 15000, cwd: repoPath }
     );

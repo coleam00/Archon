@@ -49,3 +49,7 @@ export {
   syncRepository,
   addSafeDirectory,
 } from './repo';
+
+// Forge detection helpers
+export { detectForgeType, resolveForgeContext } from './forge';
+export type { ForgeType, ForgeContext } from './forge';

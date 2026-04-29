@@ -319,6 +319,19 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 | `MAX_WORKTREES_PER_CODEBASE` | Max worktrees per codebase before auto-cleanup | `25` |
 | `CLEANUP_INTERVAL_HOURS` | How often the background cleanup service runs | `6` |
 
+### Forge Runtime (workflow execution)
+
+These variables are injected by the workflow executor based on the repository `origin` remote so workflows can stay forge-neutral:
+
+| Variable | Description | Example |
+| --- | --- | --- |
+| `FORGE_TYPE` | Detected forge type (`github`, `gitlab`, `unknown`) | `gitlab` |
+| `FORGE_API_BASE` | Forge API base URL | `https://gitlab.example.com/api/v4` |
+| `FORGE_WEB_URL` | Forge web base URL | `https://gitlab.example.com` |
+| `FORGE_CLI` | Optional CLI hint (`gh` or `glab`) | `glab` |
+
+`FORGE_CLI` can also be set manually to override auto-detection.
+
 ### Docker / Deployment
 
 | Variable | Description | Default |
@@ -411,6 +424,9 @@ No configuration needed. Archon works out of the box with:
 - `~/.archon/` for all managed files
 - Claude as default AI assistant
 - Platform-appropriate streaming modes
+- Forge runtime auto-detection (`FORGE_TYPE`, `FORGE_API_BASE`, `FORGE_WEB_URL`)
+
+For forge-neutral shell steps and default workflow commands, use `archon-forge ...` (for example `archon-forge pr view --json number,url`).
 
 ### Custom AI Preference
 

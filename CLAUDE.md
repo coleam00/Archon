@@ -255,6 +255,10 @@ bun run cli serve --download-only  # Download without starting
 
 # Show version
 bun run cli version
+
+# Forge-neutral wrapper for PR/issue/MR commands used in default workflows
+# Auto-selects gh vs glab from git origin (or FORGE_CLI override)
+archon-forge pr view --json number,url
 ```
 
 ## Architecture
@@ -688,6 +692,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 - `$WORKFLOW_ID` - The workflow run ID
 - `$BASE_BRANCH` - Base branch; auto-detected from git when `worktree.baseBranch` is not set; fails only if referenced in a prompt and auto-detection also fails
 - `$DOCS_DIR` - Documentation directory path; configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/`. Never throws.
+- Forge runtime env vars (auto-injected by executor from git origin): `FORGE_TYPE`, `FORGE_API_BASE`, `FORGE_WEB_URL`, optional `FORGE_CLI`.
 - `$LOOP_USER_INPUT` - User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations.
 - `$REJECTION_REASON` - Reviewer feedback provided via `/workflow reject <id> <reason>` at an approval gate. Only populated in `on_reject` prompts; empty string elsewhere.
 - `$LOOP_PREV_OUTPUT` - Cleaned output of the previous loop iteration (loop nodes only). Empty string on the first iteration (no prior output exists). Useful for `fresh_context: true` loops that need to reference what the previous pass produced or why it failed without carrying full session history.
