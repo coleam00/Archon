@@ -60,7 +60,7 @@ describe('evaluateCondition', () => {
   it('dot notation: returns JSON stringified value for array fields', () => {
     const jsonOutput = JSON.stringify({ items: ['todo', 'fix'], count: 2 });
     const outputs = new Map([['gather', makeOutput(jsonOutput)]]);
-    // Array field resolves to JSON stringified version
+
     const expectedItems = JSON.stringify(['todo', 'fix']);
     const condition = "$gather.output.items == '" + expectedItems + "'";
     expect(evaluateCondition(condition, outputs).result).toBe(true);

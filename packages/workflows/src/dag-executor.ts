@@ -306,7 +306,8 @@ export function substituteNodeOutputRefs(
         // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
         // String(boolean) is 'true' or 'false' — no shell metacharacters.
         if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        // arrays and objects: JSON-stringify so downstream nodes can parse them
+        // arrays and objects: JSON-stringify. Bash passes substitution as a single
+        // argument, so downstream tools (jq, etc.) receive a JSON literal they can parse.
         if (Array.isArray(value) || typeof value === 'object') {
           return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
         }
