@@ -72,4 +72,13 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
     const result = await resolver.resolveClaudeBinaryPath('/config/claude');
     expect(result).toBe('/env/claude');
   });
+
+  test('falls through to undefined when CLAUDE_BIN_PATH is the empty string', async () => {
+    // Pin the contract: an unset shell variable that gets exported as empty
+    // (e.g. `export CLAUDE_BIN_PATH=`) must behave the same as fully unset,
+    // not throw "file does not exist".
+    process.env.CLAUDE_BIN_PATH = '';
+    const result = await resolver.resolveClaudeBinaryPath();
+    expect(result).toBeUndefined();
+  });
 });
