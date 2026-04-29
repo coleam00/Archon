@@ -80,6 +80,84 @@ export function classifyError(error: Error): ErrorType {
   return 'UNKNOWN';
 }
 
+// ─── Subprocess Failure Formatting ───────────────────────────────────────────
+
+/** Max characters of stderr/message we keep in user-facing and logged fields. */
+const SUBPROCESS_ERROR_MAX_CHARS = 2000;
+
+/**
+ * Raw ExecFileException shape from Node's `child_process.execFile`. For inline
+ * scripts via `bash -c <body>` / `bun -e <body>` the entire script body is
+ * embedded in `err.message`, `err.cmd`, and the first line of `err.stack` —
+ * which is why `formatSubprocessFailure` strips the prefix and exposes a
+ * controlled `logFields` subset rather than the raw error.
+ */
+interface RawSubprocessError {
+  message?: string;
+  stderr?: string;
+  stdout?: string;
+  // Numeric exit code OR errno symbol (e.g. 'ENOENT') — mirrors ExecFileException.
+  code?: number | string | null;
+  killed?: boolean;
+  cmd?: string;
+}
+
+/**
+ * Produce a concise, diagnostic-first summary of a failed subprocess.
+ *
+ * User-visible output strips Node's `"Command failed: <cmd>"` prefix (which for
+ * inline scripts contains the full script body) and prefers stderr when present.
+ * Log fields expose a controlled, tail-truncated subset — never the full `err`
+ * object, to prevent Pino's default error serializer from emitting three copies
+ * of the script body (`err.message`, `err.stack`, `err.cmd`).
+ */
+export function formatSubprocessFailure(
+  err: RawSubprocessError,
+  label: string
+): { userMessage: string; logFields: Record<string, unknown> } {
+  const stderr = (err.stderr ?? '').trim();
+  const rawMessage = (err.message ?? '').trim();
+
+  // The first line of Node's ExecFileException.message is `Command failed: <cmd>`,
+  // and for `bash -c <body>` / `bun -e <body>` that line embeds the full script
+  // body. Strip it so user-facing output never re-leaks the body.
+  const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
+  const bodyAfterPrefix = hasCommandFailedPrefix
+    ? rawMessage.split('\n').slice(1).join('\n').trim()
+    : rawMessage;
+
+  let diagnostic: string;
+  if (stderr) {
+    diagnostic = stderr;
+  } else if (bodyAfterPrefix) {
+    diagnostic = bodyAfterPrefix;
+  } else if (hasCommandFailedPrefix) {
+    // Prefix was the entire message — exit code in the suffix is the only signal.
+    diagnostic = 'no diagnostic output';
+  } else {
+    diagnostic = 'unknown error';
+  }
+
+  const truncated =
+    diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
+      ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
+      : diagnostic;
+
+  const exitSuffix = err.code != null ? ` [exit ${String(err.code)}]` : '';
+
+  const stderrTail =
+    stderr.length > SUBPROCESS_ERROR_MAX_CHARS ? stderr.slice(-SUBPROCESS_ERROR_MAX_CHARS) : stderr;
+
+  return {
+    userMessage: `${label} failed${exitSuffix}: ${truncated}`,
+    logFields: {
+      exitCode: err.code ?? undefined,
+      killed: err.killed === true,
+      stderrTail: stderrTail.length > 0 ? stderrTail : undefined,
+    },
+  };
+}
+
 // ─── Credit Exhaustion Detection ────────────────────────────────────────────
 
 /** Patterns that indicate credit/quota exhaustion in streamed assistant output */
@@ -275,6 +353,9 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $LOOP_USER_INPUT - User feedback from interactive loop approval. Only populated on the
  *   first iteration of a resumed interactive loop; empty string on all other iterations.
  * - $REJECTION_REASON - Reviewer feedback from approval node rejection (on_reject prompts only).
+ * - $LOOP_PREV_OUTPUT - Cleaned output of the previous loop iteration. Empty string on the
+ *   first iteration (no prior output exists). Useful for fresh_context loops that need
+ *   to reference what the previous pass produced or why it failed.
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
@@ -303,6 +384,7 @@ export function substituteWorkflowVariables(
   issueContext?: string,
   loopUserInput?: string,
   rejectionReason?: string,
+  loopPrevOutput?: string,
   forgeType?: string,
   forgeApiBase?: string,
   forgeCli?: string
@@ -328,6 +410,7 @@ export function substituteWorkflowVariables(
     .replace(/\$DOCS_DIR/g, resolvedDocsDir)
     .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
     .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
+    .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '')
     .replace(/\$FORGE_TYPE/g, forgeType ?? 'github')
     .replace(/\$FORGE_API_BASE/g, forgeApiBase ?? 'https://api.github.com')
     .replace(/\$FORGE_CLI/g, forgeCli ?? '')
@@ -392,6 +475,7 @@ export function buildPromptWithContext(
     issueContext,
     undefined, // loopUserInput
     undefined, // rejectionReason
+    undefined, // loopPrevOutput
     forgeType,
     forgeApiBase,
     forgeCli
@@ -437,18 +521,26 @@ function escapeRegExp(str: string): string {
 /**
  * Detect whether the AI output contains a completion signal.
  *
- * Supports two formats:
+ * Supports three formats, checked in order:
  * 1. <promise>SIGNAL</promise> - Recommended; prevents false positives in prose
- * 2. Plain SIGNAL - Backwards compatibility; only at end of output or on own line
+ * 2. <anytag>SIGNAL</anytag> - Any XML-wrapped tag; case-insensitive on tag names
+ * 3. Plain SIGNAL - Backwards compatibility; only at end of output or on own line
  *
- * The <promise> tag format uses case-insensitive matching for the tags.
- * Plain signal detection is restrictive to prevent false positives.
+ * Tag matching uses a backreference (\1) so opening and closing tag names must
+ * agree — `<COMPLETE>X</done>` is not treated as a completion, which avoids
+ * false positives when the AI interleaves tags in prose.
+ *
+ * Plain signal detection is restrictive to prevent false positives like "not SIGNAL yet".
  */
 export function detectCompletionSignal(output: string, signal: string): boolean {
-  // Check for <promise>SIGNAL</promise> format (recommended - prevents false positives)
-  // Case-insensitive for tags
-  const promisePattern = new RegExp(`<promise>\\s*${escapeRegExp(signal)}\\s*</promise>`, 'i');
-  if (promisePattern.test(output)) {
+  // Check for XML-like tag wrapping with matching open/close names: <tag>SIGNAL</tag>.
+  // Catches <promise>COMPLETE</promise>, <COMPLETE>ALL_CLEAN</COMPLETE>, <done>X</done>.
+  // The `([a-zA-Z][\w-]*)` capture plus `</\1>` backreference requires tag names to match.
+  const xmlWrappedPattern = new RegExp(
+    `<([a-zA-Z][\\w-]*)[^>]*>\\s*${escapeRegExp(signal)}\\s*</\\1>`,
+    'i'
+  );
+  if (xmlWrappedPattern.test(output)) {
     return true;
   }
   // Plain signal detection - restrictive to prevent false positives like "not COMPLETE yet"
@@ -460,9 +552,24 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
   return endPattern.test(output) || ownLinePattern.test(output);
 }
 
-/** Strip internal completion signal tags before sending to user-facing output. */
-export function stripCompletionTags(content: string): string {
-  return content.replace(/<promise>[\s\S]*?<\/promise>/gi, '').trim();
+/**
+ * Strip internal completion signal tags before sending to user-facing output.
+ * Always strips `<promise>…</promise>` (any content). When `until` is provided,
+ * also strips any XML-wrapped form of that signal with matching tag names
+ * (e.g. `<COMPLETE>ALL_CLEAN</COMPLETE>`). Mismatched tag names are left alone
+ * so regular prose (`<note>ALL_CLEAN</warning>`) isn't accidentally rewritten.
+ */
+export function stripCompletionTags(content: string, until?: string): string {
+  let result = content.replace(/<promise>[\s\S]*?<\/promise>/gi, '');
+  if (until) {
+    // Strip XML-tagged completion signals with matching open/close tag names.
+    const escapedSignal = escapeRegExp(until);
+    result = result.replace(
+      new RegExp(`<([a-zA-Z][\\w-]*)[^>]*>\\s*${escapedSignal}\\s*</\\1>`, 'gi'),
+      ''
+    );
+  }
+  return result.trim();
 }
 
 /**

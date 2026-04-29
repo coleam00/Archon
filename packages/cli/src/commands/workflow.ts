@@ -10,7 +10,8 @@ import {
 } from '@archon/core';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import { configureIsolation, getIsolationProvider } from '@archon/isolation';
-import { createLogger } from '@archon/paths';
+import { createLogger, getArchonHome } from '@archon/paths';
+import { join } from 'node:path';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
@@ -75,6 +76,57 @@ function generateConversationId(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `cli-${String(timestamp)}-${random}`;
+}
+
+/**
+ * Parses the "Source symlink at X already points to Y, expected Z" error
+ * thrown by `createProjectSourceSymlink` in @archon/paths. Cross-package
+ * string contract — if that throw site changes wording, this parser silently
+ * stops matching. Returns the workspace dir (parent of the `source` link) so
+ * the caller can emit an exact cleanup path, or null if unrecognized.
+ */
+export function extractStaleWorkspaceEntry(message: string): string | null {
+  const prefix = 'Source symlink at ';
+  const delimiter = ' already points to ';
+  if (!message.startsWith(prefix)) return null;
+
+  const remainder = message.slice(prefix.length);
+  const delimiterIndex = remainder.indexOf(delimiter);
+  if (delimiterIndex === -1) return null;
+
+  const sourcePath = remainder.slice(0, delimiterIndex).trim();
+  const lastSeparator = Math.max(sourcePath.lastIndexOf('/'), sourcePath.lastIndexOf('\\'));
+  return lastSeparator === -1 ? null : sourcePath.slice(0, lastSeparator);
+}
+
+/**
+ * Wraps a codebase auto-registration failure for either the worktree-create or
+ * resume path. Preserves the original error message and delegates hint detail
+ * to `extractStaleWorkspaceEntry`; falls back to a workspace-root pointer when
+ * the error shape is unrecognized.
+ */
+function buildRegistrationFailureError(action: string, error: Error): Error {
+  const staleWorkspaceEntry = extractStaleWorkspaceEntry(error.message);
+  let hint: string;
+  if (staleWorkspaceEntry) {
+    hint = `Hint: Remove the stale workspace entry at ${staleWorkspaceEntry} and retry, or use --no-worktree to skip isolation.`;
+  } else {
+    // Guard against a throwing getArchonHome() (misconfigured env vars, etc.):
+    // the registration error we're wrapping is the load-bearing one — we'd
+    // rather lose the exact path in the hint than replace it with a secondary
+    // home-resolution error that masks the root cause.
+    try {
+      const workspacesPath = join(getArchonHome(), 'workspaces');
+      hint = `Hint: Check your Archon workspace registration under ${workspacesPath} and retry, or use --no-worktree to skip isolation.`;
+    } catch {
+      hint =
+        'Hint: Check your Archon workspace registration and retry, or use --no-worktree to skip isolation.';
+    }
+  }
+
+  return new Error(
+    `Cannot ${action}: repository registration failed.\nError: ${error.message}\n${hint}`
+  );
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -316,6 +368,7 @@ export async function workflowRunCommand(
   // Try to find a codebase for this directory
   let codebase = null;
   let codebaseLookupError: Error | null = null;
+  let codebaseRegistrationError: Error | null = null;
   try {
     codebase = await codebaseDb.findCodebaseByDefaultCwd(cwd);
   } catch (error) {
@@ -361,6 +414,7 @@ export async function workflowRunCommand(
         }
       } catch (error) {
         const err = error as Error;
+        codebaseRegistrationError = err;
         getLog().warn(
           { err, errorType: err.constructor.name, repoRoot },
           'cli.codebase_auto_registration_failed'
@@ -384,6 +438,9 @@ export async function workflowRunCommand(
             `Error: ${codebaseLookupError.message}\n` +
             'Hint: Check your database connection before using --resume.'
         );
+      }
+      if (codebaseRegistrationError) {
+        throw buildRegistrationFailureError('resume', codebaseRegistrationError);
       }
       throw new Error(
         'Cannot resume: Not in a git repository.\n' +
@@ -543,6 +600,9 @@ export async function workflowRunCommand(
           `Error: ${codebaseLookupError.message}\n` +
           'Hint: Check your database connection, or use --no-worktree to skip isolation.'
       );
+    }
+    if (codebaseRegistrationError) {
+      throw buildRegistrationFailureError('create worktree', codebaseRegistrationError);
     }
     throw new Error(
       'Cannot create worktree: not in a git repository.\n' +

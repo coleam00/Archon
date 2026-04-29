@@ -18,16 +18,35 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
 
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
+import * as binaryResolver from './binary-resolver';
 
 describe('shouldPassNoEnvFile', () => {
-  test('returns true when cliPath is undefined (dev mode — SDK spawns cli.js via Bun)', () => {
-    expect(shouldPassNoEnvFile(undefined)).toBe(true);
+  test('returns false when cliPath is undefined (dev mode — SDK 0.2.x resolves a native binary)', () => {
+    // Pre-0.2.x the SDK shipped cli.js and dev mode = JS. Since 0.2.x the
+    // SDK ships per-platform native binaries via optional deps. The flag
+    // (a Bun runtime option) is meaningless to native binaries and gets
+    // rejected as `error: unknown option '--no-env-file'`. CWD .env leak
+    // protection comes from stripCwdEnv() at entry, not from this flag.
+    expect(shouldPassNoEnvFile(undefined)).toBe(false);
   });
 
-  test('returns true for an explicit cli.js path (npm-installed, SDK spawns via Bun/Node)', () => {
+  test('returns true for an explicit cli.js path (legacy npm-installed cli.js, SDK spawns via Bun)', () => {
     expect(
       shouldPassNoEnvFile('/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js')
     ).toBe(true);
+  });
+
+  test('returns true for .mjs and .cjs paths (also Bun-runnable JS entry points)', () => {
+    expect(shouldPassNoEnvFile('/path/to/cli.mjs')).toBe(true);
+    expect(shouldPassNoEnvFile('/path/to/cli.cjs')).toBe(true);
+  });
+
+  test('returns false for non-Bun-runnable JS-adjacent extensions', () => {
+    // `.ts`/`.tsx`/`.jsx` are deliberately excluded — the SDK never shipped
+    // those as entry points, so accepting them would only widen misconfiguration.
+    expect(shouldPassNoEnvFile('/path/to/cli.ts')).toBe(false);
+    expect(shouldPassNoEnvFile('/path/to/cli.tsx')).toBe(false);
+    expect(shouldPassNoEnvFile('/path/to/cli.jsx')).toBe(false);
   });
 
   test('returns false for a native binary path (curl installer, SDK execs directly)', () => {
@@ -505,8 +524,10 @@ describe('ClaudeProvider', () => {
       const callArgs = mockQuery.mock.calls[0][0] as {
         options: { env: NodeJS.ProcessEnv; executableArgs?: string[] };
       };
-      // --no-env-file prevents Bun from auto-loading .env in subprocess CWD
-      expect(callArgs.options.executableArgs).toEqual(['--no-env-file']);
+      // executableArgs is omitted when cliPath is undefined (dev mode, SDK
+      // 0.2.x resolves a native binary). CWD .env leak protection comes
+      // from stripCwdEnv() at entry, not from the --no-env-file flag.
+      expect(callArgs.options.executableArgs).toBeUndefined();
       expect(callArgs.options.env.CUSTOM_USER_KEY).toBe('user-trusted-value');
       // Windows uses "Path" casing in spread objects and USERPROFILE instead of HOME
       const envPath = callArgs.options.env.PATH ?? callArgs.options.env.Path;
@@ -519,6 +540,37 @@ describe('ClaudeProvider', () => {
       // Cleanup
       if (originalKey !== undefined) process.env.CUSTOM_USER_KEY = originalKey;
       else delete process.env.CUSTOM_USER_KEY;
+    });
+
+    test('passes executableArgs: [--no-env-file] when cliPath ends in a Bun-runnable JS extension', async () => {
+      // Belt-and-suspenders integration check: the dev-mode path is exercised
+      // in the test above (executableArgs: undefined). This test exercises the
+      // legacy explicit-cli.js path through the real buildBaseClaudeOptions
+      // codepath, so a regression in the conditional spread would be caught.
+      const spy = spyOn(binaryResolver, 'resolveClaudeBinaryPath').mockResolvedValue(
+        '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+      );
+
+      mockQuery.mockImplementation(async function* () {
+        // empty
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace')) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as {
+        options: {
+          executableArgs?: string[];
+          pathToClaudeCodeExecutable?: string;
+        };
+      };
+      expect(callArgs.options.executableArgs).toEqual(['--no-env-file']);
+      expect(callArgs.options.pathToClaudeCodeExecutable).toBe(
+        '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+      );
+
+      spy.mockRestore();
     });
 
     test('classifies exit code errors as crash and retries up to 3 times', async () => {

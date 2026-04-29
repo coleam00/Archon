@@ -252,6 +252,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   await webAdapter.start();
   persistence.startPeriodicFlush();
 
+  // Mutable — pushed to as each adapter starts, read by the /api/health endpoint.
+  // Must be a live reference because Telegram starts after the HTTP listener begins
+  // accepting requests, so a snapshot taken at registration time would miss it.
+  const activePlatforms: string[] = ['Web'];
+
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let github: GitHubAdapter | null = null;
   let gitea: GiteaAdapter | null = null;
@@ -284,6 +289,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         botMention
       );
       await github.start();
+      activePlatforms.push('GitHub');
     } else {
       getLog().info('github_adapter_skipped');
     }
@@ -300,6 +306,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         giteaBotMention
       );
       await gitea.start();
+      activePlatforms.push('Gitea');
     } else {
       getLog().info('gitea_adapter_skipped');
     }
@@ -316,6 +323,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         gitlabBotMention
       );
       await gitlab.start();
+      activePlatforms.push('GitLab');
     } else {
       getLog().info('gitlab_adapter_skipped');
     }
@@ -377,7 +385,24 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
       });
 
-      await discord.start();
+      // Don't let a Discord login failure (bad token, missing privileged
+      // intents, etc.) bring down the whole server — users running
+      // `archon serve` for the web UI shouldn't lose it because of an
+      // unrelated bot misconfiguration. See #1365.
+      try {
+        await discord.start();
+        activePlatforms.push('Discord');
+      } catch (error) {
+        const err = error as Error;
+        const isPrivilegedIntentError = err.message?.includes('disallowed intents');
+        const hint = isPrivilegedIntentError
+          ? 'Enable "Message Content Intent" in the Discord Developer Portal ' +
+            '(your application > Bot > Privileged Gateway Intents) and restart, ' +
+            'or unset DISCORD_BOT_TOKEN if you do not want the Discord adapter.'
+          : 'Verify DISCORD_BOT_TOKEN is valid, or unset it to disable the Discord adapter.';
+        getLog().error({ err, hint }, 'discord.start_failed_continuing_without_adapter');
+        discord = null;
+      }
     } else {
       getLog().info('discord_adapter_skipped');
     }
@@ -433,6 +458,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       });
 
       await slack.start();
+      activePlatforms.push('Slack');
     } else {
       getLog().info('slack_adapter_skipped');
     }
@@ -451,7 +477,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager);
+  registerApiRoutes(app, webAdapter, lockManager, activePlatforms);
 
   // GitHub webhook endpoint
   if (github) {
@@ -607,6 +633,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     try {
       await telegramAdapter.start();
+      activePlatforms.push('Telegram');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       getLog().error({ err: error, errorType: error.constructor.name }, 'telegram.start_failed');
@@ -667,15 +694,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // because it occurs AFTER the for-await generator loop exits (and thus outside
   // the try/catch in claude.ts). These are SDK cleanup races, not fatal app errors.
   process.on('unhandledRejection', handleUnhandledRejection);
-
-  // Show active platforms
-  const activePlatforms = ['Web'];
-  if (telegram) activePlatforms.push('Telegram');
-  if (discord) activePlatforms.push('Discord');
-  if (slack) activePlatforms.push('Slack');
-  if (github) activePlatforms.push('GitHub');
-  if (gitea) activePlatforms.push('Gitea');
-  if (gitlab) activePlatforms.push('GitLab');
 
   getLog().info({ activePlatforms, port }, 'server_ready');
 

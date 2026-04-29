@@ -69,6 +69,14 @@ mock.module('./event-emitter', () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Bootstrap provider registry (executor calls isRegisteredProvider at workflow level)
+// ---------------------------------------------------------------------------
+
+import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+clearRegistry();
+registerBuiltinProviders();
+
+// ---------------------------------------------------------------------------
 // Import after mocks
 // ---------------------------------------------------------------------------
 

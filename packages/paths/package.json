@@ -1,6 +1,6 @@
 {
   "name": "@archon/paths",
-  "version": "0.3.6",
+  "version": "0.3.10",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

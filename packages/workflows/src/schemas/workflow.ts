@@ -68,6 +68,14 @@ export const workflowBaseSchema = z.object({
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
+  /**
+   * When `false`, the engine skips the path-exclusive lock for this workflow,
+   * allowing N concurrent runs on the same live checkout. The author asserts
+   * that concurrent runs will not race (e.g. all writes are per-run-scoped).
+   * Defaults to `true` (safe: serialize runs on the same path).
+   */
+  mutates_checkout: z.boolean().optional(),
+  tags: z.array(z.string().min(1)).optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;

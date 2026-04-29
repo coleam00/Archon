@@ -1,0 +1,971 @@
+name: archon-release
+description: |
+  Use when: User says "/release", "release", "cut a release", "ship it",
+            "release to main", or asks to release the project.
+  Triggers: "/release", "/release minor", "/release major", "ship it",
+            "release patch", "release minor", "release major".
+  Does: Cuts a release from the dev branch end-to-end. Validates state,
+        smoke-tests the compiled binary, bumps version, drafts a changelog
+        from commits via AI, gets human approval, then commits, opens a PR,
+        tags after merge, creates the GitHub release, and updates the
+        Homebrew formula and tap.
+  NOT for: Hotfix recovery from a broken release CI run (manual recovery
+           path), publishing release notes only, retroactive tagging.
+
+  Pass `--dry-run` (or `dry-run`) anywhere in the message to preview every
+  step without touching git, GitHub, the filesystem, or any remote state.
+  Bump type defaults to `patch`. Accepts: `patch`, `minor`, `major`.
+
+  Examples:
+    archon workflow run archon-release ""                  # patch release
+    archon workflow run archon-release "minor"             # minor release
+    archon workflow run archon-release "patch --dry-run"   # dry-run patch
+    archon workflow run archon-release "--dry-run"         # dry-run patch (implicit)
+
+provider: claude
+model: sonnet
+interactive: true                       # required: has approval gates
+
+worktree:
+  enabled: false                        # operates on the live dev branch — never use a worktree
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 1 — Parse args and validate preconditions (always run)
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: parse-args
+    script: |
+      const raw = String.raw`$ARGUMENTS`.trim().toLowerCase();
+      const tokens = raw.split(/\s+/).filter(Boolean);
+      const dryRun = tokens.includes("--dry-run") || tokens.includes("dry-run");
+      const bumpToken = tokens.find((t) => ["patch", "minor", "major"].includes(t));
+      const bump = bumpToken ?? "patch";
+      // dryRun is stringified as "true"/"false" so `when:` can compare against quoted strings
+      console.log(JSON.stringify({ bump, dryRun: String(dryRun) }));
+    runtime: bun
+    timeout: 5000
+
+  - id: validate-state
+    bash: |
+      set -euo pipefail
+
+      echo "::: Validating release preconditions :::"
+      echo "Bump:    $parse-args.output.bump"
+      echo "Dry run: $parse-args.output.dryRun"
+      echo
+
+      git fetch origin --quiet
+      git checkout dev
+      git pull origin dev --ff-only --quiet
+
+      # Only check TRACKED files for modifications. Untracked files don't
+      # affect a release because `git add -u` in commit-and-push won't pick
+      # them up. Being strict about untracked files would block this very
+      # workflow on the first run (the workflow YAML is itself untracked).
+      if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "ERROR: tracked files have uncommitted changes. Commit or stash before releasing."
+        git status --short
+        exit 1
+      fi
+
+      untracked=$(git ls-files --others --exclude-standard)
+      if [ -n "$untracked" ]; then
+        echo "WARNING: untracked files present (will NOT be included in release commit):"
+        echo "$untracked" | sed 's/^/  /'
+        echo
+      fi
+
+      echo "OK: on dev, tracked files clean, fast-forwarded to origin/dev"
+    timeout: 60000
+    depends_on: [parse-args]
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 2 — Pre-flight compiled-binary smoke test (always run)
+  # ───────────────────────────────────────────────────────────────────
+  # Mirrors release skill Step 1.5. Catches bundler regressions before
+  # the tag is pushed. If this fails, abort immediately.
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: preflight-smoke
+    script: |
+      import { spawnSync } from "node:child_process";
+      import { mkdtempSync, existsSync, rmSync } from "node:fs";
+      import { tmpdir } from "node:os";
+      import { join } from "node:path";
+
+      const result = { passed: "true", skipped: "false", reason: "" };
+
+      if (!existsSync("scripts/build-binaries.sh") || !existsSync("packages/cli/src/cli.ts")) {
+        result.skipped = "true";
+        result.reason = "Not a Bun CLI project — pre-flight smoke skipped.";
+        console.log(JSON.stringify(result));
+        process.exit(0);
+      }
+
+      const dir = mkdtempSync(join(tmpdir(), "release-smoke-"));
+      const binaryPath = join(dir, "archon-smoke");
+
+      try {
+        const build = spawnSync(
+          "bun",
+          ["build", "--compile", "--minify", "--target=bun", `--outfile=${binaryPath}`, "packages/cli/src/cli.ts"],
+          { encoding: "utf-8", stdio: "pipe" },
+        );
+
+        if (build.status !== 0) {
+          result.passed = "false";
+          result.reason = `bun build --compile failed (exit ${build.status}):\n${build.stderr || build.stdout}`;
+          console.log(JSON.stringify(result));
+          process.exit(0);
+        }
+
+        // --help instead of `version` because version's compiled-binary branch
+        // requires BUNDLED_IS_BINARY=true, which scripts/build-binaries.sh sets
+        // but a bare `bun build --compile` does not.
+        const run = spawnSync(binaryPath, ["--help"], { encoding: "utf-8", timeout: 30000 });
+        const out = `${run.stdout || ""}${run.stderr || ""}`;
+
+        if (run.status !== 0) {
+          result.passed = "false";
+          result.reason = `compiled binary crashed at startup (exit ${run.status}):\n${out}`;
+          console.log(JSON.stringify(result));
+          process.exit(0);
+        }
+
+        if (/Expected CommonJS module|TypeError:|ReferenceError:|SyntaxError:/.test(out)) {
+          result.passed = "false";
+          result.reason = `compiled binary emitted runtime error despite exit 0:\n${out}`;
+          console.log(JSON.stringify(result));
+          process.exit(0);
+        }
+
+        result.reason = "Pre-flight binary smoke: PASSED";
+        console.log(JSON.stringify(result));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    runtime: bun
+    timeout: 180000
+    depends_on: [validate-state]
+
+  - id: abort-if-smoke-failed
+    cancel: |
+      Pre-flight compiled-binary smoke test FAILED. The release is aborted
+      before any version bump, commit, tag, or PR is created.
+
+      Common causes:
+        - Bun --bytecode producing invalid output for the current module graph
+        - A dependency reading package.json or other files at module top level
+        - Circular imports that break under minification
+        - A new package shipping CJS with an unusual wrapper shape
+
+      Fix the underlying issue on a feature branch, merge to dev, then re-run /release.
+      The smoke test output is in the run log — check the preflight-smoke node.
+    when: "$preflight-smoke.output.passed == 'false'"
+    depends_on: [preflight-smoke]
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 3 — Detect stack, compute next version, collect commits
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: detect-stack
+    script: |
+      import { readFileSync, existsSync } from "node:fs";
+
+      const candidates = [
+        { file: "package.json", stack: "node", extract: (s) => JSON.parse(s).version },
+        { file: "pyproject.toml", stack: "python", extract: (s) => s.match(/^version\s*=\s*"([^"]+)"/m)?.[1] },
+        { file: "Cargo.toml", stack: "rust", extract: (s) => s.match(/^version\s*=\s*"([^"]+)"/m)?.[1] },
+      ];
+
+      for (const { file, stack, extract } of candidates) {
+        if (!existsSync(file)) continue;
+        const contents = readFileSync(file, "utf-8");
+        const version = extract(contents);
+        if (!version) {
+          console.error(`Found ${file} but could not parse version field.`);
+          process.exit(1);
+        }
+        console.log(JSON.stringify({ stack, versionFile: file, currentVersion: version }));
+        process.exit(0);
+      }
+
+      console.error("No supported version file found (package.json, pyproject.toml, Cargo.toml).");
+      process.exit(1);
+    runtime: bun
+    timeout: 10000
+    depends_on: [preflight-smoke]
+
+  - id: bump-version
+    script: |
+      const stack = JSON.parse(String.raw`$detect-stack.output`);
+      const args = JSON.parse(String.raw`$parse-args.output`);
+
+      const m = stack.currentVersion.match(/^(\d+)\.(\d+)\.(\d+)/);
+      if (!m) {
+        console.error(`Cannot parse semver from current version: ${stack.currentVersion}`);
+        process.exit(1);
+      }
+      let [, major, minor, patch] = m.map(Number);
+
+      switch (args.bump) {
+        case "major": major += 1; minor = 0; patch = 0; break;
+        case "minor": minor += 1; patch = 0; break;
+        case "patch": patch += 1; break;
+        default:
+          console.error(`Unknown bump type: ${args.bump}`);
+          process.exit(1);
+      }
+
+      const newVersion = `${major}.${minor}.${patch}`;
+      console.log(JSON.stringify({
+        oldVersion: stack.currentVersion,
+        newVersion,
+        bump: args.bump,
+        stack: stack.stack,
+        versionFile: stack.versionFile,
+      }));
+    runtime: bun
+    timeout: 5000
+    depends_on: [detect-stack, parse-args]
+
+  - id: collect-commits
+    bash: |
+      set -euo pipefail
+      commits=$(git log main..dev --oneline --no-merges)
+      if [ -z "$commits" ]; then
+        echo "NO_COMMITS"
+        exit 0
+      fi
+      echo "$commits"
+    timeout: 15000
+    depends_on: [validate-state]
+
+  - id: abort-if-no-commits
+    cancel: "Nothing to release — dev has no commits ahead of main."
+    when: "$collect-commits.output == 'NO_COMMITS'"
+    depends_on: [collect-commits]
+
+  - id: collect-diff-stat
+    bash: |
+      git diff --stat main..dev | tail -60
+    timeout: 15000
+    depends_on: [validate-state]
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 4 — AI drafts the changelog from commits + diff (always runs)
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: draft-changelog
+    prompt: |
+      You are drafting a CHANGELOG entry for the upcoming release.
+
+      Bumping `$bump-version.output.oldVersion` -> `$bump-version.output.newVersion`
+      (bump type: $bump-version.output.bump).
+
+      Commits being shipped (oneline, no merges):
+
+      ```
+      $collect-commits.output
+      ```
+
+      Diff stat:
+
+      ```
+      $collect-diff-stat.output
+      ```
+
+      Categorize commits into Keep a Changelog sections: Added, Changed, Fixed,
+      Removed. Rules:
+
+      - Rewrite commit subjects into clear user-facing changelog entries. Do NOT
+        copy commit messages verbatim.
+      - Group related commits into single entries where it makes sense.
+      - Each entry starts with a noun or gerund describing WHAT changed.
+      - Skip internal-only changes (CI tweaks, typo fixes) unless they affect
+        user-visible behavior.
+      - Include PR numbers in parentheses when visible: `(#12)`.
+      - Write a one-line summary that captures the release theme.
+      - No emoji. No AI attribution. No "Co-Authored-By".
+      - Empty arrays are fine if a category has no entries.
+
+      Return strictly valid JSON matching the schema.
+    depends_on: [bump-version, collect-commits, collect-diff-stat]
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: One-line summary of the release theme
+        added:
+          type: array
+          items: { type: string }
+        changed:
+          type: array
+          items: { type: string }
+        fixed:
+          type: array
+          items: { type: string }
+        removed:
+          type: array
+          items: { type: string }
+      required: [summary, added, changed, fixed, removed]
+
+  # Bridge: persist draft-changelog's AI output to disk via auto-shell-quoted
+  # bash, so downstream SCRIPT nodes can read the JSON via fs instead of
+  # String.raw template substitution. Necessary because AI-generated content
+  # routinely contains backticks (markdown code spans) that would terminate
+  # a JS template literal mid-string.
+  #
+  # CRITICAL: do NOT wrap $draft-changelog.output in your own quotes. Archon
+  # already wraps it in single quotes via shellQuote(). Adding your own quotes
+  # like '$node.output' produces ''<raw>'' which collapses to bare unquoted
+  # JSON, and bash brace-expands the {...} into separate words.
+  - id: save-draft-json
+    bash: |
+      mkdir -p "$ARTIFACTS_DIR"
+      printf '%s' $draft-changelog.output > "$ARTIFACTS_DIR/draft-changelog.json"
+      echo "wrote $ARTIFACTS_DIR/draft-changelog.json ($(wc -c < $ARTIFACTS_DIR/draft-changelog.json) bytes)"
+    timeout: 10000
+    depends_on: [draft-changelog]
+
+  - id: format-changelog
+    script: |
+      import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+      import { join } from "node:path";
+
+      const artifactsDir = String.raw`$ARTIFACTS_DIR`;
+      // Read AI output from disk (file bridge) — see save-draft-json
+      // for why we don't use String.raw on $draft-changelog.output directly.
+      const cl = JSON.parse(readFileSync(join(artifactsDir, "draft-changelog.json"), "utf-8"));
+      // bump-version and parse-args produce safe deterministic JSON; substitution OK.
+      const ver = JSON.parse(String.raw`$bump-version.output`);
+      const args = JSON.parse(String.raw`$parse-args.output`);
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      const sections = [
+        ["Added", cl.added],
+        ["Changed", cl.changed],
+        ["Fixed", cl.fixed],
+        ["Removed", cl.removed],
+      ];
+
+      let md = `## [${ver.newVersion}] - ${today}\n\n${cl.summary}\n`;
+      for (const [name, items] of sections) {
+        if (!items?.length) continue;
+        md += `\n### ${name}\n\n`;
+        for (const it of items) md += `- ${it}\n`;
+      }
+
+      // Persist a copy to the run's artifacts so the user has a record.
+      // Reuses `artifactsDir` declared above for reading draft-changelog.json.
+      try {
+        mkdirSync(artifactsDir, { recursive: true });
+        writeFileSync(join(artifactsDir, "changelog-section.md"), md);
+      } catch (e) {
+        console.error(`(non-fatal) could not write artifact: ${e.message}`);
+      }
+
+      console.log(JSON.stringify({
+        rendered: md,
+        oldVersion: ver.oldVersion,
+        newVersion: ver.newVersion,
+        bump: ver.bump,
+        dryRun: args.dryRun,
+        stack: ver.stack,
+        versionFile: ver.versionFile,
+      }));
+    runtime: bun
+    timeout: 10000
+    depends_on: [save-draft-json, draft-changelog, bump-version, parse-args]
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 5 — Human approval gate (always runs)
+  # ───────────────────────────────────────────────────────────────────
+  # In dry-run mode the workflow stops here cleanly; in full mode it
+  # proceeds to write files and create the PR.
+  # ═══════════════════════════════════════════════════════════════════
+
+  # ── Pre-approval summary ──
+  # Approval messages don't get variable substitution today, so we emit
+  # the dynamic summary as a Haiku prompt-node output (which DOES get
+  # substituted and streams to chat). Cheap pass-through, ~200 tokens.
+  - id: review-summary
+    prompt: |
+      Reply to the user with EXACTLY this text, verbatim, no elaboration,
+      no markdown-rendering, no commentary, no questions. Just print it.
+
+      ══════════════════════════════════════════════════════════════════
+      RELEASE REVIEW
+      ══════════════════════════════════════════════════════════════════
+
+      Version : $bump-version.output.oldVersion  →  $bump-version.output.newVersion
+      Bump    : $bump-version.output.bump
+      Dry run : $parse-args.output.dryRun
+
+      ── Proposed CHANGELOG ───────────────────────────────────────────
+
+      $format-changelog.output.rendered
+
+      ── Commits being shipped ────────────────────────────────────────
+
+      $collect-commits.output
+
+      ══════════════════════════════════════════════════════════════════
+
+      Reply with `/workflow approve <run-id>` to continue, or
+      `/workflow reject <run-id> <reason>` to abort.
+    depends_on: [format-changelog, collect-commits, bump-version, parse-args]
+    model: haiku
+    allowed_tools: []
+
+  - id: review-changelog
+    approval:
+      message: |
+        Approve the release review above.
+
+        - In dry-run mode the workflow ends here without modifying any files.
+        - In full mode approval triggers: write files, commit + push to dev,
+          open a PR dev → main, then pause again before tag/release.
+    depends_on: [review-summary]
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 6 — Apply local file changes (skipped in --dry-run)
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: write-files
+    script: |
+      import { readFileSync, writeFileSync, existsSync } from "node:fs";
+      import { execSync } from "node:child_process";
+      import { join } from "node:path";
+
+      // bump-version is safe to substitute (deterministic JSON, no backticks).
+      const ver = JSON.parse(String.raw`$bump-version.output`);
+      // format-changelog.output.rendered contains AI-authored markdown with
+      // backticks → unsafe via String.raw. Read the .md file from disk instead.
+      const artifactsDir = String.raw`$ARTIFACTS_DIR`;
+      const renderedMd = readFileSync(join(artifactsDir, "changelog-section.md"), "utf-8");
+      const fmt = { rendered: renderedMd };
+
+      const written = [];
+
+      // 1. Bump the version file
+      switch (ver.stack) {
+        case "node": {
+          const pkg = JSON.parse(readFileSync(ver.versionFile, "utf-8"));
+          pkg.version = ver.newVersion;
+          writeFileSync(ver.versionFile, JSON.stringify(pkg, null, 2) + "\n");
+          break;
+        }
+        case "python":
+        case "rust": {
+          const original = readFileSync(ver.versionFile, "utf-8");
+          const updated = original.replace(/^(version\s*=\s*")[^"]+(")/m, `$1${ver.newVersion}$2`);
+          if (updated === original) throw new Error(`Failed to update version in ${ver.versionFile}`);
+          writeFileSync(ver.versionFile, updated);
+          break;
+        }
+        default:
+          throw new Error(`Unknown stack: ${ver.stack}`);
+      }
+      written.push(ver.versionFile);
+
+      // 2. Workspace version sync (monorepo only)
+      if (existsSync("scripts/sync-versions.sh")) {
+        execSync("bash scripts/sync-versions.sh", { stdio: "inherit" });
+        // Stage workspace package.json files explicitly downstream
+        written.push("packages/*/package.json");
+      }
+
+      // 3. Lockfile refresh
+      const lockfileCommands = {
+        node: existsSync("bun.lock") ? ["bun", "install"] :
+              existsSync("package-lock.json") ? ["npm", "install", "--package-lock-only"] : null,
+        python: existsSync("uv.lock") ? ["uv", "lock", "--quiet"] : null,
+        rust: ["cargo", "update", "--workspace"],
+      }[ver.stack];
+
+      if (lockfileCommands) {
+        execSync(lockfileCommands.join(" "), { stdio: "inherit" });
+        const lockFile = {
+          node: existsSync("bun.lock") ? "bun.lock" : "package-lock.json",
+          python: "uv.lock",
+          rust: "Cargo.lock",
+        }[ver.stack];
+        if (lockFile && existsSync(lockFile)) written.push(lockFile);
+      }
+
+      // 4. Update CHANGELOG.md — prepend the new section under [Unreleased]
+      const changelogPath = "CHANGELOG.md";
+      let changelog = existsSync(changelogPath)
+        ? readFileSync(changelogPath, "utf-8")
+        : "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\n## [Unreleased]\n\n";
+
+      // Insert the new section right after the [Unreleased] header (and any blank lines beneath it)
+      const unreleasedMatch = changelog.match(/(## \[Unreleased\]\s*\n+)/);
+      if (unreleasedMatch) {
+        const insertAt = unreleasedMatch.index + unreleasedMatch[0].length;
+        changelog = changelog.slice(0, insertAt) + fmt.rendered + "\n" + changelog.slice(insertAt);
+      } else {
+        // No [Unreleased] header — prepend at the top below the title
+        const titleMatch = changelog.match(/^# .+\n+/);
+        const insertAt = titleMatch ? titleMatch[0].length : 0;
+        changelog = changelog.slice(0, insertAt) + "## [Unreleased]\n\n" + fmt.rendered + "\n" + changelog.slice(insertAt);
+      }
+      writeFileSync(changelogPath, changelog);
+      written.push(changelogPath);
+
+      console.log(JSON.stringify({ filesModified: written, newVersion: ver.newVersion }));
+    runtime: bun
+    timeout: 120000
+    depends_on: [review-changelog, bump-version, format-changelog]
+    when: "$parse-args.output.dryRun == 'false'"
+
+  - id: commit-and-push
+    bash: |
+      set -euo pipefail
+
+      # Working tree was clean at validate-state; only write-files modified it,
+      # so `git add -A` stages exactly what the release should ship.
+      git add -A
+      git status --short
+
+      git commit -m "Release $bump-version.output.newVersion"
+      git push origin dev
+    timeout: 60000
+    depends_on: [write-files, bump-version]
+    when: "$parse-args.output.dryRun == 'false'"
+
+  - id: create-pr
+    bash: |
+      set -euo pipefail
+
+      ver=$bump-version.output.newVersion
+      body=$format-changelog.output.rendered
+
+      # If a PR already exists for this branch, just print its URL.
+      existing=$(gh pr list --head dev --base main --state open --json url --jq '.[0].url' 2>/dev/null || true)
+      if [ -n "$existing" ]; then
+        echo "PR already open: $existing"
+        echo "$existing"
+        exit 0
+      fi
+
+      # Build the PR body in a way that doesn't put a literal "---" at YAML column 1
+      pr_body=$(printf '%s\n\n---\n\nMerging this PR releases %s to main.\n' "$body" "$ver")
+
+      url=$(gh pr create --base main --head dev --title "Release $ver" --body "$pr_body")
+      echo "$url"
+    timeout: 60000
+    depends_on: [commit-and-push, format-changelog, bump-version]
+    when: "$parse-args.output.dryRun == 'false'"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 7 — Wait for the PR to merge (skipped in --dry-run)
+  # ───────────────────────────────────────────────────────────────────
+  # The user (or a reviewer) merges the PR however they prefer:
+  #   gh pr merge --squash --delete-branch=false
+  # then approves here. We don't auto-merge — keeps reviewer in control.
+  # ═══════════════════════════════════════════════════════════════════
+
+  # Pre-merge-gate summary (same pass-through pattern as review-summary)
+  - id: merge-summary
+    prompt: |
+      Reply to the user with EXACTLY this text, verbatim, no elaboration:
+
+      ══════════════════════════════════════════════════════════════════
+      PR OPENED — waiting for merge
+      ══════════════════════════════════════════════════════════════════
+
+      $create-pr.output
+
+      Merge the PR however you prefer:
+        gh pr merge --squash --delete-branch=false
+        (or use the GitHub web UI)
+
+      Then approve here to continue with tag, GitHub release, dev sync,
+      binary wait, and Homebrew formula update.
+    depends_on: [create-pr]
+    model: haiku
+    allowed_tools: []
+    when: "$parse-args.output.dryRun == 'false'"
+
+  - id: wait-for-merge
+    approval:
+      message: |
+        Approve once the PR above has been merged into main.
+        Reject to stop — the PR will remain open and reviewable.
+    depends_on: [merge-summary]
+    when: "$parse-args.output.dryRun == 'false'"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 8 — Tag, GitHub release, sync dev with main
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: tag-and-release
+    bash: |
+      set -euo pipefail
+
+      ver=$bump-version.output.newVersion
+      body=$format-changelog.output.rendered
+
+      git fetch origin main --quiet
+
+      # Tag the merge commit on main, push the tag.
+      git tag "v$ver" origin/main
+      git push origin "v$ver"
+
+      # Strip the leading "## [x.y.z] - YYYY-MM-DD" header line for the release body.
+      notes=$(printf '%s\n' "$body" | sed '1{/^## /d;}; 2{/^$/d;}')
+
+      gh release create "v$ver" --title "v$ver" --notes "$notes"
+
+      echo "Tagged and released v$ver"
+    timeout: 90000
+    depends_on: [wait-for-merge, bump-version, format-changelog]
+    when: "$parse-args.output.dryRun == 'false'"
+
+  - id: sync-dev-with-main
+    bash: |
+      set -euo pipefail
+
+      # After squash-merge, dev and main contain the same content but have
+      # divergent commit histories. The previous `--ff-only` strategy fails
+      # because main's squash commit has a different SHA than dev's release
+      # commit, so dev is never fast-forwardable to main.
+      #
+      # Resetting dev to main was tried but BLOWS UP open PRs targeting dev:
+      # rewriting dev's history shifts every PR's merge-base to a much older
+      # commit, and their diffs balloon to include thousands of lines of
+      # release content as "missing from base". Don't do this.
+      #
+      # Instead use a regular merge (matches the /release SKILL's Step 9):
+      # `git pull origin main` brings main's squash into dev as a merge
+      # commit. Open PRs' merge-bases stay at their original commits, their
+      # diffs stay small, no history is rewritten. The merge commit shows
+      # up in dev's `git log`, which is the cost of preserving open-PR sanity.
+      git checkout dev
+      git pull origin main --no-edit
+      git push origin dev
+
+      echo "dev synced to main via merge commit"
+    timeout: 60000
+    depends_on: [tag-and-release]
+    when: "$parse-args.output.dryRun == 'false'"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 9 — Wait for release CI to finish building binaries
+  # ───────────────────────────────────────────────────────────────────
+  # Poll the release until all 7 expected assets exist (5 binaries +
+  # archon-web.tar.gz + checksums.txt). Bail out early if the release
+  # workflow fails — no point waiting if CI is broken.
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: check-homebrew
+    bash: |
+      if [ -f homebrew/archon.rb ]; then
+        echo "true"
+      else
+        echo "false"
+      fi
+    timeout: 5000
+    depends_on: [validate-state]
+
+  - id: wait-for-binaries
+    bash: |
+      set -uo pipefail
+
+      ver=$bump-version.output.newVersion
+      repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+
+      echo "Waiting for release workflow to finish uploading binaries to v$ver..."
+
+      for i in $(seq 1 30); do
+        asset_count=$(gh release view "v$ver" --repo "$repo" --json assets --jq '.assets | length' 2>/dev/null || echo "0")
+
+        if [ "$asset_count" -ge 7 ]; then
+          echo "All $asset_count assets uploaded"
+          exit 0
+        fi
+
+        # Short-circuit: if the release workflow itself failed, stop waiting.
+        workflow_status=$(gh run list --workflow release.yml --event push --limit 1 --json conclusion,status --jq '.[0] | "\(.status)|\(.conclusion)"' 2>/dev/null || echo "unknown|unknown")
+        if [ "$workflow_status" = "completed|failure" ]; then
+          echo "Release workflow FAILED — see: gh run view --log-failed"
+          exit 1
+        fi
+
+        echo "  Assets so far: $asset_count/7 — waiting 30s (attempt $i/30)..."
+        sleep 30
+      done
+
+      echo "Timed out waiting for binaries after 15 minutes"
+      exit 1
+    timeout: 1000000              # 16 minutes — outer bound on the polling loop
+    depends_on: [sync-dev-with-main, check-homebrew, bump-version]
+    when: "$parse-args.output.dryRun == 'false' && $check-homebrew.output == 'true'"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 10 — Update Homebrew formula and sync the tap repo
+  # ───────────────────────────────────────────────────────────────────
+  # Only runs if homebrew/archon.rb exists in the repo. The formula
+  # version and SHAs MUST move atomically (per the release skill's
+  # critical warning) — we regenerate the entire file from a template.
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: fetch-and-update-formula
+    script: |
+      import { spawnSync } from "node:child_process";
+      import { writeFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+      import { tmpdir } from "node:os";
+      import { join } from "node:path";
+
+      const ver = JSON.parse(String.raw`$bump-version.output`).newVersion;
+
+      const repoOwnerName = spawnSync("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"], { encoding: "utf-8" }).stdout.trim();
+
+      const dir = mkdtempSync(join(tmpdir(), "release-shas-"));
+      try {
+        const dl = spawnSync(
+          "gh",
+          ["release", "download", `v${ver}`, "--repo", repoOwnerName, "--pattern", "checksums.txt", "--dir", dir],
+          { encoding: "utf-8", stdio: "pipe" },
+        );
+        if (dl.status !== 0) {
+          console.error(`Failed to download checksums.txt: ${dl.stderr}`);
+          process.exit(1);
+        }
+
+        const checksums = readFileSync(join(dir, "checksums.txt"), "utf-8");
+
+        const sha = (asset) => {
+          const m = checksums.match(new RegExp(`^([a-f0-9]{64})\\s+\\*?${asset}$`, "m"));
+          if (!m) throw new Error(`Missing SHA for ${asset} in checksums.txt:\n${checksums}`);
+          return m[1];
+        };
+
+        const shas = {
+          darwinArm64: sha("archon-darwin-arm64"),
+          darwinX64: sha("archon-darwin-x64"),
+          linuxArm64: sha("archon-linux-arm64"),
+          linuxX64: sha("archon-linux-x64"),
+        };
+
+        // Regenerate the entire formula from the canonical template.
+        // Editing in place is forbidden — version + SHAs MUST move atomically.
+        // Built as a line array so the YAML block scalar's indentation rules don't fight us.
+        const formula = [
+          "# Homebrew formula for Archon CLI",
+          "# To install: brew install coleam00/archon/archon",
+          "#",
+          "# This formula downloads pre-built binaries from GitHub releases.",
+          "# For development, see: https://github.com/coleam00/Archon",
+          "",
+          "class Archon < Formula",
+          '  desc "Remote agentic coding platform - control AI assistants from anywhere"',
+          '  homepage "https://github.com/coleam00/Archon"',
+          `  version "${ver}"`,
+          '  license "MIT"',
+          "",
+          "  on_macos do",
+          "    on_arm do",
+          '      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-arm64"',
+          `      sha256 "${shas.darwinArm64}"`,
+          "    end",
+          "    on_intel do",
+          '      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-x64"',
+          `      sha256 "${shas.darwinX64}"`,
+          "    end",
+          "  end",
+          "",
+          "  on_linux do",
+          "    on_arm do",
+          '      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-arm64"',
+          `      sha256 "${shas.linuxArm64}"`,
+          "    end",
+          "    on_intel do",
+          '      url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-x64"',
+          `      sha256 "${shas.linuxX64}"`,
+          "    end",
+          "  end",
+          "",
+          "  def install",
+          "    binary_name = case",
+          "    when OS.mac? && Hardware::CPU.arm?",
+          '      "archon-darwin-arm64"',
+          "    when OS.mac? && Hardware::CPU.intel?",
+          '      "archon-darwin-x64"',
+          "    when OS.linux? && Hardware::CPU.arm?",
+          '      "archon-linux-arm64"',
+          "    when OS.linux? && Hardware::CPU.intel?",
+          '      "archon-linux-x64"',
+          "    end",
+          "",
+          '    bin.install binary_name => "archon"',
+          "  end",
+          "",
+          "  test do",
+          '    assert_match version.to_s, shell_output("#{bin}/archon version")',
+          "  end",
+          "end",
+          "",
+        ].join("\n");
+
+        writeFileSync("homebrew/archon.rb", formula);
+        console.log(JSON.stringify({ updatedTo: ver, shas }));
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    runtime: bun
+    timeout: 120000
+    depends_on: [wait-for-binaries, bump-version]
+    when: "$parse-args.output.dryRun == 'false' && $check-homebrew.output == 'true'"
+
+  - id: commit-formula
+    bash: |
+      set -euo pipefail
+
+      ver=$bump-version.output.newVersion
+
+      # fetch-and-update-formula left the formula change uncommitted on dev.
+      # `git checkout main` refuses while ANY tracked file is dirty (not just
+      # the formula — e.g. an in-progress workflow-yaml edit during recovery
+      # would block too), so stash everything → checkout → pop carries the
+      # change across. Then commit only the formula (any other restored dirt
+      # stays uncommitted) and push on main.
+      git stash push -m "release-commit-formula-pending"
+      git fetch origin --quiet
+      git checkout main
+      git pull origin main --ff-only --quiet
+      git stash pop
+      git add homebrew/archon.rb
+      git commit -m "chore(homebrew): update formula to v$ver"
+      git push origin main
+
+      # Sync dev with main so the formula update is on both branches.
+      # Use a regular merge (not reset --hard) for the same reason as
+      # sync-dev-with-main: rewriting dev's history blows up open PRs.
+      git checkout dev
+      git pull origin main --no-edit
+      git push origin dev
+
+      echo "Formula committed to main and synced to dev via merge commit"
+    timeout: 90000
+    depends_on: [fetch-and-update-formula, bump-version]
+    when: "$parse-args.output.dryRun == 'false' && $check-homebrew.output == 'true'"
+
+  - id: sync-tap
+    script: |
+      import { spawnSync } from "node:child_process";
+      import { mkdtempSync, copyFileSync, rmSync } from "node:fs";
+      import { tmpdir } from "node:os";
+      import { join } from "node:path";
+
+      const ver = JSON.parse(String.raw`$bump-version.output`).newVersion;
+      const tapRepo = "git@github.com:coleam00/homebrew-archon.git";
+
+      const dir = mkdtempSync(join(tmpdir(), "tap-sync-"));
+      try {
+        const clone = spawnSync("git", ["clone", "--depth=1", tapRepo, dir], { encoding: "utf-8", stdio: "pipe" });
+        if (clone.status !== 0) {
+          console.error("Failed to clone tap repo. You may need push access to coleam00/homebrew-archon.");
+          console.error("Run this manually after the release:");
+          console.error(`  git clone ${tapRepo} && cp homebrew/archon.rb <tap>/Formula/archon.rb && git -C <tap> commit -am 'chore: sync formula to v${ver}' && git -C <tap> push`);
+          process.exit(1);
+        }
+
+        copyFileSync("homebrew/archon.rb", join(dir, "Formula", "archon.rb"));
+
+        const diff = spawnSync("git", ["-C", dir, "diff", "--quiet"], { encoding: "utf-8" });
+        if (diff.status === 0) {
+          console.log("Tap formula already in sync — no changes needed");
+          process.exit(0);
+        }
+
+        for (const args of [
+          ["-C", dir, "add", "Formula/archon.rb"],
+          ["-C", dir, "commit", "-m", `chore: sync formula to v${ver}`],
+          ["-C", dir, "push", "origin", "main"],
+        ]) {
+          const r = spawnSync("git", args, { encoding: "utf-8", stdio: "inherit" });
+          if (r.status !== 0) {
+            console.error(`git ${args.slice(2).join(" ")} failed`);
+            process.exit(1);
+          }
+        }
+
+        console.log(`Tap synced to v${ver}`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    runtime: bun
+    timeout: 120000
+    depends_on: [commit-formula, bump-version]
+    when: "$parse-args.output.dryRun == 'false' && $check-homebrew.output == 'true'"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 11 — Final summary (always runs in both modes)
+  # ───────────────────────────────────────────────────────────────────
+  # `trigger_rule: all_done` lets this run regardless of which downstream
+  # nodes were skipped (dry-run path or no-homebrew path).
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: final-summary
+    script: |
+      // Defensive: this node runs with trigger_rule: all_done, so any upstream
+      // node may have been skipped or failed. Empty $node.output substitutions
+      // resolve to "" and would break JSON.parse if not guarded.
+      const safeJson = (raw) => {
+        const s = raw.trim();
+        if (!s) return null;
+        try { return JSON.parse(s); } catch { return null; }
+      };
+
+      const args = safeJson(String.raw`$parse-args.output`);
+      const ver = safeJson(String.raw`$bump-version.output`);
+
+      const lines = [];
+      lines.push("══════════════════════════════════════════════════════════════════");
+
+      if (!args || !ver) {
+        lines.push("WORKFLOW ENDED EARLY — see prior node failures or skips.");
+        lines.push("");
+        lines.push(`parse-args  : ${args ? "ok" : "missing/skipped"}`);
+        lines.push(`bump-version: ${ver  ? "ok" : "missing/skipped"}`);
+        lines.push("");
+        lines.push("Check the run log for the first failed node and address it.");
+      } else if (args.dryRun === "true") {
+        lines.push(`DRY RUN COMPLETE — would have released v${ver.newVersion} (from v${ver.oldVersion})`);
+        lines.push("");
+        lines.push("No files were written. No commits were made. No PR was created.");
+        lines.push("Re-run without --dry-run to actually cut the release.");
+      } else {
+        lines.push(`RELEASE COMPLETE — v${ver.newVersion} (from v${ver.oldVersion}, ${ver.bump})`);
+        lines.push("");
+        lines.push("Verify the release end-to-end with the test-release skill:");
+        lines.push(`  /test-release brew ${ver.newVersion}`);
+        lines.push(`  /test-release curl-mac ${ver.newVersion}`);
+        lines.push("");
+        lines.push("If verification fails, file a hotfix and cut the next patch.");
+        lines.push("DO NOT announce the release until /test-release passes.");
+      }
+      lines.push("══════════════════════════════════════════════════════════════════");
+      console.log(lines.join("\n"));
+    runtime: bun
+    timeout: 5000
+    depends_on:
+      - review-changelog
+      - write-files
+      - commit-and-push
+      - create-pr
+      - wait-for-merge
+      - tag-and-release
+      - sync-dev-with-main
+      - wait-for-binaries
+      - fetch-and-update-formula
+      - commit-formula
+      - sync-tap
+    trigger_rule: all_done

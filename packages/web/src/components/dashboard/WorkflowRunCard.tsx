@@ -32,7 +32,7 @@ interface WorkflowRunCardProps {
   onAbandon?: (runId: string) => void;
   onDelete?: (runId: string) => void;
   onApprove?: (runId: string) => void;
-  onReject?: (runId: string) => void;
+  onReject?: (runId: string, reason?: string) => void;
 }
 
 const PLATFORM_ICONS: Record<string, React.ReactElement> = {
@@ -329,13 +329,18 @@ export function WorkflowRunCard({
               title="Reject workflow?"
               description={
                 <>
-                  Reject the paused workflow <strong>{run.workflow_name}</strong>. The run will be
-                  marked as failed and any pending iterations will not continue.
+                  Reject the paused workflow <strong>{run.workflow_name}</strong>. If the approval
+                  node defines an <code>on_reject</code> prompt, it runs with your reason as{' '}
+                  <code>$REJECTION_REASON</code>; otherwise the run is cancelled.
                 </>
               }
               confirmLabel="Reject"
-              onConfirm={(): void => {
-                onReject(run.id);
+              reasonInput={{
+                label: 'Reason (optional)',
+                placeholder: 'Why are you rejecting? Visible to the on_reject prompt.',
+              }}
+              onConfirm={(reason): void => {
+                onReject(run.id, reason);
               }}
             />
           )}

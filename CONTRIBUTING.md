@@ -44,7 +44,8 @@ bun run validate
 1. Create a feature branch from `dev`
 2. Make your changes
 3. Ensure all checks pass
-4. Submit a PR with a clear description
+4. Submit a PR using the template at [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md). GitHub fills it in automatically when you open a PR through the web UI. If you use `gh pr create`, copy the template into the body — leaving it empty or partially filled slows review.
+5. Link the issue your PR addresses with `Closes #<number>` (or `Fixes #<number>` / `Resolves #<number>`) in the description so it auto-closes on merge.
 
 ## Code Style
 

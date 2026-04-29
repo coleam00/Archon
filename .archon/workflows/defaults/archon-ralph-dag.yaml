@@ -189,7 +189,7 @@ nodes:
   - id: implement
     depends_on: [validate-prd]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation
@@ -648,13 +648,27 @@ nodes:
       max_iterations: 15
       fresh_context: true
 
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [implement]
+
   # ═══════════════════════════════════════════════════════════════
   # NODE 5: COMPLETION REPORT
   # Reads final state and produces a summary.
   # ═══════════════════════════════════════════════════════════════
 
   - id: report
-    depends_on: [implement]
+    depends_on: [verify-pr-base]
     prompt: |
       # Completion Report
 

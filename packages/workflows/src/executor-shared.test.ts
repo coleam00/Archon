@@ -22,7 +22,10 @@ import {
   substituteWorkflowVariables,
   buildPromptWithContext,
   detectCreditExhaustion,
+  detectCompletionSignal,
+  stripCompletionTags,
   isInlineScript,
+  formatSubprocessFailure,
 } from './executor-shared';
 
 describe('substituteWorkflowVariables', () => {
@@ -250,6 +253,50 @@ describe('substituteWorkflowVariables', () => {
     );
     expect(prompt).toBe('Fix: ');
   });
+
+  it('replaces $LOOP_PREV_OUTPUT with the previous iteration output', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Last pass said:\n$LOOP_PREV_OUTPUT',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      'QA failed: 2 type errors in users.ts'
+    );
+    expect(prompt).toBe('Last pass said:\nQA failed: 2 type errors in users.ts');
+  });
+
+  it('clears $LOOP_PREV_OUTPUT when not provided (first iteration)', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Previous output: $LOOP_PREV_OUTPUT (end)',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('Previous output:  (end)');
+  });
+
+  it('does not affect prompts that omit $LOOP_PREV_OUTPUT', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Plain prompt with no loop variable.',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      'unused previous output'
+    );
+    expect(prompt).toBe('Plain prompt with no loop variable.');
+  });
 });
 
 describe('buildPromptWithContext', () => {
@@ -372,5 +419,149 @@ describe('isInlineScript', () => {
   // Edge cases
   it('empty string is not inline', () => {
     expect(isInlineScript('')).toBe(false);
+  });
+});
+
+describe('detectCompletionSignal', () => {
+  it('detects <promise>SIGNAL</promise> format', () => {
+    expect(detectCompletionSignal('<promise>COMPLETE</promise>', 'COMPLETE')).toBe(true);
+  });
+
+  it('detects signal in custom XML tags: <COMPLETE>SIGNAL</COMPLETE>', () => {
+    expect(detectCompletionSignal('<COMPLETE>ALL_CLEAN</COMPLETE>', 'ALL_CLEAN')).toBe(true);
+  });
+
+  it('detects signal in other XML tag names', () => {
+    expect(detectCompletionSignal('<done>COMPLETE</done>', 'COMPLETE')).toBe(true);
+    expect(detectCompletionSignal('<status>DONE</status>', 'DONE')).toBe(true);
+  });
+
+  it('detects plain signal at end of output', () => {
+    expect(detectCompletionSignal('Work done. COMPLETE', 'COMPLETE')).toBe(true);
+  });
+
+  it('detects plain signal on its own line', () => {
+    expect(detectCompletionSignal('Work done.\nCOMPLETE\nExtra text', 'COMPLETE')).toBe(true);
+  });
+
+  it('does not detect signal embedded in prose', () => {
+    expect(detectCompletionSignal('The status is not COMPLETE yet.', 'COMPLETE')).toBe(false);
+  });
+
+  it('does not detect signal when wrong value is in tags', () => {
+    expect(detectCompletionSignal('<COMPLETE>WRONG</COMPLETE>', 'ALL_CLEAN')).toBe(false);
+  });
+
+  it('does NOT detect signal when XML tag names do not match (strict)', () => {
+    // Open/close tag names must agree — guards against AI prose that
+    // interleaves tags (e.g. "<COMPLETE>ALL_CLEAN</other-tag>") being
+    // treated as a completion.
+    expect(detectCompletionSignal('<COMPLETE>ALL_CLEAN</done>', 'ALL_CLEAN')).toBe(false);
+  });
+
+  it('detects signal when tag names match case-insensitively', () => {
+    expect(detectCompletionSignal('<Complete>ALL_CLEAN</complete>', 'ALL_CLEAN')).toBe(true);
+  });
+});
+
+describe('stripCompletionTags', () => {
+  it('strips <promise> tags', () => {
+    expect(stripCompletionTags('Done. <promise>COMPLETE</promise>')).toBe('Done.');
+  });
+
+  it('strips XML-wrapped signal when until is provided', () => {
+    expect(stripCompletionTags('Done. <COMPLETE>ALL_CLEAN</COMPLETE>', 'ALL_CLEAN')).toBe('Done.');
+  });
+
+  it('does not strip XML tags when until is not provided', () => {
+    const input = 'Done. <COMPLETE>ALL_CLEAN</COMPLETE>';
+    expect(stripCompletionTags(input)).toBe(input.trim());
+  });
+
+  it('strips both <promise> and XML-tagged signal when until is provided', () => {
+    const input = 'Done. <promise>ALL_CLEAN</promise> <COMPLETE>ALL_CLEAN</COMPLETE>';
+    expect(stripCompletionTags(input, 'ALL_CLEAN')).toBe('Done.');
+  });
+});
+
+describe('formatSubprocessFailure', () => {
+  it('strips the "Command failed: <cmd>" prefix line so the script body does not appear', () => {
+    const err = {
+      message:
+        'Command failed: bun --no-env-file -e import { writeFileSync } from "node:fs"; const x = `hello`;\n' +
+        'error: Expected ")" but found "x"\n    at [eval]:1:50',
+      stderr: '',
+      code: 1,
+    };
+    const { userMessage } = formatSubprocessFailure(err, "Script node 'n1'");
+    expect(userMessage).not.toContain('Command failed:');
+    expect(userMessage).not.toContain('writeFileSync'); // script body must not leak
+    expect(userMessage).toContain('Expected ")"');
+    expect(userMessage).toContain('[eval]:1:50');
+    expect(userMessage).toContain('[exit 1]');
+  });
+
+  it('prefers stderr over message body when both are present', () => {
+    const err = {
+      message:
+        'Command failed: bash -c long script body that should not appear\nfallback text in message',
+      stderr: 'clean diagnostic from stderr',
+      code: 2,
+    };
+    const { userMessage } = formatSubprocessFailure(err, "Bash node 'b1'");
+    expect(userMessage).toContain('clean diagnostic from stderr');
+    expect(userMessage).not.toContain('long script body');
+    expect(userMessage).toContain('[exit 2]');
+  });
+
+  it('truncates diagnostics larger than 2 KB from the tail', () => {
+    const big = 'x'.repeat(5000) + '\nactual error at end';
+    const { userMessage } = formatSubprocessFailure(
+      { message: 'Command failed: cmd\n', stderr: big, code: 1 },
+      "Script node 'n1'"
+    );
+    expect(userMessage).toContain('actual error at end');
+    expect(userMessage).toContain('[truncated]');
+    // Tight bound: ~2 KB diagnostic + label prefix + truncation suffix should fit
+    // well under 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
+    expect(userMessage.length).toBeLessThan(2100);
+  });
+
+  it('logFields never contain the full message, stack, or cmd', () => {
+    const err = {
+      message: 'Command failed: bun -e const body = "SECRET_BODY"\n',
+      stack: 'Error: Command failed: bun -e const body = "SECRET_BODY"\n    at …',
+      cmd: 'bun -e const body = "SECRET_BODY"',
+      stderr: 'short stderr',
+      code: 1,
+    };
+    const { logFields } = formatSubprocessFailure(err, "Script node 'n1'");
+    const serialized = JSON.stringify(logFields);
+    expect(serialized).not.toContain('SECRET_BODY');
+    expect(serialized).not.toContain('Command failed:');
+    expect(logFields.exitCode).toBe(1);
+    expect(logFields.stderrTail).toBe('short stderr');
+  });
+
+  it('falls back when stderr is empty and there is no "Command failed:" prefix', () => {
+    const err = { message: 'ENOENT: bash not found', code: 127 };
+    const { userMessage } = formatSubprocessFailure(err, "Bash node 'b1'");
+    expect(userMessage).toContain('ENOENT: bash not found');
+    expect(userMessage).toContain('[exit 127]');
+  });
+
+  it('handles a completely empty error object without throwing', () => {
+    const { userMessage, logFields } = formatSubprocessFailure({}, "Bash node 'b1'");
+    expect(userMessage).toContain("Bash node 'b1' failed");
+    expect(userMessage).toContain('unknown error');
+    expect(logFields.exitCode).toBeUndefined();
+    expect(logFields.killed).toBe(false);
+    expect(logFields.stderrTail).toBeUndefined();
+  });
+
+  it('omits the [exit N] suffix when no code is present', () => {
+    const { userMessage } = formatSubprocessFailure({ stderr: 'diagnostic' }, "Script node 'n1'");
+    expect(userMessage).not.toContain('[exit');
+    expect(userMessage).toContain('diagnostic');
   });
 });

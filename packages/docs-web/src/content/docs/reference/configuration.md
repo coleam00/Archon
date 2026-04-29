@@ -122,9 +122,11 @@ commands:
 # Worktree settings
 worktree:
   baseBranch: main  # Optional: auto-detected from git when not set
-  copyFiles:  # Optional: Additional files to copy to worktrees
-    - .env.example -> .env  # Rename during copy
+  copyFiles:  # Optional: Gitignored files/dirs to copy into new worktrees.
+              # `.archon/` is always copied automatically — don't list it.
+    - .env
     - .vscode               # Copy entire directory
+    - plans/                # Local plans not committed to the team repo
   initSubmodules: true  # Optional: default true — auto-detects .gitmodules and runs
                         # `git submodule update --init --recursive`. Set false to opt out.
   path: .worktrees      # Optional: co-locate worktrees with the repo at
@@ -171,7 +173,34 @@ assistants:
 
 This is useful when you maintain coding style or identity preferences in `~/.claude/CLAUDE.md` and want Archon sessions to respect them.
 
-**Default behavior:** The `.archon/` directory is always copied to worktrees automatically (contains artifacts, plans, workflows). Use `copyFiles` only for additional files like `.env` or `.vscode`.
+### Worktree file copying (`worktree.copyFiles`)
+
+`git worktree add` only copies **tracked** files into a new worktree. Anything gitignored — secrets, local planning docs, agent reports, IDE settings, data fixtures — is absent by default. Archon's `worktree.copyFiles` closes that gap: after the worktree is created, each listed path is copied from the canonical repo into the worktree via raw filesystem copy (not git), so gitignored content comes along for the ride.
+
+**Defaults — no config needed for the common case.** `.archon/` is always copied automatically. If you gitignore `.archon/` (or it's just not committed), your custom commands, workflows, and scripts still reach every worktree. You do not need to list `.archon/` in `copyFiles` — it's merged in for you.
+
+**Common entries:**
+
+```yaml
+worktree:
+  copyFiles:
+    - .env                  # local secrets
+    - .vscode/              # editor settings
+    - .claude/              # per-repo Claude Code config (agents, skills, hooks)
+    - plans/                # working docs that aren't committed
+    - reports/              # agent-generated markdown reports
+    - data/fixtures/        # local-only test data
+```
+
+**Semantics:**
+
+- Each entry is a path (file or directory) relative to the repo root — source and destination are always identical. No rename syntax.
+- Missing files are silently skipped (`ENOENT` at debug level), so you can list "optional" entries without bookkeeping.
+- Directories are copied recursively.
+- Per-entry failures are isolated — one bad entry won't abort the rest. Non-ENOENT failures (permissions, disk full) are surfaced as warnings on the environment.
+- Path-traversal attempts (entries resolving outside the repo root, or absolute paths on a different drive) are rejected — the entry is logged and skipped.
+
+**Interaction with `worktree.path`:** The copy step runs identically whether worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/` (default) or inside the repo at `<repoRoot>/<worktree.path>/` (repo-local). Both layouts get the same gitignored-file treatment.
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 

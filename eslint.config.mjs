@@ -17,7 +17,7 @@ export default tseslint.config(
       'worktrees/**',
       '.claude/worktrees/**',
       '.claude/skills/**',
-      '.archon/scripts/**/!(forge-cli).ts',
+      '.archon/**/!(forge-cli).ts', // User workflow/script/command content — except forge-cli.ts which we lint
       '**/*.generated.ts', // Auto-generated source files (content inlined via JSON.stringify)
       '**/*.js',
       '*.mjs',

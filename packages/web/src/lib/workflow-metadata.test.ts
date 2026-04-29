@@ -200,6 +200,31 @@ describe('getWorkflowTags', () => {
     const githubCount = tags.filter(t => t === 'GitHub').length;
     expect(githubCount).toBeLessThanOrEqual(1);
   });
+
+  test('uses explicit tags when provided', () => {
+    const parsed = parseWorkflowDescription('A GitLab workflow');
+    const tags = getWorkflowTags('review-gitlab-mr', parsed, ['GitLab', 'Review']);
+    expect(tags).toEqual(['GitLab', 'Review']);
+  });
+
+  test('falls back to inference when no explicit tags', () => {
+    const parsed = parseWorkflowDescription('Does: review PR on GitHub');
+    const tags = getWorkflowTags('archon-pr-review', parsed, undefined);
+    expect(tags).toContain('GitHub');
+    expect(tags).toContain('Review');
+  });
+
+  test('deduplicates explicit tags', () => {
+    const parsed = parseWorkflowDescription('anything');
+    const tags = getWorkflowTags('test', parsed, ['GitLab', 'GitLab', 'Review']);
+    expect(tags).toEqual(['GitLab', 'Review']);
+  });
+
+  test('explicit empty array suppresses inference', () => {
+    const parsed = parseWorkflowDescription('Does: review PR on GitHub');
+    const tags = getWorkflowTags('archon-pr-review', parsed, []);
+    expect(tags).toEqual([]);
+  });
 });
 
 describe('getWorkflowIconName', () => {

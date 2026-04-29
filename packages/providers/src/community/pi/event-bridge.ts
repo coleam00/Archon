@@ -153,10 +153,14 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
 
 /**
  * Attempt to parse a Pi assistant transcript as the structured-output JSON
- * requested via `outputFormat`. Handles two common model failure modes:
+ * requested via `outputFormat`. Handles three common model failure modes:
  *  - trailing/leading whitespace (always stripped)
  *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
  *    emit despite the "no code fences" instruction in the prompt
+ *  - prose preamble followed by a single trailing JSON object — pattern
+ *    observed on Minimax M2.7 ("Now I have all the inputs. Let me evaluate
+ *    the three gates: ... {...}"). Reasoning models tend to "think out loud"
+ *    before emitting structured output despite explicit JSON-only prompts.
  *
  * Returns the parsed value on success, `undefined` on any failure. Callers
  * treat `undefined` as "structured output unavailable" and degrade via the
@@ -171,11 +175,30 @@ export function tryParseStructuredOutput(text: string): unknown {
     .replace(/^```(?:json)?\s*\n?/i, '')
     .replace(/\n?\s*```\s*$/, '')
     .trim();
+
+  // Tier 1: clean parse — fast path for fully compliant outputs.
   try {
     return JSON.parse(cleaned);
   } catch {
-    return undefined;
+    // fall through
   }
+
+  // Tier 2: scan forward to the FIRST `{` and parse from there. Recovers the
+  // preamble-then-JSON pattern reasoning models emit. A backward scan from
+  // the last `{` was considered but rejected: it silently returns the wrong
+  // object when the prose contains a brace-bearing example after the real
+  // payload (e.g. `{"actual":1}\nFor example: {"x":2}` would yield `{x:2}`),
+  // breaking the conservative-failure contract callers rely on.
+  const firstBrace = cleaned.indexOf('{');
+  if (firstBrace > 0) {
+    try {
+      return JSON.parse(cleaned.slice(firstBrace));
+    } catch {
+      // fall through
+    }
+  }
+
+  return undefined;
 }
 
 /**

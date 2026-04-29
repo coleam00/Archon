@@ -6,16 +6,21 @@
  * own node_modules location; in compiled binaries that path is frozen to
  * the build host's filesystem and does not exist on end-user machines.
  *
- * Resolution order (binary mode only):
- * 1. `CLAUDE_BIN_PATH` environment variable
- * 2. `assistants.claude.claudeBinaryPath` in config
- * 3. Throw with install instructions
+ * Resolution order:
+ * 1. `CLAUDE_BIN_PATH` environment variable (honored in both modes — escape
+ *    hatch for hosts where the SDK's per-platform binary auto-resolution
+ *    picks the wrong variant, e.g. glibc Linux + musl SDK package)
+ * 2. `assistants.claude.claudeBinaryPath` in config (binary mode only)
+ * 3. Autodetect canonical install path (binary mode only — native installer default)
+ * 4. Throw with install instructions (binary mode only)
  *
- * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the caller
- * omits `pathToClaudeCodeExecutable` entirely and the SDK resolves via its
- * normal node_modules lookup.
+ * In dev mode (BUNDLED_IS_BINARY=false), if no env var is set, returns
+ * undefined so the caller omits `pathToClaudeCodeExecutable` entirely and
+ * the SDK resolves via its normal node_modules lookup.
  */
 import { existsSync as _existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { BUNDLED_IS_BINARY, createLogger } from '@archon/paths';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
@@ -50,17 +55,22 @@ const INSTALL_INSTRUCTIONS =
   'See: https://archon.diy/docs/reference/configuration#claude';
 
 /**
- * Resolve the path to the Claude Code SDK's cli.js.
+ * Resolve the path to the Claude Code executable (native binary in SDK 0.2.x;
+ * legacy `cli.js` is still accepted for operators pinned to npm-installed
+ * SDKs that ship a JS entry point).
  *
- * In dev mode: returns undefined (let SDK resolve via node_modules).
- * In binary mode: resolves from env/config, or throws with install instructions.
+ * In dev mode: honors `CLAUDE_BIN_PATH` if set; otherwise returns undefined
+ * (let SDK resolve from its bundled per-platform native binary in
+ * `@anthropic-ai/claude-agent-sdk-<platform>`).
+ * In binary mode: resolves from env/config/autodetect, or throws with
+ * install instructions.
  */
 export async function resolveClaudeBinaryPath(
   configClaudeBinaryPath?: string
 ): Promise<string | undefined> {
-  if (!BUNDLED_IS_BINARY) return undefined;
-
-  // 1. Environment variable override
+  // 1. Environment variable override — honored in dev mode too, so operators
+  // on libc mismatches (e.g. glibc host with the SDK's musl variant first in
+  // its resolution order) can pin a known-good binary without a compiled build.
   const envPath = process.env.CLAUDE_BIN_PATH;
   if (envPath) {
     if (!fileExists(envPath)) {
@@ -73,6 +83,8 @@ export async function resolveClaudeBinaryPath(
     getLog().info({ binaryPath: envPath, source: 'env' }, 'claude.binary_resolved');
     return envPath;
   }
+
+  if (!BUNDLED_IS_BINARY) return undefined;
 
   // 2. Config file override
   if (configClaudeBinaryPath) {
@@ -89,6 +101,25 @@ export async function resolveClaudeBinaryPath(
     return configClaudeBinaryPath;
   }
 
-  // 3. Not found — throw with install instructions
+  // 3. Autodetect — the Anthropic native installer
+  // (`curl -fsSL https://claude.ai/install.sh | bash` on macOS/Linux,
+  // `irm https://claude.ai/install.ps1 | iex` on Windows) writes the
+  // executable to a fixed location relative to $HOME. Users who follow
+  // the recommended install path don't need any env var or config entry;
+  // users who deviate (npm global, custom path, etc.) still set one of
+  // the higher-priority sources above.
+  const nativeInstallerPath =
+    process.platform === 'win32'
+      ? join(homedir(), '.local', 'bin', 'claude.exe')
+      : join(homedir(), '.local', 'bin', 'claude');
+  if (fileExists(nativeInstallerPath)) {
+    getLog().info(
+      { binaryPath: nativeInstallerPath, source: 'autodetect' },
+      'claude.binary_resolved'
+    );
+    return nativeInstallerPath;
+  }
+
+  // 4. Not found — throw with install instructions
   throw new Error(INSTALL_INSTRUCTIONS);
 }

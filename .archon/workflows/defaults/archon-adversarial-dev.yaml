@@ -101,7 +101,9 @@ nodes:
         "status": "running"
       }
       STATEEOF
-      sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json"
+      STATE_TMP="$ARTIFACTS/state.json.tmp"
+      sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"
+      mv "$STATE_TMP" "$ARTIFACTS/state.json"
 
       echo "{\"totalSprints\": $SPRINT_COUNT, \"appDir\": \"$ARTIFACTS/app\", \"artifactsDir\": \"$ARTIFACTS\"}"
     timeout: 30000
@@ -115,7 +117,7 @@ nodes:
   - id: adversarial-sprint
     depends_on: [init-workspace]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
     loop:
       prompt: |
         # Adversarial Development — Sprint Loop
