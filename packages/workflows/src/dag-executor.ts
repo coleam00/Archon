@@ -74,6 +74,8 @@ import {
   stripCompletionTags,
   isInlineScript,
   formatSubprocessFailure,
+  safeSendMessage,
+  type SendMessageContext,
 } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -186,12 +188,6 @@ export function shouldContinueStreamingForStatus(status: string | null): boolean
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
 
-/** Context for platform message sending */
-interface SendMessageContext {
-  workflowId?: string;
-  nodeName?: string;
-}
-
 /** Default DAG node retry for TRANSIENT errors */
 const DEFAULT_NODE_MAX_RETRIES = 2;
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
@@ -227,44 +223,6 @@ function getEffectiveNodeRetryConfig(node: DagNode): {
  */
 function isTransientNodeError(errorMessage: string): boolean {
   return classifyError(new Error(errorMessage)) === 'TRANSIENT';
-}
-
-/**
- * Safely send a message to the platform without crashing on failure.
- * Returns true if message was sent successfully, false otherwise.
- */
-async function safeSendMessage(
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  metadata?: WorkflowMessageMetadata
-): Promise<boolean> {
-  try {
-    await platform.sendMessage(conversationId, message, metadata);
-    return true;
-  } catch (error) {
-    const err = error as Error;
-    const errorType = classifyError(err);
-
-    getLog().error(
-      {
-        err,
-        conversationId,
-        messageLength: message.length,
-        errorType,
-        platformType: platform.getPlatformType(),
-        ...context,
-      },
-      'dag_node_message_send_failed'
-    );
-
-    if (errorType === 'FATAL') {
-      throw new Error(`Platform authentication/permission error: ${err.message}`);
-    }
-
-    return false;
-  }
 }
 
 /**

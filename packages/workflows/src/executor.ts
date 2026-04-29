@@ -14,7 +14,7 @@ import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import { classifyError } from './executor-shared';
+import { classifyError, safeSendMessage, type SendMessageContext } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -23,92 +23,6 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Context for platform message sending */
-interface SendMessageContext {
-  workflowId?: string;
-  stepName?: string;
-}
-
-/**
- * Log a send message failure with context
- */
-function logSendError(
-  label: string,
-  error: Error,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  extra?: Record<string, unknown>
-): void {
-  getLog().error(
-    {
-      err: error,
-      conversationId,
-      messageLength: message.length,
-      errorType: classifyError(error),
-      platformType: platform.getPlatformType(),
-      ...context,
-      ...extra,
-    },
-    label
-  );
-}
-
-/** Threshold for consecutive UNKNOWN errors before aborting */
-const UNKNOWN_ERROR_THRESHOLD = 3;
-
-/** Mutable counter for tracking consecutive unknown errors across calls */
-interface UnknownErrorTracker {
-  count: number;
-}
-
-/**
- * Safely send a message to the platform without crashing on failure.
- * Returns true if message was sent successfully, false otherwise.
- * Only suppresses transient/unknown errors; fatal errors are rethrown.
- * When unknownErrorTracker is provided, consecutive UNKNOWN errors are tracked
- * and the workflow is aborted after UNKNOWN_ERROR_THRESHOLD consecutive failures.
- */
-async function safeSendMessage(
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  unknownErrorTracker?: UnknownErrorTracker,
-  metadata?: WorkflowMessageMetadata
-): Promise<boolean> {
-  try {
-    await platform.sendMessage(conversationId, message, metadata);
-    if (unknownErrorTracker) unknownErrorTracker.count = 0;
-    return true;
-  } catch (error) {
-    const err = error as Error;
-    const errorType = classifyError(err);
-
-    logSendError('Failed to send message', err, platform, conversationId, message, context, {
-      stack: err.stack,
-    });
-
-    // Fatal errors should not be suppressed - they indicate configuration issues
-    if (errorType === 'FATAL') {
-      throw new Error(`Platform authentication/permission error: ${err.message}`);
-    }
-
-    // Track consecutive UNKNOWN errors - abort if threshold exceeded
-    if (errorType === 'UNKNOWN' && unknownErrorTracker) {
-      unknownErrorTracker.count++;
-      if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
-        throw new Error(
-          `${UNKNOWN_ERROR_THRESHOLD} consecutive unrecognized errors - aborting workflow: ${err.message}`
-        );
-      }
-    }
-
-    // Transient errors (and below-threshold unknown errors) suppressed to allow workflow to continue
-    return false;
-  }
-}
 
 /**
  * Delay execution for specified milliseconds
@@ -137,17 +51,18 @@ async function sendCriticalMessage(
       const err = error as Error;
       const errorType = classifyError(err);
 
-      logSendError(
-        'Critical message send failed',
-        err,
-        platform,
-        conversationId,
-        message,
-        context,
+      getLog().error(
         {
+          err,
+          conversationId,
+          messageLength: message.length,
+          errorType,
+          platformType: platform.getPlatformType(),
+          ...context,
           attempt,
           maxRetries,
-        }
+        },
+        'platform.critical_message_send_failed'
       );
 
       // Don't retry fatal errors
