@@ -60,6 +60,8 @@ If neither is set in a compiled binary, Archon throws with install instructions 
 
 The Claude Agent SDK accepts either the native compiled binary or a JS `cli.js`.
 
+**Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
+
 **Typical paths by install method:**
 
 | Install method | Typical executable path |
