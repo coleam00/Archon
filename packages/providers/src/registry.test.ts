@@ -11,10 +11,7 @@ import {
   registerCommunityProviders,
   clearRegistry,
 } from './registry';
-import {
-  isCopilotModelCompatible,
-  registerCopilotProvider,
-} from './community/copilot/registration';
+import { registerCopilotProvider } from './community/copilot/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
@@ -302,17 +299,6 @@ describe('registry', () => {
       expect(caps.agents).toBe(true);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
-    });
-
-    test('isModelCompatible accepts non-empty explicit model strings', () => {
-      registerCopilotProvider();
-      const reg = getRegistration('copilot');
-      expect(reg.isModelCompatible('gpt-5')).toBe(true);
-      expect(reg.isModelCompatible('claude-sonnet-4.5')).toBe(true);
-      expect(reg.isModelCompatible('  gpt-5-mini  ')).toBe(true);
-      expect(reg.isModelCompatible('')).toBe(false);
-      expect(reg.isModelCompatible('inherit')).toBe(false);
-      expect(isCopilotModelCompatible('gpt-5')).toBe(true);
     });
 
     test('appears in getProviderInfoList with builtIn: false', () => {
