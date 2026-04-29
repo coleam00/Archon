@@ -1371,8 +1371,11 @@ async function executeBashNode(
     const err = error as Error & { killed?: boolean; code?: number | string; stderr?: string };
     const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
     const label = `Bash node '${node.id}'`;
+    // Always run the formatter so logs get sanitized fields regardless of which
+    // user-facing branch we end up in — the timeout message also contains the
+    // full `Command failed: bash -c <body>` line and would otherwise leak.
+    const formatted = formatSubprocessFailure(err, label);
     let errorMsg: string;
-    let logFields: Record<string, unknown> = {};
     if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.message?.includes('ENOENT')) {
@@ -1380,13 +1383,11 @@ async function executeBashNode(
     } else if (err.message?.includes('EACCES')) {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
-      const formatted = formatSubprocessFailure(err, label);
       errorMsg = formatted.userMessage;
-      logFields = formatted.logFields;
     }
 
     getLog().error(
-      { ...logFields, nodeId: node.id, isTimeout, errType: err.constructor.name },
+      { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
       'dag_node_failed'
     );
     await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
@@ -1634,8 +1635,11 @@ async function executeScriptNode(
     const err = error as Error & { killed?: boolean; code?: number | string; stderr?: string };
     const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
     const label = `Script node '${node.id}'`;
+    // Always run the formatter so logs get sanitized fields regardless of which
+    // user-facing branch we end up in — the timeout message also contains the
+    // full `Command failed: bun -e <body>` line and would otherwise leak.
+    const formatted = formatSubprocessFailure(err, label);
     let errorMsg: string;
-    let logFields: Record<string, unknown> = {};
     if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.message?.includes('ENOENT')) {
@@ -1643,13 +1647,11 @@ async function executeScriptNode(
     } else if (err.message?.includes('EACCES')) {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
-      const formatted = formatSubprocessFailure(err, label);
       errorMsg = formatted.userMessage;
-      logFields = formatted.logFields;
     }
 
     getLog().error(
-      { ...logFields, nodeId: node.id, isTimeout, errType: err.constructor.name },
+      { ...formatted.logFields, nodeId: node.id, nodeType: 'script', isTimeout },
       'dag_node_failed'
     );
     await logNodeError(logDir, workflowRun.id, node.id, errorMsg);

@@ -1138,7 +1138,6 @@ describe('executeDagWorkflow -- bash nodes', () => {
     expect(failMsg).toBeDefined();
   });
 
-  // Regression for issue #1389 — bash node error must surface stderr, not the script body
   it('failure message surfaces stderr and does not leak the "Command failed: bash -c <body>" prefix', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -1148,10 +1147,9 @@ describe('executeDagWorkflow -- bash nodes', () => {
       user_message: 'test',
     });
 
-    // Script body contains a unique marker that appears ONLY in the command line
-    // (echoed to stdout, not stderr). The error message must not contain the
-    // marker because the entire "Command failed: bash -c <body>" prefix line
-    // should be stripped.
+    // Marker is echoed to stdout only (so it lands in the command line embedded
+    // in err.message but never in stderr). If it shows up in errorMsg the
+    // prefix line was not stripped.
     const bashNode: BashNode = {
       id: 'fail-bash-1389',
       bash: 'echo UNIQUE_CMDLINE_MARKER_1389; echo "diagnostic from stderr" >&2; exit 1',
@@ -1183,10 +1181,8 @@ describe('executeDagWorkflow -- bash nodes', () => {
     const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
     expect(errorMsg).toContain("Bash node 'fail-bash-1389' failed");
     expect(errorMsg).toContain('[exit 1]');
-    // The "Command failed: bash -c <body>" prefix (which leaks the body) must not appear.
     expect(errorMsg).not.toContain('Command failed:');
     expect(errorMsg).not.toContain('UNIQUE_CMDLINE_MARKER_1389');
-    // But stderr content must be surfaced — it is the actionable diagnostic.
     expect(errorMsg).toContain('diagnostic from stderr');
   });
 
@@ -6178,7 +6174,6 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(failMsg).toBeDefined();
   });
 
-  // Regression for issue #1389 — script node error must stay concise and diagnostic-first
   it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -6188,13 +6183,13 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // Build a body that is much larger than the diagnostic stderr, so if the body
-    // ever leaks into errorMsg again (via the old `${err.message}` path) the size
-    // assertion will catch it. Bun's stderr echoes only ~1-3 lines of context.
-    const longPadding = '// padding line '.repeat(200); // ~3.2 KB of harmless comments
+    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // so any leak of the script body via err.message would violate the length
+    // assertion below. Bun's stderr echoes only a few lines of context.
+    const paddingAboveMax = '// padding line '.repeat(200);
     const scriptNode: ScriptNode = {
       id: 'fail-script-1389',
-      script: `${longPadding}\nconst x = "marker"; this is not valid javascript`,
+      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
       runtime: 'bun',
     };
 
@@ -6223,14 +6218,14 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(failedEvent).toBeDefined();
     const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
     expect(errorMsg).toContain("Script node 'fail-script-1389' failed");
-    // The "Command failed: bun -e <body>" prefix must not appear.
     expect(errorMsg).not.toContain('Command failed:');
-    // The padding body (~3.2 KB) must not have been copied wholesale into errorMsg.
     expect(errorMsg).not.toContain('padding line padding line padding line');
-    // The helper caps diagnostic output at ~2 KB; whole errorMsg should stay well below 4 KB.
-    expect(errorMsg.length).toBeLessThan(4000);
-    // The actionable diagnostic (syntax-error marker) should be preserved.
-    expect(errorMsg.toLowerCase()).toMatch(/error|expected|unexpected|syntax/);
+    // 2 KB diagnostic cap + label prefix + truncation marker should stay under
+    // 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
+    expect(errorMsg.length).toBeLessThan(2100);
+    // Bun emits `error: <description>\n    at [eval]:L:C` for parse failures —
+    // the location marker is the strongest signal that the diagnostic survived.
+    expect(errorMsg).toContain('[eval]');
   });
 
   it('timeout kills subprocess', async () => {

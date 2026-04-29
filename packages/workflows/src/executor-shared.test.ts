@@ -484,7 +484,7 @@ describe('stripCompletionTags', () => {
   });
 });
 
-describe('formatSubprocessFailure (issue #1389)', () => {
+describe('formatSubprocessFailure', () => {
   it('strips the "Command failed: <cmd>" prefix line so the script body does not appear', () => {
     const err = {
       message:
@@ -522,7 +522,9 @@ describe('formatSubprocessFailure (issue #1389)', () => {
     );
     expect(userMessage).toContain('actual error at end');
     expect(userMessage).toContain('[truncated]');
-    expect(userMessage.length).toBeLessThan(2200);
+    // Tight bound: ~2 KB diagnostic + label prefix + truncation suffix should fit
+    // well under 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
+    expect(userMessage.length).toBeLessThan(2100);
   });
 
   it('logFields never contain the full message, stack, or cmd', () => {

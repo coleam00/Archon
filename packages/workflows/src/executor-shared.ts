@@ -86,16 +86,18 @@ export function classifyError(error: Error): ErrorType {
 const SUBPROCESS_ERROR_MAX_CHARS = 2000;
 
 /**
- * Raw ExecFileException shape from Node's `child_process.execFile` (via
- * `promisify`). `err.message` is always `"Command failed: <cmd> <args>\n<stderr>"` —
- * for inline scripts via `bash -c <body>` / `bun -e <body>` the entire script body
- * is embedded in `err.message`, `err.cmd`, and the first line of `err.stack`.
+ * Raw ExecFileException shape from Node's `child_process.execFile`. For inline
+ * scripts via `bash -c <body>` / `bun -e <body>` the entire script body is
+ * embedded in `err.message`, `err.cmd`, and the first line of `err.stack` —
+ * which is why `formatSubprocessFailure` strips the prefix and exposes a
+ * controlled `logFields` subset rather than the raw error.
  */
-export interface RawSubprocessError {
+interface RawSubprocessError {
   message?: string;
   stderr?: string;
   stdout?: string;
-  code?: number | string;
+  // Numeric exit code OR errno symbol (e.g. 'ENOENT') — mirrors ExecFileException.
+  code?: number | string | null;
   killed?: boolean;
   cmd?: string;
 }
@@ -116,30 +118,32 @@ export function formatSubprocessFailure(
   const stderr = (err.stderr ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
 
-  // Strip "Command failed: <cmd line>\n" prefix if present. The first line of
-  // Node's ExecFileException.message contains the entire command line — including
-  // the full substituted script body for `bash -c <body>` / `bun -e <body>`.
-  // We never want that line in user-facing output; fall back to a generic label
-  // rather than re-leaking it.
+  // The first line of Node's ExecFileException.message is `Command failed: <cmd>`,
+  // and for `bash -c <body>` / `bun -e <body>` that line embeds the full script
+  // body. Strip it so user-facing output never re-leaks the body.
   const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
   const bodyAfterPrefix = hasCommandFailedPrefix
     ? rawMessage.split('\n').slice(1).join('\n').trim()
     : rawMessage;
 
-  const diagnostic =
-    stderr ||
-    bodyAfterPrefix ||
-    (hasCommandFailedPrefix ? 'no diagnostic output' : rawMessage) ||
-    'unknown error';
+  let diagnostic: string;
+  if (stderr) {
+    diagnostic = stderr;
+  } else if (bodyAfterPrefix) {
+    diagnostic = bodyAfterPrefix;
+  } else if (hasCommandFailedPrefix) {
+    // Prefix was the entire message — exit code in the suffix is the only signal.
+    diagnostic = 'no diagnostic output';
+  } else {
+    diagnostic = 'unknown error';
+  }
+
   const truncated =
     diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
       ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
       : diagnostic;
 
-  const exitSuffix =
-    typeof err.code === 'number' || typeof err.code === 'string'
-      ? ` [exit ${String(err.code)}]`
-      : '';
+  const exitSuffix = err.code != null ? ` [exit ${String(err.code)}]` : '';
 
   const stderrTail =
     stderr.length > SUBPROCESS_ERROR_MAX_CHARS ? stderr.slice(-SUBPROCESS_ERROR_MAX_CHARS) : stderr;
@@ -147,9 +151,9 @@ export function formatSubprocessFailure(
   return {
     userMessage: `${label} failed${exitSuffix}: ${truncated}`,
     logFields: {
-      exitCode: err.code,
+      exitCode: err.code ?? undefined,
       killed: err.killed === true,
-      stderrTail: stderrTail || undefined,
+      stderrTail: stderrTail.length > 0 ? stderrTail : undefined,
     },
   };
 }
