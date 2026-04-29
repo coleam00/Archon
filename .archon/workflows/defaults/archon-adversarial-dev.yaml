@@ -117,7 +117,7 @@ nodes:
   - id: adversarial-sprint
     depends_on: [init-workspace]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
     loop:
       prompt: |
         # Adversarial Development — Sprint Loop

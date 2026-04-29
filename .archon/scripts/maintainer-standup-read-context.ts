@@ -1,0 +1,82 @@
+#!/usr/bin/env bun
+/**
+ * Loads local context for the maintainer-standup synthesis: direction.md
+ * (committed), profile.md (per-maintainer), prior state.json, and the most
+ * recent N briefs.
+ *
+ * Output: JSON to stdout.
+ */
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const RECENT_BRIEFS_LIMIT = 3;
+
+const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
+
+const directionPath = resolve(baseDir, 'direction.md');
+const direction = existsSync(directionPath) ? readFileSync(directionPath, 'utf8') : '';
+
+const profilePath = resolve(baseDir, 'profile.md');
+const profile = existsSync(profilePath) ? readFileSync(profilePath, 'utf8') : '';
+
+const statePath = resolve(baseDir, 'state.json');
+let priorState: unknown = null;
+if (existsSync(statePath)) {
+  try {
+    priorState = JSON.parse(readFileSync(statePath, 'utf8'));
+  } catch {
+    priorState = null;
+  }
+}
+
+const briefsDir = resolve(baseDir, 'briefs');
+const recentBriefs: { date: string; content: string }[] = [];
+if (existsSync(briefsDir)) {
+  const files = readdirSync(briefsDir)
+    .filter((f) => f.endsWith('.md'))
+    .sort()
+    .reverse()
+    .slice(0, RECENT_BRIEFS_LIMIT);
+  for (const f of files) {
+    recentBriefs.push({
+      date: f.replace(/\.md$/, ''),
+      content: readFileSync(resolve(briefsDir, f), 'utf8'),
+    });
+  }
+}
+
+// Deterministic clock — emit today's local date + a precomputed 3-day-out
+// deadline so downstream prompts don't have to do calendar arithmetic
+// (LLMs are unreliable at it) and don't anchor to stale prior_state.last_run_at
+// (which can produce past deadlines on long gaps between runs).
+const todayDate = new Date();
+const today = todayDate.toLocaleDateString('sv-SE'); // YYYY-MM-DD local
+const deadlineDate = new Date(todayDate);
+deadlineDate.setDate(deadlineDate.getDate() + 3);
+const deadline_3d = deadlineDate.toLocaleDateString('sv-SE');
+
+// Cross-workflow memory: which PRs has maintainer-review-pr already triaged?
+// Written by maintainer-review-pr's `record-review` node; surfaced here so
+// the standup synthesizer can mark "✓ reviewed Nd ago" next to P1-P4 entries
+// and flag staleness when the contributor pushes after a prior review.
+const reviewedPrsPath = resolve(baseDir, 'reviewed-prs.json');
+let reviewedPrs: unknown = {};
+if (existsSync(reviewedPrsPath)) {
+  try {
+    reviewedPrs = JSON.parse(readFileSync(reviewedPrsPath, 'utf8'));
+  } catch {
+    reviewedPrs = {};
+  }
+}
+
+console.log(
+  JSON.stringify({
+    direction,
+    profile,
+    prior_state: priorState,
+    recent_briefs: recentBriefs,
+    today,
+    deadline_3d,
+    reviewed_prs: reviewedPrs,
+  }),
+);

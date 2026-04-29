@@ -103,4 +103,4 @@ archon workflow reject <run-id> "reason for rejection"
 
 - **Workflow shows `running` for a long time**: The AI is doing research/implementation. Be patient — check again in a few minutes.
 - **Log file not found**: The log is at `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl`
-- **User wants to cancel**: Run `archon workflow reject <run-id>` or `archon workflow cancel <run-id>`
+- **User wants to cancel**: Run `archon workflow reject <run-id>` to stop at an approval gate, or `archon workflow abandon <run-id>` to mark the run cancelled without killing any subprocess. To actively terminate a still-live subprocess, use the chat slash command `/workflow cancel <run-id>` on the platform that started it — there is no `archon workflow cancel` CLI subcommand

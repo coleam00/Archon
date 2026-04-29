@@ -168,7 +168,18 @@ describe('sessions', () => {
       );
     });
 
-    test('throws SessionNotFoundError when session does not exist', async () => {
+    test('sets assistant_session_id to NULL when called with null', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await updateSession('session-123', null);
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'UPDATE remote_agent_sessions SET assistant_session_id = $1 WHERE id = $2',
+        [null, 'session-123']
+      );
+    });
+
+    test('throws SessionNotFoundError when session does not exist (updateSession)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0)); // rowCount = 0
 
       const error = await updateSession('non-existent', 'new-session-id').catch(e => e);

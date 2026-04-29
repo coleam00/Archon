@@ -198,14 +198,10 @@ nodes:
       3. **Read example test files** — understand testing patterns
       4. **Check for any recent changes** — `git log --oneline -10`
 
-      ## Step 2: Determine Plan Location
+      ## Step 2: Plan File Location
 
-      Generate a kebab-case slug from the feature name.
-      Save to `.claude/archon/plans/{slug}.plan.md`.
-
-      ```bash
-      mkdir -p .claude/archon/plans
-      ```
+      Save the plan to `$ARTIFACTS_DIR/plan.md`.
+      The directory already exists (pre-created by the workflow executor).
 
       ## Step 3: Write the Plan
 
@@ -282,7 +278,7 @@ nodes:
       ```
       ## Plan Created
 
-      **File**: `.claude/archon/plans/{slug}.plan.md`
+      **File**: `$ARTIFACTS_DIR/plan.md`
       **Tasks**: {count}
       **Files to change**: {count}
 
@@ -310,13 +306,9 @@ nodes:
 
         ---
 
-        ## Step 1: Find and Read the Plan
+        ## Step 1: Read the Plan
 
-        ```bash
-        ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
-        ```
-
-        Read the entire plan file. Also read CLAUDE.md for conventions.
+        Read `$ARTIFACTS_DIR/plan.md` and CLAUDE.md for conventions.
 
         ## Step 2: Process Feedback
 
@@ -375,10 +367,10 @@ nodes:
     bash: |
       set -e
 
-      PLAN_FILE=$(ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1)
+      PLAN_FILE="$ARTIFACTS_DIR/plan.md"
 
-      if [ -z "$PLAN_FILE" ]; then
-        echo "ERROR: No plan file found in .claude/archon/plans/"
+      if [ ! -f "$PLAN_FILE" ]; then
+        echo "ERROR: No plan file found at $ARTIFACTS_DIR/plan.md"
         exit 1
       fi
 
@@ -403,8 +395,12 @@ nodes:
       echo ""
       echo "=== PLAN_END ==="
 
-      TASK_COUNT=$(grep -c "^### Task [0-9]" "$PLAN_FILE" || true)
-      echo "TASK_COUNT=${TASK_COUNT:-0}"
+      TASK_COUNT=$(grep -c "^### Task [0-9]" "$PLAN_FILE" 2>/dev/null || echo "0")
+      if [ "$TASK_COUNT" -eq 0 ]; then
+        echo "ERROR: No '### Task N:' sections found in $PLAN_FILE. Plan may be malformed."
+        exit 1
+      fi
+      echo "TASK_COUNT=${TASK_COUNT}"
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 3b: IMPLEMENT — Task-by-Task Loop (Ralph pattern)
@@ -447,7 +443,7 @@ nodes:
         may have changed things. **You MUST re-read from disk:**
 
         1. **Read the plan file** — your implementation guide
-        2. **Read progress tracking** — check if `.claude/archon/plans/progress.txt` exists
+        2. **Read progress tracking** — check if `$ARTIFACTS_DIR/progress.txt` exists
         3. **Read CLAUDE.md** — project conventions and constraints
 
         ### 0.3 Check Git State
@@ -511,7 +507,7 @@ nodes:
         )"
         ```
 
-        Track progress in `.claude/archon/plans/progress.txt`:
+        Track progress in `$ARTIFACTS_DIR/progress.txt`:
         ```
         ## Task {N}: {title} — COMPLETED
         Date: {ISO date}
@@ -552,11 +548,9 @@ nodes:
 
       ---
 
-      ## Step 1: Find and Read the Plan
+      ## Step 1: Read the Plan
 
-      ```bash
-      ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
-      ```
+      Read `$ARTIFACTS_DIR/plan.md` to understand the intended implementation.
 
       ## Step 2: Review All Changes
 
@@ -581,7 +575,7 @@ nodes:
 
       Fix type errors, lint warnings, missing imports, formatting. Commit any fixes:
       ```bash
-      git add -A && git commit -m "fix: address code review findings" 2>/dev/null || true
+      git add -A && git commit -m "fix: address code review findings" || true
       ```
 
       ## Step 6: Present Review
@@ -627,11 +621,7 @@ nodes:
 
         ## Step 1: Read Context
 
-        ```bash
-        ls -t .claude/archon/plans/*.plan.md 2>/dev/null | head -1
-        ```
-
-        Read the plan file and CLAUDE.md for conventions.
+        Read `$ARTIFACTS_DIR/plan.md` and CLAUDE.md for conventions.
 
         ## Step 2: Process Feedback
 
@@ -710,7 +700,7 @@ nodes:
       ## Step 1: Push Changes
 
       ```bash
-      git push -u origin HEAD 2>&1 || true
+      git push -u origin HEAD 2>&1 || echo "WARNING: Push failed — verify remote authentication and branch state before creating the PR."
       ```
 
       ## Step 2: Generate Summary
@@ -720,7 +710,7 @@ nodes:
       git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
       ```
 
-      Read the plan file and progress tracking for context.
+      Read `$ARTIFACTS_DIR/plan.md` and `$ARTIFACTS_DIR/progress.txt` for context.
 
       ## Step 3: Create PR (if not already created)
 
@@ -764,3 +754,17 @@ nodes:
       All checks passed.
       ===============================================================
       ```
+
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [finalize]

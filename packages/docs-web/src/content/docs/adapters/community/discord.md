@@ -40,6 +40,14 @@ Connect Archon to Discord so you can interact with your AI coding assistant from
 2. Enable **"Message Content Intent"** (required for the bot to read messages)
 3. Save changes
 
+:::caution
+Skipping this step causes Discord to reject the bot's connection with
+`Used disallowed intents`. Archon will log
+`discord.start_failed_continuing_without_adapter` and keep the rest of
+the server running, but the Discord adapter will be unavailable until
+the intent is enabled and the server is restarted.
+:::
+
 ## Invite Bot to Your Server
 
 1. Go to "OAuth2" > "URL Generator" in the left sidebar
