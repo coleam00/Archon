@@ -75,7 +75,7 @@ const MAX_BATCH_TOTAL_CHUNKS = 200;
  * Safely add a reaction to a message.
  * Errors are logged but not thrown to avoid breaking core message handling.
  */
-async function safeAddReaction(
+export async function safeAddReaction(
   platform: IPlatformAdapter,
   conversationId: string,
   reaction: string
@@ -83,7 +83,7 @@ async function safeAddReaction(
   try {
     await platform.addReaction?.(conversationId, reaction);
   } catch (error) {
-    getLog().warn({ err: error, conversationId, reaction }, 'reaction_add_failed');
+    getLog().warn({ err: error, conversationId, reaction }, 'orchestrator.reaction_add_failed');
   }
 }
 
@@ -91,7 +91,7 @@ async function safeAddReaction(
  * Safely remove a reaction from a message.
  * Errors are logged but not thrown to avoid breaking core message handling.
  */
-async function safeRemoveReaction(
+export async function safeRemoveReaction(
   platform: IPlatformAdapter,
   conversationId: string,
   reaction: string
@@ -99,7 +99,7 @@ async function safeRemoveReaction(
   try {
     await platform.removeReaction?.(conversationId, reaction);
   } catch (error) {
-    getLog().warn({ err: error, conversationId, reaction }, 'reaction_remove_failed');
+    getLog().warn({ err: error, conversationId, reaction }, 'orchestrator.reaction_remove_failed');
   }
 }
 
@@ -954,8 +954,8 @@ export async function handleMessage(
 
       // React with ✅ on success
       await safeAddReaction(platform, conversationId, 'white_check_mark');
-    } finally {
-      // No additional cleanup needed
+    } catch {
+      // Silently ignore reaction errors
     }
   } catch (error) {
     const err = toError(error);
@@ -969,8 +969,8 @@ export async function handleMessage(
 
       // React with ❌ on failure
       await safeAddReaction(platform, conversationId, 'x');
-    } finally {
-      // No additional cleanup needed
+    } catch {
+      // Silently ignore reaction errors
     }
 
     const userMessage = classifyAndFormatError(err);

@@ -200,7 +200,7 @@ export class SlackAdapter implements IPlatformAdapter {
 
   /**
    * Add a reaction (emoji) to a message
-   * @param conversationId - Format: "channel:timestamp"
+   * @param conversationId - Slack: "channel:timestamp"
    * @param reaction - Emoji shortname (e.g., "eyes", "white_check_mark", "x")
    */
   async addReaction(conversationId: string, reaction: string): Promise<void> {
@@ -226,7 +226,7 @@ export class SlackAdapter implements IPlatformAdapter {
 
   /**
    * Remove a reaction from a message
-   * @param conversationId - Format: "channel:timestamp"
+   * @param conversationId - Slack: "channel:timestamp"
    * @param reaction - Emoji shortname to remove (e.g., "eyes", "arrows_counterclockwise")
    */
   async removeReaction(conversationId: string, reaction: string): Promise<void> {
