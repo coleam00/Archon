@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Claude provider crashed in dev mode with `error: unknown option '--no-env-file'`.** The Claude Agent SDK switched from shipping `cli.js` to per-platform native binaries (via optional deps) in the 0.2.x series. Archon's `shouldPassNoEnvFile` predicate kept emitting the Bun-only `--no-env-file` flag in dev mode (when the SDK resolves its bundled binary), which the native binary rejects. Tightened the predicate to only emit the flag for explicitly-configured Bun-runnable JS entry points (`.js`/`.mjs`/`.cjs`). Target-repo `.env` isolation is unchanged — `stripCwdEnv()` at process boot remains the primary guard, and the native Claude binary does not auto-load `.env` from its cwd. (#1461)
+- **Pi structured-output now tolerates reasoning-model prose preamble.** `tryParseStructuredOutput` previously returned `undefined` whenever the assistant text wasn't pure JSON, even when the JSON object was clearly emitted at the end of a "Let me evaluate..." preamble. Reasoning models — observed on Minimax M2.7 — routinely "think out loud" before emitting structured output despite explicit JSON-only prompts. The parser now falls back to a forward-scan from the first `{` when the clean parse fails, recovering the structured output without changing the success path for fully compliant models. (#1440)
 
 ## [0.3.9] - 2026-04-22
 
