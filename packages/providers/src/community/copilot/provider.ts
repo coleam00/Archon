@@ -1,11 +1,18 @@
-import {
+// IMPORTANT: Do NOT add static `import { ... } from '@github/copilot-sdk'` here
+// (only `import type` is safe). The Copilot SDK has not been audited for
+// module-load side effects and the Pi precedent (#1355, v0.3.7) shows compiled
+// Archon binaries crash at startup if any reachable SDK module reads files at
+// import time. The `CopilotClient` constructor and `approveAll` value binding
+// are dynamic-imported inside `sendQuery()` below so the SDK only loads when a
+// Copilot workflow is actually invoked. The `provider-lazy-load.test.ts`
+// regression test locks this invariant in.
+import type {
+  AssistantMessageEvent,
   CopilotClient,
-  approveAll,
-  type AssistantMessageEvent,
-  type CustomAgentConfig,
-  type MCPServerConfig,
-  type SessionConfig,
-  type SessionEvent,
+  CustomAgentConfig,
+  MCPServerConfig,
+  SessionConfig,
+  SessionEvent,
 } from '@github/copilot-sdk';
 import { createLogger } from '@archon/paths';
 
@@ -239,7 +246,8 @@ async function buildSessionConfig(
   copilotConfig: CopilotProviderDefaults,
   requestOptions: SendQueryOptions | undefined,
   cwd: string,
-  warnings: ProviderWarning[]
+  warnings: ProviderWarning[],
+  approveAll: SessionConfig['onPermissionRequest']
 ): Promise<SessionConfig> {
   const reasoning = resolveCopilotReasoning(requestOptions?.nodeConfig);
   if (reasoning.warning) {
@@ -393,6 +401,13 @@ export class CopilotProvider implements IAgentProvider {
     let activeSession: Awaited<ReturnType<CopilotClient['createSession']>> | undefined;
     let runFinished = false;
     (async (): Promise<void> => {
+      // Lazy-load the SDK at first invocation. See the import-block header above
+      // for why this matters in compiled Archon binaries. Module-namespace
+      // binding (rather than destructuring) keeps the constructor's PascalCase
+      // shape at the call site without fighting the camelCase naming-convention
+      // lint rule applied to local variables.
+      const copilotSdk = await import('@github/copilot-sdk');
+
       const assistantConfig = requestOptions?.assistantConfig ?? {};
       const copilotConfig = parseCopilotConfig(assistantConfig);
       const mergedEnv = buildCopilotEnv(requestOptions?.env);
@@ -400,13 +415,19 @@ export class CopilotProvider implements IAgentProvider {
       const cliPath = await resolveCopilotCliPath(copilotConfig.copilotCliPath);
 
       const warnings: ProviderWarning[] = [];
-      const sessionConfig = await buildSessionConfig(copilotConfig, requestOptions, cwd, warnings);
+      const sessionConfig = await buildSessionConfig(
+        copilotConfig,
+        requestOptions,
+        cwd,
+        warnings,
+        copilotSdk.approveAll
+      );
 
       for (const w of warnings) {
         queue.push({ type: 'system', content: `⚠️ ${w.message}` });
       }
 
-      const client = new CopilotClient({
+      const client = new copilotSdk.CopilotClient({
         cliPath,
         cwd,
         env: mergedEnv,
