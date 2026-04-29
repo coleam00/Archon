@@ -1138,6 +1138,54 @@ describe('executeDagWorkflow -- bash nodes', () => {
     expect(failMsg).toBeDefined();
   });
 
+  it('failure message surfaces stderr and does not leak the "Command failed: bash -c <body>" prefix', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-1389-run-id', {
+      workflow_name: 'bash-1389',
+      conversation_id: 'conv-1389b',
+      user_message: 'test',
+    });
+
+    // Marker is echoed to stdout only (so it lands in the command line embedded
+    // in err.message but never in stderr). If it shows up in errorMsg the
+    // prefix line was not stripped.
+    const bashNode: BashNode = {
+      id: 'fail-bash-1389',
+      bash: 'echo UNIQUE_CMDLINE_MARKER_1389; echo "diagnostic from stderr" >&2; exit 1',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-1389b',
+      testDir,
+      { name: 'bash-1389', nodes: [bashNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'fail-bash-1389'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain("Bash node 'fail-bash-1389' failed");
+    expect(errorMsg).toContain('[exit 1]');
+    expect(errorMsg).not.toContain('Command failed:');
+    expect(errorMsg).not.toContain('UNIQUE_CMDLINE_MARKER_1389');
+    expect(errorMsg).toContain('diagnostic from stderr');
+  });
+
   it('variable substitution works in bash scripts', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -6124,6 +6172,60 @@ describe('executeDagWorkflow -- script nodes', () => {
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
     expect(failMsg).toBeDefined();
+  });
+
+  it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-1389-run-id', {
+      workflow_name: 'script-1389',
+      conversation_id: 'conv-1389s',
+      user_message: 'test',
+    });
+
+    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // so any leak of the script body via err.message would violate the length
+    // assertion below. Bun's stderr echoes only a few lines of context.
+    const paddingAboveMax = '// padding line '.repeat(200);
+    const scriptNode: ScriptNode = {
+      id: 'fail-script-1389',
+      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-1389s',
+      testDir,
+      { name: 'script-1389', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'fail-script-1389'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain("Script node 'fail-script-1389' failed");
+    expect(errorMsg).not.toContain('Command failed:');
+    expect(errorMsg).not.toContain('padding line padding line padding line');
+    // 2 KB diagnostic cap + label prefix + truncation marker should stay under
+    // 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
+    expect(errorMsg.length).toBeLessThan(2100);
+    // Bun emits `error: <description>\n    at [eval]:L:C` for parse failures —
+    // the location marker is the strongest signal that the diagnostic survived.
+    expect(errorMsg).toContain('[eval]');
   });
 
   it('timeout kills subprocess', async () => {

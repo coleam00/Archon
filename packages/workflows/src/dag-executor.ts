@@ -73,6 +73,7 @@ import {
   detectCompletionSignal,
   stripCompletionTags,
   isInlineScript,
+  formatSubprocessFailure,
 } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -1367,20 +1368,28 @@ async function executeBashNode(
 
     return { state: 'completed', output };
   } catch (error) {
-    const err = error as Error & { killed?: boolean; code?: number | string };
+    const err = error as Error & { killed?: boolean; code?: number | string; stderr?: string };
     const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
+    const label = `Bash node '${node.id}'`;
+    // Always run the formatter so logs get sanitized fields regardless of which
+    // user-facing branch we end up in — the timeout message also contains the
+    // full `Command failed: bash -c <body>` line and would otherwise leak.
+    const formatted = formatSubprocessFailure(err, label);
     let errorMsg: string;
     if (isTimeout) {
-      errorMsg = `Bash node '${node.id}' timed out after ${String(timeout)}ms`;
+      errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.message?.includes('ENOENT')) {
-      errorMsg = `Bash node '${node.id}' failed: bash executable not found in PATH`;
+      errorMsg = `${label} failed: bash executable not found in PATH`;
     } else if (err.message?.includes('EACCES')) {
-      errorMsg = `Bash node '${node.id}' failed: permission denied (check cwd permissions)`;
+      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
-      errorMsg = `Bash node '${node.id}' failed: ${err.message}`;
+      errorMsg = formatted.userMessage;
     }
 
-    getLog().error({ err, nodeId: node.id, isTimeout }, 'dag_node_failed');
+    getLog().error(
+      { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
+      'dag_node_failed'
+    );
     await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
     deps.store
@@ -1625,19 +1634,26 @@ async function executeScriptNode(
   } catch (error) {
     const err = error as Error & { killed?: boolean; code?: number | string; stderr?: string };
     const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
-    const stderrHint = err.stderr?.trim() ? `\n\nScript output:\n${err.stderr.trim()}` : '';
+    const label = `Script node '${node.id}'`;
+    // Always run the formatter so logs get sanitized fields regardless of which
+    // user-facing branch we end up in — the timeout message also contains the
+    // full `Command failed: bun -e <body>` line and would otherwise leak.
+    const formatted = formatSubprocessFailure(err, label);
     let errorMsg: string;
     if (isTimeout) {
-      errorMsg = `Script node '${node.id}' timed out after ${String(timeout)}ms`;
+      errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.message?.includes('ENOENT')) {
-      errorMsg = `Script node '${node.id}' failed: '${cmd}' executable not found in PATH`;
+      errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
     } else if (err.message?.includes('EACCES')) {
-      errorMsg = `Script node '${node.id}' failed: permission denied (check cwd permissions)`;
+      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
-      errorMsg = `Script node '${node.id}' failed: ${err.message}${stderrHint}`;
+      errorMsg = formatted.userMessage;
     }
 
-    getLog().error({ err, nodeId: node.id, isTimeout }, 'dag_node_failed');
+    getLog().error(
+      { ...formatted.logFields, nodeId: node.id, nodeType: 'script', isTimeout },
+      'dag_node_failed'
+    );
     await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
     deps.store

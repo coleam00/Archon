@@ -178,7 +178,7 @@ nodes:
       5. Use `bash` nodes for deterministic shell operations (file checks, git commands, installs)
       6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps)
          — stdout is captured as output, stderr is forwarded as a warning.
-         $nodeId.output is NOT shell-quoted in script bodies.
+         `$nodeId.output` is NOT shell-quoted in script bodies.
          - **TypeScript/bun**: assign directly — `const data = $nodeId.output;`
            (JSON is valid JS expression syntax; avoid String.raw — it breaks on backticks)
          - **Python/uv**: use json.loads — `import json; data = json.loads("""$nodeId.output""")`
