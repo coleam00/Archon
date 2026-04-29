@@ -183,26 +183,12 @@ export function tryParseStructuredOutput(text: string): unknown {
     // fall through
   }
 
-  // Tier 2: scan backward to the LAST `{` and parse from there. Catches the
-  // common preamble-then-flat-JSON pattern. With a flat (non-nested) JSON
-  // response the last `{` is the only `{`, and slicing recovers it.
-  // `lastBrace > 0` excludes position 0, which Tier 1 already attempted.
-  const lastBrace = cleaned.lastIndexOf('{');
-  if (lastBrace > 0) {
-    try {
-      return JSON.parse(cleaned.slice(lastBrace));
-    } catch {
-      // fall through
-    }
-  }
-
-  // Tier 3: scan forward to the FIRST `{`. With a preamble-then-nested-JSON
-  // pattern, Tier 2 lands inside a child object and JSON.parse rejects the
-  // trailing `}}`; the outer `{` is the recovery point. When the only `{`
-  // is at position 0, Tier 1 already tried it. When there's exactly one
-  // `{` past position 0, Tier 2 already tried that exact slice; this tier
-  // re-runs JSON.parse on the same input and fails identically — one
-  // redundant call we accept for a simpler control flow.
+  // Tier 2: scan forward to the FIRST `{` and parse from there. Recovers the
+  // preamble-then-JSON pattern reasoning models emit. A backward scan from
+  // the last `{` was considered but rejected: it silently returns the wrong
+  // object when the prose contains a brace-bearing example after the real
+  // payload (e.g. `{"actual":1}\nFor example: {"x":2}` would yield `{x:2}`),
+  // breaking the conservative-failure contract callers rely on.
   const firstBrace = cleaned.indexOf('{');
   if (firstBrace > 0) {
     try {

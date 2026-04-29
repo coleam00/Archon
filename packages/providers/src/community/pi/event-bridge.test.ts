@@ -403,17 +403,17 @@ describe('tryParseStructuredOutput', () => {
 
   test('returns undefined when model wraps JSON in prose with trailing text', () => {
     // Caller degrades via the executor's missing-structured-output warning.
-    // Trailing prose after the JSON breaks every tier — the regex would have
-    // to track brace depth to handle this case, which isn't worth the cost.
+    // Forward scan starts at the JSON object but JSON.parse rejects the
+    // trailing prose, so we fail closed rather than guess.
     const prose =
       'Here is the JSON you requested:\n{"ok":true}\nLet me know if you need anything else.';
     expect(tryParseStructuredOutput(prose)).toBeUndefined();
   });
 
-  test('parses preamble + trailing flat JSON (Minimax M2.7 reasoning-model pattern)', () => {
+  test('parses preamble + trailing JSON (Minimax M2.7 reasoning-model pattern)', () => {
     // Real-world failure mode observed on Minimax M2.7: the model "thinks out
-    // loud" before emitting the JSON-only output we asked for. Tier 2's
-    // backward scan from the last `{` recovers the structured output.
+    // loud" before emitting the JSON-only output we asked for. Forward scan
+    // from the first `{` (preamble has no braces) recovers the payload.
     const minimax =
       'Now I have all the inputs. Let me evaluate the three gates:\n\n' +
       '**Gate A — Direction alignment**: aligned\n' +
@@ -428,9 +428,8 @@ describe('tryParseStructuredOutput', () => {
     });
   });
 
-  test('parses preamble + trailing nested JSON via tier-3 forward scan', () => {
-    // Tier 2's backward scan lands inside the nested object and fails;
-    // Tier 3's forward scan recovers by parsing from the outer `{`.
+  test('parses preamble + trailing nested JSON via forward scan', () => {
+    // Forward scan lands on the outer `{` and JSON.parse handles the nesting.
     const nested =
       'Reasoning before the JSON.\n' + '{"verdict":"review","details":{"foo":1,"bar":[1,2,3]}}';
     expect(tryParseStructuredOutput(nested)).toEqual({
@@ -440,17 +439,23 @@ describe('tryParseStructuredOutput', () => {
   });
 
   test('parses preamble + JSON containing `{` inside a string value', () => {
-    // Pins the cascade composition. Tier 2's lastIndexOf('{') lands inside
-    // the string value's brace; slicing to `{ inside","ok":true}` makes
-    // JSON.parse fail. Tier 3 forward-scans to the JSON object's outer
-    // opening `{` and parses cleanly. Preamble must not itself contain
-    // `{`, otherwise Tier 3 lands there instead of on the JSON object.
+    // Forward scan lands on the JSON object's outer `{`; JSON.parse handles
+    // the in-string `{`. Preamble must not itself contain `{`, otherwise the
+    // forward scan would start there and fail.
     const tricky =
       'Brief preamble with no extra braces.\n' + '{"key":"value with { inside","ok":true}';
     expect(tryParseStructuredOutput(tricky)).toEqual({
       key: 'value with { inside',
       ok: true,
     });
+  });
+
+  test('returns undefined when prose contains a brace-bearing example after the real JSON', () => {
+    // Conservative-failure regression. A backward-scan strategy would silently
+    // return the trailing example; forward scan starts at the real payload,
+    // JSON.parse rejects the trailing prose+example, and we fail closed.
+    const withExample = '{"actual":"value"}\nFor example: {"verdict":"review"}';
+    expect(tryParseStructuredOutput(withExample)).toBeUndefined();
   });
 
   test('returns undefined on malformed JSON', () => {
