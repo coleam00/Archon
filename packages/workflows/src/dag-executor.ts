@@ -306,7 +306,11 @@ export function substituteNodeOutputRefs(
         // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
         // String(boolean) is 'true' or 'false' — no shell metacharacters.
         if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        return escapedForBash ? "''" : ''; // objects, null, undefined, symbol, bigint → empty
+        // arrays and objects: JSON-stringify so downstream nodes can parse them
+        if (Array.isArray(value) || typeof value === 'object') {
+          return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
+        }
+        return escapedForBash ? "''" : ''; // null, undefined, symbol, bigint → empty
       } catch (jsonErr) {
         getLog().warn(
           { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100), err: jsonErr as Error },

@@ -57,6 +57,22 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$classify.output.type == 'FEATURE'", outputs).result).toBe(false);
   });
 
+  it('dot notation: returns JSON stringified value for array fields', () => {
+    const jsonOutput = JSON.stringify({ items: ['todo', 'fix'], count: 2 });
+    const outputs = new Map([['gather', makeOutput(jsonOutput)]]);
+    // Array field resolves to JSON stringified version
+    const expectedItems = JSON.stringify(['todo', 'fix']);
+    const condition = "$gather.output.items == '" + expectedItems + "'";
+    expect(evaluateCondition(condition, outputs).result).toBe(true);
+  });
+
+  it('dot notation: returns JSON stringified value for object fields', () => {
+    const jsonOutput = JSON.stringify({ config: { timeout: 30 } });
+    const outputs = new Map([['setup', makeOutput(jsonOutput)]]);
+    const expectedConfig = JSON.stringify({ timeout: 30 });
+    const condition = "$setup.output.config == '" + expectedConfig + "'";
+    expect(evaluateCondition(condition, outputs).result).toBe(true);
+  });
   it('dot notation: returns false on invalid JSON (fails gracefully)', () => {
     const outputs = new Map([['classify', makeOutput('not-json')]]);
     // Should not throw; JSON parse fails, resolves to '', so == 'BUG' is false
