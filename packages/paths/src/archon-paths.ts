@@ -16,7 +16,7 @@
 
 import { join, dirname, normalize, basename } from 'path';
 import { homedir } from 'os';
-import { access, mkdir, symlink, lstat, readdir, readlink, rm } from 'fs/promises';
+import { access, mkdir, symlink, lstat, readdir, readlink, rm, stat } from 'fs/promises';
 import { createLogger } from './logger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -228,7 +228,28 @@ export async function findMarkdownFilesRecursive(
       continue;
     }
 
-    if (entry.isDirectory()) {
+    // Resolve the entry's actual type, following symlinks so that team-shared
+    // command/workflow files made available via symlink (e.g. `~/.archon/commands/foo.md`
+    // → `/path/to/team-repo/commands/foo.md`) are picked up. `Dirent.isFile()` /
+    // `Dirent.isDirectory()` both return false for symlinks, so without the
+    // stat() they would be silently skipped.
+    let isDir: boolean;
+    let isFile: boolean;
+    if (entry.isSymbolicLink()) {
+      try {
+        const targetStat = await stat(join(fullPath, entry.name));
+        isDir = targetStat.isDirectory();
+        isFile = targetStat.isFile();
+      } catch {
+        // Broken symlink — skip silently
+        continue;
+      }
+    } else {
+      isDir = entry.isDirectory();
+      isFile = entry.isFile();
+    }
+
+    if (isDir) {
       // Skip descending if we're already at the depth cap — files at deeper
       // levels are silently ignored (matches the convention that `.archon/*/`
       // folders support one level of grouping like `defaults/`).
@@ -239,7 +260,7 @@ export async function findMarkdownFilesRecursive(
         options
       );
       results.push(...subResults);
-    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+    } else if (isFile && entry.name.endsWith('.md')) {
       results.push({
         commandName: basename(entry.name, '.md'),
         relativePath: join(relativePath, entry.name),
