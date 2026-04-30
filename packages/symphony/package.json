@@ -1,0 +1,22 @@
+{
+  "name": "@archon/symphony",
+  "version": "0.3.10",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./db/dispatches": "./src/db/dispatches.ts"
+  },
+  "scripts": {
+    "test": "bun test src/",
+    "type-check": "bun x tsc --noEmit"
+  },
+  "dependencies": {
+    "@archon/core": "workspace:*",
+    "@archon/paths": "workspace:*"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
