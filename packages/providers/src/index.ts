@@ -83,7 +83,6 @@ export {
 // PI_CREDENTIAL_SPECS is intentionally NOT re-exported: its only consumer is
 // the Pi registration, which imports the generated file directly.
 export { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from './community/pi/pi-vendor-map.generated';
-
 export {
   CopilotProvider,
   parseCopilotConfig,
@@ -95,3 +94,9 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+export {
+  OmpProvider,
+  parseOmpConfig,
+  registerOmpProvider,
+  type OmpProviderDefaults,
+} from './community/omp';

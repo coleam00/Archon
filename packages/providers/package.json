@@ -18,11 +18,12 @@
     "./community/pi": "./src/community/pi/index.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
+    "./community/omp": "./src/community/omp/index.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts"
   },
   "scripts": {
-    "test": "bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts && bun test src/claude/binary-resolver.test.ts && bun test src/claude/binary-resolver-dev.test.ts && bun test src/claude/native-tools.test.ts && bun test src/community/pi/model-ref.test.ts && bun test src/community/pi/config.test.ts && bun test src/community/pi/event-bridge.test.ts && bun test src/community/pi/options-translator.test.ts && bun test src/community/pi/session-resolver.test.ts && bun test src/community/pi/native-tools.test.ts && bun test src/community/pi/provider.test.ts && bun test src/community/pi/provider-lazy-load.test.ts && bun test src/community/pi/ui-context-stub.test.ts && bun test src/community/copilot/config.test.ts && bun test src/community/copilot/event-bridge.test.ts && bun test src/community/copilot/binary-resolver-dev.test.ts && bun test src/community/copilot/binary-resolver.test.ts && bun test src/community/copilot/provider.test.ts && bun test src/community/copilot/provider-lazy-load.test.ts && bun test src/community/copilot/provider-hardening.test.ts && bun test src/community/opencode/provider.test.ts && bun test src/shared/structured-output.test.ts && bun test src/shared/skills.test.ts && bun test src/shared/resumed.test.ts",
+    "test": "bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts && bun test src/claude/binary-resolver.test.ts && bun test src/claude/binary-resolver-dev.test.ts && bun test src/claude/native-tools.test.ts && bun test src/community/pi/model-ref.test.ts && bun test src/community/pi/config.test.ts && bun test src/community/pi/event-bridge.test.ts && bun test src/community/pi/options-translator.test.ts && bun test src/community/pi/session-resolver.test.ts && bun test src/community/pi/native-tools.test.ts && bun test src/community/pi/provider.test.ts && bun test src/community/pi/provider-lazy-load.test.ts && bun test src/community/pi/ui-context-stub.test.ts && bun test src/community/copilot/config.test.ts && bun test src/community/copilot/event-bridge.test.ts && bun test src/community/copilot/binary-resolver-dev.test.ts && bun test src/community/copilot/binary-resolver.test.ts && bun test src/community/copilot/provider.test.ts && bun test src/community/copilot/provider-lazy-load.test.ts && bun test src/community/copilot/provider-hardening.test.ts && bun test src/community/omp/mcp-config.test.ts && bun test src/community/omp/async-queue.test.ts && bun test src/community/omp/config.test.ts && bun test src/community/omp/model-ref.test.ts && bun test src/community/omp/options-translator.test.ts && bun test src/community/omp/session-resolver.test.ts && bun test src/community/omp/event-bridge.test.ts && bun test src/community/omp/ui-context-stub.test.ts && bun test src/community/omp/provider.test.ts && bun test src/community/opencode/provider.test.ts && bun test src/shared/structured-output.test.ts && bun test src/shared/skills.test.ts && bun test src/shared/resumed.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -31,6 +32,9 @@
     "@github/copilot-sdk": "~1.0.1",
     "@earendil-works/pi-ai": "^0.80.6",
     "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@oh-my-pi/pi-agent-core": "^15.3.2",
+    "@oh-my-pi/pi-ai": "^15.3.2",
+    "@oh-my-pi/pi-coding-agent": "^15.3.2",
     "@opencode-ai/sdk": "^1.17.3",
     "@openai/codex-sdk": "^0.144.4",
     "@sinclair/typebox": "^0.34.41",

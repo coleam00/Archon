@@ -347,6 +347,7 @@ packages/
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
 │       ├── community/pi/     # PiProvider (builtIn: false) — @earendil-works/pi-coding-agent, ~20 LLM backends
 │       ├── community/opencode/ # OpenCodeProvider (builtIn: false) — @archon/opencode SDK, local embedded runtime
+│       ├── community/omp/    # OmpProvider (builtIn: false) — @oh-my-pi/pi-coding-agent, provider id `omp`
 │       └── index.ts          # Package exports
 ├── core/                     # @archon/core - Shared business logic
 │   └── src/
