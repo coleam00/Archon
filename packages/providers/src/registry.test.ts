@@ -12,6 +12,7 @@ import {
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
+import { registerCopilotProvider } from './community/copilot/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -252,16 +253,17 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
       expect(isRegisteredProvider('pi')).toBe(true);
+      expect(isRegisteredProvider('copilot')).toBe(true);
     });
 
     test('is idempotent', () => {
       registerCommunityProviders();
       expect(() => registerCommunityProviders()).not.toThrow();
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
+      const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
       expect(piCount).toBe(1);
+      expect(copilotCount).toBe(1);
     });
   });
 
@@ -316,6 +318,55 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'pi']);
+    });
+  });
+
+  describe('registerCopilotProvider (community provider)', () => {
+    test('registers copilot with builtIn: false', () => {
+      registerCopilotProvider();
+      const reg = getRegistration('copilot');
+      expect(reg.id).toBe('copilot');
+      expect(reg.displayName).toBe('Copilot (GitHub)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerCopilotProvider();
+      expect(() => registerCopilotProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'copilot');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares conservative capabilities', () => {
+      registerCopilotProvider();
+      const caps = getProviderCapabilities('copilot');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.thinkingControl).toBe(true);
+      expect(caps.mcp).toBe(true);
+      expect(caps.hooks).toBe(false);
+      expect(caps.skills).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.structuredOutput).toBe(true);
+      expect(caps.agents).toBe(true);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerCopilotProvider();
+      const info = getProviderInfoList().find(p => p.id === 'copilot');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins', () => {
+      registerCopilotProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'copilot']);
     });
   });
 });
