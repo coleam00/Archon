@@ -447,7 +447,7 @@ describe('CopilotProvider.sendQuery', () => {
     expect(sawUnsupported).toBe(false);
   });
 
-  test('env token is used when useLoggedInUser is not explicitly enabled', async () => {
+  test('GH_TOKEN is ignored by default (logged-in user wins)', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
@@ -455,6 +455,45 @@ describe('CopilotProvider.sendQuery', () => {
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
       env: { GH_TOKEN: 'ghp_testtoken' },
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    expect(lastClientOpts?.githubToken).toBeUndefined();
+    expect(lastClientOpts?.useLoggedInUser).toBe(true);
+  });
+
+  test('COPILOT_GITHUB_TOKEN is always used (intent signal)', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      env: { COPILOT_GITHUB_TOKEN: 'ghp_copilot' },
+    });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    session.resolveSend(undefined);
+    await first;
+    await collect(gen);
+
+    expect(lastClientOpts?.githubToken).toBe('ghp_copilot');
+    expect(lastClientOpts?.useLoggedInUser).toBe(false);
+  });
+
+  test('useLoggedInUser:false opts into generic GH_TOKEN', async () => {
+    const session = makeFakeSession();
+    nextCreateSessionResult = session;
+
+    const p = new CopilotProvider();
+    const gen = p.sendQuery('hi', '/w', undefined, {
+      model: 'gpt-5',
+      env: { GH_TOKEN: 'ghp_testtoken' },
+      assistantConfig: { useLoggedInUser: false },
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));

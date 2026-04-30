@@ -11,7 +11,7 @@
  *     in isolation.
  *  3. `bridgeSession(session, prompt, abortSignal?)` — wired integration
  *     wrapper; lives here rather than in provider.ts so the queue/listener/
- *     cleanup lifecycle stays readable. Implemented in step 6 of the plan.
+ *     cleanup lifecycle stays readable.
  *
  * Module-scope invariant: type-only imports from @github/copilot-sdk. Value
  * imports go inside `provider.ts` via dynamic `await import(...)`. See the
@@ -29,7 +29,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-// ─── AsyncQueue — copy of PI's (single-producer / single-consumer) ───────
+// ─── AsyncQueue ──────────────────────────────────────────────────────────
 
 /**
  * Single-producer / single-consumer async queue. Bridges the SDK's

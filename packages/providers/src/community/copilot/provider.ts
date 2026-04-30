@@ -43,11 +43,19 @@ import { bridgeSession } from './event-bridge';
 type CopilotReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 /**
- * Env var names the SDK reads for GitHub Copilot auth, in precedence order.
- * `COPILOT_GITHUB_TOKEN` is the Copilot-specific name and wins; `GH_TOKEN`
- * and `GITHUB_TOKEN` are the conventional gh-cli fallbacks.
+ * Auth env vars, split by intent.
+ *
+ *   - `COPILOT_GITHUB_TOKEN` — Copilot-specific PAT. Setting it is a strong
+ *     signal of intent ("use this for Copilot"), so it always wins.
+ *   - `GH_TOKEN` / `GITHUB_TOKEN` — generic GitHub tokens. Most users have
+ *     these set for `gh` CLI / clone helpers / webhooks, where classic PATs
+ *     are fine. Those PATs typically lack Copilot entitlement, so picking
+ *     them up automatically yields a misleading "Session was not created
+ *     with authentication info" error from the SDK. We therefore ignore
+ *     these unless the user explicitly opts in via `useLoggedInUser: false`.
  */
-const AUTH_ENV_KEYS = ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'] as const;
+const COPILOT_TOKEN_ENV_KEY = 'COPILOT_GITHUB_TOKEN';
+const GENERIC_GITHUB_TOKEN_ENV_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -61,7 +69,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * so each request sees correct per-request env vars.
  */
 export function resetCopilotSingleton(): void {
-  /* no-op — retained for API back-compat */
+  // no-op
 }
 
 // ─── Warning collection ─────────────────────────────────────────────────────
@@ -86,9 +94,13 @@ function buildCopilotEnv(requestEnv?: Record<string, string>): Record<string, st
   return { ...baseEnv, ...(requestEnv ?? {}) };
 }
 
-/** First non-empty value from AUTH_ENV_KEYS, or undefined if none set. */
-function resolveGitHubToken(env: Record<string, string>): string | undefined {
-  for (const key of AUTH_ENV_KEYS) {
+function resolveCopilotToken(env: Record<string, string>): string | undefined {
+  const value = env[COPILOT_TOKEN_ENV_KEY];
+  return value ? value : undefined;
+}
+
+function resolveGenericGitHubToken(env: Record<string, string>): string | undefined {
+  for (const key of GENERIC_GITHUB_TOKEN_ENV_KEYS) {
     const value = env[key];
     if (value) return value;
   }
@@ -392,7 +404,8 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
   ) {
     return new Error(
       `Copilot authentication failed: ${combined}\n\n` +
-        'Run `copilot login`, or provide COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.'
+        'Run `copilot login` (default), set COPILOT_GITHUB_TOKEN, or set ' +
+        '`useLoggedInUser: false` in `.archon/config.yaml` to use GH_TOKEN / GITHUB_TOKEN.'
     );
   }
 
@@ -447,7 +460,8 @@ export class CopilotProvider implements IAgentProvider {
     const copilotConfig = parseCopilotConfig(assistantConfig);
 
     const mergedEnv = buildCopilotEnv(requestOptions?.env);
-    const githubToken = resolveGitHubToken(mergedEnv);
+    const copilotToken = resolveCopilotToken(mergedEnv);
+    const genericGithubToken = resolveGenericGitHubToken(mergedEnv);
     const cliPath = await resolveCopilotBinaryPath(copilotConfig.copilotCliPath);
 
     const sdk = await import('@github/copilot-sdk');
@@ -483,18 +497,23 @@ export class CopilotProvider implements IAgentProvider {
       env: mergedEnv,
     };
     if (cliPath) clientOpts.cliPath = cliPath;
-    // `useLoggedInUser: true` set explicitly in config lets users keep
-    // generic GH_TOKEN/GITHUB_TOKEN exported for other archon subsystems
-    // (GitHub adapter, clone handler) while forcing Copilot to use the
-    // CLI's stored Copilot-scoped OAuth — classic `ghp_` PATs have no
-    // Copilot entitlement and the SDK rejects them with a misleading
-    // "Session was not created with authentication info" error.
-    const preferLoggedIn = copilotConfig.useLoggedInUser === true;
-    if (githubToken && !preferLoggedIn) {
-      clientOpts.githubToken = githubToken;
+    // Auth precedence: see COPILOT_TOKEN_ENV_KEY / GENERIC_GITHUB_TOKEN_ENV_KEYS docs.
+    let tokenSource: 'copilot-token' | 'generic-token' | 'logged-in-user';
+    if (copilotToken) {
+      clientOpts.githubToken = copilotToken;
+      clientOpts.useLoggedInUser = false;
+      tokenSource = 'copilot-token';
+    } else if (copilotConfig.useLoggedInUser === false) {
+      if (genericGithubToken) {
+        clientOpts.githubToken = genericGithubToken;
+        tokenSource = 'generic-token';
+      } else {
+        tokenSource = 'logged-in-user';
+      }
       clientOpts.useLoggedInUser = false;
     } else {
-      clientOpts.useLoggedInUser = copilotConfig.useLoggedInUser ?? true;
+      clientOpts.useLoggedInUser = true;
+      tokenSource = 'logged-in-user';
     }
     if (copilotConfig.logLevel) clientOpts.logLevel = copilotConfig.logLevel;
     const client = new copilotClientCtor(clientOpts);
@@ -567,7 +586,7 @@ export class CopilotProvider implements IAgentProvider {
         mcpServers: sessionConfig.mcpServers ? Object.keys(sessionConfig.mcpServers).length : 0,
         skills: sessionConfig.skillDirectories?.length ?? 0,
         agents: sessionConfig.customAgents?.length ?? 0,
-        tokenSource: githubToken ? 'env' : 'logged-in-user',
+        tokenSource,
         resumed: resumeSessionId !== undefined && !resumeFailed,
       },
       'copilot.session_started'
