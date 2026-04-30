@@ -1,0 +1,146 @@
+# E2E smoke test — Copilot provider, every CI-compatible node type
+# Covers: prompt, command, loop (AI node types) + bash, script bun/uv
+#   (deterministic node types) + depends_on / when / trigger_rule / $nodeId.output
+#   (DAG features) + Copilot-specific options: effort, allowed_tools,
+#   output_format (best-effort JSON via prompt augment + 2-tier parser).
+# Skipped: `approval:` — pauses for human input, incompatible with CI.
+# Auth: `gh auth login` OR COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
+#   Requires an active GitHub Copilot subscription.
+name: e2e-copilot-all-nodes-smoke
+description: 'Copilot provider smoke across every CI-compatible node type plus Copilot-specific options.'
+provider: copilot
+model: gpt-5-mini
+
+nodes:
+  # ─── AI node types ──────────────────────────────────────────────────────
+
+  # 1. prompt: inline prompt + effort + allowed_tools (no tool calls).
+  #    Verifies reasoningEffort and availableTools=[] reach the SDK.
+  - id: prompt-node
+    prompt: "Reply with exactly the single word 'ok' and nothing else."
+    allowed_tools: []
+    effort: low
+    idle_timeout: 30000
+
+  # 2. command: named command file (.archon/commands/e2e-echo-command.md).
+  #    The command echoes back $ARGUMENTS (the workflow invocation message).
+  - id: command-node
+    command: e2e-echo-command
+    allowed_tools: []
+    idle_timeout: 30000
+
+  # 3. loop: iterative AI prompt until completion signal.
+  #    Bounded by max_iterations: 2 so a misbehaving model can't hang CI.
+  - id: loop-node
+    loop:
+      prompt: "Reply with exactly 'DONE' and nothing else."
+      until: 'DONE'
+      max_iterations: 2
+    allowed_tools: []
+    effort: low
+    idle_timeout: 60000
+
+  # 4. output_format: Copilot's best-effort structured output path
+  #    (prompt augmented with schema + 2-tier JSON parser on result text).
+  #    Unique to Copilot/Pi vs. Claude/Codex native JSON mode — only an
+  #    E2E test catches "real model drifted around the schema".
+  - id: structured-node
+    prompt: |
+      Return a JSON object with two fields, no fences and no prose:
+        - "status": always "ok" (string)
+        - "value":  always 42 (number)
+    allowed_tools: []
+    effort: low
+    idle_timeout: 30000
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+        value:
+          type: number
+      required: [status, value]
+
+  # ─── Deterministic node types (no AI) ───────────────────────────────────
+
+  # 5. bash: shell script with JSON output (enables $nodeId.output.status
+  #    dot-access downstream).
+  - id: bash-json-node
+    bash: 'echo ''{"status":"ok"}'''
+
+  # 6. script: bun (TypeScript/JavaScript runtime)
+  - id: script-bun-node
+    script: echo-args
+    runtime: bun
+    timeout: 30000
+
+  # 7. script: uv (Python runtime)
+  - id: script-python-node
+    script: echo-py
+    runtime: uv
+    timeout: 30000
+
+  # ─── DAG features ───────────────────────────────────────────────────────
+
+  # 8. depends_on + $nodeId.output substitution
+  - id: downstream
+    bash: "echo 'downstream got: $prompt-node.output'"
+    depends_on: [prompt-node]
+
+  # 9. when: conditional (JSON dot-access on bash JSON output)
+  - id: gated
+    bash: "echo 'gated-ok'"
+    depends_on: [bash-json-node]
+    when: "$bash-json-node.output.status == 'ok'"
+
+  # 10. when: conditional on AI structured output (proves output_format
+  #     parsed and dot-access works on the resulting object).
+  - id: structured-check
+    bash: "echo \"structured.status=$structured-node.output.status\""
+    depends_on: [structured-node]
+    when: "$structured-node.output.status == 'ok'"
+
+  # 11. trigger_rule: merge multiple deps (all_success semantics)
+  - id: merge
+    bash: "echo 'merge-ok'"
+    depends_on:
+      [downstream, gated, structured-check, script-bun-node, script-python-node]
+    trigger_rule: all_success
+
+  # ─── Final assertion ────────────────────────────────────────────────────
+
+  # 12. Verify every upstream node produced non-empty output, including
+  #     dot-access on the structured-output node (proves output_format
+  #     parsed and downstream consumers can index into it).
+  #     Note: value-equality on string fields is avoided on purpose —
+  #     shellQuote() wraps strings in literal single quotes, so a literal
+  #     `[ "$x" != "ok" ]` would always fail. Non-emptiness is the right
+  #     bar for a smoke; the `when:` gate on structured-check already
+  #     proved the value matched 'ok' to reach this node.
+  - id: assert
+    bash: |
+      fail=0
+      check() {
+        local name="$1"
+        local value="$2"
+        if [ -z "$value" ]; then
+          echo "FAIL: $name produced empty output"
+          fail=1
+        fi
+      }
+      check prompt-node       "$prompt-node.output"
+      check command-node      "$command-node.output"
+      check loop-node         "$loop-node.output"
+      check bash-json-node    "$bash-json-node.output"
+      check script-bun-node   "$script-bun-node.output"
+      check script-python-node "$script-python-node.output"
+      check downstream        "$downstream.output"
+      check gated             "$gated.output"
+      check merge             "$merge.output"
+      check structured.status "$structured-node.output.status"
+      check structured.value  "$structured-node.output.value"
+
+      if [ "$fail" -eq 1 ]; then exit 1; fi
+      echo "PASS: all node types + structured output verified"
+    depends_on: [merge, loop-node, command-node]
+    trigger_rule: all_success
