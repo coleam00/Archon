@@ -1,0 +1,49 @@
+# Symphony orchestrator config. Copy to ~/.archon/symphony.yaml and edit.
+#
+# This file replaces symphoney-codex's WORKFLOW.md. The agent/codex/claude
+# blocks moved into per-workflow YAML inside Archon's .archon/workflows/
+# directory; Symphony only owns dispatch policy here.
+
+trackers:
+  - kind: linear
+    api_key: $LINEAR_API_KEY
+    project_slug: $LINEAR_PROJECT_SLUG
+    active_states: [Todo, "In Progress"]
+    terminal_states: [Done, Canceled]
+    repository: Ddell12/archon-symphony
+  - kind: github
+    token: $GITHUB_TOKEN
+    owner: Ddell12
+    repo: archon-symphony
+    active_states: [open]
+    terminal_states: [closed]
+
+dispatch:
+  max_concurrent: 2
+  max_concurrent_by_state:
+    todo: 1
+  retry:
+    continuation_delay_ms: 5000
+    failure_base_delay_ms: 30000
+    max_backoff_ms: 600000
+
+polling:
+  interval_ms: 30000
+
+# Maps issue.state (case-sensitive) → workflow name. Phase 2 only writes the
+# workflow name into symphony_dispatches; Phase 3 actually runs it.
+state_workflow_map:
+  Todo: archon-feature-development
+  "In Progress": archon-continue
+  open: archon-feature-development
+
+# Maps tracker+repository → an Archon codebase. codebase_id can be null for
+# Phase 2 (the stub dispatcher tolerates a missing mapping); Phase 3 will
+# require a resolvable codebase_id.
+codebases:
+  - tracker: linear
+    repository: Ddell12/archon-symphony
+    codebase_id: null
+  - tracker: github
+    repository: Ddell12/archon-symphony
+    codebase_id: null
