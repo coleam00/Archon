@@ -384,6 +384,67 @@ nodes:
 
 Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
 
+## Oh My Pi (Community Provider)
+
+Oh My Pi is registered as `provider: omp` with display name **Oh My Pi (community)**. It is separate from the existing `provider: pi` integration; `pi` remains the older Pi community adapter, while `omp` maps explicitly to the Oh My Pi SDK packages (`@oh-my-pi/*`).
+
+### Configure Oh My Pi
+
+```yaml
+# .archon/config.yaml
+assistants:
+  omp:
+    model: anthropic/claude-sonnet-4-5
+    enableMCP: false
+    enableLsp: true
+    disableExtensionDiscovery: true
+    additionalExtensionPaths:
+      - /opt/omp/extensions/acme
+    toolNames:
+      - read
+      - search
+      - find
+      - bash
+      - edit
+      - write
+      - lsp
+      - browser
+      - task
+      - web_search
+```
+
+Only `model` is exposed to web clients by default; filesystem paths and extension settings remain server-side configuration.
+
+### Model reference format
+
+Oh My Pi models use `<omp-provider-id>/<model-id>`:
+
+```yaml
+provider: omp
+model: anthropic/claude-sonnet-4-5
+
+nodes:
+  - id: summarize
+    provider: omp
+    model: openrouter/qwen/qwen3-coder
+    prompt: "Summarize this repository."
+    allowed_tools: [read, search, find]
+```
+
+### Oh My Pi capabilities
+
+| Feature | Support | YAML field |
+|---|---|---|
+| Session resume | ✅ | automatic (Archon persists `sessionId`) |
+| Tool restrictions | ✅ | `allowed_tools` / `denied_tools` in OMP tool names (`read`, `search`, `find`, `bash`, `edit`, `write`, `lsp`, `browser`, `task`, etc.) |
+| Thinking / effort | ✅ | `effort: low\|medium\|high\|max` (`max` maps to OMP `xhigh`) |
+| Skills | ✅ | `skills: [name]` through OMP skill discovery |
+| Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed from final assistant text |
+| Auth env override | ✅ | provider API-key env vars such as `ANTHROPIC_API_KEY` are passed to OMP auth storage as runtime overrides |
+| Bash subprocess env injection | ❌ | OMP bash env is per tool call; Archon does not mutate global `process.env` per request |
+| Archon `mcp:` field | ❌ | OMP MCP discovery can be enabled via `assistants.omp.enableMCP`, but Archon's `mcp:` YAML is not translated |
+| Claude hooks / inline agents / sandbox / fallback model / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |
+
 ### See also
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.

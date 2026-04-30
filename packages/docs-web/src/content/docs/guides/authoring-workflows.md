@@ -199,17 +199,17 @@ nodes:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
-| `model` | string | inherited | Per-node model override |
-| `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude and Codex; best-effort on Pi (schema appended to prompt, JSON extracted from result text) |
-| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Claude only |
-| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
+| `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`, `'pi'`, `'omp'`) |
+| `model` | string | inherited | Per-node model override. Oh My Pi uses `<omp-provider-id>/<model-id>` (for example `anthropic/claude-sonnet-4-5` or `openrouter/qwen/qwen3-coder`) |
+| `output_format` | object | — | JSON Schema for structured output. SDK-enforced on Claude/Codex; best-effort (prompt + JSON extraction) on Pi and Oh My Pi. |
+| `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Supported by Claude, Pi, and Oh My Pi (use each provider's tool names; OMP uses `search`, not `grep`) |
+| `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Supported by Claude, Pi, and Oh My Pi |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string | — | Path to MCP server config JSON file. Claude only. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Skills to preload. Claude only. See [Skills](/guides/skills/) |
+| `skills` | string[] | — | Skills to preload. Supported by Claude, Pi, and Oh My Pi. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
-| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude only. Also settable at workflow level |
-| `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude only. Also settable at workflow level |
+| `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Supported by Claude, Pi, and Oh My Pi (`max` maps to provider-specific strongest setting). Also settable at workflow level |
+| `thinking` | string \| object | — | Thinking mode. Claude supports string/object forms; Pi and Oh My Pi support string effort-like levels only and warn on Claude object form. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
@@ -394,27 +394,29 @@ nodes:
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
-Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced at the Claude SDK level.
+Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced for Claude, Pi, and Oh My Pi. Tool names are provider-specific: Claude uses Claude SDK names, Pi uses `grep`, and Oh My Pi uses `search`.
 
 ```yaml
 nodes:
   - id: review
     command: code-review
-    allowed_tools: [Read, Grep, Glob]   # whitelist — only these tools available
+    allowed_tools: [Read, Grep, Glob]   # Claude-style names
 
-  - id: implement
-    command: implement-feature
-    denied_tools: [WebSearch, WebFetch] # blacklist — remove these tools
+  - id: omp-review
+    provider: omp
+    model: anthropic/claude-sonnet-4-5
+    command: code-review
+    allowed_tools: [read, search, find] # OMP-style names
 
-  - id: mcp-only
-    command: mcp-command
+  - id: no-tools
+    command: summarize
     allowed_tools: []                   # empty list = disable all built-in tools
 ```
 
-- `allowed_tools: []` disables all built-in tools (useful for MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers — see [Node Fields](#node-fields)
-- If both are set, `denied_tools` is applied after `allowed_tools`
-- `undefined` (field absent) and `[]` have different semantics — absent means use default tool set, `[]` means no tools
-- Claude only — Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+- `allowed_tools: []` disables all built-in tools.
+- If both are set, `denied_tools` is applied after `allowed_tools`.
+- `undefined` (field absent) and `[]` have different semantics — absent means use the provider default tool set, `[]` means no tools.
+- Providers that do not support tool restrictions emit a warning and continue.
 
 ### Inline sub-agents
 

@@ -278,6 +278,7 @@ packages/
 │       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
 │       ├── community/pi/     # PiProvider (builtIn: false) — @mariozechner/pi-coding-agent, ~20 LLM backends
+│       ├── community/omp/    # OmpProvider (builtIn: false) — @oh-my-pi/pi-coding-agent, provider id `omp`
 │       └── index.ts          # Package exports
 ├── core/                     # @archon/core - Shared business logic
 │   └── src/

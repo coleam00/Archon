@@ -82,6 +82,29 @@ export interface PiProviderDefaults {
   env?: Record<string, string>;
 }
 
+/**
+ * Community provider defaults for Oh My Pi (@oh-my-pi/pi-coding-agent).
+ * Keep this surface intentionally small: Archon YAML remains the canonical
+ * workflow contract; OMP local config discovery is not blindly passthrough.
+ */
+export interface OmpProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref in '<omp-provider-id>/<model-id>' format. */
+  model?: string;
+  /** Advanced override for OMP auth/session/settings root. */
+  agentDir?: string;
+  /** Enable OMP's own MCP discovery. Archon's mcp: YAML is not translated. */
+  enableMCP?: boolean;
+  /** Enable OMP LSP-backed tools and warmup. */
+  enableLsp?: boolean;
+  /** Disable OMP extension discovery while still allowing explicit paths. */
+  disableExtensionDiscovery?: boolean;
+  /** Additional OMP extension entrypoints/directories to load. */
+  additionalExtensionPaths?: string[];
+  /** Explicit OMP built-in tool names to expose. */
+  toolNames?: string[];
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
