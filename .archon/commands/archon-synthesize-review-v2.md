@@ -3,6 +3,26 @@ description: V2 — Aggregate JSON findings from reviewers, emit synthesis.json 
 argument-hint: (none — reads $ARTIFACTS_DIR/review/*-findings.json)
 ---
 
+## CRITICAL — Tool-use enforcement
+
+You MUST use the Write tool to persist `synthesis.json` AND `synthesis.md`.
+Do NOT describe findings, ask questions, or wait for user input — invoke
+Write. The downstream `pre-fix-gate` will hard-fail if synthesis.json is
+missing.
+
+This command MUST end with BOTH files Written:
+- `$ARTIFACTS_DIR/review/synthesis.json` (machine-readable contract)
+- `$ARTIFACTS_DIR/review/synthesis.md`   (human-readable summary)
+
+If you found zero reviewer JSONs on disk, STILL Write synthesis.json with
+`{"agents_completed": 0, "agents_failed": <N>, "blocking_findings": [], "verdict": "BLOCK", ...}` so the gate can deterministically see the empty state.
+
+NEVER end your turn by asking "would you like me to check elsewhere?" —
+you have all the context needed; if data is missing, record that fact in
+the JSON and exit.
+
+---
+
 # Synthesize Review (v2)
 
 You are aggregating structured findings from up to 5 reviewer agents into a single canonical contract that downstream nodes consume. **You write JSON, not English.**

@@ -3,6 +3,21 @@ description: V2 — Apply review fixes from synthesis.json (used by archon-compr
 argument-hint: (none — reads $ARTIFACTS_DIR/review/synthesis.json)
 ---
 
+## CRITICAL — Tool-use enforcement
+
+You MUST use Edit/Write to apply fixes AND Write to persist fix-report.json.
+Do NOT describe what fixes you would apply — apply them via tool calls.
+Do NOT end your turn having only summarised intended changes.
+
+This command MUST end with the following file Written:
+- `$ARTIFACTS_DIR/review/fix-report.json`
+
+If validate passes after edits, you MUST also commit and push via Bash.
+If zero blocking findings exist, Write fix-report.json with `{"results": [],
+"validate_ok": true, "remaining_blocking": 0}`.
+
+---
+
 # Implement Review Fixes (v2)
 
 This is the comprehensive-pr-review-v2 counterpart of `archon-self-fix-all-v2`. The contract and protocol are identical — read [archon-self-fix-all-v2](archon-self-fix-all-v2.md) for the full spec.

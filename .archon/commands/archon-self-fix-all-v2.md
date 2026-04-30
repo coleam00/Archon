@@ -3,6 +3,25 @@ description: V2 — Read synthesis.json, fix CRITICAL+HIGH findings, emit fix-re
 argument-hint: (none — reads $ARTIFACTS_DIR/review/synthesis.json)
 ---
 
+## CRITICAL — Tool-use enforcement
+
+You MUST use Edit/Write to apply fixes AND Write to persist fix-report.json.
+Do NOT describe what fixes you would apply — apply them via tool calls.
+Do NOT end your turn having only summarised intended changes; the
+re-review loop will fail if fix-report.json is missing.
+
+This command MUST end with the following file Written:
+- `$ARTIFACTS_DIR/review/fix-report.json`
+
+If validate passes after edits, you MUST also commit and push via Bash.
+Never end with uncommitted changes when fixes have been applied.
+
+If there are zero blocking findings to fix, STILL Write fix-report.json
+with `{"results": [], "validate_ok": true, "remaining_blocking": 0}` so
+downstream gates have something to read.
+
+---
+
 # Self-Fix All (v2)
 
 You are fixing findings from `$ARTIFACTS_DIR/review/synthesis.json` with full Edit/Write/Bash access. **You produce a structured fix-report.json so the re-review loop can verify your work deterministically.**
