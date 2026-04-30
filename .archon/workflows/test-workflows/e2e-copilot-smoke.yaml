@@ -19,15 +19,14 @@ nodes:
     idle_timeout: 30000
 
   # 2. Assert non-empty output — fails if Copilot returned nothing.
-  #    Wrap the AI-controlled value in a quoted here-doc so shell metacharacters
-  #    in the model's response (backticks, $(...), ${}) are treated as data,
-  #    not executable shell.
+  #    Note on quoting: the workflow engine's variable substitution already
+  #    shell-quotes node outputs for bash nodes (dag-executor.ts shellQuote() —
+  #    see issue #591 "Fix: shell injection via $nodeId.output in bash nodes").
+  #    So we assign $nodeId.output BARE — the engine wraps the value in a
+  #    properly escaped single-quoted string before bash sees it.
   - id: assert
     bash: |
-      output=$(cat <<'ARCHON_COPILOT_SIMPLE_OUTPUT'
-$simple.output
-ARCHON_COPILOT_SIMPLE_OUTPUT
-      )
+      output=$simple.output
       if [ -z "$output" ]; then
         printf 'FAIL: simple node returned empty output\n'
         exit 1
