@@ -1,0 +1,23 @@
+name: archon-test-pi
+description: |
+  Simple test workflow to verify the pi provider works with Archon.
+  Triggers: "test pi", "test pi provider".
+
+provider: pi
+model: kiro/minimax-m2-5
+
+nodes:
+  - id: hello
+    prompt: |
+      Who won the 1984 Major League Baseball World Series? Answer in one sentence.
+
+  - id: verify
+    prompt: |
+      The previous node said:
+
+      $hello.output
+
+      If the answer mentions the Detroit Tigers, say "Pi provider verified ✅".
+      If not, say "Pi provider FAILED ❌ — wrong answer".
+      Say nothing else.
+    depends_on: [hello]
