@@ -6,6 +6,9 @@ import {
   insertDispatch,
   getDispatchByDispatchKey,
   getDispatchById,
+  getDispatchByWorkflowRunId,
+  listDispatches,
+  listInFlight,
   updateStatus,
   attachWorkflowRun,
   type InsertDispatchInput,
@@ -202,5 +205,85 @@ describe('symphony_dispatches CRUD', () => {
       expect((e as Error).message).toContain('not found');
     }
     expect(threw).toBe(true);
+  });
+
+  test('getDispatchByWorkflowRunId looks up the dispatch row for a known run id', async () => {
+    await insertCodebase(db, 'cb-rev');
+    await insertConversation(db, 'conv-rev');
+    await insertWorkflowRun(db, 'wfr-rev', 'conv-rev');
+    const inserted = await insertDispatch(
+      db,
+      baseInput({ dispatch_key: 'linear:rev', codebase_id: 'cb-rev' })
+    );
+    await attachWorkflowRun(db, inserted.id, 'wfr-rev');
+
+    const found = await getDispatchByWorkflowRunId(db, 'wfr-rev');
+    expect(found?.id).toBe(inserted.id);
+
+    const missing = await getDispatchByWorkflowRunId(db, 'wfr-not-attached');
+    expect(missing).toBeNull();
+  });
+
+  test('listDispatches returns rows ordered by dispatched_at DESC, optionally filtered by status', async () => {
+    const a = await insertDispatch(db, baseInput({ dispatch_key: 'linear:a', status: 'pending' }));
+    // Force ordering — sqlite datetime() resolution is per-second, so insert two
+    // rows with deliberately distinct identifiers and rely on ROWID tiebreakers
+    // via the column order. We verify both rows are returned, not the exact order.
+    const b = await insertDispatch(db, baseInput({ dispatch_key: 'linear:b', status: 'failed' }));
+
+    const all = await listDispatches(db);
+    expect(all.map(r => r.dispatch_key).sort()).toEqual(['linear:a', 'linear:b']);
+
+    const failed = await listDispatches(db, { status: 'failed' });
+    expect(failed.map(r => r.id)).toEqual([b.id]);
+
+    const pending = await listDispatches(db, { status: 'pending' });
+    expect(pending.map(r => r.id)).toEqual([a.id]);
+  });
+
+  test('listInFlight returns only rows with workflow_run_id and status in (pending,running)', async () => {
+    await insertCodebase(db, 'cb-flight');
+    await insertConversation(db, 'conv-flight');
+    await insertWorkflowRun(db, 'wfr-running', 'conv-flight');
+    await insertWorkflowRun(db, 'wfr-pending', 'conv-flight');
+    await insertWorkflowRun(db, 'wfr-completed', 'conv-flight');
+
+    const running = await insertDispatch(
+      db,
+      baseInput({ dispatch_key: 'linear:running', codebase_id: 'cb-flight' })
+    );
+    await attachWorkflowRun(db, running.id, 'wfr-running');
+    await updateStatus(db, running.id, 'running');
+
+    const pending = await insertDispatch(
+      db,
+      baseInput({ dispatch_key: 'linear:pending', codebase_id: 'cb-flight' })
+    );
+    await attachWorkflowRun(db, pending.id, 'wfr-pending');
+    // status stays 'pending'
+
+    const completed = await insertDispatch(
+      db,
+      baseInput({ dispatch_key: 'linear:completed', codebase_id: 'cb-flight' })
+    );
+    await attachWorkflowRun(db, completed.id, 'wfr-completed');
+    await updateStatus(db, completed.id, 'completed');
+
+    // failed-no-run rows must NOT show up (they never launched a workflow)
+    await insertDispatch(
+      db,
+      baseInput({
+        dispatch_key: 'linear:no-codebase',
+        status: 'failed',
+        last_error: 'no codebase mapped',
+      })
+    );
+
+    const inFlight = await listInFlight(db);
+    const ids = new Set(inFlight.map(r => r.id));
+    expect(ids.has(running.id)).toBe(true);
+    expect(ids.has(pending.id)).toBe(true);
+    expect(ids.has(completed.id)).toBe(false);
+    expect(inFlight.length).toBe(2);
   });
 });

@@ -59,6 +59,8 @@ function makeRunningEntry(id: string): RunningEntry {
     retry_attempt: null,
     abort: new AbortController(),
     cancel_requested: false,
+    dispatch_id: null,
+    workflow_run_id: null,
   };
 }
 

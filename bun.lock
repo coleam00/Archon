@@ -151,6 +151,7 @@
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/providers": "workspace:*",
+        "@archon/symphony": "workspace:*",
         "@archon/workflows": "workspace:*",
         "@hono/zod-openapi": "^0.19.6",
         "dotenv": "^17.2.3",
@@ -167,6 +168,7 @@
       "dependencies": {
         "@archon/core": "workspace:*",
         "@archon/paths": "workspace:*",
+        "@archon/workflows": "workspace:*",
         "@octokit/rest": "^22.0.0",
         "graphql-request": "^7.2.0",
       },
