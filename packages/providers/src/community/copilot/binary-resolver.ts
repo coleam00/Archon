@@ -36,7 +36,8 @@ import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
  */
 export function resolveFromPath(): string | undefined {
   const lookupCmd = process.platform === 'win32' ? 'where' : 'which';
-  const executable = process.platform === 'win32' ? 'copilot.exe' : 'copilot';
+  // 'where copilot' (no .exe) resolves npm shims (.cmd) and .exe; 'copilot.exe' alone misses them.
+  const executable = 'copilot';
   try {
     const output = _execFileSync(lookupCmd, [executable], {
       encoding: 'utf-8',
@@ -133,7 +134,7 @@ export async function resolveCopilotBinaryPath(
   if (binaryName) {
     const archonHome = getArchonHome();
     const vendorBinaryPath = join(archonHome, COPILOT_VENDOR_DIR, binaryName);
-    if (fileExists(vendorBinaryPath)) {
+    if (isExecutableFile(vendorBinaryPath)) {
       getLog().info({ source: 'vendor' }, 'copilot.binary_resolved');
       return vendorBinaryPath;
     }
@@ -142,7 +143,7 @@ export async function resolveCopilotBinaryPath(
   // 4. Autodetect canonical install paths
   const autodetectPaths = getAutodetectPaths();
   for (const probePath of autodetectPaths) {
-    if (fileExists(probePath)) {
+    if (isExecutableFile(probePath)) {
       getLog().info({ source: 'autodetect' }, 'copilot.binary_resolved');
       return probePath;
     }

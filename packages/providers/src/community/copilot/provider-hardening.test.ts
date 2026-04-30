@@ -281,12 +281,11 @@ describe('CopilotProvider hardening', () => {
     let primaryError: Error | undefined;
     try {
       await firstNext;
-      await collect(gen);
     } catch (e) {
       primaryError = e as Error;
     }
     if (!primaryError) {
-      // The error may have surfaced via the result chunk; inspect collect().
+      // The error may surface from subsequent generator iteration.
       const { error } = await collect(gen);
       primaryError = error;
     }
