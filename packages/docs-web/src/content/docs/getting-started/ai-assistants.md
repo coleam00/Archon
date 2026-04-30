@@ -395,11 +395,24 @@ Oh My Pi is registered as `provider: omp` with display name **Oh My Pi (communit
 assistants:
   omp:
     model: anthropic/claude-sonnet-4-5
+    agentDir: /absolute/optional/omp-agent-dir
+
+    # OMP session controls
+    interactive: true
     enableMCP: false
     enableLsp: true
     disableExtensionDiscovery: true
     additionalExtensionPaths:
       - /opt/omp/extensions/acme
+    extensionFlags:
+      plan: true
+      mode: strict
+
+    # Session-scoped env for in-process OMP extensions; shell env wins.
+    env:
+      PLANNOTATOR_REMOTE: "1"
+
+    # Restrict the OMP tool set Archon exposes to the session.
     toolNames:
       - read
       - search
@@ -408,12 +421,32 @@ assistants:
       - edit
       - write
       - lsp
-      - browser
       - task
       - web_search
+
+    # In-memory OMP Settings.isolated(...) overrides.
+    settings:
+      retry:
+        enabled: true
+        maxRetries: 3
+      compaction:
+        enabled: true
+      contextPromotion:
+        enabled: true
+      modelRoles:
+        default: anthropic/claude-sonnet-4-5
+        task: anthropic/claude-haiku-4-5
+      enabledModels:
+        - anthropic/*
+      modelProviderOrder:
+        - anthropic
+      disabledProviders:
+        - experimental-provider
+      disabledExtensions:
+        - risky-extension
 ```
 
-Only `model` is exposed to web clients by default; filesystem paths and extension settings remain server-side configuration.
+Only `model` is exposed to web clients by default; filesystem paths, environment variables, extension settings, and OMP settings remain server-side configuration.
 
 ### Model reference format
 
@@ -431,18 +464,32 @@ nodes:
     allowed_tools: [read, search, find]
 ```
 
+Archon still chooses the initial model from the node/workflow model first, then `assistants.omp.model`. The OMP `settings.modelRoles`, `enabledModels`, and `modelProviderOrder` fields influence OMP's internal role and fallback behavior after that initial Archon choice.
+
+### OMP tool names
+
+`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `search`, `find`, `lsp`, `notebook`, `web_search`, `ast_grep`, `ast_edit`, `calc`, `task`, `todo_write`, and `ask`.
+
+Tools that can modify files, run code, access the network, or change session state should be enabled intentionally: `bash`, `python`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `irc`, `render_mermaid`, and `search_tool_bm25`. Hidden SDK tools such as `yield`, `resolve`, and `exit_plan_mode` are only useful for OMP-internal workflows.
+
 ### Oh My Pi capabilities
 
 | Feature | Support | YAML field |
 |---|---|---|
 | Session resume | ✅ | automatic (Archon persists `sessionId`) |
-| Tool restrictions | ✅ | `allowed_tools` / `denied_tools` in OMP tool names (`read`, `search`, `find`, `bash`, `edit`, `write`, `lsp`, `browser`, `task`, etc.) |
+| Tool restrictions | ✅ | `allowed_tools` / `denied_tools` in OMP tool names |
 | Thinking / effort | ✅ | `effort: low\|medium\|high\|max` (`max` maps to OMP `xhigh`) |
 | Skills | ✅ | `skills: [name]` through OMP skill discovery |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed from final assistant text |
-| Auth env override | ✅ | provider API-key env vars such as `ANTHROPIC_API_KEY` are passed to OMP auth storage as runtime overrides |
-| Bash subprocess env injection | ❌ | OMP bash env is per tool call; Archon does not mutate global `process.env` per request |
-| Archon `mcp:` field | ❌ | OMP MCP discovery can be enabled via `assistants.omp.enableMCP`, but Archon's `mcp:` YAML is not translated |
+| Auth env override | ✅ | provider API-key env vars such as `ANTHROPIC_API_KEY` are passed to OMP auth storage as runtime overrides; Hugging Face uses `HUGGINGFACE_HUB_TOKEN` then `HF_TOKEN` |
+| OMP config env | ✅ | `assistants.omp.env` applies session-scoped process env for in-process OMP extensions, does not override shell env, and removes keys Archon created after the prompt |
+| OMP interactivity | ✅ | `assistants.omp.interactive: false` passes `hasUI: false` and skips Archon's OMP UI bridge |
+| OMP extension flags | ✅ when an extension runner loads | `assistants.omp.extensionFlags` calls OMP `extensionRunner.setFlagValue()` before the first prompt; Archon emits a warning if no runner is present |
+| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `contextPromotion`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)` |
+| OMP MCP discovery | ✅ (OMP-native only) | `assistants.omp.enableMCP` toggles OMP's own MCP discovery from `.omp/mcp.json`, `~/.omp/agent/mcp.json`, root `mcp.json`, and supported third-party config files |
+| Archon `mcp:` field | ❌ | Archon's node-level `mcp:` YAML is not translated into OMP MCP configuration |
+| Bash subprocess env injection | ❌ | OMP bash env is per tool call; Archon does not inject workflow/codebase `envVars` into every OMP tool subprocess |
+| Custom tools / commands / hooks paths | OMP-native only | Use OMP discovery directories such as `.omp/tools`, `.omp/commands`, `.omp/hooks`, or extensions; Archon does not write hidden config files or expose path-array shims |
 | Claude hooks / inline agents / sandbox / fallback model / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |
 
 ### See also
