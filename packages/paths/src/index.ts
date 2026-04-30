@@ -2,6 +2,8 @@
 export {
   expandTilde,
   isDocker,
+  isWSL,
+  getWSLDistroName,
   getArchonHome,
   getArchonWorkspacesPath,
   getArchonWorktreesPath,

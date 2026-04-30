@@ -375,6 +375,8 @@ export function DashboardPage(): React.ReactElement {
                           key={run.id}
                           run={run}
                           isDocker={health?.is_docker}
+                          isWsl={health?.is_wsl}
+                          wslDistro={health?.wsl_distro}
                           onCancel={handleCancel}
                           onResume={handleResume}
                           onAbandon={handleAbandon}
@@ -392,6 +394,8 @@ export function DashboardPage(): React.ReactElement {
                       parentPlatformId={group.parentPlatformId}
                       runs={group.runs}
                       isDocker={health?.is_docker}
+                      isWsl={health?.is_wsl}
+                      wslDistro={health?.wsl_distro}
                       onCancel={handleCancel}
                       onResume={handleResume}
                       onAbandon={handleAbandon}

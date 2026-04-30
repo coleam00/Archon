@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ExternalLink, Copy, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ideUri } from '@/lib/ide-uri';
 
 interface HeaderProps {
   title: string;
@@ -8,6 +9,8 @@ interface HeaderProps {
   projectName?: string;
   connected?: boolean;
   isDocker?: boolean;
+  isWsl?: boolean;
+  wslDistro?: string;
 }
 
 function smartPath(fullPath: string): string {
@@ -22,14 +25,14 @@ export function Header({
   projectName,
   connected,
   isDocker,
+  isWsl,
+  wslDistro,
 }: HeaderProps): React.ReactElement {
   const [copied, setCopied] = useState(false);
 
   const openInVSCode = (): void => {
     if (subtitle) {
-      // Normalize backslashes to forward slashes for the vscode:// URI
-      const normalizedPath = subtitle.replace(/\\/g, '/');
-      window.open(`vscode://file/${normalizedPath}`, '_blank');
+      window.open(ideUri(subtitle, { is_wsl: isWsl, wsl_distro: wslDistro }), '_blank');
     }
   };
 
