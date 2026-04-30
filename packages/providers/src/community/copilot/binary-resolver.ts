@@ -15,9 +15,7 @@
  *  5. PATH lookup via `which` / `where`
  *  6. Throw with install instructions
  *
- * In dev mode (`BUNDLED_IS_BINARY=false`) this returns undefined and lets
- * the SDK find its own bundled CLI via `node_modules/.bin/copilot`. Mirrors
- * `codex/binary-resolver.ts` and `claude/binary-resolver.ts`.
+ * Mirrors `codex/binary-resolver.ts` and `claude/binary-resolver.ts`.
  */
 import {
   accessSync as _accessSync,

@@ -9,9 +9,8 @@ import { CopilotProvider } from './provider';
  * Idempotent — safe to call multiple times, so process entrypoints (CLI,
  * server, config-loader) can each call it without coordination. Kept
  * separate from `registerBuiltinProviders()` because `builtIn: false` is
- * load-bearing: community providers are intentionally excluded from
- * `inferProviderFromModel`, and promoting Copilot to built-in would need
- * explicit revisiting of its model-inference behavior.
+ * load-bearing: Copilot is a community provider and must not be conflated
+ * with core providers until it's explicitly promoted.
  */
 export function registerCopilotProvider(): void {
   if (isRegisteredProvider('copilot')) return;
