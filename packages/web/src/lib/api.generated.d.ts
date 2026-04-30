@@ -1940,6 +1940,316 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/symphony/state': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Symphony orchestrator snapshot (running, retrying, completed) */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SymphonyStateResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/symphony/dispatches': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List symphony_dispatches rows */
+    get: {
+      parameters: {
+        query?: {
+          status?: components['schemas']['SymphonyDispatchStatus'];
+          limit?: number;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SymphonyDispatchListResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/symphony/dispatches/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Fetch one symphony_dispatches row by id */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SymphonyDispatchRow'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/symphony/dispatch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Trigger an immediate dispatch attempt for a known dispatch_key */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SymphonyDispatchActionBody'];
+        };
+      };
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SymphonyDispatchActionResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/symphony/cancel': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Cancel a running Symphony dispatch and its workflow run */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SymphonyDispatchActionBody'];
+        };
+      };
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SymphonyDispatchActionResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/symphony/refresh': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Force the Symphony tick loop to run on the next event-loop turn */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SymphonyRefreshResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2348,6 +2658,7 @@ export interface components {
       worktree?: {
         enabled?: boolean;
       };
+      mutates_checkout?: boolean;
       tags?: string[];
       nodes: components['schemas']['DagNode'][];
     };
@@ -2572,6 +2883,68 @@ export interface components {
       currentVersion: string;
       latestVersion: string;
       releaseUrl: string;
+    };
+    /** @enum {string} */
+    SymphonyTrackerKind: 'linear' | 'github';
+    SymphonyRunningRow: {
+      dispatch_key: string;
+      tracker: components['schemas']['SymphonyTrackerKind'];
+      issue_id: string;
+      issue_identifier: string;
+      state: string;
+      started_at: string;
+      workflow_run_id: string | null;
+    };
+    SymphonyRetryRow: {
+      dispatch_key: string;
+      tracker: components['schemas']['SymphonyTrackerKind'];
+      issue_id: string;
+      issue_identifier: string;
+      attempt: number;
+      due_at: string;
+      error: string | null;
+    };
+    SymphonyStateResponse: {
+      generated_at: string;
+      counts: {
+        running: number;
+        retrying: number;
+        completed: number;
+      };
+      running: components['schemas']['SymphonyRunningRow'][];
+      retrying: components['schemas']['SymphonyRetryRow'][];
+    };
+    /** @enum {string} */
+    SymphonyDispatchStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+    SymphonyDispatchRow: {
+      id: string;
+      issue_id: string;
+      identifier: string;
+      tracker: components['schemas']['SymphonyTrackerKind'];
+      dispatch_key: string;
+      codebase_id: string | null;
+      workflow_name: string;
+      workflow_run_id: string | null;
+      attempt: number;
+      dispatched_at: string;
+      status: components['schemas']['SymphonyDispatchStatus'];
+      last_error: string | null;
+    };
+    SymphonyDispatchListResponse: {
+      dispatches: components['schemas']['SymphonyDispatchRow'][];
+    };
+    SymphonyDispatchActionResponse: {
+      ok: boolean;
+      dispatch_key?: string;
+      code?: string;
+      reason?: string;
+    };
+    SymphonyDispatchActionBody: {
+      /** @description Source-aware dispatch key, e.g. 'linear:APP-123' or 'github:owner/repo#42' */
+      dispatch_key: string;
+    };
+    SymphonyRefreshResponse: {
+      coalesced: boolean;
     };
   };
   responses: never;
