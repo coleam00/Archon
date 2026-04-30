@@ -206,9 +206,15 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
       return chunks;
     }
     case 'session.error': {
+      // Don't emit a system chunk here — defer until after sendAndWait
+      // resolves. If the SDK delivers a fallback assistant message (transient
+      // upstream errors are common on auto-retry paths), the user got what
+      // they asked for and a "⚠️ ..." chunk is just noise. The bridgeSession
+      // wrapper checks `sawAssistantContent` and emits the warning only when
+      // no assistant content reached the consumer.
       const msg = event.data.message || 'Copilot session error';
       ctx.markErrored(msg);
-      return [{ type: 'system', content: `⚠️ ${msg}` }];
+      return [];
     }
     case 'session.compaction_start': {
       return [{ type: 'system', content: '⚙️ Compacting context…' }];
@@ -308,12 +314,28 @@ export async function* bridgeSession(
       log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_failed');
     });
   };
-  if (abortSignal) {
-    if (abortSignal.aborted) {
-      onAbort();
-    } else {
-      abortSignal.addEventListener('abort', onAbort, { once: true });
+  // `addEventListener('abort', ...)` is a no-op on an already-aborted signal,
+  // so short-circuit before handing the 24-hour sendAndWait path a signal
+  // that will never fire. Caller's caller (the executor) treats AbortError
+  // as a clean cancellation. Clean up listeners + queue first so the throw
+  // doesn't leak resources.
+  if (abortSignal?.aborted) {
+    onAbort();
+    queue.close();
+    try {
+      unsubscribe();
+    } catch (err) {
+      log.debug({ err }, 'copilot.unsubscribe_failed');
     }
+    try {
+      await session.disconnect();
+    } catch (err) {
+      log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
+    }
+    throw new DOMException('Copilot sendQuery aborted before start', 'AbortError');
+  }
+  if (abortSignal) {
+    abortSignal.addEventListener('abort', onAbort, { once: true });
   }
 
   // Kick off sendAndWait; it resolves on `session.idle`. The explicit
@@ -344,6 +366,15 @@ export async function* bridgeSession(
     if (!sawAssistantContent && sendResult?.data?.content) {
       if (wantsStructured) assistantBuffer += sendResult.data.content;
       yield { type: 'assistant', content: sendResult.data.content };
+      sawAssistantContent = true;
+    }
+
+    // Emit the deferred session.error warning only if no assistant content
+    // reached the consumer. When the SDK auto-recovers and still delivers a
+    // fallback message (the common case for transient upstream errors), the
+    // ⚠️ chunk is noise and gets suppressed.
+    if (!sawAssistantContent && errorMessage) {
+      yield { type: 'system', content: `⚠️ ${errorMessage}` };
     }
 
     // Terminal result chunk — always emit, even on error, so the executor
