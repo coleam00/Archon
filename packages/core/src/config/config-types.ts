@@ -300,12 +300,6 @@ export interface MergedConfig {
    * Undefined when no env vars are configured.
    */
   envVars?: Record<string, string>;
-  /**
-   * Dotted-path flags (e.g. `copilot.model`) for fields whose effective
-   * value came from an env var. Surfaced to the Web UI so dependent inputs
-   * render disabled.
-   */
-  envOverrides: Record<string, boolean>;
 }
 
 /**
@@ -329,5 +323,4 @@ export interface SafeConfig {
     loadDefaultCommands: boolean;
     loadDefaultWorkflows: boolean;
   };
-  envOverrides: Record<string, boolean>;
 }

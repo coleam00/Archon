@@ -5,7 +5,6 @@ import { pool, getDialect } from './connection';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
-import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -73,7 +72,7 @@ export async function getOrCreateConversation(
   // Check if we should inherit from a parent conversation (e.g., Discord thread inheriting from parent channel)
   let inheritedCodebaseId: string | null = null;
   let inheritedCwd: string | null = null;
-  let assistantType: string | undefined;
+  let assistantType = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(
@@ -103,10 +102,6 @@ export async function getOrCreateConversation(
     if (codebase.rows[0]) {
       assistantType = codebase.rows[0].ai_assistant_type;
     }
-  }
-
-  if (!assistantType) {
-    assistantType = (await loadConfig()).assistant;
   }
 
   const created = await pool.query<Conversation>(

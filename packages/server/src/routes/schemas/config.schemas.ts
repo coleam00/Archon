@@ -23,7 +23,6 @@ export const safeConfigSchema = z
       loadDefaultCommands: z.boolean(),
       loadDefaultWorkflows: z.boolean(),
     }),
-    envOverrides: z.record(z.string(), z.boolean()),
   })
   .openapi('SafeConfig');
 
