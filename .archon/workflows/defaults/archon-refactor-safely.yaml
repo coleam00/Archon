@@ -235,7 +235,13 @@ nodes:
       5. Update the original file's exports to re-export from the new module (API preservation)
       6. Use Grep to find and update ALL import sites across the codebase
       7. Run `bun run type-check` to verify (you'll be reminded by hooks)
-      8. Commit: `git add -A && git commit -m "refactor: [task description]"`
+      8. Commit ONLY the files you edited for this task — never `git add -A`. Stage by name, then commit:
+         ```bash
+         git add path/to/file1 path/to/file2 ...
+         git status --porcelain  # verify nothing scratch is staged
+         git commit -m "refactor: [task description]"
+         ```
+         **Never stage**: `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`, `review/`, `*-report.md` at the repo root, or anything under `$ARTIFACTS_DIR`.
       9. Move to next task
 
       ## Handling Problems
