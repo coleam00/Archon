@@ -17,9 +17,26 @@ nodes:
   - id: scope
     command: archon-pr-review-scope
 
+  # ─── ARCHITECTURAL FIX (2026-04-30): hard-checkout the PR's branch ──
+  # Without this, the workflow worktree stays on whatever branch archon
+  # created (typically `archon/task-review-pr-N` off main). Self-fix
+  # then commits to that orphan branch, NOT to the PR's actual branch
+  # — fix commits never reach the PR. `gh pr checkout` is canonical
+  # and deterministic; it bypasses any AI-interpretation of sync's
+  # conditional checkout step.
+  - id: checkout-pr-branch
+    bash: |
+      set -euo pipefail
+      PR=$(cat "$ARTIFACTS_DIR/.pr-number")
+      echo "Checking out PR #$PR's branch in this worktree…"
+      gh pr checkout "$PR"
+      echo "Now on: $(git branch --show-current)"
+      echo "HEAD:   $(git rev-parse --short HEAD)"
+    depends_on: [scope]
+
   - id: sync
     command: archon-sync-pr-with-main
-    depends_on: [scope]
+    depends_on: [checkout-pr-branch]
 
   # ─── REVIEWERS (read-only, parallel) ───────────────────────────────
   - id: code-review
