@@ -20,6 +20,7 @@ import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
+import { SessionNotFoundError } from '../db/sessions';
 import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
@@ -351,10 +352,16 @@ async function tryPersistSessionId(sessionId: string, assistantSessionId: string
   try {
     await sessionDb.updateSession(sessionId, assistantSessionId);
   } catch (error) {
-    getLog().error(
-      { err: error as Error, sessionId, newSessionId: assistantSessionId },
-      'session_id_persist_failed'
-    );
+    // Swallow SessionNotFoundError — it's non-critical and can happen when:
+    // 1. A new session was just created (no prior session to update)
+    // 2. Race condition between session creation and persistence
+    // 3. Session was cleaned up concurrently
+    if (!(error instanceof SessionNotFoundError)) {
+      getLog().error(
+        { err: error as Error, sessionId, newSessionId: assistantSessionId },
+        'session_id_persist_failed'
+      );
+    }
   }
 }
 

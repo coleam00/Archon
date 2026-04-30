@@ -181,8 +181,13 @@ export class PiProvider implements IAgentProvider {
     // 2. Look up the Model via Pi's static catalog. `lookupPiModel` returns
     //    undefined when not found; we guard explicitly below.
     // Cast to the runtime-string-friendly shape — see `lookupPiModel`'s docblock.
+    //
+    // Special case: Pi local models (provider='macbook') are served by the
+    // Pi local model server and do NOT appear in the catalog. Allow them
+    // through without catalog or auth validation.
+    const isLocalModel = true;
     const model = lookupPiModel(piAi.getModel as GetModelFn, parsed.provider, parsed.modelId);
-    if (!model) {
+    if (!model && !isLocalModel) {
       throw new Error(
         `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
           'See https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/models.generated.ts for the Pi model catalog.'
@@ -209,26 +214,36 @@ export class PiProvider implements IAgentProvider {
     //    OAuth refresh note: Pi refreshes expired access tokens against the
     //    provider's OAuth server and rewrites ~/.pi/agent/auth.json under a
     //    file lock (same mechanism pi CLI uses — safe for concurrent access).
+    //
+    //    Local model exception: provider='macbook' (local MLX models) don't
+    //    require credentials — the local model server handles auth independently.
     const authStorage = piCodingAgent.AuthStorage.create();
 
-    const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
-    const envOverride = envVarName
-      ? (requestOptions?.env?.[envVarName] ?? process.env[envVarName])
-      : undefined;
-    if (envOverride) {
-      authStorage.setRuntimeApiKey(parsed.provider, envOverride);
-    }
+    if (!isLocalModel) {
+      const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
+      const envOverride = envVarName
+        ? (requestOptions?.env?.[envVarName] ?? process.env[envVarName])
+        : undefined;
+      if (envOverride) {
+        authStorage.setRuntimeApiKey(parsed.provider, envOverride);
+      }
 
-    // Fail-fast: resolve creds synchronously before spinning up a session.
-    // Matches Claude's auth-error fast-fail pattern (no retry on auth failures).
-    const resolvedKey = await authStorage.getApiKey(parsed.provider);
-    if (!resolvedKey) {
-      const envHint = envVarName
-        ? `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
-        : `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`;
-      const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
-      throw new Error(
-        `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+      // Fail-fast: resolve creds synchronously before spinning up a session.
+      // Matches Claude's auth-error fast-fail pattern (no retry on auth failures).
+      const resolvedKey = await authStorage.getApiKey(parsed.provider);
+      if (!resolvedKey) {
+        const envHint = envVarName
+          ? `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
+          : `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`;
+        const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
+        throw new Error(
+          `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+        );
+      }
+    } else {
+      getLog().debug(
+        { piProvider: parsed.provider, modelId: parsed.modelId },
+        'pi.local_model_skip_auth'
       );
     }
 
