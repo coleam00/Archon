@@ -3,6 +3,22 @@ description: Create comprehensive feature implementation plan with codebase anal
 argument-hint: <feature description | path/to/prd.md>
 ---
 
+## CRITICAL — Tool-use enforcement
+
+You MUST use the Write tool to persist this plan to disk. Do NOT describe
+what you would write — invoke Write. If you say "I'll create plan.md…" you
+MUST immediately follow with a Write tool call to that exact path. Never
+end your turn having only described content; the file must exist on disk.
+
+This command MUST end with the following file Written:
+- `$ARTIFACTS_DIR/plan.md`
+
+A downstream `plan-verify` node will hard-fail if this file is missing or
+empty. Generating the plan as a chat response without invoking Write
+counts as failure.
+
+---
+
 # Create Implementation Plan
 
 **Input**: $ARGUMENTS

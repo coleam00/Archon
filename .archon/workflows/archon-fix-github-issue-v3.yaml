@@ -99,6 +99,34 @@ nodes:
     when: "$classify.output.issue_type != 'bug'"
     context: fresh
 
+  # ─── ARTIFACT VERIFY GATES (added 2026-04-30 to catch the
+  # "AI generated text but didn't invoke Write" failure mode that lost
+  # 5 of 29 issues in the 2026-04-30 batch). These nodes hard-fail loudly
+  # if the upstream plan/investigate node "completed" without writing
+  # its artifact to disk. Pair with the tool-use enforcement block at the
+  # top of archon-create-plan.md / archon-investigate-issue.md.
+  - id: investigate-verify
+    bash: |
+      set -euo pipefail
+      if [ ! -s "$ARTIFACTS_DIR/investigation.md" ]; then
+        echo "BLOCKED: investigate ran but did not Write \$ARTIFACTS_DIR/investigation.md" >&2
+        echo "AI generated content but did not invoke the Write tool. Re-dispatch." >&2
+        exit 1
+      fi
+    depends_on: [investigate]
+    when: "$classify.output.issue_type == 'bug'"
+
+  - id: plan-verify
+    bash: |
+      set -euo pipefail
+      if [ ! -s "$ARTIFACTS_DIR/plan.md" ]; then
+        echo "BLOCKED: plan ran but did not Write \$ARTIFACTS_DIR/plan.md" >&2
+        echo "AI generated content but did not invoke the Write tool. Re-dispatch." >&2
+        exit 1
+      fi
+    depends_on: [plan]
+    when: "$classify.output.issue_type != 'bug'"
+
   - id: bridge-artifacts
     bash: |
       set -euo pipefail
@@ -107,7 +135,7 @@ nodes:
       elif [ ! -f "$ARTIFACTS_DIR/investigation.md" ]; then
         echo "BLOCKED: no plan or investigation produced" >&2; exit 1
       fi
-    depends_on: [investigate, plan]
+    depends_on: [investigate-verify, plan-verify]
     trigger_rule: one_success
 
   # ═══ NEW: PEER-PR CHECK ════════════════════════════════════════

@@ -111,6 +111,27 @@ nodes:
     when: "$classify.output.issue_type != 'bug'"
     context: fresh
 
+  # ─── ARTIFACT VERIFY GATES (added 2026-04-30 — same as v3) ───
+  - id: investigate-verify
+    bash: |
+      set -euo pipefail
+      if [ ! -s "$ARTIFACTS_DIR/investigation.md" ]; then
+        echo "BLOCKED: investigate did not Write \$ARTIFACTS_DIR/investigation.md" >&2
+        exit 1
+      fi
+    depends_on: [investigate]
+    when: "$classify.output.issue_type == 'bug'"
+
+  - id: plan-verify
+    bash: |
+      set -euo pipefail
+      if [ ! -s "$ARTIFACTS_DIR/plan.md" ]; then
+        echo "BLOCKED: plan did not Write \$ARTIFACTS_DIR/plan.md" >&2
+        exit 1
+      fi
+    depends_on: [plan]
+    when: "$classify.output.issue_type != 'bug'"
+
   - id: bridge-artifacts
     bash: |
       set -euo pipefail
@@ -119,7 +140,7 @@ nodes:
       elif [ ! -f "$ARTIFACTS_DIR/investigation.md" ]; then
         echo "BLOCKED: no plan or investigation produced" >&2; exit 1
       fi
-    depends_on: [investigate, plan]
+    depends_on: [investigate-verify, plan-verify]
     trigger_rule: one_success
 
   # ═══ NEW: PEER-PR CHECK ════════════════════════════════════════

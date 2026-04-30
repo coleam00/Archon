@@ -3,6 +3,22 @@ description: Investigate a GitHub issue or problem - analyze codebase, create pl
 argument-hint: <issue-number|url|"description">
 ---
 
+## CRITICAL — Tool-use enforcement
+
+You MUST use the Write tool to persist your investigation to disk. Do NOT
+describe what you would write — invoke Write. If you say "I'll create
+investigation.md…" you MUST immediately follow with a Write tool call to
+that exact path. Never end your turn having only described content.
+
+This command MUST end with the following file Written:
+- `$ARTIFACTS_DIR/investigation.md`
+
+A downstream `investigate-verify` node will hard-fail if this file is
+missing or empty. Generating the investigation as a chat response without
+invoking Write counts as failure.
+
+---
+
 # Investigate Issue
 
 **Input**: $ARGUMENTS

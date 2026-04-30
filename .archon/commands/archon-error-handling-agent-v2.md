@@ -3,9 +3,24 @@ description: V2 — Review error handling, emit structured findings.json
 argument-hint: (none — reads from $ARTIFACTS_DIR/review/scope.md)
 ---
 
+## CRITICAL — Tool-use enforcement
+
+You MUST use the Write tool to persist BOTH findings files. Do NOT describe
+findings as a chat response — invoke Write. The pipeline blocks if either
+file is missing.
+
+This command MUST end with BOTH files Written:
+- `$ARTIFACTS_DIR/review/error-handling-findings.md`
+- `$ARTIFACTS_DIR/review/error-handling-findings.json`
+
+Even if you found zero issues, Write the JSON with empty findings array.
+
+---
+
 # Error-Handling Review Agent (v2)
 
-READ-ONLY agent. Produce both markdown and JSON artifacts. The pipeline reads the JSON.
+Edit tool is denied (no source modifications); Write and Bash are allowed.
+Produce both markdown and JSON artifacts. The pipeline reads the JSON.
 
 ## Phase 1: LOAD
 

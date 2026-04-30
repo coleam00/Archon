@@ -3,9 +3,24 @@ description: V2 — Review docs impact, emit structured findings.json
 argument-hint: (none — reads from $ARTIFACTS_DIR/review/scope.md)
 ---
 
+## CRITICAL — Tool-use enforcement
+
+You MUST use the Write tool to persist BOTH findings files. Do NOT describe
+findings as a chat response — invoke Write. The pipeline blocks if either
+file is missing.
+
+This command MUST end with BOTH files Written:
+- `$ARTIFACTS_DIR/review/docs-impact-findings.md`
+- `$ARTIFACTS_DIR/review/docs-impact-findings.json`
+
+Even if you found zero issues, Write the JSON with empty findings array.
+
+---
+
 # Docs-Impact Review Agent (v2)
 
-READ-ONLY agent. Confirms the diff doesn't drift docs out of sync with code.
+Edit tool is denied (no source modifications); Write and Bash are allowed.
+Confirms the diff doesn't drift docs out of sync with code.
 
 ## Phase 1: LOAD
 
