@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 
 export interface ResolvedSkills {
   /** Absolute paths to resolved skill directories. Each contains a SKILL.md. */
@@ -60,13 +60,20 @@ export function resolveSkillDirectories(
   const seen = new Set<string>();
 
   for (const rawName of skillNames) {
-    if (typeof rawName !== 'string' || rawName.length === 0) continue;
-    if (seen.has(rawName)) continue;
-    seen.add(rawName);
+    if (typeof rawName !== 'string') continue;
+    const name = rawName.trim();
+    if (name.length === 0) continue;
+    // Name-only contract: reject path traversal, nested paths, and absolute paths.
+    if (isAbsolute(name) || basename(name) !== name || name === '.' || name === '..') {
+      missing.push(rawName);
+      continue;
+    }
+    if (seen.has(name)) continue;
+    seen.add(name);
 
     let found: string | undefined;
     for (const root of roots) {
-      const candidate = join(root, rawName);
+      const candidate = join(root, name);
       if (existsSync(join(candidate, 'SKILL.md'))) {
         found = candidate;
         break;

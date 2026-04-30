@@ -384,7 +384,7 @@ export async function* bridgeSession(
       sessionId: session.sessionId,
     };
     if (capturedTokens) result.tokens = capturedTokens;
-    if (errorMessage) {
+    if (!sawAssistantContent && errorMessage) {
       result.isError = true;
       result.errors = [errorMessage];
     }

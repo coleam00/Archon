@@ -78,7 +78,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
   });
 
   test('checks vendor directory when no env or config path', async () => {
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation((path: string) => {
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockImplementation((path: string) => {
       const normalized = path.replace(/\\/g, '/');
       return normalized.includes('vendor/copilot');
     });
@@ -93,7 +93,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
     if (process.platform === 'win32') return;
     const home = process.env.HOME ?? '/Users/test';
     const expected = `${home}/.npm-global/bin/copilot`;
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockImplementation(
       (path: string) => path === expected
     );
 
@@ -107,7 +107,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
 
   test('autodetects homebrew install on Apple Silicon', async () => {
     if (process.platform !== 'darwin' || process.arch !== 'arm64') return;
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockImplementation(
       (path: string) => path === '/opt/homebrew/bin/copilot'
     );
 
@@ -121,7 +121,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
 
   test('autodetects system install at /usr/local/bin/copilot', async () => {
     if (process.platform === 'win32') return;
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockImplementation(
       (path: string) => path === '/usr/local/bin/copilot'
     );
 
@@ -130,7 +130,7 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
   });
 
   test('vendor directory takes precedence over autodetect', async () => {
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation((path: string) => {
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockImplementation((path: string) => {
       const normalized = path.replace(/\\/g, '/');
       return normalized.includes('vendor/copilot') || normalized.includes('.npm-global');
     });
@@ -144,16 +144,21 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
   });
 
   test('falls back to PATH lookup when no canonical path matches', async () => {
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
-    const resolveFromPathSpy = spyOn(resolver, 'resolveFromPath').mockReturnValue(
-      '/some/non-canonical/bin/copilot'
+    const pathResult = '/some/non-canonical/bin/copilot';
+    // Tiers 3/4 use isExecutableFile; return false for all except the PATH result so they fall
+    // through to the PATH tier, then return true so the PATH result is accepted.
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockImplementation(
+      (path: string) => path === pathResult
     );
-    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(true);
+    const resolveFromPathSpy = spyOn(resolver, 'resolveFromPath').mockReturnValue(pathResult);
 
-    const result = await resolver.resolveCopilotBinaryPath();
-    expect(result).toBe('/some/non-canonical/bin/copilot');
-    expect(mockLogger.info).toHaveBeenCalledWith({ source: 'path' }, 'copilot.binary_resolved');
-    resolveFromPathSpy.mockRestore();
+    try {
+      const result = await resolver.resolveCopilotBinaryPath();
+      expect(result).toBe(pathResult);
+      expect(mockLogger.info).toHaveBeenCalledWith({ source: 'path' }, 'copilot.binary_resolved');
+    } finally {
+      resolveFromPathSpy.mockRestore();
+    }
   });
 
   test('rejects PATH lookup result that is not executable', async () => {
@@ -165,20 +170,26 @@ describe('resolveCopilotBinaryPath (binary mode)', () => {
     );
     isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(false);
 
-    await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow(
-      'Copilot CLI binary not found'
-    );
-    resolveFromPathSpy.mockRestore();
+    try {
+      await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow(
+        'Copilot CLI binary not found'
+      );
+    } finally {
+      resolveFromPathSpy.mockRestore();
+    }
   });
 
   test('throws with install instructions when binary not found anywhere', async () => {
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+    isExecutableFileSpy = spyOn(resolver, 'isExecutableFile').mockReturnValue(false);
     const resolveFromPathSpy = spyOn(resolver, 'resolveFromPath').mockReturnValue(undefined);
 
-    await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow(
-      'Copilot CLI binary not found'
-    );
-    resolveFromPathSpy.mockRestore();
+    try {
+      await expect(resolver.resolveCopilotBinaryPath()).rejects.toThrow(
+        'Copilot CLI binary not found'
+      );
+    } finally {
+      resolveFromPathSpy.mockRestore();
+    }
   });
 });
 
