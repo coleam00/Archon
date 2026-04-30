@@ -269,20 +269,22 @@ describe('mapCopilotEvent', () => {
     expect((out[0] as { toolName: string }).toolName).toBe('unknown');
   });
 
-  test('session.error → system chunk and markErrored called', () => {
+  test('session.error → no chunk emitted, markErrored called (deferred to bridgeSession)', () => {
     const ctx = makeCtx();
     const out = mapCopilotEvent(
       evt('session.error', { errorType: 'rate_limit', message: 'Slow down' }),
       ctx
     );
-    expect(out).toEqual([{ type: 'system', content: '⚠️ Slow down' }]);
+    // Defer the system chunk to bridgeSession so it can suppress the warning
+    // when SDK auto-recovery still delivers a fallback assistant message.
+    expect(out).toEqual([]);
     expect(ctx.erroredWith).toBe('Slow down');
   });
 
-  test('session.error with missing message uses fallback string', () => {
+  test('session.error with missing message records fallback string', () => {
     const ctx = makeCtx();
     const out = mapCopilotEvent(evt('session.error', { errorType: 'unknown' }), ctx);
-    expect((out[0] as MessageChunk & { content: string }).content).toBe('⚠️ Copilot session error');
+    expect(out).toEqual([]);
     expect(ctx.erroredWith).toBe('Copilot session error');
   });
 
