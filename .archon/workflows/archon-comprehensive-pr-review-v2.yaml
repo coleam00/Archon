@@ -1,0 +1,146 @@
+name: archon-comprehensive-pr-review-v2
+description: |
+  V2 of archon-comprehensive-pr-review. Adds:
+  - Structured JSON findings contract (each reviewer emits findings.json)
+  - Hard CRITICAL gate after synthesize and after self-fix
+  - Re-review verification loop (re-runs flagged reviewers until CRITICAL/HIGH = 0)
+  - all_done trigger_rule (vs one_success) so partial reviews don't drive fixes
+  - Read-only reviewers (denied_tools on Edit/Write/Bash)
+  - set -euo pipefail in all bash nodes
+  Triggers: "review pr v2", "comprehensive review v2".
+  NOT for: production until validated side-by-side with v1.
+
+provider: claude
+model: sonnet
+
+nodes:
+  - id: scope
+    command: archon-pr-review-scope
+
+  - id: sync
+    command: archon-sync-pr-with-main
+    depends_on: [scope]
+
+  # ─── REVIEWERS (read-only, parallel) ───────────────────────────────
+  - id: code-review
+    command: archon-code-review-agent-v2
+    depends_on: [sync]
+    context: fresh
+    denied_tools: [Edit, Write, Bash]
+
+  - id: error-handling
+    command: archon-error-handling-agent-v2
+    depends_on: [sync]
+    context: fresh
+    denied_tools: [Edit, Write, Bash]
+
+  - id: test-coverage
+    command: archon-test-coverage-agent-v2
+    depends_on: [sync]
+    context: fresh
+    denied_tools: [Edit, Write, Bash]
+
+  - id: comment-quality
+    command: archon-comment-quality-agent-v2
+    depends_on: [sync]
+    context: fresh
+    denied_tools: [Edit, Write, Bash]
+
+  - id: docs-impact
+    command: archon-docs-impact-agent-v2
+    depends_on: [sync]
+    context: fresh
+    denied_tools: [Edit, Write, Bash]
+
+  # ─── SYNTHESIZE: aggregate JSONs, emit synthesis.json ─────────────
+  - id: synthesize
+    command: archon-synthesize-review-v2
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    trigger_rule: all_done   # was: one_success — wait for everyone, tolerate failures
+    context: fresh
+
+  # ─── PRE-FIX GATE: surface state, never silent ─────────────────────
+  - id: pre-fix-gate
+    bash: |
+      set -euo pipefail
+      SYNTH="$ARTIFACTS_DIR/review/synthesis.json"
+      if [ ! -f "$SYNTH" ]; then
+        echo "BLOCKED: synthesis.json missing — synthesize node did not produce a contract" >&2
+        exit 1
+      fi
+      CRIT=$(jq -r '.stats.critical // 0' "$SYNTH")
+      HIGH=$(jq -r '.stats.high // 0' "$SYNTH")
+      AGENTS_FAILED=$(jq -r '.agents_failed // 0' "$SYNTH")
+      AGENTS_COMPLETED=$(jq -r '.agents_completed // 0' "$SYNTH")
+      echo "Reviewers completed: $AGENTS_COMPLETED, failed: $AGENTS_FAILED"
+      echo "Findings: CRITICAL=$CRIT HIGH=$HIGH"
+      if [ "$AGENTS_COMPLETED" -lt 3 ]; then
+        echo "BLOCKED: only $AGENTS_COMPLETED reviewers succeeded (minimum 3 required to proceed)" >&2
+        exit 1
+      fi
+    depends_on: [synthesize]
+
+  # ─── SELF-FIX: read synthesis.json, fix CRITICAL + HIGH ───────────
+  - id: implement-fixes
+    command: archon-implement-review-fixes-v2
+    depends_on: [pre-fix-gate]
+    context: fresh
+
+  # ─── RE-REVIEW LOOP: verify the fixes actually fixed the findings ──
+  - id: re-review
+    loop:
+      prompt: |
+        You are verifying that fixes from $ARTIFACTS_DIR/review/fix-report.json
+        actually resolved the CRITICAL/HIGH findings in $ARTIFACTS_DIR/review/synthesis.json.
+
+        For each blocking finding:
+        1. Read the original finding's `confirmation_check` (bash command — usually grep).
+        2. Run it; exit code 0 means resolved, non-zero means still present.
+        3. Re-read the surrounding code — does the fix actually address the root cause,
+           or did the fixer just patch the symptom?
+
+        Write `$ARTIFACTS_DIR/review/re-review.json`:
+        {
+          "iteration": <n>,
+          "verified_resolved": [<finding ids>],
+          "still_present": [<finding ids with reason>],
+          "newly_introduced": [<new findings the fix created>],
+          "unresolved_count": <int>
+        }
+
+        If unresolved_count > 0, write a brief delta plan to
+        `$ARTIFACTS_DIR/review/re-review-delta.md` so the next iteration of the loop
+        (or a human) can act. End the iteration with the literal token <promise>RE_REVIEW_DONE</promise>.
+      until: RE_REVIEW_DONE
+      until_bash: |
+        set -euo pipefail
+        RR="$ARTIFACTS_DIR/review/re-review.json"
+        [ -f "$RR" ] && [ "$(jq -r '.unresolved_count' "$RR")" = "0" ]
+      max_iterations: 2
+      fresh_context: true
+    depends_on: [implement-fixes]
+
+  # ─── POST-FIX GATE: hard stop if anything blocking remains ─────────
+  - id: post-fix-gate
+    bash: |
+      set -euo pipefail
+      RR="$ARTIFACTS_DIR/review/re-review.json"
+      if [ ! -f "$RR" ]; then
+        echo "BLOCKED: re-review.json missing — re-review loop did not complete" >&2
+        exit 1
+      fi
+      UNRESOLVED=$(jq -r '.unresolved_count // 999' "$RR")
+      NEW=$(jq -r '.newly_introduced | length' "$RR")
+      if [ "$UNRESOLVED" -gt 0 ] || [ "$NEW" -gt 0 ]; then
+        echo "BLOCKED: $UNRESOLVED unresolved + $NEW newly-introduced findings remain" >&2
+        echo "PR converted back to draft. See $ARTIFACTS_DIR/review/re-review-delta.md" >&2
+        # Convert PR back to draft so it can't auto-merge
+        PR=$(cat "$ARTIFACTS_DIR/.pr-number" 2>/dev/null || echo "")
+        if [ -n "$PR" ]; then
+          gh pr ready "$PR" --undo 2>/dev/null || true
+          gh pr comment "$PR" --body "⚠️ Archon v2 review-loop terminated with $UNRESOLVED unresolved and $NEW newly-introduced findings. PR reverted to draft. See \`$ARTIFACTS_DIR/review/re-review-delta.md\`."
+        fi
+        exit 1
+      fi
+      echo "All blocking findings resolved. PR ready for human review."
+    depends_on: [re-review]

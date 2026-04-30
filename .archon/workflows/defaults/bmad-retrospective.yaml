@@ -1,0 +1,99 @@
+name: bmad-retrospective
+description: |
+  BMAD Phase 4 - Epic completion retrospective.
+  Triggers: "bmad retrospective", "retrospective", "retro", "bmad retro",
+            "epic complete retro", "lessons learned".
+
+  Developer agent reviews completed work and captures lessons learned.
+  Produces retrospective notes.
+
+provider: claude
+
+nodes:
+  - id: gather-retro-data
+    bash: |
+      echo "=== Sprint Status ==="
+      if [ -f "$PWD/_bmad-output/implementation-artifacts/sprints/sprint-status.yaml" ]; then
+        cat "$PWD/_bmad-output/implementation-artifacts/sprints/sprint-status.yaml"
+      else
+        echo "NO_SPRINT_STATUS"
+      fi
+
+      echo ""
+      echo "=== Code Review Records ==="
+      ls -1 "$PWD/_bmad-output/implementation-artifacts/code-review".md 2>/dev/null || echo "(none)"
+
+      echo ""
+      echo "=== Course Correction Records ==="
+      ls -1 "$PWD/_bmad-output/implementation-artifacts/course-correction".md 2>/dev/null || echo "(none)"
+
+      echo ""
+      echo "=== Git History ==="
+      git log --oneline -30 2>/dev/null || echo "(no git history)"
+
+      echo ""
+      echo "=== Story Files ==="
+      ls -1 "$PWD/_bmad-output/implementation-artifacts/stories/"*.md 2>/dev/null || echo "(none)"
+
+  - id: conduct-retrospective
+    model: sonnet
+    skills:
+      - bmad/bmm/developer
+    prompt: |
+      You are Amelia, the BMAD Developer agent. Conduct an epic retrospective.
+
+      ## Retrospective Data
+      $gather-retro-data.output
+
+      ## Instructions
+
+      Review the completed work and conduct a structured retrospective using
+      the "Start, Stop, Continue" framework:
+
+      Write the retrospective to `$ARTIFACTS_DIR/implementation-artifacts/retrospectives/retrospective.md`:
+
+      ```markdown
+      # Epic Retrospective
+
+      **Epic(s)**: {epic IDs}
+      **Date**: {date}
+      **Facilitator**: BMAD Developer (Amelia)
+
+      ## Summary
+      {what was accomplished in 2-3 sentences}
+
+      ## Metrics
+      - Stories completed: {count}
+      - Stories still in progress: {count}
+      - Code reviews: {count} (approved / changes requested)
+      - Course corrections: {count}
+      - Commits: {count}
+
+      ## Start (things we should begin doing)
+      - {action} because {reason}
+
+      ## Stop (things we should stop doing)
+      - {action} because {reason}
+
+      ## Continue (things that worked well)
+      - {action} because {reason}
+
+      ## Key Learnings
+      ### Technical Learnings
+      - {learning}
+
+      ### Process Learnings
+      - {learning}
+
+      ### Architecture Learnings
+      - {learning}
+
+      ## Action Items for Next Epic
+      - [ ] {action item}
+      - [ ] {action item}
+
+      ## Kudos
+      {recognition of good work or decisions}
+      ```
+
+    depends_on: [gather-retro-data]

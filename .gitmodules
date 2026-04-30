@@ -1,0 +1,3 @@
+[submodule "claude-code-bmad-skills"]
+	path = claude-code-bmad-skills
+	url = https://github.com/aj-geddes/claude-code-bmad-skills.git

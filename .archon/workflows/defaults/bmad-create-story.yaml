@@ -1,0 +1,100 @@
+name: bmad-create-story
+description: |
+  BMAD Phase 4 - Prepare next story for implementation.
+  Triggers: "bmad create story", "prepare next story", "bmad next story".
+
+  Developer agent prepares the next available story, reading epics, PRD, and architecture.
+  Produces story-[slug].md in _bmad-output/implementation-artifacts/stories/.
+
+provider: claude
+
+nodes:
+  - id: find-next-story
+    bash: |
+      SPRINT_FILE="$PWD/_bmad-output/implementation-artifacts/sprints/sprint-status.yaml"
+      if [ ! -f "$SPRINT_FILE" ]; then
+        echo "ERROR: sprint-status.yaml not found. Run /bmad-sprint-planning first."
+        exit 1
+      fi
+
+      echo "=== Sprint Status ==="
+      cat "$SPRINT_FILE"
+
+      echo ""
+      echo "=== Story Files ==="
+      ls -1 "$PWD/_bmad-output/implementation-artifacts/stories/" 2>/dev/null || echo "(none)"
+
+  - id: prepare-story
+    model: sonnet
+    skills:
+      - bmad/bmm/developer
+    prompt: |
+      You are Amelia, the BMAD Developer agent. Prepare the next story for implementation.
+
+      ## Sprint Status
+      $find-next-story.output
+
+      ## Context Documents
+      Read these files for full context:
+      - `$ARTIFACTS_DIR/planning-artifacts/PRD.md`
+      - `$ARTIFACTS_DIR/planning-artifacts/architecture.md`
+      - `$ARTIFACTS_DIR/planning-artifacts/ux-spec.md` (if exists)
+      - `$ARTIFACTS_DIR/planning-artifacts/epics/epics.md`
+
+      ## Instructions
+
+      1. Identify the next story to work on (first "ready" story with no assignment)
+      2. Read the existing story file from the epics directory
+      3. Enrich it with full context from the PRD, architecture, and UX spec
+      4. Add implementation details:
+         - Specific files to create/modify
+         - API endpoints to implement
+         - Database changes needed
+         - Test files to create
+      5. Write the enriched story to `$ARTIFACTS_DIR/implementation-artifacts/stories/story-{slug}.md`
+      6. Update the sprint-status.yaml to mark this story as "prepared"
+
+      The enriched story should include:
+
+      ```markdown
+      # STORY-{N}: {Title} - IMPLEMENTATION READY
+
+      **Epic**: EPIC-{N}
+      **Status**: Prepared for Implementation
+      **Date**: {date}
+
+      ## User Story
+      As a {role}, I want {action}, so that {benefit}.
+
+      ## Acceptance Criteria
+      - [ ] {criterion}
+
+      ## Implementation Plan
+      ### Files to Create
+      - `path/to/file.ts` - {purpose}
+      ### Files to Modify
+      - `path/to/file.ts` - {what changes}
+
+      ## Technical Details
+      {architecture decisions relevant to this story}
+
+      ## API Changes
+      {new or modified endpoints}
+
+      ## Database Changes
+      {schema changes if any}
+
+      ## Test Plan
+      {specific tests to write}
+
+      ## Definition of Done
+      - [ ] Code complete
+      - [ ] All tests passing
+      - [ ] Code reviewed
+      - [ ] Documentation updated
+      ```
+
+      After writing the story file, output:
+      `STORY_PREPARED: story-{slug}.md`
+
+    depends_on: [find-next-story]

@@ -1,0 +1,156 @@
+name: bmad-create-epics-and-stories
+description: |
+  BMAD Phase 3 - Break PRD + Architecture into epics and stories.
+  Triggers: "bmad epics", "create epics", "bmad stories", "break into stories",
+            "bmad create epics and stories".
+
+  PM agent (John) decomposes the PRD and architecture into epics and stories.
+  Produces epics/ files in _bmad-output/planning-artifacts/epics/.
+
+provider: claude
+interactive: true
+
+nodes:
+  - id: verify-inputs
+    bash: |
+      ERRORS=0
+      for f in \
+        planning-artifacts/PRD.md \
+        planning-artifacts/architecture.md \
+      ; do
+        if [ -f "$PWD/_bmad-output/$f" ]; then
+          echo "FOUND: $f"
+        else
+          echo "MISSING: $f"
+          ERRORS=$((ERRORS + 1))
+        fi
+      done
+      if [ $ERRORS -gt 0 ]; then
+        echo "ERROR: Missing required artifacts. Run prerequisite workflows first."
+        exit 1
+      fi
+
+      echo ""
+      echo "UX SPEC (optional):"
+      if [ -f "$PWD/_bmad-output/planning-artifacts/ux-spec.md" ]; then
+        echo "FOUND"
+      else
+        echo "NOT_FOUND"
+      fi
+
+      mkdir -p "$PWD/_bmad-output/planning-artifacts/epics"
+
+  - id: create-epics
+    model: sonnet
+    skills:
+      - bmad/bmm/pm
+    context: shared
+    prompt: |
+      You are John, the BMAD Product Manager agent. Decompose the PRD and architecture into epics and stories.
+
+      ## Inputs
+      Read the following files:
+      - `$ARTIFACTS_DIR/planning-artifacts/PRD.md`
+      - `$ARTIFACTS_DIR/planning-artifacts/architecture.md`
+      - `$ARTIFACTS_DIR/planning-artifacts/ux-spec.md` (if exists)
+
+      ## Instructions
+
+      Break the PRD requirements into epics, then break each epic into user stories.
+      Follow these rules:
+
+      1. **Epics** should be deliverable chunks (1-3 sprints each)
+      2. **Stories** should follow INVEST criteria (Independent, Negotiable, Valuable, Estimable, Small, Testable)
+      3. Each story should be completable by a single developer in 1-3 days
+      4. Define dependencies between stories explicitly
+      5. Order stories within each epic by priority and dependency
+
+      Write the epics index to `$ARTIFACTS_DIR/planning-artifacts/epics/epics.md`:
+
+      ```markdown
+      # Epics and Stories Index
+
+      **Product**: {name}
+      **Based on**: PRD.md + architecture.md
+      **Date**: {date}
+
+      ## Epic Summary
+      | Epic ID | Title | Priority | Stories | Est. Sprint |
+      |---------|-------|----------|---------|-------------|
+      | EPIC-001 | {title} | P0 | {count} | {N} |
+
+      ## Epics
+      ### EPIC-001: {Epic Title}
+      **Priority**: P0
+      **Description**: {what this epic delivers}
+      **Stories**:
+      - STORY-001: {title} (depends on: none)
+      - STORY-002: {title} (depends on: STORY-001)
+
+      ### EPIC-002: {Epic Title}
+      ...
+      ```
+
+      Then create individual story files in `$ARTIFACTS_DIR/planning-artifacts/epics/`:
+
+      For each story, create `story-{slug}.md`:
+
+      ```markdown
+      # STORY-{N}: {Story Title}
+
+      **Epic**: EPIC-{N}
+      **Priority**: P0/P1/P2
+      **Estimated Effort**: {S/M/L/XL}
+      **Dependencies**: {list or "none"}
+
+      ## User Story
+      As a {role}, I want {action}, so that {benefit}.
+
+      ## Acceptance Criteria
+      - [ ] {criterion 1}
+      - [ ] {criterion 2}
+      - [ ] {criterion 3}
+
+      ## Technical Context
+      {relevant architecture decisions, APIs, data models from architecture.md}
+
+      ## UX Requirements
+      {relevant screens/flows from ux-spec.md, if applicable}
+
+      ## Test Strategy
+      {how this story should be tested}
+
+      ## Definition of Done
+      - [ ] Code written and reviewed
+      - [ ] Tests passing
+      - [ ] Documentation updated
+      - [ ] Acceptance criteria verified
+      ```
+
+    depends_on: [verify-inputs]
+
+  - id: review-epics
+    approval:
+      message: "Review the epics and story breakdown. Check that stories are well-scoped and dependencies are correct. Provide feedback or say 'approved' to finalize."
+      capture_response: true
+    depends_on: [create-epics]
+
+  - id: finalize-epics
+    model: sonnet
+    prompt: |
+      The epics and stories have been reviewed.
+
+      ## Reviewer Feedback
+      $review-epics.output
+
+      ## Instructions
+      Apply feedback to the epic and story files in `$ARTIFACTS_DIR/planning-artifacts/epics/`.
+
+      Present a summary of what was created:
+      - Number of epics
+      - Number of stories
+      - Story file locations
+
+      Recommend next workflow: `/bmad-check-implementation-readiness` before starting the sprint.
+
+    depends_on: [review-epics]

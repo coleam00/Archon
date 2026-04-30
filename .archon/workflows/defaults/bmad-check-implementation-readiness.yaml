@@ -1,0 +1,156 @@
+name: bmad-check-implementation-readiness
+description: |
+  BMAD Phase 3 - Gate check before implementation.
+  Triggers: "bmad readiness", "implementation readiness", "bmad gate check",
+            "check readiness", "are we ready to implement".
+
+  Architect agent validates cohesion across all planning documents.
+  Produces PASS/CONCERNS/FAIL decision.
+
+provider: claude
+interactive: true
+
+nodes:
+  - id: gather-all-docs
+    bash: |
+      echo "=== Required Planning Documents ==="
+      REQUIRED=(
+        "planning-artifacts/PRD.md"
+        "planning-artifacts/architecture.md"
+        "planning-artifacts/epics/epics.md"
+      )
+      MISSING=0
+      for f in "${REQUIRED[@]}"; do
+        if [ -f "$PWD/_bmad-output/$f" ]; then
+          echo "FOUND: $f"
+        else
+          echo "MISSING: $f"
+          MISSING=$((MISSING + 1))
+        fi
+      done
+
+      echo ""
+      echo "=== Optional Documents ==="
+      OPTIONAL=(
+        "planning-artifacts/ux-spec.md"
+        "planning-artifacts/epics/story-"
+      )
+      for f in "${OPTIONAL[@]}"; do
+        count=$(ls "$PWD/_bmad-output/$f"* 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$count" -gt 0 ]; then
+          echo "FOUND: $f ($count files)"
+        else
+          echo "NOT_FOUND: $f"
+        fi
+      done
+
+      if [ $MISSING -gt 0 ]; then
+        echo ""
+        echo "ERROR: $MISSING required document(s) missing. Cannot proceed with readiness check."
+        exit 1
+      fi
+
+  - id: readiness-check
+    model: sonnet
+    skills:
+      - bmad/bmm/architect
+    prompt: |
+      You are Winston, the BMAD Architect agent. Perform an implementation readiness gate check.
+
+      ## Gathered State
+      $gather-all-docs.output
+
+      ## Instructions
+
+      Read ALL planning documents and evaluate implementation readiness across these dimensions:
+
+      1. **Completeness**: Are all required planning artifacts present and substantive?
+      2. **Cohesion**: Do the PRD, architecture, and epics tell a consistent story?
+         - Do epics cover all PRD requirements?
+         - Does the architecture support all epic stories?
+         - Are there gaps between PRD requirements and story coverage?
+      3. **Clarity**: Are stories well-defined with clear acceptance criteria?
+      4. **Dependency Order**: Are story dependencies correct and achievable?
+      5. **Technical Feasibility**: Are there architectural risks not yet addressed?
+      6. **Testability**: Can each story be tested independently?
+
+      Write your assessment to `$ARTIFACTS_DIR/planning-artifacts/readiness-assessment.md`:
+
+      ```markdown
+      # Implementation Readiness Assessment
+
+      **Date**: {date}
+      **Assessor**: BMAD Architect (Winston)
+
+      ## Decision: PASS | CONCERNS | FAIL
+
+      ## Dimension Analysis
+
+      ### 1. Completeness: {PASS/CONCERNS/FAIL}
+      {details}
+
+      ### 2. Cohesion: {PASS/CONCERNS/FAIL}
+      {details}
+
+      ### 3. Clarity: {PASS/CONCERNS/FAIL}
+      {details}
+
+      ### 4. Dependency Order: {PASS/CONCERNS/FAIL}
+      {details}
+
+      ### 5. Technical Feasibility: {PASS/CONCERNS/FAIL}
+      {details}
+
+      ### 6. Testability: {PASS/CONCERNS/FAIL}
+      {details}
+
+      ## Specific Concerns
+      {list each concern with recommendation}
+
+      ## Recommendation
+      {one paragraph: proceed with concerns, go back and fix, or ready to implement}
+      ```
+
+      **CRITICAL**: Your final line must be exactly one of:
+      - `READINESS_DECISION: PASS`
+      - `READINESS_DECISION: CONCERNS`
+      - `READINESS_DECISION: FAIL`
+
+    depends_on: [gather-all-docs]
+
+  - id: readiness-gate
+    approval:
+      message: "Review the readiness assessment above. Do you want to proceed to implementation, go back to fix concerns, or stop?"
+      capture_response: true
+      on_reject:
+        prompt: |
+          The readiness check has identified concerns or failed.
+
+          ## Assessment
+          $readiness-check.output
+
+          ## User Feedback
+          $REJECTION_REASON
+
+          Summarize what needs to be addressed before implementation can proceed.
+          Recommend which prior workflow(s) to revisit.
+    depends_on: [readiness-check]
+    when: "$readiness-check.output contains 'CONCERNS' || $readiness-check.output contains 'FAIL'"
+
+  - id: proceed
+    model: sonnet
+    prompt: |
+      Implementation readiness has been confirmed.
+
+      ## Readiness Assessment
+      $readiness-check.output
+
+      ## Gate Decision
+      $readiness-gate.output
+
+      ## Instructions
+      Summarize the readiness result and recommend the next workflow:
+      - `/bmad-sprint-planning` to initialize sprint tracking
+
+    depends_on: [readiness-check]
+    when: "$readiness-check.output contains 'PASS'"
