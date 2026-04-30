@@ -180,7 +180,7 @@ nodes:
       while IFS= read -r my_file; do
         echo "$OPEN_PRS" | jq -c --arg f "$my_file" '.[] | select(.files | any(.path == $f))' | while IFS= read -r overlap_pr; do
           OVERLAP_FOUND=true
-          echo "$overlap_pr" | jq -r '"⚠️  PR #\(.number) (\(.title)) also touches \($ENV.MY_FILE)"' MY_FILE="$my_file"
+          MY_FILE="$my_file" echo "$overlap_pr" | jq -r --arg f "$my_file" '"⚠️  PR #\(.number) (\(.title)) also touches \($f)"' || true
         done
       done < "$ARTIFACTS_DIR/peer-prs/this-pr-files.txt" > "$ARTIFACTS_DIR/peer-prs/overlap.md"
 
