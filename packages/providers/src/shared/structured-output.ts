@@ -34,10 +34,13 @@ ${JSON.stringify(schema, null, 2)}`;
 
 /**
  * Attempt to parse an assistant transcript as the structured-output JSON.
- * Handles two common model failure modes:
+ * Handles three common model failure modes:
  *  - trailing/leading whitespace (always stripped)
  *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
  *    emit despite the "no code fences" instruction in the prompt
+ *  - prose preamble followed by a single trailing JSON object — pattern
+ *    observed on Minimax M2.7 reasoning models that "think out loud" before
+ *    emitting structured output despite explicit JSON-only prompts.
  *
  * Returns the parsed value on success, `undefined` on any failure. Callers
  * treat `undefined` as "structured output unavailable" and degrade via the
@@ -52,11 +55,36 @@ export function tryParseStructuredOutput(text: string): unknown {
     .replace(/^```(?:json)?\s*\n?/i, '')
     .replace(/\n?\s*```\s*$/, '')
     .trim();
+
+  // Tier 1: clean parse — fast path for fully compliant outputs.
+  const tier1 = tryJsonParseObject(cleaned);
+  if (tier1 !== undefined) return tier1;
+
+  // Tier 2: scan forward to the FIRST `{` and parse from there. Recovers the
+  // preamble-then-JSON pattern reasoning models emit. A backward scan from
+  // the last `{` was considered but rejected: it silently returns the wrong
+  // object when the prose contains a brace-bearing example after the real
+  // payload (e.g. `{"actual":1}\nFor example: {"x":2}` would yield `{x:2}`),
+  // breaking the conservative-failure contract callers rely on.
+  const firstBrace = cleaned.indexOf('{');
+  if (firstBrace > 0) {
+    const tier2 = tryJsonParseObject(cleaned.slice(firstBrace));
+    if (tier2 !== undefined) return tier2;
+  }
+
+  return undefined;
+}
+
+/**
+ * Parse `text` as JSON and only return it if the result is a non-null
+ * object (or array). Schema augmentation always asks for an object — bare
+ * `null`, numbers, and strings parse cleanly but are not "structured
+ * output", so we treat them as missing and let the dag-executor's
+ * structured_output_missing path engage.
+ */
+function tryJsonParseObject(text: string): unknown {
   try {
-    const parsed: unknown = JSON.parse(cleaned);
-    // Schema augmentation always asks for an object — bare `null`, numbers,
-    // and strings are valid JSON but not "structured output". Treat them as
-    // missing so the dag-executor's structured_output_missing path engages.
+    const parsed: unknown = JSON.parse(text);
     if (parsed === null || typeof parsed !== 'object') return undefined;
     return parsed;
   } catch {
