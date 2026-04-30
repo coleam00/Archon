@@ -1,5 +1,12 @@
 import { createLogger } from '@archon/paths';
-import type { OmpAuthStorage, OmpCreateAgentSessionOptions } from './sdk-loader';
+import type {
+  OmpAuthStorage,
+  OmpCodingAgentSdk,
+  OmpCreateAgentSessionOptions,
+  OmpModelRegistry,
+  OmpSessionManager,
+} from './sdk-loader';
+
 import { loadOmpSdk } from './sdk-loader';
 
 import type {
@@ -8,16 +15,18 @@ import type {
   ProviderCapabilities,
   SendQueryOptions,
 } from '../../types';
-
 import { OMP_CAPABILITIES } from './capabilities';
 import { parseOmpConfig } from './config';
 import { bridgeSession } from './event-bridge';
 import { parseOmpModelRef } from './model-ref';
 import {
+  applyConfigEnv,
+  buildOmpSettingsOverrides,
   getRuntimeAuthOverride,
   resolveOmpSkills,
   resolveOmpThinkingLevel,
   resolveOmpToolNames,
+  restoreConfigEnv,
 } from './options-translator';
 import { resolveOmpSession } from './session-resolver';
 import { createArchonOmpUIBridge, createArchonOmpUIContext } from './ui-context-stub';
@@ -26,6 +35,24 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.omp');
   return cachedLog;
+}
+
+let configEnvLock: Promise<void> = Promise.resolve();
+
+async function acquireConfigEnvLock(): Promise<() => void> {
+  let release: (() => void) | undefined;
+  const previous = configEnvLock;
+  const current = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  configEnvLock = previous.then(
+    () => current,
+    () => current
+  );
+  await previous.catch(() => undefined);
+  return () => {
+    release?.();
+  };
 }
 
 export function augmentPromptForJsonSchema(
@@ -40,6 +67,157 @@ CRITICAL: Respond with ONLY a JSON object matching the schema below. No prose be
 
 Schema:
 ${JSON.stringify(schema, null, 2)}`;
+}
+
+type ParsedModelRef = NonNullable<ReturnType<typeof parseOmpModelRef>>;
+
+function requireParsedModelRef(modelRef: string | undefined): ParsedModelRef {
+  if (!modelRef) {
+    throw new Error(
+      'Oh My Pi provider requires a model. Set `model` on the workflow node or `assistants.omp.model` in .archon/config.yaml. ' +
+        "Format: '<omp-provider-id>/<model-id>' (e.g. 'anthropic/claude-sonnet-4-5')."
+    );
+  }
+
+  const parsed = parseOmpModelRef(modelRef);
+  if (!parsed) {
+    throw new Error(
+      `Invalid Oh My Pi model ref: '${modelRef}'. Expected format '<omp-provider-id>/<model-id>' (e.g. 'anthropic/claude-sonnet-4-5').`
+    );
+  }
+
+  return parsed;
+}
+
+async function discoverAuthStorageOrThrow(
+  sdk: OmpCodingAgentSdk,
+  agentDir: string | undefined,
+  provider: string
+): Promise<OmpAuthStorage> {
+  try {
+    return await sdk.discoverAuthStorage(agentDir);
+  } catch (err) {
+    const error = err as Error;
+    getLog().error({ err: error, ompProvider: provider }, 'omp.auth_storage_init_failed');
+    throw new Error(
+      `Oh My Pi auth storage init failed: ${error.message}. Check that your OMP agent database is readable.`
+    );
+  }
+}
+
+function resolveSessionModel(
+  sdk: OmpCodingAgentSdk,
+  authStorage: OmpAuthStorage,
+  parsed: ParsedModelRef
+): { modelRegistry: OmpModelRegistry; model: unknown } {
+  const modelRegistry = new sdk.ModelRegistry(authStorage);
+  modelRegistry.refreshInBackground();
+
+  const model = modelRegistry.find(parsed.provider, parsed.modelId);
+  if (!model) {
+    getLog().error(
+      { ompProvider: parsed.provider, modelId: parsed.modelId },
+      'omp.model_not_found'
+    );
+    throw new Error(
+      `Oh My Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. Check the OMP model catalog or your custom model registry.`
+    );
+  }
+
+  return { modelRegistry, model };
+}
+
+async function ensureProviderCredentials(
+  authStorage: OmpAuthStorage,
+  parsed: ParsedModelRef
+): Promise<void> {
+  const resolvedKey = await authStorage.getApiKey(parsed.provider);
+  if (resolvedKey) return;
+
+  throw new Error(
+    `Oh My Pi auth: no credentials for provider '${parsed.provider}'. Run \`omp\` locally to authenticate or set the provider API key in the environment/codebase env vars.`
+  );
+}
+
+function buildSessionOptions(args: {
+  cwd: string;
+  agentDir: string | undefined;
+  model: unknown;
+  authStorage: OmpAuthStorage;
+  modelRegistry: OmpModelRegistry;
+  sessionManager: OmpSessionManager;
+  settings: unknown;
+  skills: unknown[];
+  enableMCP: boolean;
+  enableLsp: boolean;
+  disableExtensionDiscovery: boolean;
+  additionalExtensionPaths?: string[];
+  thinkingLevel?: string;
+  systemPrompt?: string;
+  toolNames: string[];
+  hasUI: boolean;
+}): OmpCreateAgentSessionOptions {
+  return {
+    cwd: args.cwd,
+    ...(args.agentDir ? { agentDir: args.agentDir } : {}),
+    model: args.model,
+    authStorage: args.authStorage,
+    modelRegistry: args.modelRegistry,
+    sessionManager: args.sessionManager,
+    settings: args.settings,
+    skills: args.skills,
+    enableMCP: args.enableMCP,
+    enableLsp: args.enableLsp,
+    disableExtensionDiscovery: args.disableExtensionDiscovery,
+    ...(args.additionalExtensionPaths
+      ? { additionalExtensionPaths: args.additionalExtensionPaths }
+      : {}),
+    ...(args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}),
+    ...(args.systemPrompt !== undefined ? { systemPrompt: args.systemPrompt } : {}),
+    toolNames: args.toolNames,
+    hasUI: args.hasUI,
+  };
+}
+
+function logSessionStart(args: {
+  provider: string;
+  modelId: string;
+  cwd: string;
+  thinkingLevel: string | undefined;
+  toolCount: number;
+  skillCount: number;
+  missingSkillCount: number;
+  resumed: boolean;
+  settingsOverrideCount: number;
+  configEnvKeysApplied: number;
+  interactive: boolean;
+  extensionsDisabled: boolean;
+}): void {
+  getLog().info(
+    {
+      ompProvider: args.provider,
+      modelId: args.modelId,
+      cwd: args.cwd,
+      thinkingLevel: args.thinkingLevel,
+      toolCount: args.toolCount,
+      skillCount: args.skillCount,
+      missingSkillCount: args.missingSkillCount,
+      resumed: args.resumed,
+      settingsOverrideCount: args.settingsOverrideCount,
+      configEnvKeysApplied: args.configEnvKeysApplied,
+      interactive: args.interactive,
+      extensionsDisabled: args.extensionsDisabled,
+    },
+    'omp.session_started'
+  );
+}
+
+function extensionFlagWarning(
+  extensionFlagsConfigured: boolean,
+  hasRunner: boolean
+): string | undefined {
+  if (!extensionFlagsConfigured || hasRunner) return undefined;
+  return '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.';
 }
 
 /**
@@ -57,60 +235,17 @@ export class OmpProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const ompConfig = parseOmpConfig(assistantConfig);
+    let configEnvKeysApplied: string[] = [];
 
-    const modelRef = requestOptions?.model ?? ompConfig.model;
+    const parsed = requireParsedModelRef(requestOptions?.model ?? ompConfig.model);
     const sdk = await this.sdkLoader();
-    if (!modelRef) {
-      throw new Error(
-        'Oh My Pi provider requires a model. Set `model` on the workflow node or `assistants.omp.model` in .archon/config.yaml. ' +
-          "Format: '<omp-provider-id>/<model-id>' (e.g. 'anthropic/claude-sonnet-4-5')."
-      );
-    }
-
-    const parsed = parseOmpModelRef(modelRef);
-    if (!parsed) {
-      throw new Error(
-        `Invalid Oh My Pi model ref: '${modelRef}'. Expected format '<omp-provider-id>/<model-id>' (e.g. 'anthropic/claude-sonnet-4-5').`
-      );
-    }
-
-    let authStorage: OmpAuthStorage;
-    try {
-      authStorage = await sdk.discoverAuthStorage(ompConfig.agentDir);
-    } catch (err) {
-      const e = err as Error;
-      getLog().error({ err: e, ompProvider: parsed.provider }, 'omp.auth_storage_init_failed');
-      throw new Error(
-        `Oh My Pi auth storage init failed: ${e.message}. Check that your OMP agent database is readable.`
-      );
-    }
+    const authStorage = await discoverAuthStorageOrThrow(sdk, ompConfig.agentDir, parsed.provider);
 
     const runtimeOverride = getRuntimeAuthOverride(parsed.provider, requestOptions?.env);
-    if (runtimeOverride) {
-      authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
-    }
+    if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
 
-    const modelRegistry = new sdk.ModelRegistry(authStorage);
-    modelRegistry.refreshInBackground();
-    const model = modelRegistry.find(parsed.provider, parsed.modelId);
-    if (!model) {
-      getLog().error(
-        { ompProvider: parsed.provider, modelId: parsed.modelId },
-        'omp.model_not_found'
-      );
-      throw new Error(
-        `Oh My Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
-          'Check the OMP model catalog or your custom model registry.'
-      );
-    }
-
-    const resolvedKey = await authStorage.getApiKey(parsed.provider);
-    if (!resolvedKey) {
-      throw new Error(
-        `Oh My Pi auth: no credentials for provider '${parsed.provider}'. ` +
-          'Run `omp` locally to authenticate or set the provider API key in the environment/codebase env vars.'
-      );
-    }
+    const { modelRegistry, model } = resolveSessionModel(sdk, authStorage, parsed);
+    await ensureProviderCredentials(authStorage, parsed);
 
     const nodeConfig = requestOptions?.nodeConfig;
     const { level: thinkingLevel, warning: thinkingWarning } = resolveOmpThinkingLevel(nodeConfig);
@@ -151,26 +286,15 @@ export class OmpProvider implements IAgentProvider {
     }
 
     const systemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
-    const settings = sdk.Settings.isolated({});
-    const uiBridge = createArchonOmpUIBridge();
+    const settingsOverrides = buildOmpSettingsOverrides(ompConfig);
+    const settings = sdk.Settings.isolated(settingsOverrides);
+    const interactive = ompConfig.interactive !== false;
+    const extensionsDisabled = ompConfig.disableExtensionDiscovery !== false;
+    const uiBridge = interactive ? createArchonOmpUIBridge() : undefined;
 
-    getLog().info(
-      {
-        ompProvider: parsed.provider,
-        modelId: parsed.modelId,
-        cwd,
-        thinkingLevel,
-        toolCount: toolNames.length,
-        skillCount: skills.length,
-        missingSkillCount: missingSkills.length,
-        resumed: resumeSessionId !== undefined && !resumeFailed,
-      },
-      'omp.session_started'
-    );
-
-    const sessionOptions: OmpCreateAgentSessionOptions = {
+    const sessionOptions = buildSessionOptions({
       cwd,
-      ...(ompConfig.agentDir ? { agentDir: ompConfig.agentDir } : {}),
+      agentDir: ompConfig.agentDir,
       model,
       authStorage,
       modelRegistry,
@@ -179,41 +303,82 @@ export class OmpProvider implements IAgentProvider {
       skills,
       enableMCP: ompConfig.enableMCP === true,
       enableLsp: ompConfig.enableLsp !== false,
-      disableExtensionDiscovery: ompConfig.disableExtensionDiscovery !== false,
-      ...(ompConfig.additionalExtensionPaths
-        ? { additionalExtensionPaths: ompConfig.additionalExtensionPaths }
-        : {}),
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      disableExtensionDiscovery: extensionsDisabled,
+      additionalExtensionPaths: ompConfig.additionalExtensionPaths,
+      thinkingLevel,
+      systemPrompt,
       toolNames,
-      hasUI: true,
-    };
+      hasUI: interactive,
+    });
 
-    const agentSessionResult = await sdk.createAgentSession(sessionOptions);
-    agentSessionResult.setToolUIContext(createArchonOmpUIContext(uiBridge), true);
-    const { session, modelFallbackMessage } = agentSessionResult;
-
-    if (modelFallbackMessage) {
-      yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
+    const releaseConfigEnvLock = ompConfig.env ? await acquireConfigEnvLock() : undefined;
+    configEnvKeysApplied = applyConfigEnv(ompConfig.env);
+    if (configEnvKeysApplied.length > 0) {
+      getLog().debug({ keys: configEnvKeysApplied }, 'omp.config_env_applied');
     }
 
-    const outputFormat = requestOptions?.outputFormat;
-    const effectivePrompt = outputFormat
-      ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
-      : prompt;
+    logSessionStart({
+      provider: parsed.provider,
+      modelId: parsed.modelId,
+      cwd,
+      thinkingLevel,
+      toolCount: toolNames.length,
+      skillCount: skills.length,
+      missingSkillCount: missingSkills.length,
+      resumed: resumeSessionId !== undefined && !resumeFailed,
+      settingsOverrideCount: Object.keys(settingsOverrides).length,
+      configEnvKeysApplied: configEnvKeysApplied.length,
+      interactive,
+      extensionsDisabled,
+    });
 
     try {
-      yield* bridgeSession(
-        session,
-        effectivePrompt,
-        requestOptions?.abortSignal,
-        outputFormat?.schema,
-        uiBridge
+      const agentSessionResult = await sdk.createAgentSession(sessionOptions);
+      const { session, modelFallbackMessage } = agentSessionResult;
+
+      if (ompConfig.extensionFlags && session.extensionRunner) {
+        for (const [name, value] of Object.entries(ompConfig.extensionFlags)) {
+          session.extensionRunner.setFlagValue(name, value);
+        }
+      }
+
+      const extensionWarning = extensionFlagWarning(
+        ompConfig.extensionFlags !== undefined,
+        session.extensionRunner !== undefined
       );
-      getLog().info({ ompProvider: parsed.provider }, 'omp.prompt_completed');
-    } catch (err) {
-      getLog().error({ err, ompProvider: parsed.provider }, 'omp.prompt_failed');
-      throw err;
+      if (extensionWarning) {
+        yield { type: 'system', content: extensionWarning };
+      }
+
+      if (uiBridge) {
+        agentSessionResult.setToolUIContext(createArchonOmpUIContext(uiBridge), true);
+      }
+
+      if (modelFallbackMessage) {
+        yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
+      }
+
+      const outputFormat = requestOptions?.outputFormat;
+      const effectivePrompt = outputFormat
+        ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
+        : prompt;
+
+      try {
+        yield* bridgeSession(
+          session,
+          effectivePrompt,
+          requestOptions?.abortSignal,
+          outputFormat?.schema,
+          uiBridge
+        );
+        getLog().info({ ompProvider: parsed.provider }, 'omp.prompt_completed');
+      } catch (err) {
+        getLog().error({ err, ompProvider: parsed.provider }, 'omp.prompt_failed');
+        throw err;
+      }
+    } finally {
+      restoreConfigEnv(configEnvKeysApplied);
+      releaseConfigEnvLock?.();
     }
   }
 

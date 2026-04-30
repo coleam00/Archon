@@ -23,8 +23,13 @@ export interface OmpSessionInfo {
   path: string;
 }
 
+export interface OmpExtensionRunner {
+  setFlagValue(name: string, value: boolean | string): void;
+}
+
 export interface OmpSession {
   sessionId?: string;
+  extensionRunner?: OmpExtensionRunner;
   subscribe(listener: (event: unknown) => void): () => void;
   prompt(prompt: string): Promise<unknown>;
   abort(): Promise<unknown>;

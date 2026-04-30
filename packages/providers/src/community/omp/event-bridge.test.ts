@@ -33,6 +33,61 @@ describe('mapOmpEvent', () => {
   });
 });
 
+test('maps retry fallback and compaction events', () => {
+  expect(
+    mapOmpEvent({
+      type: 'retry_fallback_applied',
+      from: 'anthropic/old',
+      to: 'anthropic/new',
+      role: 'default',
+    })
+  ).toEqual([
+    {
+      type: 'system',
+      content: '⚠️ OMP retry fallback applied for default: anthropic/old → anthropic/new',
+    },
+  ]);
+
+  expect(
+    mapOmpEvent({ type: 'retry_fallback_succeeded', model: 'anthropic/new', role: 'default' })
+  ).toEqual([
+    {
+      type: 'system',
+      content: '✓ OMP retry fallback succeeded for default: anthropic/new',
+    },
+  ]);
+
+  expect(
+    mapOmpEvent({ type: 'auto_compaction_start', reason: 'threshold', action: 'context-full' })
+  ).toEqual([
+    {
+      type: 'system',
+      content: '⚠️ OMP auto-compaction started (threshold, context-full).',
+    },
+  ]);
+
+  expect(
+    mapOmpEvent({ type: 'auto_compaction_end', action: 'context-full', aborted: false })
+  ).toEqual([
+    {
+      type: 'system',
+      content: '✓ OMP auto-compaction completed (context-full).',
+    },
+  ]);
+});
+
+test('maps retry end and ignores skipped compaction', () => {
+  expect(
+    mapOmpEvent({ type: 'auto_retry_end', success: false, attempt: 2, finalError: 'rate limit' })
+  ).toEqual([
+    {
+      type: 'system',
+      content: '⚠️ retry 2 failed: rate limit',
+    },
+  ]);
+  expect(mapOmpEvent({ type: 'auto_compaction_end', skipped: true })).toEqual([]);
+});
+
 describe('buildResultChunk', () => {
   test('extracts usage and stop reason', () => {
     expect(

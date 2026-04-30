@@ -1,16 +1,46 @@
 import { describe, expect, test } from 'bun:test';
 
 import { augmentPromptForJsonSchema, OmpProvider } from './provider';
-import type { OmpCodingAgentSdk, OmpSession } from './sdk-loader';
+import type {
+  OmpCodingAgentSdk,
+  OmpCreateAgentSessionOptions,
+  OmpExtensionRunner,
+  OmpSession,
+} from './sdk-loader';
+import type { MessageChunk } from '../../types';
 
-function makeSdk(options: { model?: unknown; apiKey?: string } = {}): OmpCodingAgentSdk {
+interface FakeSdkOptions {
+  model?: unknown;
+  apiKey?: string;
+  extensionRunner?: OmpExtensionRunner;
+  onCreateAgentSession?: (options: OmpCreateAgentSessionOptions) => void;
+  onSettingsIsolated?: (overrides: Record<string, unknown>) => void;
+  onSetToolUIContext?: (uiContext: unknown, hasUI: boolean) => void;
+  onSetRuntimeApiKey?: (provider: string, apiKey: string) => void;
+  onPrompt?: () => void | Promise<void>;
+}
+
+async function collectChunks(
+  provider: OmpProvider,
+  options: Parameters<OmpProvider['sendQuery']>[3]
+): Promise<MessageChunk[]> {
+  const chunks: MessageChunk[] = [];
+  for await (const chunk of provider.sendQuery('hi', '/repo', undefined, options)) {
+    chunks.push(chunk);
+  }
+  return chunks;
+}
+
+function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
   const session: OmpSession = {
     sessionId: 'sess-1',
+    ...(options.extensionRunner ? { extensionRunner: options.extensionRunner } : {}),
     subscribe(listener) {
       this.listener = listener;
       return () => undefined;
     },
     async prompt() {
+      await options.onPrompt?.();
       const listener = this.listener as ((event: unknown) => void) | undefined;
       listener?.({
         type: 'message_update',
@@ -30,18 +60,19 @@ function makeSdk(options: { model?: unknown; apiKey?: string } = {}): OmpCodingA
   } as OmpSession & { listener?: (event: unknown) => void };
 
   return {
-    async createAgentSession() {
+    async createAgentSession(sessionOptions) {
+      options.onCreateAgentSession?.(sessionOptions);
       return {
         session,
-        setToolUIContext() {
-          return undefined;
+        setToolUIContext(uiContext, hasUI) {
+          options.onSetToolUIContext?.(uiContext, hasUI);
         },
       };
     },
     async discoverAuthStorage() {
       return {
-        setRuntimeApiKey() {
-          return undefined;
+        setRuntimeApiKey(provider, apiKey) {
+          options.onSetRuntimeApiKey?.(provider, apiKey);
         },
         async getApiKey() {
           return options.apiKey ?? 'sk-test';
@@ -49,19 +80,23 @@ function makeSdk(options: { model?: unknown; apiKey?: string } = {}): OmpCodingA
       };
     },
     ModelRegistry: class {
-      refreshInBackground() {
+      refreshInBackground(): void {
         return undefined;
       }
-      find() {
+      find(): unknown {
         return options.model ?? { provider: 'anthropic', id: 'claude-sonnet-4-5' };
       }
     },
     Settings: {
-      isolated() {
-        return {};
+      isolated(overrides = {}) {
+        options.onSettingsIsolated?.(overrides);
+        return { overrides };
       },
     },
     SessionManager: {
+      getDefaultSessionDir() {
+        return '/tmp/omp-sessions';
+      },
       create() {
         return {};
       },
@@ -96,13 +131,10 @@ describe('OmpProvider', () => {
 
   test('streams assistant and result chunks', async () => {
     const provider = new OmpProvider(async () => makeSdk());
-    const chunks = [];
-    for await (const chunk of provider.sendQuery('hi', '/repo', undefined, {
+    const chunks = await collectChunks(provider, {
       model: 'anthropic/claude-sonnet-4-5',
       outputFormat: { type: 'json_schema', schema: { type: 'object' } },
-    })) {
-      chunks.push(chunk);
-    }
+    });
 
     expect(chunks).toContainEqual({ type: 'assistant', content: '{"ok":true}' });
     expect(chunks.at(-1)).toEqual({
@@ -111,6 +143,237 @@ describe('OmpProvider', () => {
       stopReason: 'end_turn',
       sessionId: 'sess-1',
       structuredOutput: { ok: true },
+    });
+  });
+
+  test('passes verified settings overrides to isolated OMP settings', async () => {
+    let settingsOverrides: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSettingsIsolated(overrides) {
+          settingsOverrides = overrides;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: {
+        settings: {
+          retry: { enabled: false, maxRetries: 2 },
+          compaction: { enabled: true },
+          contextPromotion: { enabled: false },
+          modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
+          enabledModels: ['anthropic/*'],
+          modelProviderOrder: ['anthropic'],
+          disabledProviders: ['experimental-provider'],
+          disabledExtensions: ['risky-extension'],
+        },
+      },
+    });
+
+    expect(settingsOverrides).toEqual({
+      'retry.enabled': false,
+      'retry.maxRetries': 2,
+      'compaction.enabled': true,
+      'contextPromotion.enabled': false,
+      modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
+      enabledModels: ['anthropic/*'],
+      modelProviderOrder: ['anthropic'],
+      disabledProviders: ['experimental-provider'],
+      disabledExtensions: ['risky-extension'],
+    });
+  });
+
+  test('applies config env without overriding shell env and keeps auth overrides', async () => {
+    const originalExisting = process.env.OMP_PROVIDER_TEST_EXISTING;
+    const originalNew = process.env.OMP_PROVIDER_TEST_NEW;
+    delete process.env.OMP_PROVIDER_TEST_NEW;
+    process.env.OMP_PROVIDER_TEST_EXISTING = 'shell';
+    let runtimeOverride: [string, string] | undefined;
+
+    try {
+      const provider = new OmpProvider(async () =>
+        makeSdk({
+          onSetRuntimeApiKey(providerName, apiKey) {
+            runtimeOverride = [providerName, apiKey];
+          },
+        })
+      );
+
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        env: { ANTHROPIC_API_KEY: 'request-key' },
+        assistantConfig: {
+          env: {
+            OMP_PROVIDER_TEST_EXISTING: 'config',
+            OMP_PROVIDER_TEST_NEW: 'configured',
+          },
+        },
+      });
+
+      expect(process.env.OMP_PROVIDER_TEST_EXISTING).toBe('shell');
+      expect(process.env.OMP_PROVIDER_TEST_NEW).toBeUndefined();
+      expect(runtimeOverride).toEqual(['anthropic', 'request-key']);
+    } finally {
+      if (originalExisting === undefined) delete process.env.OMP_PROVIDER_TEST_EXISTING;
+      else process.env.OMP_PROVIDER_TEST_EXISTING = originalExisting;
+      if (originalNew === undefined) delete process.env.OMP_PROVIDER_TEST_NEW;
+      else process.env.OMP_PROVIDER_TEST_NEW = originalNew;
+    }
+  });
+
+  test('does not apply config env when model validation fails', async () => {
+    const originalNew = process.env.OMP_PROVIDER_TEST_INVALID_MODEL;
+    delete process.env.OMP_PROVIDER_TEST_INVALID_MODEL;
+    const provider = new OmpProvider(async () => makeSdk());
+
+    try {
+      await expect(async () => {
+        await collectChunks(provider, {
+          model: 'not-a-model-ref',
+          assistantConfig: { env: { OMP_PROVIDER_TEST_INVALID_MODEL: 'configured' } },
+        });
+      }).toThrow('Invalid Oh My Pi model ref');
+      expect(process.env.OMP_PROVIDER_TEST_INVALID_MODEL).toBeUndefined();
+    } finally {
+      if (originalNew === undefined) delete process.env.OMP_PROVIDER_TEST_INVALID_MODEL;
+      else process.env.OMP_PROVIDER_TEST_INVALID_MODEL = originalNew;
+    }
+  });
+
+  test('serializes overlapping config env sessions', async () => {
+    const originalShared = process.env.OMP_PROVIDER_TEST_SHARED;
+    delete process.env.OMP_PROVIDER_TEST_SHARED;
+
+    let releaseFirst: (() => void) | undefined;
+    let markFirstPromptEntered: (() => void) | undefined;
+    const firstPromptEntered = new Promise<void>(resolve => {
+      markFirstPromptEntered = resolve;
+    });
+    const providerOne = new OmpProvider(async () =>
+      makeSdk({
+        async onPrompt() {
+          expect(process.env.OMP_PROVIDER_TEST_SHARED).toBe('first');
+          markFirstPromptEntered?.();
+          await new Promise<void>(release => {
+            releaseFirst = release;
+          });
+        },
+      })
+    );
+    const firstRun = collectChunks(providerOne, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { env: { OMP_PROVIDER_TEST_SHARED: 'first' } },
+    });
+
+    try {
+      await firstPromptEntered;
+      let secondPromptValue: string | undefined;
+      const providerTwo = new OmpProvider(async () =>
+        makeSdk({
+          onPrompt() {
+            secondPromptValue = process.env.OMP_PROVIDER_TEST_SHARED;
+          },
+        })
+      );
+
+      const secondRun = collectChunks(providerTwo, {
+        model: 'anthropic/claude-sonnet-4-5',
+        assistantConfig: { env: { OMP_PROVIDER_TEST_SHARED: 'second' } },
+      });
+      await Promise.resolve();
+      expect(secondPromptValue).toBeUndefined();
+
+      releaseFirst?.();
+      await Promise.all([firstRun, secondRun]);
+
+      expect(secondPromptValue).toBe('second');
+      expect(process.env.OMP_PROVIDER_TEST_SHARED).toBeUndefined();
+    } finally {
+      releaseFirst?.();
+      if (originalShared === undefined) delete process.env.OMP_PROVIDER_TEST_SHARED;
+      else process.env.OMP_PROVIDER_TEST_SHARED = originalShared;
+    }
+  });
+
+  test('passes hasUI true by default and binds UI context', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    let boundHasUi: boolean | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+        onSetToolUIContext(_uiContext, hasUI) {
+          boundHasUi = hasUI;
+        },
+      })
+    );
+
+    await collectChunks(provider, { model: 'anthropic/claude-sonnet-4-5' });
+
+    expect(sessionOptions?.hasUI).toBe(true);
+    expect(boundHasUi).toBe(true);
+  });
+
+  test('passes hasUI false and skips UI binding when interactive is false', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    let uiBindCount = 0;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+        onSetToolUIContext() {
+          uiBindCount += 1;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { interactive: false },
+    });
+
+    expect(sessionOptions?.hasUI).toBe(false);
+    expect(uiBindCount).toBe(0);
+  });
+
+  test('applies extension flags before prompting when an extension runner exists', async () => {
+    const events: string[] = [];
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        extensionRunner: {
+          setFlagValue(name, value) {
+            events.push(`flag:${name}=${String(value)}`);
+          },
+        },
+        onPrompt() {
+          events.push('prompt');
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { extensionFlags: { plan: true, mode: 'strict' } },
+    });
+
+    expect(events).toEqual(['flag:plan=true', 'flag:mode=strict', 'prompt']);
+  });
+
+  test('warns when extension flags are configured but no extension runner exists', async () => {
+    const provider = new OmpProvider(async () => makeSdk());
+
+    const chunks = await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { extensionFlags: { plan: true } },
+    });
+
+    expect(chunks).toContainEqual({
+      type: 'system',
+      content: '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.',
     });
   });
 });

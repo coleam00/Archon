@@ -155,6 +155,30 @@ export interface OpencodeProviderDefaults {
   agent?: string;
 }
 
+export interface OmpRetrySettingsDefaults {
+  enabled?: boolean;
+  maxRetries?: number;
+}
+
+export interface OmpCompactionSettingsDefaults {
+  enabled?: boolean;
+}
+
+export interface OmpContextPromotionSettingsDefaults {
+  enabled?: boolean;
+}
+
+export interface OmpSettingsDefaults {
+  retry?: OmpRetrySettingsDefaults;
+  compaction?: OmpCompactionSettingsDefaults;
+  contextPromotion?: OmpContextPromotionSettingsDefaults;
+  modelRoles?: Record<string, string>;
+  enabledModels?: string[];
+  modelProviderOrder?: string[];
+  disabledProviders?: string[];
+  disabledExtensions?: string[];
+}
+
 /**
  * Community provider defaults for Oh My Pi (@oh-my-pi/pi-coding-agent).
  * Keep this surface intentionally small: Archon YAML remains the canonical
@@ -176,6 +200,17 @@ export interface OmpProviderDefaults {
   additionalExtensionPaths?: string[];
   /** Explicit OMP built-in tool names to expose. */
   toolNames?: string[];
+  /** Bind OMP UI context for interactive tools/extensions; defaults to true. */
+  interactive?: boolean;
+  /** OMP extension flag values applied before the first prompt. */
+  extensionFlags?: Record<string, boolean | string>;
+  /**
+   * Config-level environment for in-process OMP extensions.
+   * Existing process.env values are not overridden; shell env wins.
+   */
+  env?: Record<string, string>;
+  /** In-memory OMP Settings.isolated overrides owned by this provider. */
+  settings?: OmpSettingsDefaults;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */

@@ -9,7 +9,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export class AsyncQueue<T> implements AsyncIterable<T> {
+class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly buffer: T[] = [];
   private readonly waiters: ((result: IteratorResult<T>) => void)[] = [];
   private consumed = false;
@@ -56,7 +56,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   }
 }
 
-export function serializeToolResult(result: unknown): string {
+function serializeToolResult(result: unknown): string {
   if (typeof result === 'string') return result;
   try {
     return JSON.stringify(result);
@@ -134,67 +134,134 @@ export function tryParseStructuredOutput(text: string): unknown {
   return undefined;
 }
 
+interface ToolCallIdField {
+  toolCallId?: string;
+}
+
+function toolCallIdField(toolCallId: unknown): ToolCallIdField {
+  return typeof toolCallId === 'string' ? { toolCallId } : {};
+}
+
+function parseToolInput(args: unknown): Record<string, unknown> {
+  return typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {};
+}
+
+function mapMessageUpdate(event: Record<string, unknown>): MessageChunk[] {
+  const update = event.assistantMessageEvent as { type?: string; delta?: string } | undefined;
+  if (update?.type === 'text_delta' && typeof update.delta === 'string') {
+    return [{ type: 'assistant', content: update.delta }];
+  }
+  if (update?.type === 'thinking_delta' && typeof update.delta === 'string') {
+    return [{ type: 'thinking', content: update.delta }];
+  }
+  return [];
+}
+
+function mapToolExecutionStart(event: Record<string, unknown>): MessageChunk[] {
+  return [
+    {
+      type: 'tool',
+      toolName: String(event.toolName),
+      toolInput: parseToolInput(event.args),
+      ...toolCallIdField(event.toolCallId),
+    },
+  ];
+}
+
+function mapToolExecutionEnd(event: Record<string, unknown>): MessageChunk[] {
+  const toolName = String(event.toolName);
+  const chunks: MessageChunk[] = [];
+  if (event.isError === true) {
+    chunks.push({ type: 'system', content: `⚠️ Tool ${toolName} failed` });
+  }
+  chunks.push({
+    type: 'tool_result',
+    toolName,
+    toolOutput: serializeToolResult(event.result),
+    ...toolCallIdField(event.toolCallId),
+  });
+  return chunks;
+}
+
+function retryAttemptLabel(attempt: unknown, maxAttempts?: unknown): string {
+  const current = typeof attempt === 'number' ? String(attempt) : '?';
+  return typeof maxAttempts === 'number' ? `${current}/${maxAttempts}` : current;
+}
+
+function mapAutoRetryStart(event: Record<string, unknown>): MessageChunk[] {
+  return [
+    {
+      type: 'system',
+      content: `⚠️ retry ${retryAttemptLabel(event.attempt, event.maxAttempts)}: ${typeof event.errorMessage === 'string' ? event.errorMessage : 'request failed'}`,
+    },
+  ];
+}
+
+function mapAutoRetryEnd(event: Record<string, unknown>): MessageChunk[] {
+  const attempt = retryAttemptLabel(event.attempt);
+  return [
+    {
+      type: 'system',
+      content:
+        event.success === true
+          ? `✓ retry ${attempt} succeeded`
+          : `⚠️ retry ${attempt} failed: ${typeof event.finalError === 'string' ? event.finalError : 'request failed'}`,
+    },
+  ];
+}
+
+function mapRetryFallbackApplied(event: Record<string, unknown>): MessageChunk[] {
+  const role = typeof event.role === 'string' ? ` for ${event.role}` : '';
+  const from = typeof event.from === 'string' ? event.from : 'unknown';
+  const to = typeof event.to === 'string' ? event.to : 'unknown';
+  return [{ type: 'system', content: `⚠️ OMP retry fallback applied${role}: ${from} → ${to}` }];
+}
+
+function mapRetryFallbackSucceeded(event: Record<string, unknown>): MessageChunk[] {
+  const role = typeof event.role === 'string' ? ` for ${event.role}` : '';
+  const model = typeof event.model === 'string' ? event.model : 'unknown';
+  return [{ type: 'system', content: `✓ OMP retry fallback succeeded${role}: ${model}` }];
+}
+
+function mapAutoCompactionStart(event: Record<string, unknown>): MessageChunk[] {
+  const reason = typeof event.reason === 'string' ? event.reason : 'unknown';
+  const action = typeof event.action === 'string' ? event.action : 'unknown';
+  return [{ type: 'system', content: `⚠️ OMP auto-compaction started (${reason}, ${action}).` }];
+}
+
+function mapAutoCompactionEnd(event: Record<string, unknown>): MessageChunk[] {
+  if (event.skipped === true) return [];
+  if (event.aborted === true) {
+    const suffix = typeof event.errorMessage === 'string' ? `: ${event.errorMessage}` : '';
+    return [{ type: 'system', content: `⚠️ OMP auto-compaction aborted${suffix}` }];
+  }
+
+  const action = typeof event.action === 'string' ? event.action : 'unknown';
+  return [{ type: 'system', content: `✓ OMP auto-compaction completed (${action}).` }];
+}
+
 export function mapOmpEvent(event: { type?: string } & Record<string, unknown>): MessageChunk[] {
   switch (event.type) {
-    case 'message_update': {
-      const update = (event as { assistantMessageEvent?: { type?: string; delta?: string } })
-        .assistantMessageEvent;
-      if (update?.type === 'text_delta' && typeof update.delta === 'string') {
-        return [{ type: 'assistant', content: update.delta }];
-      }
-      if (update?.type === 'thinking_delta' && typeof update.delta === 'string') {
-        return [{ type: 'thinking', content: update.delta }];
-      }
-      return [];
-    }
-    case 'tool_execution_start': {
-      const toolEvent = event as {
-        toolName: string;
-        args?: unknown;
-        toolCallId?: string;
-      };
-      return [
-        {
-          type: 'tool',
-          toolName: toolEvent.toolName,
-          toolInput:
-            typeof toolEvent.args === 'object' && toolEvent.args !== null
-              ? (toolEvent.args as Record<string, unknown>)
-              : {},
-          ...(toolEvent.toolCallId ? { toolCallId: toolEvent.toolCallId } : {}),
-        },
-      ];
-    }
-    case 'tool_execution_end': {
-      const toolEvent = event as {
-        toolName: string;
-        result?: unknown;
-        isError?: boolean;
-        toolCallId?: string;
-      };
-      const chunks: MessageChunk[] = [];
-      if (toolEvent.isError) {
-        chunks.push({ type: 'system', content: `⚠️ Tool ${toolEvent.toolName} failed` });
-      }
-      chunks.push({
-        type: 'tool_result',
-        toolName: toolEvent.toolName,
-        toolOutput: serializeToolResult(toolEvent.result),
-        ...(toolEvent.toolCallId ? { toolCallId: toolEvent.toolCallId } : {}),
-      });
-      return chunks;
-    }
+    case 'message_update':
+      return mapMessageUpdate(event);
+    case 'tool_execution_start':
+      return mapToolExecutionStart(event);
+    case 'tool_execution_end':
+      return mapToolExecutionEnd(event);
     case 'agent_end':
-      return [buildResultChunk((event as { messages?: unknown[] }).messages ?? [])];
-    case 'auto_retry_start': {
-      const retry = event as { attempt?: number; maxAttempts?: number; errorMessage?: string };
-      return [
-        {
-          type: 'system',
-          content: `⚠️ retry ${retry.attempt ?? '?'}${retry.maxAttempts ? `/${retry.maxAttempts}` : ''}: ${retry.errorMessage ?? 'request failed'}`,
-        },
-      ];
-    }
+      return [buildResultChunk((event.messages as unknown[] | undefined) ?? [])];
+    case 'auto_retry_start':
+      return mapAutoRetryStart(event);
+    case 'auto_retry_end':
+      return mapAutoRetryEnd(event);
+    case 'retry_fallback_applied':
+      return mapRetryFallbackApplied(event);
+    case 'retry_fallback_succeeded':
+      return mapRetryFallbackSucceeded(event);
+    case 'auto_compaction_start':
+      return mapAutoCompactionStart(event);
+    case 'auto_compaction_end':
+      return mapAutoCompactionEnd(event);
     default:
       return [];
   }
@@ -204,10 +271,32 @@ export interface BridgeNotifier {
   setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
 }
 
-export type BridgeQueueItem =
+type BridgeQueueItem =
   | { kind: 'chunk'; chunk: MessageChunk }
   | { kind: 'done' }
   | { kind: 'error'; error: Error };
+
+type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
+
+function attachResultMetadata(
+  chunk: ResultChunk,
+  session: OmpSession,
+  wantsStructured: boolean,
+  assistantBuffer: string
+): ResultChunk {
+  let terminal = chunk;
+
+  const sessionId = session.sessionId;
+  if (sessionId) terminal = { ...terminal, sessionId };
+
+  if (!wantsStructured) return terminal;
+
+  const parsed = tryParseStructuredOutput(assistantBuffer);
+  if (parsed !== undefined) return { ...terminal, structuredOutput: parsed };
+
+  getLog().warn({ bufferLength: assistantBuffer.length }, 'omp.structured_parse_failed');
+  return terminal;
+}
 
 export async function* bridgeSession(
   session: OmpSession,
@@ -259,16 +348,7 @@ export async function* bridgeSession(
       if (item.kind === 'done') return;
       if (item.kind === 'error') throw item.error;
       if (item.chunk.type === 'result') {
-        let terminal: MessageChunk = item.chunk;
-        const sessionId = session.sessionId;
-        if (sessionId) terminal = { ...terminal, sessionId };
-        if (wantsStructured) {
-          const parsed = tryParseStructuredOutput(assistantBuffer);
-          if (parsed !== undefined) terminal = { ...terminal, structuredOutput: parsed };
-          else
-            getLog().warn({ bufferLength: assistantBuffer.length }, 'omp.structured_parse_failed');
-        }
-        yield terminal;
+        yield attachResultMetadata(item.chunk, session, wantsStructured, assistantBuffer);
       } else {
         yield item.chunk;
       }
