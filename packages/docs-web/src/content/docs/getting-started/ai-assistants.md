@@ -231,7 +231,7 @@ DEFAULT_AI_ASSISTANT=codex
 
 ## GitHub Copilot (Community Provider)
 
-**SDK-backed community provider.** Archon's Copilot adapter uses `@github/copilot-sdk`, which drives the Copilot CLI through GitHub's supported JSON-RPC bridge — no TUI scraping.
+**Use a GitHub Copilot subscription inside Archon workflows.** Drives the Copilot CLI via `@github/copilot-sdk`, supporting OpenAI, Anthropic via BYOK, Gemini, and the other models Copilot exposes — switch between them with the `model` field.
 
 Copilot is registered as `builtIn: false` — like Pi, a bundled community provider rather than a core built-in.
 
@@ -271,38 +271,22 @@ Copilot auth is delegated to the Copilot CLI/SDK. Pick one:
 
 An active GitHub Copilot subscription is required for any of these to work.
 
-Request-scoped env vars take precedence, so codebase env overrides work the same way they do for the other providers.
+### Copilot Configuration Options
 
-### Set Default Model
-
-```yaml
-# .archon/config.yaml
-assistants:
-  copilot:
-    model: gpt-5-mini
-```
-
-Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`claude-sonnet-4.5`), Gemini, and more. When no model is configured, Archon passes `model: 'auto'` — Copilot picks.
-
-### Additional Config
+You can configure Copilot's behavior in `.archon/config.yaml`:
 
 ```yaml
 assistants:
   copilot:
-    model: gpt-5-mini
-    # Reasoning effort for the default model
+    model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
     modelReasoningEffort: medium  # 'low' | 'medium' | 'high' | 'xhigh' | 'max' (alias for xhigh)
-    # Override Copilot's config directory
     # configDir: /absolute/path/to/copilot-config
-    # Allow Copilot to auto-discover repo MCP/skills (off by default)
-    # enableConfigDiscovery: false
-    # Reuse `copilot login` creds when no explicit token (default: true)
-    # useLoggedInUser: true
-    # CLI log level
-    # logLevel: error  # 'none' | 'error' | 'warning' | 'info' | 'debug' | 'all'
+    # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
+    # useLoggedInUser: true         # force `copilot login` creds even when a token is set
+    # logLevel: error               # 'none' | 'error' | 'warning' | 'info' | 'debug' | 'all'
 ```
 
-> **⚠️ Trust boundary.** `enableConfigDiscovery: true` lets the Copilot CLI/SDK load repo-level config (e.g. `.mcp.json`, `.vscode/mcp.json`, skill directories) directly, bypassing Archon's workflow validation surface. Only enable it for repositories you trust. Default is `false` — MCP/skills stay under explicit workflow control via `nodeConfig.mcp` and `nodeConfig.skills`.
+Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`claude-sonnet-4.5`), Gemini, and more. When no model is configured, Archon passes `model: 'auto'` and Copilot picks.
 
 ### Supported Archon Features
 
@@ -328,6 +312,11 @@ assistants:
 ```ini
 DEFAULT_AI_ASSISTANT=copilot
 ```
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) — upstream SDK.
 
 ## Pi (Community Provider)
 
