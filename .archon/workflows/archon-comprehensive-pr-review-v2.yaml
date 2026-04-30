@@ -27,9 +27,18 @@ nodes:
   - id: checkout-pr-branch
     bash: |
       set -euo pipefail
-      PR=$(cat "$ARTIFACTS_DIR/.pr-number")
+      # Extract PR number from $ARGUMENTS — robust to scope's behaviour.
+      # Workflow message looks like "Review PR #77 (closes issue #61)" —
+      # take the first numeric token, strip any leading #.
+      PR=$(echo "$ARGUMENTS" | grep -oE '#?[0-9]+' | head -1 | tr -d '#')
+      if [ -z "$PR" ]; then
+        echo "Could not extract PR number from message: $ARGUMENTS" >&2
+        exit 1
+      fi
       echo "Checking out PR #$PR's branch in this worktree…"
       gh pr checkout "$PR"
+      # Write .pr-number for any downstream node that expects it
+      echo "$PR" > "$ARTIFACTS_DIR/.pr-number"
       echo "Now on: $(git branch --show-current)"
       echo "HEAD:   $(git rev-parse --short HEAD)"
     depends_on: [scope]
