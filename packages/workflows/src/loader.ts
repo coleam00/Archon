@@ -143,14 +143,25 @@ function validateDagStructure(nodes: DagNode[]): string | null {
     return `Cycle detected among nodes: ${cycleNodes.join(', ')}`;
   }
 
-  // Check $nodeId.output references in when: and prompt: fields
+  // Check $nodeId.output references in when: and prompt: fields.
+  // Triple-backtick fenced blocks and single-backtick inline code inside a
+  // prompt body are documentation meant to render literally to the LLM
+  // (e.g. the workflow-builder shows authors how to write
+  // `$<other-node>.output` inside a script-node example); strip them before
+  // scanning so they don't false-match as real cross-node references. when:
+  // clauses are JS-like expressions and never carry markdown code, so they
+  // pass through unchanged.
   const outputRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+  const stripMarkdownCode = (s: string): string =>
+    s.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
   for (const node of nodes) {
     const sources: string[] = [];
     if (node.when) sources.push(node.when);
-    if ('prompt' in node && typeof node.prompt === 'string') sources.push(node.prompt);
+    if ('prompt' in node && typeof node.prompt === 'string') {
+      sources.push(stripMarkdownCode(node.prompt));
+    }
     if (isLoopNode(node)) {
-      sources.push(node.loop.prompt);
+      sources.push(stripMarkdownCode(node.loop.prompt));
     }
     for (const source of sources) {
       let m: RegExpExecArray | null;

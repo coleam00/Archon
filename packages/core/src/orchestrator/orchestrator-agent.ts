@@ -347,12 +347,15 @@ async function dispatchOrchestratorWorkflow(
 
 // ─── Session Helpers ────────────────────────────────────────────────────────
 
-async function tryPersistSessionId(sessionId: string, assistantSessionId: string): Promise<void> {
+async function tryPersistSessionId(
+  sessionId: string,
+  assistantSessionId: string | null
+): Promise<void> {
   try {
     await sessionDb.updateSession(sessionId, assistantSessionId);
   } catch (error) {
     getLog().error(
-      { err: error as Error, sessionId, newSessionId: assistantSessionId },
+      { err: error as Error, sessionId, persistedValue: assistantSessionId },
       'session_id_persist_failed'
     );
   }
@@ -976,11 +979,32 @@ async function handleStreamMode(
         await platform.sendStructuredEvent(conversationId, msg);
       }
     } else if (msg.type === 'result') {
-      if (msg.sessionId) {
+      if (msg.isError && msg.errorSubtype === 'error_during_execution') {
+        getLog().warn(
+          {
+            conversationId,
+            errorSubtype: msg.errorSubtype,
+            staleSessionId: msg.sessionId,
+            errors: msg.errors,
+            stopReason: msg.stopReason,
+          },
+          'clearing_stale_session_id'
+        );
+        await tryPersistSessionId(session.id, null);
+        newSessionId = undefined;
+      } else if (msg.sessionId) {
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
-        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
+        getLog().warn(
+          {
+            conversationId,
+            errorSubtype: msg.errorSubtype,
+            errors: msg.errors,
+            stopReason: msg.stopReason,
+          },
+          'ai_result_error'
+        );
         const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
         if (newSessionId) {
@@ -1099,11 +1123,32 @@ async function handleBatchMode(
         getLog().debug({ toolName: msg.toolName }, 'tool_call');
       }
     } else if (msg.type === 'result') {
-      if (msg.sessionId) {
+      if (msg.isError && msg.errorSubtype === 'error_during_execution') {
+        getLog().warn(
+          {
+            conversationId,
+            errorSubtype: msg.errorSubtype,
+            staleSessionId: msg.sessionId,
+            errors: msg.errors,
+            stopReason: msg.stopReason,
+          },
+          'clearing_stale_session_id'
+        );
+        await tryPersistSessionId(session.id, null);
+        newSessionId = undefined;
+      } else if (msg.sessionId) {
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
-        getLog().warn({ conversationId, errorSubtype: msg.errorSubtype }, 'ai_result_error');
+        getLog().warn(
+          {
+            conversationId,
+            errorSubtype: msg.errorSubtype,
+            errors: msg.errors,
+            stopReason: msg.stopReason,
+          },
+          'ai_result_error'
+        );
         const syntheticError = new Error(msg.errorSubtype ?? 'AI result error');
         await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
         if (newSessionId) {

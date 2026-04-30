@@ -1777,6 +1777,117 @@ nodes:
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
     });
+
+    it('should ignore $nodeId.output inside fenced code blocks in prompt: bodies', async () => {
+      // Prompt bodies often embed fenced documentation examples for the LLM
+      // (e.g. workflow-builder shows how to author a script node). The literal
+      // $other-node.output in such a fence is documentation, not a real ref.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'fenced-doc.yaml'),
+        `
+name: fenced-doc
+description: Prompt body with a fenced code example mentioning a literal output ref
+nodes:
+  - id: writer
+    prompt: |
+      Author a workflow that uses a script node:
+
+      \`\`\`yaml
+      script: |
+        const data = $other-node.output;
+        console.log(data);
+      \`\`\`
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('should ignore $nodeId.output inside inline backtick code in prompt: bodies', async () => {
+      // Inline `code` mentions like \`$nodeId.output\` are also documentation.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'inline-doc.yaml'),
+        `
+name: inline-doc
+description: Prompt body that mentions a placeholder via inline backticks
+nodes:
+  - id: writer
+    prompt: |
+      Use \`$nodeId.output\` to reference a sibling node's output.
+      For Python, prefer \`json.loads("""$nodeId.output""")\`.
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
+
+    it('should still reject unknown $nodeId.output refs outside code', async () => {
+      // Stripping fenced/inline code must not weaken validation of real refs
+      // that appear in prose outside any code marker.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'mixed-ref.yaml'),
+        `
+name: mixed-ref
+description: Real (unknown) ref in prose plus a fenced doc example
+nodes:
+  - id: step1
+    prompt: |
+      Build on $missing-node.output to do the work.
+
+      Example:
+
+      \`\`\`
+      const x = $other-node.output;
+      \`\`\`
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('missing-node');
+    });
+
+    it('should ignore $nodeId.output inside fenced code in loop.prompt', async () => {
+      // Loop prompts get the same documentation-stripping treatment as node prompts.
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-fenced.yaml'),
+        `
+name: loop-fenced
+description: Loop with a fenced doc example in its prompt
+nodes:
+  - id: my-loop
+    loop:
+      prompt: |
+        Iterate. Example syntax:
+
+        \`\`\`
+        $other-node.output
+        \`\`\`
+      until: DONE
+      max_iterations: 3
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+    });
   });
 
   describe('retry config parsing', () => {

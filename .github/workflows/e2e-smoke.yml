@@ -53,8 +53,12 @@ jobs:
       - name: Run Claude smoke test
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          CLAUDE_BIN_PATH: ~/.local/bin/claude
-        run: bun run cli workflow run e2e-claude-smoke --no-worktree "smoke test"
+        run: |
+          # YAML `env:` values don't expand `~`, so set CLAUDE_BIN_PATH in the
+          # shell where $HOME resolves. The native installer drops the binary
+          # at $HOME/.local/bin/claude.
+          export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
+          bun run cli workflow run e2e-claude-smoke --no-worktree "smoke test"
 
   # ─── Tier 2b: Codex provider ───────────────────────────────────────────
   e2e-codex:
@@ -119,5 +123,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CLAUDE_BIN_PATH: ~/.local/bin/claude
-        run: bun run cli workflow run e2e-mixed-providers --no-worktree "smoke test"
+        run: |
+          # YAML `env:` values don't expand `~`, so set CLAUDE_BIN_PATH in the
+          # shell where $HOME resolves. The native installer drops the binary
+          # at $HOME/.local/bin/claude.
+          export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
+          bun run cli workflow run e2e-mixed-providers --no-worktree "smoke test"

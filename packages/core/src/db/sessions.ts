@@ -58,7 +58,7 @@ export async function createSession(data: {
   return result.rows[0];
 }
 
-export async function updateSession(id: string, sessionId: string): Promise<void> {
+export async function updateSession(id: string, sessionId: string | null): Promise<void> {
   const result = await pool.query(
     'UPDATE remote_agent_sessions SET assistant_session_id = $1 WHERE id = $2',
     [sessionId, id]

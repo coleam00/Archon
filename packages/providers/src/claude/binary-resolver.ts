@@ -6,15 +6,17 @@
  * own node_modules location; in compiled binaries that path is frozen to
  * the build host's filesystem and does not exist on end-user machines.
  *
- * Resolution order (binary mode only):
- * 1. `CLAUDE_BIN_PATH` environment variable
- * 2. `assistants.claude.claudeBinaryPath` in config
- * 3. Autodetect canonical install path (native installer default)
- * 4. Throw with install instructions
+ * Resolution order:
+ * 1. `CLAUDE_BIN_PATH` environment variable (honored in both modes — escape
+ *    hatch for hosts where the SDK's per-platform binary auto-resolution
+ *    picks the wrong variant, e.g. glibc Linux + musl SDK package)
+ * 2. `assistants.claude.claudeBinaryPath` in config (binary mode only)
+ * 3. Autodetect canonical install path (binary mode only — native installer default)
+ * 4. Throw with install instructions (binary mode only)
  *
- * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the caller
- * omits `pathToClaudeCodeExecutable` entirely and the SDK resolves via its
- * normal node_modules lookup.
+ * In dev mode (BUNDLED_IS_BINARY=false), if no env var is set, returns
+ * undefined so the caller omits `pathToClaudeCodeExecutable` entirely and
+ * the SDK resolves via its normal node_modules lookup.
  */
 import { existsSync as _existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -57,16 +59,18 @@ const INSTALL_INSTRUCTIONS =
  * legacy `cli.js` is still accepted for operators pinned to npm-installed
  * SDKs that ship a JS entry point).
  *
- * In dev mode: returns undefined (let SDK resolve from its bundled per-platform
- * native binary in `@anthropic-ai/claude-agent-sdk-<platform>`).
- * In binary mode: resolves from env/config, or throws with install instructions.
+ * In dev mode: honors `CLAUDE_BIN_PATH` if set; otherwise returns undefined
+ * (let SDK resolve from its bundled per-platform native binary in
+ * `@anthropic-ai/claude-agent-sdk-<platform>`).
+ * In binary mode: resolves from env/config/autodetect, or throws with
+ * install instructions.
  */
 export async function resolveClaudeBinaryPath(
   configClaudeBinaryPath?: string
 ): Promise<string | undefined> {
-  if (!BUNDLED_IS_BINARY) return undefined;
-
-  // 1. Environment variable override
+  // 1. Environment variable override — honored in dev mode too, so operators
+  // on libc mismatches (e.g. glibc host with the SDK's musl variant first in
+  // its resolution order) can pin a known-good binary without a compiled build.
   const envPath = process.env.CLAUDE_BIN_PATH;
   if (envPath) {
     if (!fileExists(envPath)) {
@@ -79,6 +83,8 @@ export async function resolveClaudeBinaryPath(
     getLog().info({ binaryPath: envPath, source: 'env' }, 'claude.binary_resolved');
     return envPath;
   }
+
+  if (!BUNDLED_IS_BINARY) return undefined;
 
   // 2. Config file override
   if (configClaudeBinaryPath) {

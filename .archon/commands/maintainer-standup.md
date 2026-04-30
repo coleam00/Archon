@@ -11,6 +11,40 @@ You are producing a daily maintainer briefing for the Archon project. The user i
 
 ---
 
+## Output format (read this FIRST, follow exactly)
+
+Your response must be exactly two parts in order:
+
+1. **Brief markdown** — starting with the literal line `# Maintainer Standup — YYYY-MM-DD` and continuing through the brief.
+2. **State JSON block** — delimited by `ARCHON_STATE_JSON_BEGIN` and `ARCHON_STATE_JSON_END`, each on its own line, with valid JSON between them.
+
+**Hard rules:**
+
+- Start the response with the `#` heading. No prose preamble. No "Looking at the data...", no `<thinking>`, no analysis dump, no "Now I'll synthesize...".
+- Do NOT wrap the response in a JSON object. Specifically: do NOT output `{"brief_markdown": "...", "next_state": {...}}` — that is the OLD contract and is wrong.
+- Do NOT use markdown code fences around the `ARCHON_STATE_JSON_BEGIN`/`ARCHON_STATE_JSON_END` markers — the markers must be plain lines.
+- Nothing after the closing marker. The closing marker is the last line of your response.
+
+**Skeleton example** (illustrative — your actual brief uses real content):
+
+```
+# Maintainer Standup — 2026-04-29
+
+## Since last run
+- ...
+
+## P1 — Do today
+- **PR #N** — ...
+
+ARCHON_STATE_JSON_BEGIN
+{"last_run_at":"2026-04-29T07:00:00Z","last_dev_sha":"abc123","carry_over":[],"observed_prs":[{"number":1,"title":"x"}],"observed_issues":[],"direction_questions":[]}
+ARCHON_STATE_JSON_END
+```
+
+(In your real output the markers and JSON are NOT inside a code fence.)
+
+---
+
 ## Phase 1: LOAD INPUTS
 
 You have three sources of upstream context, all already gathered. Each is a JSON string that you should parse.
@@ -54,7 +88,7 @@ If `prior_state` is `null` and `recent_briefs` is empty, this is a **first run**
 When `prior_state` exists:
 
 - **Resolved since last run**: PRs in `prior_state.observed_prs` whose numbers do NOT appear in current `gh-data.output.all_open_prs` — they were closed or merged. Cross-reference against `gh-data.output.recently_closed_prs` to know whether they merged or were closed without merging. Same for issues.
-- **Carry-over revisited**: each item in `prior_state.carry_over` — is it still open? Did its status change? If resolved, mention briefly under "Resolved since last run" and DROP from `next_state.carry_over`. If still pending, keep with original `first_seen` date (so age is preserved).
+- **Carry-over revisited**: each item in `prior_state.carry_over` — is it still open? Did its status change? If resolved, mention briefly under "Resolved since last run" and DROP from the state JSON's `carry_over`. If still pending, keep with original `first_seen` date (so age is preserved).
 - **What you shipped**: `gh-data.output.my_recent_commits` lists the maintainer's commits since the last run. Summarize meaningfully — group by area, highlight notable ones. Don't just list shas.
 - **New since last run**: PRs in current `all_open_prs` whose numbers are NOT in `prior_state.observed_prs` are new this run. Same for issues.
 
@@ -83,7 +117,7 @@ Issues in `issues_assigned` and `recent_unlabeled_issues` follow the same P1-P4 
 
 ### 2f. Surface direction questions
 
-If any PR raises a "we don't have a stance on this" question that `direction.md` doesn't answer, surface it under **Direction questions raised**. These go into `next_state.direction_questions` so the maintainer can absorb them into `direction.md` over time.
+If any PR raises a "we don't have a stance on this" question that `direction.md` doesn't answer, surface it under **Direction questions raised**. These go into the state JSON's `direction_questions` so the maintainer can absorb them into `direction.md` over time.
 
 ### 2g. Carry-over aging
 
@@ -105,9 +139,11 @@ PRs not in `reviewed_prs` get no marker (their absence is itself the signal: "no
 
 ## Phase 3: GENERATE OUTPUT
 
-Return a JSON object matching the workflow's `output_format` schema. Do not write any files yourself — the workflow's `persist` node handles disk writes from your structured response.
+Output the brief as plain markdown FIRST, then a state JSON block at the end with EXACT delimiters. The persist node parses your output by splitting on those delimiters — do not return a JSON object wrapping the brief, and do not write any files yourself.
 
-### `brief_markdown` (string)
+**No prose preamble.** Start the response with the `# Maintainer Standup` heading. **No content after the closing state marker.**
+
+### Brief markdown (first)
 
 A maintainer-ready markdown brief. Adapt sections — omit empty ones, add others if useful. Keep entries to one line each. The brief should be readable on a single screen.
 
@@ -153,9 +189,30 @@ A maintainer-ready markdown brief. Adapt sections — omit empty ones, add other
 - (Omit section if nothing carried over.)
 ```
 
-### `next_state` (object)
+### State JSON block (LAST)
 
-Carry-over state for tomorrow's run. Schema:
+Immediately after the brief, emit a state JSON block with these EXACT delimiter lines (each on its own line, no surrounding code fences, no leading/trailing whitespace, no markdown formatting around them):
+
+```
+ARCHON_STATE_JSON_BEGIN
+{
+  "last_run_at": "<ISO-8601 timestamp>",
+  "last_dev_sha": "<git-status.output.current_dev_sha>",
+  "carry_over": [
+    { "kind": "pr|issue|task|direction_question", "id": "<PR/issue number as string>", "note": "<why carried>", "first_seen": "<YYYY-MM-DD>" }
+  ],
+  "observed_prs": [
+    { "number": <num>, "title": "<title>" }
+  ],
+  "observed_issues": [
+    { "number": <num>, "title": "<title>" }
+  ],
+  "direction_questions": ["<surfaced question>"]
+}
+ARCHON_STATE_JSON_END
+```
+
+State schema rules:
 
 - `last_run_at`: current ISO-8601 timestamp (use the actual timestamp at synthesis time).
 - `last_dev_sha`: value from `git-status.output.current_dev_sha`.
@@ -164,17 +221,23 @@ Carry-over state for tomorrow's run. Schema:
 - `observed_issues`: same for assigned + unlabeled issues.
 - `direction_questions`: new direction questions surfaced this run (string array).
 
+The block must be valid JSON between the markers. Use empty arrays `[]` for sections with no entries — do not omit fields.
+
 ### PHASE_3_CHECKPOINT
 
+- [ ] Response starts with the `# Maintainer Standup` heading (no prose preamble).
+- [ ] State block uses the exact `ARCHON_STATE_JSON_BEGIN` / `ARCHON_STATE_JSON_END` markers, each on its own line.
+- [ ] State block is valid JSON between the markers (no trailing commas, all required fields present).
+- [ ] Nothing follows the closing marker.
 - [ ] Every PR in `all_open_prs` is either classified into P1-P4 OR included in `observed_prs` (no PR silently dropped).
 - [ ] All P4 entries cite a specific `direction.md §clause`.
 - [ ] Carry-over items still pending have their original `first_seen` preserved.
-- [ ] Resolved-since-last-run items are surfaced in the brief AND removed from `next_state.carry_over`.
-- [ ] `next_state.last_dev_sha` is set from `git-status.output.current_dev_sha`.
-- [ ] `next_state.observed_prs` includes ALL currently-open PRs.
+- [ ] Resolved-since-last-run items are surfaced in the brief AND removed from `state.carry_over`.
+- [ ] `state.last_dev_sha` is set from `git-status.output.current_dev_sha`.
+- [ ] `state.observed_prs` includes ALL currently-open PRs.
 
 ---
 
 ## Phase 4: REPORT
 
-Return the JSON object only. The workflow's `persist` node writes `brief_markdown` to `.archon/maintainer-standup/briefs/<date>.md` and `next_state` to `.archon/maintainer-standup/state.json`. Do not write files yourself.
+Output the brief markdown then the delimited state block — nothing else. The persist node writes the brief markdown (everything before `ARCHON_STATE_JSON_BEGIN`) to `.archon/maintainer-standup/briefs/<date>.md` and the state JSON (between the markers) to `.archon/maintainer-standup/state.json`. Do not write files yourself.

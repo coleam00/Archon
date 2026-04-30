@@ -73,8 +73,11 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    - `runtime: uv` + inline  → `uv run [--with dep ...] python -c '<code>'`
    - `runtime: uv` + named   → `uv run [--with dep ...] <path>`
 4. **Capture.** `stdout` (with the trailing newline stripped) becomes
-   `$nodeId.output`. `stderr` is logged as a warning and posted to the
-   conversation but does **not** fail the node. A non-zero exit code fails it.
+   `$nodeId.output`. On a successful run, `stderr` is logged as a warning and
+   posted to the conversation but does **not** fail the node. A non-zero exit
+   code fails the node; on failure, `stderr` is the diagnostic surfaced in the
+   error message (`Script node 'X' failed [exit N]: <stderr>`) — the script
+   body is never echoed back to users.
 
 ## YAML Schema
 

@@ -60,6 +60,8 @@ If neither is set in a compiled binary, Archon throws with install instructions 
 
 The Claude Agent SDK accepts either the native compiled binary or a JS `cli.js`.
 
+**Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
+
 **Typical paths by install method:**
 
 | Install method | Typical executable path |
@@ -375,7 +377,7 @@ nodes:
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
 | MCP servers | ❌ | Pi rejects MCP by design |
 | Claude-SDK hooks | ❌ | Claude-specific format |
-| Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text (bare or ```json```-fenced); degrades cleanly when the model emits prose. Not SDK-enforced like Claude/Codex. |
+| Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, and reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern). Trailing-text-interleaved cases still degrade cleanly to the missing-structured-output warning. Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
 | Fallback model | ❌ | not native in Pi |
 | Sandbox | ❌ | not native in Pi |
