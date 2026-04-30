@@ -37,6 +37,17 @@ const labelClass = 'text-[10px] text-text-tertiary uppercase tracking-wide';
 const textareaClass =
   'w-full rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-text-primary font-mono placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent resize-y';
 
+type LoopConfig = NonNullable<DagNode['loop']>;
+
+function createDefaultLoopConfig(): LoopConfig {
+  return {
+    prompt: '',
+    until: 'COMPLETE',
+    max_iterations: 5,
+    fresh_context: false,
+  };
+}
+
 function parseToolsList(value: string): string[] | undefined {
   if (!value.trim()) return undefined;
   return value
@@ -193,6 +204,10 @@ function GeneralTab({
   commands: CommandEntry[];
   onUpdate: (updates: Partial<DagNodeData>) => void;
 }): React.ReactElement {
+  const updateLoop = (updates: Partial<LoopConfig>): void => {
+    onUpdate({ loop: { ...createDefaultLoopConfig(), ...node.loop, ...updates } });
+  };
+
   return (
     <div className="flex flex-col gap-3 p-3">
       {/* Node ID */}
@@ -221,13 +236,16 @@ function GeneralTab({
               updates.promptText = undefined;
               updates.bashScript = undefined;
               updates.bashTimeout = undefined;
+              updates.loop = undefined;
               updates.label = '';
             } else if (newType === 'prompt') {
               updates.bashScript = undefined;
               updates.bashTimeout = undefined;
+              updates.loop = undefined;
               updates.label = 'Prompt';
             } else if (newType === 'bash') {
               updates.promptText = undefined;
+              updates.loop = undefined;
               updates.label = 'Shell';
               updates.allowed_tools = undefined;
               updates.denied_tools = undefined;
@@ -235,6 +253,20 @@ function GeneralTab({
               updates.hooks = undefined;
               updates.mcp = undefined;
               updates.skills = undefined;
+            } else if (newType === 'loop') {
+              updates.promptText = undefined;
+              updates.bashScript = undefined;
+              updates.bashTimeout = undefined;
+              updates.loop = node.loop ?? createDefaultLoopConfig();
+              updates.label = 'Loop';
+              updates.context = undefined;
+              updates.allowed_tools = undefined;
+              updates.denied_tools = undefined;
+              updates.output_format = undefined;
+              updates.hooks = undefined;
+              updates.mcp = undefined;
+              updates.skills = undefined;
+              updates.retry = undefined;
             }
             onUpdate(updates);
           }}
@@ -243,6 +275,7 @@ function GeneralTab({
           <option value="command">Command</option>
           <option value="prompt">Prompt</option>
           <option value="bash">Bash</option>
+          <option value="loop">Loop</option>
         </select>
       </Field>
 
@@ -278,6 +311,93 @@ function GeneralTab({
             className={cn(textareaClass, 'min-h-[120px]')}
           />
         </Field>
+      )}
+
+      {node.nodeType === 'loop' && (
+        <>
+          <Field label="Loop Prompt">
+            <textarea
+              value={node.loop?.prompt ?? ''}
+              onChange={(e): void => {
+                updateLoop({ prompt: e.target.value });
+              }}
+              rows={5}
+              placeholder="Enter loop prompt..."
+              className={cn(textareaClass, 'min-h-[120px]')}
+            />
+          </Field>
+          <Field label="Completion Signal">
+            <input
+              type="text"
+              value={node.loop?.until ?? ''}
+              onChange={(e): void => {
+                updateLoop({ until: e.target.value });
+              }}
+              placeholder="COMPLETE"
+              className={cn(inputClass, 'font-mono')}
+            />
+          </Field>
+          <Field label="Max Iterations">
+            <input
+              type="number"
+              min={1}
+              value={node.loop?.max_iterations ?? ''}
+              onChange={(e): void => {
+                updateLoop({ max_iterations: e.target.value ? Number(e.target.value) : 0 });
+              }}
+              placeholder="5"
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Fresh Context">
+            <select
+              value={node.loop?.fresh_context === true ? 'true' : 'false'}
+              onChange={(e): void => {
+                updateLoop({ fresh_context: e.target.value === 'true' });
+              }}
+              className={selectClass}
+            >
+              <option value="false">False</option>
+              <option value="true">True</option>
+            </select>
+          </Field>
+          <Field label="Until Bash">
+            <textarea
+              value={node.loop?.until_bash ?? ''}
+              onChange={(e): void => {
+                updateLoop({ until_bash: e.target.value || undefined });
+              }}
+              rows={3}
+              placeholder="Optional shell completion check"
+              className={textareaClass}
+            />
+          </Field>
+          <Field label="Interactive">
+            <select
+              value={node.loop?.interactive === true ? 'true' : 'false'}
+              onChange={(e): void => {
+                updateLoop({ interactive: e.target.value === 'true' ? true : undefined });
+              }}
+              className={selectClass}
+            >
+              <option value="false">False</option>
+              <option value="true">True</option>
+            </select>
+          </Field>
+          {node.loop?.interactive === true && (
+            <Field label="Gate Message">
+              <textarea
+                value={node.loop?.gate_message ?? ''}
+                onChange={(e): void => {
+                  updateLoop({ gate_message: e.target.value || undefined });
+                }}
+                rows={3}
+                placeholder="Message shown while waiting for user input"
+                className={textareaClass}
+              />
+            </Field>
+          )}
+        </>
       )}
 
       {node.nodeType === 'bash' && (
@@ -342,6 +462,7 @@ function ExecutionTab({
   onUpdate: (updates: Partial<DagNodeData>) => void;
 }): React.ReactElement {
   const isBash = node.nodeType === 'bash';
+  const isLoop = node.nodeType === 'loop';
 
   return (
     <div className="flex flex-col gap-3 p-3">
@@ -361,18 +482,20 @@ function ExecutionTab({
             />
           </Field>
 
-          <Field label="Context">
-            <select
-              value={node.context ?? ''}
-              onChange={(e): void => {
-                onUpdate({ context: (e.target.value || undefined) as 'fresh' | undefined });
-              }}
-              className={selectClass}
-            >
-              <option value="">Inherit</option>
-              <option value="fresh">Fresh</option>
-            </select>
-          </Field>
+          {!isLoop && (
+            <Field label="Context">
+              <select
+                value={node.context ?? ''}
+                onChange={(e): void => {
+                  onUpdate({ context: (e.target.value || undefined) as 'fresh' | undefined });
+                }}
+                className={selectClass}
+              >
+                <option value="">Inherit</option>
+                <option value="fresh">Fresh</option>
+              </select>
+            </Field>
+          )}
         </>
       )}
 
@@ -408,82 +531,83 @@ function ExecutionTab({
         />
       </Field>
 
-      {/* Retry config */}
-      <div className="border-t border-border pt-3 mt-1">
-        <p className={cn(labelClass, 'mb-2')}>Retry Configuration</p>
+      {!isLoop && (
+        <div className="border-t border-border pt-3 mt-1">
+          <p className={cn(labelClass, 'mb-2')}>Retry Configuration</p>
 
-        <div className="flex flex-col gap-2">
-          <Field label="Max Attempts (1-5)">
-            <input
-              type="number"
-              min={1}
-              max={5}
-              value={node.retry?.max_attempts ?? ''}
-              onChange={(e): void => {
-                const v = e.target.value;
-                if (!v) {
-                  onUpdate({ retry: undefined });
-                } else {
-                  onUpdate({
-                    retry: {
-                      max_attempts: Number(v),
-                      delay_ms: node.retry?.delay_ms,
-                      on_error: node.retry?.on_error,
-                    },
-                  });
-                }
-              }}
-              placeholder="2"
-              className={inputClass}
-            />
-          </Field>
+          <div className="flex flex-col gap-2">
+            <Field label="Max Attempts (1-5)">
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={node.retry?.max_attempts ?? ''}
+                onChange={(e): void => {
+                  const v = e.target.value;
+                  if (!v) {
+                    onUpdate({ retry: undefined });
+                  } else {
+                    onUpdate({
+                      retry: {
+                        max_attempts: Number(v),
+                        delay_ms: node.retry?.delay_ms,
+                        on_error: node.retry?.on_error,
+                      },
+                    });
+                  }
+                }}
+                placeholder="2"
+                className={inputClass}
+              />
+            </Field>
 
-          <Field label="Delay (ms, 1000-60000)">
-            <input
-              type="number"
-              min={1000}
-              max={60000}
-              value={node.retry?.delay_ms ?? ''}
-              onChange={(e): void => {
-                const v = e.target.value;
-                if (node.retry) {
-                  onUpdate({
-                    retry: {
-                      ...node.retry,
-                      delay_ms: v ? Number(v) : undefined,
-                    },
-                  });
-                }
-              }}
-              placeholder="3000"
-              disabled={!node.retry}
-              className={cn(inputClass, !node.retry && 'opacity-50')}
-            />
-          </Field>
+            <Field label="Delay (ms, 1000-60000)">
+              <input
+                type="number"
+                min={1000}
+                max={60000}
+                value={node.retry?.delay_ms ?? ''}
+                onChange={(e): void => {
+                  const v = e.target.value;
+                  if (node.retry) {
+                    onUpdate({
+                      retry: {
+                        ...node.retry,
+                        delay_ms: v ? Number(v) : undefined,
+                      },
+                    });
+                  }
+                }}
+                placeholder="3000"
+                disabled={!node.retry}
+                className={cn(inputClass, !node.retry && 'opacity-50')}
+              />
+            </Field>
 
-          <Field label="On Error">
-            <select
-              value={node.retry?.on_error ?? ''}
-              onChange={(e): void => {
-                if (node.retry) {
-                  onUpdate({
-                    retry: {
-                      ...node.retry,
-                      on_error: (e.target.value || undefined) as 'transient' | 'all' | undefined,
-                    },
-                  });
-                }
-              }}
-              disabled={!node.retry}
-              className={cn(selectClass, !node.retry && 'opacity-50')}
-            >
-              <option value="">Default (transient)</option>
-              <option value="transient">transient</option>
-              <option value="all">all</option>
-            </select>
-          </Field>
+            <Field label="On Error">
+              <select
+                value={node.retry?.on_error ?? ''}
+                onChange={(e): void => {
+                  if (node.retry) {
+                    onUpdate({
+                      retry: {
+                        ...node.retry,
+                        on_error: (e.target.value || undefined) as 'transient' | 'all' | undefined,
+                      },
+                    });
+                  }
+                }}
+                disabled={!node.retry}
+                className={cn(selectClass, !node.retry && 'opacity-50')}
+              >
+                <option value="">Default (transient)</option>
+                <option value="transient">transient</option>
+                <option value="all">all</option>
+              </select>
+            </Field>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -705,7 +829,7 @@ function DagInspector({
   onDelete,
   onClose,
 }: NodeInspectorProps): React.ReactElement {
-  const isBash = node.nodeType === 'bash';
+  const supportsAdvancedAiFields = node.nodeType !== 'bash' && node.nodeType !== 'loop';
 
   return (
     <div key={node.id} className="flex flex-col h-full border-l border-border bg-surface">
@@ -742,12 +866,12 @@ function DagInspector({
           <TabsTrigger value="execution" className="text-xs">
             Execution
           </TabsTrigger>
-          {!isBash && (
+          {supportsAdvancedAiFields && (
             <TabsTrigger value="tools" className="text-xs">
               Tools
             </TabsTrigger>
           )}
-          {!isBash && (
+          {supportsAdvancedAiFields && (
             <TabsTrigger value="advanced" className="text-xs">
               Advanced
             </TabsTrigger>
@@ -763,13 +887,13 @@ function DagInspector({
             <ExecutionTab node={node} onUpdate={onUpdate} />
           </TabsContent>
 
-          {!isBash && (
+          {supportsAdvancedAiFields && (
             <TabsContent value="tools">
               <ToolsTab node={node} onUpdate={onUpdate} />
             </TabsContent>
           )}
 
-          {!isBash && (
+          {supportsAdvancedAiFields && (
             <TabsContent value="advanced">
               <AdvancedTab key={node.id} node={node} onUpdate={onUpdate} />
             </TabsContent>

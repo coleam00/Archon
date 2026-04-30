@@ -17,14 +17,28 @@ import type {
   NodeTypes,
 } from '@xyflow/react';
 import type { CommandEntry, DagNode } from '@/lib/api';
-import { dagNodeComponent, type DagFlowNode } from './DagNodeComponent';
+import { dagNodeComponent, type DagFlowNode, type NodeType } from './DagNodeComponent';
 import { QuickAddPicker } from './QuickAddPicker';
 
 export { dagNodesToReactFlow } from '@/lib/dag-layout';
 
-function resolveNodeLabel(nodeType: 'command' | 'prompt' | 'bash', commandName: string): string {
+type LoopConfig = NonNullable<DagNode['loop']>;
+
+const DEFAULT_LOOP_CONFIG: LoopConfig = {
+  prompt: '',
+  until: 'COMPLETE',
+  max_iterations: 5,
+  fresh_context: false,
+};
+
+function createDefaultLoopConfig(): LoopConfig {
+  return { ...DEFAULT_LOOP_CONFIG };
+}
+
+function resolveNodeLabel(nodeType: NodeType, commandName: string): string {
   if (nodeType === 'command') return commandName;
   if (nodeType === 'bash') return 'Shell';
+  if (nodeType === 'loop') return 'Loop';
   return 'Prompt';
 }
 
@@ -37,6 +51,7 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
       depends_on: deps.length > 0 ? deps : undefined,
       when: node.data.when || undefined,
       trigger_rule: node.data.trigger_rule || undefined,
+      idle_timeout: node.data.idle_timeout || undefined,
     };
 
     if (node.data.nodeType === 'bash') {
@@ -65,6 +80,14 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
     // DagNode uses `never` discriminant fields that can't be set on object literals
     if (node.data.nodeType === 'command') {
       return { ...aiBase, command: node.data.label } as DagNode;
+    }
+    if (node.data.nodeType === 'loop') {
+      return {
+        ...dagBase,
+        model: node.data.model || undefined,
+        provider: node.data.provider || undefined,
+        loop: node.data.loop ?? createDefaultLoopConfig(),
+      } as DagNode;
     }
     const promptText = node.data.promptText;
     return {
@@ -158,7 +181,7 @@ export function WorkflowCanvas({
       const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
       const id = `node-${crypto.randomUUID()}`;
 
-      const nodeType = type as 'command' | 'prompt' | 'bash';
+      const nodeType = type as NodeType;
       const label = resolveNodeLabel(nodeType, command);
 
       const newNode: DagFlowNode = {
@@ -169,6 +192,7 @@ export function WorkflowCanvas({
           id,
           label,
           nodeType,
+          ...(nodeType === 'loop' ? { loop: createDefaultLoopConfig() } : {}),
         },
       };
 
@@ -266,10 +290,7 @@ export function WorkflowCanvas({
   );
 
   const handleQuickAddNode = useCallback(
-    (
-      type: 'command' | 'prompt' | 'bash',
-      options?: { commandName?: string; skills?: string[]; mcp?: string }
-    ) => {
+    (type: NodeType, options?: { commandName?: string; skills?: string[]; mcp?: string }) => {
       if (!quickAddPosition) return;
 
       const id = `node-${crypto.randomUUID()}`;
@@ -283,6 +304,7 @@ export function WorkflowCanvas({
           id,
           label,
           nodeType: type,
+          ...(type === 'loop' ? { loop: createDefaultLoopConfig() } : {}),
           ...(options?.skills && { skills: options.skills }),
           ...(options?.mcp && { mcp: options.mcp }),
         },

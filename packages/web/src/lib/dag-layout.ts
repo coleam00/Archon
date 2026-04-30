@@ -1,7 +1,7 @@
 import type { Edge } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
 import type { DagNode } from '@/lib/api';
-import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
+import type { DagFlowNode, NodeType } from '@/components/workflows/DagNodeComponent';
 
 export const NODE_WIDTH = 180;
 export const NODE_HEIGHT = 80;
@@ -45,7 +45,7 @@ export function layoutWithDagre(
 
 export function resolveNodeDisplay(dn: DagNode): {
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash';
+  nodeType: NodeType;
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
@@ -60,6 +60,9 @@ export function resolveNodeDisplay(dn: DagNode): {
   }
   if ('command' in dn && dn.command) {
     return { label: dn.command, nodeType: 'command' };
+  }
+  if ('loop' in dn && dn.loop) {
+    return { label: 'Loop', nodeType: 'loop' };
   }
   return {
     label: 'Prompt',

@@ -79,6 +79,9 @@ function serializeDagNode(node: DagNode, baseIndent: number): string {
   if ('bash' in node && node.bash) {
     lines.push(`${pad}  bash: ${serializeValue(node.bash, baseIndent + 2)}`);
   }
+  if ('loop' in node && node.loop) {
+    lines.push(`${pad}  loop: ${serializeValue(node.loop, baseIndent + 2)}`);
+  }
   if ('timeout' in node && node.timeout !== undefined) {
     lines.push(`${pad}  timeout: ${node.timeout}`);
   }

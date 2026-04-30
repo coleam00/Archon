@@ -1,0 +1,80 @@
+name: archon-gsd-discuss-phase
+description: |
+  Gather implementation decisions for a roadmap phase before planning. Scouts the
+  codebase, identifies gray areas, captures human direction, and writes a phase
+  CONTEXT.md artifact.
+provider: claude
+model: sonnet
+interactive: true
+
+nodes:
+  - id: resolve-phase
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      PHASE_INPUT=$(printf '%s' "$ARGUMENTS" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+      if [ -z "$PHASE_INPUT" ]; then
+        PHASE_INPUT="next"
+      fi
+      echo "$PHASE_INPUT" | tee "$ARTIFACTS_DIR/phase.txt"
+
+  - id: load-planning-context
+    bash: |
+      set -euo pipefail
+      PHASE=$(cat "$ARTIFACTS_DIR/phase.txt")
+      {
+        echo "# Planning Context"
+        echo ""
+        echo "Phase: $PHASE"
+        echo ""
+        for file in .planning/PROJECT.md .planning/REQUIREMENTS.md .planning/ROADMAP.md .planning/STATE.md .planning/config.json; do
+          if [ -f "$file" ]; then
+            echo "## $file"
+            sed -n '1,220p' "$file"
+            echo ""
+          else
+            echo "## Missing: $file"
+            echo ""
+          fi
+        done
+        echo "## Existing phase artifacts"
+        find .planning/phases -maxdepth 3 -type f 2>/dev/null | sort || true
+      } | tee "$ARTIFACTS_DIR/planning-context.md"
+    depends_on: [resolve-phase]
+
+  - id: scout-codebase
+    command: archon-gsd-scout-codebase
+    depends_on: [load-planning-context]
+    context: fresh
+
+  - id: identify-gray-areas
+    command: archon-gsd-identify-gray-areas
+    depends_on: [scout-codebase]
+    context: fresh
+
+  - id: decision-gate
+    approval:
+      message: "Review the gray areas for this phase. Approve with any decisions, deferred ideas, or constraints to include in CONTEXT.md."
+      capture_response: true
+    depends_on: [identify-gray-areas]
+
+  - id: write-context
+    command: archon-gsd-write-context
+    depends_on: [decision-gate]
+    context: fresh
+
+  - id: report
+    bash: |
+      set -euo pipefail
+      {
+        echo "# GSD Phase Discussion Complete"
+        echo ""
+        echo "Phase: $(cat "$ARTIFACTS_DIR/phase.txt")"
+        echo ""
+        if [ -f "$ARTIFACTS_DIR/context-path.txt" ]; then
+          echo "Context artifact: $(cat "$ARTIFACTS_DIR/context-path.txt")"
+        fi
+        echo ""
+        echo "Next suggested workflow: archon-gsd-plan-phase"
+      } | tee "$ARTIFACTS_DIR/discuss-phase-report.md"
+    depends_on: [write-context]

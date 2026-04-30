@@ -1,0 +1,81 @@
+name: archon-gsd-new-project
+description: |
+  Initialize a GSD-style planning layer for a project. Drafts project artifacts in
+  the workflow artifacts directory, pauses for approval, then installs the approved
+  `.planning/` files into the repository.
+provider: claude
+model: sonnet
+interactive: true
+
+nodes:
+  - id: inspect-repo
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      {
+        echo "# Repository Inspection"
+        echo ""
+        echo "## Root"
+        pwd
+        echo ""
+        echo "## Existing planning state"
+        if [ -d .planning ]; then
+          find .planning -maxdepth 2 -type f | sort | head -100
+        else
+          echo "No .planning directory found."
+        fi
+        echo ""
+        echo "## Project indicators"
+        for file in package.json pyproject.toml go.mod Cargo.toml composer.json Gemfile bun.lock package-lock.json pnpm-lock.yaml yarn.lock; do
+          if [ -f "$file" ]; then
+            echo "- $file"
+          fi
+        done
+      } | tee "$ARTIFACTS_DIR/repo-inspection.md"
+
+  - id: project-intake
+    command: archon-gsd-project-intake
+    depends_on: [inspect-repo]
+    context: fresh
+
+  - id: project-research
+    command: archon-gsd-project-research
+    depends_on: [project-intake]
+    context: fresh
+
+  - id: generate-draft
+    command: archon-gsd-generate-project
+    depends_on: [project-research]
+    context: fresh
+
+  - id: approve-project
+    approval:
+      message: "Review the drafted GSD project artifacts in the workflow output. Approve to install them into .planning/."
+      capture_response: true
+    depends_on: [generate-draft]
+
+  - id: install-planning
+    bash: |
+      set -euo pipefail
+      DRAFT_DIR="$ARTIFACTS_DIR/gsd-project-draft/.planning"
+      if [ ! -d "$DRAFT_DIR" ]; then
+        echo "Missing draft planning directory: $DRAFT_DIR" >&2
+        exit 1
+      fi
+      mkdir -p .planning
+      cp -R "$DRAFT_DIR/." .planning/
+      find .planning -maxdepth 3 -type f | sort | tee "$ARTIFACTS_DIR/installed-planning-files.txt"
+    depends_on: [approve-project]
+
+  - id: report
+    bash: |
+      set -euo pipefail
+      {
+        echo "# GSD Project Initialization Complete"
+        echo ""
+        echo "Installed planning files:"
+        cat "$ARTIFACTS_DIR/installed-planning-files.txt"
+        echo ""
+        echo "Next suggested workflow: archon-gsd-discuss-phase"
+      } | tee "$ARTIFACTS_DIR/new-project-report.md"
+    depends_on: [install-planning]

@@ -1604,6 +1604,8 @@ nodes:
 
       const node = result.workflows[0].workflow.nodes[0];
       expect(isLoopNode(node)).toBe(true);
+      expect(node.model).toBe('claude-opus-4-6');
+      expect(node.provider).toBe('claude');
 
       // model and provider should NOT trigger a warning
       const warnCalls = (mockLogger.warn as Mock<() => undefined>).mock.calls;

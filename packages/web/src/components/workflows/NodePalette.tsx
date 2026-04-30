@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { listCommands, type CommandEntry } from '@/lib/api';
 import { useProject } from '@/contexts/ProjectContext';
+import type { NodeType } from './DagNodeComponent';
 
 export function NodePalette(): React.ReactElement {
   const { codebases, selectedProjectId } = useProject();
@@ -18,11 +19,7 @@ export function NodePalette(): React.ReactElement {
     queryFn: () => listCommands(cwd),
   });
 
-  const onDragStart = (
-    e: React.DragEvent,
-    type: 'command' | 'prompt' | 'bash',
-    name: string
-  ): void => {
+  const onDragStart = (e: React.DragEvent, type: NodeType, name: string): void => {
     e.dataTransfer.setData('application/reactflow-type', type);
     e.dataTransfer.setData('application/reactflow-command', name);
     e.dataTransfer.effectAllowed = 'move';
@@ -60,6 +57,17 @@ export function NodePalette(): React.ReactElement {
       >
         <span className="text-[10px] text-accent font-medium">BASH</span>
         <span>Shell script</span>
+      </div>
+
+      <div
+        draggable
+        onDragStart={(e): void => {
+          onDragStart(e, 'loop', 'Loop');
+        }}
+        className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-dashed border-border hover:border-accent hover:bg-accent/5 cursor-grab text-xs text-text-primary mb-2"
+      >
+        <span className="text-[10px] text-accent font-medium">LOOP</span>
+        <span>Repeat prompt</span>
       </div>
 
       {isLoading && <p className="text-xs text-text-tertiary">Loading commands...</p>}

@@ -1,0 +1,99 @@
+name: archon-gsd-plan-phase
+description: |
+  Always research a GSD-style roadmap phase, create executable phase plans, run a
+  plan-check/revision loop, and pause for approval before execution.
+provider: claude
+model: sonnet
+interactive: true
+
+nodes:
+  - id: resolve-phase
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      PHASE_INPUT=$(printf '%s' "$ARGUMENTS" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+      if [ -z "$PHASE_INPUT" ]; then
+        PHASE_INPUT="next"
+      fi
+      echo "$PHASE_INPUT" | tee "$ARTIFACTS_DIR/phase.txt"
+
+  - id: collect-phase-context
+    bash: |
+      set -euo pipefail
+      PHASE=$(cat "$ARTIFACTS_DIR/phase.txt")
+      {
+        echo "# Phase Planning Context"
+        echo ""
+        echo "Phase: $PHASE"
+        echo ""
+        for file in .planning/PROJECT.md .planning/REQUIREMENTS.md .planning/ROADMAP.md .planning/STATE.md; do
+          if [ -f "$file" ]; then
+            echo "## $file"
+            sed -n '1,260p' "$file"
+            echo ""
+          fi
+        done
+        echo "## Phase files"
+        find .planning/phases -maxdepth 3 -type f 2>/dev/null | sort || true
+      } | tee "$ARTIFACTS_DIR/phase-planning-context.md"
+    depends_on: [resolve-phase]
+
+  - id: research-phase
+    command: archon-gsd-phase-research
+    depends_on: [collect-phase-context]
+    context: fresh
+
+  - id: create-plans
+    command: archon-gsd-create-phase-plans
+    depends_on: [research-phase]
+    context: fresh
+
+  - id: check-and-revise-plans
+    depends_on: [create-plans]
+    loop:
+      prompt: |
+        You are running the GSD plan-check/revision loop for this phase.
+
+        User request: $ARGUMENTS
+        Artifacts directory: $ARTIFACTS_DIR
+        Phase: $resolve-phase.output
+        Previous loop output: $LOOP_PREV_OUTPUT
+        User feedback, if any: $LOOP_USER_INPUT
+
+        Read the created phase plans and run the same checks as `archon-gsd-check-plans`:
+        requirement coverage, task completeness, dependency correctness, key links,
+        scope sanity, must-have derivation, and user decision fidelity.
+
+        If blockers exist, revise the plan files directly and write/update
+        `$ARTIFACTS_DIR/plan-check.md` with the issues and fixes made.
+
+        When the plans pass with no blockers, write `$ARTIFACTS_DIR/plan-check.md`
+        with status `passed` and output `<promise>PLANS_ACCEPTED</promise>`.
+      until: PLANS_ACCEPTED
+      max_iterations: 3
+      fresh_context: true
+
+  - id: approval-gate
+    approval:
+      message: "Review the GSD phase plans and plan-check result. Approve to mark them ready for archon-gsd-execute-phase."
+      capture_response: true
+    depends_on: [check-and-revise-plans]
+
+  - id: report
+    bash: |
+      set -euo pipefail
+      {
+        echo "# GSD Phase Planning Complete"
+        echo ""
+        echo "Phase: $(cat "$ARTIFACTS_DIR/phase.txt")"
+        echo ""
+        echo "Plan files:"
+        find .planning/phases -maxdepth 3 -name '*-PLAN.md' -type f 2>/dev/null | sort || true
+        echo ""
+        if [ -f "$ARTIFACTS_DIR/plan-check.md" ]; then
+          echo "Plan check: $ARTIFACTS_DIR/plan-check.md"
+        fi
+        echo ""
+        echo "Next suggested workflow: archon-gsd-execute-phase"
+      } | tee "$ARTIFACTS_DIR/plan-phase-report.md"
+    depends_on: [approval-gate]

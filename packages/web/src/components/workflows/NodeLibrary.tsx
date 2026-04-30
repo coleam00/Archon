@@ -3,6 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { categorizeCommands } from '@/lib/command-categories';
 import type { CommandEntry } from '@/lib/api';
+import type { NodeType } from './DagNodeComponent';
 
 interface NodeLibraryProps {
   commands: CommandEntry[];
@@ -13,9 +14,10 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   command: 'bg-node-command',
   prompt: 'bg-node-prompt',
   bash: 'bg-node-bash',
+  loop: 'bg-node-loop',
 };
 
-function onDragStart(e: React.DragEvent, type: 'command' | 'prompt' | 'bash', name: string): void {
+function onDragStart(e: React.DragEvent, type: NodeType, name: string): void {
   e.dataTransfer.setData('application/reactflow-type', type);
   e.dataTransfer.setData('application/reactflow-command', name);
   e.dataTransfer.effectAllowed = 'move';
@@ -36,7 +38,7 @@ function DraggableItem({
   name,
   displayName,
 }: {
-  type: 'command' | 'prompt' | 'bash';
+  type: NodeType;
   name: string;
   displayName: string;
 }): React.ReactElement {
@@ -104,7 +106,8 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
   const showQuickNodes =
     !search.trim() ||
     'prompt'.includes(search.toLowerCase()) ||
-    'bash'.includes(search.toLowerCase());
+    'bash'.includes(search.toLowerCase()) ||
+    'loop'.includes(search.toLowerCase());
 
   return (
     <div className="flex flex-col h-full overflow-hidden border-r border-border bg-surface">
@@ -131,9 +134,10 @@ export function NodeLibrary({ commands, isLoading }: NodeLibraryProps): React.Re
           <div className="flex flex-col gap-2 p-2">
             {/* Quick Nodes */}
             {showQuickNodes && (
-              <CollapsibleSection title="Quick Nodes" count={2} defaultOpen>
+              <CollapsibleSection title="Quick Nodes" count={3} defaultOpen>
                 <DraggableItem type="prompt" name="Prompt" displayName="Prompt" />
                 <DraggableItem type="bash" name="Shell" displayName="Bash" />
+                <DraggableItem type="loop" name="Loop" displayName="Loop" />
               </CollapsibleSection>
             )}
 

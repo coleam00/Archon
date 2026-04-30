@@ -1,0 +1,113 @@
+name: archon-gsd-verify-work
+description: |
+  Verify that an executed GSD-style phase actually achieves its roadmap goal.
+  Produces VERIFICATION.md and, when gaps are found, gap-closure plans without
+  automatically executing them.
+provider: claude
+model: sonnet
+interactive: true
+
+nodes:
+  - id: resolve-phase
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      PHASE_INPUT=$(printf '%s' "$ARGUMENTS" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+      if [ -z "$PHASE_INPUT" ]; then
+        PHASE_INPUT="next"
+      fi
+      echo "$PHASE_INPUT" | tee "$ARTIFACTS_DIR/phase.txt"
+
+  - id: load-phase-evidence
+    bash: |
+      set -euo pipefail
+      PHASE=$(cat "$ARTIFACTS_DIR/phase.txt")
+      {
+        echo "# Phase Evidence"
+        echo ""
+        echo "Phase: $PHASE"
+        echo ""
+        for file in .planning/PROJECT.md .planning/REQUIREMENTS.md .planning/ROADMAP.md .planning/STATE.md; do
+          if [ -f "$file" ]; then
+            echo "## $file"
+            sed -n '1,260p' "$file"
+            echo ""
+          fi
+        done
+        echo "## Phase artifacts"
+        find .planning/phases -maxdepth 3 -type f 2>/dev/null | sort || true
+      } | tee "$ARTIFACTS_DIR/phase-evidence.md"
+    depends_on: [resolve-phase]
+
+  - id: verify-goal
+    command: archon-gsd-verify-goal
+    depends_on: [load-phase-evidence]
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [passed, gaps_found, human_needed]
+        score:
+          type: string
+        report_path:
+          type: string
+        gap_count:
+          type: number
+      required: [status, score, report_path, gap_count]
+
+  - id: human-uat-gate
+    approval:
+      message: "Human verification is needed. Run the checks described in the verification report, then approve with results or reject to stop."
+      capture_response: true
+    depends_on: [verify-goal]
+    when: "$verify-goal.output.status == 'human_needed'"
+
+  - id: create-gap-plans
+    command: archon-gsd-create-gap-plans
+    depends_on: [verify-goal]
+    when: "$verify-goal.output.status == 'gaps_found'"
+    context: fresh
+
+  - id: passed-report
+    bash: |
+      set -euo pipefail
+      {
+        echo "# GSD Verification Passed"
+        echo ""
+        echo "Phase: $(cat "$ARTIFACTS_DIR/phase.txt")"
+        echo "Report: $verify-goal.output.report_path"
+        echo "Score: $verify-goal.output.score"
+        echo ""
+        echo "Next suggested workflow: archon-gsd-ship"
+      } | tee "$ARTIFACTS_DIR/verify-work-report.md"
+    depends_on: [verify-goal]
+    when: "$verify-goal.output.status == 'passed'"
+
+  - id: gaps-report
+    bash: |
+      set -euo pipefail
+      {
+        echo "# GSD Verification Gaps Found"
+        echo ""
+        echo "Phase: $(cat "$ARTIFACTS_DIR/phase.txt")"
+        echo "Report: $verify-goal.output.report_path"
+        echo "Gap count: $verify-goal.output.gap_count"
+        echo ""
+        echo "Gap plans were created. Next suggested workflow: archon-gsd-execute-phase --gaps-only"
+      } | tee "$ARTIFACTS_DIR/verify-work-report.md"
+    depends_on: [create-gap-plans]
+
+  - id: human-report
+    bash: |
+      set -euo pipefail
+      {
+        echo "# GSD Human Verification Recorded"
+        echo ""
+        echo "Phase: $(cat "$ARTIFACTS_DIR/phase.txt")"
+        echo "Report: $verify-goal.output.report_path"
+        echo "Human response:"
+        echo "$human-uat-gate.output"
+      } | tee "$ARTIFACTS_DIR/verify-work-report.md"
+    depends_on: [human-uat-gate]

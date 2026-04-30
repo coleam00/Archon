@@ -1,0 +1,73 @@
+name: archon-gsd-execute-phase
+description: |
+  Execute approved GSD-style phase plans sequentially in a worktree. Each loop
+  iteration executes the next unfinished plan, validates changes, and writes a
+  SUMMARY.md artifact.
+provider: claude
+model: sonnet
+worktree:
+  enabled: true
+
+nodes:
+  - id: resolve-phase
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      PHASE_INPUT=$(printf '%s' "$ARGUMENTS" | grep -oE '[0-9]+(\.[0-9]+)?' | head -1 || true)
+      if [ -z "$PHASE_INPUT" ]; then
+        PHASE_INPUT="next"
+      fi
+      echo "$PHASE_INPUT" | tee "$ARTIFACTS_DIR/phase.txt"
+
+  - id: load-phase-plans
+    bash: |
+      set -euo pipefail
+      PHASE=$(cat "$ARTIFACTS_DIR/phase.txt")
+      {
+        echo "# Phase Plans"
+        echo ""
+        echo "Phase: $PHASE"
+        echo ""
+        find .planning/phases -maxdepth 3 -name '*-PLAN.md' -type f 2>/dev/null | sort || true
+        echo ""
+        echo "# Existing Summaries"
+        find .planning/phases -maxdepth 3 -name '*-SUMMARY.md' -type f 2>/dev/null | sort || true
+      } | tee "$ARTIFACTS_DIR/phase-plans.md"
+      if ! grep -q -- '-PLAN.md' "$ARTIFACTS_DIR/phase-plans.md"; then
+        echo "No phase plans found. Run archon-gsd-plan-phase first." >&2
+        exit 1
+      fi
+    depends_on: [resolve-phase]
+
+  - id: execute-plans
+    depends_on: [load-phase-plans]
+    loop:
+      prompt: |
+        Execute the next unfinished GSD phase plan sequentially.
+
+        User request: $ARGUMENTS
+        Artifacts directory: $ARTIFACTS_DIR
+        Phase: $resolve-phase.output
+        Plan inventory:
+        $load-phase-plans.output
+        Previous loop output:
+        $LOOP_PREV_OUTPUT
+
+        Read `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md`,
+        `.planning/STATE.md`, the relevant phase CONTEXT.md, and the next PLAN.md that
+        does not yet have a matching SUMMARY.md.
+
+        Execute only that plan. Validate the changes using the plan's verification
+        commands. Write a substantive SUMMARY.md next to the PLAN.md. Update planning
+        state files when appropriate.
+
+        If all plans already have SUMMARY.md files, output `<promise>PHASE_EXECUTED</promise>`.
+        If an architectural decision is required, stop and explain the required human decision.
+      until: PHASE_EXECUTED
+      max_iterations: 12
+      fresh_context: true
+
+  - id: execution-summary
+    command: archon-gsd-execution-summary
+    depends_on: [execute-plans]
+    context: fresh

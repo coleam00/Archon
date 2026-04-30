@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Box, FileText, Terminal, Zap, Plug, ChevronRight } from 'lucide-react';
+import { Box, FileText, Terminal, Repeat, Zap, Plug, ChevronRight } from 'lucide-react';
 import type { CommandEntry } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { CommandPicker } from './CommandPicker';
+import type { NodeType } from './DagNodeComponent';
 
 interface QuickAddPickerProps {
   position: { x: number; y: number };
   onAddNode: (
-    type: 'command' | 'prompt' | 'bash',
+    type: NodeType,
     options?: { commandName?: string; skills?: string[]; mcp?: string }
   ) => void;
   onClose: () => void;
@@ -193,6 +194,22 @@ export function QuickAddPicker({
           <div className="flex-1 min-w-0">
             <div className="text-xs font-medium text-text-primary">Bash</div>
             <div className="text-[10px] text-text-tertiary">Shell script</div>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={(): void => {
+            onAddNode('loop');
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover cursor-pointer"
+        >
+          <span className="text-text-secondary">
+            <Repeat className="size-4" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-text-primary">Loop</div>
+            <div className="text-[10px] text-text-tertiary">Repeat an AI prompt</div>
           </div>
         </button>
 

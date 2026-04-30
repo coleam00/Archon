@@ -66,6 +66,39 @@ function getInstantIssues(
         suggestion: 'Enter a prompt for this node',
       });
     }
+    if (node.data.nodeType === 'loop') {
+      if (!node.data.loop?.prompt.trim()) {
+        issues.push({
+          severity: 'error',
+          message: `Node "${node.data.id}": loop prompt cannot be empty`,
+          nodeId: node.data.id,
+          field: 'loop.prompt',
+          suggestion: 'Enter a prompt for this loop node',
+        });
+      }
+      if (!node.data.loop?.until.trim()) {
+        issues.push({
+          severity: 'error',
+          message: `Node "${node.data.id}": loop completion signal cannot be empty`,
+          nodeId: node.data.id,
+          field: 'loop.until',
+          suggestion: 'Enter the completion signal this loop waits for',
+        });
+      }
+      if (
+        node.data.loop === undefined ||
+        !Number.isInteger(node.data.loop.max_iterations) ||
+        node.data.loop.max_iterations <= 0
+      ) {
+        issues.push({
+          severity: 'error',
+          message: `Node "${node.data.id}": max iterations must be a positive integer`,
+          nodeId: node.data.id,
+          field: 'loop.max_iterations',
+          suggestion: 'Enter a positive whole number',
+        });
+      }
+    }
   }
 
   return issues;
@@ -140,9 +173,10 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     const textsToScan: string[] = [];
     if (node.data.when) textsToScan.push(node.data.when);
     if (node.data.promptText) textsToScan.push(node.data.promptText);
+    if (node.data.loop?.prompt) textsToScan.push(node.data.loop.prompt);
 
     for (const text of textsToScan) {
-      const outputRefPattern = /\$(\w+)\.output/g;
+      const outputRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
       let match: RegExpExecArray | null;
       while ((match = outputRefPattern.exec(text)) !== null) {
         const referencedId = match[1];
