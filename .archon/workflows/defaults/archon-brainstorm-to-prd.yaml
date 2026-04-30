@@ -1,0 +1,620 @@
+name: archon-brainstorm-to-prd
+description: |
+  Use when: User wants to take a free-form idea (or refine an existing brain dump) all
+  the way to a structured PRD with clarifying-question rounds and Memexia-backed memory.
+  Triggers: "brainstorm to prd", "create a prd", "interactive prd from idea",
+            "turn this idea into a prd", "structure this brain dump".
+  NOT for: Refining an existing PRD into a plan (use archon-prd-to-plan).
+  NOT for: Bug fixes / single-feature builds where a PRD already exists (use archon-piv-loop).
+
+  Pipeline workflow 1 of 4. Implements PRD methodology phases 1–3:
+    1. Brainstorm — free-form human brain dump; AI listens.
+    2. Clarifying questions — AI surfaces assumptions, edge cases, missing context with
+       targeted (codebase-grounded) questions.
+    3. Create PRD — structured doc with frontmatter linking the Memexia bank.
+
+  Memexia is the durable knowledge store across the whole pipeline. This workflow
+  creates the bank, persists every Q&A round + decision into it, and writes a PRD
+  whose frontmatter is the contract for downstream workflows (archon-prd-to-plan,
+  archon-plan-to-stories, archon-execute-story).
+
+  Input: a free-form description of the idea, OR `--from-existing <path>` pointing
+  at an existing brain-dump markdown file.
+
+provider: claude
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE A: Bank setup
+  # Slugify input, create the Memexia bank, emit BANK_NAME + SLUG
+  # for downstream nodes.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: bank-setup
+    bash: |
+      set -euo pipefail
+
+      MCP_FILE=".archon/mcp/memexia.json"
+      if [ ! -f "${MCP_FILE}" ]; then
+        echo "ERROR: ${MCP_FILE} not found. Worktree may have been created without copyFiles: [.archon/mcp]." >&2
+        echo "Add 'copyFiles: [.archon/mcp]' under worktree: in .archon/config.yaml and retry." >&2
+        echo "See docs/memexia-onboarding/ in the archon repo for one-time setup steps." >&2
+        exit 1
+      fi
+
+      # API creds come from ~/.archon/.env (Archon auto-loads it). The MCP
+      # JSON references the same env vars for the MCP server to receive them.
+      API_URL="${MEMEXIA_API_URL:-}"
+      API_KEY="${MEMEXIA_API_KEY:-}"
+      if [ -z "${API_URL}" ] || [ -z "${API_KEY}" ]; then
+        echo "ERROR: MEMEXIA_API_URL and MEMEXIA_API_KEY must be set in ~/.archon/.env" >&2
+        echo "See docs/memexia-onboarding/README.md for the once-per-machine setup." >&2
+        exit 1
+      fi
+
+      # Slugify the user's input. If the input starts with --from-existing,
+      # derive the slug from the referenced file's basename instead.
+      RAW="$ARGUMENTS"
+      if printf '%s' "${RAW}" | grep -qE '^[[:space:]]*--from-existing[[:space:]]+'; then
+        EXISTING_PATH=$(printf '%s' "${RAW}" | sed -E 's/^[[:space:]]*--from-existing[[:space:]]+//; s/[[:space:]].*$//')
+        if [ ! -f "${EXISTING_PATH}" ]; then
+          echo "ERROR: --from-existing path not found: ${EXISTING_PATH}" >&2
+          exit 1
+        fi
+        BASENAME=$(basename "${EXISTING_PATH}" | sed -E 's/\.[^.]+$//')
+        SLUG_SOURCE="${BASENAME}"
+      else
+        # First ~80 chars of free-form text — enough for a meaningful slug.
+        SLUG_SOURCE=$(printf '%s' "${RAW}" | head -c 80)
+      fi
+
+      # Slugify, then truncate at the last hyphen before 40 chars so we don't
+      # cut mid-word. Falls back to "initiative" if the input had nothing
+      # alphanumeric in it.
+      SLUG_FULL=$(printf '%s' "${SLUG_SOURCE}" \
+        | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+      if [ -z "${SLUG_FULL}" ]; then
+        SLUG="initiative"
+      elif [ "${#SLUG_FULL}" -le 40 ]; then
+        SLUG="${SLUG_FULL}"
+      else
+        TRUNCATED="${SLUG_FULL:0:40}"
+        if printf '%s' "${TRUNCATED}" | grep -q '-'; then
+          SLUG="${TRUNCATED%-*}"
+        else
+          SLUG="${TRUNCATED}"
+        fi
+      fi
+
+      # Project name from git remote (canonical) with basename fallback. Used
+      # only for human-readable bank prefix; uniqueness comes from $WORKFLOW_ID.
+      REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || true)
+      if [ -n "${REMOTE_URL}" ]; then
+        PROJECT_NAME=$(printf '%s' "${REMOTE_URL}" \
+          | sed -E 's#\.git$##; s#.*[/:]##' \
+          | sed -E 's/[^a-zA-Z0-9_-]/-/g')
+      fi
+      if [ -z "${PROJECT_NAME:-}" ] || [ "${PROJECT_NAME}" = "-" ]; then
+        PROJECT_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" \
+          | sed -E 's/[^a-zA-Z0-9_-]/-/g')
+      fi
+      PROJECT_NAME=$(printf '%s' "${PROJECT_NAME}" | head -c 40)
+
+      # Bank name = <project>-<run-id>. Run ID is a UUID, so uniqueness is
+      # guaranteed; no preflight check needed. Memexia bank-IDs cap at 100
+      # chars (regex [a-zA-Z0-9_-]+); project ≤40 + '-' + 32-char hex = ≤73.
+      BANK_NAME="${PROJECT_NAME}-$WORKFLOW_ID"
+      PRD_PATH="docs/prd-${SLUG}.md"
+
+      mkdir -p "$ARTIFACTS_DIR"
+      cat > "$ARTIFACTS_DIR/bank-info.env" <<EOF
+      SLUG=${SLUG}
+      PROJECT_NAME=${PROJECT_NAME}
+      BANK_NAME=${BANK_NAME}
+      PRD_PATH=${PRD_PATH}
+      MEMEXIA_API_URL=${API_URL}
+      EOF
+
+      # Create the bank. Memexia is idempotent server-side — re-creating an
+      # existing bank returns 200 with the existing bank's data — but with
+      # run-id naming we won't hit that case anyway.
+      RESP=$(curl -sS -o /tmp/bank-create-resp.json -w "%{http_code}" \
+        -X POST "${API_URL}/api/v1/banks/create" \
+        -H "x-api-key: ${API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -n --arg id "${BANK_NAME}" --arg slug "${SLUG}" --arg project "${PROJECT_NAME}" '{
+          bankId: $id,
+          retainMission: ("Long-term knowledge for the " + $slug + " initiative in " + $project + ". Stores brainstorm context, Q&A rounds, locked decisions, codebase findings, and per-story research."),
+          enableObservations: true
+        }')") || true
+
+      if [ "${RESP}" = "200" ] || [ "${RESP}" = "201" ]; then
+        echo "Bank created: ${BANK_NAME}"
+      else
+        BODY=$(cat /tmp/bank-create-resp.json 2>/dev/null || echo "")
+        echo "ERROR: bank-create returned HTTP ${RESP}: ${BODY}" >&2
+        exit 1
+      fi
+
+      echo "SLUG=${SLUG}"
+      echo "PROJECT_NAME=${PROJECT_NAME}"
+      echo "BANK_NAME=${BANK_NAME}"
+      echo "PRD_PATH=${PRD_PATH}"
+      echo "MEMEXIA_API_URL=${API_URL}"
+      echo "ARTIFACT_INFO=$ARTIFACTS_DIR/bank-info.env"
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE B: Brainstorm + clarify loop
+  # Mirrors PIV's `explore` loop. Interactive — arbitrary rounds.
+  # MCP/skills can't attach to a loop node, so the AI uses Bash+curl
+  # against Memexia and reads ~/.claude/skills/memexia-memory/SKILL.md
+  # inline for zone routing guidance.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: brainstorm
+    depends_on: [bank-setup]
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        # Brainstorm-to-PRD — Exploration
+
+        You are a senior product partner. Goal: deeply understand what the user
+        wants to build before any PRD is written.
+
+        **User's request**: $ARGUMENTS
+        **User's latest input**: $LOOP_USER_INPUT
+
+        **Bank-setup output (read every iteration — slug, bank, paths)**:
+        $bank-setup.output
+
+        ---
+
+        ## Memexia: how to use it from this loop
+
+        `mcp:` and `skills:` cannot attach to loop nodes in Archon, so do this manually:
+
+        1. **Read the routing guide once per iteration** with the Read tool:
+           `~/.claude/skills/memexia-memory/SKILL.md`
+           — it covers zones, TTL, dedup rules, LTM types. Follow it strictly.
+        2. **Memexia API access via Bash**:
+           - Read creds from `.archon/mcp/memexia.json` with `jq` (matches the
+             bank-setup pattern; do NOT inline the API key in echo statements).
+           - All endpoints live at `${MEMEXIA_API_URL}/api/v1/...`. Auth via
+             header `x-api-key: ${MEMEXIA_API_KEY}`.
+           - Common endpoints:
+             - `POST /api/v1/agent-memory/remember` — durable knowledge
+             - `POST /api/v1/agent-memory/save` — short-term scratchpad
+             - `POST /api/v1/agent-memory/query` — semantic recall
+             - `POST /api/v1/arcvault/capture` — vault capture (zone-routed)
+           - Pass `agent_id: "archon-brainstorm-to-prd"` in the body of every
+             agent-memory call so attribution is consistent.
+        3. **Bank to write into**: parse `BANK_NAME=...` from the bank-setup
+           output above. Tag every memory with `bank: "<bank-name>"` plus a
+           secondary tag describing the content (`brainstorm-raw`, `qa-round-N`,
+           `decision`, `codebase-finding`).
+        4. **Don't write secrets, PII, or raw API keys to Memexia.** Skill rules apply.
+
+        ---
+
+        ## If this is the FIRST iteration ($LOOP_USER_INPUT is empty)
+
+        ### Step 1: Parse the input
+
+        - **Free text** → use it as the brain dump.
+        - **`--from-existing <path>`** → Read that file. Use its content as the
+          brain dump. Surface anything ambiguous as a question rather than guessing.
+        - **GitHub issue ref (`#NN`)** → `gh issue view NN --json title,body,labels,comments`,
+          summarize.
+
+        Save the raw brain dump to Memexia immediately (`agent-memory/save`,
+        layer=stm, tags: bank-name + `brainstorm-raw`).
+
+        ### Step 2: Do your homework BEFORE asking questions
+
+        Generic questions are wasted rounds. Ground every question in the codebase:
+
+        1. Read CLAUDE.md.
+        2. Search for related code — find existing implementations, components,
+           or patterns the idea would extend.
+        3. Read the most relevant 2–4 files in full.
+        4. `git log --oneline -20` to see recent activity in adjacent areas.
+
+        Save salient codebase findings to Memexia (`agent-memory/remember`,
+        type: world_fact, tags: bank-name + `codebase-finding`).
+
+        ### Step 3: Present what you understand
+
+        ```
+        ## What I Understand
+        {2–3 sentences restating the user's idea}
+
+        ## What Already Exists
+        - {file:line} — {what it does and how it relates}
+        - {file:line} — {what it does and how it relates}
+
+        ## Initial Architecture Thoughts
+        - {approach 1 — extend X}
+        - {approach 2 — fallback}
+        - {key open architectural decision}
+        ```
+
+        ### Step 4: Ask 4–6 targeted questions
+
+        Each question MUST reference a specific file, pattern, or finding from
+        Step 2. Generic "what's the scope?" is forbidden — phrase it as
+        "Should this extend `packages/foo/bar.ts:42` or live in a new module?"
+
+        Save the question set to Memexia tagged `qa-round-1`.
+
+        ---
+
+        ## If the user has provided input (subsequent iterations)
+
+        ### Step 1: Process answers
+
+        Read $LOOP_USER_INPUT carefully. Identify:
+        - Decisions they made (save each: `agent-memory/remember`, type: experience,
+          tags: bank-name + `decision`).
+        - Questions they fired BACK at you — answer with file:line evidence.
+        - Areas they want explored — go research them.
+
+        ### Step 2: Targeted research
+
+        Do not ask follow-ups blindly. Read code, run `git log`, check tests.
+        Write findings to Memexia tagged `codebase-finding`.
+
+        ### Step 3: Update understanding
+
+        Show what you learned, answer their questions with evidence, refine
+        architecture recommendation.
+
+        ### Step 4: Converge or continue
+
+        **If important questions remain**: ask 2–4 focused follow-ups. Save as
+        the next `qa-round-N` to Memexia.
+
+        **If the picture is clear** (you can write a PRD without guessing): present:
+
+        ```
+        ## Brainstorm Complete — Ready for PRD Draft
+
+        ### What We're Building
+        {Crisp 2-sentence statement}
+
+        ### Locked Decisions (saved to Memexia)
+        - {decision 1}
+        - {decision 2}
+
+        ### Open Questions Deferred to PRD Draft
+        - {anything you'll surface in the PRD's "Open questions" section}
+
+        ### Sources Referenced
+        - {file:line ...}
+        ```
+
+        Then say: "I have a clear picture. Say **ready** and I'll draft the PRD,
+        or share final thoughts."
+
+        ---
+
+        ## CRITICAL — completion signal discipline
+
+        - NEVER output `<promise>PRD_DRAFT_READY</promise>` unless the user's
+          LATEST message contains an EXPLICIT phrase like "ready", "draft the prd",
+          "let's go", "proceed", or "I'm done".
+        - User asked a question → do NOT signal. Answer it.
+        - User gave feedback or requested changes → do NOT signal. Address them.
+        - User said "also check X" or "one more thing" → do NOT signal. Explore.
+        - Unsure whether the user is approving → do NOT signal. Ask.
+        - The ONLY correct time to emit the signal is when the user's message
+          CLEARLY means "stop exploring, draft the PRD."
+      until: PRD_DRAFT_READY
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Answer the questions, ask me to explore specific areas, or say "ready"
+        when you're satisfied with the exploration.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE C: PRD draft
+  # Fresh prompt node — gets real MCP + skill preload. Reads the
+  # bank for full Q&A history and writes docs/prd-<slug>.md.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: prd-draft
+    depends_on: [brainstorm]
+    model: sonnet
+    context: fresh
+    mcp: .archon/mcp/memexia.json
+    skills: [memexia-memory]
+    prompt: |
+      # Brainstorm-to-PRD — PRD Draft
+
+      You are creating the structured PRD from the completed brainstorm.
+      This PRD is the contract for every downstream workflow in the pipeline
+      (archon-prd-to-plan, archon-plan-to-stories, archon-execute-story).
+
+      You have:
+      - The Memexia MCP attached — use `mcp__memexia__*` tools directly.
+      - The `memexia-memory` skill preloaded — follow its zone routing rules.
+
+      ---
+
+      ## Step 1: Pull context
+
+      Parse `BANK_NAME=...`, `SLUG=...`, `PRD_PATH=...` from:
+      $bank-setup.output
+
+      Then:
+      1. `mcp__memexia__memexia_agent_memory_query` (or `_recall`) the bank for
+         everything tagged `brainstorm-raw`, `qa-round-*`, `decision`, and
+         `codebase-finding`. Use the bank id as a filter.
+      2. Read the brainstorm summary: $brainstorm.output
+      3. Read CLAUDE.md to capture project conventions/constraints.
+
+      ## Step 2: Write the PRD
+
+      Save to the `PRD_PATH` value above (i.e. `docs/prd-<slug>.md`). Use the
+      Write tool. The file MUST start with this exact frontmatter block:
+
+      ```markdown
+      ---
+      title: <feature title>
+      slug: <slug>
+      memexia_bank: <bank-name>
+      prd_path: docs/prd-<slug>.md
+      created_at: <YYYY-MM-DD>
+      ---
+      ```
+
+      Frontmatter values come from the bank-setup output (slug, bank-name) and
+      today's date. The rest of the document is structured as:
+
+      ```markdown
+      # <Title>
+
+      ## Summary
+      2–4 sentences: what + why. The hook for anyone reading this in three months.
+
+      ## User Stories
+      As a <role>, I want <capability>, so that <outcome>.
+      (Aim for 3–7 stories. Each one names a real role from the brainstorm.)
+
+      ## Features
+      ### <Feature name>
+      <2–4 sentences. Reference codebase findings (file:line) where the feature
+      will live or extend.>
+
+      ## Edge Cases
+      Specific scenarios — concurrency, empty/error/auth states, large inputs.
+      Reference findings from Memexia. No generic "handle errors gracefully".
+
+      ## Out of Scope
+      What we are explicitly NOT doing. Rationale per item.
+
+      ## Success Criteria
+      - Specific, testable outcomes.
+      - At least one criterion that an automated test could assert.
+
+      ## Open Questions (deferred to plan / per-story)
+      Items the brainstorm surfaced but didn't lock. The plan workflow will resolve.
+      ```
+
+      ## Step 3: Persist decisions
+
+      For each locked architectural decision in the PRD, write it to Memexia:
+      - `mcp__memexia__memexia_agent_memory_remember`
+      - `bank: <bank-name>`, `tags: ["decision", "prd"]`
+      - Content: the decision + rationale.
+
+      ## Step 4: Report
+
+      Output exactly:
+
+      ```
+      ## PRD Drafted
+
+      Path: docs/prd-<slug>.md
+      Bank: <bank-name>
+      Sections: Summary, User Stories ({n}), Features ({n}), Edge Cases ({n}),
+                Out of Scope ({n}), Success Criteria ({n}), Open Questions ({n})
+
+      Locked decisions persisted to Memexia: {n}
+
+      Please review and provide feedback in the next loop.
+      ```
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE D: PRD refine loop
+  # Mirrors PIV's `refine-plan` loop. Interactive iteration until
+  # the user explicitly approves.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: refine-prd
+    depends_on: [prd-draft]
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        # Brainstorm-to-PRD — PRD Refinement
+
+        The user is reviewing the PRD and providing feedback.
+
+        **User's feedback**: $LOOP_USER_INPUT
+
+        **Bank-setup context (slug, bank, paths)**:
+        $bank-setup.output
+
+        ---
+
+        ## Memexia: same access pattern as the brainstorm loop
+
+        Read `~/.claude/skills/memexia-memory/SKILL.md` once per iteration for
+        routing rules. Use Bash + curl against `${MEMEXIA_API_URL}/api/v1/...`
+        with `x-api-key: ${MEMEXIA_API_KEY}` (read both from
+        `.archon/mcp/memexia.json` via `jq`). Pass
+        `agent_id: "archon-brainstorm-to-prd"` in agent-memory bodies.
+
+        ---
+
+        ## Step 1: Read the PRD
+
+        Parse `PRD_PATH=...` from bank-setup output. Read it. Read CLAUDE.md.
+
+        ## Step 2: Process feedback
+
+        **No user feedback yet (first iteration, $LOOP_USER_INPUT empty)**:
+        - Summarize the PRD's key sections + open questions.
+        - Ask the user to review and provide feedback.
+        - Do NOT emit the completion signal on the first iteration.
+
+        **User explicitly approved** (latest message contains "approved",
+        "looks good", "ship it", "ready", "lgtm"):
+        - Make no further edits.
+        - Output: "PRD approved. Ready to commit and proceed to plan workflow."
+        - Emit `<promise>PRD_APPROVED</promise>`.
+
+        **User provided specific feedback**:
+        - Parse each piece. Edit the PRD file directly via Edit/Write.
+        - Persist every revision to Memexia (`agent-memory/remember`,
+          tags: `decision` + `prd-revision`, content: what changed and why).
+        - Re-verify any file:line references are still accurate after edits.
+
+        ## Step 3: CRITICAL — completion signal discipline
+
+        NEVER emit `<promise>PRD_APPROVED</promise>` unless the user's latest
+        message EXPLICITLY says "approved", "looks good", "ship it", "lgtm" or
+        a clear synonym. Questions, "almost", "one more thing", "what about X"
+        are NOT approval. When unsure, ASK.
+
+        ## Step 4: Show changes
+
+        ```
+        ## PRD Revised
+
+        Changes:
+        - {change 1}
+        - {change 2}
+
+        Updated counts:
+        - User Stories: {n}
+        - Features: {n}
+        - Open Questions: {n}
+
+        Review the updated PRD and provide more feedback, or say "approved"
+        to finalize.
+        ```
+      until: PRD_APPROVED
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Review docs/prd-<slug>.md. Provide specific feedback on what to change,
+        or say "approved" to commit the PRD and finish.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE E: Commit + push
+  # The PRD is the contract for the next workflow — push it so
+  # archon-prd-to-plan can read it from the base branch after merge.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: commit-prd
+    depends_on: [refine-prd]
+    bash: |
+      set -euo pipefail
+
+      # Source slug + paths from the artifact file written by bank-setup.
+      INFO_FILE="$ARTIFACTS_DIR/bank-info.env"
+      if [ ! -f "${INFO_FILE}" ]; then
+        echo "ERROR: ${INFO_FILE} missing. bank-setup did not run or did not persist context." >&2
+        exit 1
+      fi
+      # shellcheck disable=SC1090
+      . "${INFO_FILE}"
+
+      if [ -z "${SLUG:-}" ] || [ -z "${PRD_PATH:-}" ]; then
+        echo "ERROR: SLUG or PRD_PATH not set in ${INFO_FILE}." >&2
+        exit 1
+      fi
+
+      if [ ! -f "${PRD_PATH}" ]; then
+        echo "ERROR: PRD file not found at ${PRD_PATH}. Refinement loop did not produce one." >&2
+        exit 1
+      fi
+
+      # Quick frontmatter sanity check — downstream workflows depend on these keys.
+      for key in slug memexia_bank prd_path; do
+        if ! grep -qE "^${key}:" "${PRD_PATH}"; then
+          echo "ERROR: PRD frontmatter is missing '${key}'. Downstream workflows will fail." >&2
+          exit 1
+        fi
+      done
+
+      git add "${PRD_PATH}"
+      if git diff --cached --quiet; then
+        echo "No PRD changes to commit (already committed in a previous run?)."
+      else
+        git commit -m "docs: PRD for ${SLUG}"
+      fi
+
+      if ! git push -u origin HEAD 2>&1; then
+        echo "ERROR: push failed — verify remote auth and branch state, then push + merge manually." >&2
+        exit 1
+      fi
+
+      # Open a PR against $BASE_BRANCH and auto-merge.
+      PR_TITLE="docs: PRD for ${SLUG}"
+      PR_BODY=$(cat <<BODY
+      Auto-generated by archon-brainstorm-to-prd.
+
+      - PRD: \`${PRD_PATH}\`
+      - Memexia bank: \`${BANK_NAME}\`
+
+      Next pipeline step: \`archon workflow run archon-prd-to-plan ${PRD_PATH}\`
+      BODY
+      )
+
+      PR_URL=$(gh pr create --base "$BASE_BRANCH" --title "${PR_TITLE}" --body "${PR_BODY}" 2>&1) || {
+        echo "ERROR: gh pr create failed: ${PR_URL}" >&2
+        echo "Branch is pushed; create PR manually." >&2
+        exit 1
+      }
+      echo "PR created: ${PR_URL}"
+
+      # Try immediate squash-merge; fall back to scheduled auto-merge if branch
+      # protection requires checks. Either way, downstream wait loop confirms
+      # the merge actually lands before we report success.
+      if gh pr merge "${PR_URL}" --squash 2>/tmp/merge.log; then
+        echo "Squash-merged immediately."
+      elif gh pr merge "${PR_URL}" --squash --auto 2>/tmp/merge.log; then
+        echo "Auto-merge scheduled — waiting for branch protection checks to pass."
+      else
+        echo "WARNING: could not merge PR. Reason:" >&2
+        cat /tmp/merge.log >&2
+        echo "Review and merge manually: ${PR_URL}" >&2
+        exit 0
+      fi
+
+      # Poll for MERGED state with a 60s cap (5s interval = 12 polls).
+      WAIT_TIMEOUT=60
+      WAIT_INTERVAL=5
+      WAITED=0
+      MERGED=0
+      while [ "${WAITED}" -lt "${WAIT_TIMEOUT}" ]; do
+        STATE=$(gh pr view "${PR_URL}" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")
+        case "${STATE}" in
+          MERGED) MERGED=1; break ;;
+          CLOSED) echo "WARNING: PR closed without merging: ${PR_URL}"; exit 0 ;;
+          OPEN)   sleep "${WAIT_INTERVAL}"; WAITED=$((WAITED + WAIT_INTERVAL)) ;;
+          *)      echo "Unexpected PR state '${STATE}'; stopping wait."; break ;;
+        esac
+      done
+
+      if [ "${MERGED}" -eq 1 ]; then
+        echo "PRD merged into ${BASE_BRANCH} after ${WAITED}s."
+        echo "Next: archon workflow run archon-prd-to-plan ${PRD_PATH}"
+      else
+        echo "PR not yet merged after ${WAIT_TIMEOUT}s — auto-merge scheduled."
+        echo "Run the next workflow once ${PR_URL} merges:"
+        echo "  archon workflow run archon-prd-to-plan ${PRD_PATH}"
+      fi

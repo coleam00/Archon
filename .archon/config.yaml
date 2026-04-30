@@ -1,5 +1,7 @@
 worktree:
   baseBranch: dev
+  copyFiles:
+    - .archon/mcp
 
 docs:
   path: packages/docs-web/src/content/docs

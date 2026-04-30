@@ -1,0 +1,812 @@
+name: archon-execute-story
+description: |
+  Use when: User wants to implement a single GitHub issue produced by
+  archon-plan-to-stories — fresh context, dep-checked, plan-confirmed,
+  Ralph-implemented, code-reviewed, validated, and merged via PR.
+  Triggers: "execute story", "implement issue #N", "run story <N>",
+            "execute issue <N>", "build story <N>".
+  NOT for: Implementation without an issue trail (use archon-piv-loop).
+  NOT for: Multi-issue parallel execution (run one invocation per issue).
+
+  Pipeline workflow 4 of 4. Implements PRD methodology phases 5, 6 (per-story
+  refinement), 7, 8.
+
+  Reads the GitHub issue body (which references PRD/plan/per-story plan and
+  the Memexia bank), refuses to start if any blocker is open, primes a fresh
+  AI session with the full context, runs an approval gate on the per-story
+  plan, executes a Ralph implementation loop, runs code review, iterates with
+  the user on feedback, opens a PR with `Closes #<issue>`, and verifies the
+  PR base.
+
+  Input: a GitHub issue number (e.g. `42` or `#42`).
+
+provider: claude
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE A: Dep-check
+  # Fetch issue, parse Depends on, verify all blockers are closed.
+  # Emit story metadata for downstream nodes.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: dep-check
+    bash: |
+      set -euo pipefail
+
+      MCP_FILE=".archon/mcp/memexia.json"
+      if [ ! -f "${MCP_FILE}" ]; then
+        echo "ERROR: ${MCP_FILE} not found." >&2
+        exit 1
+      fi
+
+      RAW=$(printf '%s' "$ARGUMENTS" | awk '{print $1}' | sed -E 's/^#//')
+      if ! printf '%s' "${RAW}" | grep -qE '^[0-9]+$'; then
+        echo "ERROR: usage: archon workflow run archon-execute-story <issue-number>" >&2
+        exit 1
+      fi
+      ISSUE_NUMBER="${RAW}"
+
+      # Fetch the issue.
+      ISSUE_JSON=$(gh issue view "${ISSUE_NUMBER}" --json number,title,body,labels,state)
+      STATE=$(printf '%s' "${ISSUE_JSON}" | jq -r '.state')
+      if [ "${STATE}" != "OPEN" ]; then
+        echo "ERROR: issue #${ISSUE_NUMBER} is ${STATE}, refusing to execute a non-open issue." >&2
+        exit 1
+      fi
+
+      TITLE=$(printf '%s' "${ISSUE_JSON}" | jq -r '.title')
+      BODY=$(printf '%s' "${ISSUE_JSON}" | jq -r '.body')
+
+      # Parse "Depends on: #X, #Y" — match anywhere in the body.
+      BLOCKER_LINE=$(printf '%s' "${BODY}" | grep -iE '^[[:space:]-]*Depends on:' | head -1 || true)
+      OPEN_BLOCKERS=""
+      if [ -n "${BLOCKER_LINE}" ]; then
+        # Extract numbers preceded by #.
+        BLOCKERS=$(printf '%s' "${BLOCKER_LINE}" | grep -oE '#[0-9]+' | tr -d '#' | sort -u)
+        for B in ${BLOCKERS}; do
+          B_STATE=$(gh issue view "${B}" --json state -q '.state' 2>/dev/null || echo "MISSING")
+          if [ "${B_STATE}" = "OPEN" ]; then
+            OPEN_BLOCKERS="${OPEN_BLOCKERS} #${B}"
+          elif [ "${B_STATE}" = "MISSING" ]; then
+            OPEN_BLOCKERS="${OPEN_BLOCKERS} #${B}(missing)"
+          fi
+        done
+      fi
+      if [ -n "${OPEN_BLOCKERS}" ]; then
+        echo "ERROR: issue #${ISSUE_NUMBER} has open blockers:${OPEN_BLOCKERS}" >&2
+        echo "Resolve / close blockers, then re-run." >&2
+        exit 1
+      fi
+
+      # Parse references from issue body. Pattern set by workflow 3.
+      get_path() {
+        printf '%s' "${BODY}" | grep -oE "\`$1\`" | head -1 | tr -d '`'
+      }
+      # The body has lines like:
+      #   - PRD: `docs/prd-<slug>.md`
+      #   - Plan: `docs/plans/<slug>.md`
+      #   - Per-story plan: `docs/stories/<slug>-<n>.md`
+      #   - Memexia bank: `<bank-name>`
+      # Extract via the dash-prefixed line and the inline backticks.
+      extract_after_label() {
+        printf '%s\n' "${BODY}" | grep -E "^[[:space:]-]*$1:" | head -1 | grep -oE '`[^`]+`' | head -1 | tr -d '`'
+      }
+
+      PRD_PATH=$(extract_after_label "PRD")
+      PLAN_PATH=$(extract_after_label "Plan")
+      STORY_PLAN_PATH=$(extract_after_label "Per-story plan")
+      BANK_NAME=$(extract_after_label "Memexia bank")
+
+      for v in PRD_PATH PLAN_PATH STORY_PLAN_PATH BANK_NAME; do
+        eval "val=\${$v}"
+        if [ -z "${val}" ]; then
+          echo "ERROR: issue #${ISSUE_NUMBER} body is missing '${v}' link. Was it created by archon-plan-to-stories?" >&2
+          exit 1
+        fi
+      done
+      for path in "${PRD_PATH}" "${PLAN_PATH}" "${STORY_PLAN_PATH}"; do
+        if [ ! -f "${path}" ]; then
+          echo "ERROR: referenced file does not exist: ${path}" >&2
+          echo "Has the docs branch been merged into the base branch yet?" >&2
+          exit 1
+        fi
+      done
+
+      # Story number (last segment of story plan filename).
+      STORY_NUMBER=$(basename "${STORY_PLAN_PATH}" .md | grep -oE '[0-9]+$' || true)
+      if [ -z "${STORY_NUMBER}" ]; then
+        echo "WARNING: Could not infer story number from ${STORY_PLAN_PATH}." >&2
+        STORY_NUMBER="unknown"
+      fi
+      SLUG=$(basename "${STORY_PLAN_PATH}" .md | sed -E "s/-${STORY_NUMBER}\$//")
+
+      API_URL="${MEMEXIA_API_URL:-}"
+      if [ -z "${API_URL}" ]; then
+        echo "ERROR: MEMEXIA_API_URL must be set in ~/.archon/.env" >&2
+        exit 1
+      fi
+
+      mkdir -p "$ARTIFACTS_DIR"
+      cat > "$ARTIFACTS_DIR/story-info.env" <<EOF
+      ISSUE_NUMBER=${ISSUE_NUMBER}
+      ISSUE_TITLE=${TITLE}
+      SLUG=${SLUG}
+      STORY_NUMBER=${STORY_NUMBER}
+      BANK_NAME=${BANK_NAME}
+      PRD_PATH=${PRD_PATH}
+      PLAN_PATH=${PLAN_PATH}
+      STORY_PLAN_PATH=${STORY_PLAN_PATH}
+      MEMEXIA_API_URL=${API_URL}
+      EOF
+
+      # Also persist the issue body — handy for the prime node.
+      printf '%s' "${BODY}" > "$ARTIFACTS_DIR/issue-body.md"
+
+      echo "ISSUE_NUMBER=${ISSUE_NUMBER}"
+      echo "ISSUE_TITLE=${TITLE}"
+      echo "SLUG=${SLUG}"
+      echo "STORY_NUMBER=${STORY_NUMBER}"
+      echo "BANK_NAME=${BANK_NAME}"
+      echo "PRD_PATH=${PRD_PATH}"
+      echo "PLAN_PATH=${PLAN_PATH}"
+      echo "STORY_PLAN_PATH=${STORY_PLAN_PATH}"
+      echo "Blockers: none open."
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE B: Prime
+  # Fresh prompt — gets MCP + skill preload. Loads issue body, PRD,
+  # plan, per-story plan, queries Memexia for `story-<n>` tag, emits
+  # a primed-context summary for the planner.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: prime
+    depends_on: [dep-check]
+    model: sonnet
+    context: fresh
+    mcp: .archon/mcp/memexia.json
+    skills: [memexia-memory]
+    prompt: |
+      # Execute-Story — Prime Context
+
+      You are loading the full context for one story implementation. Your
+      output becomes the input to the plan-confirm gate.
+
+      You have:
+      - The Memexia MCP attached — use `mcp__memexia__*` tools directly.
+      - The `memexia-memory` skill preloaded — follow its zone routing rules.
+
+      ---
+
+      ## Step 1: Pull context
+
+      Parse `ISSUE_NUMBER`, `ISSUE_TITLE`, `SLUG`, `STORY_NUMBER`, `BANK_NAME`,
+      `PRD_PATH`, `PLAN_PATH`, `STORY_PLAN_PATH` from:
+      $dep-check.output
+
+      Then read, in order:
+      1. The issue body — already saved at `$ARTIFACTS_DIR/issue-body.md`.
+      2. `STORY_PLAN_PATH` — the per-story plan (locked decisions, files, tasks).
+      3. `PLAN_PATH` — only the sections relevant to this story.
+      4. `PRD_PATH` — only the user stories / features that match this story.
+      5. CLAUDE.md.
+      6. `git log --oneline -20` for recent activity in the area.
+
+      ## Step 2: Pull Memexia context
+
+      - `mcp__memexia__memexia_agent_memory_query`:
+        `bank: "<bank-name>"`, query for tag `story-<n>` (where `<n>` is
+        STORY_NUMBER from above). Returns per-story research.
+      - `mcp__memexia__memexia_agent_memory_query`:
+        `bank: "<bank-name>"`, query for tag `decision`. Returns locked
+        architectural decisions you must NOT relitigate.
+
+      ## Step 3: Read every file the story plan references
+
+      The "Files to CREATE / UPDATE" section names files. UPDATE files must be
+      read in full (so the implement loop has accurate file:line context).
+      CREATE files: confirm they don't already exist.
+
+      ## Step 4: Output the primed-context summary
+
+      Save to `$ARTIFACTS_DIR/primed-context.md`. Format:
+
+      ```markdown
+      # Primed Context — Issue #<issue-number>: <title>
+
+      ## Story
+      - Slug: <slug>
+      - Number: <n>
+      - PRD: <prd-path>
+      - Plan: <plan-path>
+      - Per-story plan: <story-plan-path>
+      - Memexia bank: <bank-name>
+
+      ## Locked Decisions (do NOT relitigate)
+      - {Decision 1 from Memexia bank, with bank entry id}
+      - ...
+
+      ## Per-Story Research (Memexia, tag story-<n>)
+      - {Finding 1, with bank entry id}
+      - ...
+
+      ## Files (current state, NOT what we'll change to)
+      ### `<path>` — UPDATE
+      Current behavior: <2–3 sentences>
+      Relevant region: file:lines
+      ### `<path>` — CREATE
+      Confirmed not present.
+
+      ## Task List From Story Plan
+      <copy verbatim from STORY_PLAN_PATH>
+
+      ## Risks / Open Questions
+      <if any — flag for the plan-confirm gate>
+      ```
+
+      ## Step 5: Report
+
+      Output:
+
+      ```
+      ## Primed
+
+      Issue: #<issue-number> — <title>
+      Story: <slug>-<n>
+      Bank: <bank-name>
+      Locked decisions: {n}
+      Per-story memories pulled: {n}
+      Files (UPDATE): {n}, Files (CREATE): {n}
+
+      Primed context saved to: $ARTIFACTS_DIR/primed-context.md
+
+      Proceeding to plan-confirm gate.
+      ```
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE C: Plan-confirm gate
+  # Approval node — pauses for the user to review the per-story plan
+  # in light of the primed context. on_reject runs an AI rework using
+  # the workflow's default model.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan-confirm
+    depends_on: [prime]
+    approval:
+      message: |
+        Per-story plan ready for review. Read `$ARTIFACTS_DIR/primed-context.md`
+        and the per-story plan file. Approve to proceed to implementation, or
+        reject with feedback (e.g. "rework: clarify the auth flow") to have
+        the AI revise before implementation begins.
+      capture_response: true
+      on_reject:
+        prompt: |
+          # Execute-Story — Plan Rework
+
+          The user rejected the per-story plan with this feedback:
+
+          $REJECTION_REASON
+
+          ## Step 1: Re-read context
+
+          Parse paths from:
+          $dep-check.output
+
+          Read:
+          - `$ARTIFACTS_DIR/primed-context.md` (your previous primed summary).
+          - The per-story plan at `STORY_PLAN_PATH`.
+          - The user's feedback above.
+
+          ## Step 2: Revise the per-story plan
+
+          Edit `STORY_PLAN_PATH` directly. Address every point in the user's
+          feedback. Be conservative — do NOT rewrite the whole plan; only the
+          parts the feedback flagged.
+
+          If the feedback contradicts a locked decision from the Memexia bank,
+          surface that conflict in your response and ask the user to resolve
+          via Memexia (do NOT silently override locked decisions).
+
+          ## Step 3: Update the primed context
+
+          Re-write `$ARTIFACTS_DIR/primed-context.md` to reflect the revised
+          plan. Add a "## Revision History" section noting what changed and why.
+
+          ## Step 4: Report
+
+          ```
+          ## Plan Revised
+
+          Changes:
+          - {change 1}
+          - {change 2}
+
+          Re-pausing for approval at the same gate.
+          ```
+        max_attempts: 5
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE D: Implement-setup
+  # Verify per-story plan exists, install deps, emit task count.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement-setup
+    depends_on: [plan-confirm]
+    bash: |
+      set -euo pipefail
+
+      INFO_FILE="$ARTIFACTS_DIR/story-info.env"
+      # shellcheck disable=SC1090
+      . "${INFO_FILE}"
+
+      if [ ! -f "${STORY_PLAN_PATH}" ]; then
+        echo "ERROR: Per-story plan missing at ${STORY_PLAN_PATH}." >&2
+        exit 1
+      fi
+      if [ ! -f "$ARTIFACTS_DIR/primed-context.md" ]; then
+        echo "ERROR: Primed context missing — prime node did not produce one." >&2
+        exit 1
+      fi
+
+      # Install dependencies if a lockfile is present.
+      if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+        echo "Installing dependencies (bun)..."
+        bun install --frozen-lockfile 2>&1 | tail -3 || true
+      elif [ -f "package-lock.json" ]; then
+        echo "Installing dependencies (npm)..."
+        npm ci 2>&1 | tail -3 || true
+      elif [ -f "yarn.lock" ]; then
+        echo "Installing dependencies (yarn)..."
+        yarn install --frozen-lockfile 2>&1 | tail -3 || true
+      elif [ -f "pnpm-lock.yaml" ]; then
+        echo "Installing dependencies (pnpm)..."
+        pnpm install --frozen-lockfile 2>&1 | tail -3 || true
+      fi
+
+      # Atomic-task count: count `- [ ]` checkboxes in the Task List section.
+      TASK_COUNT=$(awk '/^## Task List/,/^## /{ if (/^- \[ \]/) c++ } END {print c+0}' "${STORY_PLAN_PATH}")
+      if [ "${TASK_COUNT}" -eq 0 ]; then
+        echo "ERROR: No '- [ ]' tasks found in ${STORY_PLAN_PATH} Task List section." >&2
+        echo "Plan refinement should leave a non-empty task list." >&2
+        exit 1
+      fi
+
+      echo "BRANCH=$(git branch --show-current)"
+      echo "GIT_ROOT=$(git rev-parse --show-toplevel)"
+      echo "STORY_PLAN_PATH=${STORY_PLAN_PATH}"
+      echo "TASK_COUNT=${TASK_COUNT}"
+      echo ""
+      echo "=== STORY_PLAN_START ==="
+      cat "${STORY_PLAN_PATH}"
+      echo ""
+      echo "=== STORY_PLAN_END ==="
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE E: Implement (Ralph loop)
+  # Mirrors PIV's `implement`. fresh_context: true. One task per
+  # iteration. Validates before commit. Tracks progress on disk.
+  # MCP/skills can't attach to a loop — implementation does not need
+  # Memexia tools (the prime node already gathered the context).
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement
+    depends_on: [implement-setup]
+    idle_timeout: 600000
+    model: claude-opus-4-6[1m]
+    loop:
+      prompt: |
+        # Execute-Story — Implementation Agent
+
+        You are an autonomous coding agent in a FRESH session — no memory of
+        previous iterations. Read the per-story plan from disk, implement ONE
+        task, validate, commit, update tracking, exit. The loop engine starts
+        a fresh iteration.
+
+        **Golden Rule**: If validation fails, fix it before committing. Never
+        commit broken code.
+
+        ---
+
+        ## Phase 0: CONTEXT — Load State
+
+        The setup node produced this context:
+
+        $implement-setup.output
+
+        **User's original request**: $USER_MESSAGE
+
+        ### 0.1 Parse Story Plan path
+
+        Extract the `STORY_PLAN_PATH=...` line from the context above.
+
+        ### 0.2 Read Current State (from disk — not from context above)
+
+        The context above is a snapshot from before the loop started. Previous
+        iterations may have changed things. Re-read from disk:
+
+        1. **The per-story plan** — your implementation guide.
+        2. **The primed context** at `$ARTIFACTS_DIR/primed-context.md`.
+        3. **Progress tracking** — check if `$ARTIFACTS_DIR/progress.txt` exists.
+        4. **CLAUDE.md** — project conventions.
+
+        ### 0.3 Check Git State
+
+        ```bash
+        git log --oneline -10
+        git status
+        ```
+
+        ---
+
+        ## Phase 1: SELECT — Pick Next Task
+
+        Tasks are `- [ ]` checkboxes in the per-story plan's "Task List" section.
+        Cross-reference with previous commits and `$ARTIFACTS_DIR/progress.txt`.
+
+        **If ALL tasks are complete** → Skip to Phase 5 (Completion).
+
+        Announce:
+
+        ```
+        -- Task Selected ------------------------------------------------
+        Task: <task description>
+        File(s): <paths>
+        -----------------------------------------------------------------
+        ```
+
+        ---
+
+        ## Phase 2: IMPLEMENT — Execute the Task
+
+        1. Read the file you're about to change (if it exists).
+        2. Read any pattern source the plan cites (file:line ...).
+        3. Make changes following the plan EXACTLY.
+        4. Type-check after each file: `bun run type-check 2>&1 || true`.
+
+        ---
+
+        ## Phase 3: VALIDATE — Verify the Task
+
+        ```bash
+        bun run type-check && bun run lint && bun run test && bun run format:check
+        ```
+
+        If validation fails: fix, re-run (up to 3 attempts). If unfixable, note
+        in `$ARTIFACTS_DIR/progress.txt` and DO NOT commit broken code.
+
+        ---
+
+        ## Phase 4: COMMIT — Save Changes
+
+        ```bash
+        git add -A
+        git diff --cached --stat
+        git commit -m "$(cat <<'EOF'
+        <type>: <task description>
+
+        Story <slug>-<n>: <brief details>
+        Refs #<issue-number>
+        EOF
+        )"
+        ```
+
+        Mark the task done in the per-story plan (toggle `- [ ]` → `- [x]`)
+        and append a record to `$ARTIFACTS_DIR/progress.txt`:
+
+        ```
+        ## Task: <description> — COMPLETED
+        Date: <ISO date>
+        Files: <list>
+        Commit: <short hash>
+        ---
+        ```
+
+        ---
+
+        ## Phase 5: COMPLETE — Check All Tasks
+
+        If ALL `- [ ]` tasks in the per-story plan are now `- [x]`:
+        1. Run full validation: `bun run validate 2>&1`.
+        2. Push: `git push -u origin HEAD`.
+        3. Signal: `<promise>COMPLETE</promise>`.
+
+        If tasks remain, report status (which task is next) and end normally.
+        The loop engine starts a fresh iteration.
+      until: COMPLETE
+      max_iterations: 15
+      fresh_context: true
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE F: Code review
+  # Mirrors PIV's code-review. Fresh prompt — gets MCP + skill preload
+  # so it can record review findings to Memexia.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: code-review
+    depends_on: [implement]
+    model: sonnet
+    context: fresh
+    mcp: .archon/mcp/memexia.json
+    skills: [memexia-memory]
+    prompt: |
+      # Execute-Story — Automated Code Review
+
+      The implementation phase is complete. Review ALL changes against the
+      per-story plan and the locked decisions in Memexia.
+
+      You have:
+      - The Memexia MCP attached — record review findings as world_facts
+        tagged `code-review` + `story-<n>`.
+      - The `memexia-memory` skill preloaded.
+
+      **Implementation output**: $implement.output
+      **Story-info from dep-check**:
+      $dep-check.output
+
+      ---
+
+      ## Step 1: Read the plan + locked decisions
+
+      Read `STORY_PLAN_PATH` (from dep-check output). Query Memexia for
+      `decision` + `story-<n>` tags to recall what was locked.
+
+      ## Step 2: Review all changes
+
+      ```bash
+      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff $BASE_BRANCH..HEAD --stat
+      git diff $BASE_BRANCH..HEAD
+      ```
+
+      ## Step 3: Check against plan + decisions
+
+      For EACH task: was it implemented? Do success criteria hold?
+      For EACH file: code quality, security, conventions, CLAUDE.md compliance.
+      For EACH locked decision: does the implementation honor it? Flag any
+      drift loudly — drift on locked decisions is a review failure.
+
+      ## Step 4: Run validation
+
+      ```bash
+      bun run validate 2>&1 || (bun run type-check && bun run lint && bun run test && bun run format:check)
+      ```
+
+      ## Step 5: Fix obvious issues
+
+      Type errors, lint warnings, missing imports, formatting. Commit any fixes:
+      ```bash
+      git add -A && git commit -m "fix: address code review findings" || true
+      ```
+
+      ## Step 6: Persist findings
+
+      For each non-trivial finding (positive or negative), `mcp__memexia__memexia_agent_memory_remember`:
+      - `bank: <bank-name>`, `tags: ["code-review", "story-<n>"]`.
+      - Content: finding + evidence (file:line).
+
+      ## Step 7: Present review
+
+      ```
+      ## Code Review Complete
+
+      ### Implementation Status
+      | Task | Status | Notes |
+      |------|--------|-------|
+      | ... | DONE / PARTIAL / MISSING | ... |
+
+      ### Validation
+      - Type-check: PASS / FAIL
+      - Lint: PASS / FAIL
+      - Tests: PASS / FAIL
+      - Format: PASS / FAIL
+
+      ### Locked Decisions Honored
+      | Decision | Status | Evidence |
+      |----------|--------|----------|
+      | ... | YES / NO / PARTIAL | file:line |
+
+      ### Code Quality Findings
+      {Issues, or "No issues found."}
+
+      ### Recommendation
+      {READY FOR REVIEW / NEEDS FIXES}
+      ```
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE G: Fix-feedback loop
+  # Mirrors PIV's fix-feedback. Interactive — user tests, AI fixes.
+  # MCP/skills can't attach — Bash + skill-file pattern.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fix-feedback
+    depends_on: [code-review]
+    idle_timeout: 600000
+    loop:
+      prompt: |
+        # Execute-Story — Address Validation Feedback
+
+        The human is reviewing the implementation and providing feedback.
+
+        **Human's feedback**: $LOOP_USER_INPUT
+        **Story-info**:
+        $dep-check.output
+
+        ---
+
+        ## Memexia: Bash + curl pattern (loop nodes can't attach mcp:/skills:)
+
+        1. Read `~/.claude/skills/memexia-memory/SKILL.md` once per iteration.
+        2. Auth: `jq` from `.archon/mcp/memexia.json`.
+        3. Persist gotchas / fixes via `agent-memory/remember`,
+           `agent_id: "archon-execute-story"`, tags: `bank-name` + `gotcha`
+           + `story-<n>`.
+
+        ---
+
+        ## Step 1: Read context
+
+        Read `STORY_PLAN_PATH` (from dep-check output) and CLAUDE.md.
+
+        ## Step 2: Process feedback
+
+        **No user feedback yet (first iteration, $LOOP_USER_INPUT empty)**:
+        - Present the code review results.
+        - Ask the user to test the implementation and provide feedback.
+        - Do NOT emit the completion signal on the first iteration.
+
+        **User explicitly approved** (latest message: "approved", "looks good",
+        "ship it", "lgtm"):
+        - Output: "Implementation approved!"
+        - Emit `<promise>VALIDATED</promise>`.
+
+        **User provided specific feedback**:
+        1. Read the relevant files.
+        2. Understand each issue.
+        3. Make the fixes.
+        4. Type-check after each change.
+        5. Persist any non-trivial gotcha to Memexia (curl + skill rules).
+
+        ## Step 3: CRITICAL — completion signal discipline
+
+        NEVER emit `<promise>VALIDATED</promise>` unless the user's latest
+        message EXPLICITLY says "approved", "looks good", "ship it", "lgtm"
+        or a clear synonym. Questions / feedback / "almost" are NOT approval.
+        When unsure, ASK.
+
+        ## Step 4: Full validation
+
+        ```bash
+        bun run validate 2>&1 || (bun run type-check && bun run lint && bun run test && bun run format:check)
+        ```
+
+        ## Step 5: Commit fixes
+
+        ```bash
+        git add -A
+        git commit -m "$(cat <<'EOF'
+        fix: address review feedback
+
+        Changes:
+        - <fix 1>
+        - <fix 2>
+        EOF
+        )"
+        ```
+
+        ## Step 6: Report
+
+        ```
+        ## Feedback Addressed
+
+        Changes:
+        - <fix 1>
+
+        Validation: <PASS / FAIL with details>
+
+        Review again, or say "approved" to finalize and open the PR.
+        ```
+      until: VALIDATED
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Test the implementation. Provide specific feedback on what needs
+        fixing, or say "approved" to open the PR.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE H: Finalize
+  # Push, create PR with `Closes #<issue-number>` so the issue
+  # auto-closes on merge. Body references PRD/plan/per-story plan/bank.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: finalize
+    depends_on: [fix-feedback]
+    model: sonnet
+    context: fresh
+    prompt: |
+      # Execute-Story — Finalize
+
+      The implementation has been approved. Push and open a PR.
+
+      **Story-info**:
+      $dep-check.output
+
+      ---
+
+      ## Step 1: Push
+
+      ```bash
+      git push -u origin HEAD 2>&1 || echo "WARNING: Push failed — verify auth before opening the PR."
+      ```
+
+      ## Step 2: Generate summary
+
+      ```bash
+      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      ```
+
+      Read `STORY_PLAN_PATH` (from dep-check output) and `$ARTIFACTS_DIR/progress.txt`.
+
+      ## Step 3: Create PR (if not already created)
+
+      Check first:
+      ```bash
+      gh pr view HEAD --json url 2>/dev/null || echo "NO_PR"
+      ```
+
+      If no PR exists, gather the repo's PR template:
+      ```bash
+      cat .github/pull_request_template.md 2>/dev/null || cat .github/PULL_REQUEST_TEMPLATE.md 2>/dev/null || echo "NO_TEMPLATE"
+      ```
+
+      Create with `gh pr create --base $BASE_BRANCH`. The body MUST include
+      `Closes #<issue-number>` (use the ISSUE_NUMBER value from dep-check
+      output) so the issue auto-closes on merge. Body should also reference:
+      - PRD path
+      - Plan path
+      - Per-story plan path
+      - Memexia bank name
+
+      Use a HEREDOC for the body. Title: the issue title (also from dep-check
+      output) — succinct, no `[Story N]` prefix.
+
+      ## Step 4: Output summary
+
+      ```
+      ===============================================================
+      EXECUTE-STORY — COMPLETE
+      ===============================================================
+      Issue: #<issue-number> — <title>
+      Story: <slug>-<n>
+      Branch: <branch>
+      PR: <url>
+
+      -- Tasks completed -----------------------------------------------
+      <list from progress.txt>
+
+      -- Files changed -------------------------------------------------
+      <git diff --stat>
+
+      -- Memexia bank --------------------------------------------------
+      <bank-name>
+      ===============================================================
+      ```
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE I: verify-pr-base (mirrors PIV's last node)
+  # Belt-and-braces guard against PRs targeting the wrong base.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: verify-pr-base
+    depends_on: [finalize]
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #${PR_NUMBER}: expected=${EXPECTED} actual=${ACTUAL} — re-targeting" >&2
+        gh pr edit "${PR_NUMBER}" --base "${EXPECTED}"
+      else
+        echo "PR base verified: ${EXPECTED}"
+      fi

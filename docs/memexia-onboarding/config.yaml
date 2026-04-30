@@ -1,0 +1,7 @@
+worktree:
+  baseBranch: main          # change to dev / develop / master if your project's base branch differs
+  copyFiles:
+    - .archon/mcp           # carries the gitignored Memexia MCP config into worktrees
+
+# docs:
+#   path: docs              # uncomment + adjust if your project's docs live somewhere other than docs/
