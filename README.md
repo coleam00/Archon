@@ -20,6 +20,14 @@
 
 ---
 
+> **This is `Ddell12/archon-symphony`, a fork of [`coleam00/Archon`](https://github.com/coleam00/Archon).**
+>
+> The fork adds **Symphony** — an autonomous tracker-driven dispatcher. It polls Linear and GitHub for issues matching a configured state, claims dispatch slots, and runs Archon workflows per issue. A `/symphony` kanban in the web UI shows every dispatch with a deep link into the workflow-run drill-through.
+>
+> See [`packages/symphony/README.md`](packages/symphony/README.md) for setup. Everything below is upstream Archon; the fork's value-add lives on top.
+
+---
+
 Archon is a workflow engine for AI coding agents. Define your development processes as YAML workflows - planning, implementation, validation, code review, PR creation - and run them reliably across all your projects.
 
 Like what Dockerfiles did for infrastructure and GitHub Actions did for CI/CD - Archon does for AI coding workflows. Think n8n, but for software development.
