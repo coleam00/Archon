@@ -231,16 +231,20 @@ export async function touchConversation(id: string): Promise<void> {
 }
 
 /**
- * Update conversation title
+ * Update conversation title.
+ *
+ * Fire-and-forget safe — does not throw when the conversation does not exist.
+ * The caller (title-generator) already wraps this in a try-catch.
  */
 export async function updateConversationTitle(id: string, title: string): Promise<void> {
   const dialect = getDialect();
+  const log = createLogger('db.conversations');
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET title = $1, updated_at = ${dialect.now()} WHERE id = $2`,
     [title, id]
   );
   if (result.rowCount === 0) {
-    throw new ConversationNotFoundError(id);
+    log.warn({ conversationId: id }, 'update_conversation_title_not_found');
   }
 }
 
