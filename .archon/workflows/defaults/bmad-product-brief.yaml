@@ -1,0 +1,118 @@
+name: bmad-product-brief
+description: |
+  BMAD Phase 1 - Create a product brief document.
+  Triggers: "bmad product brief", "product brief", "bmad brief".
+
+  Analyst agent creates a product brief through interactive approval gate.
+  Produces product-brief.md in _bmad-output/planning-artifacts/.
+
+provider: claude
+interactive: true
+
+nodes:
+  - id: gather-context
+    bash: |
+      echo "=== Existing BMAD Artifacts ==="
+      for f in \
+        brainstorming-report.md \
+        research-findings.md \
+        prfaq.md \
+      ; do
+        if [ -f "$PWD/_bmad-output/$f" ]; then
+          echo "FOUND: $f"
+          echo "--- Content preview (first 20 lines) ---"
+          head -20 "$PWD/_bmad-output/$f"
+          echo "--- end preview ---"
+        else
+          echo "MISSING: $f"
+        fi
+      done
+
+  - id: draft-brief
+    model: sonnet
+    skills:
+      - bmad/bmm/analyst
+    prompt: |
+      You are Mary, the BMAD Analyst agent. Draft a product brief.
+
+      ## User Input
+      $ARGUMENTS
+
+      ## Existing Context
+      $gather-context.output
+
+      ## Instructions
+
+      Synthesize available inputs into a concise product brief. If brainstorming or
+      research artifacts exist, incorporate their key findings. If not, work from
+      the user's description.
+
+      Write the product brief to `$ARTIFACTS_DIR/planning-artifacts/product-brief.md`:
+
+      ```markdown
+      # Product Brief
+
+      **Product Name**: {working title}
+      **Date**: {date}
+      **Author**: BMAD Analyst (Mary)
+
+      ## Problem Statement
+      {clear statement of the problem being solved}
+
+      ## Target Users
+      {who this is for, with specific personas if available}
+
+      ## Proposed Solution
+      {high-level description of the product/approach}
+
+      ## Key Differentiators
+      {what makes this different from alternatives}
+
+      ## Success Metrics
+      {how we will know this worked}
+
+      ## Scope Boundaries
+      ### In Scope
+      - {what is included}
+      ### Out of Scope
+      - {what is explicitly excluded}
+
+      ## Key Assumptions
+      {assumptions that need validation}
+
+      ## Known Risks
+      {risks with potential mitigations}
+
+      ## Recommended Next Steps
+      - Proceed to PRD creation: /bmad-create-prd
+      - Or Working Backwards: /bmad-prfaq
+      ```
+
+    depends_on: [gather-context]
+
+  - id: review-brief
+    approval:
+      message: "Review the product brief above. Provide feedback or say 'approved' to finalize."
+      capture_response: true
+    depends_on: [draft-brief]
+
+  - id: finalize
+    model: sonnet
+    prompt: |
+      The product brief has been reviewed.
+
+      ## Reviewer Feedback
+      $review-brief.output
+
+      ## Instructions
+      If the feedback contains specific change requests, apply them to the brief
+      at `$ARTIFACTS_DIR/planning-artifacts/product-brief.md`. Otherwise, confirm
+      the brief is finalized.
+
+      Present the final brief to the user with the file path.
+      Recommend next workflow:
+      - `/bmad-create-prd` to create a full PRD
+      - `/bmad-research` if more research is needed
+      - `/bmad-prfaq` for the Working Backwards approach
+
+    depends_on: [review-brief]

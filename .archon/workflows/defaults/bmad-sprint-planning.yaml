@@ -1,0 +1,77 @@
+name: bmad-sprint-planning
+description: |
+  BMAD Phase 4 - Initialize sprint tracking.
+  Triggers: "bmad sprint planning", "sprint planning", "bmad sprint", "start sprint".
+
+  Developer agent (Amelia) initializes sprint tracking from epics/stories.
+  Produces sprint-status.yaml in _bmad-output/implementation-artifacts/sprints/.
+
+provider: claude
+
+nodes:
+  - id: read-epics
+    bash: |
+      if [ -f "$PWD/_bmad-output/planning-artifacts/epics/epics.md" ]; then
+        echo "EPICS INDEX: FOUND"
+        cat "$PWD/_bmad-output/planning-artifacts/epics/epics.md"
+      else
+        echo "ERROR: epics.md not found. Run /bmad-create-epics-and-stories first."
+        exit 1
+      fi
+
+      echo ""
+      echo "=== Story Files ==="
+      ls -1 "$PWD/_bmad-output/planning-artifacts/epics/story-"*.md 2>/dev/null || echo "(none)"
+
+      mkdir -p "$PWD/_bmad-output/implementation-artifacts/sprints"
+      mkdir -p "$PWD/_bmad-output/implementation-artifacts/stories"
+
+  - id: init-sprint
+    model: sonnet
+    skills:
+      - bmad/bmm/developer
+    prompt: |
+      You are Amelia, the BMAD Developer agent. Initialize sprint tracking.
+
+      ## Epics and Stories
+      $read-epics.output
+
+      ## Instructions
+
+      Create the sprint status tracker at
+      `$ARTIFACTS_DIR/implementation-artifacts/sprints/sprint-status.yaml`:
+
+      ```yaml
+      sprint:
+        name: Sprint 1
+        start_date: {today}
+        status: planning
+        epics:
+          - epic_id: EPIC-001
+            title: {title}
+            status: not_started
+            stories:
+              - story_id: STORY-001
+                slug: {slug}
+                title: {title}
+                status: ready
+                assigned_to: null
+                started_at: null
+                completed_at: null
+                pr_url: null
+      ```
+
+      Include ALL stories from the epics index. Set initial status to "ready" for
+      stories with no dependencies, "blocked" for stories with unmet dependencies.
+
+      Also copy story files to the implementation stories directory:
+      - From: `$ARTIFACTS_DIR/planning-artifacts/epics/story-*.md`
+      - To: `$ARTIFACTS_DIR/implementation-artifacts/stories/story-*.md`
+
+      After creating the sprint status file, print a summary:
+      - Total epics
+      - Total stories
+      - Stories ready (no dependencies)
+      - Stories blocked (have dependencies)
+
+    depends_on: [read-epics]

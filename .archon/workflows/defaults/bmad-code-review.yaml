@@ -1,0 +1,121 @@
+name: bmad-code-review
+description: |
+  BMAD Phase 4 - Validate implementation quality.
+  Triggers: "bmad code review", "code review", "review my code", "bmad review".
+
+  Developer agent reviews implementation against architecture and story.
+  Produces approve/changes requested decision.
+
+provider: claude
+interactive: true
+
+nodes:
+  - id: gather-review-context
+    bash: |
+      echo "=== Git Diff ==="
+      git diff HEAD~1..HEAD --stat 2>/dev/null || echo "(no recent commits)"
+      echo ""
+      git diff HEAD~1..HEAD 2>/dev/null | head -500 || echo "(unable to show diff)"
+
+      echo ""
+      echo "=== Recent Commits ==="
+      git log --oneline -5 2>/dev/null
+
+      echo ""
+      echo "=== Validation ==="
+      if command -v bun &>/dev/null && [ -f "package.json" ]; then
+        bun run type-check 2>&1 | tail -5 || true
+        bun run lint 2>&1 | tail -5 || true
+      fi
+
+      echo ""
+      echo "=== Architecture Document ==="
+      if [ -f "$PWD/_bmad-output/planning-artifacts/architecture.md" ]; then
+        head -50 "$PWD/_bmad-output/planning-artifacts/architecture.md"
+      fi
+
+  - id: perform-review
+    model: sonnet
+    skills:
+      - bmad/bmm/developer
+    prompt: |
+      You are Amelia, the BMAD Developer agent performing a code review.
+
+      ## Review Context
+      $gather-review-context.output
+
+      ## Instructions
+
+      Review the implementation against these criteria:
+
+      1. **Story Compliance**: Does the code satisfy all acceptance criteria?
+      2. **Architecture Alignment**: Does it follow the architecture decisions?
+      3. **Code Quality**: Is the code clean, readable, and well-structured?
+      4. **Test Coverage**: Are there adequate tests for the new functionality?
+      5. **Security**: Are there any security concerns?
+      6. **Performance**: Are there obvious performance issues?
+      7. **Edge Cases**: Are edge cases handled?
+
+      Write the review to `$ARTIFACTS_DIR/implementation-artifacts/code-review.md`:
+
+      ```markdown
+      # Code Review
+
+      **Date**: {date}
+      **Reviewer**: BMAD Developer (Amelia)
+
+      ## Decision: APPROVE | REQUEST_CHANGES
+
+      ## Story Compliance
+      {for each acceptance criterion: MET / NOT MET with explanation}
+
+      ## Architecture Alignment
+      {does the implementation follow architecture decisions?}
+
+      ## Findings
+      ### {Severity}: {title}
+      - **File**: `path:line`
+      - **Issue**: {description}
+      - **Suggestion**: {recommended fix}
+
+      ## Test Coverage
+      {assessment of test coverage}
+
+      ## Overall Assessment
+      {summary paragraph}
+      ```
+
+      **CRITICAL**: Your final line must be exactly one of:
+      - `REVIEW_DECISION: APPROVE`
+      - `REVIEW_DECISION: REQUEST_CHANGES`
+
+    depends_on: [gather-review-context]
+
+  - id: review-gate
+    depends_on: [perform-review]
+    prompt: |
+      You are summarising the BMAD code review decision for the user.
+
+      ## Review Output
+      $perform-review.output
+
+      ## Instructions
+
+      1. Read the code review at `$ARTIFACTS_DIR/implementation-artifacts/code-review.md`.
+      2. Extract the final `REVIEW_DECISION:` line — it will be either
+         `APPROVE` or `REQUEST_CHANGES`.
+      3. Produce a concise summary for the user containing:
+         - **Decision** — APPROVE or REQUEST_CHANGES (verbatim)
+         - **Top 3 findings** (most severe first) with file:line references
+         - **Story compliance** — one-liner: were all acceptance criteria met?
+         - **Recommended next step** — if APPROVE: "ready to merge"; if
+           REQUEST_CHANGES: list the specific fixes the developer should make,
+           in priority order
+
+      4. Final line of your output must be exactly one of:
+         - `GATE_DECISION: APPROVE`
+         - `GATE_DECISION: REQUEST_CHANGES`
+
+      Do not invent findings. If the review file is empty or missing, say so
+      and emit `GATE_DECISION: REQUEST_CHANGES` so downstream steps can
+      re-run the review.

@@ -1,0 +1,156 @@
+name: bmad-prfaq
+description: |
+  BMAD Phase 1 - Working Backwards PRFAQ (Press Release + FAQ).
+  Triggers: "bmad prfaq", "prfaq", "working backwards", "press release faq".
+
+  Analyst agent facilitates the Working Backwards challenge/response loop.
+  Produces prfaq.md in _bmad-output/planning-artifacts/.
+
+provider: claude
+interactive: true
+
+nodes:
+  - id: gather-context
+    bash: |
+      echo "=== Existing BMAD Artifacts ==="
+      for f in \
+        brainstorming-report.md \
+        research-findings.md \
+        product-brief.md \
+      ; do
+        if [ -f "$PWD/_bmad-output/$f" ]; then
+          echo "FOUND: $f"
+        else
+          echo "MISSING: $f"
+        fi
+      done
+
+  - id: prfaq-loop
+    model: sonnet
+    loop:
+      prompt: |
+        You are Mary, the BMAD Analyst agent, facilitating a Working Backwards PRFAQ session.
+
+        ## Topic
+        $ARGUMENTS
+
+        ## User Input
+        $LOOP_USER_INPUT
+
+        ## Existing Context
+        $gather-context.output
+
+        ## PRFAQ Process
+
+        The Working Backwards method has two parts:
+        1. **Press Release**: A future-dated press release announcing the product as if it already exists
+        2. **FAQ**: Internal FAQ addressing hard questions about the product
+
+        **If this is the first iteration:**
+        1. Explain the Working Backwards process to the user
+        2. Ask for the core inputs:
+           - What is the product?
+           - Who is the customer?
+           - What problem does it solve?
+           - What is the compelling customer experience?
+        3. Challenge the user's thinking -- push them to think from the customer's perspective
+
+        **If the user has provided input:**
+        1. Process their response
+        2. Challenge weak thinking -- ask "So what?" and "Why does the customer care?"
+        3. Help refine the press release narrative (customer-centric, benefit-focused)
+        4. Begin building the FAQ with tough internal questions:
+           - Why is this hard?
+           - What are the risks?
+           - What are the alternatives?
+           - What does this cost?
+           - Why now?
+
+        **When the PRFAQ is sufficiently developed** (user signals readiness or the
+        press release and FAQ are comprehensive):
+        1. Write the complete PRFAQ document
+        2. End with: <promise>COMPLETE</promise>
+
+        ## Output Format (write when signaling COMPLETE)
+
+        Write to `$ARTIFACTS_DIR/planning-artifacts/prfaq.md`:
+
+        ```markdown
+        # PRFAQ: {Product Name}
+
+        **Date**: {future launch date}
+        **Location**: {launch location}
+
+        ## Press Release
+
+        ### {Product Name} {verb} {benefit}
+        _{Company} today announced {product name}, a {description} that {key benefit}._
+
+        {2-3 paragraph press release written in journalistic style, customer-focused}
+
+        ### Quote from {Executive}
+        "{customer-centric quote about the product's impact}"
+
+        ### How to Get Started
+        {brief instructions for the customer}
+
+        ### About {Company}
+        {boilerplate}
+
+        ---
+
+        ## Frequently Asked Questions
+
+        ### General
+        **Q: What is {Product Name}?**
+        A: {answer}
+
+        **Q: Who is this for?**
+        A: {answer}
+
+        **Q: Why should I care?**
+        A: {answer}
+
+        ### Business
+        **Q: How much does it cost?**
+        A: {answer}
+
+        **Q: How does this make money?**
+        A: {answer}
+
+        ### Technical
+        **Q: How does it work?**
+        A: {answer}
+
+        **Q: What are the limitations?**
+        A: {answer}
+
+        ### Competitive
+        **Q: Why not just use {alternative}?**
+        A: {answer}
+
+        ### Risk
+        **Q: What could go wrong?**
+        A: {answer}
+
+        **Q: What if customers don't adopt it?**
+        A: {answer}
+        ```
+
+      until: COMPLETE
+      max_iterations: 12
+      interactive: true
+      gate_message: |
+        Respond to the Working Backwards questions above, refine your PRFAQ,
+        or say "done" when you're ready to finalize.
+
+  - id: confirm
+    model: sonnet
+    prompt: |
+      The PRFAQ has been completed. Read it at `$ARTIFACTS_DIR/planning-artifacts/prfaq.md`
+      and present a brief summary to the user.
+
+      Recommend next workflow:
+      - `/bmad-create-prd` to create a formal PRD based on the PRFAQ insights
+
+    depends_on: [prfaq-loop]

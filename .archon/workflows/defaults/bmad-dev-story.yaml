@@ -1,0 +1,110 @@
+name: bmad-dev-story
+description: |
+  BMAD Phase 4 - Implement a story.
+  Triggers: "bmad dev story", "implement story", "bmad develop", "code the story".
+
+  Developer agent implements a story, writing code and tests.
+  Includes approval gate for code review.
+
+provider: claude
+interactive: true
+
+nodes:
+  - id: load-story
+    bash: |
+      STORIES_DIR="$PWD/_bmad-output/implementation-artifacts/stories"
+      if [ ! -d "$STORIES_DIR" ]; then
+        echo "ERROR: stories directory not found. Run /bmad-sprint-planning first."
+        exit 1
+      fi
+
+      STORY_FILE=$(ls -t "$STORIES_DIR"/story-*.md 2>/dev/null | grep -v "COMPLETE\|REVIEWED" | head -1)
+      if [ -z "$STORY_FILE" ]; then
+        echo "ERROR: No story files found ready for implementation."
+        echo "Run /bmad-create-story to prepare the next story."
+        exit 1
+      fi
+
+      echo "STORY_FILE=$STORY_FILE"
+      echo "=== Story Content ==="
+      cat "$STORY_FILE"
+      echo ""
+      echo "=== Sprint Status ==="
+      cat "$PWD/_bmad-output/implementation-artifacts/sprints/sprint-status.yaml" 2>/dev/null
+
+  - id: implement-story
+    model: sonnet
+    skills:
+      - bmad/bmm/developer
+    context: shared
+    prompt: |
+      You are Amelia, the BMAD Developer agent. Implement the assigned story.
+
+      ## Story to Implement
+      $load-story.output
+
+      ## Instructions
+
+      1. Read the story file carefully and understand the requirements
+      2. Read any referenced files in the codebase before making changes
+      3. Implement the story following the plan:
+         - Create new files as specified
+         - Modify existing files as specified
+         - Follow the project's coding conventions (read CLAUDE.md if present)
+      4. After implementing each file, verify it compiles/parses correctly
+      5. Write tests for the new functionality
+      6. Run the full test suite to ensure no regressions
+
+      ## Implementation Rules
+      - Work ONLY on files mentioned in the story's implementation plan
+      - Do not refactor unrelated code
+      - If you discover the plan is incomplete or incorrect, note it but continue with
+        your best judgment
+      - Commit each logical change with a clear commit message
+      - After all changes, run: type-check, lint, tests
+
+      ## After Implementation
+      Write a summary of what was done:
+
+      ```markdown
+      # Story Implementation Summary
+
+      **Story**: {story-id}
+      **Files Created**: {list}
+      **Files Modified**: {list}
+      **Tests Added**: {list}
+
+      ## Changes Made
+      - {change 1}
+      - {change 2}
+
+      ## Validation
+      - Type check: {PASS/FAIL}
+      - Lint: {PASS/FAIL}
+      - Tests: {PASS/FAIL}
+
+      ## Notes
+      {any deviations from the plan or open items}
+      ```
+
+    depends_on: [load-story]
+    idle_timeout: 600000
+
+  - id: code-review-gate
+    approval:
+      message: "Story implementation is complete. Review the summary above and the git diff. Approve to proceed to code review, or provide feedback."
+      capture_response: true
+    depends_on: [implement-story]
+
+  - id: update-sprint-status
+    bash: |
+      SPRINT_FILE="$PWD/_bmad-output/implementation-artifacts/sprints/sprint-status.yaml"
+      if [ ! -f "$SPRINT_FILE" ]; then
+        echo "No sprint status file to update."
+        exit 0
+      fi
+
+      echo "Sprint status review decision: $code-review-gate.output"
+      echo "Story implementation awaiting code review."
+
+    depends_on: [code-review-gate]
