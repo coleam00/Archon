@@ -198,23 +198,28 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 2. Build AuthStorage + ModelRegistry. Both `create()` calls read from
-    //    disk: AuthStorage reads ~/.pi/agent/auth.json (or
-    //    $PI_CODING_AGENT_DIR/auth.json), and ModelRegistry reads
-    //    ~/.pi/agent/models.json — the user's per-host config including
-    //    custom models for local providers (LM Studio, ollama, llamacpp,
-    //    custom OpenAI-compatible endpoints). Reads are synchronous and
-    //    happen on every sendQuery; we don't cache because the user can
-    //    edit either file between calls and expects pickup without restart
-    //    (Pi's `/login` flow rewrites auth.json under a file lock).
-    //    ModelRegistry captures any models.json load/parse error in its
-    //    internal loadError rather than throwing — surfaced below if the
-    //    requested model is then not found.
+    // 2. Build AuthStorage + ModelRegistry.
+    //
+    //    AuthStorage.create() reads ~/.pi/agent/auth.json (or
+    //    $PI_CODING_AGENT_DIR/auth.json) — credentials populated via
+    //    `pi` → `/login` or hand-edited api_key entries.
+    //
+    //    ModelRegistry.inMemory() is used instead of ModelRegistry.create()
+    //    for a critical reason: create() reads ~/.pi/agent/models.json and
+    //    returns an immutable registry — fine for static/custom models, but
+    //    extension providers (e.g. pi-provider-kiro) register their models
+    //    dynamically during session.bindExtensions(). inMemory() creates a
+    //    mutable registry that extensions can call registerProvider() on,
+    //    while still exposing the built-in static model catalog via find().
+    //
+    //    Both reads are synchronous and happen on every sendQuery; we don't
+    //    cache because the user can edit auth.json between calls and expects
+    //    pickup without restart.
     let authStorage: ReturnType<typeof piCodingAgent.AuthStorage.create>;
-    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.create>;
+    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.inMemory>;
     try {
       authStorage = piCodingAgent.AuthStorage.create();
-      modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
+      modelRegistry = piCodingAgent.ModelRegistry.inMemory(authStorage);
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
@@ -224,27 +229,33 @@ export class PiProvider implements IAgentProvider {
       );
     }
 
-    // 3. Look up the model. find() returns undefined when not found; if
-    //    models.json itself failed to load (e.g. a custom provider entry
-    //    missing baseUrl/apiKey), surface the load error so users debugging
-    //    custom-provider configs see the actual reason.
-    const model = modelRegistry.find(parsed.provider, parsed.modelId);
+    // 3. First-pass model lookup (phase 1 of 2).
+    //
+    //    modelRegistry.find() checks Pi's built-in static catalog (google,
+    //    anthropic, openai, etc.). For these providers, the model is
+    //    resolved immediately and we can fail-fast on missing credentials.
+    //
+    //    Extension-registered providers (e.g. pi-provider-kiro for Kiro API
+    //    models) are NOT in the static catalog — they register their models
+    //    on the ModelRegistry during session.bindExtensions() (step 4f).
+    //    When find() returns undefined here, we defer resolution to step 4g
+    //    (phase 2) which runs after bindExtensions().
+    let model = modelRegistry.find(parsed.provider, parsed.modelId);
     if (!model) {
+      // Surface any models.json load error as a warning — helps debug
+      // custom-provider configs (e.g. missing baseUrl in models.json).
       const loadError = modelRegistry.getError?.();
-      const loadErrorHint = loadError
-        ? ` ~/.pi/agent/models.json failed to load: ${loadError}`
-        : '';
-      getLog().error(
-        {
-          piProvider: parsed.provider,
-          modelId: parsed.modelId,
-          loadError: loadError ?? null,
-        },
-        'pi.model_not_found'
-      );
-      throw new Error(
-        `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'.${loadErrorHint} ` +
-          'See https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/models.generated.ts for the Pi model catalog.'
+      if (loadError) {
+        getLog().warn(
+          { piProvider: parsed.provider, modelId: parsed.modelId, loadError },
+          'pi.model_registry_load_error'
+        );
+      }
+      // Not an error yet — extension providers will register during
+      // bindExtensions(). Log at info so the deferral is visible in logs.
+      getLog().info(
+        { piProvider: parsed.provider, modelId: parsed.modelId },
+        'pi.model_not_in_static_catalog_deferring'
       );
     }
 
@@ -274,29 +285,42 @@ export class PiProvider implements IAgentProvider {
       authStorage.setRuntimeApiKey(parsed.provider, envOverride);
     }
 
-    const resolvedKey = await authStorage.getApiKey(parsed.provider);
-    if (!resolvedKey) {
-      if (envVarName) {
-        const envHint = `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`;
-        const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
-        throw new Error(
-          `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+    // Auth fail-fast — only when the model was found in the static catalog.
+    //
+    // Built-in providers (google, anthropic, openai, etc.) use Pi's
+    // AuthStorage for credentials, so we can validate early and give a
+    // clear error message with env-var and /login hints.
+    //
+    // Extension-registered providers (like kiro) manage their own
+    // credentials entirely outside Pi's AuthStorage (e.g. kiro uses
+    // AWS SSO/OIDC via ~/.aws/sso/cache/). Checking Pi's AuthStorage
+    // for them would always fail, so we skip the check and let the
+    // extension handle auth during its own streaming flow.
+    if (model) {
+      const resolvedKey = await authStorage.getApiKey(parsed.provider);
+      if (!resolvedKey) {
+        if (envVarName) {
+          const envHint = `Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`;
+          const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
+          throw new Error(
+            `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+          );
+        }
+
+        // Unmapped providers (LM Studio, ollama, llamacpp, custom
+        // OpenAI-compatible endpoints) often don't need credentials at all —
+        // log + continue rather than failing fast so local models work without
+        // ceremony. If the SDK call later fails for a provider that *does*
+        // need creds, the auth_missing breadcrumb is searchable in the log.
+        getLog().info(
+          {
+            piProvider: parsed.provider,
+            envHint: `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`,
+            loginHint: `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`,
+          },
+          'pi.auth_missing'
         );
       }
-
-      // Unmapped providers (LM Studio, ollama, llamacpp, custom
-      // OpenAI-compatible endpoints) often don't need credentials at all —
-      // log + continue rather than failing fast so local models work without
-      // ceremony. If the SDK call later fails for a provider that *does*
-      // need creds, the auth_missing breadcrumb is searchable in the log.
-      getLog().info(
-        {
-          piProvider: parsed.provider,
-          envHint: `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`,
-          loginHint: `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`,
-        },
-        'pi.auth_missing'
-      );
     }
 
     // 4. Translate Archon nodeConfig to Pi SDK options. All three translations
@@ -407,7 +431,10 @@ export class PiProvider implements IAgentProvider {
 
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd,
-      model,
+      // model is omitted when not yet resolved (extension provider path).
+      // createAgentSession accepts this — the model will be set via
+      // session.setModel() after bindExtensions() resolves it (step 4g).
+      ...(model ? { model } : {}),
       authStorage,
       modelRegistry,
       sessionManager,
@@ -417,7 +444,11 @@ export class PiProvider implements IAgentProvider {
       ...(filteredTools !== undefined ? { tools: filteredTools } : {}),
     });
 
-    if (modelFallbackMessage) {
+    // Suppress the model fallback warning when we're doing deferred
+    // resolution (model is null). Pi's session restore can't find extension
+    // models in the static catalog and emits a misleading "Could not restore
+    // model X, using Y" message. We'll set the correct model in step 4g.
+    if (modelFallbackMessage && model) {
       yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
     }
 
@@ -435,12 +466,44 @@ export class PiProvider implements IAgentProvider {
     // 4f. Bind UI context (so ctx.hasUI is true and ctx.ui.notify() forwards
     //     into the chunk stream) or fire session_start with no UI. Must run
     //     after flag pass-through above.
+    //
+    //     IMPORTANT: bindExtensions() is the trigger that causes extension
+    //     providers to register their models. Internally, Pi wires
+    //     providerActions into the ExtensionRunner, which fires each
+    //     extension's session_start handler. Extensions like pi-provider-kiro
+    //     call pi.registerProvider("kiro", ...) during session_start, which
+    //     adds their models to our modelRegistry instance. This is why
+    //     ModelRegistry.inMemory() is required (step 2) — create() returns
+    //     an immutable registry that registerProvider() can't modify.
     const uiBridge = interactive ? createArchonUIBridge() : undefined;
     if (uiBridge) {
       const uiContext = createArchonUIContext(uiBridge);
       await session.bindExtensions({ uiContext });
     } else if (enableExtensions) {
       await session.bindExtensions({});
+    }
+
+    // 4g. Deferred model resolution (phase 2 of 2) for extension providers.
+    //
+    //     After bindExtensions(), extension providers have registered their
+    //     models on our modelRegistry. Now modelRegistry.find() can resolve
+    //     models that weren't in the static catalog at step 3.
+    //
+    //     session.setModel() switches the session to the resolved model.
+    //     This is safe because no prompt has been sent yet — the session was
+    //     created without a model (or with a fallback) and we're replacing
+    //     it before the first prompt() call.
+    if (!model) {
+      model = modelRegistry.find(parsed.provider, parsed.modelId);
+      if (!model) {
+        throw new Error(
+          `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
+            'The model was not found in the static catalog or via any installed extension. ' +
+            'Ensure the provider extension is installed (e.g. `pi install npm:pi-provider-kiro`) ' +
+            'and `enableExtensions: true` is set in .archon/config.yaml.'
+        );
+      }
+      await session.setModel(model);
     }
 
     // 5. Structured output (best-effort). Pi has no SDK-level JSON schema
