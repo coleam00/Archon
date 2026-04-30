@@ -330,6 +330,10 @@ export async function* bridgeSession(
   try {
     for await (const item of queue) {
       if (item.kind === 'done') return;
+      // When session.prompt() rejects, the actual error is pushed here.
+      // Throw immediately so the real error message surfaces to the user
+      // instead of being swallowed by the result-chunk path (which only
+      // has the generic `stopReason: "error"` and loses the details).
       if (item.kind === 'error') throw item.error;
       // Annotate the terminal result chunk with Pi's session UUID so Archon's
       // orchestrator can pass it back as `resumeSessionId` on the next call.
