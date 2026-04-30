@@ -1,8 +1,9 @@
 # E2E smoke test — GitHub Copilot community provider
-# Verifies: Copilot connectivity, streaming bridge yields assistant chunks,
-#   tokens arrive on the terminal result chunk, and $nodeId.output plumbing works.
-# Design: mirrors e2e-pi-smoke.yaml structure.
-# Auth: picks up `gh auth login` state OR COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env.
+# Verifies: Copilot connectivity (sendQuery), $nodeId.output refs,
+#   streaming bridge, and SDK wiring (effort → reasoningEffort).
+# Design: mirrors e2e-pi-smoke.yaml structure. effort: low keeps the
+#   smoke fast; gpt-5-mini is the cheapest Copilot model.
+# Auth: `gh auth login` OR COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
 #   Requires an active GitHub Copilot subscription.
 name: e2e-copilot-smoke
 description: 'Smoke test for Copilot community provider. Verifies prompt response via sendQuery.'
@@ -10,26 +11,20 @@ provider: copilot
 model: gpt-5-mini
 
 nodes:
-  # 1. Simple prompt — verifies CopilotClient spawns, bridgeSession yields
-  #    assistant chunks via streaming deltas, agent_end produces the terminal
-  #    result chunk with sessionId + tokens.
+  # 1. Simple prompt — verifies CopilotClient spawns, the streaming bridge
+  #    yields assistant chunks, and agent_end produces a result chunk.
   - id: simple
     prompt: 'What is 2+2? Answer with just the number, nothing else.'
     effort: low
     idle_timeout: 30000
 
-  # 2. Assert non-empty output — fails if Copilot returned nothing.
-  #    Note on quoting: the workflow engine's variable substitution already
-  #    shell-quotes node outputs for bash nodes (dag-executor.ts shellQuote() —
-  #    see issue #591 "Fix: shell injection via $nodeId.output in bash nodes").
-  #    So we assign $nodeId.output BARE — the engine wraps the value in a
-  #    properly escaped single-quoted string before bash sees it.
+  # 2. Assert non-empty output — fails CI if Copilot returned nothing
   - id: assert
     bash: |
-      output=$simple.output
+      output="$simple.output"
       if [ -z "$output" ]; then
-        printf 'FAIL: simple node returned empty output\n'
+        echo "FAIL: simple node returned empty output"
         exit 1
       fi
-      printf 'PASS: simple=%s\n' "$output"
+      echo "PASS: simple=$output"
     depends_on: [simple]

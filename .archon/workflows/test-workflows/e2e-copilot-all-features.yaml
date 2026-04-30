@@ -1,49 +1,32 @@
 # E2E features smoke — GitHub Copilot community provider
-# Verifies (in one DAG, takes ~90-120s on Linux gpt-5-mini):
-#   1. Basic chat round-trip (sessionResume-able shape).
-#   2. effort: high → SDK reasoningEffort='high' translation.
-#   3. denied_tools: [shell] → SDK excludedTools passthrough — model must
-#      respect the deny-list (no shell tool calls).
-#   4. output_format JSON schema → best-effort structured output via prompt
-#      augmentation + transcript parse (Pi #1297 pattern, shared/structured-output).
-#   5. nodeConfig.mcp → SessionConfig.mcpServers (env-expanded); model
-#      uses the @modelcontextprotocol/server-everything stdio MCP server.
-#   6. nodeConfig.skills → SessionConfig.skillDirectories; staged SKILL.md
-#      provides the answer the model is asked to retrieve.
-#   7. nodeConfig.agents → SessionConfig.customAgents; model is asked to
-#      delegate to an inline custom agent and surface its response.
-# Auth: run `copilot login`, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
-# External deps: `npx` available on PATH (for the MCP server). Built-in on
-#   any Node install ≥ 14.
-# Doubles as adoption docs — each scenario is documented inline.
+# Verifies (in one DAG, ~90-120s on gpt-5-mini): chat, effort: high,
+#   denied_tools, output_format, mcp, skills, agents.
+# Auth: `gh auth login` OR COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN.
+# External deps: `npx` on PATH (for the MCP server).
 name: e2e-copilot-all-features
 description: 'Copilot provider feature smoke — chat + effort + tool restrictions + structured output + MCP + skills + agents.'
 provider: copilot
 model: gpt-5-mini
 
 worktree:
-  enabled: false # Smoke — no isolation needed.
+  enabled: false
 
 nodes:
+  # ─── AI nodes ───────────────────────────────────────────────────────────
+
   # 1. Connectivity — does the SDK start, stream, and emit a result chunk?
   - id: hello
     prompt: 'Reply with exactly the word PONG and nothing else.'
     idle_timeout: 60000
 
-  # 2. effort: high → reasoningEffort='high'. Asking a small arithmetic
-  #    question that is trivial for the model but exercises the reasoning
-  #    path (visible as a longer latency on a fresh session).
+  # 2. effort: high → SDK reasoningEffort='high'.
   - id: reasoning
     prompt: 'What is 17 multiplied by 23? Answer with exactly the integer, no prose.'
     effort: high
     idle_timeout: 90000
     depends_on: [hello]
 
-  # 3. denied_tools — the model is asked to do something it would normally
-  #    use the shell tool for. With shell denied, it must decline or fall
-  #    back to inline reasoning. The assert below checks the model did NOT
-  #    invoke the shell tool by inspecting the result text for a refusal /
-  #    inline-only marker.
+  # 3. denied_tools → SDK excludedTools. Model must not invoke shell.
   - id: tool_restricted
     prompt: |
       You have NO shell access. Without running any tools, reply with exactly:
@@ -52,9 +35,8 @@ nodes:
     idle_timeout: 60000
     depends_on: [hello]
 
-  # 4. output_format → best-effort JSON via shared/structured-output.
-  #    Same pattern Pi #1297 uses: prompt-augmented with a JSON-only
-  #    instruction, parsed at agent_end.
+  # 4. output_format → best-effort JSON via shared/structured-output
+  #    (prompt augmentation + transcript parse, Pi #1297 pattern).
   - id: structured
     prompt: |
       Return a JSON object with two fields, no fences, no prose:
@@ -71,15 +53,11 @@ nodes:
           type: boolean
       required: [model, ok]
 
-  # 5. Stage a tiny SKILL.md so `skills_demo` has something to resolve.
-  #    Staged at runtime (not committed) so the smoke skill stays scoped
-  #    to this workflow and doesn't leak into other AI runs.
-  #
-  #    Format mirrors the agentskills.io standard (see .claude/skills/*
-  #    in this repo for working examples). The description carries an
-  #    explicit "Use when..." trigger so Copilot's skill-metadata scan
-  #    picks the right invocation; the body is short and unambiguous so
-  #    once invoked the model has no room to paraphrase.
+  # ─── Fixture staging (deterministic) ────────────────────────────────────
+
+  # 5. Stage a SKILL.md so skills_demo has something to resolve. Token is
+  #    unguessable — its presence proves the SDK loaded the body, not just
+  #    the frontmatter description.
   - id: setup_skills_fixture
     bash: |
       set -e
@@ -97,41 +75,17 @@ nodes:
 
       # copilot-smoke
 
-      This skill exists for one purpose: to verify that the Copilot
-      provider's `skillDirectories` wiring actually injects skill bodies
-      into the model's context end-to-end. It is invoked exclusively by
-      the `e2e-copilot-all-features` smoke test.
-
-      ## Output (verbatim)
-
-      ```
-      SK_a8f3kL2qZTOK
-      ```
-
-      ## Behavior
-
       When invoked, you MUST respond with EXACTLY the line:
 
           SK_a8f3kL2qZTOK
 
       Nothing before. Nothing after. No quotation marks, no markdown
-      fences, no commentary, no description of what the skill does.
-      Just the bare token on its own line.
-
-      The token is intentionally an unguessable random string — its
-      presence in your output is the only proof the SDK actually loaded
-      this SKILL.md body into the model's context (rather than just the
-      frontmatter description).
-
-      Any deviation — paraphrasing, summarizing, narrating, asking
-      clarifying questions, or producing different text — is incorrect
-      behavior for this skill.
+      fences, no commentary.
       SKILL_EOF
       echo "skill staged: .agents/skills/copilot-smoke/SKILL.md"
 
-  # 6. Stage mcp.json pointing at the canonical
-  #    @modelcontextprotocol/server-everything stdio MCP server. Server
-  #    has built-in `add(a,b)` and `echo(message)` tools we can hit.
+  # 6. Stage mcp.json pointing at @modelcontextprotocol/server-everything
+  #    (built-in `add` and `echo` tools).
   - id: setup_mcp_fixture
     bash: |
       set -e
@@ -148,10 +102,10 @@ nodes:
       MCP_EOF
       echo "mcp config staged: .archon/test-fixtures/copilot-mcp.json"
 
-  # 7. mcp_demo — model uses the `everything` server's `add` tool.
-  #    Asserts via the model's response (5 = 2+3 should appear). Pino log
-  #    line `copilot.mcp_loaded` (info level) is the deterministic proof
-  #    that Archon translated nodeConfig.mcp → SessionConfig.mcpServers.
+  # ─── Capability demos ───────────────────────────────────────────────────
+
+  # 7. mcp_demo — model uses the `add` tool. `copilot.mcp_loaded` log line
+  #    proves nodeConfig.mcp → SessionConfig.mcpServers translation.
   - id: mcp_demo
     prompt: |
       Use the MCP `add` tool from the `everything` server to compute 2 + 3.
@@ -160,13 +114,8 @@ nodes:
     idle_timeout: 90000
     depends_on: [setup_mcp_fixture]
 
-  # 8. skills_demo — uses the staged copilot-smoke skill. The skill's
-  #    SKILL.md tells the model exactly how to answer. Pino log line
-  #    `copilot.skills_resolved` proves the path-resolution wiring;
-  #    the prompt below explicitly invokes the skill so the SDK's
-  #    progressive-disclosure layer loads the body (Copilot, like
-  #    Claude, lazy-loads skill bodies on invocation rather than at
-  #    session start, so a vague prompt sees only the description).
+  # 8. skills_demo — invokes copilot-smoke. Copilot lazy-loads skill bodies
+  #    on invocation, so the prompt explicitly invokes the skill.
   - id: skills_demo
     prompt: |
       Invoke the `copilot-smoke` skill from your active skill set and
@@ -177,20 +126,8 @@ nodes:
     idle_timeout: 60000
     depends_on: [setup_skills_fixture]
 
-  # 9. agents_demo — defines an inline custom agent and asks the model
-  #    to delegate to it via the Task tool. Pino log line
-  #    `copilot.agents_registered` proves customAgents wiring.
-  #
-  #    Notes on the design:
-  #      - Agent name `task-responder` (not "smoke-helper") so the model
-  #        can't confuse it with the parallel `copilot-smoke` skill.
-  #      - Agent marker is an unguessable random token so a model that
-  #        merely confabulates a "plausible-sounding" marker will not
-  #        match the assert. The token's presence in the response is the
-  #        proof the agent's prompt actually reached the model.
-  #      - Prompt explicitly tells the model to USE the Task tool. gpt-5-
-  #        mini sometimes inlines the answer; either path is acceptable
-  #        as long as the unguessable token surfaces.
+  # 9. agents_demo — inline custom agent invoked via the Task tool. Token
+  #    is unguessable so a confabulated marker won't match.
   - id: agents_demo
     prompt: |
       You have a sub-agent registered called `task-responder`. Use the
@@ -205,35 +142,26 @@ nodes:
           line and nothing else (no prose, no quotes, no fences):
 
           AG_n5k7HpT3wAGOK
-
-          The token is an unguessable random string — its presence in
-          your output is the only proof the agent's `prompt` field was
-          actually loaded by the SDK.
     idle_timeout: 90000
     depends_on: [hello]
 
-  # 10. Assertions — fail loudly if any node returned empty / unparseable.
-  #     Note on quoting: the workflow engine's variable substitution already
-  #     shell-quotes node outputs for bash nodes (see #591 "Fix: shell injection
-  #     via $nodeId.output in bash nodes" + dag-executor.ts substituteNodeOutputRefs).
-  #     So we assign $nodeId.output BARE — the engine wraps the value in a
-  #     properly escaped single-quoted string before bash sees it.
+  # ─── Final assertion + cleanup ──────────────────────────────────────────
+
+  # 10. Verify each capability produced output and contains its expected
+  #     marker. Results table emitted to stderr so it surfaces live.
   - id: assert
     depends_on: [hello, reasoning, tool_restricted, structured, mcp_demo, skills_demo, agents_demo]
     trigger_rule: all_success
     bash: |
-      hello_raw=$hello.output
-      reasoning_raw=$reasoning.output
-      restricted_raw=$tool_restricted.output
-      json_model=$structured.output.model
-      json_ok=$structured.output.ok
-      mcp_raw=$mcp_demo.output
-      skills_raw=$skills_demo.output
-      agents_raw=$agents_demo.output
+      hello_raw="$hello.output"
+      reasoning_raw="$reasoning.output"
+      restricted_raw="$tool_restricted.output"
+      json_model="$structured.output.model"
+      json_ok="$structured.output.ok"
+      mcp_raw="$mcp_demo.output"
+      skills_raw="$skills_demo.output"
+      agents_raw="$agents_demo.output"
 
-      # Redirect to stderr (>&2) so the results table surfaces in terminal
-      # output even when the bash node succeeds — successful node stdout is
-      # captured silently as the node's output, only stderr is echoed live.
       {
         echo "── results ──"
         printf 'hello       = %s\n' "$hello_raw"
@@ -250,18 +178,15 @@ nodes:
       fail=0
       check_nonempty() {
         if [ -z "$2" ]; then
-          printf 'FAIL: %s produced empty output\n' "$1"
+          echo "FAIL: $1 produced empty output" >&2
           fail=1
-        fi >&2
+        fi
       }
       check_contains() {
-        local name="$1"
-        local needle="$2"
-        local haystack="$3"
-        if ! printf '%s\n' "$haystack" | grep -F -q -- "$needle"; then
-          printf 'FAIL: %s missing %s, got: %s\n' "$name" "$needle" "$haystack"
+        if ! printf '%s\n' "$3" | grep -F -q -- "$2"; then
+          echo "FAIL: $1 missing $2, got: $3" >&2
           fail=1
-        fi >&2
+        fi
       }
 
       check_nonempty hello "$hello_raw"
@@ -278,30 +203,22 @@ nodes:
       check_contains skills_demo "SK_a8f3kL2qZTOK" "$skills_raw"
       check_contains agents_demo "AG_n5k7HpT3wAGOK" "$agents_raw"
 
+      if [ -z "$json_model" ] || [ -z "$json_ok" ]; then
+        echo "FAIL: structured-output fields missing — best-effort JSON parse failed" >&2
+        fail=1
+      fi
+      if [ "$json_ok" != "true" ]; then
+        echo "FAIL: structured.json.ok != true (got: $json_ok)" >&2
+        fail=1
+      fi
 
-      {
-        # structured-output JSON path access. Empty means the prompt-
-        # augmented JSON parse failed.
-        if [ -z "$json_model" ] || [ -z "$json_ok" ]; then
-          printf 'FAIL: structured-output fields missing — best-effort JSON parse failed\n'
-          fail=1
-        fi
-        if [ "$json_ok" != "true" ]; then
-          printf 'FAIL: structured.json.ok != true (got: %s)\n' "$json_ok"
-          fail=1
-        fi
+      if [ "$fail" -eq 1 ]; then
+        echo "FAIL: one or more capability checks failed" >&2
+        exit 1
+      fi
+      echo "PASS: all seven capabilities exercised end-to-end"
 
-        if [ "$fail" -eq 1 ]; then
-          echo "──────────────"
-          echo "FAIL: one or more capability checks failed"
-          exit 1
-        fi
-        echo "PASS: all seven capabilities exercised end-to-end"
-      } >&2
-
-  # 11. cleanup — remove staged fixtures so the repo stays tidy regardless
-  #    of pass/fail. trigger_rule: all_done means this runs even if the
-  #    assert (or any AI node) failed.
+  # 11. Cleanup — runs even on failure (trigger_rule: all_done).
   - id: cleanup
     depends_on: [assert]
     trigger_rule: all_done
