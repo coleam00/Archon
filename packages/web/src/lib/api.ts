@@ -99,7 +99,6 @@ export interface SafeConfigResponse {
     loadDefaultCommands: boolean;
     loadDefaultWorkflows: boolean;
   };
-  envOverrides: Record<string, boolean>;
 }
 
 export interface UpdateAssistantConfigBody {

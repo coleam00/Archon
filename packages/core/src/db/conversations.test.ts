@@ -1,4 +1,4 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
 const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
@@ -9,11 +9,6 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDialect: () => mockPostgresDialect,
-}));
-
-const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
-mock.module('../config/config-loader', () => ({
-  loadConfig: mockLoadConfig,
 }));
 
 import {
@@ -30,8 +25,21 @@ describe('conversations', () => {
   });
 
   describe('getOrCreateConversation', () => {
+    let originalDefaultAiAssistant: string | undefined;
+
     beforeEach(() => {
-      mockLoadConfig.mockClear();
+      // Save and clear env var to ensure test isolation
+      originalDefaultAiAssistant = process.env.DEFAULT_AI_ASSISTANT;
+      delete process.env.DEFAULT_AI_ASSISTANT;
+    });
+
+    afterEach(() => {
+      // Restore original env var value
+      if (originalDefaultAiAssistant === undefined) {
+        delete process.env.DEFAULT_AI_ASSISTANT;
+      } else {
+        process.env.DEFAULT_AI_ASSISTANT = originalDefaultAiAssistant;
+      }
     });
 
     const existingConversation: Conversation = {
@@ -113,8 +121,9 @@ describe('conversations', () => {
       );
     });
 
-    test('uses config.assistant from loadConfig', async () => {
-      mockLoadConfig.mockResolvedValueOnce({ assistant: 'codex' });
+    test('uses DEFAULT_AI_ASSISTANT env var when set', async () => {
+      // Set env var for this test (afterEach will restore original)
+      process.env.DEFAULT_AI_ASSISTANT = 'codex';
 
       const newConversation: Conversation = {
         ...existingConversation,

@@ -282,12 +282,6 @@ assistants:
     model: gpt-5-mini
 ```
 
-Or via env var (overrides config for this session):
-
-```ini
-COPILOT_MODEL=gpt-5-mini
-```
-
 Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`claude-sonnet-4.5`), Gemini, and more. When no model is configured, Archon passes `model: 'auto'` — Copilot picks.
 
 ### Additional Config

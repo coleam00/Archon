@@ -4,7 +4,6 @@
 import { pool, getDialect } from './connection';
 import type { Codebase } from '../types';
 import { createLogger } from '@archon/paths';
-import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -19,7 +18,7 @@ export async function createCodebase(data: {
   default_cwd: string;
   ai_assistant_type?: string;
 }): Promise<Codebase> {
-  const assistantType = data.ai_assistant_type ?? (await loadConfig()).assistant;
+  const assistantType = data.ai_assistant_type ?? 'claude';
   const result = await pool.query<Codebase>(
     'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
     [data.name, data.repository_url ?? null, data.default_cwd, assistantType]

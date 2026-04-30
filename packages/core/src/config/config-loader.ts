@@ -301,7 +301,6 @@ function getDefaults(): MergedConfig {
       loadDefaultCommands: true,
       loadDefaultWorkflows: true,
     },
-    envOverrides: {},
   };
 }
 
@@ -326,13 +325,6 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
           `Available providers: ${getRegisteredProviderNames().join(', ')}`
       );
     }
-  }
-
-  const envCopilotModel = process.env.COPILOT_MODEL;
-  if (envCopilotModel && envCopilotModel.length > 0) {
-    if (!config.assistants.copilot) config.assistants.copilot = {};
-    config.assistants.copilot.model = envCopilotModel;
-    config.envOverrides['copilot.model'] = true;
   }
 
   // Streaming overrides
@@ -606,6 +598,5 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
       loadDefaultCommands: config.defaults.loadDefaultCommands,
       loadDefaultWorkflows: config.defaults.loadDefaultWorkflows,
     },
-    envOverrides: { ...config.envOverrides },
   };
 }
