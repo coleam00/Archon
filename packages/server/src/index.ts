@@ -63,6 +63,15 @@ import { MessagePersistence } from './adapters/web/persistence';
 import { SSETransport } from './adapters/web/transport';
 import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { registerApiRoutes } from './routes/api';
+import { registerSymphonyRoutes } from './routes/api.symphony';
+import {
+  startSymphonyService,
+  createProductionBridge,
+  type SymphonyServiceHandle,
+} from '@archon/symphony';
+import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { getArchonHome } from '@archon/paths';
 import {
   handleMessage,
   pool,
@@ -87,6 +96,37 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('server');
   return cachedLog;
+}
+
+/**
+ * Boot the Symphony service when `~/.archon/symphony.yaml` is present and
+ * register `/api/symphony/*` routes against the resulting handle. Missing
+ * config → silent no-op so users who don't run Symphony don't pay any cost.
+ */
+async function maybeStartSymphony(
+  app: OpenAPIHono,
+  webAdapter: WebAdapter
+): Promise<SymphonyServiceHandle | null> {
+  const configPath = join(getArchonHome(), 'symphony.yaml');
+  try {
+    await stat(configPath);
+  } catch {
+    getLog().info({ config_path: configPath }, 'symphony.disabled_no_config');
+    return null;
+  }
+  try {
+    const bridge = createProductionBridge({ webAdapter });
+    const handle = await startSymphonyService({ configPath, bridge });
+    registerSymphonyRoutes(app, handle);
+    getLog().info({ config_path: configPath }, 'symphony.routes_registered');
+    return handle;
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, config_path: configPath },
+      'symphony.start_failed_continuing_without_service'
+    );
+    return null;
+  }
 }
 
 /**
@@ -479,6 +519,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Register Web UI API routes
   registerApiRoutes(app, webAdapter, lockManager, activePlatforms);
 
+  // Optionally boot the Symphony service + register /api/symphony/* routes.
+  // Opt-in by file presence: missing ~/.archon/symphony.yaml → silent no-op.
+  const symphonyHandle = await maybeStartSymphony(app, webAdapter);
+  if (symphonyHandle) activePlatforms.push('Symphony');
+
   // GitHub webhook endpoint
   if (github) {
     app.post('/webhooks/github', async c => {
@@ -656,6 +701,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getLog().error({ err: e }, 'shutdown_flush_failed');
       })
       .then(async () => {
+        // Stop the Symphony service first so its in-flight orchestrator
+        // promises and event-emitter subscription land before the database
+        // pool closes underneath them.
+        if (symphonyHandle) {
+          try {
+            await symphonyHandle.stop();
+          } catch (error) {
+            getLog().error({ err: error }, 'symphony_stop_error');
+          }
+        }
         // Stop adapters (these should not throw, but be defensive)
         try {
           telegram?.stop();

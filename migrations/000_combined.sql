@@ -1,8 +1,8 @@
 -- Remote Coding Agent - Combined Schema
--- Version: Combined (final state after migrations 001-020)
+-- Version: Combined (final state after migrations 001-022)
 -- Description: Complete database schema (idempotent - safe to run multiple times)
 --
--- 8 Tables:
+-- 9 Tables:
 --   1. remote_agent_codebases
 --   1b. remote_agent_codebase_env_vars
 --   2. remote_agent_conversations
@@ -11,6 +11,7 @@
 --   5. remote_agent_workflow_runs
 --   6. remote_agent_workflow_events
 --   7. remote_agent_messages
+--   8. symphony_dispatches
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -312,3 +313,34 @@ ALTER TABLE remote_agent_sessions
 -- From migration 021: allow_env_keys on codebases
 ALTER TABLE remote_agent_codebases
   ADD COLUMN IF NOT EXISTS allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ============================================================================
+-- Table 8: Symphony dispatches (from migration 022)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS symphony_dispatches (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  issue_id        TEXT NOT NULL,
+  identifier      TEXT NOT NULL,
+  tracker         TEXT NOT NULL CHECK (tracker IN ('linear', 'github')),
+  dispatch_key    TEXT NOT NULL UNIQUE,
+  codebase_id     UUID NULL REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
+  workflow_name   TEXT NOT NULL,
+  workflow_run_id UUID NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+  attempt         INTEGER NOT NULL,
+  dispatched_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  status          TEXT NOT NULL,
+  last_error      TEXT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_tracker_issue
+  ON symphony_dispatches (tracker, issue_id);
+CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_identifier
+  ON symphony_dispatches (identifier);
+CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_workflow_run
+  ON symphony_dispatches (workflow_run_id);
+CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_codebase
+  ON symphony_dispatches (codebase_id);
+
+COMMENT ON TABLE symphony_dispatches IS
+  'Symphony tracker-issue → Archon workflow-run join. One row per dispatch attempt; keyed by dispatch_key for source-aware uniqueness.';

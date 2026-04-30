@@ -18,6 +18,7 @@ export default tseslint.config(
       '.claude/worktrees/**',
       '.claude/skills/**',
       '.archon/**', // User workflow/script/command content — not in any tsconfig project
+      'docs/**', // Documentation + symphoney-legacy reference snapshot — not part of build
       '**/*.generated.ts', // Auto-generated source files (content inlined via JSON.stringify)
       '**/*.js',
       '*.mjs',

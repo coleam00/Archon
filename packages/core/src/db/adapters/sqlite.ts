@@ -346,6 +346,23 @@ export class SqliteAdapter implements IDatabase {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
 
+      -- Symphony dispatches table (from PG migration 022): joins Symphony tracker
+      -- issues to Archon workflow runs. Keyed by source-aware dispatch_key.
+      CREATE TABLE IF NOT EXISTS symphony_dispatches (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        issue_id TEXT NOT NULL,
+        identifier TEXT NOT NULL,
+        tracker TEXT NOT NULL CHECK (tracker IN ('linear', 'github')),
+        dispatch_key TEXT NOT NULL UNIQUE,
+        codebase_id TEXT REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
+        workflow_name TEXT NOT NULL,
+        workflow_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+        attempt INTEGER NOT NULL,
+        dispatched_at TEXT NOT NULL DEFAULT (datetime('now')),
+        status TEXT NOT NULL,
+        last_error TEXT
+      );
+
       -- Indexes
       CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id ON remote_agent_codebase_env_vars(codebase_id);
       CREATE INDEX IF NOT EXISTS idx_conversations_platform ON remote_agent_conversations(platform_type, platform_conversation_id);
@@ -375,6 +392,16 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_sessions(parent_session_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_conversation_started
         ON remote_agent_sessions(conversation_id, started_at DESC);
+
+      -- From PG migration 022: symphony dispatches lookup paths
+      CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_tracker_issue
+        ON symphony_dispatches(tracker, issue_id);
+      CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_identifier
+        ON symphony_dispatches(identifier);
+      CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_workflow_run
+        ON symphony_dispatches(workflow_run_id);
+      CREATE INDEX IF NOT EXISTS idx_symphony_dispatches_codebase
+        ON symphony_dispatches(codebase_id);
     `);
     getLog().info('db.sqlite_schema_initialized');
   }

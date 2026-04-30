@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-30
+
+First consolidated `archon-symphony` release. Brings Symphoney's autonomous tracker-driven dispatch into Archon as `packages/symphony/`, exposes a `/symphony` kanban in the web UI, and retires the standalone `Ddell12/symphoney-codex/web/` workspace.
+
+### Added
+
+- **`@archon/symphony` workspace package.** Autonomous Linear + GitHub tracker dispatch on top of Archon workflows. Polls configured trackers, claims dispatch slots (global and per-state), runs an Archon workflow per matching issue, and tracks the result in a new `symphony_dispatches` table. Owns dispatch policy only; the agent loop, worktree management, and PR publishing are delegated to Archon's workflow executor and isolation packages. (#1, #3, #4)
+- **`/api/symphony/*` REST routes.** `GET /state`, `GET /dispatches`, `GET /dispatches/{id}`, `POST /dispatch`, `POST /cancel`, `POST /refresh`. Routes register conditionally — only when `~/.archon/symphony.yaml` is present. Missing config emits `symphony.disabled_no_config` and the server runs without Symphony. (#4)
+- **`/symphony` kanban page in the web UI.** Group dispatches by lifecycle / status / repository, polls `/api/symphony/state` every 5s, deep-links each card into the existing `/workflows/runs/:runId` drill-through page. New TopNav tab (Inbox icon). (#5)
+- **`symphony_dispatches` schema across both DB adapters.** PostgreSQL migration `022_symphony_dispatches.sql` (joins `issue_id ↔ remote_agent_workflow_runs.id` via UUID FK, indexes `(tracker, issue_id)`, `(identifier)`, `(workflow_run_id)`, `(codebase_id)`, `dispatch_key UNIQUE`); SQLite-equivalent table created in `packages/core/src/db/adapters/sqlite.ts:createSchema()` with TEXT IDs. (#1)
+- **Source-aware `dispatch_key`** (`linear:<id>` / `github:<owner>/<repo>#<n>`) used for state and persistence so the same raw issue id from two trackers cannot collide. (#3)
+- **`packages/symphony/symphony.yaml.example`** documenting the runtime config: `trackers[]`, `dispatch.{max_concurrent,retry}`, `polling`, `state_workflow_map`, `codebases[]`. Replaces symphoney-codex's `WORKFLOW.md`. (#3)
+- **`packages/symphony/README.md`.** Setup, codebase mapping, startup, `/api/symphony/*` table, parity-with-spec note (what carries over from symphoney-codex SPEC, what's intentionally dropped), and migration notes for users coming from the standalone repo. (#6)
+- **Fork-distinction banner in root `README.md`** identifying this as `Ddell12/archon-symphony` and pointing at the Symphony package. Upstream Archon README content preserved verbatim below. (#6)
+- **`docs/symphoney-legacy/`** snapshot of the standalone symphoney-codex repo for reference (SPEC, PARITY_REPORT, plans). (#2)
+- **Synced upstream Archon improvements through PR #1506** — see upstream `coleam00/Archon` 0.3.10 release notes for the full set; notable inclusions: bundled maintainer workflow suite, `$LOOP_PREV_OUTPUT`, `mutates_checkout`, explicit workflow `tags`, Pi `ModelRegistry`, claude-agent-sdk 0.2.121, codex-sdk 0.125.0.
+
+### Changed
+
+- **Dispatch policy and agent loop are now decoupled.** `~/.archon/symphony.yaml` owns trackers / slots / retries / state→workflow mapping; per-workflow YAML in `.archon/workflows/` owns the agent / model / tool configuration. The legacy `agent:` / `codex:` / `claude:` blocks from symphoney-codex's `WORKFLOW.md` no longer exist. (#3)
+- **Tracker config strings expand `$VAR` indirection on every field**, not just secrets. `project_slug`, `endpoint`, `repository`, `owner`, `repo`, `codebase_id`, `api_key`, and `token` all run through `resolveEnvIndirection` at snapshot build time. Literals pass through unchanged. (#3)
+
+### Fixed
+
+- **No autonomous lifecycle mutation across process boundaries (Symphony orchestrator).** `reconcileOnStart()` only reads upstream workflow status for in-flight rows; it never marks non-terminal upstream runs as failed by timer. Same rule the rest of Archon follows. Crashed Symphony processes recover terminal-state writes on next boot without breaking runs that are still progressing in another process. (#4)
+- **Hard-fail on missing codebase mapping.** Dispatcher writes a row with `status='failed'`, `last_error='no codebase mapped for <tracker>:<repository>'`, and does not retry. Every active tracker repo must have an explicit `codebases:` mapping. Previously a missing mapping silently no-op'd. (#4)
+
+### Removed
+
+- **`Ddell12/symphoney-codex/web/` workspace** (separate PR `Ddell12/symphoney-codex#1`, tagged `v1-final-pre-archon-merge`). The Next 16 kanban is replaced by `/symphony` in this repo. The standalone Symphoney binary is now maintenance-only.
+
 ## [0.3.10] - 2026-04-29
 
 Maintainer workflow suite, loop output variables, and broad workflow engine fixes

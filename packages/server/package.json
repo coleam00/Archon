@@ -1,6 +1,6 @@
 {
   "name": "@archon/server",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
@@ -16,6 +16,7 @@
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
+    "@archon/symphony": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@hono/zod-openapi": "^0.19.6",
     "dotenv": "^17.2.3",
