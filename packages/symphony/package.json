@@ -6,7 +6,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./db/dispatches": "./src/db/dispatches.ts"
+    "./db/dispatches": "./src/db/dispatches.ts",
+    "./workflow-bridge/factory": "./src/workflow-bridge/factory.ts",
+    "./workflow-bridge/types": "./src/workflow-bridge/types.ts"
   },
   "scripts": {
     "test": "bun test src/",
@@ -15,6 +17,7 @@
   "dependencies": {
     "@archon/core": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/workflows": "workspace:*",
     "@octokit/rest": "^22.0.0",
     "graphql-request": "^7.2.0"
   },

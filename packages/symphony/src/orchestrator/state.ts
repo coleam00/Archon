@@ -18,6 +18,17 @@ export interface RunningEntry {
   /** AbortController used to cancel any in-flight async work on stop(). */
   abort: AbortController;
   cancel_requested: boolean;
+  /**
+   * Primary key of the symphony_dispatches row that owns this run. Set as soon
+   * as the row is inserted (before workflow launch). Allows the event listener
+   * to update DB status without re-querying by dispatch_key.
+   */
+  dispatch_id: string | null;
+  /**
+   * Archon workflow_run_id once `executeWorkflow` has been pre-staged. Null
+   * during the transient window between row insert and workflowStore.createWorkflowRun.
+   */
+  workflow_run_id: string | null;
 }
 
 export interface RetryEntry {

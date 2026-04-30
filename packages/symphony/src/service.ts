@@ -9,6 +9,7 @@ import { LinearTracker } from './tracker/linear';
 import { GitHubTracker } from './tracker/github';
 import type { Tracker } from './tracker/types';
 import { Orchestrator, type TrackerMap } from './orchestrator/orchestrator';
+import type { BridgeDeps } from './workflow-bridge/types';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -24,6 +25,13 @@ export interface StartSymphonyServiceOptions {
   configPath?: string;
   /** Override env (used by tests). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Bridge to Archon's workflow engine. Required for actual dispatch. The
+   * standalone CLI entrypoint (`packages/symphony/src/cli/dev.ts`) omits this
+   * to keep the Phase-2 polling-only mode available, but the production server
+   * always passes a bridge.
+   */
+  bridge?: BridgeDeps;
 }
 
 export interface SymphonyServiceHandle {
@@ -66,11 +74,9 @@ function buildTracker(cfg: TrackerConfig): Tracker {
 
 /**
  * Boot the Symphony orchestrator: load config, build trackers, instantiate
- * the orchestrator, start the polling loop. Returns a handle exposing the
- * orchestrator and a stop() that aborts in-flight work and clears timers.
- *
- * Phase 2 caveat: this does not start an HTTP server. Phase 3 wires the
- * service into Archon's existing server process.
+ * the orchestrator, run reconcileOnStart (when a bridge is wired), start the
+ * polling loop. Returns a handle exposing the orchestrator and a stop() that
+ * aborts in-flight work and clears timers.
  */
 export async function startSymphonyService(
   opts: StartSymphonyServiceOptions = {}
@@ -99,6 +105,7 @@ export async function startSymphonyService(
     getSnapshot: (): ConfigSnapshot => snapshot,
     trackers,
     getDb: (): ReturnType<typeof getDatabase> => getDatabase(),
+    bridge: opts.bridge,
   });
 
   log.info(
@@ -112,9 +119,18 @@ export async function startSymphonyService(
       polling_ms: snapshot.polling.intervalMs,
       max_concurrent: snapshot.dispatch.maxConcurrent,
       workflows: Object.keys(snapshot.stateWorkflowMap).length,
+      bridge_wired: Boolean(opts.bridge),
     },
     'symphony.service_started'
   );
+
+  if (opts.bridge) {
+    try {
+      await orchestrator.reconcileOnStart();
+    } catch (e) {
+      log.warn({ err: (e as Error).message }, 'symphony.reconcile_on_start_failed_continuing');
+    }
+  }
 
   orchestrator.start();
 

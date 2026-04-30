@@ -1,8 +1,20 @@
 import type { IDatabase } from '@archon/core/db';
 import { createLogger } from '@archon/paths';
+import {
+  getWorkflowEventEmitter,
+  type WorkflowEmitterEvent,
+} from '@archon/workflows/event-emitter';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import type { Issue, Tracker } from '../tracker/types';
 import type { ConfigSnapshot, TrackerKind } from '../config/snapshot';
-import { insertDispatch } from '../db/dispatches';
+import {
+  listInFlight,
+  updateStatus,
+  type DispatchRow,
+  type DispatchStatus,
+} from '../db/dispatches';
+import { dispatchToWorkflow } from '../workflow-bridge/dispatcher';
+import type { BridgeDeps, DispatchOutcome } from '../workflow-bridge/types';
 import {
   availableGlobalSlots,
   availableSlotsForState,
@@ -45,6 +57,21 @@ export interface OrchestratorDeps {
    * cannot race a subsequent insert.
    */
   getDb: () => IDatabase;
+  /**
+   * Phase 3 bridge to Archon's workflow engine. When set, dispatch launches
+   * real workflow runs via `executeWorkflow` and watches the singleton event
+   * emitter for terminal status. When unset, the orchestrator polls but does
+   * not launch — used by unit tests that only exercise loop logic.
+   */
+  bridge?: BridgeDeps;
+  /**
+   * Optional injection point for tests that want to observe terminal-event
+   * subscriptions without booting a real workflow engine. Defaults to
+   * `getWorkflowEventEmitter()`.
+   */
+  getEventEmitter?: () => {
+    subscribe: (listener: (event: WorkflowEmitterEvent) => void) => () => void;
+  };
   /** Optional clock override for tests. */
   now?: () => number;
   /** Optional setTimeout override. */
@@ -78,6 +105,8 @@ export interface OrchestratorRunningRow {
   issue_identifier: string;
   state: string;
   started_at: string;
+  /** Archon workflow_run_id once the run has been pre-staged. Null pre-launch. */
+  workflow_run_id: string | null;
 }
 
 export interface OrchestratorRetryRow {
@@ -103,6 +132,14 @@ export class Orchestrator {
   private stopped = false;
   private pendingRefresh = false;
   private observers: (() => void)[] = [];
+  /**
+   * Reverse map for terminal-event handling: when the workflow engine fires
+   * `workflow_completed | workflow_failed | workflow_cancelled` for a `runId`,
+   * we look up the Symphony `dispatch_key` here.
+   */
+  private readonly runIdToDispatchKey = new Map<string, string>();
+  /** Returned by `emitter.subscribe()` so we can unsubscribe at stop time. */
+  private eventUnsubscribe: (() => void) | null = null;
 
   constructor(private readonly deps: OrchestratorDeps) {}
 
@@ -129,11 +166,23 @@ export class Orchestrator {
   }
 
   start(): void {
+    if (this.deps.bridge) {
+      const emitter = this.deps.getEventEmitter
+        ? this.deps.getEventEmitter()
+        : getWorkflowEventEmitter();
+      this.eventUnsubscribe = emitter.subscribe(event => {
+        this.onWorkflowEvent(event);
+      });
+    }
     this.scheduleTick(0);
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.eventUnsubscribe) {
+      this.eventUnsubscribe();
+      this.eventUnsubscribe = null;
+    }
     const cancel = this.deps.cancelTimeout ?? clearTimeout;
     if (this.tickTimer) {
       cancel(this.tickTimer);
@@ -145,6 +194,171 @@ export class Orchestrator {
     this.state.retry_attempts.clear();
     for (const entry of this.state.running.values()) {
       entry.abort.abort();
+    }
+  }
+
+  /**
+   * Hydrate state from `symphony_dispatches` rows that were left in flight
+   * when the previous process exited. Terminal upstream rows are recorded in
+   * `state.completed` and updated in DB; still-running rows just get their
+   * `runId → dispatchKey` mapping registered so the singleton event emitter
+   * can route their terminal events back to us.
+   *
+   * Per CLAUDE.md, this READS upstream status — it never marks a non-terminal
+   * upstream run as failed by timer.
+   */
+  async reconcileOnStart(): Promise<void> {
+    if (!this.deps.bridge) return;
+    const log = getLog();
+    let inFlight: DispatchRow[];
+    try {
+      inFlight = await listInFlight(this.deps.getDb());
+    } catch (e) {
+      log.error({ err: (e as Error).message }, 'symphony.reconcile_query_failed');
+      return;
+    }
+    for (const row of inFlight) {
+      if (!row.workflow_run_id) continue;
+      let upstreamStatus: string | null;
+      try {
+        upstreamStatus = await this.deps.bridge.workflowDeps.store.getWorkflowRunStatus(
+          row.workflow_run_id
+        );
+      } catch (e) {
+        log.warn(
+          { row_id: row.id, run_id: row.workflow_run_id, err: (e as Error).message },
+          'symphony.reconcile_lookup_failed'
+        );
+        continue;
+      }
+      if (
+        upstreamStatus &&
+        (TERMINAL_WORKFLOW_STATUSES as readonly string[]).includes(upstreamStatus)
+      ) {
+        const dispatchStatus: DispatchStatus =
+          upstreamStatus === 'completed'
+            ? 'completed'
+            : upstreamStatus === 'cancelled'
+              ? 'cancelled'
+              : 'failed';
+        try {
+          await updateStatus(this.deps.getDb(), row.id, dispatchStatus);
+        } catch (e) {
+          log.warn(
+            { row_id: row.id, err: (e as Error).message },
+            'symphony.reconcile_status_write_failed'
+          );
+        }
+        this.state.completed.add(row.dispatch_key);
+        log.info(
+          {
+            dispatch_key: row.dispatch_key,
+            run_id: row.workflow_run_id,
+            upstream_status: upstreamStatus,
+          },
+          'symphony.reconcile_terminal'
+        );
+      } else {
+        // Still in-flight upstream: register the mapping so terminal events
+        // can route here, and remember the dispatch_key as completed-for-now
+        // so the polling loop won't re-dispatch the same issue.
+        this.runIdToDispatchKey.set(row.workflow_run_id, row.dispatch_key);
+        this.state.completed.add(row.dispatch_key);
+        log.info(
+          {
+            dispatch_key: row.dispatch_key,
+            run_id: row.workflow_run_id,
+            upstream_status: upstreamStatus,
+          },
+          'symphony.reconcile_in_flight'
+        );
+      }
+    }
+  }
+
+  private onWorkflowEvent(event: WorkflowEmitterEvent): void {
+    if (
+      event.type !== 'workflow_completed' &&
+      event.type !== 'workflow_failed' &&
+      event.type !== 'workflow_cancelled'
+    ) {
+      return;
+    }
+    const dispatchKey = this.runIdToDispatchKey.get(event.runId);
+    if (!dispatchKey) return; // not a Symphony-launched run
+
+    const log = getLog();
+    void this.applyTerminalEvent(event, dispatchKey).catch((e: unknown) => {
+      log.error(
+        { dispatch_key: dispatchKey, run_id: event.runId, err: (e as Error).message },
+        'symphony.terminal_event_apply_failed'
+      );
+    });
+  }
+
+  private async applyTerminalEvent(
+    event:
+      | { type: 'workflow_completed'; runId: string }
+      | { type: 'workflow_failed'; runId: string; error: string }
+      | { type: 'workflow_cancelled'; runId: string; reason: string },
+    dispatchKey: string
+  ): Promise<void> {
+    const log = getLog();
+    const entry = this.state.running.get(dispatchKey);
+    const dispatchId = entry?.dispatch_id ?? null;
+
+    let dbStatus: DispatchStatus;
+    let lastError: string | null = null;
+    let scheduleRetryAfter = false;
+    if (event.type === 'workflow_completed') {
+      dbStatus = 'completed';
+    } else if (event.type === 'workflow_failed') {
+      dbStatus = 'failed';
+      lastError = event.error;
+      scheduleRetryAfter = true;
+    } else {
+      dbStatus = 'cancelled';
+      lastError = event.reason;
+    }
+
+    if (dispatchId) {
+      try {
+        await updateStatus(this.deps.getDb(), dispatchId, dbStatus, lastError);
+      } catch (e) {
+        log.warn(
+          { dispatch_key: dispatchKey, err: (e as Error).message },
+          'symphony.terminal_db_write_failed'
+        );
+      }
+    }
+
+    this.runIdToDispatchKey.delete(event.runId);
+    if (entry) {
+      this.state.running.delete(dispatchKey);
+      this.state.claimed.delete(dispatchKey);
+    }
+    log.info(
+      {
+        dispatch_key: dispatchKey,
+        run_id: event.runId,
+        status: dbStatus,
+        error: lastError,
+      },
+      'symphony.workflow_terminal'
+    );
+
+    if (event.type === 'workflow_failed' && scheduleRetryAfter && entry) {
+      this.scheduleRetry(
+        dispatchKey,
+        entry.tracker,
+        entry.issue_id,
+        entry.identifier,
+        (entry.retry_attempt ?? 1) + 1,
+        'failure',
+        event.error
+      );
+    } else {
+      this.state.completed.add(dispatchKey);
     }
   }
 
@@ -241,6 +455,20 @@ export class Orchestrator {
       { dispatch_key: dispatchKey, identifier: target.identifier },
       'symphony.cancel_requested'
     );
+
+    // Phase 3: also cancel the upstream workflow run. The event emitter will
+    // fire `workflow_cancelled` which `applyTerminalEvent` translates into
+    // the standard state mutation.
+    if (this.deps.bridge && target.workflow_run_id) {
+      const runId = target.workflow_run_id;
+      void this.deps.bridge.workflowDeps.store.cancelWorkflowRun(runId).catch((e: unknown) => {
+        getLog().warn(
+          { dispatch_key: dispatchKey, run_id: runId, err: (e as Error).message },
+          'symphony.cancel_upstream_failed'
+        );
+      });
+    }
+
     this.notifyObservers();
     return { ok: true, dispatch_key: dispatchKey };
   }
@@ -270,6 +498,7 @@ export class Orchestrator {
         issue_identifier: entry.identifier,
         state: entry.issue.state,
         started_at: new Date(entry.started_at).toISOString(),
+        workflow_run_id: entry.workflow_run_id,
       });
     }
     const retrying: OrchestratorRetryRow[] = [];
@@ -370,10 +599,12 @@ export class Orchestrator {
   }
 
   /**
-   * Phase 2 stub: writes a `symphony_dispatches` row with `workflow_run_id =
-   * null`, logs `symphony.dispatch_skipped`, and marks the dispatch_key as
-   * completed in memory so the next tick does not re-dispatch. Phase 3 will
-   * replace this body with a real `executeWorkflow(...)` invocation.
+   * Phase 3: launches an Archon workflow run for the issue via the bridge.
+   *
+   * Without a bridge (test/Phase-2 mode), this is a no-op — the orchestrator
+   * still polls and accumulates state, but no DB row is written and no run is
+   * launched. Tests that exercise the loop without a real workflow engine
+   * should pass an explicit fake bridge.
    */
   private async dispatchIssue(
     issue: Issue,
@@ -390,20 +621,14 @@ export class Orchestrator {
       return;
     }
 
-    const workflowName = snap.stateWorkflowMap[issue.state];
-    if (!workflowName) {
-      getLog().warn(
-        {
-          dispatch_key: dispatchKey,
-          identifier: issue.identifier,
-          state: issue.state,
-        },
-        'symphony.dispatch_no_workflow_for_state'
-      );
+    if (!this.deps.bridge) {
+      // No bridge wired — orchestrator is in poll-only mode. Don't write a
+      // DB row, don't launch anything. Mark the dispatch_key completed so the
+      // loop's dedup keeps working for the lifetime of this orchestrator.
+      this.state.completed.add(dispatchKey);
       return;
     }
 
-    const codebaseId = this.resolveCodebaseId(trackerKind, issue, snap);
     this.state.claimed.add(dispatchKey);
     const existingRetry = this.state.retry_attempts.get(dispatchKey);
     if (existingRetry?.timer_handle) {
@@ -412,50 +637,55 @@ export class Orchestrator {
     }
     this.state.retry_attempts.delete(dispatchKey);
 
-    const log = getLog();
+    const codebaseId = this.resolveCodebaseId(trackerKind, issue, snap);
+    const abort = new AbortController();
+
+    let outcome: DispatchOutcome;
     try {
-      await insertDispatch(this.deps.getDb(), {
-        issue_id: issue.id,
-        identifier: issue.identifier,
-        tracker: trackerKind,
-        dispatch_key: dispatchKey,
-        codebase_id: codebaseId,
-        workflow_name: workflowName,
-        workflow_run_id: null,
+      outcome = await dispatchToWorkflow(this.deps.getDb(), this.deps.bridge, {
+        issue,
+        trackerKind,
+        snap,
         attempt: attempt ?? 1,
-        status: 'pending',
+        codebaseId,
+        abort,
       });
     } catch (e) {
-      log.warn(
-        {
-          dispatch_key: dispatchKey,
-          identifier: issue.identifier,
-          err: (e as Error).message,
-        },
-        'symphony.dispatch_db_conflict'
+      // Unexpected throw inside the dispatcher — treat as a failed launch.
+      // No DB write happens here; the dispatcher writes its own rows.
+      getLog().error(
+        { dispatch_key: dispatchKey, err: (e as Error).message },
+        'symphony.dispatch_unexpected_error'
       );
-      // Row already exists from a prior process: treat as completed for this
-      // Symphony instance so we don't loop. Phase 3 will reconcile against the
-      // existing workflow_run_id instead.
       this.state.claimed.delete(dispatchKey);
       this.state.completed.add(dispatchKey);
       return;
     }
 
-    log.info(
-      {
-        dispatch_key: dispatchKey,
-        identifier: issue.identifier,
-        tracker: trackerKind,
-        workflow: workflowName,
-        codebase_id: codebaseId,
-        attempt: attempt ?? 1,
-      },
-      'symphony.dispatch_skipped'
-    );
-
-    // Stub completion: Phase 3 replaces this with a workflow run lifecycle.
     this.state.claimed.delete(dispatchKey);
+
+    if (outcome.status === 'launched' && outcome.dispatchId && outcome.workflowRunId) {
+      const entry: RunningEntry = {
+        dispatch_key: dispatchKey,
+        tracker: trackerKind,
+        issue_id: issue.id,
+        identifier: issue.identifier,
+        issue,
+        started_at: this.deps.now?.() ?? nowMs(),
+        retry_attempt: attempt,
+        abort,
+        cancel_requested: false,
+        dispatch_id: outcome.dispatchId,
+        workflow_run_id: outcome.workflowRunId,
+      };
+      this.state.running.set(dispatchKey, entry);
+      this.runIdToDispatchKey.set(outcome.workflowRunId, dispatchKey);
+      return;
+    }
+
+    // Failed at the dispatcher gate. The dispatcher already wrote a `failed`
+    // row for `failed_no_codebase` / `failed_no_workflow`. Config errors do
+    // not retry; only the unhandled throw above schedules anything.
     this.state.completed.add(dispatchKey);
   }
 

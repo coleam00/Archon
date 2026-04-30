@@ -97,6 +97,60 @@ export async function getDispatchById(db: IDatabase, id: string): Promise<Dispat
   return result.rows[0] ?? null;
 }
 
+export async function getDispatchByWorkflowRunId(
+  db: IDatabase,
+  workflowRunId: string
+): Promise<DispatchRow | null> {
+  const result = await db.query<DispatchRow>(
+    'SELECT * FROM symphony_dispatches WHERE workflow_run_id = $1',
+    [workflowRunId]
+  );
+  return result.rows[0] ?? null;
+}
+
+export interface ListDispatchesOptions {
+  status?: DispatchStatus;
+  limit?: number;
+}
+
+export async function listDispatches(
+  db: IDatabase,
+  opts: ListDispatchesOptions = {}
+): Promise<DispatchRow[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
+  if (opts.status) {
+    const result = await db.query<DispatchRow>(
+      'SELECT * FROM symphony_dispatches WHERE status = $1 ORDER BY dispatched_at DESC LIMIT $2',
+      [opts.status, limit]
+    );
+    return [...result.rows];
+  }
+  const result = await db.query<DispatchRow>(
+    'SELECT * FROM symphony_dispatches ORDER BY dispatched_at DESC LIMIT $1',
+    [limit]
+  );
+  return [...result.rows];
+}
+
+/**
+ * Rows that may correspond to a still-running upstream workflow_run. Used by
+ * the orchestrator's reconcileOnStart() to recover from a process crash.
+ *
+ * Excludes rows with workflow_run_id = NULL because they never actually
+ * launched a workflow (e.g. failed at the codebase-mapping gate). Includes
+ * 'pending' because executeWorkflow may not have transitioned the run yet
+ * when the parent process died.
+ */
+export async function listInFlight(db: IDatabase): Promise<DispatchRow[]> {
+  const result = await db.query<DispatchRow>(
+    `SELECT * FROM symphony_dispatches
+     WHERE workflow_run_id IS NOT NULL
+       AND status IN ('pending', 'running')
+     ORDER BY dispatched_at DESC`
+  );
+  return [...result.rows];
+}
+
 export async function updateStatus(
   db: IDatabase,
   id: string,

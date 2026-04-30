@@ -54,3 +54,25 @@ export {
   type StartSymphonyServiceOptions,
   type SymphonyServiceHandle,
 } from './service';
+export { createProductionBridge } from './workflow-bridge/factory';
+export type {
+  BridgeCodebase,
+  BridgeConversation,
+  BridgeDeps,
+  BridgeWebAdapter,
+  CodebaseLoader,
+  DispatchInput,
+  DispatchOutcome,
+  IsolationResolver,
+  RunWorkflowFn,
+  RunWorkflowInput,
+  WorkerConversationFactory,
+  WorkflowResolver,
+} from './workflow-bridge/types';
+export {
+  listDispatches,
+  listInFlight,
+  getDispatchByDispatchKey,
+  getDispatchById,
+  getDispatchByWorkflowRunId,
+} from './db/dispatches';
