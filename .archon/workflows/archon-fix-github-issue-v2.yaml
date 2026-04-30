@@ -238,35 +238,35 @@ nodes:
     command: archon-code-review-agent-v2
     depends_on: [review-classify]
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: error-handling
     command: archon-error-handling-agent-v2
     depends_on: [review-classify]
     when: "$review-classify.output.run_error_handling == 'true'"
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: test-coverage
     command: archon-test-coverage-agent-v2
     depends_on: [review-classify]
     when: "$review-classify.output.run_test_coverage == 'true'"
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: comment-quality
     command: archon-comment-quality-agent-v2
     depends_on: [review-classify]
     when: "$review-classify.output.run_comment_quality == 'true'"
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: docs-impact
     command: archon-docs-impact-agent-v2
     depends_on: [review-classify]
     when: "$review-classify.output.run_docs_impact == 'true'"
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   # ═══ PHASE 9: SYNTHESIZE + GATES + SELF-FIX + RE-REVIEW ───────
   - id: synthesize

@@ -26,31 +26,31 @@ nodes:
     command: archon-code-review-agent-v2
     depends_on: [sync]
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: error-handling
     command: archon-error-handling-agent-v2
     depends_on: [sync]
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: test-coverage
     command: archon-test-coverage-agent-v2
     depends_on: [sync]
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: comment-quality
     command: archon-comment-quality-agent-v2
     depends_on: [sync]
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   - id: docs-impact
     command: archon-docs-impact-agent-v2
     depends_on: [sync]
     context: fresh
-    denied_tools: [Edit, Write, Bash]
+    denied_tools: [Edit]
 
   # ─── SYNTHESIZE: aggregate JSONs, emit synthesis.json ─────────────
   - id: synthesize
