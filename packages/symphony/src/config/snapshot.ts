@@ -105,6 +105,17 @@ function asStringMap(v: unknown): Record<string, string> {
   return out;
 }
 
+/**
+ * Resolve a YAML scalar through env-indirection, returning the resolved string
+ * (empty string when an env var is unset) or `undefined` when the input is
+ * missing/non-string. Distinct from `resolveEnvIndirection` only in name —
+ * this is the helper we use uniformly for every tracker/codebase field so the
+ * `$VAR` form works everywhere, not just on secrets.
+ */
+function resolveString(v: unknown, env: NodeJS.ProcessEnv): string | undefined {
+  return resolveEnvIndirection(v, env);
+}
+
 function buildTracker(
   raw: Record<string, unknown>,
   env: NodeJS.ProcessEnv,
@@ -112,23 +123,22 @@ function buildTracker(
 ): TrackerConfig | null {
   const kind = typeof raw.kind === 'string' ? raw.kind.toLowerCase() : '';
   if (kind === 'linear') {
-    const apiKey = resolveEnvIndirection(raw.api_key, env) ?? '';
+    const apiKey = resolveString(raw.api_key, env) ?? '';
     if (!apiKey) {
       errors.push('linear tracker is missing api_key (set $LINEAR_API_KEY in env or inline)');
       return null;
     }
-    const projectSlug =
-      typeof raw.project_slug === 'string' && raw.project_slug.trim() !== ''
-        ? raw.project_slug.trim()
-        : '';
+    const projectSlug = resolveString(raw.project_slug, env) ?? '';
     if (!projectSlug) {
       errors.push('linear tracker is missing project_slug');
       return null;
     }
+    const endpointResolved = resolveString(raw.endpoint, env);
     const endpoint =
-      typeof raw.endpoint === 'string' && raw.endpoint.trim() !== ''
-        ? raw.endpoint.trim()
+      endpointResolved && endpointResolved.length > 0
+        ? endpointResolved
         : DEFAULTS.tracker.endpoint_linear;
+    const repositoryResolved = resolveString(raw.repository, env);
     return {
       kind: 'linear',
       apiKey,
@@ -136,20 +146,17 @@ function buildTracker(
       projectSlug,
       activeStates: asStringList(raw.active_states, DEFAULTS.tracker.linear_active_states),
       terminalStates: asStringList(raw.terminal_states, DEFAULTS.tracker.linear_terminal_states),
-      repository:
-        typeof raw.repository === 'string' && raw.repository.trim() !== ''
-          ? raw.repository.trim()
-          : null,
+      repository: repositoryResolved && repositoryResolved.length > 0 ? repositoryResolved : null,
     };
   }
   if (kind === 'github') {
-    const token = resolveEnvIndirection(raw.token, env) ?? '';
+    const token = resolveString(raw.token, env) ?? '';
     if (!token) {
       errors.push('github tracker is missing token (set $GITHUB_TOKEN in env or inline)');
       return null;
     }
-    const owner = typeof raw.owner === 'string' ? raw.owner.trim() : '';
-    const repo = typeof raw.repo === 'string' ? raw.repo.trim() : '';
+    const owner = resolveString(raw.owner, env) ?? '';
+    const repo = resolveString(raw.repo, env) ?? '';
     if (!owner || !repo) {
       errors.push('github tracker is missing owner or repo');
       return null;
@@ -167,12 +174,12 @@ function buildTracker(
   return null;
 }
 
-function buildCodebases(raw: unknown, errors: string[]): CodebaseMapping[] {
+function buildCodebases(raw: unknown, env: NodeJS.ProcessEnv, errors: string[]): CodebaseMapping[] {
   const out: CodebaseMapping[] = [];
   for (const entry of asArray(raw)) {
     const obj = asObject(entry);
     const tracker = typeof obj.tracker === 'string' ? obj.tracker.toLowerCase() : '';
-    const repository = typeof obj.repository === 'string' ? obj.repository.trim() : '';
+    const repository = resolveString(obj.repository, env) ?? '';
     if (tracker !== 'linear' && tracker !== 'github') {
       errors.push(`codebases[].tracker must be 'linear' or 'github', got '${tracker}'`);
       continue;
@@ -181,13 +188,11 @@ function buildCodebases(raw: unknown, errors: string[]): CodebaseMapping[] {
       errors.push('codebases[].repository is required');
       continue;
     }
+    const codebaseIdResolved = resolveString(obj.codebase_id, env);
     out.push({
       tracker: tracker,
       repository,
-      codebaseId:
-        typeof obj.codebase_id === 'string' && obj.codebase_id.trim() !== ''
-          ? obj.codebase_id.trim()
-          : null,
+      codebaseId: codebaseIdResolved && codebaseIdResolved.length > 0 ? codebaseIdResolved : null,
     });
   }
   return out;
@@ -254,7 +259,7 @@ export function buildSnapshot(raw: unknown, env: NodeJS.ProcessEnv = process.env
   };
 
   const stateWorkflowMap = asStringMap(cfg.state_workflow_map);
-  const codebases = buildCodebases(cfg.codebases, errors);
+  const codebases = buildCodebases(cfg.codebases, env, errors);
 
   return {
     trackers,

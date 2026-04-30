@@ -124,6 +124,72 @@ dispatch:
     expect(snap.dispatch.retry.maxBackoffMs).toBe(250000);
   });
 
+  test('env indirection works on non-secret tracker fields ($VAR forms)', () => {
+    const yaml = `
+trackers:
+  - kind: linear
+    api_key: $LINEAR_API_KEY
+    project_slug: $LINEAR_PROJECT_SLUG
+    endpoint: $LINEAR_ENDPOINT
+    repository: $LINEAR_REPO
+  - kind: github
+    token: $GITHUB_TOKEN
+    owner: $GH_OWNER
+    repo: $GH_REPO
+codebases:
+  - tracker: linear
+    repository: $LINEAR_REPO
+    codebase_id: $CB_ID
+`;
+    const env: NodeJS.ProcessEnv = {
+      LINEAR_API_KEY: 'secret-token',
+      LINEAR_PROJECT_SLUG: 'd0ef0b50e836',
+      LINEAR_ENDPOINT: 'https://api.linear.app/graphql',
+      LINEAR_REPO: 'Ddell12/archon-symphony',
+      GITHUB_TOKEN: 'gh-token',
+      GH_OWNER: 'Ddell12',
+      GH_REPO: 'archon-symphony-smoke-test',
+      CB_ID: 'cb-uuid-1',
+    };
+    const snap = buildSnapshot(parseSymphonyConfig(yaml), env);
+    expect(snap.trackers).toHaveLength(2);
+    const linear = snap.trackers.find(t => t.kind === 'linear');
+    const github = snap.trackers.find(t => t.kind === 'github');
+    if (linear?.kind !== 'linear') throw new Error('expected linear');
+    if (github?.kind !== 'github') throw new Error('expected github');
+    expect(linear.projectSlug).toBe('d0ef0b50e836');
+    expect(linear.endpoint).toBe('https://api.linear.app/graphql');
+    expect(linear.repository).toBe('Ddell12/archon-symphony');
+    expect(github.owner).toBe('Ddell12');
+    expect(github.repo).toBe('archon-symphony-smoke-test');
+    expect(snap.codebases[0]?.repository).toBe('Ddell12/archon-symphony');
+    expect(snap.codebases[0]?.codebaseId).toBe('cb-uuid-1');
+  });
+
+  test('falls back to defaults when env-indirected non-required fields resolve to empty', () => {
+    const yaml = `
+trackers:
+  - kind: linear
+    api_key: $LINEAR_API_KEY
+    project_slug: hard-coded-slug
+    endpoint: $UNSET_ENDPOINT
+    repository: $UNSET_REPO
+codebases:
+  - tracker: linear
+    repository: hard-coded-repo
+    codebase_id: $UNSET_CB_ID
+`;
+    const snap = buildSnapshot(parseSymphonyConfig(yaml), baseEnv);
+    const linear = snap.trackers.find(t => t.kind === 'linear');
+    if (linear?.kind !== 'linear') throw new Error('expected linear');
+    // endpoint falls back to DEFAULTS when env var is unset
+    expect(linear.endpoint).toBe('https://api.linear.app/graphql');
+    // repository falls back to null when env var is unset
+    expect(linear.repository).toBeNull();
+    // codebase_id falls back to null when env var is unset
+    expect(snap.codebases[0]?.codebaseId).toBeNull();
+  });
+
   test('round-trips state_workflow_map and codebases', () => {
     const yaml = `
 trackers:
