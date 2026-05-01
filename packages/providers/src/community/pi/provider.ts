@@ -204,22 +204,21 @@ export class PiProvider implements IAgentProvider {
     //    $PI_CODING_AGENT_DIR/auth.json) — credentials populated via
     //    `pi` → `/login` or hand-edited api_key entries.
     //
-    //    ModelRegistry.inMemory() is used instead of ModelRegistry.create()
-    //    for a critical reason: create() reads ~/.pi/agent/models.json and
-    //    returns an immutable registry — fine for static/custom models, but
-    //    extension providers (e.g. pi-provider-kiro) register their models
-    //    dynamically during session.bindExtensions(). inMemory() creates a
-    //    mutable registry that extensions can call registerProvider() on,
-    //    while still exposing the built-in static model catalog via find().
+    //    ModelRegistry.create() loads both the built-in static catalog AND
+    //    custom providers from ~/.pi/agent/models.json (e.g. ollama, LM
+    //    Studio). Despite the earlier assumption, create() returns the same
+    //    ModelRegistry class as inMemory() — registerProvider() works on
+    //    both, so extension providers (e.g. pi-provider-kiro) can still
+    //    register their models dynamically during session.bindExtensions().
     //
     //    Both reads are synchronous and happen on every sendQuery; we don't
     //    cache because the user can edit auth.json between calls and expects
     //    pickup without restart.
     let authStorage: ReturnType<typeof piCodingAgent.AuthStorage.create>;
-    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.inMemory>;
+    let modelRegistry: ReturnType<typeof piCodingAgent.ModelRegistry.create>;
     try {
       authStorage = piCodingAgent.AuthStorage.create();
-      modelRegistry = piCodingAgent.ModelRegistry.inMemory(authStorage);
+      modelRegistry = piCodingAgent.ModelRegistry.create(authStorage);
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');

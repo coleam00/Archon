@@ -146,8 +146,20 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     tokens,
     ...(tokens.cost !== undefined ? { cost: tokens.cost } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
-    ...(isError ? { isError: true, errorSubtype: last.stopReason } : {}),
+    ...(isError
+      ? {
+          isError: true,
+          errorSubtype: last.stopReason,
+          ...(last.errorMessage ? { errors: [last.errorMessage] } : {}),
+        }
+      : {}),
   };
+  if (isError) {
+    getLog().error(
+      { stopReason: last.stopReason, errorMessage: last.errorMessage, model: last.model },
+      'pi.event-bridge.result_error'
+    );
+  }
   return chunk;
 }
 
