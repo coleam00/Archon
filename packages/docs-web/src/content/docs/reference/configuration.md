@@ -153,25 +153,25 @@ defaults:
 
 ### Claude settingSources
 
-Controls which `CLAUDE.md` files the Claude Agent SDK loads during sessions:
+Controls which sources the Claude Agent SDK loads during sessions — `CLAUDE.md`, skills, commands, agents, and hooks:
 
 | Value | Description |
 |-------|-------------|
-| `project` | Load the project's `CLAUDE.md` (default, always included) |
-| `user` | Also load `~/.claude/CLAUDE.md` (user's global preferences) |
+| `project` | Load project-level `<cwd>/.claude/` (CLAUDE.md, skills, commands, agents) |
+| `user` | Load user-level `~/.claude/` (CLAUDE.md, skills, commands, agents) |
 
-**Default**: `['project']` -- only project-level instructions are loaded.
+**Default**: `['project', 'user']` — both project-level and user-level sources are loaded.
 
-Set in global or repo config:
+To restrict a project to project-level resources only (e.g. CI, shared environments, or when `~/.claude/` contains personal commands you don't want surfacing in workflows):
+
 ```yaml
 assistants:
   claude:
     settingSources:
       - project
-      - user
 ```
 
-This is useful when you maintain coding style or identity preferences in `~/.claude/CLAUDE.md` and want Archon sessions to respect them.
+Set in `~/.archon/config.yaml` (global) or `.archon/config.yaml` (repo-specific).
 
 ### Worktree file copying (`worktree.copyFiles`)
 

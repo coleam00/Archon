@@ -27,7 +27,8 @@ function setupAuth(): void {
   const refreshToken = process.env.CODEX_REFRESH_TOKEN;
   const accountId = process.env.CODEX_ACCOUNT_ID;
 
-  // Skip if Codex credentials not provided
+  // No CODEX_* env vars provided: warn if a persisted auth.json already
+  // exists on the volume (may be stale), otherwise skip with "unavailable".
   if (!idToken || !accessToken || !refreshToken || !accountId) {
     // /home/appuser is now persisted across restarts in Docker, so a stale
     // auth.json from a previous run with creds is not automatically wiped.
