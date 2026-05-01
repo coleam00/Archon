@@ -17,15 +17,28 @@ import type {
   NodeTypes,
 } from '@xyflow/react';
 import type { CommandEntry, DagNode } from '@/lib/api';
-import { dagNodeComponent, type DagFlowNode } from './DagNodeComponent';
+import { dagNodeComponent, type DagFlowNode, type DagNodeKind } from './DagNodeComponent';
 import { QuickAddPicker } from './QuickAddPicker';
 
 export { dagNodesToReactFlow } from '@/lib/dag-layout';
 
-function resolveNodeLabel(nodeType: 'command' | 'prompt' | 'bash', commandName: string): string {
-  if (nodeType === 'command') return commandName;
-  if (nodeType === 'bash') return 'Shell';
-  return 'Prompt';
+function resolveNodeLabel(nodeType: DagNodeKind, commandName: string): string {
+  switch (nodeType) {
+    case 'command':
+      return commandName;
+    case 'bash':
+      return 'Shell';
+    case 'script':
+      return 'Script';
+    case 'loop':
+      return 'Loop';
+    case 'approval':
+      return 'Approval';
+    case 'cancel':
+      return 'Cancel';
+    case 'prompt':
+      return 'Prompt';
+  }
 }
 
 export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): DagNode[] {
@@ -37,10 +50,12 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
       depends_on: deps.length > 0 ? deps : undefined,
       when: node.data.when || undefined,
       trigger_rule: node.data.trigger_rule || undefined,
+      idle_timeout: node.data.idle_timeout ?? undefined,
+      retry: node.data.retry ?? undefined,
     };
 
+    // No-AI nodes: bash, script, cancel, approval. Loop has model/provider only (per LOOP_NODE_AI_FIELDS).
     if (node.data.nodeType === 'bash') {
-      // DagNode uses `never` discriminant fields that can't be set on object literals
       return {
         ...dagBase,
         bash: node.data.bashScript ?? '',
@@ -48,7 +63,30 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
       } as DagNode;
     }
 
-    // AI node fields (not applicable to bash)
+    if (node.data.nodeType === 'script') {
+      const scriptNode: Record<string, unknown> = {
+        ...dagBase,
+        script: node.data.scriptBody ?? '',
+      };
+      if (node.data.scriptRuntime) scriptNode.runtime = node.data.scriptRuntime;
+      if (node.data.scriptDeps && node.data.scriptDeps.length > 0)
+        scriptNode.deps = node.data.scriptDeps;
+      if (node.data.scriptTimeout) scriptNode.timeout = node.data.scriptTimeout;
+      return scriptNode as DagNode;
+    }
+
+    if (node.data.nodeType === 'cancel') {
+      return { ...dagBase, cancel: node.data.cancelReason ?? '' } as DagNode;
+    }
+
+    if (node.data.nodeType === 'approval') {
+      return {
+        ...dagBase,
+        approval: node.data.approvalConfig ?? { message: '' },
+      } as DagNode;
+    }
+
+    // AI node fields (apply to command, prompt, loop)
     const aiBase = {
       ...dagBase,
       model: node.data.model || undefined,
@@ -60,12 +98,33 @@ export function reactFlowToDagNodes(rfNodes: DagFlowNode[], rfEdges: Edge[]): Da
       hooks: node.data.hooks ?? undefined,
       mcp: node.data.mcp ?? undefined,
       skills: node.data.skills ?? undefined,
+      agents: node.data.agents ?? undefined,
+      effort: node.data.effort ?? undefined,
+      thinking: node.data.thinking ?? undefined,
+      maxBudgetUsd: node.data.maxBudgetUsd ?? undefined,
+      systemPrompt: node.data.systemPrompt ?? undefined,
+      fallbackModel: node.data.fallbackModel ?? undefined,
+      betas: node.data.betas ?? undefined,
+      sandbox: node.data.sandbox ?? undefined,
     };
 
-    // DagNode uses `never` discriminant fields that can't be set on object literals
+    if (node.data.nodeType === 'loop') {
+      return {
+        ...aiBase,
+        loop: node.data.loopConfig ?? {
+          prompt: '',
+          until: '',
+          max_iterations: 1,
+          fresh_context: false,
+        },
+      } as DagNode;
+    }
+
     if (node.data.nodeType === 'command') {
       return { ...aiBase, command: node.data.label } as DagNode;
     }
+
+    // prompt
     const promptText = node.data.promptText;
     return {
       ...aiBase,
@@ -86,6 +145,7 @@ interface WorkflowCanvasProps {
   onDirty: () => void;
   onPushSnapshot?: () => void;
   commands: CommandEntry[];
+  readOnly?: boolean;
 }
 
 interface QuickAddPosition {
@@ -105,6 +165,7 @@ export function WorkflowCanvas({
   onDirty,
   onPushSnapshot,
   commands,
+  readOnly = false,
 }: WorkflowCanvasProps): React.ReactElement {
   const { screenToFlowPosition } = useReactFlow();
   const [quickAddPosition, setQuickAddPosition] = useState<QuickAddPosition | null>(null);
@@ -158,7 +219,7 @@ export function WorkflowCanvas({
       const position = screenToFlowPosition({ x: e.clientX, y: e.clientY });
       const id = `node-${crypto.randomUUID()}`;
 
-      const nodeType = type as 'command' | 'prompt' | 'bash';
+      const nodeType = type as DagNodeKind;
       const label = resolveNodeLabel(nodeType, command);
 
       const newNode: DagFlowNode = {
@@ -266,10 +327,7 @@ export function WorkflowCanvas({
   );
 
   const handleQuickAddNode = useCallback(
-    (
-      type: 'command' | 'prompt' | 'bash',
-      options?: { commandName?: string; skills?: string[]; mcp?: string }
-    ) => {
+    (type: DagNodeKind, options?: { commandName?: string; skills?: string[]; mcp?: string }) => {
       if (!quickAddPosition) return;
 
       const id = `node-${crypto.randomUUID()}`;
@@ -285,6 +343,18 @@ export function WorkflowCanvas({
           nodeType: type,
           ...(options?.skills && { skills: options.skills }),
           ...(options?.mcp && { mcp: options.mcp }),
+          ...(type === 'script' && { scriptRuntime: 'bun' as const }),
+          ...(type === 'loop' && {
+            loopConfig: {
+              prompt: '',
+              until: 'COMPLETE',
+              max_iterations: 5,
+              fresh_context: false,
+            },
+          }),
+          ...(type === 'approval' && {
+            approvalConfig: { message: 'Review and approve to continue' },
+          }),
         },
       };
 
@@ -352,17 +422,23 @@ export function WorkflowCanvas({
         edges={styledEdges}
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
-        onConnect={onConnect}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
+        onConnect={readOnly ? undefined : onConnect}
+        onDrop={readOnly ? undefined : onDrop}
+        onDragOver={readOnly ? undefined : onDragOver}
         onNodeClick={(_e, node): void => {
           onNodeSelect(node.id);
         }}
-        onNodeContextMenu={handleNodeContextMenu}
-        onPaneClick={handlePaneClick}
+        onNodeContextMenu={readOnly ? undefined : handleNodeContextMenu}
+        onPaneClick={readOnly ? undefined : handlePaneClick}
         nodeTypes={nodeTypes}
-        panOnDrag
-        selectionOnDrag={false}
+        // Pan with middle/right mouse only — left-mouse drag becomes box-select.
+        panOnDrag={[1, 2]}
+        selectionOnDrag={!readOnly}
+        // Cmd/Shift expand selection (default is just Shift).
+        multiSelectionKeyCode={['Meta', 'Shift']}
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
+        elementsSelectable
         fitView
         colorMode="dark"
         className="bg-background"

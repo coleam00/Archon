@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { listWorkflows } from '@/lib/api';
+import type { WorkflowSource } from '@/lib/api';
 import { useProject } from '@/contexts/ProjectContext';
 import { useProviders } from '@/hooks/useProviders';
 
@@ -17,6 +18,8 @@ export interface BuilderToolbarProps {
   hasUnsavedChanges: boolean;
   validationErrors: string[];
   viewMode: ViewMode;
+  hasClientErrors: boolean;
+  loadedSource: WorkflowSource | null;
   onNameChange: (name: string) => void;
   onDescriptionChange: (desc: string) => void;
   onProviderChange: (p: string | undefined) => void;
@@ -25,8 +28,22 @@ export interface BuilderToolbarProps {
   onValidate: () => void;
   onSave: () => void;
   onRun: () => void;
+  onTestRun: () => void;
+  onFork: () => void;
   onLoadWorkflow: (name: string) => void;
 }
+
+const SOURCE_BADGE_LABELS: Record<WorkflowSource, string> = {
+  bundled: 'Bundled',
+  global: 'Global',
+  project: 'Project',
+};
+
+const SOURCE_BADGE_CLASSES: Record<WorkflowSource, string> = {
+  bundled: 'bg-warning/15 text-warning',
+  global: 'bg-accent/15 text-accent',
+  project: 'bg-success/15 text-success',
+};
 
 const VIEW_MODE_LABELS: readonly { value: ViewMode; label: string }[] = [
   { value: 'hidden', label: 'Visual' },
@@ -42,6 +59,8 @@ export function BuilderToolbar({
   hasUnsavedChanges,
   validationErrors,
   viewMode,
+  hasClientErrors,
+  loadedSource,
   onNameChange,
   onDescriptionChange,
   onProviderChange,
@@ -50,8 +69,11 @@ export function BuilderToolbar({
   onValidate,
   onSave,
   onRun,
+  onTestRun,
+  onFork,
   onLoadWorkflow,
 }: BuilderToolbarProps): React.ReactElement {
+  const isReadOnly = loadedSource === 'bundled';
   const navigate = useNavigate();
   const { codebases, selectedProjectId } = useProject();
   const cwd = selectedProjectId
@@ -213,19 +235,61 @@ export function BuilderToolbar({
             </span>
           )}
 
+          {loadedSource && (
+            <span
+              className={cn(
+                'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                SOURCE_BADGE_CLASSES[loadedSource]
+              )}
+              title={
+                loadedSource === 'bundled'
+                  ? 'Bundled workflow — read-only. Use "Fork to project" to edit.'
+                  : `Loaded from ${loadedSource} scope`
+              }
+            >
+              {SOURCE_BADGE_LABELS[loadedSource]}
+            </span>
+          )}
+
           <Button variant="outline" size="xs" onClick={onValidate}>
             Validate
           </Button>
 
-          <Button variant="secondary" size="xs" onClick={onSave} disabled={!workflowName.trim()}>
-            Save
+          {isReadOnly ? (
+            <Button variant="secondary" size="xs" onClick={onFork} disabled={!workflowName.trim()}>
+              Fork to project
+            </Button>
+          ) : (
+            <Button variant="secondary" size="xs" onClick={onSave} disabled={!workflowName.trim()}>
+              Save
+            </Button>
+          )}
+
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={onTestRun}
+            disabled={hasClientErrors}
+            title={
+              hasClientErrors
+                ? 'Fix validation errors before test-running'
+                : 'Run this workflow once without saving'
+            }
+          >
+            Test Run
           </Button>
 
           <Button
             size="xs"
             onClick={onRun}
-            disabled={!workflowName.trim() || hasUnsavedChanges}
-            title={hasUnsavedChanges ? 'Save the workflow before running' : undefined}
+            disabled={!workflowName.trim() || hasUnsavedChanges || isReadOnly}
+            title={
+              isReadOnly
+                ? 'Bundled workflows must be forked before they can be run from the builder'
+                : hasUnsavedChanges
+                  ? 'Save the workflow before running'
+                  : undefined
+            }
             className="bg-node-command hover:bg-node-command/90 text-white"
           >
             Run

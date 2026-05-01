@@ -11,6 +11,8 @@ export interface BuilderKeyboardActions {
   onAddBash: () => void;
   onDeleteSelected: () => void;
   onDuplicateSelected: () => void;
+  onCopySelected: () => void;
+  onPaste: () => void;
   onQuickAdd?: () => void;
   onFitView?: () => void;
   onSelectAll?: () => void;
@@ -90,6 +92,16 @@ export function handleBuilderKeydown(
     if (e.key === 'a') {
       e.preventDefault();
       actions.onSelectAll?.();
+      return;
+    }
+    if (e.key === 'c') {
+      e.preventDefault();
+      actions.onCopySelected();
+      return;
+    }
+    if (e.key === 'v') {
+      e.preventDefault();
+      actions.onPaste();
       return;
     }
   }

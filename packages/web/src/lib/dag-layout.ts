@@ -1,7 +1,12 @@
 import type { Edge } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
 import type { DagNode } from '@/lib/api';
-import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
+import type {
+  DagFlowNode,
+  DagNodeKind,
+  LoopNodeConfig,
+  ApprovalNodeConfig,
+} from '@/components/workflows/DagNodeComponent';
 
 export const NODE_WIDTH = 180;
 export const NODE_HEIGHT = 80;
@@ -43,14 +48,27 @@ export function layoutWithDagre(
   }
 }
 
-export function resolveNodeDisplay(dn: DagNode): {
+interface NodeDisplay {
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash';
+  nodeType: DagNodeKind;
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
-} {
-  if ('bash' in dn && dn.bash) {
+  scriptBody?: string;
+  scriptRuntime?: 'bun' | 'uv';
+  scriptDeps?: string[];
+  scriptTimeout?: number;
+  loopConfig?: LoopNodeConfig;
+  approvalConfig?: ApprovalNodeConfig;
+  cancelReason?: string;
+}
+
+/**
+ * Mirror loader.ts:188-377 dispatch order: bash → script → loop → approval → cancel → command → prompt.
+ * Each node type is exclusive on the wire (enforced by dagNodeSchema.superRefine).
+ */
+export function resolveNodeDisplay(dn: DagNode): NodeDisplay {
+  if ('bash' in dn && typeof dn.bash === 'string' && dn.bash) {
     return {
       label: 'Shell',
       nodeType: 'bash',
@@ -58,13 +76,44 @@ export function resolveNodeDisplay(dn: DagNode): {
       bashTimeout: dn.timeout,
     };
   }
-  if ('command' in dn && dn.command) {
+  if ('script' in dn && typeof dn.script === 'string' && dn.script) {
+    return {
+      label: 'Script',
+      nodeType: 'script',
+      scriptBody: dn.script,
+      scriptRuntime: dn.runtime,
+      scriptDeps: dn.deps,
+      scriptTimeout: dn.timeout,
+    };
+  }
+  if ('loop' in dn && dn.loop) {
+    return {
+      label: 'Loop',
+      nodeType: 'loop',
+      loopConfig: dn.loop,
+    };
+  }
+  if ('approval' in dn && dn.approval) {
+    return {
+      label: 'Approval',
+      nodeType: 'approval',
+      approvalConfig: dn.approval,
+    };
+  }
+  if ('cancel' in dn && typeof dn.cancel === 'string' && dn.cancel) {
+    return {
+      label: 'Cancel',
+      nodeType: 'cancel',
+      cancelReason: dn.cancel,
+    };
+  }
+  if ('command' in dn && typeof dn.command === 'string' && dn.command) {
     return { label: dn.command, nodeType: 'command' };
   }
   return {
     label: 'Prompt',
     nodeType: 'prompt',
-    promptText: dn.prompt,
+    promptText: typeof dn.prompt === 'string' ? dn.prompt : undefined,
   };
 }
 

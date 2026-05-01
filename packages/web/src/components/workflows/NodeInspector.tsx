@@ -216,19 +216,62 @@ function GeneralTab({
           value={node.nodeType}
           onChange={(e): void => {
             const newType = e.target.value as DagNodeData['nodeType'];
-            const updates: Partial<DagNodeData> = { nodeType: newType };
+            // Clear ALL variant-specific fields, then set defaults for the new type.
+            const updates: Partial<DagNodeData> = {
+              nodeType: newType,
+              promptText: undefined,
+              bashScript: undefined,
+              bashTimeout: undefined,
+              scriptBody: undefined,
+              scriptRuntime: undefined,
+              scriptDeps: undefined,
+              scriptTimeout: undefined,
+              loopConfig: undefined,
+              approvalConfig: undefined,
+              cancelReason: undefined,
+            };
             if (newType === 'command') {
-              updates.promptText = undefined;
-              updates.bashScript = undefined;
-              updates.bashTimeout = undefined;
               updates.label = '';
             } else if (newType === 'prompt') {
-              updates.bashScript = undefined;
-              updates.bashTimeout = undefined;
               updates.label = 'Prompt';
             } else if (newType === 'bash') {
-              updates.promptText = undefined;
               updates.label = 'Shell';
+              // Bash has no AI fields — clear them.
+              updates.allowed_tools = undefined;
+              updates.denied_tools = undefined;
+              updates.output_format = undefined;
+              updates.hooks = undefined;
+              updates.mcp = undefined;
+              updates.skills = undefined;
+            } else if (newType === 'script') {
+              updates.label = 'Script';
+              updates.scriptRuntime = 'bun';
+              updates.allowed_tools = undefined;
+              updates.denied_tools = undefined;
+              updates.output_format = undefined;
+              updates.hooks = undefined;
+              updates.mcp = undefined;
+              updates.skills = undefined;
+            } else if (newType === 'loop') {
+              updates.label = 'Loop';
+              updates.loopConfig = {
+                prompt: '',
+                until: 'COMPLETE',
+                max_iterations: 5,
+                fresh_context: false,
+              };
+            } else if (newType === 'approval') {
+              updates.label = 'Approval';
+              updates.approvalConfig = { message: 'Review and approve to continue' };
+              updates.allowed_tools = undefined;
+              updates.denied_tools = undefined;
+              updates.output_format = undefined;
+              updates.hooks = undefined;
+              updates.mcp = undefined;
+              updates.skills = undefined;
+            } else if (newType === 'cancel') {
+              updates.label = 'Cancel';
+              updates.cancelReason = '';
               updates.allowed_tools = undefined;
               updates.denied_tools = undefined;
               updates.output_format = undefined;
@@ -243,6 +286,10 @@ function GeneralTab({
           <option value="command">Command</option>
           <option value="prompt">Prompt</option>
           <option value="bash">Bash</option>
+          <option value="script">Script</option>
+          <option value="loop">Loop</option>
+          <option value="approval">Approval</option>
+          <option value="cancel">Cancel</option>
         </select>
       </Field>
 
@@ -308,6 +355,333 @@ function GeneralTab({
         </>
       )}
 
+      {node.nodeType === 'script' && (
+        <>
+          <Field label="Runtime">
+            <select
+              value={node.scriptRuntime ?? ''}
+              onChange={(e): void => {
+                onUpdate({
+                  scriptRuntime: (e.target.value || undefined) as 'bun' | 'uv' | undefined,
+                });
+              }}
+              className={selectClass}
+            >
+              <option value="">Select runtime...</option>
+              <option value="bun">bun (TypeScript / JavaScript)</option>
+              <option value="uv">uv (Python)</option>
+            </select>
+          </Field>
+          <Field label="Script">
+            <textarea
+              value={node.scriptBody ?? ''}
+              onChange={(e): void => {
+                onUpdate({ scriptBody: e.target.value });
+              }}
+              rows={6}
+              placeholder={
+                node.scriptRuntime === 'uv' ? "print('hello world')" : "console.log('hello world')"
+              }
+              className={cn(textareaClass, 'min-h-[140px]')}
+            />
+          </Field>
+          <Field label="Dependencies (comma-separated)">
+            <input
+              type="text"
+              value={node.scriptDeps?.join(', ') ?? ''}
+              onChange={(e): void => {
+                onUpdate({ scriptDeps: parseToolsList(e.target.value) });
+              }}
+              placeholder={node.scriptRuntime === 'uv' ? 'requests, pydantic' : 'zod, lodash'}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Timeout (ms)">
+            <input
+              type="number"
+              value={node.scriptTimeout ?? ''}
+              onChange={(e): void => {
+                const v = e.target.value;
+                onUpdate({ scriptTimeout: v ? Number(v) : undefined });
+              }}
+              placeholder="120000"
+              className={inputClass}
+            />
+          </Field>
+        </>
+      )}
+
+      {node.nodeType === 'loop' && (
+        <>
+          <Field label="Iteration Prompt">
+            <textarea
+              value={node.loopConfig?.prompt ?? ''}
+              onChange={(e): void => {
+                onUpdate({
+                  loopConfig: {
+                    ...(node.loopConfig ?? {
+                      prompt: '',
+                      until: '',
+                      max_iterations: 1,
+                      fresh_context: false,
+                    }),
+                    prompt: e.target.value,
+                  },
+                });
+              }}
+              rows={5}
+              placeholder="Continue working until you can output the completion signal..."
+              className={cn(textareaClass, 'min-h-[120px]')}
+            />
+          </Field>
+          <Field label="Completion Signal (until)">
+            <input
+              type="text"
+              value={node.loopConfig?.until ?? ''}
+              onChange={(e): void => {
+                onUpdate({
+                  loopConfig: {
+                    ...(node.loopConfig ?? {
+                      prompt: '',
+                      until: '',
+                      max_iterations: 1,
+                      fresh_context: false,
+                    }),
+                    until: e.target.value,
+                  },
+                });
+              }}
+              placeholder="COMPLETE"
+              className={cn(inputClass, 'font-mono')}
+            />
+          </Field>
+          <Field label="Max Iterations">
+            <input
+              type="number"
+              min={1}
+              value={node.loopConfig?.max_iterations ?? ''}
+              onChange={(e): void => {
+                const v = e.target.value;
+                onUpdate({
+                  loopConfig: {
+                    ...(node.loopConfig ?? {
+                      prompt: '',
+                      until: '',
+                      max_iterations: 1,
+                      fresh_context: false,
+                    }),
+                    max_iterations: v ? Number(v) : 1,
+                  },
+                });
+              }}
+              placeholder="5"
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Fresh Context Each Iteration">
+            <label className="flex items-center gap-2 text-xs text-text-secondary">
+              <input
+                type="checkbox"
+                checked={node.loopConfig?.fresh_context ?? false}
+                onChange={(e): void => {
+                  onUpdate({
+                    loopConfig: {
+                      ...(node.loopConfig ?? {
+                        prompt: '',
+                        until: '',
+                        max_iterations: 1,
+                        fresh_context: false,
+                      }),
+                      fresh_context: e.target.checked,
+                    },
+                  });
+                }}
+              />
+              Restart session per iteration
+            </label>
+          </Field>
+          <Field label="Until Bash (optional)">
+            <textarea
+              value={node.loopConfig?.until_bash ?? ''}
+              onChange={(e): void => {
+                onUpdate({
+                  loopConfig: {
+                    ...(node.loopConfig ?? {
+                      prompt: '',
+                      until: '',
+                      max_iterations: 1,
+                      fresh_context: false,
+                    }),
+                    until_bash: e.target.value || undefined,
+                  },
+                });
+              }}
+              rows={3}
+              placeholder="bun run validate"
+              className={cn(textareaClass, 'min-h-[60px]')}
+            />
+            <p className="text-[9px] text-text-tertiary">Exit 0 marks the loop complete.</p>
+          </Field>
+          <Field label="Interactive">
+            <label className="flex items-center gap-2 text-xs text-text-secondary">
+              <input
+                type="checkbox"
+                checked={node.loopConfig?.interactive ?? false}
+                onChange={(e): void => {
+                  onUpdate({
+                    loopConfig: {
+                      ...(node.loopConfig ?? {
+                        prompt: '',
+                        until: '',
+                        max_iterations: 1,
+                        fresh_context: false,
+                      }),
+                      interactive: e.target.checked || undefined,
+                    },
+                  });
+                }}
+              />
+              Pause for user feedback between iterations
+            </label>
+          </Field>
+          {node.loopConfig?.interactive && (
+            <Field label="Gate Message">
+              <textarea
+                value={node.loopConfig?.gate_message ?? ''}
+                onChange={(e): void => {
+                  onUpdate({
+                    loopConfig: {
+                      ...(node.loopConfig ?? {
+                        prompt: '',
+                        until: '',
+                        max_iterations: 1,
+                        fresh_context: false,
+                      }),
+                      gate_message: e.target.value || undefined,
+                    },
+                  });
+                }}
+                rows={2}
+                placeholder="Review iteration output and approve to continue"
+                className={cn(textareaClass, 'min-h-[60px]')}
+              />
+            </Field>
+          )}
+        </>
+      )}
+
+      {node.nodeType === 'approval' && (
+        <>
+          <Field label="Message">
+            <textarea
+              value={node.approvalConfig?.message ?? ''}
+              onChange={(e): void => {
+                onUpdate({
+                  approvalConfig: {
+                    ...(node.approvalConfig ?? { message: '' }),
+                    message: e.target.value,
+                  },
+                });
+              }}
+              rows={3}
+              placeholder="Review the changes and approve to continue"
+              className={cn(textareaClass, 'min-h-[80px]')}
+            />
+          </Field>
+          <Field label="Capture Response">
+            <label className="flex items-center gap-2 text-xs text-text-secondary">
+              <input
+                type="checkbox"
+                checked={node.approvalConfig?.capture_response ?? false}
+                onChange={(e): void => {
+                  onUpdate({
+                    approvalConfig: {
+                      ...(node.approvalConfig ?? { message: '' }),
+                      capture_response: e.target.checked || undefined,
+                    },
+                  });
+                }}
+              />
+              Store the reviewer&apos;s comment as <code className="text-[10px]">$id.output</code>
+            </label>
+          </Field>
+          <div className="border-t border-border pt-3 mt-1">
+            <p className={cn(labelClass, 'mb-2')}>On Reject</p>
+            <Field label="Rework Prompt (optional)">
+              <textarea
+                value={node.approvalConfig?.on_reject?.prompt ?? ''}
+                onChange={(e): void => {
+                  const text = e.target.value;
+                  const existing = node.approvalConfig ?? { message: '' };
+                  if (!text) {
+                    // Clear on_reject when prompt empties.
+                    const { on_reject: dropped, ...rest } = existing;
+                    void dropped;
+                    onUpdate({ approvalConfig: rest });
+                    return;
+                  }
+                  onUpdate({
+                    approvalConfig: {
+                      ...existing,
+                      on_reject: {
+                        ...(existing.on_reject ?? { prompt: '' }),
+                        prompt: text,
+                      },
+                    },
+                  });
+                }}
+                rows={3}
+                placeholder="Address the review feedback: $REJECTION_REASON"
+                className={cn(textareaClass, 'min-h-[80px]')}
+              />
+            </Field>
+            {node.approvalConfig?.on_reject && (
+              <Field label="Max Attempts (1-10)">
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={node.approvalConfig?.on_reject?.max_attempts ?? ''}
+                  onChange={(e): void => {
+                    const v = e.target.value;
+                    const existing = node.approvalConfig ?? { message: '' };
+                    if (!existing.on_reject) return;
+                    onUpdate({
+                      approvalConfig: {
+                        ...existing,
+                        on_reject: {
+                          ...existing.on_reject,
+                          max_attempts: v ? Number(v) : undefined,
+                        },
+                      },
+                    });
+                  }}
+                  placeholder="3"
+                  className={inputClass}
+                />
+              </Field>
+            )}
+          </div>
+        </>
+      )}
+
+      {node.nodeType === 'cancel' && (
+        <Field label="Cancel Reason">
+          <textarea
+            value={node.cancelReason ?? ''}
+            onChange={(e): void => {
+              onUpdate({ cancelReason: e.target.value });
+            }}
+            rows={3}
+            placeholder="Required preconditions not met"
+            className={cn(textareaClass, 'min-h-[80px]')}
+          />
+          <p className="text-[9px] text-text-tertiary">
+            Reaching this node terminates the run with the given reason.
+          </p>
+        </Field>
+      )}
+
       {/* Dependencies */}
       <Field label="Dependencies">
         <DependencyTags
@@ -334,6 +708,13 @@ function GeneralTab({
   );
 }
 
+/** Nodes that don't run the AI provider — bash, script, approval, cancel. (loop is AI; it just constrains AI fields.) */
+function isNoAiNode(nodeType: DagNodeData['nodeType']): boolean {
+  return (
+    nodeType === 'bash' || nodeType === 'script' || nodeType === 'approval' || nodeType === 'cancel'
+  );
+}
+
 function ExecutionTab({
   node,
   onUpdate,
@@ -341,11 +722,11 @@ function ExecutionTab({
   node: DagNodeData;
   onUpdate: (updates: Partial<DagNodeData>) => void;
 }): React.ReactElement {
-  const isBash = node.nodeType === 'bash';
+  const showAiFields = !isNoAiNode(node.nodeType);
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      {!isBash && (
+      {showAiFields && (
         <>
           <ProviderField node={node} onUpdate={onUpdate} selectClass={selectClass} />
 
@@ -408,82 +789,84 @@ function ExecutionTab({
         />
       </Field>
 
-      {/* Retry config */}
-      <div className="border-t border-border pt-3 mt-1">
-        <p className={cn(labelClass, 'mb-2')}>Retry Configuration</p>
+      {/* Retry config — engine forbids retry on loop nodes (loop manages its own iteration). */}
+      {node.nodeType !== 'loop' && (
+        <div className="border-t border-border pt-3 mt-1">
+          <p className={cn(labelClass, 'mb-2')}>Retry Configuration</p>
 
-        <div className="flex flex-col gap-2">
-          <Field label="Max Attempts (1-5)">
-            <input
-              type="number"
-              min={1}
-              max={5}
-              value={node.retry?.max_attempts ?? ''}
-              onChange={(e): void => {
-                const v = e.target.value;
-                if (!v) {
-                  onUpdate({ retry: undefined });
-                } else {
-                  onUpdate({
-                    retry: {
-                      max_attempts: Number(v),
-                      delay_ms: node.retry?.delay_ms,
-                      on_error: node.retry?.on_error,
-                    },
-                  });
-                }
-              }}
-              placeholder="2"
-              className={inputClass}
-            />
-          </Field>
+          <div className="flex flex-col gap-2">
+            <Field label="Max Attempts (1-5)">
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={node.retry?.max_attempts ?? ''}
+                onChange={(e): void => {
+                  const v = e.target.value;
+                  if (!v) {
+                    onUpdate({ retry: undefined });
+                  } else {
+                    onUpdate({
+                      retry: {
+                        max_attempts: Number(v),
+                        delay_ms: node.retry?.delay_ms,
+                        on_error: node.retry?.on_error,
+                      },
+                    });
+                  }
+                }}
+                placeholder="2"
+                className={inputClass}
+              />
+            </Field>
 
-          <Field label="Delay (ms, 1000-60000)">
-            <input
-              type="number"
-              min={1000}
-              max={60000}
-              value={node.retry?.delay_ms ?? ''}
-              onChange={(e): void => {
-                const v = e.target.value;
-                if (node.retry) {
-                  onUpdate({
-                    retry: {
-                      ...node.retry,
-                      delay_ms: v ? Number(v) : undefined,
-                    },
-                  });
-                }
-              }}
-              placeholder="3000"
-              disabled={!node.retry}
-              className={cn(inputClass, !node.retry && 'opacity-50')}
-            />
-          </Field>
+            <Field label="Delay (ms, 1000-60000)">
+              <input
+                type="number"
+                min={1000}
+                max={60000}
+                value={node.retry?.delay_ms ?? ''}
+                onChange={(e): void => {
+                  const v = e.target.value;
+                  if (node.retry) {
+                    onUpdate({
+                      retry: {
+                        ...node.retry,
+                        delay_ms: v ? Number(v) : undefined,
+                      },
+                    });
+                  }
+                }}
+                placeholder="3000"
+                disabled={!node.retry}
+                className={cn(inputClass, !node.retry && 'opacity-50')}
+              />
+            </Field>
 
-          <Field label="On Error">
-            <select
-              value={node.retry?.on_error ?? ''}
-              onChange={(e): void => {
-                if (node.retry) {
-                  onUpdate({
-                    retry: {
-                      ...node.retry,
-                      on_error: (e.target.value || undefined) as 'transient' | 'all' | undefined,
-                    },
-                  });
-                }
-              }}
-              disabled={!node.retry}
-              className={cn(selectClass, !node.retry && 'opacity-50')}
-            >
-              <option value="">Default (transient)</option>
-              <option value="transient">transient</option>
-              <option value="all">all</option>
-            </select>
-          </Field>
+            <Field label="On Error">
+              <select
+                value={node.retry?.on_error ?? ''}
+                onChange={(e): void => {
+                  if (node.retry) {
+                    onUpdate({
+                      retry: {
+                        ...node.retry,
+                        on_error: (e.target.value || undefined) as 'transient' | 'all' | undefined,
+                      },
+                    });
+                  }
+                }}
+                disabled={!node.retry}
+                className={cn(selectClass, !node.retry && 'opacity-50')}
+              >
+                <option value="">Default (transient)</option>
+                <option value="transient">transient</option>
+                <option value="all">all</option>
+              </select>
+            </Field>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -705,7 +1088,7 @@ function DagInspector({
   onDelete,
   onClose,
 }: NodeInspectorProps): React.ReactElement {
-  const isBash = node.nodeType === 'bash';
+  const showAiSurface = !isNoAiNode(node.nodeType);
 
   return (
     <div key={node.id} className="flex flex-col h-full border-l border-border bg-surface">
@@ -742,12 +1125,12 @@ function DagInspector({
           <TabsTrigger value="execution" className="text-xs">
             Execution
           </TabsTrigger>
-          {!isBash && (
+          {showAiSurface && (
             <TabsTrigger value="tools" className="text-xs">
               Tools
             </TabsTrigger>
           )}
-          {!isBash && (
+          {showAiSurface && (
             <TabsTrigger value="advanced" className="text-xs">
               Advanced
             </TabsTrigger>
@@ -763,13 +1146,13 @@ function DagInspector({
             <ExecutionTab node={node} onUpdate={onUpdate} />
           </TabsContent>
 
-          {!isBash && (
+          {showAiSurface && (
             <TabsContent value="tools">
               <ToolsTab node={node} onUpdate={onUpdate} />
             </TabsContent>
           )}
 
-          {!isBash && (
+          {showAiSurface && (
             <TabsContent value="advanced">
               <AdvancedTab key={node.id} node={node} onUpdate={onUpdate} />
             </TabsContent>

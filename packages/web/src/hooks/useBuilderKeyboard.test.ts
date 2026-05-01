@@ -26,6 +26,8 @@ function makeActions(): BuilderKeyboardActions & {
     onAddBash: bump('onAddBash'),
     onDeleteSelected: bump('onDeleteSelected'),
     onDuplicateSelected: bump('onDuplicateSelected'),
+    onCopySelected: bump('onCopySelected'),
+    onPaste: bump('onPaste'),
     onQuickAdd: bump('onQuickAdd'),
     onFitView: bump('onFitView'),
     onSelectAll: bump('onSelectAll'),

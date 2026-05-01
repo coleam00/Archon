@@ -46,6 +46,10 @@ import {
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { parseWorkflow } from '@archon/workflows/loader';
+import {
+  getWorkflowEventEmitter,
+  type WorkflowEmitterEvent,
+} from '@archon/workflows/event-emitter';
 import { isValidCommandName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
@@ -74,6 +78,8 @@ import {
   workflowListResponseSchema,
   validateWorkflowBodySchema,
   validateWorkflowResponseSchema,
+  testRunWorkflowBodySchema,
+  testRunWorkflowResponseSchema,
   getWorkflowResponseSchema,
   saveWorkflowBodySchema,
   deleteWorkflowResponseSchema,
@@ -234,6 +240,27 @@ const validateWorkflowRoute = createRoute({
     200: {
       content: { 'application/json': { schema: validateWorkflowResponseSchema } },
       description: 'Validation result',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const testRunWorkflowRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/test-run',
+  tags: ['Workflows'],
+  summary: 'Run an in-memory workflow definition without persisting it',
+  request: {
+    body: {
+      content: { 'application/json': { schema: testRunWorkflowBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: testRunWorkflowResponseSchema } },
+      description: 'Test run dispatched',
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
@@ -919,6 +946,53 @@ function mapSymphonyEvent(event: SymphonyEmitterEvent): string {
     ...rest,
     timestamp: Date.now(),
   });
+}
+
+/**
+ * Boot-time sweep: remove orphaned `_testrun_*.yaml` files older than 1 hour.
+ *
+ * Test-run files are written by `POST /api/workflows/test-run` and normally
+ * cleaned up when the run reaches a terminal status. A crashed daemon can leave
+ * them behind — this catches those across all registered codebases.
+ *
+ * Exported (rather than inlined into `registerApiRoutes`) so route-level tests
+ * that mock `listCodebases` once-only do not get their mocks consumed by the
+ * sweep on every test setup.
+ */
+export async function sweepOrphanTestRunFiles(): Promise<void> {
+  try {
+    const codebases = await codebaseDb.listCodebases();
+    const [workflowFolder] = getWorkflowFolderSearchPaths();
+    const now = Date.now();
+    const ONE_HOUR = 60 * 60 * 1000;
+    for (const cb of codebases) {
+      const dir = join(cb.default_cwd, workflowFolder);
+      let entries: string[];
+      try {
+        entries = await readdir(dir);
+      } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().debug({ err: e, dir }, 'workflow.test_run_sweep_readdir_failed');
+        }
+        continue;
+      }
+      for (const name of entries) {
+        if (!name.startsWith('_testrun_') || !name.endsWith('.yaml')) continue;
+        const fp = join(dir, name);
+        try {
+          const st = await stat(fp);
+          if (now - st.mtimeMs > ONE_HOUR) {
+            await unlink(fp);
+            getLog().info({ filePath: fp }, 'workflow.test_run_orphan_swept');
+          }
+        } catch (err) {
+          getLog().debug({ err, filePath: fp }, 'workflow.test_run_sweep_entry_failed');
+        }
+      }
+    }
+  } catch (err) {
+    getLog().warn({ err }, 'workflow.test_run_sweep_failed');
+  }
 }
 
 /**
@@ -1903,7 +1977,10 @@ export function registerApiRoutes(
 
       const result = await discoverWorkflowsWithConfig(workingDir, loadConfig);
       return c.json({
-        workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
+        // Hide internal test-run scratch files from the dropdown.
+        workflows: result.workflows
+          .filter(ws => !ws.workflow.name.startsWith('_testrun_'))
+          .map(ws => ({ workflow: ws.workflow, source: ws.source })),
         errors: result.errors.length > 0 ? result.errors : undefined,
       });
     } catch (error) {
@@ -2370,6 +2447,167 @@ export function registerApiRoutes(
       getLog().error({ err }, 'workflow.validate_failed');
       return apiError(c, 500, 'Failed to validate workflow');
     }
+  });
+
+  // POST /api/workflows/test-run - Run an in-memory workflow without persisting it.
+  // MUST be registered before GET /api/workflows/:name so "test-run" is not treated as :name.
+  // Strategy: write the definition to `<cwd>/.archon/workflows/_testrun_<uuid>.yaml`, dispatch
+  // through the existing executor, and unlink on terminal status. The temp filename is also
+  // filtered out of GET /api/workflows so the dropdown stays clean.
+  registerOpenApiRoute(testRunWorkflowRoute, async c => {
+    const { definition, codebaseId, cwd, message } = getValidatedBody(c, testRunWorkflowBodySchema);
+
+    // Resolve workingDir from cwd / codebaseId / first codebase, in that order.
+    let workingDir: string | undefined = cwd;
+    if (cwd) {
+      if (!(await validateCwd(cwd))) {
+        return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+      }
+    } else if (codebaseId) {
+      const cb = await codebaseDb.getCodebase(codebaseId);
+      if (!cb) return apiError(c, 400, 'Codebase not found');
+      workingDir = cb.default_cwd;
+    } else {
+      const codebases = await codebaseDb.listCodebases();
+      if (codebases.length > 0) workingDir = codebases[0].default_cwd;
+    }
+    if (!workingDir) {
+      return apiError(c, 400, 'No working directory could be resolved for the test run');
+    }
+
+    const tempName = `_testrun_${randomUUID()}`;
+
+    // Force the workflow's name to match the temp filename so internal references line up.
+    const definitionWithName: Record<string, unknown> = {
+      ...definition,
+      name: tempName,
+    };
+
+    // Validate before writing.
+    let yamlContent: string;
+    try {
+      yamlContent = Bun.YAML.stringify(definitionWithName);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, tempName }, 'workflow.test_run_serialize_failed');
+      return apiError(c, 400, 'Failed to serialize workflow definition');
+    }
+    const parsed = parseWorkflow(yamlContent, `${tempName}.yaml`);
+    if (parsed.error) {
+      return apiError(c, 400, 'Workflow definition is invalid', parsed.error.error);
+    }
+
+    // Write the temp file under the codebase's .archon/workflows/.
+    const [workflowFolder] = getWorkflowFolderSearchPaths();
+    const dirPath = join(workingDir, workflowFolder);
+    const filePath = join(dirPath, `${tempName}.yaml`);
+    try {
+      await mkdir(dirPath, { recursive: true });
+      await writeFile(filePath, yamlContent, 'utf-8');
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, tempName, filePath }, 'workflow.test_run_write_failed');
+      return apiError(c, 500, 'Failed to stage temp workflow file');
+    }
+
+    // Hook one-shot cleanup: unlink the temp file when the run reaches a terminal state.
+    // Safety net: unconditionally unlink after 1 hour even if no terminal event arrives.
+    const emitter = getWorkflowEventEmitter();
+    let runId: string | null = null;
+    let cleanedUp = false;
+    const cleanup = async (): Promise<void> => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      try {
+        await unlink(filePath);
+      } catch (e: unknown) {
+        const err = e as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, tempName, filePath }, 'workflow.test_run_cleanup_failed');
+        }
+      }
+    };
+    const unsubscribe = emitter.subscribe((ev: WorkflowEmitterEvent) => {
+      // Capture the runId once we see this temp workflow start.
+      if (ev.type === 'workflow_started' && ev.workflowName === tempName && !runId) {
+        runId = ev.runId;
+        return;
+      }
+      if (
+        runId &&
+        ev.runId === runId &&
+        (ev.type === 'workflow_completed' ||
+          ev.type === 'workflow_failed' ||
+          ev.type === 'workflow_cancelled')
+      ) {
+        unsubscribe();
+        clearTimeout(safetyTimer);
+        void cleanup();
+      }
+    });
+    const safetyTimer = setTimeout(
+      () => {
+        unsubscribe();
+        void cleanup();
+        getLog().info({ tempName, filePath }, 'workflow.test_run_safety_cleanup');
+      },
+      60 * 60 * 1000
+    );
+    if (typeof safetyTimer === 'object' && 'unref' in safetyTimer) {
+      (safetyTimer as { unref: () => void }).unref();
+    }
+
+    // Create a fresh conversation for this test run so it stays isolated from any
+    // existing chat thread.
+    const platformConvId = `web-testrun-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    let conversation: Awaited<ReturnType<typeof conversationDb.getOrCreateConversation>>;
+    try {
+      conversation = await conversationDb.getOrCreateConversation(
+        'web',
+        platformConvId,
+        codebaseId ?? undefined
+      );
+    } catch (error) {
+      unsubscribe();
+      clearTimeout(safetyTimer);
+      void cleanup();
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, tempName }, 'workflow.test_run_conv_create_failed');
+      return apiError(c, 500, 'Failed to create test-run conversation');
+    }
+    webAdapter.setConversationDbId(conversation.platform_conversation_id, conversation.id);
+    await conversationDb.updateConversationTitle(
+      conversation.id,
+      `Test run · ${tempName.slice(9, 17)}`
+    );
+
+    const dispatchMessage = `/workflow run ${tempName}${message ? ` ${message}` : ''}`;
+    try {
+      await messageDb.addMessage(conversation.id, 'user', dispatchMessage);
+    } catch (e: unknown) {
+      getLog().error({ err: e, conversationId: conversation.id }, 'message_persistence_failed');
+    }
+
+    let dispatchResult: Awaited<ReturnType<typeof dispatchToOrchestrator>>;
+    try {
+      dispatchResult = await dispatchToOrchestrator(
+        conversation.platform_conversation_id,
+        dispatchMessage
+      );
+    } catch (error) {
+      unsubscribe();
+      clearTimeout(safetyTimer);
+      void cleanup();
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err, tempName }, 'workflow.test_run_dispatch_failed');
+      return apiError(c, 500, 'Failed to dispatch test run');
+    }
+
+    return c.json({
+      tempName,
+      conversationId: conversation.platform_conversation_id,
+      ...dispatchResult,
+    });
   });
 
   // GET /api/workflows/:name - Fetch a single workflow definition

@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Box, FileText, Terminal, Zap, Plug, ChevronRight } from 'lucide-react';
+import {
+  Box,
+  FileText,
+  Terminal,
+  Zap,
+  Plug,
+  ChevronRight,
+  FileCode,
+  Repeat,
+  CheckSquare,
+  XCircle,
+} from 'lucide-react';
 import type { CommandEntry } from '@/lib/api';
+import type { DagNodeKind } from './DagNodeComponent';
 import { cn } from '@/lib/utils';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { CommandPicker } from './CommandPicker';
@@ -8,7 +20,7 @@ import { CommandPicker } from './CommandPicker';
 interface QuickAddPickerProps {
   position: { x: number; y: number };
   onAddNode: (
-    type: 'command' | 'prompt' | 'bash',
+    type: DagNodeKind,
     options?: { commandName?: string; skills?: string[]; mcp?: string }
   ) => void;
   onClose: () => void;
@@ -193,6 +205,74 @@ export function QuickAddPicker({
           <div className="flex-1 min-w-0">
             <div className="text-xs font-medium text-text-primary">Bash</div>
             <div className="text-[10px] text-text-tertiary">Shell script</div>
+          </div>
+        </button>
+
+        {/* Script */}
+        <button
+          type="button"
+          onClick={(): void => {
+            onAddNode('script');
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover cursor-pointer"
+        >
+          <span className="text-text-secondary">
+            <FileCode className="size-4" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-text-primary">Script</div>
+            <div className="text-[10px] text-text-tertiary">TypeScript / Python via bun or uv</div>
+          </div>
+        </button>
+
+        {/* Loop */}
+        <button
+          type="button"
+          onClick={(): void => {
+            onAddNode('loop');
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover cursor-pointer"
+        >
+          <span className="text-text-secondary">
+            <Repeat className="size-4" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-text-primary">Loop</div>
+            <div className="text-[10px] text-text-tertiary">Iterate AI prompt until done</div>
+          </div>
+        </button>
+
+        {/* Approval */}
+        <button
+          type="button"
+          onClick={(): void => {
+            onAddNode('approval');
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover cursor-pointer"
+        >
+          <span className="text-text-secondary">
+            <CheckSquare className="size-4" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-text-primary">Approval</div>
+            <div className="text-[10px] text-text-tertiary">Pause for human review</div>
+          </div>
+        </button>
+
+        {/* Cancel */}
+        <button
+          type="button"
+          onClick={(): void => {
+            onAddNode('cancel');
+          }}
+          className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-surface-hover cursor-pointer"
+        >
+          <span className="text-text-secondary">
+            <XCircle className="size-4" />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium text-text-primary">Cancel</div>
+            <div className="text-[10px] text-text-tertiary">Terminate the run with a reason</div>
           </div>
         </button>
 

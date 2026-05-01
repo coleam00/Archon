@@ -62,7 +62,7 @@ import { WebAdapter } from './adapters/web';
 import { MessagePersistence } from './adapters/web/persistence';
 import { SSETransport } from './adapters/web/transport';
 import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
-import { registerApiRoutes } from './routes/api';
+import { registerApiRoutes, sweepOrphanTestRunFiles } from './routes/api';
 import { registerSymphonyRoutes } from './routes/api.symphony';
 import { registerLinearRoutes } from './routes/api.linear';
 import {
@@ -525,6 +525,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Register Web UI API routes after symphony so /api/health can include its state
   registerApiRoutes(app, webAdapter, lockManager, activePlatforms, symphonyHandle ?? undefined);
+
+  // Boot-time sweep of orphaned `_testrun_*` workflow scratch files.
+  void sweepOrphanTestRunFiles();
 
   // GitHub webhook endpoint
   if (github) {

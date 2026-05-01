@@ -504,6 +504,24 @@ export async function validateWorkflow(
   });
 }
 
+export interface TestRunResponse {
+  tempName: string;
+  conversationId: string;
+  accepted: boolean;
+  status: string;
+}
+
+export async function testRunWorkflow(
+  definition: WorkflowDefinition,
+  options: { codebaseId?: string; cwd?: string; message?: string } = {}
+): Promise<TestRunResponse> {
+  return fetchJSON('/api/workflows/test-run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ definition, ...options }),
+  });
+}
+
 export interface CommandEntry {
   name: string;
   source: WorkflowSource;

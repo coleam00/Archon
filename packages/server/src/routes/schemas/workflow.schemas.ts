@@ -67,6 +67,26 @@ export const validateWorkflowResponseSchema = z
   })
   .openapi('ValidateWorkflowResponse');
 
+/** POST /api/workflows/test-run request body. */
+export const testRunWorkflowBodySchema = z
+  .object({
+    definition: z.record(z.unknown()),
+    codebaseId: z.string().optional(),
+    cwd: z.string().optional(),
+    message: z.string().optional(),
+  })
+  .openapi('TestRunWorkflowBody');
+
+/** POST /api/workflows/test-run response. */
+export const testRunWorkflowResponseSchema = z
+  .object({
+    tempName: z.string(),
+    conversationId: z.string(),
+    accepted: z.boolean(),
+    status: z.string(),
+  })
+  .openapi('TestRunWorkflowResponse');
+
 /** DELETE /api/workflows/:name response. */
 export const deleteWorkflowResponseSchema = z
   .object({ deleted: z.boolean(), name: z.string() })

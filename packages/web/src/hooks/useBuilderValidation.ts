@@ -48,23 +48,134 @@ function getInstantIssues(
   }
 
   for (const node of nodes) {
-    if (node.data.nodeType === 'bash' && !node.data.bashScript?.trim()) {
-      issues.push({
-        severity: 'error',
-        message: `Node "${node.data.id}": bash script cannot be empty`,
-        nodeId: node.data.id,
-        field: 'bashScript',
-        suggestion: 'Enter a bash script for this node',
-      });
-    }
-    if (node.data.nodeType === 'prompt' && !node.data.promptText?.trim()) {
-      issues.push({
-        severity: 'error',
-        message: `Node "${node.data.id}": prompt cannot be empty`,
-        nodeId: node.data.id,
-        field: 'promptText',
-        suggestion: 'Enter a prompt for this node',
-      });
+    const { id } = node.data;
+    switch (node.data.nodeType) {
+      case 'bash':
+        if (!node.data.bashScript?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": bash script cannot be empty`,
+            nodeId: id,
+            field: 'bashScript',
+            suggestion: 'Enter a bash script for this node',
+          });
+        }
+        break;
+      case 'prompt':
+        if (!node.data.promptText?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": prompt cannot be empty`,
+            nodeId: id,
+            field: 'promptText',
+            suggestion: 'Enter a prompt for this node',
+          });
+        }
+        break;
+      case 'command':
+        if (!node.data.label.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": command name is required`,
+            nodeId: id,
+            field: 'command',
+            suggestion: 'Pick a command from the dropdown',
+          });
+        }
+        break;
+      case 'script':
+        if (!node.data.scriptBody?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": script cannot be empty`,
+            nodeId: id,
+            field: 'scriptBody',
+          });
+        }
+        if (!node.data.scriptRuntime) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": script runtime ('bun' or 'uv') is required`,
+            nodeId: id,
+            field: 'scriptRuntime',
+          });
+        }
+        break;
+      case 'loop': {
+        const loop = node.data.loopConfig;
+        if (!loop?.prompt?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": loop.prompt is required`,
+            nodeId: id,
+            field: 'loopConfig.prompt',
+          });
+        }
+        if (!loop?.until?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": loop.until completion signal is required`,
+            nodeId: id,
+            field: 'loopConfig.until',
+          });
+        }
+        if (!loop?.max_iterations || loop.max_iterations < 1) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": loop.max_iterations must be a positive integer`,
+            nodeId: id,
+            field: 'loopConfig.max_iterations',
+          });
+        }
+        if (loop?.interactive && !loop?.gate_message?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": interactive loop requires gate_message`,
+            nodeId: id,
+            field: 'loopConfig.gate_message',
+          });
+        }
+        if (node.data.retry) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": retry is not supported on loop nodes`,
+            nodeId: id,
+            field: 'retry',
+            suggestion: 'Loop nodes manage their own iteration',
+          });
+        }
+        break;
+      }
+      case 'approval': {
+        const approval = node.data.approvalConfig;
+        if (!approval?.message?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": approval.message is required`,
+            nodeId: id,
+            field: 'approvalConfig.message',
+          });
+        }
+        if (approval?.on_reject && !approval.on_reject.prompt?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": approval.on_reject.prompt cannot be empty`,
+            nodeId: id,
+            field: 'approvalConfig.on_reject.prompt',
+          });
+        }
+        break;
+      }
+      case 'cancel':
+        if (!node.data.cancelReason?.trim()) {
+          issues.push({
+            severity: 'error',
+            message: `Node "${id}": cancel reason cannot be empty`,
+            nodeId: id,
+            field: 'cancelReason',
+          });
+        }
+        break;
     }
   }
 
@@ -140,6 +251,14 @@ function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): ValidationIssu
     const textsToScan: string[] = [];
     if (node.data.when) textsToScan.push(node.data.when);
     if (node.data.promptText) textsToScan.push(node.data.promptText);
+    if (node.data.bashScript) textsToScan.push(node.data.bashScript);
+    if (node.data.scriptBody) textsToScan.push(node.data.scriptBody);
+    if (node.data.loopConfig?.prompt) textsToScan.push(node.data.loopConfig.prompt);
+    if (node.data.loopConfig?.until_bash) textsToScan.push(node.data.loopConfig.until_bash);
+    if (node.data.approvalConfig?.message) textsToScan.push(node.data.approvalConfig.message);
+    if (node.data.approvalConfig?.on_reject?.prompt) {
+      textsToScan.push(node.data.approvalConfig.on_reject.prompt);
+    }
 
     for (const text of textsToScan) {
       const outputRefPattern = /\$(\w+)\.output/g;

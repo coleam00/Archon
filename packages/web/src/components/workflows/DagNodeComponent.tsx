@@ -4,20 +4,39 @@ import type { NodeProps, Node } from '@xyflow/react';
 import type { DagNode } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
+export type LoopNodeConfig = NonNullable<DagNode['loop']>;
+export type ApprovalNodeConfig = NonNullable<DagNode['approval']>;
+
+export type DagNodeKind = 'command' | 'prompt' | 'bash' | 'script' | 'loop' | 'approval' | 'cancel';
+
 export interface DagNodeData extends DagNode {
-  /** For command nodes: the command name. For prompt nodes: display label ("Prompt"). For bash: display label ("Shell"). */
+  /** Display label: command name for `command`, "Prompt" / "Shell" / "Script" / "Loop" / "Approval" / "Cancel" for the rest. */
   label: string;
-  nodeType: 'command' | 'prompt' | 'bash';
+  nodeType: DagNodeKind;
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
+  scriptBody?: string;
+  scriptRuntime?: 'bun' | 'uv';
+  scriptDeps?: string[];
+  scriptTimeout?: number;
+  loopConfig?: LoopNodeConfig;
+  approvalConfig?: ApprovalNodeConfig;
+  cancelReason?: string;
   /** Required by React Flow's Node<T> constraint — do not rely on this for typed access. */
   [key: string]: unknown;
 }
 
 export type DagFlowNode = Node<DagNodeData>;
 
-const TYPE_CONFIG = {
+interface TypeConfigEntry {
+  badge: string;
+  stripeColor: string;
+  badgeBg: string;
+  badgeText: string;
+}
+
+const TYPE_CONFIG: Record<DagNodeKind, TypeConfigEntry> = {
   command: {
     badge: 'CMD',
     stripeColor: 'bg-node-command',
@@ -36,7 +55,35 @@ const TYPE_CONFIG = {
     badgeBg: 'bg-node-bash/20',
     badgeText: 'text-node-bash',
   },
-} as const;
+  // Reuse bash palette for script (both run code, no AI).
+  script: {
+    badge: 'SCRIPT',
+    stripeColor: 'bg-node-bash',
+    badgeBg: 'bg-node-bash/20',
+    badgeText: 'text-node-bash',
+  },
+  // Reuse prompt palette for loop (loop is an iterative AI prompt).
+  loop: {
+    badge: 'LOOP',
+    stripeColor: 'bg-node-prompt',
+    badgeBg: 'bg-node-prompt/20',
+    badgeText: 'text-node-prompt',
+  },
+  // Reuse command palette for approval (a deterministic gate).
+  approval: {
+    badge: 'APPROVE',
+    stripeColor: 'bg-node-command',
+    badgeBg: 'bg-node-command/20',
+    badgeText: 'text-node-command',
+  },
+  // Reuse bash palette for cancel (terminal control flow, no AI).
+  cancel: {
+    badge: 'CANCEL',
+    stripeColor: 'bg-node-bash',
+    badgeBg: 'bg-node-bash/20',
+    badgeText: 'text-node-bash',
+  },
+};
 
 function getContentPreview(data: DagNodeData): string {
   switch (data.nodeType) {
@@ -46,6 +93,14 @@ function getContentPreview(data: DagNodeData): string {
       return data.promptText?.split('\n')[0] ?? '';
     case 'bash':
       return data.bashScript?.split('\n')[0] ?? '';
+    case 'script':
+      return data.scriptBody?.split('\n')[0] ?? '';
+    case 'loop':
+      return data.loopConfig?.prompt?.split('\n')[0] ?? '';
+    case 'approval':
+      return data.approvalConfig?.message?.split('\n')[0] ?? '';
+    case 'cancel':
+      return data.cancelReason?.split('\n')[0] ?? '';
   }
 }
 
