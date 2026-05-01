@@ -65,6 +65,7 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { registerApiRoutes, sweepOrphanTestRunFiles } from './routes/api';
 import { registerSymphonyRoutes } from './routes/api.symphony';
 import { registerLinearRoutes } from './routes/api.linear';
+import { registerCompassRoutes } from './routes/api.compass';
 import {
   startSymphonyService,
   createProductionBridge,
@@ -525,6 +526,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Register Web UI API routes after symphony so /api/health can include its state
   registerApiRoutes(app, webAdapter, lockManager, activePlatforms, symphonyHandle ?? undefined);
+
+  // Compass: visual canvas for "what to build next" — routes are namespaced
+  // under /api/compass/* and operate on registered codebases.
+  registerCompassRoutes(app, webAdapter, lockManager);
 
   // Boot-time sweep of orphaned `_testrun_*` workflow scratch files.
   void sweepOrphanTestRunFiles();
