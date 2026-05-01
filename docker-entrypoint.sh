@@ -13,13 +13,13 @@ if [ "$(id -u)" = "0" ]; then
     echo "ERROR: Failed to fix ownership of /.archon — volume may be read-only or mounted with incompatible options" >&2
     exit 1
   fi
-  # If a volume or bind mount provided /home/appuser/.claude, fix its ownership too
-  # so Claude Code can read/write skills, prompts, OAuth state. No mount = no-op.
-  if [ -d /home/appuser/.claude ]; then
-    if ! chown -Rh appuser:appuser /home/appuser/.claude 2>/dev/null; then
-      echo "ERROR: Failed to fix ownership of /home/appuser/.claude — volume may be read-only" >&2
-      exit 1
-    fi
+  # /home/appuser is persisted to a named volume (or bind-mounted via
+  # ARCHON_USER_HOME) so Claude/Codex/Pi config, ~/.gitconfig, shell history,
+  # and other user-specific state survive rebuilds. On bind mounts, host UIDs
+  # don't map to appuser (1001), so fix ownership the same way we do /.archon.
+  if ! chown -Rh appuser:appuser /home/appuser 2>/dev/null; then
+    echo "ERROR: Failed to fix ownership of /home/appuser — volume may be read-only or mounted with incompatible options" >&2
+    exit 1
   fi
   RUNNER="gosu appuser"
 else
