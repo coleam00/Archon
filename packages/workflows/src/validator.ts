@@ -279,7 +279,8 @@ export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boo
   const cached = runtimeCache.get(runtime);
   if (cached !== undefined) return cached;
   try {
-    await execFileAsync('which', [runtime]);
+    const locator = process.platform === 'win32' ? 'where.exe' : 'which';
+    await execFileAsync(locator, [runtime]);
     runtimeCache.set(runtime, true);
     return true;
   } catch {
