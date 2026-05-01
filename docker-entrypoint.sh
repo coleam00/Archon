@@ -44,8 +44,14 @@ fi
 # The Dockerfile RUN-layer registers fixed paths, but that gitconfig lives
 # in the image layer — bind mounts don't inherit it on restart, and
 # worktrees are nested at arbitrary depths unknown at build time.
+# With /home/appuser now persisted, ~/.gitconfig survives across restarts —
+# so we must check before --add or duplicate safe.directory lines accumulate
+# every boot.
 find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
-  $RUNNER git config --global --add safe.directory "$(dirname "$git_dir")"
+  repo_dir="$(dirname "$git_dir")"
+  if ! $RUNNER git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$repo_dir"; then
+    $RUNNER git config --global --add safe.directory "$repo_dir"
+  fi
 done
 
 # Configure git to use GH_TOKEN for HTTPS clones via credential helper

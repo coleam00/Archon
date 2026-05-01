@@ -493,6 +493,10 @@ sudo chown -R 1001:1001 /opt/archon-user-home
 
 The entrypoint re-applies ownership on every container start, so subsequent rebuilds work without re-running `chown`.
 
+:::caution
+Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
+:::
+
 If `ARCHON_USER_HOME` is not set, Docker manages the volume automatically (`archon_user_home`) — config persists across restarts and rebuilds but lives inside Docker's storage. To wipe it: `docker compose down && docker volume rm archon_archon_user_home`.
 
 ### GitHub CLI Authentication
