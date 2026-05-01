@@ -401,6 +401,7 @@ assistants:
     interactive: true
     enableMCP: false
     enableLsp: true
+    # Optional hard-disable; omit this key to keep OMP's discovery default.
     disableExtensionDiscovery: true
     additionalExtensionPaths:
       - /opt/omp/extensions/acme

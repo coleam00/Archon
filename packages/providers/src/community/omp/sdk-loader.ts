@@ -53,7 +53,7 @@ export interface OmpCreateAgentSessionOptions {
   skills: unknown[];
   enableMCP: boolean;
   enableLsp: boolean;
-  disableExtensionDiscovery: boolean;
+  disableExtensionDiscovery?: boolean;
   additionalExtensionPaths?: string[];
   thinkingLevel?: string;
   systemPrompt?: string;

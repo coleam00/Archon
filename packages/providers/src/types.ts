@@ -121,7 +121,7 @@ export interface OmpProviderDefaults {
   enableMCP?: boolean;
   /** Enable OMP LSP-backed tools and warmup. */
   enableLsp?: boolean;
-  /** Disable OMP extension discovery while still allowing explicit paths. */
+  /** Disable OMP extension discovery while still allowing explicit paths when set true. */
   disableExtensionDiscovery?: boolean;
   /** Additional OMP extension entrypoints/directories to load. */
   additionalExtensionPaths?: string[];
