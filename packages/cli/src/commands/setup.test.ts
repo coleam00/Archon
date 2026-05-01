@@ -10,13 +10,13 @@ import {
   generateEnvContent,
   generateWebhookSecret,
   spawnTerminalWithSetup,
-  copyArchonSkill,
   detectClaudeExecutablePath,
   writeScopedEnv,
   serializeEnv,
   resolveScopedEnvPath,
 } from './setup';
 import * as setupModule from './setup';
+import { copyArchonSkill } from './skill';
 import { parse as parseDotenv } from 'dotenv';
 
 // Test directory for file operations
