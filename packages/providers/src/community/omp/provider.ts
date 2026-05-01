@@ -150,7 +150,7 @@ function buildSessionOptions(args: {
   skills: unknown[];
   enableMCP: boolean;
   enableLsp: boolean;
-  disableExtensionDiscovery: boolean;
+  disableExtensionDiscovery?: boolean;
   additionalExtensionPaths?: string[];
   thinkingLevel?: string;
   systemPrompt?: string;
@@ -168,7 +168,9 @@ function buildSessionOptions(args: {
     skills: args.skills,
     enableMCP: args.enableMCP,
     enableLsp: args.enableLsp,
-    disableExtensionDiscovery: args.disableExtensionDiscovery,
+    ...(args.disableExtensionDiscovery !== undefined
+      ? { disableExtensionDiscovery: args.disableExtensionDiscovery }
+      : {}),
     ...(args.additionalExtensionPaths
       ? { additionalExtensionPaths: args.additionalExtensionPaths }
       : {}),
@@ -289,7 +291,7 @@ export class OmpProvider implements IAgentProvider {
     const settingsOverrides = buildOmpSettingsOverrides(ompConfig);
     const settings = sdk.Settings.isolated(settingsOverrides);
     const interactive = ompConfig.interactive !== false;
-    const extensionsDisabled = ompConfig.disableExtensionDiscovery !== false;
+    const extensionsDisabled = ompConfig.disableExtensionDiscovery === true;
     const uiBridge = interactive ? createArchonOmpUIBridge() : undefined;
 
     const sessionOptions = buildSessionOptions({
@@ -303,7 +305,7 @@ export class OmpProvider implements IAgentProvider {
       skills,
       enableMCP: ompConfig.enableMCP === true,
       enableLsp: ompConfig.enableLsp !== false,
-      disableExtensionDiscovery: extensionsDisabled,
+      disableExtensionDiscovery: ompConfig.disableExtensionDiscovery,
       additionalExtensionPaths: ompConfig.additionalExtensionPaths,
       thinkingLevel,
       systemPrompt,
@@ -311,7 +313,7 @@ export class OmpProvider implements IAgentProvider {
       hasUI: interactive,
     });
 
-    const releaseConfigEnvLock = ompConfig.env ? await acquireConfigEnvLock() : undefined;
+    const releaseConfigEnvLock = await acquireConfigEnvLock();
     configEnvKeysApplied = applyConfigEnv(ompConfig.env);
     if (configEnvKeysApplied.length > 0) {
       getLog().debug({ keys: configEnvKeysApplied }, 'omp.config_env_applied');

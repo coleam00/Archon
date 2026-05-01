@@ -269,10 +269,12 @@ describe('OmpProvider', () => {
 
     try {
       await firstPromptEntered;
+      let secondPromptStarted = false;
       let secondPromptValue: string | undefined;
       const providerTwo = new OmpProvider(async () =>
         makeSdk({
           onPrompt() {
+            secondPromptStarted = true;
             secondPromptValue = process.env.OMP_PROVIDER_TEST_SHARED;
           },
         })
@@ -280,15 +282,15 @@ describe('OmpProvider', () => {
 
       const secondRun = collectChunks(providerTwo, {
         model: 'anthropic/claude-sonnet-4-5',
-        assistantConfig: { env: { OMP_PROVIDER_TEST_SHARED: 'second' } },
       });
       await Promise.resolve();
-      expect(secondPromptValue).toBeUndefined();
+      expect(secondPromptStarted).toBe(false);
 
       releaseFirst?.();
       await Promise.all([firstRun, secondRun]);
 
-      expect(secondPromptValue).toBe('second');
+      expect(secondPromptStarted).toBe(true);
+      expect(secondPromptValue).toBeUndefined();
       expect(process.env.OMP_PROVIDER_TEST_SHARED).toBeUndefined();
     } finally {
       releaseFirst?.();
@@ -315,6 +317,39 @@ describe('OmpProvider', () => {
 
     expect(sessionOptions?.hasUI).toBe(true);
     expect(boundHasUi).toBe(true);
+  });
+
+  test('preserves OMP SDK discovery default when config omits disableExtensionDiscovery', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, { model: 'anthropic/claude-sonnet-4-5' });
+
+    expect(sessionOptions?.disableExtensionDiscovery).toBeUndefined();
+  });
+
+  test('passes explicit extension discovery disable flag when configured', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { disableExtensionDiscovery: true },
+    });
+
+    expect(sessionOptions?.disableExtensionDiscovery).toBe(true);
   });
 
   test('passes hasUI false and skips UI binding when interactive is false', async () => {
