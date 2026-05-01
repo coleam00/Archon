@@ -387,9 +387,11 @@ describe('DAG Loader -- cycle detection', () => {
   beforeEach(async () => {
     testDir = join(tmpdir(), `dag-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
+    process.env.ARCHON_HOME = testDir;
   });
 
   afterEach(async () => {
+    delete process.env.ARCHON_HOME;
     try {
       await rm(testDir, { recursive: true, force: true });
     } catch {

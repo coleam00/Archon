@@ -1,276 +1,198 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
-import { useNavigate } from 'react-router';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Search, X } from 'lucide-react';
-import { listWorkflows, createConversation, runWorkflow, deleteConversation } from '@/lib/api';
+import { Plus, Search, X } from 'lucide-react';
+import { listWorkflows } from '@/lib/api';
+import type { WorkflowListEntry, WorkflowSource } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { useProject } from '@/contexts/ProjectContext';
-import { WorkflowCard } from '@/components/workflows/WorkflowCard';
-import {
-  getWorkflowCategory,
-  getWorkflowDisplayName,
-  CATEGORIES,
-  type WorkflowCategory,
-} from '@/lib/workflow-metadata';
+import { cn } from '@/lib/utils';
+import { WorkflowRow } from './WorkflowRow';
 
-export function WorkflowList(): React.ReactElement {
-  const navigate = useNavigate();
-  const [selectedWorkflow, setSelectedWorkflow] = useState<string | null>(null);
-  const [runMessage, setRunMessage] = useState('');
-  const [running, setRunning] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState<WorkflowCategory>('All');
-  const { codebases, selectedProjectId } = useProject();
-  const [localProjectId, setLocalProjectId] = useState<string | null>(selectedProjectId);
-  const messageInputRef = useRef<HTMLInputElement>(null);
+type SourceFilter = 'all' | WorkflowSource;
 
-  useEffect(() => {
-    setLocalProjectId(selectedProjectId);
-  }, [selectedProjectId]);
+interface WorkflowListProps {
+  cwd: string | undefined;
+  selectedName: string | null;
+  selectedSource: WorkflowSource | null;
+  onSelect: (entry: WorkflowListEntry) => void;
+  onNew: () => void;
+}
 
-  // Focus message input when a workflow is selected
-  useEffect(() => {
-    if (selectedWorkflow) {
-      requestAnimationFrame(() => {
-        messageInputRef.current?.focus();
-      });
-    }
-  }, [selectedWorkflow]);
+export function WorkflowList({
+  cwd,
+  selectedName,
+  selectedSource,
+  onSelect,
+  onNew,
+}: WorkflowListProps): React.ReactElement {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<SourceFilter>('all');
 
-  // Reset selection when filters change so stale run panel state doesn't persist
-  useEffect(() => {
-    setSelectedWorkflow(null);
-    setRunMessage('');
-    setRunError(null);
-  }, [searchQuery, activeCategory]);
-
-  const handleRun = async (workflowName: string): Promise<void> => {
-    if (!runMessage.trim() || running) return;
-    setRunning(true);
-    setRunError(null);
-    let conversationId: string | undefined;
-    let workflowStarted = false;
-    try {
-      ({ conversationId } = await createConversation(localProjectId ?? undefined));
-      await runWorkflow(workflowName, conversationId, runMessage.trim());
-      workflowStarted = true;
-      setRunMessage('');
-      setSelectedWorkflow(null);
-      navigate(`/chat/${conversationId}`);
-    } catch (error) {
-      console.error('[Workflows] Failed to run workflow', { error });
-      setRunError(
-        error instanceof Error
-          ? `Failed to start workflow: ${error.message}`
-          : 'Failed to start workflow. Check server connectivity.'
-      );
-      if (conversationId !== undefined && !workflowStarted) {
-        void deleteConversation(conversationId).catch((cleanupErr: unknown) => {
-          console.warn('[Workflows] Failed to clean up orphan conversation', {
-            conversationId,
-            error: cleanupErr,
-          });
-        });
-      }
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  const selectedCwd = localProjectId
-    ? codebases?.find(cb => cb.id === localProjectId)?.default_cwd
-    : undefined;
-
-  const {
-    data: workflows,
-    isLoading: loadingWorkflows,
-    isError: workflowsError,
-  } = useQuery({
-    queryKey: ['workflows', selectedCwd ?? null],
-    queryFn: () => listWorkflows(selectedCwd),
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['workflows', cwd ?? null],
+    queryFn: () => listWorkflows(cwd),
+    refetchOnWindowFocus: false,
   });
 
-  // Filter workflows by search query and category
-  const filteredWorkflows = useMemo(() => {
-    if (!workflows) return [];
-    return workflows
-      .map(entry => entry.workflow)
-      .filter(wf => {
-        // Search filter
-        if (searchQuery) {
-          const query = searchQuery.toLowerCase();
-          const matchesName = wf.name.toLowerCase().includes(query);
-          const matchesDesc = wf.description?.toLowerCase().includes(query) ?? false;
-          if (!matchesName && !matchesDesc) return false;
-        }
-        // Category filter
-        if (activeCategory !== 'All') {
-          const cat = getWorkflowCategory(wf.name, wf.description ?? '');
-          if (cat !== activeCategory) return false;
-        }
-        return true;
-      });
-  }, [workflows, searchQuery, activeCategory]);
+  const all: WorkflowListEntry[] = data ?? [];
 
-  if (loadingWorkflows) {
-    return (
-      <div className="flex items-center justify-center h-32 text-text-secondary text-sm">
-        Loading workflows...
-      </div>
-    );
-  }
+  const counts = useMemo(() => {
+    const c = { all: all.length, bundled: 0, global: 0, project: 0 };
+    for (const e of all) {
+      if (e.source === 'bundled') c.bundled += 1;
+      else if (e.source === 'global') c.global += 1;
+      else if (e.source === 'project') c.project += 1;
+    }
+    return c;
+  }, [all]);
 
-  if (workflowsError) {
-    return (
-      <div className="text-sm text-error">Failed to load workflows. Check server connectivity.</div>
-    );
-  }
-
-  const hasWorkflows = workflows != null && workflows.length > 0;
-  const displayName = selectedWorkflow ? getWorkflowDisplayName(selectedWorkflow) : '';
+  const filtered = useMemo(() => {
+    let list = all;
+    if (filter !== 'all') list = list.filter(e => e.source === filter);
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      list = list.filter(
+        e =>
+          e.workflow.name.toLowerCase().includes(q) ||
+          e.workflow.description.toLowerCase().includes(q)
+      );
+    }
+    return [...list].sort((a, b) => a.workflow.name.localeCompare(b.workflow.name));
+  }, [all, filter, query]);
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-auto space-y-4 p-0">
-        {/* Search + Category Filters — only show when workflows exist */}
-        {hasWorkflows && (
-          <div className="space-y-3">
-            {/* Search bar */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-text-tertiary" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e): void => {
-                  setSearchQuery(e.target.value);
-                }}
-                placeholder="Search workflows..."
-                className="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-surface text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:ring-1 focus:ring-accent"
-              />
+    <div className="flex h-full w-[380px] shrink-0 flex-col border-r border-bridges-border-subtle bg-bridges-surface">
+      <div className="flex flex-col gap-2.5 border-b border-bridges-border-subtle px-4 pt-3.5 pb-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-[16px] font-semibold leading-tight text-bridges-fg1">
+              Workflows
             </div>
-
-            {/* Category filter tabs */}
-            <div className="flex items-center gap-2 flex-wrap">
-              {CATEGORIES.map(cat => (
-                <button
-                  key={cat}
-                  onClick={(): void => {
-                    setActiveCategory(cat);
-                  }}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                    activeCategory === cat
-                      ? 'bg-primary text-white'
-                      : 'bg-surface-elevated text-text-secondary hover:text-text-primary'
-                  }`}
-                >
-                  {cat}
-                </button>
-              ))}
+            <div className="text-[12px] text-bridges-fg3">
+              {filtered.length} of {all.length}
             </div>
           </div>
-        )}
+          <Button size="sm" onClick={onNew} className="h-8 gap-1.5 px-3 text-[12.5px]">
+            <Plus className="h-3.5 w-3.5" />
+            New workflow
+          </Button>
+        </div>
 
-        {/* Workflow grid */}
-        {!hasWorkflows ? (
-          <div className="text-sm text-text-secondary">
-            No workflows found. Add workflow definitions to{' '}
-            <code className="text-xs bg-surface-inset px-1 py-0.5 rounded">.archon/workflows/</code>
-          </div>
-        ) : filteredWorkflows.length === 0 ? (
-          <div className="text-sm text-text-secondary py-8 text-center">
-            No workflows match your search.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filteredWorkflows.map(wf => (
-              <WorkflowCard
-                key={wf.name}
-                workflow={wf}
-                isSelected={selectedWorkflow === wf.name}
-                onToggle={(name): void => {
-                  setSelectedWorkflow(selectedWorkflow === name ? null : name);
-                  setRunMessage('');
-                  setRunError(null);
-                }}
-                onRun={(name): void => {
-                  setSelectedWorkflow(name);
-                  setRunMessage('');
-                  setRunError(null);
-                }}
-              />
-            ))}
-          </div>
-        )}
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-bridges-fg3" />
+          <input
+            type="text"
+            value={query}
+            onChange={e => {
+              setQuery(e.target.value);
+            }}
+            placeholder="Search workflows"
+            className="w-full rounded-md border border-bridges-border bg-bridges-surface py-1.5 pl-8 pr-7 text-[13px] text-bridges-fg1 placeholder:text-bridges-fg-placeholder focus:border-bridges-border-strong focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => {
+                setQuery('');
+              }}
+              className="absolute right-2 top-1/2 inline-flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded text-bridges-fg3 hover:bg-bridges-surface-muted"
+              aria-label="Clear search"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          <FilterChip
+            label="All"
+            count={counts.all}
+            active={filter === 'all'}
+            onClick={() => {
+              setFilter('all');
+            }}
+          />
+          <FilterChip
+            label="Project"
+            count={counts.project}
+            active={filter === 'project'}
+            onClick={() => {
+              setFilter('project');
+            }}
+          />
+          <FilterChip
+            label="Global"
+            count={counts.global}
+            active={filter === 'global'}
+            onClick={() => {
+              setFilter('global');
+            }}
+          />
+          <FilterChip
+            label="Bundled"
+            count={counts.bundled}
+            active={filter === 'bundled'}
+            onClick={() => {
+              setFilter('bundled');
+            }}
+          />
+        </div>
       </div>
 
-      {/* Sticky run bar — anchored at bottom, slides up with glow when workflow selected */}
-      {selectedWorkflow && (
-        <div className="shrink-0 border-t border-accent/40 bg-surface-elevated px-4 py-3 animate-slide-up shadow-[0_-4px_20px_rgba(59,130,246,0.15)]">
-          <div className="flex items-center gap-3">
-            {/* Workflow name + dismiss */}
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-sm font-medium text-text-primary">{displayName}</span>
-              <button
-                onClick={(): void => {
-                  setSelectedWorkflow(null);
-                  setRunMessage('');
-                  setRunError(null);
-                }}
-                className="p-0.5 rounded text-text-tertiary hover:text-text-primary transition-colors"
-                title="Dismiss"
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-
-            {/* Project picker */}
-            <select
-              value={localProjectId ?? ''}
-              onChange={(e): void => {
-                setLocalProjectId(e.target.value || null);
-              }}
-              className="w-48 shrink-0 rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
-            >
-              <option value="">No project</option>
-              {codebases?.map(cb => (
-                <option key={cb.id} value={cb.id}>
-                  {cb.name}
-                </option>
-              ))}
-            </select>
-
-            {/* Message input + Run button */}
-            <input
-              ref={messageInputRef}
-              type="text"
-              value={runMessage}
-              onChange={(e): void => {
-                setRunMessage(e.target.value);
-              }}
-              placeholder="Enter a message for this workflow..."
-              className="flex-1 min-w-0 px-3 py-1.5 rounded-md border border-border bg-surface text-sm text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
-              onKeyDown={(e): void => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleRun(selectedWorkflow);
-                }
-              }}
-              disabled={running}
-            />
-            <Button
-              size="sm"
-              onClick={(): void => {
-                void handleRun(selectedWorkflow);
-              }}
-              disabled={running || !runMessage.trim()}
-            >
-              {running ? 'Starting...' : 'Run'}
-            </Button>
+      <div className="flex-1 overflow-y-auto">
+        {isLoading && (
+          <div className="px-6 py-10 text-center text-[13px] text-bridges-fg3">
+            Loading workflows…
           </div>
-          {runError && <p className="text-xs text-error mt-1">{runError}</p>}
-        </div>
-      )}
+        )}
+        {isError && (
+          <div className="px-6 py-10 text-center text-[13px] text-bridges-tint-danger-fg">
+            Failed to load workflows: {(error as Error | undefined)?.message}
+          </div>
+        )}
+        {!isLoading && !isError && filtered.length === 0 && (
+          <div className="px-6 py-10 text-center text-[13px] text-bridges-fg3">
+            No workflows match your filters.
+          </div>
+        )}
+        {filtered.map(e => (
+          <WorkflowRow
+            key={`${e.source}:${e.workflow.name}`}
+            entry={e}
+            selected={selectedName === e.workflow.name && selectedSource === e.source}
+            onSelect={() => {
+              onSelect(e);
+            }}
+          />
+        ))}
+      </div>
     </div>
+  );
+}
+
+function FilterChip({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] font-medium leading-none transition-colors',
+        active
+          ? 'border-bridges-action bg-bridges-action text-white'
+          : 'border-bridges-border bg-bridges-surface text-bridges-fg2 hover:border-bridges-border-strong'
+      )}
+    >
+      {label}
+      <span className="font-mono opacity-70">{count}</span>
+    </button>
   );
 }

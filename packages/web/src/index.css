@@ -338,6 +338,12 @@
   }
 }
 
+/* Dot-grid canvas background — matches the design reference */
+.dot-grid {
+  background-image: radial-gradient(circle, #dcdce0 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
 /* Base body styling */
 body {
   background-color: var(--background);

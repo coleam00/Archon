@@ -44,9 +44,13 @@ describe('Workflow Loader', () => {
     // Create unique temp directory for each test
     testDir = join(tmpdir(), `workflow-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
+    // Redirect ARCHON_HOME so home-scoped workflows in ~/.archon/workflows/ are not
+    // discovered alongside test fixtures — testDir has no workflows/ subdir, triggering ENOENT.
+    process.env.ARCHON_HOME = testDir;
   });
 
   afterEach(async () => {
+    delete process.env.ARCHON_HOME;
     // Clean up temp directory
     try {
       await rm(testDir, { recursive: true, force: true });
