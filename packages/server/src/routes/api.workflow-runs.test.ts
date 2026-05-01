@@ -1061,6 +1061,8 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('ready to resume');
+    // Surface the exact CLI command so the web-UI user isn't left guessing.
+    expect(body.message).toContain('archon workflow resume run-uuid-4');
   });
 });
 
@@ -1326,7 +1328,10 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
-    expect(body.message).toContain('On-reject prompt');
+    // MOCK_PAUSED_RUN has parent_conversation_id: null, so this run takes the
+    // CLI-hint branch — the message names the explicit resume command.
+    expect(body.message).toContain('on-reject prompt');
+    expect(body.message).toContain('archon workflow resume run-on-reject');
     expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-on-reject', {
       status: 'failed',
       metadata: { rejection_reason: 'needs more tests', rejection_count: 1 },
@@ -1415,7 +1420,7 @@ describe('approve/reject auto-resume', () => {
     expect(dispatchedMessage).toBe('/workflow run deploy Deploy feature X');
   });
 
-  test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
+  test('approve: skips dispatch and surfaces CLI hint when parent_conversation_id is null (CLI-dispatched run)', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: null,
@@ -1430,12 +1435,14 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    expect(body.message).toContain('Send a message to continue');
+    // CLI-originated runs get a direct CLI command — no parent thread to send a message to.
+    expect(body.message).toContain('archon workflow resume run-paused-1');
+    expect(body.message).not.toContain('originating thread');
     expect(mockHandleMessage).not.toHaveBeenCalled();
     expect(mockGetConversationById).not.toHaveBeenCalled();
   });
 
-  test('approve: skips dispatch when parent conversation no longer exists', async () => {
+  test('approve: skips dispatch and surfaces CLI hint when parent conversation no longer exists', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: 'deleted-conv-uuid',
@@ -1451,11 +1458,12 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    expect(body.message).toContain('Send a message to continue');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
+    expect(body.message).toContain('no longer available');
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
-  test('approve: skips dispatch when parent conversation is on a non-web platform', async () => {
+  test('approve: skips dispatch and surfaces both options when parent is a non-web platform', async () => {
     // A Slack/Telegram/GitHub-sourced run being approved via the dashboard
     // must not route through dispatchToOrchestrator — that helper is wired
     // to the web adapter + lock manager, so dispatching a Slack thread_ts
@@ -1479,8 +1487,38 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    // Same fallback text as no-parent case — user re-runs from the originating platform.
-    expect(body.message).toContain('Send a message to continue');
+    // Chat-platform parents get both routes — re-run on origin or use the CLI.
+    expect(body.message).toContain('originating thread');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('approve: surfaces dispatch-failed hint when an unexpected error occurs in the resume path', async () => {
+    // The catch branch inside tryAutoResumeAfterGate is the safety net for
+    // any throw on the resume path — DB lookups, the dispatch call, or any
+    // future addition. Trigger it via a parent-conversation lookup throw,
+    // which is the most reproducible path in tests.
+    // (handleMessage throws are swallowed inside dispatchToOrchestrator's
+    // own try/catch, so they never reach this branch.)
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      parent_conversation_id: 'web-parent-uuid',
+    });
+    mockGetConversationById.mockImplementationOnce(async () => {
+      throw new Error('database connection lost');
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
+      method: 'POST',
+      body: JSON.stringify({ comment: 'LGTM' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Auto-resume dispatch failed');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
@@ -1544,5 +1582,108 @@ describe('approve/reject auto-resume', () => {
     // Cancellation path doesn't auto-resume — nothing to resume to.
     expect(mockHandleMessage).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-paused-1');
+  });
+
+  // ---------------------------------------------------------------------
+  // The four non-resumed branches on reject. Mirror the approve tests but
+  // for the on_reject path — the user-visible message must name the next
+  // step concretely (`archon workflow resume <id>`), not vague "will run
+  // on resume" text. Regression coverage for #1522.
+  // ---------------------------------------------------------------------
+
+  function pausedRunWithOnReject(parentConversationId: string | null): MockWorkflowRun {
+    return {
+      ...MOCK_PAUSED_RUN,
+      parent_conversation_id: parentConversationId,
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review-gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    };
+  }
+
+  test('reject: skips dispatch and surfaces CLI hint when parent_conversation_id is null', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(pausedRunWithOnReject(null));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'tests missing' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('archon workflow resume run-paused-1');
+    expect(body.message).toContain('apply the on-reject prompt');
+    expect(body.message).not.toContain('originating thread');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('reject: surfaces both options when parent is a non-web platform', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(pausedRunWithOnReject('telegram-parent-uuid'));
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'telegram-parent-uuid',
+      platform_conversation_id: '12345',
+      platform_type: 'telegram',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'tests missing' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('originating thread');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('reject: surfaces "no longer available" hint when parent conversation is deleted', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(pausedRunWithOnReject('deleted-parent-uuid'));
+    mockGetConversationById.mockResolvedValueOnce(null);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'tests missing' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('no longer available');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('reject: surfaces dispatch-failed hint when an unexpected error occurs in the resume path', async () => {
+    // Mirror of the approve test — exercise the catch via a DB throw.
+    mockGetWorkflowRun.mockResolvedValueOnce(pausedRunWithOnReject('web-parent-uuid'));
+    mockGetConversationById.mockImplementationOnce(async () => {
+      throw new Error('database connection lost');
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'tests missing' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Auto-resume dispatch failed');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 });
