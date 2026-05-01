@@ -14,3 +14,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.user
+    # Persist Claude Code config (skills, prompts, OAuth state) across container recreations.
+    # Without this, anything you put in ~/.claude/ inside the container is wiped on
+    # `docker compose up --build` or image pull.
+    # Uncomment the volume below AND the named volume at the bottom of this file.
+    # volumes:
+    #   - claude_home:/home/appuser/.claude
+
+# volumes:
+#   claude_home:

@@ -452,6 +452,10 @@ By default this is a Docker-managed volume. To store data at a specific location
 ARCHON_DATA=/opt/archon-data
 ```
 
+:::note
+`ARCHON_HOME` from `.env.example` is **ignored inside Docker** — the container always uses `/.archon`. Use `ARCHON_DATA` (host-side bind-mount source) to control *where on the host* `/.archon` lives. Both variables leak into the container env via `env_file: .env`, which is harmless but expected.
+:::
+
 The directory is created automatically. Make sure the path is writable by UID 1001 (the container user):
 
 ```bash
@@ -460,6 +464,32 @@ sudo chown -R 1001:1001 /opt/archon-data
 ```
 
 If `ARCHON_DATA` is not set, Docker manages the volume automatically (`archon_data`) — data persists across restarts and rebuilds but lives inside Docker's storage.
+
+### Persisting Claude Code config
+
+The image runs as `appuser` with `$HOME=/home/appuser`. Claude Code (and any agents the SDK launches) reads runtime config from `~/.claude/` — skills, prompts, OAuth tokens, etc. Nothing in the base compose mounts that path, so anything you write there is wiped on `docker compose up --build` or image pull.
+
+To persist `~/.claude/` across rebuilds, copy the example override file and uncomment the `claude_home` volume:
+
+```bash
+cp docker-compose.override.example.yml docker-compose.override.yml
+# then edit docker-compose.override.yml — uncomment the `volumes:` block under `app`
+# and the top-level `volumes: { claude_home: }` named volume.
+docker compose up -d
+```
+
+`docker-compose.override.yml` is gitignored, so the customization stays local. `docker compose` automatically merges it with the base file — no extra flags.
+
+If you prefer a host bind mount instead of a named volume, replace `claude_home` with an absolute path and chown it to UID 1001 first:
+
+```bash
+mkdir -p /opt/archon-claude
+sudo chown -R 1001:1001 /opt/archon-claude
+# then in docker-compose.override.yml:
+#   - /opt/archon-claude:/home/appuser/.claude
+```
+
+The entrypoint will fix ownership of bind-mounted Claude config on container start, just like it does for `/.archon`.
 
 ### GitHub CLI Authentication
 

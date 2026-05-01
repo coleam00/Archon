@@ -223,7 +223,7 @@ Environment variables override all other configuration. They are organized by ca
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `ARCHON_HOME` | Base directory for all Archon-managed files | `~/.archon` |
+| `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
@@ -323,7 +323,7 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `ARCHON_DATA` | Host path for Archon data (workspaces, worktrees, artifacts) | Docker-managed volume |
+| `ARCHON_DATA` | Host path for Archon data (workspaces, worktrees, artifacts). Compose-only — read by `docker-compose.yml` to choose the bind-mount source for `/.archon`; not read by Archon source code. | Docker-managed volume |
 | `DOMAIN` | Public domain for Caddy reverse proxy (TLS auto-provisioned) | -- |
 | `CADDY_BASIC_AUTH` | Caddy basicauth directive to protect Web UI and API | Disabled |
 | `AUTH_USERNAME` | Username for form-based auth (Caddy forward_auth) | -- |

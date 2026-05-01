@@ -13,10 +13,28 @@ if [ "$(id -u)" = "0" ]; then
     echo "ERROR: Failed to fix ownership of /.archon — volume may be read-only or mounted with incompatible options" >&2
     exit 1
   fi
+  # If a volume or bind mount provided /home/appuser/.claude, fix its ownership too
+  # so Claude Code can read/write skills, prompts, OAuth state. No mount = no-op.
+  if [ -d /home/appuser/.claude ]; then
+    if ! chown -Rh appuser:appuser /home/appuser/.claude 2>/dev/null; then
+      echo "ERROR: Failed to fix ownership of /home/appuser/.claude — volume may be read-only" >&2
+      exit 1
+    fi
+  fi
   RUNNER="gosu appuser"
 else
   # Already running as non-root (e.g., --user flag or Kubernetes)
   RUNNER=""
+fi
+
+# Warn if vars known to be ignored inside the container were set via env_file: .env.
+# These leak in but have no effect (ARCHON_HOME is overridden to /.archon by source;
+# ARCHON_DATA is a host-side compose substitution token, never read by the container).
+if [ -n "${ARCHON_HOME:-}" ]; then
+  echo "[archon] ARCHON_HOME=${ARCHON_HOME} ignored in Docker (container home is fixed at /.archon)" >&2
+fi
+if [ -n "${ARCHON_DATA:-}" ]; then
+  echo "[archon] ARCHON_DATA=${ARCHON_DATA} is a host-side compose token; not read inside the container" >&2
 fi
 
 # Register all git repositories under /.archon as safe directories.
