@@ -59,8 +59,11 @@ function looksLikePath(s: string): boolean {
  */
 export function resolveCopilotBinaryPath(configBinaryPath?: string): string {
   // 1. Environment variable override
-  const envPath = process.env.COPILOT_BIN_PATH;
-  if (envPath) {
+  const envPath = process.env.COPILOT_BIN_PATH?.trim();
+  if (process.env.COPILOT_BIN_PATH !== undefined) {
+    if (!envPath) {
+      throw new Error('COPILOT_BIN_PATH is set but empty.');
+    }
     if (looksLikePath(envPath) && !fileExists(envPath)) {
       throw new Error(
         `COPILOT_BIN_PATH is set to "${envPath}" but the file does not exist.\n` +
@@ -72,15 +75,22 @@ export function resolveCopilotBinaryPath(configBinaryPath?: string): string {
   }
 
   // 2. Config file override
-  if (configBinaryPath) {
-    if (looksLikePath(configBinaryPath) && !fileExists(configBinaryPath)) {
+  const trimmedConfigBinaryPath = configBinaryPath?.trim();
+  if (configBinaryPath !== undefined) {
+    if (!trimmedConfigBinaryPath) {
+      throw new Error('assistants.copilot.copilotBinaryPath must not be empty.');
+    }
+    if (looksLikePath(trimmedConfigBinaryPath) && !fileExists(trimmedConfigBinaryPath)) {
       throw new Error(
-        `assistants.copilot.copilotBinaryPath is set to "${configBinaryPath}" but the file does not exist.\n` +
+        `assistants.copilot.copilotBinaryPath is set to "${trimmedConfigBinaryPath}" but the file does not exist.\n` +
           'Please verify the path in .archon/config.yaml points to the GitHub Copilot CLI binary.'
       );
     }
-    getLog().info({ binaryPath: configBinaryPath, source: 'config' }, 'copilot.binary_resolved');
-    return configBinaryPath;
+    getLog().info(
+      { binaryPath: trimmedConfigBinaryPath, source: 'config' },
+      'copilot.binary_resolved'
+    );
+    return trimmedConfigBinaryPath;
   }
 
   // 3. PATH default — rely on OS PATH lookup at spawn time

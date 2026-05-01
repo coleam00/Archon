@@ -43,6 +43,25 @@ async function collect<T>(gen: AsyncGenerator<T>): Promise<T[]> {
   return result;
 }
 
+function requireDefined<T>(value: T | undefined, message: string): T {
+  if (value === undefined) {
+    throw new Error(message);
+  }
+  return value;
+}
+
+type ResultChunk = {
+  type: 'result';
+  isError?: boolean;
+  errorSubtype?: string;
+  errors?: string[];
+};
+
+type SystemChunk = {
+  type: 'system';
+  content: string;
+};
+
 async function createProvider(): Promise<import('./provider').CopilotProvider> {
   const { CopilotProvider } = await import('./provider');
   return new CopilotProvider();
@@ -377,9 +396,23 @@ describe('resolveCopilotBinaryPath', () => {
     expect(result).toBe('copilot');
   });
 
+  test('COPILOT_BIN_PATH is trimmed and rejects blank values', () => {
+    process.env.COPILOT_BIN_PATH = '  copilot  ';
+    expect(resolveCopilotBinaryPath(undefined)).toBe('copilot');
+
+    process.env.COPILOT_BIN_PATH = '   ';
+    expect(() => resolveCopilotBinaryPath(undefined)).toThrow('COPILOT_BIN_PATH is set but empty');
+  });
+
   test('COPILOT_BIN_PATH absolute path that does not exist throws', () => {
     process.env.COPILOT_BIN_PATH = '/nonexistent/path/to/copilot';
     expect(() => resolveCopilotBinaryPath(undefined)).toThrow('COPILOT_BIN_PATH');
+  });
+
+  test('config binary path is trimmed and rejects blank values', () => {
+    delete process.env.COPILOT_BIN_PATH;
+    expect(resolveCopilotBinaryPath('  copilot  ')).toBe('copilot');
+    expect(() => resolveCopilotBinaryPath('   ')).toThrow('copilotBinaryPath must not be empty');
   });
 
   test('config path that does not exist throws', () => {
@@ -415,12 +448,13 @@ class FakeChildProcess extends EventEmitter {
   pid = 12345;
 
   // scheduled events
-  private _stdoutChunks: Array<{ data: string; delayMs: number }> = [];
-  private _stderrChunks: Array<{ data: string; delayMs: number }> = [];
+  private _stdoutChunks: { data: string; delayMs: number }[] = [];
+  private _stderrChunks: { data: string; delayMs: number }[] = [];
   private _exitCode: number | null = 0;
   private _exitSignal: string | null = null;
   private _exitDelayMs = 5;
   private _spawnError: Error | null = null;
+  private _exitBeforeStreamEnd = false;
 
   constructor() {
     super();
@@ -463,6 +497,11 @@ class FakeChildProcess extends EventEmitter {
     return this;
   }
 
+  scheduleExitBeforeStreamEnd(): this {
+    this._exitBeforeStreamEnd = true;
+    return this;
+  }
+
   /** Start driving events. Called by the mock spawn. */
   start(): void {
     if (this._spawnError) {
@@ -489,10 +528,15 @@ class FakeChildProcess extends EventEmitter {
     const exitDelay = Math.max(this._exitDelayMs, maxChunkDelay + 1);
 
     setTimeout(() => {
-      // Signal end of streams
+      if (this._exitBeforeStreamEnd) {
+        this.emit('exit', this._exitCode, this._exitSignal);
+      }
       this.stdout.emit('end');
       this.stderr.emit('end');
-      this.emit('exit', this._exitCode, this._exitSignal);
+      if (!this._exitBeforeStreamEnd) {
+        this.emit('exit', this._exitCode, this._exitSignal);
+      }
+      this.emit('close', this._exitCode, this._exitSignal);
     }, exitDelay);
   }
 
@@ -504,6 +548,7 @@ class FakeChildProcess extends EventEmitter {
         this.stdout.emit('end');
         this.stderr.emit('end');
         this.emit('exit', null, signal ?? 'SIGTERM');
+        this.emit('close', null, signal ?? 'SIGTERM');
       }, 5);
     }
     return true;
@@ -626,15 +671,14 @@ describe('CopilotProvider.sendQuery', () => {
     const provider = await createProvider();
     const chunks = await collect(provider.sendQuery('test', '/tmp', undefined, {}));
 
-    const resultChunk = chunks.find(c => c.type === 'result') as
-      | { type: 'result'; isError?: boolean; errorSubtype?: string; errors?: string[] }
-      | undefined;
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
 
     expect(resultChunk).toBeDefined();
-    expect(resultChunk!.isError).toBe(true);
-    expect(resultChunk!.errorSubtype).toBe('copilot_cli_exit');
-    expect(resultChunk!.errors).toBeDefined();
-    expect(resultChunk!.errors!.some(e => e.includes('exited with code 1'))).toBe(true);
+    const result = requireDefined(resultChunk, 'Expected non-zero exit result chunk');
+    expect(result.isError).toBe(true);
+    expect(result.errorSubtype).toBe('copilot_cli_exit');
+    expect(result.errors).toBeDefined();
+    expect(result.errors?.some(e => e.includes('exited with code 1'))).toBe(true);
   });
 
   test('spawn error yields result with isError', async () => {
@@ -652,13 +696,25 @@ describe('CopilotProvider.sendQuery', () => {
     const provider = await createProvider();
     const chunks = await collect(provider.sendQuery('test', '/tmp', undefined, {}));
 
-    const resultChunk = chunks.find(c => c.type === 'result') as
-      | { type: 'result'; isError?: boolean; errorSubtype?: string; errors?: string[] }
-      | undefined;
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
 
     expect(resultChunk).toBeDefined();
-    expect(resultChunk!.isError).toBe(true);
-    expect(resultChunk!.errorSubtype).toBe('copilot_cli_exit');
+    const result = requireDefined(resultChunk, 'Expected spawn error result chunk');
+    expect(result.isError).toBe(true);
+    expect(result.errorSubtype).toBe('copilot_cli_exit');
+  });
+
+  test('resolver setup errors yield result chunk instead of throwing', async () => {
+    process.env.COPILOT_BIN_PATH = '   ';
+
+    const provider = await createProvider();
+    const chunks = await collect(provider.sendQuery('test', '/tmp', undefined, {}));
+
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
+    const result = requireDefined(resultChunk, 'Expected resolver setup error result chunk');
+    expect(result.isError).toBe(true);
+    expect(result.errorSubtype).toBe('copilot_cli_exit');
+    expect(result.errors?.some(e => e.includes('COPILOT_BIN_PATH is set but empty'))).toBe(true);
   });
 
   test('abort signal kills process and yields abort error result', async () => {
@@ -687,14 +743,13 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const resultChunk = chunks.find(c => c.type === 'result') as
-      | { type: 'result'; isError?: boolean; errorSubtype?: string; errors?: string[] }
-      | undefined;
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
 
     expect(resultChunk).toBeDefined();
-    expect(resultChunk!.isError).toBe(true);
-    expect(resultChunk!.errorSubtype).toBe('copilot_cli_exit');
-    expect(resultChunk!.errors!.some(e => e.toLowerCase().includes('abort'))).toBe(true);
+    const result = requireDefined(resultChunk, 'Expected abort result chunk');
+    expect(result.isError).toBe(true);
+    expect(result.errorSubtype).toBe('copilot_cli_exit');
+    expect(result.errors?.some(e => e.toLowerCase().includes('abort'))).toBe(true);
   });
 
   test('first-event timeout yields error result when no output arrives', async () => {
@@ -717,14 +772,13 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const resultChunk = chunks.find(c => c.type === 'result') as
-      | { type: 'result'; isError?: boolean; errorSubtype?: string; errors?: string[] }
-      | undefined;
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
 
     expect(resultChunk).toBeDefined();
-    expect(resultChunk!.isError).toBe(true);
-    expect(resultChunk!.errorSubtype).toBe('copilot_cli_exit');
-    expect(resultChunk!.errors!.some(e => e.includes('did not produce any output'))).toBe(true);
+    const result = requireDefined(resultChunk, 'Expected first-event timeout result chunk');
+    expect(result.isError).toBe(true);
+    expect(result.errorSubtype).toBe('copilot_cli_exit');
+    expect(result.errors?.some(e => e.includes('did not produce any output'))).toBe(true);
   }, 5000);
 
   test('first-event timeout is satisfied by raw output before newline', async () => {
@@ -750,13 +804,37 @@ describe('CopilotProvider.sendQuery', () => {
     const assistantChunk = chunks.find(c => c.type === 'assistant') as
       | { type: 'assistant'; content: string }
       | undefined;
-    const resultChunk = chunks.find(c => c.type === 'result') as
-      | { type: 'result'; isError?: boolean }
-      | undefined;
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
 
     expect(assistantChunk?.content).toBe('partial output without newline');
     expect(resultChunk).toBeDefined();
-    expect(resultChunk!.isError).toBeUndefined();
+    const result = requireDefined(resultChunk, 'Expected raw output result chunk');
+    expect(result.isError).toBeUndefined();
+  });
+
+  test('final unterminated output is preserved when exit fires before stream end', async () => {
+    const fake = new FakeChildProcess();
+    fake.scheduleStdout('final line without newline', 5);
+    fake.scheduleExit(0, null, 20).scheduleExitBeforeStreamEnd();
+
+    const spawnMod = await import('node:child_process');
+    (spawnMod.spawn as ReturnType<typeof mock>).mockImplementationOnce(
+      (_b: string, _a: string[]) => {
+        Promise.resolve().then(() => fake.start());
+        return fake as unknown as ChildProcess;
+      }
+    );
+
+    const provider = await createProvider();
+    const chunks = await collect(provider.sendQuery('test', '/tmp', undefined, {}));
+
+    const assistantChunk = chunks.find(c => c.type === 'assistant') as
+      | { type: 'assistant'; content: string }
+      | undefined;
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
+
+    expect(assistantChunk?.content).toBe('final line without newline');
+    expect(resultChunk).toBeDefined();
   });
 
   test('process timeout yields error result when process runs too long', async () => {
@@ -780,14 +858,13 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const resultChunk = chunks.find(c => c.type === 'result') as
-      | { type: 'result'; isError?: boolean; errorSubtype?: string; errors?: string[] }
-      | undefined;
+    const resultChunk = chunks.find(c => c.type === 'result') as ResultChunk | undefined;
 
     expect(resultChunk).toBeDefined();
-    expect(resultChunk!.isError).toBe(true);
-    expect(resultChunk!.errorSubtype).toBe('copilot_cli_exit');
-    expect(resultChunk!.errors!.some(e => e.includes('timeout'))).toBe(true);
+    const result = requireDefined(resultChunk, 'Expected process timeout result chunk');
+    expect(result.isError).toBe(true);
+    expect(result.errorSubtype).toBe('copilot_cli_exit');
+    expect(result.errors?.some(e => e.includes('timeout'))).toBe(true);
   }, 5000);
 
   test('security warning emitted for allowAll', async () => {
@@ -809,13 +886,10 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const warningChunk = systemChunks.find(c => c.content.includes('allowAll'));
     expect(warningChunk).toBeDefined();
-    expect(warningChunk!.content).toContain('⚠️');
+    expect(requireDefined(warningChunk, 'Expected allowAll warning chunk').content).toContain('⚠️');
   });
 
   test('security warning emitted for allowAllTools', async () => {
@@ -837,10 +911,7 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const warningChunk = systemChunks.find(c => c.content.includes('allowAllTools'));
     expect(warningChunk).toBeDefined();
   });
@@ -864,10 +935,7 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const warningChunk = systemChunks.find(c => c.content.includes('allowAll'));
     expect(warningChunk).toBeDefined();
   });
@@ -891,10 +959,7 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const warningChunk = systemChunks.find(c => c.content.includes('allowAllTools'));
     expect(warningChunk).toBeDefined();
   });
@@ -918,10 +983,7 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const warningChunk = systemChunks.find(c => c.content.includes('allowAll'));
     expect(warningChunk).toBeDefined();
   });
@@ -945,10 +1007,7 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const warningChunk = systemChunks.find(c => c.content.includes('allowAllPaths'));
     expect(warningChunk).toBeDefined();
   });
@@ -972,10 +1031,7 @@ describe('CopilotProvider.sendQuery', () => {
       })
     );
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const warningChunk = systemChunks.find(c => c.content.includes('allowAllUrls'));
     expect(warningChunk).toBeDefined();
   });
@@ -1023,10 +1079,7 @@ describe('CopilotProvider.sendQuery', () => {
     const provider = await createProvider();
     const chunks = await collect(provider.sendQuery('test', '/tmp', undefined, {}));
 
-    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
-      type: 'system';
-      content: string;
-    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
     const hasAllowAllWarning = systemChunks.some(c => c.content.includes('allowAll'));
     expect(hasAllowAllWarning).toBe(false);
   });

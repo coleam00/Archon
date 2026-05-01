@@ -73,7 +73,13 @@ function buildSpawnCommand(binary: string, argv: string[]): SpawnCommand {
   }
 
   const resolvedBinary = resolvePathCommand(binary);
-  const npmLoaderPath = join(dirname(resolvedBinary), 'node_modules', '@github', 'copilot', 'npm-loader.js');
+  const npmLoaderPath = join(
+    dirname(resolvedBinary),
+    'node_modules',
+    '@github',
+    'copilot',
+    'npm-loader.js'
+  );
   if (existsSync(npmLoaderPath)) {
     return { command: 'node', args: [npmLoaderPath, ...argv] };
   }
@@ -229,36 +235,62 @@ export class CopilotProvider implements IAgentProvider {
       };
     }
 
-    const binary = resolveCopilotBinaryPath(config.copilotBinaryPath);
-    const spawnCommand = buildSpawnCommand(binary, argv);
-
-    // Log args with prompt redacted for safety
-    getLog().info({ binary: spawnCommand.command, argc: spawnCommand.args.length }, 'copilot.spawn');
-
     const env = buildCopilotEnv(options?.env);
+    let spawnCommand: SpawnCommand;
+    let child: ReturnType<typeof spawn>;
+    try {
+      const binary = resolveCopilotBinaryPath(config.copilotBinaryPath);
+      spawnCommand = buildSpawnCommand(binary, argv);
+
+      // Log args with prompt redacted for safety
+      getLog().info(
+        { binary: spawnCommand.command, argc: spawnCommand.args.length },
+        'copilot.spawn'
+      );
+
+      // ── Spawn ──────────────────────────────────────────────────────────────
+      child = spawn(spawnCommand.command, spawnCommand.args, {
+        cwd,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to start the Copilot CLI process.';
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'copilot_cli_exit',
+        errors: [message],
+      };
+      return;
+    }
 
     const firstEventTimeoutMs = config.firstEventTimeoutMs ?? DEFAULT_FIRST_EVENT_TIMEOUT_MS;
     const processTimeoutMs = config.processTimeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS;
     const abortSignal = options?.abortSignal;
 
-    // ── Spawn ──────────────────────────────────────────────────────────────
-    const child = spawn(spawnCommand.command, spawnCommand.args, {
-      cwd,
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
     const { push, next } = makeEventQueue();
     let processExited = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const clearKillTimer = (): void => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = undefined;
+      }
+    };
 
     // Helper: kill the child process with a SIGTERM → SIGKILL escalation
     const killProcess = (reason: string): void => {
       if (!processExited) {
+        clearKillTimer();
         getLog().info({ reason }, 'copilot.kill');
         child.kill('SIGTERM');
-        setTimeout(() => {
+        killTimer = setTimeout(() => {
           if (!processExited) child.kill('SIGKILL');
         }, 2000);
+        killTimer.unref?.();
       }
     };
 
@@ -266,6 +298,7 @@ export class CopilotProvider implements IAgentProvider {
     const stderr = child.stderr;
     if (!stdout || !stderr) {
       killProcess('missing_stdio_pipe');
+      clearKillTimer();
       yield {
         type: 'result',
         isError: true,
@@ -311,9 +344,10 @@ export class CopilotProvider implements IAgentProvider {
       markFirstOutput
     );
 
-    // exit producer
-    child.once('exit', (code, signal) => {
+    // close producer — waits until stdio streams are closed, preserving final buffered output.
+    child.once('close', (code, signal) => {
       processExited = true;
+      clearKillTimer();
       push({ kind: 'exit', code, signal });
     });
     child.once('error', err => {
@@ -431,6 +465,7 @@ export class CopilotProvider implements IAgentProvider {
       }
     } finally {
       clearTimers();
+      clearKillTimer();
       if (abortSignal) abortSignal.removeEventListener('abort', onAbort);
       if (!child.killed) child.kill('SIGTERM');
     }
