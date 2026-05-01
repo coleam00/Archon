@@ -28,7 +28,7 @@ interface RawGitHubIssue {
   title: string | null;
   body: string | null;
   state: string;
-  html_url: string;
+  html_url: string | null;
   labels: (string | { name?: string | null } | null)[];
   pull_request?: unknown;
   created_at: string | null;
@@ -108,9 +108,17 @@ export class GitHubTracker implements Tracker {
   async fetchIssueStatesByIds(ids: string[]): Promise<Issue[]> {
     if (ids.length === 0) return [];
     const out: Issue[] = [];
+    const nodeIds: string[] = [];
+
+    // Split inputs: numeric / `owner/repo#N` go through REST; everything else
+    // (notably GitHub GraphQL node IDs like `I_kwDO…`, which is what Issue.id
+    // returns) is batched into a single GraphQL `nodes()` lookup.
     for (const id of ids) {
       const number = this.parseIssueNumber(id);
-      if (number === null) continue;
+      if (number === null) {
+        nodeIds.push(id);
+        continue;
+      }
       try {
         const res = await this.octokit.rest.issues.get({
           owner: this.owner,
@@ -129,6 +137,39 @@ export class GitHubTracker implements Tracker {
           continue;
         }
         throw new TrackerError('github_api_request', `GitHub issues.get failed: ${err.message}`, e);
+      }
+    }
+
+    if (nodeIds.length > 0) {
+      try {
+        const data = await this.octokit.graphql<GraphqlNodesResponse>(GRAPHQL_NODES_QUERY, {
+          ids: nodeIds,
+        });
+        for (const node of data.nodes ?? []) {
+          if (!isGraphqlIssueNode(node)) continue;
+          out.push(
+            this.normalize({
+              id: node.databaseId ?? 0,
+              node_id: node.id,
+              number: node.number,
+              title: node.title,
+              body: node.body,
+              // GraphQL returns 'OPEN'/'CLOSED'; REST returns 'open'/'closed'.
+              // Lowercase here so isStateActive() comparisons remain consistent.
+              state: typeof node.state === 'string' ? node.state.toLowerCase() : '',
+              html_url: node.url,
+              labels: (node.labels?.nodes ?? []).map(l => l?.name ?? null),
+              created_at: node.createdAt,
+              updated_at: node.updatedAt,
+            })
+          );
+        }
+      } catch (e) {
+        throw new TrackerError(
+          'github_api_request',
+          `GitHub graphql nodes failed: ${(e as Error).message}`,
+          e
+        );
       }
     }
     return out;
@@ -204,4 +245,48 @@ function parseDate(input: string | null | undefined): Date | null {
   if (typeof input !== 'string') return null;
   const d = new Date(input);
   return isNaN(d.getTime()) ? null : d;
+}
+
+const GRAPHQL_NODES_QUERY = `
+  query SymphonyIssueNodes($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      __typename
+      ... on Issue {
+        id
+        databaseId
+        number
+        title
+        body
+        state
+        url
+        labels(first: 50) { nodes { name } }
+        createdAt
+        updatedAt
+      }
+    }
+  }
+`;
+
+interface GraphqlIssueNode {
+  __typename: 'Issue';
+  id: string;
+  databaseId: number | null;
+  number: number;
+  title: string | null;
+  body: string | null;
+  state: string;
+  url: string | null;
+  labels: { nodes: ({ name: string | null } | null)[] } | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+interface GraphqlNodesResponse {
+  nodes: (GraphqlIssueNode | { __typename: string } | null)[];
+}
+
+function isGraphqlIssueNode(
+  node: GraphqlIssueNode | { __typename: string } | null
+): node is GraphqlIssueNode {
+  return node !== null && node.__typename === 'Issue';
 }
