@@ -27,43 +27,38 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import { Kbd } from './primitives';
+import { RunCard } from './RunCard';
 
 interface BoardTabProps {
   onOpenRun: (runId: string) => void;
 }
 
-type LaneId = 'queued' | 'running' | 'paused' | 'failed' | 'recent';
+type LaneId = 'paused' | 'running' | 'completed' | 'failed';
 
-const LANES: {
-  id: LaneId;
-  label: string;
-  tone: 'muted' | 'info' | 'warn' | 'error' | 'success';
-}[] = [
-  { id: 'queued', label: 'Queued', tone: 'muted' },
-  { id: 'running', label: 'Running', tone: 'info' },
-  { id: 'paused', label: 'Awaiting approval', tone: 'warn' },
-  { id: 'failed', label: 'Failed', tone: 'error' },
-  { id: 'recent', label: 'Recently completed', tone: 'success' },
+const LANES: { id: LaneId; label: string; dot: string }[] = [
+  { id: 'paused', label: 'Awaiting approval', dot: '#8B5CF6' },
+  { id: 'running', label: 'Running', dot: '#F59E0B' },
+  { id: 'completed', label: 'Completed', dot: '#10B981' },
+  { id: 'failed', label: 'Failed', dot: '#EF4444' },
 ];
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function laneFor(run: DashboardRunResponse): LaneId | null {
   switch (run.status) {
-    case 'pending':
-      return 'queued';
-    case 'running':
-      return 'running';
     case 'paused':
       return 'paused';
+    case 'pending':
+    case 'running':
+      return 'running';
     case 'failed':
       return 'failed';
     case 'completed':
     case 'cancelled': {
-      // Only show in Recent if finished within the last 24h.
       if (!run.completed_at) return null;
       const ts = new Date(run.completed_at).getTime();
-      return Date.now() - ts < ONE_DAY_MS ? 'recent' : null;
+      return Date.now() - ts < ONE_DAY_MS ? 'completed' : null;
     }
     default:
       return null;
@@ -76,10 +71,29 @@ interface PendingAction {
   workflowName: string;
 }
 
+interface DragAction {
+  kind: 'approve' | 'reject' | 'resume' | 'cancel';
+  label: string;
+}
+
+function dragActionFor(sourceLane: LaneId | null, targetLane: LaneId): DragAction | null {
+  if (sourceLane === targetLane) return null;
+  if (targetLane === 'failed' && sourceLane === 'paused')
+    return { kind: 'reject', label: 'Reject' };
+  if (targetLane === 'failed' && sourceLane === 'running')
+    return { kind: 'cancel', label: 'Cancel' };
+  if (targetLane === 'running' && sourceLane === 'paused')
+    return { kind: 'approve', label: 'Approve' };
+  if (targetLane === 'running' && sourceLane === 'failed')
+    return { kind: 'resume', label: 'Resume' };
+  return null;
+}
+
 export function BoardTab({ onOpenRun }: BoardTabProps): React.ReactElement {
   const queryClient = useQueryClient();
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['mission.board.runs'],
@@ -89,11 +103,10 @@ export function BoardTab({ onOpenRun }: BoardTabProps): React.ReactElement {
 
   const grouped = useMemo(() => {
     const map: Record<LaneId, DashboardRunResponse[]> = {
-      queued: [],
-      running: [],
       paused: [],
+      running: [],
+      completed: [],
       failed: [],
-      recent: [],
     };
     for (const run of data?.runs ?? []) {
       const lane = laneFor(run);
@@ -112,6 +125,7 @@ export function BoardTab({ onOpenRun }: BoardTabProps): React.ReactElement {
   }
 
   async function handleDragEnd(event: DragEndEvent): Promise<void> {
+    setActiveId(null);
     setActionError(null);
     const runId = String(event.active.id);
     const targetLane = event.over?.id as LaneId | undefined;
@@ -120,38 +134,22 @@ export function BoardTab({ onOpenRun }: BoardTabProps): React.ReactElement {
     const run = data?.runs.find(r => r.id === runId);
     if (!run) return;
     const sourceLane = laneFor(run);
-    if (sourceLane === targetLane) return;
+    const action = dragActionFor(sourceLane, targetLane);
+    if (!action) return;
 
-    // Encode the valid transitions explicitly. Anything else is a no-op
-    // (the card snaps back to its original lane).
-    const transition = `${sourceLane ?? '?'}->${targetLane}`;
     try {
-      switch (transition) {
-        case 'paused->running':
+      switch (action.kind) {
+        case 'approve':
           await approveWorkflowRun(runId);
           break;
-        case 'paused->failed':
-          // Reject needs a reason — open the dialog and stop here. The dialog
-          // will run the actual API call on confirm.
+        case 'reject':
           setPending({ kind: 'reject', runId, workflowName: run.workflow_name });
           return;
-        case 'failed->running':
+        case 'resume':
           await resumeWorkflowRun(runId);
           break;
-        case 'running->failed':
-        case 'running->recent':
-        case 'paused->recent':
-        case 'queued->recent':
-          // Treat "drag onto Recent" or onto Failed as a cancel intent. Confirm
-          // because cancel is destructive and we don't want a fat-finger drag
-          // to kill an active run.
+        case 'cancel':
           setPending({ kind: 'cancel-confirm', runId, workflowName: run.workflow_name });
-          return;
-        default:
-          // Unsupported transition — show a quiet message and do nothing.
-          setActionError(
-            `Can't move from ${LANES.find(l => l.id === sourceLane)?.label ?? sourceLane} to ${LANES.find(l => l.id === targetLane)?.label ?? targetLane}.`
-          );
           return;
       }
       await invalidate();
@@ -160,24 +158,50 @@ export function BoardTab({ onOpenRun }: BoardTabProps): React.ReactElement {
     }
   }
 
+  const dragSrc = activeId ? (data?.runs.find(r => r.id === activeId) ?? null) : null;
+  const dragSrcLane = dragSrc ? laneFor(dragSrc) : null;
+
   return (
-    <div className="space-y-3">
+    <div className="px-5 pb-6 pt-4">
+      <div className="mb-3.5 flex items-center gap-2.5">
+        <h1 className="m-0 text-[18px] font-semibold tracking-tight text-bridges-fg1">Board</h1>
+        <span className="text-[12px] text-bridges-fg3">
+          drag <Kbd>card</Kbd> to a lane to act
+          <span className="ml-1.5 text-[11px]">
+            — Awaiting → Running approve · Awaiting → Failed reject · Failed → Running resume ·
+            Running → Failed cancel
+          </span>
+        </span>
+      </div>
+
       {actionError && (
-        <div className="rounded-md border border-error/30 bg-error/5 px-3 py-2 text-sm text-error">
+        <div className="mb-3 rounded-md border border-bridges-danger/40 bg-bridges-tint-danger-bg px-3 py-2 text-sm text-bridges-tint-danger-fg">
           {actionError}
         </div>
       )}
-      {isLoading && <p className="text-sm text-text-secondary">Loading…</p>}
+      {isLoading && <p className="text-sm text-bridges-fg2">Loading…</p>}
 
       <DndContext
         sensors={sensors}
+        onDragStart={e => {
+          setActiveId(String(e.active.id));
+        }}
+        onDragCancel={() => {
+          setActiveId(null);
+        }}
         onDragEnd={e => {
           void handleDragEnd(e);
         }}
       >
-        <div className="grid gap-3 lg:grid-cols-5 md:grid-cols-3 sm:grid-cols-2 grid-cols-1">
+        <div className="flex items-start gap-3">
           {LANES.map(lane => (
-            <Lane key={lane.id} lane={lane} runs={grouped[lane.id]} onOpenRun={onOpenRun} />
+            <Lane
+              key={lane.id}
+              lane={lane}
+              runs={grouped[lane.id]}
+              dragSrcLane={dragSrcLane}
+              onOpenRun={onOpenRun}
+            />
           ))}
         </div>
       </DndContext>
@@ -207,51 +231,59 @@ export function BoardTab({ onOpenRun }: BoardTabProps): React.ReactElement {
 function Lane({
   lane,
   runs,
+  dragSrcLane,
   onOpenRun,
 }: {
   lane: (typeof LANES)[number];
   runs: DashboardRunResponse[];
+  dragSrcLane: LaneId | null;
   onOpenRun: (runId: string) => void;
 }): React.ReactElement {
   const { isOver, setNodeRef } = useDroppable({ id: lane.id });
-  const toneBorder = {
-    muted: 'border-border',
-    info: 'border-primary/30',
-    warn: 'border-warning/30',
-    error: 'border-error/30',
-    success: 'border-success/30',
-  }[lane.tone];
+  const action = dragSrcLane ? dragActionFor(dragSrcLane, lane.id) : null;
+  const allowed = action != null;
 
   return (
     <div
       ref={setNodeRef}
       className={cn(
-        'rounded-md border bg-surface-elevated p-2 transition-colors',
-        toneBorder,
-        isOver && 'bg-primary/5 ring-1 ring-primary'
+        'flex min-w-[280px] flex-1 flex-col rounded-xl border-[1.5px] border-dashed p-2 transition-colors',
+        isOver && allowed ? 'bg-bridges-surface-subtle' : 'border-transparent bg-transparent'
       )}
+      style={isOver && allowed ? { borderColor: lane.dot } : undefined}
     >
-      <div className="flex items-center justify-between border-b border-border pb-1.5">
-        <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-          {lane.label}
-        </span>
-        <span className="text-xs text-text-tertiary">{runs.length}</span>
+      <div className="flex items-center gap-2 px-2 pb-2.5 pt-1">
+        <span className="h-2 w-2 rounded-full" style={{ background: lane.dot }} />
+        <span className="text-[12px] font-semibold text-bridges-fg1">{lane.label}</span>
+        <span className="text-[11px] tabular-nums text-bridges-fg3">{runs.length}</span>
+        <div className="flex-1" />
+        {dragSrcLane && (
+          <span
+            className={cn(
+              'rounded-full px-[7px] py-[2px] text-[10px] font-semibold uppercase tracking-[0.05em]',
+              allowed ? 'text-white' : 'text-bridges-fg-placeholder'
+            )}
+            style={{ background: allowed ? lane.dot : 'transparent' }}
+          >
+            {allowed ? action.label : '—'}
+          </span>
+        )}
       </div>
-      <ul className="mt-2 space-y-2">
+      <div className="flex min-h-[80px] flex-col gap-2">
         {runs.length === 0 && (
-          <li className="rounded-md border border-dashed border-border bg-surface px-2 py-3 text-center text-[11px] text-text-tertiary">
-            empty
-          </li>
+          <div className="px-2.5 py-3 text-center text-[11.5px] italic text-bridges-fg-placeholder">
+            no runs
+          </div>
         )}
         {runs.map(run => (
-          <BoardCard key={run.id} run={run} onOpenRun={onOpenRun} />
+          <DraggableCard key={run.id} run={run} onOpenRun={onOpenRun} />
         ))}
-      </ul>
+      </div>
     </div>
   );
 }
 
-function BoardCard({
+function DraggableCard({
   run,
   onOpenRun,
 }: {
@@ -259,36 +291,16 @@ function BoardCard({
   onOpenRun: (runId: string) => void;
 }): React.ReactElement {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: run.id });
-
   return (
-    <li
-      ref={setNodeRef}
-      {...attributes}
-      {...listeners}
-      onClick={() => {
-        onOpenRun(run.id);
-      }}
-      className={cn(
-        'cursor-grab rounded-md border border-border bg-surface px-2 py-2 text-sm shadow-sm hover:bg-surface-elevated active:cursor-grabbing',
-        isDragging && 'opacity-40'
-      )}
-    >
-      <p className="truncate font-medium text-text-primary">{run.workflow_name}</p>
-      <p className="truncate text-xs text-text-secondary">
-        {run.codebase_name ?? '—'}
-        {run.current_step_name ? ` · ${run.current_step_name}` : ''}
-      </p>
-      {run.status === 'paused' && (
-        <p className="mt-1 text-[10px] uppercase tracking-wide text-warning">
-          drag → ✓ approve / ✗ reject
-        </p>
-      )}
-      {run.status === 'failed' && (
-        <p className="mt-1 text-[10px] uppercase tracking-wide text-text-tertiary">
-          drag → Running to resume
-        </p>
-      )}
-    </li>
+    <div ref={setNodeRef} {...attributes} {...listeners} style={{ opacity: isDragging ? 0.4 : 1 }}>
+      <RunCard
+        run={run}
+        dragging={isDragging}
+        onClick={() => {
+          onOpenRun(run.id);
+        }}
+      />
+    </div>
   );
 }
 
@@ -339,7 +351,10 @@ function RejectDialog({
           <DialogTitle>Reject — {pending?.workflowName ?? ''}</DialogTitle>
           <DialogDescription>
             The reason will be passed to the workflow's `on_reject` prompt as
-            <code className="ml-1 rounded bg-surface px-1 py-0.5 text-xs">$REJECTION_REASON</code>.
+            <code className="ml-1 rounded bg-bridges-surface-subtle px-1 py-0.5 text-xs">
+              $REJECTION_REASON
+            </code>
+            .
           </DialogDescription>
         </DialogHeader>
         <Textarea
@@ -350,7 +365,7 @@ function RejectDialog({
           }}
           rows={4}
         />
-        {error && <p className="text-xs text-error">{error}</p>}
+        {error && <p className="text-xs text-bridges-danger">{error}</p>}
         <div className="mt-4 flex justify-end gap-2">
           <Button
             type="button"
@@ -425,7 +440,7 @@ function CancelConfirmDialog({
             be marked cancelled.
           </DialogDescription>
         </DialogHeader>
-        {error && <p className="text-xs text-error">{error}</p>}
+        {error && <p className="text-xs text-bridges-danger">{error}</p>}
         <div className="mt-4 flex justify-end gap-2">
           <Button type="button" variant="outline" disabled={busy} onClick={onClose}>
             Keep running

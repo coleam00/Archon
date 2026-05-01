@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { Pause, Play } from 'lucide-react';
 import { useMissionStore } from '@/stores/mission-store';
 import type { MissionTimelineEvent } from '@/stores/mission-store';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { Mono, fmtAgo } from './primitives';
 
 interface FeedTabProps {
   onOpenRun: (runId: string) => void;
@@ -24,27 +25,38 @@ const ALL_TYPES = [
   'symphony_tracker_poll_completed',
 ] as const;
 
+const LEVEL_FOR_TYPE: Record<string, 'ok' | 'warn' | 'err' | 'info'> = {
+  workflow_status: 'info',
+  workflow_artifact: 'info',
+  symphony_dispatch_completed: 'ok',
+  symphony_dispatch_failed: 'err',
+  symphony_dispatch_retry_scheduled: 'warn',
+  symphony_dispatch_cancelled: 'warn',
+};
+
+const LEVEL_TINTS: Record<string, { color: string; bg: string }> = {
+  ok: { color: 'var(--bridges-success)', bg: 'var(--bridges-tint-success-bg)' },
+  warn: { color: 'var(--bridges-warning)', bg: 'var(--bridges-tint-warning-bg)' },
+  err: { color: 'var(--bridges-danger)', bg: 'var(--bridges-tint-danger-bg)' },
+  info: { color: 'var(--bridges-fg2)', bg: 'var(--bridges-surface-subtle)' },
+};
+
+function levelOf(type: string, payload: Record<string, unknown>): 'ok' | 'warn' | 'err' | 'info' {
+  if (typeof payload.error === 'string' || typeof payload.errorMessage === 'string') return 'err';
+  if (LEVEL_FOR_TYPE[type]) return LEVEL_FOR_TYPE[type];
+  return 'info';
+}
+
 export function FeedTab({ onOpenRun }: FeedTabProps): React.ReactElement {
   const globalFeed = useMissionStore(s => s.globalFeed);
   const [autoscroll, setAutoscroll] = useState(true);
-  const [filter, setFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(() => {
-    let rows = globalFeed;
-    if (typeFilter) rows = rows.filter(e => e.type === typeFilter);
-    if (filter) {
-      const q = filter.toLowerCase();
-      rows = rows.filter(
-        e =>
-          e.type.toLowerCase().includes(q) ||
-          e.runId.toLowerCase().includes(q) ||
-          JSON.stringify(e.payload).toLowerCase().includes(q)
-      );
-    }
-    return rows;
-  }, [globalFeed, filter, typeFilter]);
+    if (!typeFilter) return globalFeed;
+    return globalFeed.filter(e => e.type === typeFilter);
+  }, [globalFeed, typeFilter]);
 
   useEffect(() => {
     if (autoscroll) {
@@ -53,22 +65,19 @@ export function FeedTab({ onOpenRun }: FeedTabProps): React.ReactElement {
   }, [filtered.length, autoscroll]);
 
   return (
-    <div className="flex h-full flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          placeholder="Filter (text in type, runId, or payload)"
-          value={filter}
-          onChange={e => {
-            setFilter(e.target.value);
-          }}
-          className="max-w-sm"
-        />
+    <div className="mx-auto max-w-[1100px] px-6 pb-6 pt-4">
+      <div className="mb-3.5 flex items-center gap-2.5">
+        <h1 className="m-0 text-[18px] font-semibold tracking-tight text-bridges-fg1">Feed</h1>
+        <span className="text-[13px] text-bridges-fg3">
+          Every workflow event across every run, newest first.
+        </span>
+        <div className="flex-1" />
         <select
           value={typeFilter}
           onChange={e => {
             setTypeFilter(e.target.value);
           }}
-          className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text-primary"
+          className="rounded-md border border-bridges-border bg-bridges-surface px-2 py-1 text-[12px] text-bridges-fg1"
         >
           <option value="">All types</option>
           {ALL_TYPES.map(t => (
@@ -77,7 +86,6 @@ export function FeedTab({ onOpenRun }: FeedTabProps): React.ReactElement {
             </option>
           ))}
         </select>
-        <span className="ml-auto text-xs text-text-secondary">{filtered.length} events</span>
         <Button
           type="button"
           size="sm"
@@ -86,52 +94,70 @@ export function FeedTab({ onOpenRun }: FeedTabProps): React.ReactElement {
             setAutoscroll(v => !v);
           }}
         >
-          {autoscroll ? 'Pause' : 'Resume'}
+          {autoscroll ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+          {autoscroll ? 'Pause autoscroll' : 'Resume autoscroll'}
         </Button>
       </div>
 
-      <ol className="flex-1 space-y-1 overflow-y-auto rounded-md border border-border bg-surface p-2 font-mono text-[11px]">
+      <div className="overflow-hidden rounded-xl border border-bridges-border bg-bridges-surface">
         {filtered.length === 0 && (
-          <li className="text-text-tertiary">No events yet — they will stream in here.</li>
+          <p className="px-4 py-8 text-center text-[12.5px] text-bridges-fg3">
+            No events yet — they will stream in here.
+          </p>
         )}
         {filtered.map((event, idx) => (
           <FeedRow
             key={`${String(idx)}-${String(event.timestamp)}`}
             event={event}
+            isLast={idx === filtered.length - 1}
             onOpenRun={onOpenRun}
           />
         ))}
         <div ref={bottomRef} />
-      </ol>
+      </div>
     </div>
   );
 }
 
 function FeedRow({
   event,
+  isLast,
   onOpenRun,
 }: {
   event: MissionTimelineEvent;
+  isLast: boolean;
   onOpenRun: (runId: string) => void;
 }): React.ReactElement {
-  const time = new Date(event.timestamp).toLocaleTimeString();
-  const summary = summarize(event);
   const isClickable = event.runId !== 'system' && !event.type.startsWith('symphony_tracker_');
+  const level = levelOf(event.type, event.payload);
+  const tint = LEVEL_TINTS[level];
+  const summary = summarize(event);
+  const text = event.type.split('.')[0]?.split('_')[0] ?? event.type;
 
   return (
-    <li
-      className={cn(
-        'flex items-start gap-2 border-l-2 border-border pl-2 hover:border-primary',
-        isClickable && 'cursor-pointer'
-      )}
+    <button
+      type="button"
       onClick={() => {
         if (isClickable) onOpenRun(event.runId);
       }}
+      disabled={!isClickable}
+      className={cn(
+        'grid w-full grid-cols-[60px_90px_130px_1fr_auto] items-center gap-3 px-4 py-2.5 text-left text-[13px] transition-colors',
+        isClickable ? 'cursor-pointer hover:bg-bridges-surface-subtle' : 'cursor-default',
+        !isLast && 'border-b border-bridges-border-subtle'
+      )}
     >
-      <span className="shrink-0 text-text-tertiary">{time}</span>
-      <span className="shrink-0 text-text-secondary">{event.type}</span>
-      <span className="truncate text-text-primary">{summary}</span>
-    </li>
+      <Mono className="text-[11px] text-bridges-fg3">{fmtAgo(event.timestamp)}</Mono>
+      <span
+        className="rounded px-2 py-0.5 text-center text-[10.5px] font-semibold uppercase tracking-[0.05em]"
+        style={{ background: tint.bg, color: tint.color }}
+      >
+        {text}
+      </span>
+      <Mono className="text-[11.5px] text-bridges-fg2 truncate">{event.runId}</Mono>
+      <span className="min-w-0 truncate text-bridges-fg2">{summary || event.type}</span>
+      <span className="font-mono text-[11px] text-bridges-fg3">{event.type}</span>
+    </button>
   );
 }
 

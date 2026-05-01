@@ -10,6 +10,7 @@ import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promis
 import { readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
+import { hostname, userInfo, uptime as osUptime } from 'os';
 import type { Context } from 'hono';
 import type {
   ConversationLockManager,
@@ -73,7 +74,7 @@ import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
 import { errorSchema } from './schemas/common.schemas';
-import { updateCheckResponseSchema } from './schemas/system.schemas';
+import { updateCheckResponseSchema, operatorResponseSchema } from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
   validateWorkflowBodySchema,
@@ -930,6 +931,19 @@ const getUpdateCheckRoute = createRoute({
         },
       },
       description: 'Update check result',
+    },
+  },
+});
+
+const getOperatorRoute = createRoute({
+  method: 'get',
+  path: '/api/operator',
+  tags: ['System'],
+  summary: 'Operator identity for the running server',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: operatorResponseSchema } },
+      description: 'Operator name, host, and process uptime',
     },
   },
 });
@@ -3222,5 +3236,13 @@ export function registerApiRoutes(
     if (!BUNDLED_IS_BINARY) return c.json(noUpdate);
     const result = await checkForUpdate(appVersion);
     return c.json(result ?? noUpdate);
+  });
+
+  registerOpenApiRoute(getOperatorRoute, async c => {
+    return c.json({
+      name: userInfo().username,
+      host: hostname(),
+      uptimeSeconds: Math.floor(osUptime()),
+    });
   });
 }

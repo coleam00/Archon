@@ -2431,6 +2431,42 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/operator': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Operator identity for the running server */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Operator name, host, and process uptime */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['OperatorResponse'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/compass/{codebaseId}/graph': {
     parameters: {
       query?: never;
@@ -3489,6 +3525,11 @@ export interface components {
       currentVersion: string;
       latestVersion: string;
       releaseUrl: string;
+    };
+    OperatorResponse: {
+      name: string;
+      host: string;
+      uptimeSeconds: number;
     };
     /** @enum {string} */
     RealFeatureKind: 'route' | 'endpoint' | 'workflow' | 'component' | 'module';

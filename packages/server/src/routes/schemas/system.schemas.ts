@@ -8,3 +8,11 @@ export const updateCheckResponseSchema = z
     releaseUrl: z.string(),
   })
   .openapi('UpdateCheckResponse');
+
+export const operatorResponseSchema = z
+  .object({
+    name: z.string(),
+    host: z.string(),
+    uptimeSeconds: z.number(),
+  })
+  .openapi('OperatorResponse');

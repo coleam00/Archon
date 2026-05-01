@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, X, ArrowRight } from 'lucide-react';
 import { listDashboardRuns, approveWorkflowRun, rejectWorkflowRun } from '@/lib/api';
 import type { DashboardRunResponse } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -11,6 +12,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  Mono,
+  ProviderChip,
+  Tag,
+  fmtAgo,
+  runIdentifier,
+  runProvider,
+  runApprovalReason,
+  runBranch,
+} from './primitives';
 
 interface ApprovalContext {
   nodeId?: string;
@@ -32,31 +43,48 @@ export function ApprovalsTab(): React.ReactElement {
 
   const pending = useMemo(() => {
     const runs = data?.runs ?? [];
-    // A paused run only needs the operator if it carries an approval block in metadata.
-    // Other paused runs (e.g. waiting on a child workflow) shouldn't appear here.
     return runs.filter(r => getApproval(r) !== null);
   }, [data]);
 
-  if (isLoading) {
-    return <p className="text-sm text-text-secondary">Loading…</p>;
-  }
-  if (pending.length === 0) {
-    return (
-      <div className="rounded-md border border-border bg-surface-elevated p-6 text-center">
-        <p className="text-sm font-medium text-text-primary">Nothing waiting on you.</p>
-        <p className="mt-1 text-xs text-text-secondary">
-          Paused runs with an approval gate will appear here.
+  return (
+    <div className="mx-auto max-w-[1100px] px-6 pb-6 pt-4">
+      <div className="mb-4">
+        <h1 className="m-0 mb-1 text-[18px] font-semibold tracking-tight text-bridges-fg1">
+          Approvals
+        </h1>
+        <p className="m-0 text-[13px] text-bridges-fg2">
+          {pending.length === 0
+            ? 'Nothing waiting on you. The dispatcher will surface anything that needs a gate here.'
+            : `${pending.length.toString()} ${pending.length === 1 ? 'run is' : 'runs are'} paused at a human gate. Approve to resume; reject to cancel and write a comment.`}
         </p>
       </div>
-    );
-  }
 
-  return (
-    <ul className="space-y-3">
-      {pending.map(run => (
-        <ApprovalCard key={run.id} run={run} />
-      ))}
-    </ul>
+      {isLoading ? (
+        <p className="text-sm text-bridges-fg2">Loading…</p>
+      ) : pending.length === 0 ? (
+        <div className="rounded-xl border border-bridges-border bg-bridges-surface px-6 py-12 text-center">
+          <div
+            className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-full"
+            style={{
+              background: 'var(--bridges-tint-success-bg)',
+              color: 'var(--bridges-success)',
+            }}
+          >
+            <Check className="h-[22px] w-[22px]" />
+          </div>
+          <div className="text-sm font-medium text-bridges-fg1">All clear</div>
+          <div className="mt-1 text-[12.5px] text-bridges-fg3">
+            No runs waiting on you right now.
+          </div>
+        </div>
+      ) : (
+        <ul className="flex flex-col gap-2.5">
+          {pending.map(run => (
+            <ApprovalCard key={run.id} run={run} />
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -69,8 +97,8 @@ function ApprovalCard({ run }: { run: DashboardRunResponse }): React.ReactElemen
   const [rejectReason, setRejectReason] = useState('');
   const [approveComment, setApproveComment] = useState('');
 
-  const startedAt = run.started_at ? new Date(run.started_at) : null;
-  const waitingFor = startedAt ? formatWaiting(Date.now() - startedAt.getTime()) : '—';
+  const reason = approval?.message ?? runApprovalReason(run);
+  const branch = runBranch(run);
 
   async function invalidate(): Promise<void> {
     await queryClient.invalidateQueries({ queryKey: ['mission.approvals'] });
@@ -108,62 +136,89 @@ function ApprovalCard({ run }: { run: DashboardRunResponse }): React.ReactElemen
   }
 
   return (
-    <li className="rounded-md border border-warning/30 bg-warning/5 p-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-warning">
-              Awaiting approval
-            </span>
-            <span className="text-xs text-text-tertiary">· waiting {waitingFor}</span>
-          </div>
-          <p className="mt-1 truncate font-medium text-text-primary">{run.workflow_name}</p>
-          <p className="truncate text-xs text-text-secondary">
-            {run.codebase_name ?? '—'}
-            {approval?.nodeId ? ` · node ${approval.nodeId}` : ''}
-          </p>
-          {approval?.message && (
-            <p className="mt-2 whitespace-pre-wrap rounded-md border border-border bg-surface px-3 py-2 text-sm text-text-primary">
-              {approval.message}
-            </p>
+    <li className="flex items-stretch gap-4 rounded-xl border border-bridges-border bg-bridges-surface p-4">
+      <div className="min-w-0 flex-1">
+        <div className="mb-1.5 flex items-center gap-2">
+          <Mono className="text-[11.5px] text-bridges-fg2">{runIdentifier(run)}</Mono>
+          <ProviderChip provider={runProvider(run)} />
+          <Tag>{run.workflow_name.replace('archon-', '')}</Tag>
+          <span className="ml-auto text-[11.5px] text-bridges-fg3">
+            paused {fmtAgo(run.last_activity_at ?? run.started_at)}
+          </span>
+        </div>
+        <div className="mb-2 text-[15px] font-medium leading-snug text-bridges-fg1">
+          {run.workflow_name}
+        </div>
+        <div className="mb-2.5 font-mono text-[12px] text-bridges-fg2">
+          {approval?.nodeId && (
+            <>
+              paused at <span className="text-bridges-fg1">{approval.nodeId}</span>
+            </>
           )}
+          {branch && (
+            <>
+              {approval?.nodeId ? ' · ' : ''}branch{' '}
+              <span className="text-bridges-fg1">{branch}</span>
+            </>
+          )}
+        </div>
+        {reason && (
+          <div className="rounded-md border border-[#DDD6FE] bg-[#F5F3FF] px-3 py-2.5 text-[13px] leading-snug text-[#5B21B6]">
+            <span className="mr-1.5 font-semibold">Why this is paused:</span>
+            <span className="whitespace-pre-wrap">{reason}</span>
+          </div>
+        )}
+        <div className="mt-3 space-y-2">
+          <Textarea
+            placeholder="Optional comment on approve…"
+            value={approveComment}
+            onChange={e => {
+              setApproveComment(e.target.value);
+            }}
+            rows={2}
+            className="text-sm"
+          />
+          {error && <p className="text-xs text-bridges-danger">{error}</p>}
         </div>
       </div>
 
-      <div className="mt-3 space-y-2">
-        <Textarea
-          placeholder="Optional comment on approve…"
-          value={approveComment}
-          onChange={e => {
-            setApproveComment(e.target.value);
+      <div className="w-[1px] self-stretch bg-bridges-border-subtle" />
+
+      <div className="flex w-[160px] flex-col justify-center gap-2">
+        <Button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => {
+            void handleApprove();
           }}
-          rows={2}
-          className="text-sm"
-        />
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy !== null}
-            onClick={() => {
-              void handleApprove();
-            }}
-          >
-            {busy === 'approve' ? 'Approving…' : 'Approve'}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy !== null}
-            onClick={() => {
-              setRejectOpen(true);
-            }}
-          >
-            Reject…
-          </Button>
-        </div>
-        {error && <p className="text-xs text-error">{error}</p>}
+          className="border-0"
+          style={{
+            background: 'var(--bridges-tint-success-bg)',
+            color: 'var(--bridges-tint-success-fg)',
+          }}
+        >
+          <Check className="h-3.5 w-3.5" />
+          {busy === 'approve' ? 'Approving…' : 'Approve'}
+        </Button>
+        <Button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => {
+            setRejectOpen(true);
+          }}
+          className="border-0"
+          style={{
+            background: 'var(--bridges-tint-danger-bg)',
+            color: 'var(--bridges-tint-danger-fg)',
+          }}
+        >
+          <X className="h-3.5 w-3.5" />
+          Reject
+        </Button>
+        <Button type="button" variant="ghost" size="sm" disabled={busy !== null}>
+          Open
+          <ArrowRight className="h-3 w-3" />
+        </Button>
       </div>
 
       <Dialog
@@ -177,7 +232,9 @@ function ApprovalCard({ run }: { run: DashboardRunResponse }): React.ReactElemen
             <DialogTitle>Reject — {run.workflow_name}</DialogTitle>
             <DialogDescription>
               The reason will be passed to the workflow's `on_reject` prompt as
-              <code className="ml-1 rounded bg-surface px-1 py-0.5 text-xs">$REJECTION_REASON</code>
+              <code className="ml-1 rounded bg-bridges-surface-subtle px-1 py-0.5 text-xs">
+                $REJECTION_REASON
+              </code>
               .
             </DialogDescription>
           </DialogHeader>
@@ -214,11 +271,4 @@ function ApprovalCard({ run }: { run: DashboardRunResponse }): React.ReactElemen
       </Dialog>
     </li>
   );
-}
-
-function formatWaiting(ms: number): string {
-  if (ms < 60_000) return `${String(Math.floor(ms / 1000))}s`;
-  if (ms < 3_600_000) return `${String(Math.floor(ms / 60_000))}m`;
-  if (ms < 86_400_000) return `${String(Math.floor(ms / 3_600_000))}h`;
-  return `${String(Math.floor(ms / 86_400_000))}d`;
 }

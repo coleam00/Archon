@@ -6,19 +6,137 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Dark-only theme - uses our custom palette as root defaults */
+/* ============================================================
+   Light theme (default) — bridges palette
+   ============================================================ */
 :root {
+  /* App-specific colors */
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-inset: #f5f5f6;
+  --surface-hover: #f5f5f6;
+  --border: #e4e4e7;
+  --border-bright: #d1d1d6;
+  --text-primary: #0f0f12;
+  --text-secondary: #5a5a63;
+  --text-tertiary: #8e8e96;
+  --accent: #eff6ff;
+  --accent-hover: #60a5fa;
+  --accent-muted: #dbeafe;
+  --accent-bright: #3b82f6;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --error: #ef4444;
+
+  /* Node type colors */
+  --node-command: #3b82f6;
+  --node-prompt: #8b5cf6;
+  --node-bash: #f59e0b;
+
+  /* shadcn variables — light */
+  --radius: 0.625rem;
+  --background: #fafafa;
+  --foreground: #0f0f12;
+  --card: #ffffff;
+  --card-foreground: #0f0f12;
+  --popover: #ffffff;
+  --popover-foreground: #0f0f12;
+  --primary: #0f0f12;
+  --primary-foreground: #fafafa;
+  --secondary: #f5f5f6;
+  --secondary-foreground: #0f0f12;
+  --muted: #f0f0f2;
+  --muted-foreground: #5a5a63;
+  --accent-foreground: #1d4ed8;
+  --destructive: #ef4444;
+  --input: #e4e4e7;
+  --ring: #3b82f6;
+  --chart-1: #3b82f6;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #8b5cf6;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0f0f12;
+  --sidebar-primary: #0f0f12;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f0f0f2;
+  --sidebar-accent-foreground: #0f0f12;
+  --sidebar-border: #efeff1;
+  --sidebar-ring: #3b82f6;
+
+  /* ----------------------------------------------------------
+     Bridges palette — namespaced, exported as --color-bridges-*
+     Status hues are identical in light + dark by design.
+     ---------------------------------------------------------- */
+  --bridges-bg: #fafafa;
+  --bridges-surface: #ffffff;
+  --bridges-surface-subtle: #f5f5f6;
+  --bridges-surface-muted: #f0f0f2;
+  --bridges-fg1: #0f0f12;
+  --bridges-fg2: #5a5a63;
+  --bridges-fg3: #8e8e96;
+  --bridges-fg-placeholder: #b0b0b7;
+  --bridges-border-subtle: #efeff1;
+  --bridges-border: #e4e4e7;
+  --bridges-border-strong: #d1d1d6;
+  --bridges-action: #0f0f12;
+  --bridges-action-hover: #27272a;
+
+  /* Saturated status — same in light + dark */
+  --bridges-open: #3b82f6;
+  --bridges-success: #10b981;
+  --bridges-warning: #f59e0b;
+  --bridges-danger: #ef4444;
+  --bridges-trigger: #8b5cf6;
+  --bridges-neutral: #71717a;
+
+  /* Tag tints — 8 pastel pairs */
+  --bridges-tag-violet-bg: #ede9fe;
+  --bridges-tag-violet-fg: #6d28d9;
+  --bridges-tag-peach-bg: #ffedd5;
+  --bridges-tag-peach-fg: #c2410c;
+  --bridges-tag-pink-bg: #fce7f3;
+  --bridges-tag-pink-fg: #be185d;
+  --bridges-tag-mint-bg: #d1fae5;
+  --bridges-tag-mint-fg: #065f46;
+  --bridges-tag-sky-bg: #dbeafe;
+  --bridges-tag-sky-fg: #1e40af;
+  --bridges-tag-lilac-bg: #e0e7ff;
+  --bridges-tag-lilac-fg: #3730a3;
+  --bridges-tag-butter-bg: #fef3c7;
+  --bridges-tag-butter-fg: #92400e;
+  --bridges-tag-rose-bg: #ffe4e6;
+  --bridges-tag-rose-fg: #9f1239;
+
+  /* Tinted button/badge bg+fg pairs */
+  --bridges-tint-success-bg: #ecfdf5;
+  --bridges-tint-success-fg: #047857;
+  --bridges-tint-danger-bg: #fef2f2;
+  --bridges-tint-danger-fg: #b91c1c;
+  --bridges-tint-warning-bg: #fffbeb;
+  --bridges-tint-warning-fg: #b45309;
+  --bridges-tint-info-bg: #eff6ff;
+  --bridges-tint-info-fg: #1d4ed8;
+}
+
+/* ============================================================
+   Dark theme — opt-in via .dark on <html>
+   ============================================================ */
+.dark {
   /* App-specific colors */
   --surface: oklch(0.18 0.008 260);
   --surface-elevated: oklch(0.22 0.01 260);
+  --surface-inset: oklch(0.12 0.005 260);
+  --surface-hover: oklch(0.24 0.01 260);
+  --border: oklch(0.28 0.01 260);
   --border-bright: oklch(0.35 0.015 260);
   --text-primary: oklch(0.93 0.005 260);
   --text-secondary: oklch(0.65 0.01 260);
   --text-tertiary: oklch(0.45 0.01 260);
+  --accent: oklch(0.25 0.06 250);
   --accent-hover: oklch(0.58 0.18 250);
   --accent-muted: oklch(0.3 0.08 250);
-  --surface-inset: oklch(0.12 0.005 260);
-  --surface-hover: oklch(0.24 0.01 260);
   --accent-bright: oklch(0.72 0.18 250);
   --success: oklch(0.65 0.17 155);
   --warning: oklch(0.75 0.15 75);
@@ -29,8 +147,7 @@
   --node-prompt: oklch(0.58 0.19 290);
   --node-bash: oklch(0.75 0.15 75);
 
-  /* shadcn variables mapped to dark theme */
-  --radius: 0.625rem;
+  /* shadcn variables — dark */
   --background: oklch(0.14 0.005 260);
   --foreground: oklch(0.93 0.005 260);
   --card: oklch(0.18 0.008 260);
@@ -43,10 +160,8 @@
   --secondary-foreground: oklch(0.93 0.005 260);
   --muted: oklch(0.22 0.01 260);
   --muted-foreground: oklch(0.65 0.01 260);
-  --accent: oklch(0.25 0.06 250);
   --accent-foreground: oklch(0.93 0.005 260);
   --destructive: oklch(0.6 0.2 25);
-  --border: oklch(0.28 0.01 260);
   --input: oklch(0.28 0.01 260);
   --ring: oklch(0.65 0.18 250);
   --chart-1: oklch(0.65 0.18 250);
@@ -62,6 +177,21 @@
   --sidebar-accent-foreground: oklch(0.93 0.005 260);
   --sidebar-border: oklch(0.28 0.01 260);
   --sidebar-ring: oklch(0.65 0.18 250);
+
+  /* Bridges — dark surfaces/foregrounds (status + tag tints unchanged) */
+  --bridges-bg: #0f0f12;
+  --bridges-surface: #18181b;
+  --bridges-surface-subtle: #1f1f23;
+  --bridges-surface-muted: #27272a;
+  --bridges-fg1: #fafafa;
+  --bridges-fg2: #a1a1aa;
+  --bridges-fg3: #71717a;
+  --bridges-fg-placeholder: #52525b;
+  --bridges-border-subtle: #27272a;
+  --bridges-border: #3f3f46;
+  --bridges-border-strong: #52525b;
+  --bridges-action: #fafafa;
+  --bridges-action-hover: #e4e4e7;
 }
 
 @theme inline {
@@ -126,6 +256,52 @@
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
   --animate-slide-up: slide-up 0.25s ease-out;
+  --animate-needs-me-pulse: needs-me-pulse 2.4s ease-in-out infinite;
+
+  /* Bridges palette — exported as Tailwind classes (bg-bridges-*, text-bridges-*, border-bridges-*) */
+  --color-bridges-bg: var(--bridges-bg);
+  --color-bridges-surface: var(--bridges-surface);
+  --color-bridges-surface-subtle: var(--bridges-surface-subtle);
+  --color-bridges-surface-muted: var(--bridges-surface-muted);
+  --color-bridges-fg1: var(--bridges-fg1);
+  --color-bridges-fg2: var(--bridges-fg2);
+  --color-bridges-fg3: var(--bridges-fg3);
+  --color-bridges-fg-placeholder: var(--bridges-fg-placeholder);
+  --color-bridges-border-subtle: var(--bridges-border-subtle);
+  --color-bridges-border: var(--bridges-border);
+  --color-bridges-border-strong: var(--bridges-border-strong);
+  --color-bridges-action: var(--bridges-action);
+  --color-bridges-action-hover: var(--bridges-action-hover);
+  --color-bridges-open: var(--bridges-open);
+  --color-bridges-success: var(--bridges-success);
+  --color-bridges-warning: var(--bridges-warning);
+  --color-bridges-danger: var(--bridges-danger);
+  --color-bridges-trigger: var(--bridges-trigger);
+  --color-bridges-neutral: var(--bridges-neutral);
+  --color-bridges-tag-violet-bg: var(--bridges-tag-violet-bg);
+  --color-bridges-tag-violet-fg: var(--bridges-tag-violet-fg);
+  --color-bridges-tag-peach-bg: var(--bridges-tag-peach-bg);
+  --color-bridges-tag-peach-fg: var(--bridges-tag-peach-fg);
+  --color-bridges-tag-pink-bg: var(--bridges-tag-pink-bg);
+  --color-bridges-tag-pink-fg: var(--bridges-tag-pink-fg);
+  --color-bridges-tag-mint-bg: var(--bridges-tag-mint-bg);
+  --color-bridges-tag-mint-fg: var(--bridges-tag-mint-fg);
+  --color-bridges-tag-sky-bg: var(--bridges-tag-sky-bg);
+  --color-bridges-tag-sky-fg: var(--bridges-tag-sky-fg);
+  --color-bridges-tag-lilac-bg: var(--bridges-tag-lilac-bg);
+  --color-bridges-tag-lilac-fg: var(--bridges-tag-lilac-fg);
+  --color-bridges-tag-butter-bg: var(--bridges-tag-butter-bg);
+  --color-bridges-tag-butter-fg: var(--bridges-tag-butter-fg);
+  --color-bridges-tag-rose-bg: var(--bridges-tag-rose-bg);
+  --color-bridges-tag-rose-fg: var(--bridges-tag-rose-fg);
+  --color-bridges-tint-success-bg: var(--bridges-tint-success-bg);
+  --color-bridges-tint-success-fg: var(--bridges-tint-success-fg);
+  --color-bridges-tint-danger-bg: var(--bridges-tint-danger-bg);
+  --color-bridges-tint-danger-fg: var(--bridges-tint-danger-fg);
+  --color-bridges-tint-warning-bg: var(--bridges-tint-warning-bg);
+  --color-bridges-tint-warning-fg: var(--bridges-tint-warning-fg);
+  --color-bridges-tint-info-bg: var(--bridges-tint-info-bg);
+  --color-bridges-tint-info-fg: var(--bridges-tint-info-fg);
 }
 
 @keyframes slide-up {
@@ -139,6 +315,16 @@
   }
 }
 
+@keyframes needs-me-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(139, 92, 246, 0.18);
+  }
+}
+
 /* Base body styling */
 body {
   background-color: var(--background);
@@ -146,7 +332,7 @@ body {
   font-family: var(--font-sans);
 }
 
-/* Scrollbar styling for dark theme */
+/* Scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

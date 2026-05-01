@@ -1,6 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
+import {
+  X,
+  Check,
+  RotateCcw,
+  Terminal,
+  GitPullRequest,
+  GitBranch,
+  Clock,
+  MoreVertical,
+  ExternalLink,
+} from 'lucide-react';
 import {
   Sheet,
   SheetContent,
@@ -8,7 +19,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useMissionStore } from '@/stores/mission-store';
 import {
@@ -21,11 +31,25 @@ import {
   previewReplay,
   launchReplayApi,
   listArtifacts,
+  type WorkflowRunResponse,
   type ReplayPreviewResponse,
   type ReplayLaunchResponse,
   type ArtifactFile,
 } from '@/lib/api';
 import { ArtifactPreview } from './ArtifactPreview';
+import { cn } from '@/lib/utils';
+import {
+  Mono,
+  ProviderChip,
+  StatusChip,
+  Tag,
+  fmtAgo,
+  fmtDur,
+  runProvider,
+  runIdentifier,
+  runApprovalReason,
+  runBranch,
+} from './primitives';
 
 interface MissionDetailDrawerProps {
   runId: string | null;
@@ -44,15 +68,30 @@ const TIMELINE_EVENT_TYPES = new Set([
   'symphony_dispatch_cancelled',
 ]);
 
+const TIMELINE_KIND_COLOR: Record<string, string> = {
+  workflow_status: '#3B82F6',
+  dag_node: '#71717A',
+  workflow_step: '#71717A',
+  workflow_tool_activity: '#F59E0B',
+  workflow_artifact: '#8B5CF6',
+  symphony_dispatch_started: '#3B82F6',
+  symphony_dispatch_completed: '#10B981',
+  symphony_dispatch_failed: '#EF4444',
+  symphony_dispatch_cancelled: '#71717A',
+};
+
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
-type DrawerTab = 'timeline' | 'artifacts' | 'replay' | 'raw';
+type DrawerTab = 'timeline' | 'replay' | 'raw' | 'artifacts';
 
 export function MissionDetailDrawer({
   runId,
   onClose,
 }: MissionDetailDrawerProps): React.ReactElement {
   const [tab, setTab] = useState<DrawerTab>('timeline');
+  useEffect(() => {
+    setTab('timeline');
+  }, [runId]);
 
   return (
     <Sheet
@@ -62,8 +101,8 @@ export function MissionDetailDrawer({
       }}
     >
       <SheetContent
-        side="bottom"
-        className="flex h-[85dvh] flex-col sm:h-auto sm:max-h-[90dvh] sm:!inset-y-0 sm:!right-0 sm:!left-auto sm:w-[32rem] sm:max-w-md sm:!bottom-0 sm:!top-0"
+        side="right"
+        className="flex w-full flex-col border-bridges-border-subtle bg-bridges-surface p-0 sm:!w-[580px] sm:!max-w-[580px]"
       >
         {runId ? (
           <DrawerContent runId={runId} tab={tab} onTabChange={setTab} onClose={onClose} />
@@ -89,87 +128,107 @@ function DrawerContent({
   onTabChange: (t: DrawerTab) => void;
   onClose: () => void;
 }): React.ReactElement {
-  // Run + persisted events. SSE events come from the mission store and stack
-  // on top of these for the timeline view.
   const { data, isLoading, isError } = useQuery({
     queryKey: ['mission.runDetail', runId],
     queryFn: () => getWorkflowRun(runId),
     refetchInterval: 5_000,
   });
 
+  const run = data?.run;
+
   return (
-    <>
-      <SheetHeader>
-        <SheetTitle className="truncate">{data?.run.workflow_name ?? 'Run'}</SheetTitle>
-        <SheetDescription className="truncate font-mono text-[11px]">{runId}</SheetDescription>
-      </SheetHeader>
+    <div className="flex h-full flex-col">
+      <DrawerHeader run={run} runId={runId} onClose={onClose} />
+      <DrawerActions runId={runId} run={run} onClose={onClose} />
+      <DrawerTabs tab={tab} onTabChange={onTabChange} />
 
-      <DrawerActions
-        runId={runId}
-        status={data?.run.status ?? null}
-        workerPlatformId={data?.run.worker_platform_id ?? null}
-      />
+      <div className="flex-1 overflow-y-auto px-[18px] pb-6 pt-3.5">
+        {tab === 'timeline' && <TimelinePane runId={runId} run={run} />}
+        {tab === 'artifacts' && <ArtifactsPane runId={runId} />}
+        {tab === 'replay' && <ReplayPane runId={runId} onClose={onClose} />}
+        {tab === 'raw' && (
+          <>
+            {isLoading && <p className="text-sm text-bridges-fg2">Loading…</p>}
+            {isError && <p className="text-sm text-bridges-danger">Failed to load run.</p>}
+            {data && <RawPane data={data} />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
-      <Tabs
-        value={tab}
-        onValueChange={v => {
-          onTabChange(v as DrawerTab);
-        }}
-        className="flex flex-1 flex-col overflow-hidden"
-      >
-        <TabsList className="self-start">
-          <TabsTrigger value="timeline">Timeline</TabsTrigger>
-          <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
-          <TabsTrigger value="replay">Replay</TabsTrigger>
-          <TabsTrigger value="raw">Raw</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="timeline" className="flex-1 overflow-y-auto pr-2">
-          <TimelinePane runId={runId} />
-        </TabsContent>
-
-        <TabsContent value="artifacts" className="flex-1 overflow-y-auto pr-2">
-          <ArtifactsPane runId={runId} />
-        </TabsContent>
-
-        <TabsContent value="replay" className="flex-1 overflow-y-auto pr-2">
-          <ReplayPane runId={runId} onClose={onClose} />
-        </TabsContent>
-
-        <TabsContent value="raw" className="flex-1 overflow-y-auto pr-2">
-          {isLoading && <p className="text-sm text-text-secondary">Loading…</p>}
-          {isError && <p className="text-sm text-error">Failed to load run.</p>}
-          {data && (
-            <pre className="whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-3 font-mono text-[11px] text-text-primary">
-              {JSON.stringify(data, null, 2)}
-            </pre>
+function DrawerHeader({
+  run,
+  runId,
+  onClose,
+}: {
+  run: WorkflowRunResponse | undefined;
+  runId: string;
+  onClose: () => void;
+}): React.ReactElement {
+  return (
+    <div className="border-b border-bridges-border-subtle px-[18px] pb-3 pt-3.5">
+      <div className="mb-2 flex items-center gap-2">
+        <Mono className="text-[11px] text-bridges-fg2">{run ? runIdentifier(run) : '—'}</Mono>
+        <span className="text-bridges-border-strong">/</span>
+        <Mono className="text-[11px] text-bridges-fg2">{runId.slice(0, 8)}</Mono>
+        <div className="flex-1" />
+        <button
+          onClick={onClose}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-bridges-fg2 hover:bg-bridges-surface-subtle hover:text-bridges-fg1"
+          title="Close"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <h2 className="mb-2.5 text-[17px] font-semibold leading-snug text-bridges-fg1">
+        {run?.workflow_name ?? 'Loading…'}
+      </h2>
+      {run && (
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusChip status={run.status} />
+          <ProviderChip provider={runProvider(run)} />
+          <Tag mono>{run.workflow_name}</Tag>
+          {runBranch(run) && (
+            <span className="inline-flex items-center gap-1 text-[11.5px] text-bridges-fg3">
+              <GitBranch className="h-3 w-3" />
+              <Mono className="text-[11px] text-bridges-fg2">{runBranch(run)}</Mono>
+            </span>
           )}
-        </TabsContent>
-      </Tabs>
-    </>
+          <span className="inline-flex items-center gap-1 text-[11.5px] text-bridges-fg3">
+            <Clock className="h-3 w-3" />
+            {fmtDur(run.started_at, run.completed_at ?? Date.now())}
+          </span>
+        </div>
+      )}
+    </div>
   );
 }
 
 function DrawerActions({
   runId,
-  status,
-  workerPlatformId,
+  run,
+  onClose,
 }: {
   runId: string;
-  status: string | null;
-  workerPlatformId: string | null;
+  run: WorkflowRunResponse | undefined;
+  onClose: () => void;
 }): React.ReactElement {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const status = run?.status ?? null;
   const isActive = status === 'running' || status === 'pending';
   const isPaused = status === 'paused';
   const isFailed = status === 'failed';
+  const isCompleted = status === 'completed';
   const isTerminal = status !== null && TERMINAL_STATUSES.has(status);
+  const workerPlatformId = run?.worker_platform_id ?? null;
 
-  async function run(label: string, fn: () => Promise<unknown>): Promise<void> {
+  async function actAndInvalidate(label: string, fn: () => Promise<unknown>): Promise<void> {
     setBusy(label);
     setError(null);
     try {
@@ -178,6 +237,7 @@ function DrawerActions({
       await queryClient.invalidateQueries({ queryKey: ['dashboardRuns'] });
       await queryClient.invalidateQueries({ queryKey: ['mission.statusBar.counts'] });
       await queryClient.invalidateQueries({ queryKey: ['mission.approvals'] });
+      if (label === 'approve' || label === 'reject' || label === 'cancel') onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : `${label} failed`);
     } finally {
@@ -186,21 +246,8 @@ function DrawerActions({
   }
 
   return (
-    <div className="flex flex-col gap-1.5 border-y border-border py-2">
-      <div className="flex flex-wrap gap-2">
-        {isActive && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={busy !== null}
-            onClick={() => {
-              void run('cancel', () => cancelWorkflowRun(runId));
-            }}
-          >
-            {busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
-          </Button>
-        )}
+    <div className="border-b border-bridges-border-subtle px-[18px] pb-2.5 pt-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         {isPaused && (
           <>
             <Button
@@ -208,21 +255,52 @@ function DrawerActions({
               size="sm"
               disabled={busy !== null}
               onClick={() => {
-                void run('approve', () => approveWorkflowRun(runId));
+                void actAndInvalidate('approve', () => approveWorkflowRun(runId));
+              }}
+              className="border-0"
+              style={{
+                background: 'var(--bridges-tint-success-bg)',
+                color: 'var(--bridges-tint-success-fg)',
               }}
             >
+              <Check className="h-3 w-3" />
               {busy === 'approve' ? 'Approving…' : 'Approve'}
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => {
+                void actAndInvalidate('reject', () => rejectWorkflowRun(runId));
+              }}
+              className="border-0"
+              style={{
+                background: 'var(--bridges-tint-danger-bg)',
+                color: 'var(--bridges-tint-danger-fg)',
+              }}
+            >
+              <X className="h-3 w-3" />
+              {busy === 'reject' ? 'Rejecting…' : 'Reject'}
+            </Button>
+          </>
+        )}
+        {isActive && (
+          <>
             <Button
               type="button"
               size="sm"
               variant="outline"
               disabled={busy !== null}
               onClick={() => {
-                void run('reject', () => rejectWorkflowRun(runId));
+                void actAndInvalidate('cancel', () => cancelWorkflowRun(runId));
               }}
             >
-              {busy === 'reject' ? 'Rejecting…' : 'Reject'}
+              <X className="h-3 w-3" />
+              {busy === 'cancel' ? 'Cancelling…' : 'Cancel run'}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" disabled>
+              <Terminal className="h-3 w-3" />
+              Attach terminal
             </Button>
           </>
         )}
@@ -232,41 +310,198 @@ function DrawerActions({
             size="sm"
             disabled={busy !== null}
             onClick={() => {
-              void run('resume', () => resumeWorkflowRun(runId));
+              void actAndInvalidate('resume', () => resumeWorkflowRun(runId));
             }}
           >
+            <RotateCcw className="h-3 w-3" />
             {busy === 'resume' ? 'Resuming…' : 'Resume'}
           </Button>
         )}
-        {!isTerminal && (
+        {isCompleted && (
+          <Button type="button" size="sm" variant="outline" disabled>
+            <GitPullRequest className="h-3 w-3" />
+            View PR
+          </Button>
+        )}
+        {!isTerminal && !isPaused && (
           <Button
             type="button"
             size="sm"
-            variant="outline"
+            variant="ghost"
             disabled={busy !== null}
             onClick={() => {
-              void run('abandon', () => abandonWorkflowRun(runId));
+              void actAndInvalidate('abandon', () => abandonWorkflowRun(runId));
             }}
           >
             {busy === 'abandon' ? 'Abandoning…' : 'Abandon'}
           </Button>
         )}
+        <div className="flex-1" />
         {workerPlatformId && (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
+          <button
             onClick={() => {
               navigate(`/chat/${encodeURIComponent(workerPlatformId)}`);
             }}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-bridges-fg2 hover:bg-bridges-surface-subtle hover:text-bridges-fg1"
+            title="Open conversation"
           >
-            Open conversation
-          </Button>
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
         )}
+        <button
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-bridges-fg2 hover:bg-bridges-surface-subtle hover:text-bridges-fg1"
+          title="More"
+          disabled
+        >
+          <MoreVertical className="h-3.5 w-3.5" />
+        </button>
       </div>
-      {error && <p className="text-xs text-error">{error}</p>}
+      {error && <p className="mt-1.5 text-xs text-bridges-danger">{error}</p>}
     </div>
   );
+}
+
+function DrawerTabs({
+  tab,
+  onTabChange,
+}: {
+  tab: DrawerTab;
+  onTabChange: (t: DrawerTab) => void;
+}): React.ReactElement {
+  const TABS: { id: DrawerTab; label: string }[] = [
+    { id: 'timeline', label: 'Timeline' },
+    { id: 'replay', label: 'Replay' },
+    { id: 'raw', label: 'Raw events' },
+    { id: 'artifacts', label: 'Artifacts' },
+  ];
+  return (
+    <div className="border-b border-bridges-border-subtle bg-bridges-bg px-3.5 pb-2 pt-2.5">
+      <div className="inline-flex rounded-md bg-bridges-surface-muted p-0.5">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => {
+              onTabChange(t.id);
+            }}
+            className={cn(
+              'rounded px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+              tab === t.id
+                ? 'bg-bridges-surface text-bridges-fg1 shadow-[0_1px_2px_rgba(15,15,18,0.06)]'
+                : 'text-bridges-fg2 hover:text-bridges-fg1'
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TimelinePane({
+  runId,
+  run,
+}: {
+  runId: string;
+  run: WorkflowRunResponse | undefined;
+}): React.ReactElement {
+  const eventTimeline = useMissionStore(s => s.eventTimeline);
+  const events = eventTimeline.get(runId) ?? [];
+  const filtered = events.filter(e => TIMELINE_EVENT_TYPES.has(e.type));
+
+  const reason = run ? runApprovalReason(run) : null;
+
+  return (
+    <div>
+      {run && (
+        <div className="mb-3.5 grid grid-cols-3 gap-3 rounded-lg border border-bridges-border-subtle bg-bridges-bg p-3">
+          <Stat label="Started" value={fmtAgo(run.started_at)} />
+          <Stat label="Provider" value={runProvider(run)} />
+          <Stat label="Status" value={run.status} />
+        </div>
+      )}
+
+      {run?.status === 'paused' && reason && (
+        <div className="mb-3.5 rounded-lg border border-[#DDD6FE] bg-[#F5F3FF] p-3">
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.05em] text-[#5B21B6]">
+            Approval requested
+          </div>
+          <div className="text-[13px] leading-snug text-[#5B21B6]">{reason}</div>
+        </div>
+      )}
+
+      {filtered.length === 0 && (
+        <p className="text-sm text-bridges-fg3">
+          No events yet. New events will appear here as they stream in.
+        </p>
+      )}
+
+      <div className="relative pl-4">
+        <div className="absolute bottom-1.5 left-1 top-1.5 w-px bg-bridges-border" />
+        {filtered.map((event, idx) => {
+          const color = TIMELINE_KIND_COLOR[event.type] ?? '#71717A';
+          const summary = summarize(event.payload);
+          const isToolCall = event.type === 'workflow_tool_activity';
+          return (
+            <div
+              key={`${event.runId}-${String(idx)}-${String(event.timestamp)}`}
+              className="relative pb-3.5"
+            >
+              <span
+                className="absolute -left-4 top-1 h-2.5 w-2.5 rounded-full border-2 border-white"
+                style={{ background: color, boxShadow: '0 0 0 1px var(--bridges-border)' }}
+              />
+              <div className="mb-0.5 flex items-center gap-2">
+                <span
+                  className="text-[10.5px] font-semibold uppercase tracking-[0.05em]"
+                  style={{ color }}
+                >
+                  {event.type.replace(/_/g, ' ')}
+                </span>
+                <Mono className="text-[10.5px] text-bridges-fg3">
+                  {typeof event.payload.name === 'string' ? event.payload.name : ''}
+                </Mono>
+                <div className="flex-1" />
+                <Mono className="text-[10.5px] text-bridges-fg-placeholder">
+                  {fmtAgo(event.timestamp)}
+                </Mono>
+              </div>
+              <div
+                className={cn(
+                  'text-[12.5px] leading-snug text-bridges-fg1',
+                  isToolCall && 'font-mono'
+                )}
+              >
+                {summary || event.type}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }): React.ReactElement {
+  return (
+    <div>
+      <div className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-[0.05em] text-bridges-fg3">
+        {label}
+      </div>
+      <div className="text-[13px] font-medium text-bridges-fg1">{value}</div>
+    </div>
+  );
+}
+
+function summarize(payload: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof payload.name === 'string') parts.push(payload.name);
+  if (typeof payload.toolName === 'string') parts.push(`tool:${payload.toolName}`);
+  if (typeof payload.stepName === 'string') parts.push(`step:${payload.stepName}`);
+  if (typeof payload.status === 'string') parts.push(`→${payload.status}`);
+  if (typeof payload.error === 'string') parts.push(`error:${payload.error.slice(0, 80)}`);
+  return parts.join(' · ');
 }
 
 function ArtifactsPane({ runId }: { runId: string }): React.ReactElement {
@@ -277,107 +512,54 @@ function ArtifactsPane({ runId }: { runId: string }): React.ReactElement {
     refetchInterval: 10_000,
   });
 
-  if (isLoading) return <p className="text-sm text-text-secondary">Loading…</p>;
+  if (isLoading) return <p className="text-sm text-bridges-fg2">Loading…</p>;
   if (error) {
     const msg = error instanceof Error ? error.message : 'Failed to load';
     if (msg.includes('404')) {
-      return <p className="text-sm text-text-secondary">No artifacts written by this run.</p>;
+      return <p className="text-sm text-bridges-fg3">No artifacts written by this run.</p>;
     }
-    return <p className="text-sm text-error">{msg}</p>;
+    return <p className="text-sm text-bridges-danger">{msg}</p>;
   }
   if (!data || data.length === 0) {
-    return <p className="text-sm text-text-secondary">No artifacts written by this run.</p>;
+    return <p className="text-sm text-bridges-fg3">No artifacts written by this run.</p>;
   }
 
   return (
-    <div className="space-y-3">
-      <ul className="space-y-1">
-        {data.map(f => (
-          <li key={f.path}>
-            <button
-              type="button"
-              onClick={() => {
-                setSelected(f);
-              }}
-              className={
-                selected?.path === f.path
-                  ? 'flex w-full justify-between gap-2 rounded-md bg-primary/10 px-2 py-1.5 text-left text-sm text-primary'
-                  : 'flex w-full justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm text-text-primary hover:bg-surface-elevated'
-              }
-            >
-              <span className="truncate font-mono text-[11px]">{f.path}</span>
-              <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-tertiary">
-                {f.mimeType.split(';')[0]?.split('/')[1] ?? '—'}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
-      {selected && <ArtifactPreview runId={runId} file={selected} />}
+    <div className="space-y-2">
+      {data.map(f => {
+        const ext = f.mimeType.split(';')[0]?.split('/')[1] ?? '—';
+        const sizeKb = f.size ? `${(f.size / 1024).toFixed(0)} KB` : '';
+        return (
+          <button
+            key={f.path}
+            type="button"
+            onClick={() => {
+              setSelected(prev => (prev?.path === f.path ? null : f));
+            }}
+            className={cn(
+              'flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors',
+              selected?.path === f.path
+                ? 'border-bridges-border-strong bg-bridges-surface-subtle'
+                : 'border-bridges-border bg-bridges-surface hover:border-bridges-border-strong'
+            )}
+          >
+            <Mono className="flex-1 truncate text-[12px] text-bridges-fg1">{f.name}</Mono>
+            <span className="text-[11px] text-bridges-fg3">{sizeKb}</span>
+            <Tag>{ext}</Tag>
+          </button>
+        );
+      })}
+      {selected && (
+        <div className="mt-3 rounded-lg border border-bridges-border bg-bridges-surface p-2">
+          <ArtifactPreview runId={runId} file={selected} />
+        </div>
+      )}
     </div>
-  );
-}
-
-function TimelinePane({ runId }: { runId: string }): React.ReactElement {
-  // Live events from SSE stream. Persisted events from getWorkflowRun query are
-  // useful for cold-start, but for now the live stream is the primary source —
-  // the prior RunTimelineDrawer worked the same way.
-  const eventTimeline = useMissionStore(s => s.eventTimeline);
-  const events = eventTimeline.get(runId) ?? [];
-  const filtered = events.filter(e => TIMELINE_EVENT_TYPES.has(e.type));
-
-  if (filtered.length === 0) {
-    return (
-      <p className="text-sm text-text-secondary">
-        No events yet. New events will appear here as they stream in.
-      </p>
-    );
-  }
-
-  return (
-    <ol className="relative space-y-3 border-l-2 border-border pl-4">
-      {filtered.map((event, idx) => (
-        <li key={`${event.runId}-${String(idx)}-${String(event.timestamp)}`} className="relative">
-          <span className="absolute -left-[22px] top-1 h-3 w-3 rounded-full bg-primary" />
-          <div className="text-xs uppercase tracking-wide text-text-secondary">
-            {event.type.replace(/_/g, ' ')}
-          </div>
-          <div className="text-xs text-text-secondary">
-            {new Date(event.timestamp).toLocaleTimeString()}
-          </div>
-          <PayloadFields payload={event.payload} />
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function PayloadFields({
-  payload,
-}: {
-  payload: Record<string, unknown>;
-}): React.ReactElement | null {
-  const fields: { label: string; value: string }[] = [];
-  if (typeof payload.name === 'string') fields.push({ label: 'name', value: payload.name });
-  if (typeof payload.toolName === 'string') fields.push({ label: 'tool', value: payload.toolName });
-  if (typeof payload.stepName === 'string') fields.push({ label: 'step', value: payload.stepName });
-  if (typeof payload.status === 'string') fields.push({ label: 'status', value: payload.status });
-  if (typeof payload.error === 'string') fields.push({ label: 'error', value: payload.error });
-  if (fields.length === 0) return null;
-  return (
-    <ul className="mt-1 space-y-0.5 text-xs text-text-primary">
-      {fields.map(f => (
-        <li key={f.label}>
-          <span className="text-text-secondary">{f.label}:</span> {f.value}
-        </li>
-      ))}
-    </ul>
   );
 }
 
 type ReplayState =
   | { kind: 'idle' }
-  | { kind: 'loading' }
   | { kind: 'preview'; preview: ReplayPreviewResponse['preview'] }
   | { kind: 'launching' }
   | { kind: 'launched'; result: ReplayLaunchResponse['result'] }
@@ -410,21 +592,21 @@ function ReplayPane({
     }
   }
 
-  if (isLoading) return <p className="text-sm text-text-secondary">Checking for drift…</p>;
+  if (isLoading) return <p className="text-sm text-bridges-fg2">Checking for drift…</p>;
   if (error) {
     return (
-      <p className="text-sm text-error">
+      <p className="text-sm text-bridges-danger">
         {error instanceof Error ? error.message : 'Failed to load replay preview'}
       </p>
     );
   }
   if (state.kind === 'launching') {
-    return <p className="text-sm text-text-secondary">Launching replay…</p>;
+    return <p className="text-sm text-bridges-fg2">Launching replay…</p>;
   }
   if (state.kind === 'launched') {
     return (
       <div className="space-y-3 text-sm">
-        <p className="text-text-primary">New run started.</p>
+        <p className="text-bridges-fg1">New run started.</p>
         <div className="flex gap-2">
           <Button
             type="button"
@@ -443,9 +625,9 @@ function ReplayPane({
     );
   }
   if (state.kind === 'error') {
-    return <p className="text-sm text-error">{state.message}</p>;
+    return <p className="text-sm text-bridges-danger">{state.message}</p>;
   }
-  if (!data) return <p className="text-sm text-text-secondary">No data.</p>;
+  if (!data) return <p className="text-sm text-bridges-fg2">No data.</p>;
 
   return <DriftBlock preview={data.preview} onConfirm={handleConfirm} />;
 }
@@ -462,55 +644,91 @@ function DriftBlock({
 
   return (
     <div className="space-y-3 text-sm">
-      <p className="text-text-primary">
-        Workflow: <span className="font-medium">{preview.workflow_name}</span>
-      </p>
-      {hasDrift ? (
-        <div className="space-y-1 rounded-md border border-warning/40 bg-warning/5 p-3">
-          <p className="font-medium text-warning">Drift detected</p>
-          {drift.yaml_changed && (
-            <p className="text-xs text-text-primary">
-              Workflow YAML has changed since the original run.
-            </p>
-          )}
-          {drift.repo_head_changed && (
-            <p className="text-xs text-text-primary">
-              Repository HEAD has moved since the original run.
-            </p>
-          )}
+      <div className="rounded-lg border border-bridges-border-subtle bg-bridges-bg p-4">
+        <div className="mb-2.5 flex items-center gap-2">
+          <RotateCcw className="h-4 w-4 text-bridges-open" />
+          <span className="text-[14px] font-semibold text-bridges-fg1">Replay this run</span>
         </div>
-      ) : (
-        <p className="text-xs text-text-secondary">
-          No drift detected (or original hashes were not recorded).
+        <p className="m-0 mb-3.5 text-[13px] leading-relaxed text-bridges-fg2">
+          Re-execute <Mono className="text-bridges-fg1">{preview.workflow_name}</Mono> against the
+          same input snapshot in a fresh worktree branched from current main.
         </p>
-      )}
-      <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs">
-        <dt className="text-text-secondary">Current YAML</dt>
-        <dd className="font-mono text-text-primary">{drift.current_yaml_hash.slice(0, 12)}</dd>
-        {drift.original_yaml_hash && (
-          <>
-            <dt className="text-text-secondary">Original YAML</dt>
-            <dd className="font-mono text-text-primary">{drift.original_yaml_hash.slice(0, 12)}</dd>
-          </>
+        {hasDrift ? (
+          <div className="space-y-1 rounded-md border border-[#DDD6FE] bg-[#F5F3FF] p-3 text-[#5B21B6]">
+            <p className="font-medium">Drift detected</p>
+            {drift.yaml_changed && (
+              <p className="text-xs">Workflow YAML has changed since the original run.</p>
+            )}
+            {drift.repo_head_changed && (
+              <p className="text-xs">Repository HEAD has moved since the original run.</p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-bridges-fg3">
+            No drift detected (or original hashes were not recorded).
+          </p>
         )}
-        {drift.current_repo_head && (
-          <>
-            <dt className="text-text-secondary">Current HEAD</dt>
-            <dd className="font-mono text-text-primary">{drift.current_repo_head.slice(0, 12)}</dd>
-          </>
-        )}
-        {drift.original_repo_head && (
-          <>
-            <dt className="text-text-secondary">Original HEAD</dt>
-            <dd className="font-mono text-text-primary">{drift.original_repo_head.slice(0, 12)}</dd>
-          </>
-        )}
-      </dl>
-      <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" onClick={onConfirm}>
-          {hasDrift ? 'Replay anyway' : 'Confirm replay'}
-        </Button>
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          <dt className="text-bridges-fg3">Current YAML</dt>
+          <dd className="font-mono text-bridges-fg1">{drift.current_yaml_hash.slice(0, 12)}</dd>
+          {drift.original_yaml_hash && (
+            <>
+              <dt className="text-bridges-fg3">Original YAML</dt>
+              <dd className="font-mono text-bridges-fg1">
+                {drift.original_yaml_hash.slice(0, 12)}
+              </dd>
+            </>
+          )}
+          {drift.current_repo_head && (
+            <>
+              <dt className="text-bridges-fg3">Current HEAD</dt>
+              <dd className="font-mono text-bridges-fg1">{drift.current_repo_head.slice(0, 12)}</dd>
+            </>
+          )}
+          {drift.original_repo_head && (
+            <>
+              <dt className="text-bridges-fg3">Original HEAD</dt>
+              <dd className="font-mono text-bridges-fg1">
+                {drift.original_repo_head.slice(0, 12)}
+              </dd>
+            </>
+          )}
+        </dl>
+        <div className="mt-3 flex justify-end">
+          <Button type="button" onClick={onConfirm}>
+            {hasDrift ? 'Replay anyway' : 'Confirm replay'}
+          </Button>
+        </div>
       </div>
     </div>
+  );
+}
+
+function RawPane({
+  data,
+}: {
+  data: {
+    run: WorkflowRunResponse;
+    events: { id: string; event_type: string; created_at: string; data: Record<string, unknown> }[];
+  };
+}): React.ReactElement {
+  return (
+    <pre className="m-0 max-h-full overflow-auto rounded-lg bg-bridges-fg1 p-3 font-mono text-[11.5px] leading-snug text-[#A1A1AA]">
+      <span className="text-bridges-fg3">{`# ${data.events.length.toString()} events  ·  workflow_run=${data.run.id}\n# tail -f workflow_events.jsonl\n\n`}</span>
+      {data.events.map(ev => (
+        <div key={ev.id} className="flex gap-2.5">
+          <span className="text-bridges-neutral">
+            {new Date(ev.created_at).toISOString().slice(11, 23)}
+          </span>
+          <span
+            style={{ color: TIMELINE_KIND_COLOR[ev.event_type] ?? '#A1A1AA' }}
+            className="min-w-[120px]"
+          >
+            {ev.event_type}
+          </span>
+          <span className="flex-1 text-[#E4E4E7]">{summarize(ev.data) || '—'}</span>
+        </div>
+      ))}
+    </pre>
   );
 }

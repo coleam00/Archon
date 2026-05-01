@@ -649,6 +649,12 @@ export async function getUpdateCheck(): Promise<UpdateCheckResult> {
   return fetchJSON<UpdateCheckResult>('/api/update-check');
 }
 
+export type OperatorResponse = components['schemas']['OperatorResponse'];
+
+export async function getOperator(): Promise<OperatorResponse> {
+  return fetchJSON<OperatorResponse>('/api/operator');
+}
+
 // =========================================================================
 // Compass — visual canvas for "what feature to build next"
 // =========================================================================

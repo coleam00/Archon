@@ -1,23 +1,21 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useQueries } from '@tanstack/react-query';
+import { GalleryHorizontal, Play } from 'lucide-react';
 import { listDashboardRuns, listArtifacts } from '@/lib/api';
 import type { ArtifactFile, DashboardRunResponse } from '@/lib/api';
-import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ArtifactPreview } from './ArtifactPreview';
 import { cn } from '@/lib/utils';
+import { Mono, fmtAgo, runIdentifier } from './primitives';
 
-/**
- * Tile gallery of recent artifacts across all workflow runs. Each tile shows
- * filename + run + a thumbnail of what's there (a video frame, an image, or
- * a markdown icon). Click a tile to open it in a preview dialog with full
- * scrubbing for video.
- *
- * Implementation: pulls the last 50 runs, then for each fetches its artifact
- * manifest in parallel via tanstack `useQueries`. The combined list is
- * sorted reverse-chronologically. Filterable by media kind.
- */
 type Kind = 'all' | 'video' | 'image' | 'doc' | 'data';
+
+const KIND_TINTS: Record<Exclude<Kind, 'all'>, { bg: string; fg: string }> = {
+  video: { bg: 'var(--bridges-tag-pink-bg)', fg: 'var(--bridges-tag-pink-fg)' },
+  image: { bg: 'var(--bridges-tag-mint-bg)', fg: 'var(--bridges-tag-mint-fg)' },
+  doc: { bg: 'var(--bridges-tag-sky-bg)', fg: 'var(--bridges-tag-sky-fg)' },
+  data: { bg: 'var(--bridges-tag-butter-bg)', fg: 'var(--bridges-tag-butter-fg)' },
+};
 
 function kindOf(file: ArtifactFile): Exclude<Kind, 'all'> {
   if (file.mimeType.startsWith('video/')) return 'video';
@@ -41,11 +39,8 @@ function buildManifestQuery(r: DashboardRunResponse): {
   return {
     queryKey: ['mission.artifacts.manifest', r.id],
     queryFn: () => listArtifacts(r.id),
-    // Manifests for completed runs don't change. Stale-time keeps them fresh
-    // for active runs and quiet for finished ones.
     staleTime: r.status === 'running' || r.status === 'pending' ? 5_000 : 60_000,
     retry: (attempt: number, err: Error): boolean => {
-      // 404 = the run never wrote artifacts; don't retry.
       if (err.message.includes('404')) return false;
       return attempt < 2;
     },
@@ -63,8 +58,6 @@ export function ArtifactsTab(): React.ReactElement {
   });
   const runs = useMemo(() => runsData?.runs ?? [], [runsData]);
 
-  // Fan out a manifest fetch per run. The list is small (50 runs) so per-run
-  // queries are fine — react-query caches them and dedupes between renders.
   const manifestQueries = useQueries({
     queries: runs.map(buildManifestQuery),
   });
@@ -79,37 +72,52 @@ export function ArtifactsTab(): React.ReactElement {
         out.push({ run, file });
       }
     });
-    // Reverse-chrono — most recent artifacts first by createdAt.
     out.sort((a, b) => b.file.createdAt.localeCompare(a.file.createdAt));
     return out;
   }, [runs, manifestQueries, filter]);
 
+  const KINDS: Kind[] = ['all', 'video', 'image', 'doc', 'data'];
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        {(['all', 'video', 'image', 'doc', 'data'] as Kind[]).map(k => (
-          <Button
-            key={k}
-            type="button"
-            size="sm"
-            variant={filter === k ? 'default' : 'outline'}
-            onClick={() => {
-              setFilter(k);
-            }}
-          >
-            {k}
-          </Button>
-        ))}
+    <div className="px-6 pb-6 pt-4">
+      <div className="mb-3.5 flex items-center gap-2.5">
+        <h1 className="m-0 text-[18px] font-semibold tracking-tight text-bridges-fg1">Artifacts</h1>
+        <span className="text-[13px] text-bridges-fg3">
+          Anything a workflow wrote to its run directory.
+        </span>
+        <div className="flex-1" />
+        <div className="inline-flex rounded-md bg-bridges-surface-muted p-0.5">
+          {KINDS.map(k => (
+            <button
+              key={k}
+              onClick={() => {
+                setFilter(k);
+              }}
+              className={cn(
+                'rounded px-3 py-1 text-[12px] font-medium capitalize transition-colors',
+                filter === k
+                  ? 'bg-bridges-surface text-bridges-fg1 shadow-[0_1px_2px_rgba(15,15,18,0.06)]'
+                  : 'text-bridges-fg2 hover:text-bridges-fg1'
+              )}
+            >
+              {k}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {runsLoading && <p className="text-sm text-text-secondary">Loading runs…</p>}
+      {runsLoading && <p className="text-sm text-bridges-fg2">Loading runs…</p>}
       {!runsLoading && tiles.length === 0 && (
-        <p className="text-sm text-text-secondary">
-          No artifacts yet. Workflow nodes that write to <code>$ARTIFACTS_DIR</code> show up here.
+        <p className="text-[12.5px] text-bridges-fg3">
+          No artifacts yet. Workflow nodes that write to{' '}
+          <Mono className="text-bridges-fg2">$ARTIFACTS_DIR</Mono> show up here.
         </p>
       )}
 
-      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))' }}
+      >
         {tiles.map(tile => (
           <Tile
             key={`${tile.run.id}-${tile.file.path}`}
@@ -133,7 +141,7 @@ export function ArtifactsTab(): React.ReactElement {
           </DialogHeader>
           {openTile && <ArtifactPreview runId={openTile.run.id} file={openTile.file} />}
           {openTile && (
-            <p className="text-xs text-text-secondary">
+            <p className="text-xs text-bridges-fg3">
               {openTile.run.workflow_name} · {openTile.run.codebase_name ?? '—'}
             </p>
           )}
@@ -143,22 +151,37 @@ export function ArtifactsTab(): React.ReactElement {
   );
 }
 
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n.toString()} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function Tile({ tile, onClick }: { tile: RunArtifact; onClick: () => void }): React.ReactElement {
   const k = kindOf(tile.file);
+  const tint = KIND_TINTS[k];
+  const sizeKb = tile.file.size ? formatBytes(tile.file.size) : '';
+
   return (
     <button
       type="button"
       onClick={onClick}
-      className="group flex flex-col rounded-md border border-border bg-surface text-left transition-colors hover:bg-surface-elevated"
+      className="group overflow-hidden rounded-lg border border-bridges-border bg-bridges-surface text-left transition-shadow hover:border-bridges-border-strong hover:shadow-sm"
     >
       <div
         className={cn(
-          'flex h-32 items-center justify-center rounded-t-md',
-          k === 'video' && 'bg-black text-white/60',
-          k === 'image' && 'bg-surface-elevated',
-          k === 'doc' && 'bg-primary/5 text-primary',
-          k === 'data' && 'bg-warning/5 text-warning'
+          'relative flex h-[120px] items-center justify-center overflow-hidden',
+          k === 'video' && 'bg-bridges-fg1 text-white/80'
         )}
+        style={
+          k === 'image'
+            ? { background: 'linear-gradient(135deg, #EDE9FE, #DBEAFE)' }
+            : k === 'doc'
+              ? { background: 'var(--bridges-surface-subtle)' }
+              : k === 'data'
+                ? { background: 'var(--bridges-surface-subtle)' }
+                : undefined
+        }
       >
         {k === 'image' ? (
           <img
@@ -169,15 +192,26 @@ function Tile({ tile, onClick }: { tile: RunArtifact; onClick: () => void }): Re
             alt={tile.file.name}
             className="max-h-full max-w-full object-contain"
           />
+        ) : k === 'video' ? (
+          <Play className="h-8 w-8" />
         ) : (
-          <span className="text-xs uppercase tracking-wide">{k}</span>
+          <GalleryHorizontal className="h-8 w-8 text-bridges-fg3" />
         )}
       </div>
-      <div className="px-2 py-1.5">
-        <p className="truncate text-xs font-medium text-text-primary">{tile.file.name}</p>
-        <p className="truncate text-[11px] text-text-secondary">
-          {tile.run.workflow_name} · {tile.run.codebase_name ?? '—'}
-        </p>
+      <div className="border-t border-bridges-border-subtle px-2.5 py-2">
+        <div className="mb-1 flex items-center gap-1.5">
+          <span
+            className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em]"
+            style={{ background: tint.bg, color: tint.fg }}
+          >
+            {k}
+          </span>
+          {sizeKb && <span className="text-[11px] text-bridges-fg3">{sizeKb}</span>}
+          <div className="flex-1" />
+          <span className="text-[11px] text-bridges-fg3">{fmtAgo(tile.file.createdAt)}</span>
+        </div>
+        <Mono className="block truncate text-[12.5px] text-bridges-fg1">{tile.file.name}</Mono>
+        <Mono className="mt-1 block text-[10.5px] text-bridges-fg3">{runIdentifier(tile.run)}</Mono>
       </div>
     </button>
   );
