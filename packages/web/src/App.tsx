@@ -5,12 +5,12 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from '@/components/layout/Layout';
 import { ProjectProvider } from '@/contexts/ProjectContext';
 import { queryClient } from '@/lib/query-client';
-import { DashboardPage } from '@/routes/DashboardPage';
 import { ChatPage } from '@/routes/ChatPage';
 import { WorkflowsPage } from '@/routes/WorkflowsPage';
 import { WorkflowExecutionPage } from '@/routes/WorkflowExecutionPage';
 import { WorkflowBuilderPage } from '@/routes/WorkflowBuilderPage';
 import { SymphonyPage } from '@/routes/SymphonyPage';
+import { MissionPage } from '@/routes/MissionPage';
 import { SettingsPage } from '@/routes/SettingsPage';
 
 interface ErrorBoundaryState {
@@ -72,12 +72,13 @@ export function App(): React.ReactElement {
                 <Route path="/" element={<Navigate to="/chat" replace />} />
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/chat/*" element={<ChatPage />} />
-                <Route path="/dashboard" element={<DashboardPage />} />
+                <Route path="/dashboard" element={<Navigate to="/mission?tab=history" replace />} />
                 <Route path="/workflows" element={<WorkflowsPage />} />
                 <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
                 <Route path="/workflows/runs/:runId" element={<WorkflowExecutionPage />} />
                 <Route path="/workflows/runs" element={<Navigate to="/workflows" replace />} />
                 <Route path="/symphony" element={<SymphonyPage />} />
+                <Route path="/mission" element={<MissionPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Routes>

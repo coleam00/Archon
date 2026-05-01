@@ -74,6 +74,7 @@ describe('workflows database', () => {
           '{}',
           null,
           null,
+          null,
         ]
       );
     });
@@ -104,6 +105,7 @@ describe('workflows database', () => {
           JSON.stringify({ github_context: 'Issue #42 context' }),
           null,
           null,
+          null,
         ]
       );
     });
@@ -121,7 +123,7 @@ describe('workflows database', () => {
       expect(result.codebase_id).toBeNull();
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO remote_agent_workflow_runs'),
-        ['feature-development', 'conv-456', null, 'Add dark mode support', '{}', null, null]
+        ['feature-development', 'conv-456', null, 'Add dark mode support', '{}', null, null, null]
       );
     });
   });

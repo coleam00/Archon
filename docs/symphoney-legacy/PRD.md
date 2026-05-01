@@ -1,81 +1,130 @@
-# Symphoney — Product Requirements
+# archon-symphony — Product Requirements
 
-> Source-of-truth for the product vision. Companion to `SPEC.md` (technical contract), `ROADMAP.md` (sequenced delivery plan), and `PARITY_REPORT.md` (gap with the OpenAI reference). When the three disagree on *what* we're building, this document wins; when they disagree on *how*, `SPEC.md` wins.
+> Source-of-truth for the product vision. Companion to the legacy [`SPEC.md`](./SPEC.md) (the OpenAI Symphony Service Specification — orchestration contract), the in-repo `CLAUDE.md` (engineering guide), and the codebase under `/packages/*`. When this document and `SPEC.md` disagree on **what** we're building, this document wins; when they disagree on **how the orchestrator behaves**, `SPEC.md` wins.
+>
+> This PRD supersedes the original Symphoney PRD. The Symphoney daemon was ported into the [archon](https://github.com/archon-ai) coding-platform monorepo as the `@archon/symphony` package; the standalone `symphoney-codex` build is archived (`v1-final-pre-archon-merge`). The vision is preserved and expanded.
 
 ---
 
 ## What we're building
 
-**Symphoney is a personal AI engineering team that runs 24/7 on a Mac mini.** It picks issues out of a Linear backlog, runs Codex or Claude coding-agent sessions inside per-issue git worktrees, and ships every dispatch back as a reviewable GitHub PR with a Linear backlink — controllable from Slack on any device.
+**archon-symphony is a personal AI engineering team that runs 24/7 on a Mac mini and ships reviewable PRs while you sleep.**
 
-The build is the operator's reference implementation of the [OpenAI Symphony Service Specification](https://github.com/openai/symphony/blob/main/SPEC.md), extended with a kanban control plane, a Slack control surface, and Cloudflare-fronted hosting so the product is usable from a phone in a meeting. The orchestrator core is spec-conformant today; the remaining roadmap turns it into a daily-driver personal automation tool.
+It is three products fused into one binary:
 
-**North star: Symphony works on itself.** Every roadmap item from Wave 1 onward ships as a Symphoney-dispatched PR. If the product can't ship its own next feature with a human reviewing the diff and merging, it isn't done.
+1. **Symphony** — a Linear-driven dispatcher that picks issues out of any registered codebase's backlog, runs Claude/Codex/Pi coding-agent sessions inside per-issue git worktrees, and ships every dispatch back as a PR with a Linear backlink.
+2. **The Harness Builder** — a visual DAG editor in the web UI for authoring the workflows Symphony dispatches. Workflows are versioned YAML in `.archon/workflows/`, runnable from CLI, chat, GitHub `@archon`, or the dispatcher.
+3. **Mission Control** — a live web command center for visibility and control. Per-run event timelines, full run-history search and replay, and an eval scoreboard that tracks regression. Phone-friendly behind Cloudflare Access.
+
+The orchestration contract is OpenAI's [Symphony Service Specification](https://github.com/openai/symphony) — released open-source April 2026 with the explicit guidance that the spec "is a reference implementation" intended to be ported and tailored. archon-symphony is that tailoring for the operator who lives in Linear, Slack, GitHub, and a Mac mini, and who already chose [archon](https://github.com/coleam00/Archon) as their multi-codebase coding harness.
+
+**North star: archon-symphony works on itself, *and* on at least one other repo you own.** v1 is done when the last three roadmap items shipped on `archon-symphony` were dispatched by Symphony, *and* at least one merged PR on a different registered codebase came from a Symphony dispatch. If the product can't ship its own next feature with a human reviewing the diff and merging — and prove it generalizes off-self — it isn't done.
 
 ---
 
 ## Who this is for
 
-A single technical builder running their own backlog. One operator, one Mac mini, one Linear workspace, one GitHub repo per workflow. The product is deliberately not multi-tenant. There is no team plan, no shared dashboard, no per-user auth model. If a second person ever needs access, they get it via Cloudflare Access on the same single-user instance.
+A single technical builder with a Linear backlog, a GitHub account, and ≥1 codebase they want to keep moving while AFK. One operator, one Mac mini, one Linear workspace. The product is deliberately not multi-tenant. There is no team plan, no shared dashboard, no per-user auth model. The auth boundary is Cloudflare Access on top of single-user. If a teammate ever needs in, they get added in Cloudflare Access, not in the app.
 
 ---
 
 ## What the app does
 
-- **Polls Linear on a fixed cadence** for issues in active states (`Todo`, `In Progress`) and dispatches the eligible ones into per-issue workspaces, respecting concurrency caps and blocker chains.
-- **Creates a per-issue git worktree** branched as `sym/<IDENTIFIER>` from a dedicated dev checkout, so every dispatch starts in a known-good, isolated workspace.
-- **Runs a coding agent inside the workspace** — Codex over stdio JSON-RPC by default, optionally Claude via the Anthropic Agent SDK — driving multi-turn sessions until the agent transitions the issue out of an active state or hits the turn cap.
-- **Lets the agent transition Linear state directly** via the `linear_graphql` client-side tool, so a dispatch can self-terminate at `Done`, `Human Review`, or any workflow-defined handoff.
-- **Publishes a GitHub PR on success** with a `gh pr create` flow: typecheck must pass, branch must be `sym/<IDENTIFIER>`, working tree must be clean, branch must be ahead of `origin/main`. The PR URL is posted back to Linear as a comment.
-- **Hot-reloads its own configuration** when `WORKFLOW.md` changes on disk, so prompt edits, concurrency caps, hook scripts, and tracker settings update without a restart.
-- **Surfaces live state** through an HTTP API (`/api/v1/state`, `/api/v1/<id>`, `/api/v1/dispatch`, `/api/v1/refresh`) and a kanban dashboard at `127.0.0.1:4000` with running issues, retry queue, token totals, and a one-click immediate-dispatch action.
-- **Recovers from transient failures** with exponential backoff on dispatch failures and a fixed cadence on continuation turns, capped by `max_retry_backoff_ms`.
-- **Reconciles tracker state every tick** — if an issue moves to a terminal state during a run, the worker is aborted and its workspace cleaned up.
-- **Will be controllable from Slack** (`/symphony status`, `@symphony work on ENG-123`, in-thread cancel) so the operator can claim work or check status from their phone.
+### Always on
+
+- **Polls Linear** on a fixed cadence (default 30s) for issues in workflow-defined active states across **every registered codebase**, with Linear-project↔codebase resolution by name.
+- **Maps issues to workflows** via the per-codebase `.archon/symphony.yaml`. Workflows are the same YAML files used by `archon workflow run`, the chat router, and the GitHub `@archon` adapter — Symphony is just one more invoker.
+- **Creates a per-issue git worktree** branched as `sym/<IDENTIFIER>` from the codebase's mainline checkout, isolated under `~/.archon/workspaces/<owner>/<repo>/worktrees/<IDENTIFIER>` (archon's existing `@archon/isolation` provider).
+- **Runs the workflow** end-to-end in the worktree: every node — `command`, `prompt`, `bash`, `script`, `loop`, `approval`, `agents` — flows through archon's existing executor with full provider parity (Claude / Codex / Pi).
+- **Lets the agent transition Linear state** via the workflow's `linear_graphql` (or equivalent) tool, so a dispatch self-terminates at `Done`, `Human Review`, or any handoff state defined in the workflow.
+- **Publishes a GitHub PR** on success with the existing `gh pr create` pipeline (typecheck, branch ahead of base, working tree clean), comments the PR URL back to the Linear issue, and respects the repo's `.github/PULL_REQUEST_TEMPLATE.md`.
+- **Reconciles every tick** — if an issue moves to a terminal state mid-run, the run is cancelled, the worktree is preserved or reaped per workflow policy, and the Linear comment notes the cancellation. If the upstream workflow run terminates first, the Symphony dispatch entry is cleaned up. *(Shipped 2026-05.)*
+- **Posts back to Linear on completion or failure** with a one-line backlink. *(Shipped 2026-05.)*
+- **Recovers from transient failures** with exponential backoff per `DelayKind` (continuation: 1 s; failure: 10 s × 2^(n-1) capped by `max_retry_backoff_ms`).
+- **Hot-reloads `~/.archon/symphony.yaml`** on disk change so polling cadence, workflow mapping, concurrency caps, and tracker config update without a restart.
+
+### Controllable from anywhere
+
+- **Web command center** at `archon.<your-domain>` (Cloudflare Access-protected) and on the LAN at `127.0.0.1:3090`. Two surfaces:
+  - **Mission Control** (`/mission`): live event stream, run timeline, run history search & replay, eval scoreboard.
+  - **Harness Builder** (`/workflows`): visual DAG editor, node palette, schema validation, save-to-`.archon/workflows/`.
+- **Slack control plane** (extending the existing `@archon/adapters` Slack adapter):
+  - `/symphony status` → Block Kit summary: running, retrying, completed; per-codebase counts; links to dashboard + open PRs.
+  - `@symphony work on APP-123` → claim + dispatch immediately, bypassing polling cadence (still respects slot caps + blockers).
+  - `/symphony cancel APP-123` → in-thread cancel of a running dispatch.
+  - Threaded run output → bot posts the dispatch's plan as a thread reply on start, status updates per terminal state, PR URL on completion.
+- **Chat** via the archon web UI: every Symphony command works as `/symphony …` in any conversation. *(Shipped 2026-05.)*
+- **GitHub `@archon` mentions** continue to work for ad-hoc dispatch outside the Linear queue (existing archon behavior, unchanged).
+- **CLI** for power use: `archon cli workflow run …`, `archon cli isolation list`, `archon cli complete <branch>` (existing).
+
+### Visible and replayable
+
+- **Per-run event timeline.** Every workflow event (`workflow.start`, `node.start/end`, `agent.message`, `tool_call`, `agent_event` lifecycle, `workflow.completed/failed`) flows through archon's existing `WorkflowEmitter` and is rendered live in Mission Control over Server-Sent Events.
+- **Full run history** persisted in archon's existing SQLite/Postgres `workflow_runs` + `workflow_events` tables. Searchable by codebase, identifier, status, error class, time range. Click a run to see the timeline. *Click "replay"* to re-run the same workflow against a recorded input snapshot — deterministic where the workflow is deterministic, useful for pre-merge regression checks.
+- **Eval scoreboard.** A workflow named `archon-eval` replays a frozen set of closed Linear issues nightly. The scoreboard tracks per-workflow merge-rate, mean time to PR, validation pass rate, and flags regressions when a metric drifts >X% week-over-week. Deterministic artifacts only — no LLM-as-judge.
 
 ---
 
 ## Already shipped (don't re-spec)
 
-The following are done in the current checkout and are out of scope for any future milestone:
+The following exist in the current `dev` branch of archon-symphony — out of scope for any future milestone, listed so future plans don't re-design them:
 
-- **Spec-conformant orchestrator core.** Polling tick, dispatch math (priority asc, null-last, oldest-first, identifier tiebreak), eligibility checks (active state + blockers terminal + slot available), per-issue retry queue with `DelayKind` (`continuation` vs `failure`) backoff, reconciliation on every tick, abort on terminal-state transition, stall detection, startup cleanup.
-- **Dual agent backends.** Codex stdio JSON-RPC (`StdioCodexClient`) and Claude Agent SDK (`ClaudeAgentClient`) behind a unified `AgentClient` interface. Backend selected by `snapshot.agent.backend`. Cache-token accounting present on both.
-- **`linear_graphql` client-side tool extension.** Wired for both backends. Lets the agent run a single Linear GraphQL operation per call (typically `issueUpdate` to transition state) so dispatches can self-terminate before `max_turns`.
-- **Continuation prompt differentiation.** Turn 1 renders the full Liquid prompt; turns 2..N send only `agent.continuation_prompt`. No more 20-turn loops on simple tasks.
-- **Hot-reloading config snapshot.** `WORKFLOW.md` is parsed into an immutable `ConfigSnapshot`; `chokidar` rebuilds it on file change. Every consumer reads `getSnapshot()` per call so reloads take effect immediately.
-- **HTTP API.** `GET /` (legacy dashboard) plus `/api/v1/{state,issues,repositories,version,refresh,dispatch,<identifier>}`. Static-export of the kanban served at `/*` when `web/out` is built.
-- **Kanban control plane (web/).** Next.js 16 + React 19 + Tailwind 4 + shadcn. Polling at 5s with visibility pause. Group-by `lifecycle | status | repository`. One-click immediate dispatch.
-- **Workspace lifecycle hooks.** `after_create`, `before_run`, `after_run`, `before_remove` with `WORKSPACE_PATH`, `ISSUE_ID`, `ISSUE_IDENTIFIER`, `ISSUE_TITLE`, `ATTEMPT`, `WORKFLOW_PATH` env propagation. Path-safety constraints on workspace root.
-- **Wave 0 bootstrap.** Worktree-based hooks against a dedicated `~/symphony-dev/symphoney-codex` checkout, prod/dev split documented, first-class PR publisher with loud failures, first-dispatch ceremony config (`max_concurrent_agents: 1`, `max_turns: 12`).
-- **Structured agent-event logging.** Spec-listed events (`session_started`, `turn_completed`, etc.) emitted as `agent_event` pino lines for grep-friendly operator debugging.
+- **archon platform.** Multi-codebase registration, per-conversation isolation worktrees, Claude/Codex/Pi providers, full workflow YAML engine (DAG / loop / approval / `bash` / `script` / `prompt` / `command` / `agents` nodes), workflow event log, OpenAPI-typed REST + SSE, Slack/Telegram/GitHub/Discord platform adapters, sqlite-by-default DB, CLI, web UI scaffolding (Vite + React 19 + Tailwind 4 + shadcn).
+- **`@archon/symphony` package — orchestrator core.** Spec-conformant polling tick, dispatch math (priority asc, null-last, oldest-first, identifier tiebreak), eligibility (active state + blockers terminal + slot available), per-issue retry queue with `DelayKind` backoff, reconciliation on every tick (workflow-run terminal status detection + tracker issue-state recheck), abort on terminal-state transition, startup cleanup. *(Reconcile loop completed 2026-05.)*
+- **Workflow bridge.** Symphony's dispatcher pre-stages a `workflow_run` row, hands the row id to archon's executor, and observes events through the same `IWorkflowStore` interface that powers chat and CLI. One execution code path; multiple invokers.
+- **Linear tracker.** GraphQL polling, normalize, `commentOnIssue` mutation. GitHub tracker stub present; throws `github_unsupported_operation` until M4.
+- **PR backlink comments.** On `workflow_completed` and `workflow_failed`, fire-and-forget Linear comment with run identifier and result. *(Shipped 2026-05.)*
+- **`/api/health.symphony` block.** `getSnapshotView()` exposed on the health endpoint; counts + running + retrying arrays. Powers external uptime checks. *(Shipped 2026-05.)*
+- **`/symphony` chat commands.** `status`, `work on <id>`, `cancel <id>`, `help` routed through archon's deterministic command handler from any chat platform. Auto-prefix bare ids with `linear:`. *(Shipped 2026-05.)*
+- **`@archon/web` workflow builder scaffolding.** `WorkflowBuilderPage` exists with DAG visualization and YAML round-trip; rough but real. M2 polishes it into a daily-driver editor.
+- **Hot-reload config.** `~/.archon/symphony.yaml` watched; orchestrator picks up edits without restart. Workflow definitions hot-reload from `.archon/workflows/` per codebase.
+- **Worktree-isolated execution.** Every dispatch runs in a fresh worktree under `~/.archon/workspaces/<owner>/<repo>/worktrees/<IDENTIFIER>`. Cleanup hooks plug into archon's isolation lifecycle.
+- **Per-port autodetection.** Worktrees auto-allocate non-conflicting dev ports, so the daemon and an agent's `bun dev` can coexist.
 
 ---
 
 ## Out of scope (won't ship)
 
-- **Multi-user auth, team plans, role-based access control.** Single-operator product. Auth boundary, when it arrives, is Cloudflare Access on top of single-user.
+- **Multi-user auth, team plans, RBAC.** Single-operator product. Auth is Cloudflare Access at the edge.
+- **AI-assisted harness authoring.** The harness builder is a visual editor only — no chat-to-DAG, no auto-author-on-miss, no marketplace. *(Re-evaluate post-v1.)*
+- **Cost dashboards or budget caps.** Cost lives in the Anthropic/OpenAI/OpenRouter dashboards. Symphony does not enforce per-run or daily token caps. If runaway spend becomes a problem, lift the decision then; don't preempt it now.
+- **Auto-merge of PRs.** Every PR remains human-reviewed and human-merged. Validation gates inside the workflow (typecheck, tests, eval suite) gate the *PR open*, not the *merge*.
 - **SSH worker extension** (Symphony spec Appendix A). Localhost-only execution.
-- **Generic webhook system.** Symphoney isn't a workflow engine. Slack and Cloudflare Tunnel are bespoke integrations.
-- **Built-in metrics stack** (Prometheus, Grafana, OpenTelemetry collector). Operate from launchd logs + outbound heartbeat to a hosted uptime monitor.
-- **Drag-to-reorder columns or cards** in the kanban. Linear is the source of truth for state transitions.
-- **Editing or creating issues from the kanban.** Linear is the source of truth for issue content.
-- **Pluggable trackers beyond Linear.** The `Tracker` interface allows it; only Linear ships.
-- **First-class tracker write APIs in the orchestrator.** Per spec, ticket writes belong to the agent's tool surface (`linear_graphql`), not the orchestrator.
-- **Mobile native app.** The phone-first surface is Slack and the responsive kanban behind Cloudflare Access. No iOS/Android app.
-- **Per-user model selection or fine-tuning.** Backend and model are workflow-level settings, not per-issue.
+- **Desktop or mobile native app.** Phone surface is Slack and the responsive web UI behind Cloudflare Access.
+- **Drag-to-reorder kanban / inline issue editing.** Linear is the source of truth for both ordering and content.
+- **Pluggable trackers beyond Linear and GitHub.** The interface allows it; only those two ship.
+- **First-class tracker write APIs in the orchestrator.** Per spec, ticket writes belong to the agent's tool surface inside the workflow.
+- **Generic webhook system / generic workflow engine.** archon already has a workflow engine; Symphony is one invoker on top of it. Not a Zapier.
 - **Voice input.** Slash commands and threaded replies are sufficient.
+
+---
+
+## Reference implementations & inspiration
+
+We're not the first ones building in this shape. The following influenced architectural choices and are worth pulling specific patterns from when implementing later milestones:
+
+- **[OpenAI Symphony spec](https://github.com/openai/symphony)** — orchestration contract. Reference impl is Elixir; TypeScript/Go/Rust/Java/Python ports exist. We conform to the REQUIRED + OPTIONAL HTTP API; SSH worker is out.
+- **[Open SWE](https://github.com/langchain-ai/open-swe)** (LangChain) — async coding agent that auto-opens draft PRs linked to tickets. Cloud sandboxes; Slack + Linear invocation; subagent orchestration. Strong reference for the dispatch → PR pipeline we already have.
+- **[OpenHands](https://github.com/OpenHands/OpenHands)** — open Devin equivalent. CLI + desktop GUI + cloud platform; Slack/Linear/Jira integrations. Useful inspiration for the Mission Control timeline UX.
+- **Composio AO** — multi-agent in isolated worktrees, each with its own PR; agents fix CI failures and respond to review comments. Mirrors the worktree model; pattern to study for post-v1 PR-feedback loops.
+- **[builderz-labs/mission-control](https://github.com/builderz-labs/mission-control)** — self-hosted AI agent dashboard, SQLite-backed, no external deps. Closest analog to our Mission Control surface.
+- **OpenClaw Mission Control + Mac Mini playbooks** ([guide](https://www.marc0.dev/en/blog/ai-agents/openclaw-mac-mini-the-complete-guide-to-running-your-own-ai-agent-in-2026-1770057455419)) — the dominant 2026 pattern for 24/7 launchd-managed agents on a Mac mini. Validates our hosting model and provides battle-tested launchd plist templates.
+
+We are not depending on any of these; we are taking the shapes that worked and the hard-earned UX defaults.
 
 ---
 
 ## Tech stack
 
-- **Runtime:** Node ≥22, TypeScript ESM-only (`module: NodeNext`, `verbatimModuleSyntax` off, `isolatedModules` on, `noUncheckedIndexedAccess: true`), pnpm 10.
-- **Daemon:** Hono HTTP server via `@hono/node-server`, `chokidar` watcher, `pino` structured logging, `graphql-request` for Linear, `better-sqlite3` (planned, Wave 1.1) for durable run state.
-- **Agent backends:** `codex app-server` CLI subprocess over stdio JSON-RPC (default) or `@anthropic-ai/claude-agent-sdk` ^0.2.122 (selectable). Both expose `linear_graphql` as a client-side tool.
-- **Web:** Next.js 16 + React 19 + Tailwind 4 + shadcn + Base UI + Phosphor. Static-export at `web/out/` mounted by the daemon in prod; dev rewrites `/api/*` → `http://127.0.0.1:4000` for same-origin requests.
-- **Hosting:** Mac mini under `launchd` (user LaunchAgent), Cloudflare Tunnel (`cloudflared`) → `symphony.<domain>` → `127.0.0.1:4000`, Cloudflare Access protecting dashboard routes, `/slack/*` bypassed and verified via Slack signed requests.
-- **Tooling:** `gh` CLI for PR creation, `git worktree` for workspace isolation, Vitest for unit + integration tests, `tsx` for dev-mode no-build runs.
+- **Runtime:** [Bun](https://bun.sh) ≥1.3, TypeScript ESM-only, monorepo via Bun workspaces. Strict TS (`strict`, `noUncheckedIndexedAccess`). Zero `bun test` from repo root — per-package isolated runs (see `CLAUDE.md`).
+- **Daemon:** Hono via Bun's HTTP server (port 3090 by default). Pino structured logging. SQLite (default) or Postgres (opt-in via `DATABASE_URL`). All major routes Zod + OpenAPI.
+- **Symphony orchestrator:** `@archon/symphony` — orchestrator, dispatcher, retry queue, reconciler, trackers (Linear live; GitHub stub). Tied into archon's `IWorkflowStore` via the `BridgeDeps` adapter.
+- **Workflow engine:** `@archon/workflows` — DAG / loop / approval / bash / script / prompt / command / agents nodes, hot-reloaded YAML. `IWorkflowStore` abstraction over SQLite/Postgres.
+- **Agent backends:** `@archon/providers` — Claude (`@anthropic-ai/claude-agent-sdk`), Codex (`@openai/codex-sdk`, with native binary support), Pi (`@mariozechner/pi-coding-agent` for ~20 LLM backends including OpenRouter, Together, Groq, etc.). Backend selectable per-workflow or per-node.
+- **Web UI:** Vite + React 19 + Tailwind 4 + shadcn + Zustand. SSE for live streams. OpenAPI-derived TypeScript types via `bun generate:types`. Workflow Builder uses an existing DAG canvas in `WorkflowBuilderPage`.
+- **Platform adapters:** `@archon/adapters` — Slack (sdk + polling), Telegram (bot api + polling), GitHub (webhooks + gh CLI), Discord (discord.js).
+- **Hosting:** Mac mini under `launchd` user LaunchAgent; Cloudflare Tunnel (`cloudflared` also under `launchd`) → `archon.<domain>` → `127.0.0.1:3090`; Cloudflare Access protecting `/`, `/api/*`, `/mission`; `/webhooks/github` and `/webhooks/slack` bypassed and verified by signed-request middleware.
+- **Tooling:** `gh` CLI, `git worktree`, vitest-equivalent via `bun test`, `bun run validate` for pre-PR (type-check + lint + format + tests + bundled-defaults check).
 
 ---
 
@@ -83,163 +132,214 @@ The following are done in the current checkout and are out of scope for any futu
 
 | Integration | Purpose | Credentials needed | Status |
 |---|---|---|---|
-| **Linear** | Tracker source-of-truth; the agent also calls `linear_graphql` to transition state and post comments | `LINEAR_API_KEY` in `.env` | Live |
-| **GitHub (via gh CLI)** | Branch push + PR creation + PR-URL backlink | `gh auth status` (OAuth, browser flow) | Live |
-| **OpenAI Codex CLI** | Default agent backend over stdio JSON-RPC | None at daemon level (Codex manages its own auth) | Live |
-| **Anthropic Claude Agent SDK** | Optional agent backend | `claude login` (OAuth/subscription) **or** `ANTHROPIC_API_KEY` | Live |
-| **Slack** | Phone-first control plane (`/symphony status`, `@symphony work on …`) | Slack app: signing secret + bot token + slash command + Events API URL | Wave 2.1 |
-| **Cloudflare Tunnel + Access** | Public HTTPS for Slack webhooks, auth for dashboard | Cloudflare account, domain on Cloudflare DNS, `cloudflared` token | Wave 2.3 |
-| **Outbound uptime heartbeat** | Dead-man's switch | Healthchecks.io (or equivalent) ping URL | Wave 2.4 |
+| **Linear** | Tracker source-of-truth across all registered codebases; agent calls Linear's GraphQL to transition state and post comments | `LINEAR_API_KEY` in `~/.archon/.env` | Live |
+| **GitHub (via `gh` CLI)** | Branch push, PR creation, PR-URL backlink, GitHub `@archon` adapter for ad-hoc dispatch | `gh auth status` (OAuth) + GitHub App webhook secret | Live |
+| **OpenAI Codex SDK** | Default agent backend (`@openai/codex-sdk` + native binary); per-node override via workflow YAML | None at daemon level (Codex manages its own auth) | Live |
+| **Anthropic Claude Agent SDK** | First-class agent backend; supports MCP, hooks, skills, sub-agents | `claude login` (OAuth/subscription) **or** `ANTHROPIC_API_KEY` | Live |
+| **Pi (`@mariozechner/pi-coding-agent`)** | Community provider; one harness, ~20 LLM backends via `<provider>/<model>` refs (OpenRouter, Together, Groq, etc.) | Per-backend API key (e.g. `OPENROUTER_API_KEY`) | Live (`builtIn: false`) |
+| **Slack** | Phone-first control plane (`/symphony status`, `@symphony work on …`, threaded run output, `@symphony cancel`) | Slack app: signing secret + bot token + slash command + Events API URL | M3 |
+| **Cloudflare Tunnel + Access** | Public HTTPS for Slack webhooks; auth gate for dashboard | Cloudflare account, domain on Cloudflare DNS, `cloudflared` token | M5 |
+| **Outbound uptime heartbeat** | Dead-man's switch | [Healthchecks.io](https://healthchecks.io) (or equivalent) ping URL | M5 |
 
 ---
 
 ## Conceptual data model — what the daemon needs to remember
 
-Today, most of this lives in process memory; Wave 1.1 moves the durable parts to a SQLite store next to the workspace root.
+Almost all of this lives in archon's existing SQLite/Postgres tables (see `CLAUDE.md` § Database Schema for the canonical list). Symphony reuses them rather than introducing parallel storage. A small Symphony-only table set tracks dispatcher state; everything else is shared with the rest of archon.
 
-### Issue *(read from Linear, normalized)*
-- `id` — Linear's UUID (used for issue-level mutations)
-- `identifier` — human-readable key like `APP-123`; drives branch and workspace names
-- `title`, `description` — what the agent is told to work on
-- `priority` — drives dispatch sort order (asc, null-last)
-- `state` — current workflow state name (matched against active/terminal sets)
-- `branch_name` — agent's preferred branch hint, if any
-- `url` — link back to the Linear issue
-- `labels` — arbitrary string tags
-- `blocked_by` — list of upstream issues; dispatch waits until each is in a terminal state
-- `created_at`, `updated_at` — timestamps for sort tiebreaks and reconciliation
+### Codebases *(archon, existing)*
+- `id`, `name`, `path`, `commands` (jsonb), env-var keys, etc.
+- Symphony resolves Linear-project → codebase by matching the project name to `codebases.name` (configurable in `~/.archon/symphony.yaml`).
 
-### Run *(per-dispatch attempt)*
-- Which issue, when started, current attempt number
-- Worker promise + abort controller (in-memory only)
-- Codex/Claude session id and thread id (for resume on continuation turns)
-- Codex app-server PID, last event name, last event payload, last event timestamp
-- Token totals: input, output, cache-creation input, cache-read input, total — monotonic; out-of-order decreases ignored
-- Last-reported-to-tracker totals (so deltas can be aggregated even if events arrive out of order)
-- Turn count
-- Cancel-requested flag (set by `requestImmediateDispatch` cancel path or kanban cancel button)
-- Publish result — PR URL, `no_changes` skip marker, or `failed: <reason>` string
+### Workflow run *(archon, existing)*
+- `id`, `workflow_name`, `codebase_id`, `status`, `created_at`, `completed_at`, run-context JSON.
+- Powers Mission Control's run history; replay uses these rows + `workflow_events` to re-execute deterministically.
 
-### Turn *(one prompt → response cycle inside a run)*
-- Run id, turn number, started/ended timestamps, outcome (`completed | aborted | failed`)
-- Prompt sent (full template on turn 1; continuation prompt only on 2..N)
-- Token usage delta for this turn
+### Workflow event *(archon, existing)*
+- Step-level transitions, artifacts, errors, agent events.
+- The unified event stream Mission Control subscribes to over SSE.
 
-### Agent event *(the spec's session/turn lifecycle protocol)*
-- Run id, turn id, event name (`session_started`, `turn_completed`, `turn_failed`, `agent_message`, `tool_call_started`, `tool_call_completed`, etc.)
-- Timestamp, structured payload (varies by event)
-- Logged to pino as a structured `agent_event` line; persisted to SQLite from Wave 1.1
+### Issue *(read from Linear, normalized — Symphony-side, in-memory + dispatch row)*
+- Linear's UUID, identifier (`APP-123`), title, description, priority, state, branch hint, URL, labels, blocked-by, timestamps.
 
-### Workspace
-- Issue identifier → absolute path under `~/symphony_workspaces/<IDENTIFIER>`
-- Implementation: a git worktree on branch `sym/<IDENTIFIER>` from `~/symphony-dev/symphoney-codex`
-- Lifecycle: created on dispatch, persisted across runs, removed on terminal-state reconciliation
+### Symphony dispatch *(Symphony-side table)*
+- `dispatch_id`, `dispatch_key` (e.g. `linear:APP-123`), `tracker`, `issue_id`, `identifier`, `codebase_id`, `workflow_name`, `cwd` (worktree), `workflow_run_id` (FK to archon), `attempt`, `started_at`, `completed_at`, `status`, `error`.
+- Source of truth for per-issue dispatch lifecycle; cross-references the archon `workflow_runs` row that owns the actual execution.
 
-### Retry queue entry
-- Issue id, attempt number, delay kind (`continuation` | `failure`), due-at timestamp, last error code/message
-- Continuation: fixed 1000 ms; failure: 10000 × 2^(n-1) capped by `max_retry_backoff_ms`
+### Retry queue entry *(Symphony in-memory; rebuilt from dispatches on restart)*
+- Issue id, attempt number, delay kind (`continuation` | `failure`), due-at, last error code/message.
 
-### Config snapshot *(immutable, rebuilt on `WORKFLOW.md` change)*
-- Tracker config (kind, project, repository, active/terminal states), polling interval, workspace root, hooks, agent caps and backend selection, codex/claude per-backend settings
+### Symphony config snapshot *(immutable, rebuilt on `~/.archon/symphony.yaml` change)*
+- Trackers (kind, project slug, active/terminal states, repository hints), polling interval, max concurrent agents, workspace root, hooks, per-workflow overrides.
 
-### Rate-limit signals *(read from Linear / agent backends)*
-- Surfaced on `/api/v1/state.rate_limits`; used to decide whether to backpressure dispatch
+### Eval result *(M6, new table)*
+- `eval_run_id`, `workflow_name`, fixture issue id, baseline PR url, replay PR diff, validation result, score deltas vs prior run.
 
 ---
 
 ## Milestones
 
-The roadmap waves are the milestones. Each wave is a working session for an agent (or for the operator, in Wave 0's case). Later waves assume earlier ones have shipped.
+The legacy roadmap waves landed; this is the post-port arc.
 
 ---
 
-### Milestone 0 — Bootstrap self-work safely **(SHIPPED)**
+### M0 — Symphony port + correctness fixes **(SHIPPED)**
 
-What this milestone delivered: Symphoney can dispatch issues against itself without trashing the prod checkout, and every successful dispatch produces a reviewable PR.
+What this milestone delivered: a single archon-symphony binary that owns everything Symphoney did plus everything archon does, with the four post-port correctness/observability gaps closed.
 
 **What got built**
-- A dedicated "Symphony" Linear project (slugId `60aa12712181`) on the `dell-omni-group` org, separate from the Smoke sandbox.
-- Hook env-var plumbing: `WORKSPACE_PATH`, `ISSUE_ID`, `ISSUE_IDENTIFIER`, `ISSUE_TITLE`, `ATTEMPT`, `WORKFLOW_PATH` flow through `after_create`, `before_run`, `after_run`, `before_remove`.
-- Worktree-based workspaces: `after_create` runs `git worktree add` against `~/symphony-dev/symphoney-codex`, with a branch-exists guard so attempt N≥2 reuses the branch.
-- `before_run` runs `pnpm install --frozen-lockfile && pnpm typecheck` so the agent starts in a known-good workspace.
-- First-class PR publisher (`src/publisher/pr.ts`): rev-parse → status clean → log ahead → typecheck → gh auth status → push → `gh pr create` → Linear backlink comment. Loud failures, no auto-retry.
-- Prod/dev checkout split documented in `CLAUDE.md`; daemon runs from `~/symphony-prod/symphoney-codex`.
-- First-dispatch ceremony config: `max_concurrent_agents: 1`, `max_turns: 12` until three clean dogfood PRs land.
+- Symphoney's daemon was ported into the archon monorepo as `@archon/symphony` (#7, v0.4.0). Workspace, agent, and DB layers were replaced with archon's existing equivalents. Legacy `symphoney-codex` archived at `v1-final-pre-archon-merge`.
+- Reconcile loop fills the post-port stub: polls upstream `workflow_run` status, detects terminal upstream states, cancels runs whose tracker issues left active state, per-entry try/catch.
+- Tracker backlinks: PR completion / failure posts a Linear comment via `commentOnIssue` (Linear: live mutation; GitHub: throws stub, swallowed safely).
+- `/api/health.symphony` block exposes `getSnapshotView()` (counts + running + retrying) for external uptime checks.
+- `/symphony` chat commands (`status`, `work on`, `cancel`, `help`) routed through archon's deterministic command handler from any chat platform. Auto-prefix bare ids with `linear:`.
 
-**Done when** ✅ A handwritten Linear issue in the Symphony project gets picked up, an agent commits inside `~/symphony_workspaces/<ID>/`, and a PR opens at `Ddell12/symphoney-codex` with the PR URL posted back to the Linear issue.
+**Done when** ✅ archon-symphony runs as a single binary, the symphony daemon polls Linear and dispatches workflows, and all four ported gaps are validated end-to-end via Chrome + curl + 72/72 symphony tests + 170/170 core tests. *(2026-05-01.)*
 
 ---
 
-### Milestone 1 — Durable state and history **(NEXT — Wave 1.1 is the first dogfood dispatch)**
+### M1 — Mission Control web UI **(NEXT)**
 
-What this milestone delivers: cheap, high-leverage substrate for restart recovery, dashboard history, and the eval suite.
+What this milestone delivers: a phone-friendly command center where every dispatch's state is visible in real time and any historical run can be opened, inspected, and replayed.
 
 **What gets built**
-- Persist run state to SQLite (`runs.db` next to workspace root) with `runs`, `turns`, `agent_events`, and a `schema_meta` migration table. WAL journal mode for read concurrency.
-- Startup recovery: load non-terminal runs, reconcile their Linear states, mark stale rows as `interrupted`, never duplicate-dispatch issues already inactive.
-- Event-shape coverage cleanup: every event in the union is either emitted by at least one adapter with tests, or removed from the union.
-- Kanban surface: an `interrupted` lifecycle column with a "resume" button calling `requestImmediateDispatch`.
+- New route `/mission` in `@archon/web`. Three views, all SSE-fed:
+  - **Live runs** — running, retrying, recently completed across all codebases, with a per-run event timeline drawer (workflow nodes, agent events, tool calls).
+  - **History** — paginated, searchable list of every `workflow_run`. Filters: codebase, workflow, status, error class, time range. Click → timeline drawer.
+  - **Replay** — given a historical run, re-execute the same workflow against the same input snapshot in a fresh worktree. Useful for "did this flake?" and "did the workflow still work after I edited the prompt?" Deterministic only where the workflow is deterministic; explicitly labeled.
+- New SSE endpoint `GET /api/mission/stream` consolidating workflow-event + symphony-dispatch streams.
+- Filters and search backed by existing `workflow_runs` / `workflow_events` indexes; add a single composite index if profiling demands it.
+- Phone-first responsive layout; Cloudflare Access-friendly.
 
 **Explicitly NOT in this milestone**
-- Migration tooling beyond `PRAGMA user_version`. No Knex / Prisma / Drizzle.
-- Multi-database support. SQLite only.
-- Time-series storage of token totals. Last-known totals, plus deltas in `agent_events`, are sufficient.
+- Cost / token dashboards. Use provider dashboards.
+- Editing workflows from Mission Control. That's the Harness Builder (M2).
+- Multi-tenant filters. Single operator.
 
-**Done when** Killing the daemon mid-run and restarting shows the run as `interrupted` in the kanban with full turn history; retry counts and token totals survive; restart never dispatches an issue that's already terminal in Linear.
+**Done when** From a phone behind Cloudflare Access, the operator can see exactly what's running on which codebase, watch a run's tool calls land in real time, search history for "all failed runs in the last 7 days on `archon-symphony`," open one, and click "replay" to re-execute in a fresh worktree.
 
 ---
 
-### Milestone 2 — Slack as the control plane
+### M2 — Harness Builder polish
 
-What this milestone delivers: usable from a phone in a meeting. The product earns the description "personal AI engineering team" only after this milestone ships.
+What this milestone delivers: the visual editor for workflows graduates from scaffolding to daily driver.
 
 **What gets built**
-- A single Slack app with three primitives:
-  - `/symphony status` → Block Kit message with running issues, lifecycle pills, token meter, and links to dashboard + PRs.
-  - `@symphony work on ENG-123` → claim + dispatch immediately, bypassing the polling cadence (still respects slot caps + blockers).
-  - Threaded run output → bot posts the agent's plan as a thread reply on dispatch and the PR URL on completion. `@symphony cancel` in-thread aborts the run.
-- 24/7 hosting on the Mac mini under `launchd` (`WorkingDirectory`, `ProgramArguments`, env-file load, `KeepAlive`, log paths).
-- Cloudflare Tunnel from `cloudflared` outbound on the mini → `symphony.<domain>` → `127.0.0.1:4000`. `cloudflared` itself runs under `launchd`.
-- Cloudflare Access protecting the dashboard routes; `/slack/*` bypassed and verified via Slack signed requests.
-- `GET /healthz` with non-sensitive status (uptime, last-poll-age, last tracker error, running count, SQLite health) plus an outbound heartbeat to Healthchecks.io.
+- DAG canvas in `WorkflowBuilderPage`: zoom, pan, snap, multi-select, copy/paste nodes, undo/redo. Powered by an off-the-shelf canvas library (likely `reactflow`).
+- Node palette with all archon node types (`prompt`, `command`, `bash`, `script`, `loop`, `approval`, `agents`) and a contextual properties panel per node — provider, model, tools, env, retry, timeout.
+- Live YAML preview pane (collapsed by default), bidirectional editing, schema validation against `dagNodeSchema` and `workflowBaseSchema` on every keystroke.
+- "Test run" button that executes the in-progress workflow against a sample issue input in a throwaway worktree, surfacing the result in the Mission Control timeline drawer without saving the workflow.
+- Save → writes to `.archon/workflows/<filename>.yaml` in the codebase, runs validation, posts to existing `PUT /api/workflows/:name`.
+- Import existing workflows (project-scoped or home-scoped) into the editor; flag bundled defaults read-only.
+
+**Explicitly NOT in this milestone**
+- AI-assisted authoring. No chat-to-DAG; no autosuggest. Text editing of the YAML in your IDE remains the power-user path.
+- Marketplace / harness sharing. Just files in `.archon/workflows/`.
+- Workflow versioning beyond git. Use git.
+
+**Done when** The operator can author a new workflow end-to-end in the browser — drag nodes, wire dependencies, set per-node provider/model, run a smoke test against a sample issue — and ship it to `.archon/workflows/` without ever opening a YAML file.
+
+---
+
+### M3 — Slack control plane parity
+
+What this milestone delivers: usable from a phone in a meeting. Same bar as the legacy "Wave 2.1" milestone, retargeted at archon's Slack adapter.
+
+**What gets built**
+- Three primitives on the existing Slack adapter:
+  - `/symphony status` → Block Kit summary: per-codebase running/retrying/completed, lifecycle pills, links to Mission Control + open PRs.
+  - `@symphony work on APP-123` → claim + dispatch immediately, bypassing polling cadence (still respects slot caps + blockers).
+  - Threaded run output — bot posts the workflow's plan node output as a thread reply on dispatch, status updates per terminal state, PR URL on completion. `@symphony cancel` in-thread aborts the dispatch and writes a cancellation comment to Linear.
+- Slack signing-secret verification middleware on `/webhooks/slack`.
+- Map each Slack message → existing `web` adapter conversation so chat history threading mirrors what archon already does for the web UI.
 
 **Explicitly NOT in this milestone**
 - Slack modals, multi-channel routing, per-user prefs, voice input, message scheduling, slash subcommands beyond the three primitives.
-- A native iOS/Android app.
-- Tailscale (separate decision, only if SSH-from-anywhere ever matters).
-- Detailed health data on the unauthenticated `/healthz` path. Use the heartbeat for liveness; gate detail behind Access.
+- Native iOS/Android app.
 
-**Done when** From a phone, the operator can run `/symphony status` in a meeting, type `@symphony work on APP-300`, see the plan thread, and either let it run or `@symphony cancel`. The mini reboots cleanly under launchd. The kanban is reachable on the phone behind Cloudflare Access.
+**Done when** From a phone in a meeting, the operator can run `/symphony status`, see what's running on which codebase, type `@symphony work on APP-300`, see the plan thread, and either let it run or `@symphony cancel`.
 
 ---
 
-### Milestone 3 — Output quality
+### M4 — Multi-codebase auto-eligibility & GitHub tracker
 
-What this milestone delivers: every dispatch is trustworthy enough to merge without a careful diff read. Pick one sub-item at a time and let it bake before adding the next.
+What this milestone delivers: every registered codebase is automatically eligible for Symphony dispatch, and GitHub Issues are a viable alternative tracker for repos that don't use Linear.
 
-**What gets built (in order, one at a time)**
-- **Validation gate before completion (3.1):** before the agent calls `linear_graphql` to transition the issue, `pnpm typecheck && pnpm test` must pass. Either prompt-driven (the agent runs them) or orchestrator-driven (run them after a turn that looks complete; on failure, send stderr as the next continuation prompt).
-- **Plan-then-execute split (3.2):** turn 1 produces a markdown checklist plan, posted to Linear before execution. Subsequent turns execute one item at a time. Conservative checklist parser that doesn't block runs on extraction failure.
-- **Golden eval suite (3.3):** five closed Linear issues with known-good PRs replayed offline through `pnpm eval`. Compare patch size, touched files, validation result, expected-files-changed. No LLM grading. Weekly cadence via launchd.
-- **Linear UX polish (3.4):** plan-as-comment before execution, per-turn progress comments (test markdown support first), PR body auto-injects `Fixes ENG-123` for Linear's GitHub auto-link, register Symphoney as a Linear Agent user with delegation-based dispatch.
+**What gets built**
+- `~/.archon/symphony.yaml` per-codebase block: `linear_project_name` (defaults to codebase `name`), workflow override, max-concurrent override. Default config auto-discovers all codebases registered in archon's `codebases` table.
+- Linear-project↔codebase mapping precomputed at config-load time and re-resolved on hot-reload; mismatch surfaces as a config error with a fix-it hint.
+- GitHub tracker: `fetchCandidateIssues` against `gh issue list`, `commentOnIssue` via `gh api`, eligibility derived from labels (`symphony:eligible` etc.) since GitHub Issues lacks first-class workflow states.
+- Per-codebase concurrency cap separate from the global one (so a hot codebase can't starve the rest).
 
 **Explicitly NOT in this milestone**
-- LLM-as-judge evaluation. Deterministic artifacts only.
-- Custom validation runners beyond `pnpm typecheck && pnpm test`. The workflow defines the validation command.
-- Auto-merging PRs. Human still presses the merge button.
+- Pluggable third trackers (Jira, ZenHub). Linear + GitHub only.
+- Cross-tracker issue dependencies. Each issue's blockers stay within its tracker.
 
-**Done when** Three consecutive Symphoney-dispatched PRs land on `main` without a human pushing fixup commits, and the eval suite catches the next regression that would have shipped.
+**Done when** The operator registers a brand-new codebase via `archon codebase register`, drops a workflow into its `.archon/workflows/`, names a Linear project to match, and within one polling cycle Symphony picks up issues from that project and ships PRs against the new repo.
+
+---
+
+### M5 — 24/7 Mac mini hosting
+
+What this milestone delivers: archon-symphony runs as a real always-on service the operator never thinks about.
+
+**What gets built**
+- `launchd` plist template at `infra/launchd/dev.archon.symphony.plist` with `WorkingDirectory`, `ProgramArguments`, env-file load, `KeepAlive` true, log paths, and a one-line `launchctl bootstrap gui/<uid>` install command.
+- `cloudflared` config template at `infra/cloudflared/config.yml` with one ingress rule routing `archon.<domain>` → `127.0.0.1:3090`. Tunnel runs under its own `launchd` plist.
+- Cloudflare Access policy: protect `/`, `/api/*`, `/mission`; bypass + verify `/webhooks/*` via signed-request middleware in archon.
+- `GET /healthz` (non-sensitive: uptime, last-poll-age, last tracker error, running count, DB health) plus an outbound heartbeat to Healthchecks.io on every successful poll.
+- A 1-page `infra/README.md` runbook: bootstrap a new mini, install Bun, clone repo, install plists, configure tunnel, point Linear webhook (if used) at the public URL.
+
+**Explicitly NOT in this milestone**
+- Docker. The mini owns the runtime; containers add no value here.
+- HA / failover. Single mini, single operator. The dead-man's switch is the heartbeat.
+
+**Done when** The mini reboots, the daemon comes up under `launchd`, the tunnel reconnects, the dashboard is reachable from a phone behind Cloudflare Access, and the heartbeat keeps green for 30 days without a manual restart.
+
+---
+
+### M6 — Eval suite & regression detection
+
+What this milestone delivers: every workflow has an objective merge-rate / time-to-PR / validation-pass score that the operator can trust.
+
+**What gets built**
+- `archon-eval` workflow that, given a fixture set of closed Linear issues with known-good baseline PRs, replays each through Symphony in throwaway worktrees and records: touched-file delta from baseline, validation result, time-to-PR, model+token deltas.
+- Fixture set seeded from `~/.archon/evals/<codebase>/` — a directory of frozen Linear issue snapshots with their merged PR diffs.
+- Nightly cron via `launchd` (or recurring archon workflow) runs the suite, writes rows to a new `eval_results` table.
+- Mission Control gains a third tab: **Evals** — per-workflow scoreboard, week-over-week trend, regression callouts when a metric drifts >X% (default 15%).
+- No LLM-as-judge: only deterministic artifacts (file diffs, validation exit codes, token counts).
+
+**Explicitly NOT in this milestone**
+- Auto-rollback of workflow edits when regressions trip. The operator decides.
+- Cross-codebase eval generalization. Each codebase has its own fixture set.
+
+**Done when** A drift-introducing edit to a workflow's prompt (e.g. a clumsy refactor of `archon-feature-development`) shows up red on the next nightly Eval scoreboard, *before* the operator notices a real Linear PR going sideways.
+
+---
+
+### M7 — North star: self-ship + external repo
+
+What this milestone delivers: the proof.
+
+**What gets demonstrated**
+- The last three roadmap items shipped on `archon-symphony` were dispatched by Symphony itself; the operator only reviewed and merged.
+- At least one merged PR on a *different* registered codebase (the operator's choice — pick a real one, not a hello-world repo) came from a Symphony dispatch.
+- The Mission Control eval scoreboard has flagged at least one regression that the operator wouldn't have caught by reading the diff.
+- The mini has been continuously up for ≥30 days without a manual restart, and the heartbeat hasn't paged.
+
+**Done when** All four are true, simultaneously.
 
 ---
 
 ## Vision-level success criteria
 
-Symphoney is "done" for the operator's purposes when **all** of the following are true:
+archon-symphony is "done" for the operator's purposes when **all** of the following are true:
 
-1. The operator can describe a feature in a Linear issue from their phone, walk away, and find a mergeable PR waiting when they next open GitHub.
-2. The mini has been up for ≥30 days without a manual restart, and the heartbeat hasn't paged.
-3. The eval suite has caught at least one regression that the operator didn't catch by reading the diff.
-4. The last three roadmap items shipped were dispatched by Symphoney itself, with the operator only reviewing and merging.
-5. Operating cost is dominated by agent token spend, not infrastructure. ($0 for hosting; $X for Codex/Claude usage.)
+1. **Phone-to-PR.** The operator can describe a feature in a Linear issue from their phone, walk away, and find a mergeable PR waiting when they next open GitHub — for any registered codebase that has Symphony enabled.
+2. **Self-ship + external.** The last three roadmap items on `archon-symphony` shipped via Symphony dispatch, *and* at least one merged PR on a different repo came from Symphony.
+3. **Reliability.** The mini has been up ≥30 days without manual intervention, and the heartbeat hasn't paged.
+4. **Eval has caught a regression.** The eval scoreboard has flagged at least one regression the operator didn't catch by reading the diff.
+5. **Visibility.** The operator has not opened a database client, a log file, or a JSON log line in the last week to answer "what is Symphony doing right now?" — Mission Control has been sufficient.
+6. **Operating cost is dominated by agent token spend, not infrastructure.** $0 hosting beyond Cloudflare's free tier and the mini's electricity; $X for Codex/Claude/Pi usage.
 
-When all five are true, Symphoney has cleared the bar of "personal AI engineering team that runs 24/7." Until then, it's a tool that the operator is still feeding by hand.
+When all six are true, archon-symphony has cleared the bar of "personal AI engineering team that runs 24/7." Until then, it's a tool the operator is still feeding by hand.

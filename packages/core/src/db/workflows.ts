@@ -55,6 +55,7 @@ export async function createWorkflowRun(data: {
   metadata?: Record<string, unknown>;
   working_path?: string;
   parent_conversation_id?: string;
+  replay_of_run_id?: string;
 }): Promise<WorkflowRun> {
   // Serialize metadata with validation to catch circular references early
   let metadataJson: string;
@@ -89,8 +90,8 @@ export async function createWorkflowRun(data: {
   try {
     const result = await pool.query<WorkflowRun>(
       `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, replay_of_run_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
         data.workflow_name,
@@ -100,6 +101,7 @@ export async function createWorkflowRun(data: {
         metadataJson,
         data.working_path ?? null,
         data.parent_conversation_id ?? null,
+        data.replay_of_run_id ?? null,
       ]
     );
     const row = result.rows[0];
@@ -641,6 +643,19 @@ export interface ListDashboardRunsOptions {
   before?: string;
   limit?: number;
   offset?: number;
+  /**
+   * Filter by error class. Matches against `metadata.error_class` on the run row.
+   * Mission Control history uses this to surface "all timeout failures in the
+   * last 7 days," etc.
+   */
+  errorClass?: string;
+  /**
+   * Cursor for stable pagination. Format: `<startedAtIso>|<id>`. When present,
+   * results returned are strictly older than the cursor's (started_at, id) pair.
+   * Pairs with `nextCursor` in the result envelope. Mutually exclusive with
+   * `offset` — when both are provided, `cursor` wins.
+   */
+  cursor?: string;
 }
 
 /** Response envelope for paginated dashboard runs. */
@@ -656,6 +671,31 @@ export interface DashboardRunsResult {
     pending: number;
     paused: number;
   };
+  /**
+   * Cursor for fetching the next page. Null when no more rows match the
+   * filters. Pass back as `cursor` to advance.
+   */
+  nextCursor: string | null;
+}
+
+function jsonStringExtract(col: string, key: string): string {
+  return getDatabaseType() === 'postgresql'
+    ? `${col}->>'${key}'`
+    : `json_extract(${col}, '$.${key}')`;
+}
+
+function decodeDashboardCursor(cursor: string): { startedAt: string; id: string } | null {
+  const sep = cursor.indexOf('|');
+  if (sep <= 0 || sep >= cursor.length - 1) return null;
+  const startedAt = cursor.slice(0, sep);
+  const id = cursor.slice(sep + 1);
+  if (!startedAt || !id) return null;
+  return { startedAt, id };
+}
+
+function encodeDashboardCursor(startedAt: string | Date, id: string): string {
+  const iso = startedAt instanceof Date ? startedAt.toISOString() : startedAt;
+  return `${iso}|${id}`;
 }
 
 /**
@@ -691,6 +731,12 @@ function buildDashboardWhereClauses(
     values.push(options.before);
     whereClauses.push(`r.started_at < $${String(values.length)}`);
   }
+  if (options?.errorClass) {
+    values.push(options.errorClass);
+    whereClauses.push(
+      `${jsonStringExtract('r.metadata', 'error_class')} = $${String(values.length)}`
+    );
+  }
 
   return whereClauses;
 }
@@ -717,8 +763,21 @@ export async function listDashboardRuns(
   const listValues: unknown[] = [];
   const whereClauses = buildDashboardWhereClauses(options, listValues);
 
+  // Cursor pagination: anchor on (started_at desc, id desc). When provided,
+  // skip rows that are >= the cursor pair so the page boundary is stable
+  // even if new runs land between requests.
+  const cursor = options?.cursor ? decodeDashboardCursor(options.cursor) : null;
+  if (cursor) {
+    listValues.push(cursor.startedAt, cursor.startedAt, cursor.id);
+    const a = String(listValues.length - 2);
+    const b = String(listValues.length - 1);
+    const c = String(listValues.length);
+    whereClauses.push(`(r.started_at < $${a} OR (r.started_at = $${b} AND r.id < $${c}))`);
+  }
+
   const limit = options?.limit ?? 50;
-  const offset = options?.offset ?? 0;
+  // When cursor is provided, ignore offset entirely.
+  const offset = cursor ? 0 : (options?.offset ?? 0);
   listValues.push(limit);
   const limitParam = `$${String(listValues.length)}`;
   listValues.push(offset);
@@ -775,7 +834,7 @@ export async function listDashboardRuns(
          LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
          LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
          ${whereStr}
-         ORDER BY r.started_at DESC
+         ORDER BY r.started_at DESC, r.id DESC
          LIMIT ${limitParam} OFFSET ${offsetParam}`,
         listValues
       ),
@@ -810,7 +869,14 @@ export async function listDashboardRuns(
       ? (counts[options.status as keyof typeof counts] ?? 0)
       : counts.all;
 
-    return { runs: listResult.rows.map(normalizeWorkflowRun), total, counts };
+    const rows = listResult.rows.map(normalizeWorkflowRun);
+    // Emit a cursor only when the page filled — otherwise we're at the end.
+    const lastRow = rows.length === limit ? rows[rows.length - 1] : null;
+    const nextCursor = lastRow?.started_at
+      ? encodeDashboardCursor(lastRow.started_at, lastRow.id)
+      : null;
+
+    return { runs: rows, total, counts, nextCursor };
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'list_dashboard_runs_failed');

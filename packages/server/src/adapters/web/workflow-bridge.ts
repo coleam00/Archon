@@ -194,6 +194,8 @@ export class WorkflowEventBridge {
         }
         // Fan-out to dashboard stream — no-op when no dashboard client connected
         this.transport.emitWorkflowEvent('__dashboard__', sseEvent);
+        // Fan-out to mission stream — no-op when no mission client connected
+        this.transport.emitWorkflowEvent('__mission__', sseEvent);
       }
     });
   }

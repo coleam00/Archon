@@ -103,6 +103,42 @@ const COMMENT_CREATE_MUTATION = /* GraphQL */ `
   }
 `;
 
+const ISSUE_UPDATE_MUTATION = /* GraphQL */ `
+  mutation SymphonyIssueUpdate($id: String!, $input: IssueUpdateInput!) {
+    issueUpdate(id: $id, input: $input) {
+      success
+      issue { ${ISSUE_FIELDS} }
+    }
+  }
+`;
+
+// fetchAllIssues paginates the project's full backlog (no state filter) — used
+// by Mission Control's Linear-state kanban to display every issue, not just
+// dispatch-eligible ones. Uses a richer fragment than the dispatch path
+// because the kanban needs state IDs (for drag-to-state mutations).
+const KANBAN_FIELDS = `
+  id
+  identifier
+  title
+  priority
+  url
+  state { id name type }
+  updatedAt
+`;
+
+const ALL_ISSUES_QUERY = /* GraphQL */ `
+  query SymphonyAllIssues($slug: String!, $first: Int!, $after: String) {
+    issues(
+      first: $first
+      after: $after
+      filter: { project: { slugId: { eq: $slug } } }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ${KANBAN_FIELDS} }
+    }
+  }
+`;
+
 interface PageResponse {
   issues: {
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -134,6 +170,71 @@ interface CommentCreateResponse {
   commentCreate: {
     success: boolean;
     comment: { id: string } | null;
+  };
+}
+
+interface IssueUpdateResponse {
+  issueUpdate: {
+    success: boolean;
+    issue: RawLinearIssue | null;
+  };
+}
+
+export interface IssueUpdateInput {
+  /** Linear state id (UUID) the issue should transition to. */
+  stateId?: string;
+  /** Lexicographic-ish sort within state column. */
+  sortOrder?: number;
+}
+
+/**
+ * Lighter-weight issue shape used by the Mission Control kanban. Includes
+ * `state.id` (which the dispatch-side `Issue` interface omits) so the
+ * frontend can drag-to-state and PATCH with the target stateId.
+ */
+export interface KanbanIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  priority: number | null;
+  url: string | null;
+  state: { id: string; name: string; type: string } | null;
+  updatedAt: string | null;
+}
+
+interface RawKanbanIssue {
+  id: string;
+  identifier: string;
+  title?: string | null;
+  priority?: number | null;
+  url?: string | null;
+  state?: { id?: string | null; name?: string | null; type?: string | null } | null;
+  updatedAt?: string | null;
+}
+
+interface KanbanPageResponse {
+  issues: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: RawKanbanIssue[];
+  };
+}
+
+function normalizeKanbanIssue(raw: RawKanbanIssue): KanbanIssue {
+  return {
+    id: raw.id,
+    identifier: raw.identifier,
+    title: raw.title ?? '',
+    priority: typeof raw.priority === 'number' ? raw.priority : null,
+    url: raw.url ?? null,
+    state:
+      raw.state?.id && raw.state.name
+        ? {
+            id: raw.state.id,
+            name: raw.state.name,
+            type: raw.state.type ?? 'unknown',
+          }
+        : null,
+    updatedAt: raw.updatedAt ?? null,
   };
 }
 
@@ -237,6 +338,74 @@ export class LinearTracker implements Tracker {
       );
     }
     return { id: data.commentCreate.comment.id };
+  }
+
+  /**
+   * Update a Linear issue's state and/or sort order. Used by Mission Control's
+   * bidi kanban — drag-to-state-column triggers this. Returns nothing: the
+   * caller is expected to refetch (`fetchAllIssues`) on success because the
+   * mutation's GraphQL fragment does not include all fields the kanban needs.
+   */
+  async updateIssue(issueId: string, input: IssueUpdateInput): Promise<void> {
+    if (!issueId.trim()) {
+      throw new TrackerError('missing_issue_id', 'issueId is required');
+    }
+    const payload: Record<string, unknown> = {};
+    if (typeof input.stateId === 'string' && input.stateId) payload.stateId = input.stateId;
+    if (typeof input.sortOrder === 'number') payload.sortOrder = input.sortOrder;
+    if (Object.keys(payload).length === 0) {
+      throw new TrackerError('empty_issue_update', 'updateIssue called with no fields to change');
+    }
+    const data = await this.request<IssueUpdateResponse>(ISSUE_UPDATE_MUTATION, {
+      id: issueId,
+      input: payload,
+    });
+    if (!data?.issueUpdate?.success) {
+      throw new TrackerError(
+        'linear_issue_update_failed',
+        'Linear rejected issueUpdate (success=false)'
+      );
+    }
+  }
+
+  /**
+   * Fetch every issue in the configured project (no state filter). Mission
+   * Control reads this to populate the bidi kanban; the regular polling loop
+   * still uses `fetchCandidateIssues` for dispatch eligibility. Returns the
+   * lighter `KanbanIssue` shape (includes state.id needed for drag-to-state
+   * mutations).
+   */
+  async fetchAllIssues(): Promise<KanbanIssue[]> {
+    const out: KanbanIssue[] = [];
+    let after: string | null = null;
+    while (true) {
+      const variables: Record<string, unknown> = {
+        slug: this.opts.projectSlug,
+        first: this.opts.pageSize,
+        after,
+      };
+      const data = await this.request<KanbanPageResponse>(ALL_ISSUES_QUERY, variables);
+      const page = data?.issues;
+      if (!page?.nodes || !page.pageInfo) {
+        throw new TrackerError(
+          'linear_unknown_payload',
+          'Linear all-issues response missing fields'
+        );
+      }
+      for (const raw of page.nodes) {
+        out.push(normalizeKanbanIssue(raw));
+      }
+      if (!page.pageInfo.hasNextPage) break;
+      const cursor = page.pageInfo.endCursor;
+      if (!cursor) {
+        throw new TrackerError(
+          'linear_missing_end_cursor',
+          'hasNextPage is true but endCursor is missing'
+        );
+      }
+      after = cursor;
+    }
+    return out;
   }
 
   private async resolveProjectIds(): Promise<{ projectId: string; teamId: string }> {

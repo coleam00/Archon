@@ -314,6 +314,15 @@ export class WebAdapter implements IWebPlatformAdapter {
   }
 
   /**
+   * Emit a Mission Control event to the dedicated `__mission__` SSE channel.
+   * Fire-and-forget; no-op when no client is listening (the transport buffers
+   * for a short reconnect window before dropping).
+   */
+  emitMissionEvent(event: string): void {
+    this.transport.emitWorkflowEvent('__mission__', event);
+  }
+
+  /**
    * Bridge workflow events from a worker conversation to a parent conversation's SSE stream.
    * Forwards compact progress events (step progress, status) and output previews.
    */

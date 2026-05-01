@@ -293,6 +293,8 @@ export interface DashboardRunsResult {
   runs: DashboardRunResponse[];
   total: number;
   counts: DashboardCounts;
+  /** Cursor for the next page, or null when no more rows match. */
+  nextCursor: string | null;
 }
 
 export async function listDashboardRuns(options?: {
@@ -303,6 +305,8 @@ export async function listDashboardRuns(options?: {
   before?: string;
   limit?: number;
   offset?: number;
+  errorClass?: string;
+  cursor?: string;
 }): Promise<DashboardRunsResult> {
   const params = new URLSearchParams();
   if (options?.status) params.set('status', options.status);
@@ -312,8 +316,54 @@ export async function listDashboardRuns(options?: {
   if (options?.before) params.set('before', options.before);
   if (options?.limit) params.set('limit', String(options.limit));
   if (options?.offset) params.set('offset', String(options.offset));
+  if (options?.errorClass) params.set('errorClass', options.errorClass);
+  if (options?.cursor) params.set('cursor', options.cursor);
   const qs = params.toString();
   return fetchJSON<DashboardRunsResult>(`/api/dashboard/runs${qs ? `?${qs}` : ''}`);
+}
+
+export interface ReplayDriftResponse {
+  yaml_changed: boolean;
+  repo_head_changed: boolean;
+  current_yaml_hash: string;
+  original_yaml_hash: string | null;
+  current_repo_head: string | null;
+  original_repo_head: string | null;
+}
+
+export interface ReplayPreviewResponse {
+  mode: 'preview';
+  preview: {
+    original_run_id: string;
+    workflow_name: string;
+    drift: ReplayDriftResponse;
+  };
+}
+
+export interface ReplayLaunchResponse {
+  mode: 'launched';
+  result: {
+    new_run_id: string;
+    new_conversation_id: string;
+    workflow_name: string;
+    drift: ReplayDriftResponse;
+  };
+}
+
+export async function previewReplay(runId: string): Promise<ReplayPreviewResponse> {
+  return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}/replay`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+}
+
+export async function launchReplayApi(runId: string): Promise<ReplayLaunchResponse> {
+  return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}/replay`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: true }),
+  });
 }
 
 export async function cancelWorkflowRun(
@@ -515,6 +565,59 @@ export async function deleteCodebaseEnvVar(
     `/api/codebases/${encodeURIComponent(codebaseId)}/env/${encodeURIComponent(key)}`,
     { method: 'DELETE' }
   );
+}
+
+// Artifacts (Mission Control gallery)
+export interface ArtifactFile {
+  path: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  createdAt: string;
+}
+
+export async function listArtifacts(runId: string): Promise<ArtifactFile[]> {
+  const result = await fetchJSON<{ files: ArtifactFile[] }>(
+    `/api/artifacts/${encodeURIComponent(runId)}`
+  );
+  return result.files;
+}
+
+/** Direct URL to a specific artifact file — for <img>, <video>, <a download>. */
+export function artifactUrl(runId: string, path: string): string {
+  // Encode each path segment but keep the slashes (the server does its own decode).
+  const encoded = path
+    .split('/')
+    .map(s => encodeURIComponent(s))
+    .join('/');
+  return `/api/artifacts/${encodeURIComponent(runId)}/${encoded}`;
+}
+
+// Linear (Mission Control bidi sync)
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  priority: number | null;
+  url: string | null;
+  state: { id: string; name: string; type: string } | null;
+  updatedAt: string | null;
+}
+
+export async function listLinearIssues(): Promise<LinearIssue[]> {
+  const result = await fetchJSON<{ issues: LinearIssue[] }>('/api/linear/issues');
+  return result.issues;
+}
+
+export async function updateLinearIssue(
+  id: string,
+  body: { stateId?: string; sortOrder?: number }
+): Promise<{ ok: boolean }> {
+  return fetchJSON(`/api/linear/issues/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 // System

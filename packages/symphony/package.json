@@ -7,6 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./db/dispatches": "./src/db/dispatches.ts",
+    "./event-emitter": "./src/event-emitter.ts",
+    "./tracker/linear": "./src/tracker/linear.ts",
     "./workflow-bridge/factory": "./src/workflow-bridge/factory.ts",
     "./workflow-bridge/types": "./src/workflow-bridge/types.ts"
   },

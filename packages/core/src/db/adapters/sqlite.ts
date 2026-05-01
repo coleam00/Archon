@@ -198,6 +198,16 @@ export class SqliteAdapter implements IDatabase {
       if (!wfColNames.has('working_path')) {
         this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN working_path TEXT');
       }
+
+      if (!wfColNames.has('replay_of_run_id')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN replay_of_run_id TEXT');
+      }
+      // Index on replay_of_run_id must be created AFTER the column has been
+      // added (via ALTER TABLE above on existing DBs, or via createSchema on
+      // fresh DBs — either way it's safe by the time we get here).
+      this.db.run(
+        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_replay_of ON remote_agent_workflow_runs(replay_of_run_id)'
+      );
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
     }
@@ -322,7 +332,8 @@ export class SqliteAdapter implements IDatabase {
         started_at TEXT DEFAULT (datetime('now')),
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
-        working_path TEXT
+        working_path TEXT,
+        replay_of_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL
       );
 
       -- Workflow events table
@@ -386,6 +397,15 @@ export class SqliteAdapter implements IDatabase {
       -- From PG migration 009: staleness detection for running workflows
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_last_activity
         ON remote_agent_workflow_runs(last_activity_at) WHERE status = 'running';
+
+      -- Mission Control history pagination indexes that don't depend on the
+      -- ALTER-added replay_of_run_id column live here too.
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_status_started_id
+        ON remote_agent_workflow_runs(status, started_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_codebase_started
+        ON remote_agent_workflow_runs(codebase_id, started_at DESC);
+      -- The idx_workflow_runs_replay_of index is created in migrateColumns()
+      -- after the column has been added to existing databases via ALTER TABLE.
 
       -- From PG migration 010: session audit trail
       CREATE INDEX IF NOT EXISTS idx_sessions_parent

@@ -6,7 +6,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
-import { rm, readFile, writeFile, unlink, mkdir } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
@@ -123,6 +123,8 @@ import {
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
 import type { SymphonyServiceHandle } from '@archon/symphony';
+import { getSymphonyEventEmitter, type SymphonyEmitterEvent } from '@archon/symphony/event-emitter';
+import { buildReplayPreview, launchReplay } from '../replay';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -153,6 +155,50 @@ function jsonError(description: string): {
   description: string;
 } {
   return { content: { 'application/json': { schema: errorSchema } }, description };
+}
+
+/**
+ * Map a filename's extension to a MIME type. Used by the artifact handlers so
+ * videos, images, PDFs, and structured text all serve with the right
+ * Content-Type. Anything unrecognised falls back to application/octet-stream
+ * so the browser doesn't try to render arbitrary binary as text.
+ */
+function mimeFor(filename: string): string {
+  const ext = (filename.split('.').pop() ?? '').toLowerCase();
+  switch (ext) {
+    case 'mp4':
+      return 'video/mp4';
+    case 'webm':
+      return 'video/webm';
+    case 'mov':
+      return 'video/quicktime';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'gif':
+      return 'image/gif';
+    case 'svg':
+      return 'image/svg+xml';
+    case 'webp':
+      return 'image/webp';
+    case 'pdf':
+      return 'application/pdf';
+    case 'json':
+      return 'application/json; charset=utf-8';
+    case 'md':
+    case 'markdown':
+      return 'text/markdown; charset=utf-8';
+    case 'html':
+    case 'htm':
+      return 'text/html; charset=utf-8';
+    case 'txt':
+    case 'log':
+      return 'text/plain; charset=utf-8';
+    default:
+      return 'application/octet-stream';
+  }
 }
 
 const cwdQuerySchema = z.object({ cwd: z.string().optional() });
@@ -862,6 +908,20 @@ const getUpdateCheckRoute = createRoute({
 });
 
 /**
+ * Translate a SymphonyEmitterEvent to its Mission Control wire payload.
+ * The wire `type` is prefixed with `symphony_` so the frontend store can
+ * dispatch on the same channel that carries workflow events.
+ */
+function mapSymphonyEvent(event: SymphonyEmitterEvent): string {
+  const { type, ...rest } = event;
+  return JSON.stringify({
+    type: `symphony_${type}`,
+    ...rest,
+    timestamp: Date.now(),
+  });
+}
+
+/**
  * Register all /api/* routes on the Hono app.
  */
 export function registerApiRoutes(
@@ -1476,6 +1536,54 @@ export function registerApiRoutes(
     return c.json(result);
   });
 
+  // GET /api/mission/stream — Mission Control SSE (workflow events + Symphony dispatch events)
+  // Workflow events arrive via the WorkflowEventBridge fan-out (already wired to '__mission__').
+  // Symphony dispatch events are subscribed in-handler and prefixed with `symphony_dispatch_*`
+  // so the frontend store can route cleanly.
+  app.get('/api/mission/stream', async c => {
+    return streamSSE(c, async stream => {
+      await stream.writeSSE({
+        data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+      });
+
+      webAdapter.registerStream('__mission__', stream);
+      getLog().debug({ streamId: '__mission__' }, 'mission_sse_opened');
+
+      const symphonyUnsubscribe = getSymphonyEventEmitter().subscribe(
+        (event: SymphonyEmitterEvent) => {
+          const wireEvent = mapSymphonyEvent(event);
+          webAdapter.emitMissionEvent(wireEvent);
+        }
+      );
+
+      stream.onAbort(() => {
+        getLog().debug({ streamId: '__mission__' }, 'mission_sse_disconnected');
+        symphonyUnsubscribe();
+        webAdapter.removeStream('__mission__', stream);
+      });
+
+      try {
+        while (true) {
+          await stream.sleep(30000);
+          if (!stream.closed) {
+            await stream.writeSSE({
+              data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+            });
+          }
+        }
+      } catch (e: unknown) {
+        const msg = (e as Error).message ?? '';
+        if (!msg.includes('aborted') && !msg.includes('closed') && !msg.includes('cancel')) {
+          getLog().warn({ err: e as Error }, 'mission_sse_heartbeat_error');
+        }
+      } finally {
+        symphonyUnsubscribe();
+        webAdapter.removeStream('__mission__', stream);
+        getLog().debug({ streamId: '__mission__' }, 'mission_sse_closed');
+      }
+    });
+  });
+
   // GET /api/stream/__dashboard__ — multiplexed dashboard SSE (all workflow events)
   // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
   app.get('/api/stream/__dashboard__', async c => {
@@ -1871,6 +1979,8 @@ export function registerApiRoutes(
       const search = c.req.query('search')?.trim() || undefined;
       const after = c.req.query('after') ?? undefined;
       const before = c.req.query('before') ?? undefined;
+      const errorClass = c.req.query('errorClass')?.trim() || undefined;
+      const cursor = c.req.query('cursor')?.trim() || undefined;
       const limitRaw = Number(c.req.query('limit'));
       const limit = Number.isNaN(limitRaw) ? 50 : Math.min(Math.max(1, limitRaw), 200);
       const offsetRaw = Number(c.req.query('offset'));
@@ -1884,6 +1994,8 @@ export function registerApiRoutes(
         before,
         limit,
         offset,
+        errorClass,
+        cursor,
       });
       return c.json(result);
     } catch (error) {
@@ -2102,6 +2214,35 @@ export function registerApiRoutes(
       getLog().error({ err: error, runId }, 'api.workflow_run_delete_failed');
       return apiError(c, 500, 'Failed to delete workflow run');
     }
+  });
+
+  // POST /api/workflows/runs/:runId/replay
+  // Body: { confirm?: boolean } — when omitted or false, returns a preview drift
+  // block; when true, launches a fresh workflow run with `replay_of_run_id` set.
+  // NOTE: Uses app.post() instead of registerOpenApiRoute because the response
+  // shape varies (preview vs launch).
+  app.post('/api/workflows/runs/:runId/replay', async c => {
+    const runId = c.req.param('runId') ?? '';
+    let body: { confirm?: boolean } = {};
+    try {
+      const text = await c.req.text();
+      if (text.trim().length > 0) {
+        body = JSON.parse(text) as { confirm?: boolean };
+      }
+    } catch {
+      // Treat invalid JSON as preview request — common for GET-style probes.
+      body = {};
+    }
+
+    if (body.confirm !== true) {
+      const preview = await buildReplayPreview(runId);
+      if (!preview.ok) return apiError(c, preview.status, preview.error);
+      return c.json({ mode: 'preview', preview: preview.preview });
+    }
+
+    const launch = await launchReplay(runId, webAdapter);
+    if (!launch.ok) return apiError(c, launch.status, launch.error);
+    return c.json({ mode: 'launched', result: launch.result });
   });
 
   // GET /api/workflows/runs - List workflow runs
@@ -2519,12 +2660,84 @@ export function registerApiRoutes(
     }
   });
 
+  // GET /api/artifacts/:runId - Directory manifest of all artifact files for a run
+  // Returns { files: [{ path, name, size, mimeType, createdAt }] }. Walks the
+  // run artifacts directory recursively. Skips dotfiles. Caps at 1000 entries
+  // (more than enough — runs that need more probably want pagination).
+  app.get('/api/artifacts/:runId', async c => {
+    const runId = c.req.param('runId');
+
+    let run: Awaited<ReturnType<typeof workflowDb.getWorkflowRun>>;
+    try {
+      run = await workflowDb.getWorkflowRun(runId);
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'artifacts.run_lookup_failed');
+      return apiError(c, 500, 'Failed to look up workflow run');
+    }
+    if (!run) return apiError(c, 404, 'Workflow run not found');
+
+    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    if (!codebase?.name) return apiError(c, 404, 'Artifact not available: codebase not found');
+    const nameParts = codebase.name.split('/');
+    if (nameParts.length < 2) {
+      return apiError(c, 404, 'Artifact not available: could not determine owner/repo');
+    }
+    const [owner, repo] = nameParts;
+    const artifactDir = getRunArtifactsPath(owner, repo, runId);
+
+    interface FileEntry {
+      path: string;
+      name: string;
+      size: number;
+      mimeType: string;
+      createdAt: string;
+    }
+    const files: FileEntry[] = [];
+    const MAX = 1000;
+    async function walk(dir: string, prefix: string): Promise<void> {
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      for (const e of entries) {
+        if (files.length >= MAX) return;
+        if (e.name.startsWith('.')) continue;
+        const rel = prefix ? `${prefix}/${e.name}` : e.name;
+        const abs = join(dir, e.name);
+        if (e.isDirectory()) {
+          await walk(abs, rel);
+        } else if (e.isFile()) {
+          const s = await stat(abs);
+          files.push({
+            path: rel,
+            name: e.name,
+            size: s.size,
+            mimeType: mimeFor(e.name),
+            createdAt: s.birthtime.toISOString(),
+          });
+        }
+      }
+    }
+    try {
+      await walk(artifactDir, '');
+    } catch (err) {
+      getLog().error({ err, runId, artifactDir }, 'artifacts.manifest_failed');
+      return apiError(c, 500, 'Failed to list artifacts');
+    }
+    return c.json({ files });
+  });
+
   // GET /api/artifacts/:runId/* - Serve workflow artifact file contents
-  // The wildcard captures the filename (e.g. "plan.md", "subdir/report.md").
-  // Path traversal is blocked: any segment containing ".." is rejected.
+  // The wildcard captures the filename (e.g. "plan.md", "subdir/report.md" or
+  // "screen.mp4"). Path traversal is blocked: any segment containing ".." is
+  // rejected. Binary-safe: streams via Bun.file; honors Range for video
+  // scrubbing.
   // NOTE: Uses app.get() instead of registerOpenApiRoute because:
   //  1. Wildcard path params (*) are not representable in OpenAPI 3.0
-  //  2. Response is raw text/markdown, not JSON
+  //  2. Response is raw bytes (image/video/markdown/...), not JSON
   app.get('/api/artifacts/:runId/*', async c => {
     const runId = c.req.param('runId');
     // Hono wildcards match but don't capture — extract filename from the URL path.
@@ -2590,23 +2803,62 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid filename');
     }
 
-    let content: string;
+    // Stat first so we know the size (needed for Range responses) and can 404
+    // before opening the file.
+    let fileStat;
     try {
-      content = await readFile(filePath, 'utf-8');
+      fileStat = await stat(filePath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return apiError(c, 404, 'Artifact file not found');
       }
-      getLog().error({ err, runId, filename }, 'artifacts.read_failed');
+      getLog().error({ err, runId, filename }, 'artifacts.stat_failed');
       return apiError(c, 500, 'Failed to read artifact file');
     }
+    if (!fileStat.isFile()) return apiError(c, 404, 'Artifact file not found');
 
-    const contentType = filename.endsWith('.md')
-      ? 'text/markdown; charset=utf-8'
-      : 'text/plain; charset=utf-8';
-    return new Response(content, {
+    const contentType = mimeFor(filename);
+    const totalSize = fileStat.size;
+    const range = c.req.header('range');
+
+    // Range request — needed for video scrubbing.
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (match) {
+        const startStr = match[1];
+        const endStr = match[2];
+        const start = startStr ? parseInt(startStr, 10) : 0;
+        const end = endStr ? parseInt(endStr, 10) : totalSize - 1;
+        if (
+          Number.isFinite(start) &&
+          Number.isFinite(end) &&
+          start >= 0 &&
+          end < totalSize &&
+          start <= end
+        ) {
+          const slice = Bun.file(filePath).slice(start, end + 1);
+          return new Response(slice, {
+            status: 206,
+            headers: {
+              'Content-Type': contentType,
+              'Content-Range': `bytes ${String(start)}-${String(end)}/${String(totalSize)}`,
+              'Accept-Ranges': 'bytes',
+              'Content-Length': String(end - start + 1),
+              'Cache-Control': 'private, max-age=60',
+            },
+          });
+        }
+      }
+    }
+
+    return new Response(Bun.file(filePath), {
       status: 200,
-      headers: { 'Content-Type': contentType },
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': String(totalSize),
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'private, max-age=60',
+      },
     });
   });
 

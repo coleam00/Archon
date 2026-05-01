@@ -43,6 +43,7 @@ interface InMemoryRun {
   started_at: Date;
   completed_at: Date | null;
   last_activity_at: Date | null;
+  replay_of_run_id: string | null;
 }
 
 function toWorkflowRun(r: InMemoryRun): WorkflowRun {
@@ -59,6 +60,7 @@ function toWorkflowRun(r: InMemoryRun): WorkflowRun {
     completed_at: r.completed_at,
     last_activity_at: r.last_activity_at,
     working_path: r.working_path,
+    replay_of_run_id: r.replay_of_run_id,
   };
 }
 
@@ -96,6 +98,7 @@ export function makeFakeStore(opts: { db?: IDatabase } = {}): FakeStore {
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
+        replay_of_run_id: data.replay_of_run_id ?? null,
       };
       runs.set(id, created);
       // When a DB handle is provided, also write a row that satisfies

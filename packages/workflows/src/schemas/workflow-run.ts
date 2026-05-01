@@ -103,6 +103,8 @@ export const workflowRunSchema = z.object({
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),
   working_path: z.string().nullable(),
+  /** When set, this run was launched as a replay of the referenced original run. */
+  replay_of_run_id: z.string().nullable().optional(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

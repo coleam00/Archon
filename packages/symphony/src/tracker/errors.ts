@@ -13,6 +13,8 @@ export type TrackerErrorCode =
   | 'linear_unknown_payload'
   | 'linear_missing_end_cursor'
   | 'linear_issue_create_failed'
+  | 'linear_issue_update_failed'
+  | 'empty_issue_update'
   | 'linear_comment_create_failed'
   | 'linear_project_not_found'
   | 'linear_project_no_team'

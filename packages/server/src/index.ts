@@ -64,6 +64,7 @@ import { SSETransport } from './adapters/web/transport';
 import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { registerApiRoutes } from './routes/api';
 import { registerSymphonyRoutes } from './routes/api.symphony';
+import { registerLinearRoutes } from './routes/api.linear';
 import {
   startSymphonyService,
   createProductionBridge,
@@ -118,6 +119,7 @@ async function maybeStartSymphony(
     const bridge = createProductionBridge({ webAdapter });
     const handle = await startSymphonyService({ configPath, bridge });
     registerSymphonyRoutes(app, handle);
+    registerLinearRoutes(app, handle);
     getLog().info({ config_path: configPath }, 'symphony.routes_registered');
     return handle;
   } catch (err) {

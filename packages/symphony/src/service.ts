@@ -43,6 +43,13 @@ export interface SymphonyServiceHandle {
   orchestrator: Orchestrator;
   snapshot: ConfigSnapshot;
   configPath: string;
+  /**
+   * Tracker instances built from the active config snapshot. Exposed so
+   * server routes outside Symphony's polling loop (Mission Control's
+   * Linear-state kanban, ad-hoc dispatch UIs, etc.) can issue tracker
+   * mutations directly without rebuilding clients.
+   */
+  trackers: TrackerMap;
   stop: () => Promise<void>;
 }
 
@@ -179,6 +186,7 @@ export async function startSymphonyService(
     orchestrator,
     snapshot,
     configPath,
+    trackers,
     stop: async (): Promise<void> => {
       setSymphonyCommandHandler(null);
       await orchestrator.stop();

@@ -76,3 +76,8 @@ export {
   getDispatchById,
   getDispatchByWorkflowRunId,
 } from './db/dispatches';
+export {
+  getSymphonyEventEmitter,
+  resetSymphonyEventEmitter,
+  type SymphonyEmitterEvent,
+} from './event-emitter';

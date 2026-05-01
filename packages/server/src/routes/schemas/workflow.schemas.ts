@@ -197,6 +197,7 @@ export const dashboardRunsResponseSchema = z
       pending: z.number(),
       paused: z.number(),
     }),
+    nextCursor: z.string().nullable(),
   })
   .openapi('DashboardRunsResponse');
 
@@ -218,6 +219,8 @@ export const dashboardRunsQuerySchema = z.object({
   before: z.string().optional(),
   limit: z.string().optional(),
   offset: z.string().optional(),
+  errorClass: z.string().optional(),
+  cursor: z.string().optional(),
 });
 
 /** GET /api/workflows/runs query params. */

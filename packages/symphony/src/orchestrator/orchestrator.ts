@@ -7,6 +7,7 @@ import {
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import type { Issue, Tracker } from '../tracker/types';
 import type { ConfigSnapshot, TrackerKind } from '../config/snapshot';
+import { getSymphonyEventEmitter, type SymphonyEmitterEvent } from '../event-emitter';
 import {
   listInFlight,
   updateStatus,
@@ -72,6 +73,13 @@ export interface OrchestratorDeps {
   getEventEmitter?: () => {
     subscribe: (listener: (event: WorkflowEmitterEvent) => void) => () => void;
   };
+  /**
+   * Optional Symphony event emitter override for tests. Defaults to the
+   * process-wide singleton via `getSymphonyEventEmitter()`. The orchestrator
+   * fires `dispatch_*` and `tracker_poll_completed` events here on every
+   * state transition.
+   */
+  getSymphonyEmitter?: () => { emit: (event: SymphonyEmitterEvent) => void };
   /** Optional clock override for tests. */
   now?: () => number;
   /** Optional setTimeout override. */
@@ -146,6 +154,14 @@ export class Orchestrator {
   /** Public read-only accessor for tests. */
   get internalState(): OrchestratorState {
     return this.state;
+  }
+
+  /** Fire-and-forget Symphony event emit (errors are swallowed by the emitter). */
+  private emitSymphony(event: SymphonyEmitterEvent): void {
+    const emitter = this.deps.getSymphonyEmitter
+      ? this.deps.getSymphonyEmitter()
+      : getSymphonyEventEmitter();
+    emitter.emit(event);
   }
 
   scheduleTick(ms: number): void {
@@ -371,6 +387,40 @@ export class Orchestrator {
       'symphony.workflow_terminal'
     );
 
+    // Emit Mission Control event for the terminal transition.
+    if (entry) {
+      const trackerKind = entry.tracker;
+      const identifier = entry.identifier;
+      if (event.type === 'workflow_completed') {
+        this.emitSymphony({
+          type: 'dispatch_completed',
+          tracker: trackerKind,
+          identifier,
+          dispatchKey,
+          workflowRunId: event.runId,
+        });
+      } else if (event.type === 'workflow_failed') {
+        this.emitSymphony({
+          type: 'dispatch_failed',
+          tracker: trackerKind,
+          identifier,
+          dispatchKey,
+          workflowRunId: event.runId,
+          errorClass: 'workflow_failed',
+          errorMessage: event.error,
+        });
+      } else {
+        this.emitSymphony({
+          type: 'dispatch_cancelled',
+          tracker: trackerKind,
+          identifier,
+          dispatchKey,
+          workflowRunId: event.runId,
+          reason: event.reason,
+        });
+      }
+    }
+
     if (event.type === 'workflow_failed' && scheduleRetryAfter && entry) {
       this.scheduleRetry(
         dispatchKey,
@@ -564,6 +614,7 @@ export class Orchestrator {
 
     await this.reconcileRunningIssues(snap);
 
+    const pollStart = this.deps.now?.() ?? nowMs();
     const fetches = await Promise.allSettled(
       snap.trackers.map(async cfg => {
         const tracker = this.deps.trackers[cfg.kind];
@@ -588,6 +639,14 @@ export class Orchestrator {
         );
         continue;
       }
+      const trackerCandidates = result.value.issues.length;
+      const pollEnd = this.deps.now?.() ?? nowMs();
+      this.emitSymphony({
+        type: 'tracker_poll_completed',
+        tracker: result.value.kind,
+        candidateCount: trackerCandidates,
+        durationMs: Math.max(0, pollEnd - pollStart),
+      });
       for (const issue of result.value.issues) {
         candidates.push({ kind: result.value.kind, issue });
       }
@@ -662,6 +721,14 @@ export class Orchestrator {
     this.state.retry_attempts.delete(dispatchKey);
 
     const codebaseId = this.resolveCodebaseId(trackerKind, issue, snap);
+    this.emitSymphony({
+      type: 'dispatch_claimed',
+      tracker: trackerKind,
+      identifier: issue.identifier,
+      dispatchKey,
+      codebaseId,
+      attempt: attempt ?? 1,
+    });
     const abort = new AbortController();
 
     let outcome: DispatchOutcome;
@@ -704,6 +771,16 @@ export class Orchestrator {
       };
       this.state.running.set(dispatchKey, entry);
       this.runIdToDispatchKey.set(outcome.workflowRunId, dispatchKey);
+      this.emitSymphony({
+        type: 'dispatch_started',
+        tracker: trackerKind,
+        identifier: issue.identifier,
+        dispatchKey,
+        workflowRunId: outcome.workflowRunId,
+        dispatchId: outcome.dispatchId,
+        codebaseId,
+        workflowName: snap.stateWorkflowMap[issue.state] ?? '',
+      });
       return;
     }
 
@@ -711,6 +788,15 @@ export class Orchestrator {
     // row for `failed_no_codebase` / `failed_no_workflow`. Config errors do
     // not retry; only the unhandled throw above schedules anything.
     this.state.completed.add(dispatchKey);
+    this.emitSymphony({
+      type: 'dispatch_failed',
+      tracker: trackerKind,
+      identifier: issue.identifier,
+      dispatchKey,
+      workflowRunId: null,
+      errorClass: outcome.status,
+      errorMessage: outcome.reason ?? 'dispatch failed',
+    });
   }
 
   private resolveCodebaseId(
@@ -876,6 +962,16 @@ export class Orchestrator {
       },
       'symphony.retry_scheduled'
     );
+    this.emitSymphony({
+      type: 'dispatch_retry_scheduled',
+      tracker: trackerKind,
+      identifier,
+      dispatchKey,
+      attempt,
+      dueAt: new Date(dueAt).toISOString(),
+      delayKind,
+      lastError: error,
+    });
   }
 
   private async onRetryTimer(dispatchKey: string): Promise<void> {
