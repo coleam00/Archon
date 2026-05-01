@@ -62,9 +62,9 @@ defaultAssistant: claude # must match a registered provider (e.g. claude, codex)
 assistants:
   claude:
     model: sonnet
-    settingSources:   # Which CLAUDE.md files the SDK loads (default: ['project'])
-      - project       # Project-level CLAUDE.md (always recommended)
-      - user          # Also load ~/.claude/CLAUDE.md (global preferences)
+    settingSources:   # Which sources the Claude SDK loads (default: ['project', 'user'])
+      - project       # Project-level <cwd>/.claude/ (CLAUDE.md, skills, commands, agents)
+      - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
     # Optional: absolute path to the Claude Code executable.
     # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
     # Accepts the native binary (~/.local/bin/claude from the curl installer)

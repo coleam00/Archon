@@ -726,7 +726,7 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.settingSources).toEqual(['project', 'user']);
     });
 
-    test('defaults settingSources to project when not provided', async () => {
+    test('defaults settingSources to project + user when not provided', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'test-session' };
       });
@@ -737,7 +737,7 @@ describe('ClaudeProvider', () => {
 
       expect(mockQuery).toHaveBeenCalledTimes(1);
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options.settingSources).toEqual(['project']);
+      expect(callArgs.options.settingSources).toEqual(['project', 'user']);
     });
 
     test('passes env from requestOptions into SDK options', async () => {

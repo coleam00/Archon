@@ -127,7 +127,7 @@ assistants:
     # claudeBinaryPath: /absolute/path/to/claude
 ```
 
-The `settingSources` option controls which `CLAUDE.md` files the Claude Code SDK loads. By default, only the project-level `CLAUDE.md` is loaded. Add `user` to also load your personal `~/.claude/CLAUDE.md`.
+The `settingSources` option controls which `CLAUDE.md`, skill, command, and agent files the Claude Code SDK loads. The default is `['project', 'user']`, which loads both the project-level `<cwd>/.claude/` and your personal `~/.claude/`. Set it to `['project']` if you want to scope a workflow to project-only resources.
 
 ### Set as Default (Optional)
 
