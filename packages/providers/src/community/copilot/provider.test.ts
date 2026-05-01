@@ -14,6 +14,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -1176,5 +1179,45 @@ describe('CopilotProvider.sendQuery', () => {
     const resultChunk = chunks.findLast(c => c.type === 'result') as ResultChunk | undefined;
     expect(spawnArgHistory).toHaveLength(1);
     expect(resultChunk?.isError).toBe(true);
+  });
+
+  test('injects project-local GitHub skills into the Copilot prompt', async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), 'archon-copilot-skills-'));
+    const cwd = join(tmpRoot, 'project');
+    const skillDir = join(cwd, '.github', 'skills', 'pitch-presentation');
+
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, 'SKILL.md'), '# Pitch skill\nAlways use Polish.\n', 'utf-8');
+
+    try {
+      const fake = new FakeChildProcess();
+      fake.scheduleStdout('OK\n', 5);
+      fake.scheduleExit(0, null, 20);
+
+      const spawnMod = await import('node:child_process');
+      (spawnMod.spawn as ReturnType<typeof mock>).mockImplementationOnce((_b: string, args: string[]) => {
+        lastSpawnArgs = args;
+        spawnArgHistory.push(args);
+        Promise.resolve().then(() => fake.start());
+        return fake as unknown as ChildProcess;
+      });
+
+      const provider = await createProvider();
+      await collect(
+        provider.sendQuery('Build the deck', cwd, undefined, {
+          nodeConfig: { skills: ['pitch-presentation'] },
+        })
+      );
+
+      const promptArgIndex = lastSpawnArgs.indexOf('-p');
+      const injectedPrompt = promptArgIndex >= 0 ? lastSpawnArgs[promptArgIndex + 1] : '';
+
+      expect(injectedPrompt).toContain('Additional project skill context is provided below.');
+      expect(injectedPrompt).toContain('<skill name="pitch-presentation"');
+      expect(injectedPrompt).toContain('Always use Polish.');
+      expect(injectedPrompt).toContain('Task:\nBuild the deck');
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

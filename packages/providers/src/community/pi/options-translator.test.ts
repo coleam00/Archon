@@ -174,6 +174,7 @@ describe('resolvePiSkills', () => {
     process.env.HOME = home;
 
     // Staging:
+    //   <cwd>/.github/skills/github-skill/SKILL.md
     //   <cwd>/.agents/skills/alpha/SKILL.md
     //   <cwd>/.claude/skills/bravo/SKILL.md
     //   <home>/.agents/skills/charlie/SKILL.md
@@ -181,6 +182,7 @@ describe('resolvePiSkills', () => {
     //   <home>/.claude/skills/shared/SKILL.md  (also in <cwd>/.claude/skills/shared/)
     //   <cwd>/.claude/skills/shared/SKILL.md
     const stage = [
+      [join(cwd, '.github', 'skills', 'github-skill'), 'SKILL.md'],
       [join(cwd, '.agents', 'skills', 'alpha'), 'SKILL.md'],
       [join(cwd, '.claude', 'skills', 'bravo'), 'SKILL.md'],
       [join(home, '.agents', 'skills', 'charlie'), 'SKILL.md'],
@@ -208,6 +210,13 @@ describe('resolvePiSkills', () => {
   test('returns empty for undefined/empty input', () => {
     expect(resolvePiSkills(cwd, undefined)).toEqual({ paths: [], missing: [] });
     expect(resolvePiSkills(cwd, [])).toEqual({ paths: [], missing: [] });
+  });
+
+  test('resolves project-local .github/skills', () => {
+    const result = resolvePiSkills(cwd, ['github-skill']);
+    expect(result.missing).toEqual([]);
+    expect(result.paths).toHaveLength(1);
+    expect(result.paths[0]).toContain(join('.github', 'skills', 'github-skill'));
   });
 
   test('resolves project-local .agents/skills', () => {

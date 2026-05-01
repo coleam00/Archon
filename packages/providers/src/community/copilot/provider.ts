@@ -12,7 +12,8 @@
  * - Does not default allowAll, allowAllTools, or allowAllPaths to true.
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { createLogger } from '@archon/paths';
 import type {
@@ -53,6 +54,11 @@ interface CopilotAttemptResult {
   success: boolean;
   emittedAssistant: boolean;
   failureKind?: CopilotFailureKind;
+}
+
+interface ResolvedCopilotSkills {
+  prompt: string;
+  missing: string[];
 }
 
 /**
@@ -113,6 +119,63 @@ function classifyCopilotFailure(errors: string[]): CopilotFailureKind {
   if (RATE_LIMIT_PATTERNS.some(pattern => message.includes(pattern))) return 'rate_limit';
   if (MODEL_ACCESS_PATTERNS.some(pattern => message.includes(pattern))) return 'model_access';
   return 'unknown';
+}
+
+function skillSearchRoots(cwd: string): string[] {
+  const home = process.env.HOME ?? homedir();
+  return [
+    join(cwd, '.github', 'skills'),
+    join(cwd, '.agents', 'skills'),
+    join(cwd, '.claude', 'skills'),
+    join(home, '.agents', 'skills'),
+    join(home, '.claude', 'skills'),
+  ];
+}
+
+function resolveCopilotSkillsPrompt(cwd: string, prompt: string, skillNames: string[] | undefined): ResolvedCopilotSkills {
+  if (!skillNames || skillNames.length === 0) {
+    return { prompt, missing: [] };
+  }
+
+  const roots = skillSearchRoots(cwd);
+  const seen = new Set<string>();
+  const missing: string[] = [];
+  const sections: string[] = [];
+
+  for (const rawName of skillNames) {
+    if (typeof rawName !== 'string' || rawName.length === 0) continue;
+    if (seen.has(rawName)) continue;
+    seen.add(rawName);
+
+    let skillPath: string | undefined;
+    for (const root of roots) {
+      const candidate = join(root, rawName, 'SKILL.md');
+      if (existsSync(candidate)) {
+        skillPath = candidate;
+        break;
+      }
+    }
+
+    if (!skillPath) {
+      missing.push(rawName);
+      continue;
+    }
+
+    const content = readFileSync(skillPath, 'utf-8').trim();
+    sections.push(`<skill name="${rawName}" source="${skillPath}">\n${content}\n</skill>`);
+  }
+
+  if (sections.length === 0) {
+    return { prompt, missing };
+  }
+
+  return {
+    prompt:
+      'Additional project skill context is provided below. Treat it as authoritative workflow guidance when relevant.\n\n' +
+      `${sections.join('\n\n')}\n\n` +
+      `Task:\n${prompt}`,
+    missing,
+  };
 }
 
 // ─── Unified event queue ────────────────────────────────────────────────────
@@ -217,9 +280,24 @@ export class CopilotProvider implements IAgentProvider {
     options?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
     const config = parseCopilotConfig(options?.assistantConfig ?? {});
+    const { prompt: promptWithSkills, missing } = resolveCopilotSkillsPrompt(
+      cwd,
+      prompt,
+      options?.nodeConfig?.skills
+    );
+
+    if (missing.length > 0) {
+      yield {
+        type: 'system',
+        content:
+          `⚠️  copilot: could not resolve skill names: ${missing.join(', ')}. ` +
+          'Searched .github/skills, .agents/skills, and .claude/skills (project + user-global).',
+      };
+    }
+
     const primaryModel = options?.model ?? config.model;
     const fallbackModel = options?.fallbackModel;
-    const primaryAttempt = yield* this.runAttempt(prompt, cwd, options, config, primaryModel);
+    const primaryAttempt = yield* this.runAttempt(promptWithSkills, cwd, options, config, primaryModel);
 
     if (
       !primaryAttempt.success &&
@@ -235,7 +313,7 @@ export class CopilotProvider implements IAgentProvider {
           `due to ${primaryAttempt.failureKind === 'rate_limit' ? 'a rate limit' : 'model access'}. ` +
           `Retrying with fallback model "${fallbackModel}".`,
       };
-      yield* this.runAttempt(prompt, cwd, options, config, fallbackModel);
+      yield* this.runAttempt(promptWithSkills, cwd, options, config, fallbackModel);
     }
   }
 

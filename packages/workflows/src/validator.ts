@@ -408,19 +408,29 @@ export async function validateWorkflowResources(
     // --- Skills nodes: check skill directories exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
       for (const skillName of node.skills) {
+        const githubSkillPath = join(cwd, '.github', 'skills', skillName, 'SKILL.md');
         const projectSkillPath = join(cwd, '.claude', 'skills', skillName, 'SKILL.md');
         const userSkillPath = join(homedir(), '.claude', 'skills', skillName, 'SKILL.md');
+        const projectAgentSkillPath = join(cwd, '.agents', 'skills', skillName, 'SKILL.md');
+        const userAgentSkillPath = join(homedir(), '.agents', 'skills', skillName, 'SKILL.md');
 
+        const githubExists = await fileExists(githubSkillPath);
         const projectExists = await fileExists(projectSkillPath);
         const userExists = await fileExists(userSkillPath);
+        const projectAgentExists = await fileExists(projectAgentSkillPath);
+        const userAgentExists = await fileExists(userAgentSkillPath);
 
-        if (!projectExists && !userExists) {
+        if (!githubExists && !projectExists && !userExists && !projectAgentExists && !userAgentExists) {
           issues.push({
             level: 'warning',
             nodeId: node.id,
             field: 'skills',
-            message: `Skill '${skillName}' not found in .claude/skills/ or ~/.claude/skills/`,
-            hint: `Install with: npx skills add <repo> — or create manually at .claude/skills/${skillName}/SKILL.md`,
+            message:
+              `Skill '${skillName}' not found in .github/skills/, .agents/skills/, ` +
+              'or .claude/skills/ (project or user-global)',
+            hint:
+              `Create ${skillName}/SKILL.md under .github/skills, .agents/skills, or .claude/skills in the project, ` +
+              'or install it globally.',
           });
         }
       }

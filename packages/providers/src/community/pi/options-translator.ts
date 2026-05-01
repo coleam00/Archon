@@ -262,10 +262,11 @@ export interface ResolvedSkills {
  * workflows that already work under Claude find the same skills under Pi.
  *
  * Order (first match wins per name):
- *   1. `<cwd>/.agents/skills/<name>/`     — project-local, agentskills.io standard
- *   2. `<cwd>/.claude/skills/<name>/`     — project-local, Claude convention
- *   3. `~/.agents/skills/<name>/`         — user-global, agentskills.io standard
- *   4. `~/.claude/skills/<name>/`         — user-global, Claude convention
+ *   1. `<cwd>/.github/skills/<name>/`     — project-local, GitHub Copilot skill layout
+ *   2. `<cwd>/.agents/skills/<name>/`     — project-local, agentskills.io standard
+ *   3. `<cwd>/.claude/skills/<name>/`     — project-local, Claude convention
+ *   4. `~/.agents/skills/<name>/`         — user-global, agentskills.io standard
+ *   5. `~/.claude/skills/<name>/`         — user-global, Claude convention
  *
  * Ancestor traversal above cwd is deliberately not done in v2 — matches the
  * Pi provider's cwd-bound scope and avoids ambiguity about which repo's
@@ -278,6 +279,7 @@ function skillSearchRoots(cwd: string): string[] {
   // homedir() keeps behavior identical in non-test contexts.
   const home = process.env.HOME ?? homedir();
   return [
+    join(cwd, '.github', 'skills'),
     join(cwd, '.agents', 'skills'),
     join(cwd, '.claude', 'skills'),
     join(home, '.agents', 'skills'),
