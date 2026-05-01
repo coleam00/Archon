@@ -21,7 +21,11 @@ import type {
   ProviderCapabilities,
   TokenUsage,
 } from '@archon/providers/types';
-import { getProviderCapabilities } from '@archon/providers';
+import {
+  getProviderCapabilities,
+  getRegisteredProviders,
+  isRegisteredProvider,
+} from '@archon/providers';
 import type {
   DagNode,
   ApprovalNode,
@@ -49,7 +53,6 @@ import { formatToolCall } from './utils/tool-formatter';
 import { createLogger } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { evaluateCondition } from './condition-evaluator';
-import { inferProviderFromModel, isModelCompatible } from './model-validation';
 import {
   logNodeStart,
   logNodeComplete,
@@ -70,6 +73,7 @@ import {
   detectCompletionSignal,
   stripCompletionTags,
   isInlineScript,
+  formatSubprocessFailure,
 } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -341,7 +345,17 @@ async function resolveNodeProviderAndModel(
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
-  const provider: string = node.provider ?? inferProviderFromModel(node.model, workflowProvider);
+  // Provider is explicit: node.provider ?? workflow.provider. Model never
+  // influences provider selection. Model strings pass through to the SDK.
+  const provider: string = node.provider ?? workflowProvider;
+  if (!isRegisteredProvider(provider)) {
+    throw new Error(
+      `Node '${node.id}': unknown provider '${provider}'. ` +
+        `Registered: ${getRegisteredProviders()
+          .map(p => p.id)
+          .join(', ')}`
+    );
+  }
 
   const providerAssistantConfig = config.assistants[provider];
   const model: string | undefined =
@@ -349,12 +363,6 @@ async function resolveNodeProviderAndModel(
     (provider === workflowProvider
       ? workflowModel
       : (providerAssistantConfig?.model as string | undefined));
-
-  if (!isModelCompatible(provider, model)) {
-    throw new Error(
-      `Node '${node.id}': model "${model ?? 'default'}" is not compatible with provider "${provider}"`
-    );
-  }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
   const caps = getProviderCapabilities(provider);
@@ -1101,6 +1109,49 @@ async function executeNodeInternal(
       return { state: 'failed', output: nodeOutputText, error: creditError };
     }
 
+    // Empty assistant output is a failure for AI nodes — a provider stream
+    // that closed cleanly with zero content typically means a silent
+    // rejection or interruption that didn't produce a result.isError chunk.
+    // Bash/script/approval nodes don't reach this path; they have their
+    // own dispatch and never stream through this loop.
+    //
+    // Idle-timeout exits are exempt: the timeout warning at line 1017 has
+    // already told the user the node "completed via idle timeout"; flipping
+    // that to a failure here would directly contradict the on-screen message.
+    if (nodeOutputText.trim() === '' && structuredOutput === undefined && !nodeIdleTimedOut) {
+      const duration = Date.now() - nodeStartTime;
+      const emptyError = `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
+      getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');
+      await logNodeError(logDir, workflowRun.id, node.id, emptyError);
+
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'node_failed',
+          step_name: node.id,
+          data: { error: emptyError, duration_ms: duration },
+        })
+        .catch((err: Error) => {
+          getLog().error(
+            { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+            'workflow_event_persist_failed'
+          );
+        });
+
+      emitter.emit({
+        type: 'node_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        nodeName: node.command ?? node.id,
+        error: emptyError,
+      });
+
+      lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
+      lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
+
+      return { state: 'failed', output: '', error: emptyError };
+    }
+
     const duration = Date.now() - nodeStartTime;
     getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
     await logNodeComplete(logDir, workflowRun.id, node.id, node.command ?? '<inline>', {
@@ -1261,8 +1312,13 @@ async function executeBashNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv =
-    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
+  const subprocessEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ARTIFACTS_DIR: artifactsDir,
+    LOG_DIR: logDir,
+    BASE_BRANCH: baseBranch,
+    ...(envVars ?? {}),
+  };
 
   try {
     const { stdout, stderr } = await execFileAsync('bash', ['-c', finalScript], {
@@ -1312,20 +1368,28 @@ async function executeBashNode(
 
     return { state: 'completed', output };
   } catch (error) {
-    const err = error as Error & { killed?: boolean; code?: number | string };
+    const err = error as Error & { killed?: boolean; code?: number | string; stderr?: string };
     const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
+    const label = `Bash node '${node.id}'`;
+    // Always run the formatter so logs get sanitized fields regardless of which
+    // user-facing branch we end up in — the timeout message also contains the
+    // full `Command failed: bash -c <body>` line and would otherwise leak.
+    const formatted = formatSubprocessFailure(err, label);
     let errorMsg: string;
     if (isTimeout) {
-      errorMsg = `Bash node '${node.id}' timed out after ${String(timeout)}ms`;
+      errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.message?.includes('ENOENT')) {
-      errorMsg = `Bash node '${node.id}' failed: bash executable not found in PATH`;
+      errorMsg = `${label} failed: bash executable not found in PATH`;
     } else if (err.message?.includes('EACCES')) {
-      errorMsg = `Bash node '${node.id}' failed: permission denied (check cwd permissions)`;
+      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
-      errorMsg = `Bash node '${node.id}' failed: ${err.message}`;
+      errorMsg = formatted.userMessage;
     }
 
-    getLog().error({ err, nodeId: node.id, isTimeout }, 'dag_node_failed');
+    getLog().error(
+      { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
+      'dag_node_failed'
+    );
     await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
     deps.store
@@ -1570,19 +1634,26 @@ async function executeScriptNode(
   } catch (error) {
     const err = error as Error & { killed?: boolean; code?: number | string; stderr?: string };
     const isTimeout = err.killed === true || (err.message ?? '').includes('timed out');
-    const stderrHint = err.stderr?.trim() ? `\n\nScript output:\n${err.stderr.trim()}` : '';
+    const label = `Script node '${node.id}'`;
+    // Always run the formatter so logs get sanitized fields regardless of which
+    // user-facing branch we end up in — the timeout message also contains the
+    // full `Command failed: bun -e <body>` line and would otherwise leak.
+    const formatted = formatSubprocessFailure(err, label);
     let errorMsg: string;
     if (isTimeout) {
-      errorMsg = `Script node '${node.id}' timed out after ${String(timeout)}ms`;
+      errorMsg = `${label} timed out after ${String(timeout)}ms`;
     } else if (err.message?.includes('ENOENT')) {
-      errorMsg = `Script node '${node.id}' failed: '${cmd}' executable not found in PATH`;
+      errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
     } else if (err.message?.includes('EACCES')) {
-      errorMsg = `Script node '${node.id}' failed: permission denied (check cwd permissions)`;
+      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
-      errorMsg = `Script node '${node.id}' failed: ${err.message}${stderrHint}`;
+      errorMsg = formatted.userMessage;
     }
 
-    getLog().error({ err, nodeId: node.id, isTimeout }, 'dag_node_failed');
+    getLog().error(
+      { ...formatted.logFields, nodeId: node.id, nodeType: 'script', isTimeout },
+      'dag_node_failed'
+    );
     await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
     deps.store
@@ -1766,6 +1837,10 @@ async function executeLoopNode(
       // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
       // Pass loopUserInput on the first resumed iteration; '' on all others (non-interactive
       // or subsequent iterations) so $LOOP_USER_INPUT substitutes to empty string explicitly.
+      // $LOOP_PREV_OUTPUT carries the previous iteration's cleaned output and is empty on
+      // the first iteration (no prior output exists). Across an interactive resume, the
+      // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
+      // the resume also receives an empty $LOOP_PREV_OUTPUT.
       const { prompt: substitutedPrompt } = substituteWorkflowVariables(
         loop.prompt,
         workflowRun.id,
@@ -1774,7 +1849,9 @@ async function executeLoopNode(
         baseBranch,
         docsDir,
         issueContext,
-        i === startIteration ? loopUserInput : ''
+        i === startIteration ? loopUserInput : '',
+        undefined, // rejectionReason
+        i === startIteration ? '' : lastIterationOutput
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -1969,6 +2046,52 @@ async function executeLoopNode(
         `Loop node '${node.id}' iteration ${String(i)} completed via idle timeout (no output for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min)`,
         msgContext
       );
+    }
+
+    // Empty assistant output is an iteration failure for AI loops — same
+    // contract as the single-shot AI-node guard in executeNodeInternal. A
+    // provider stream that closed cleanly with zero content typically means
+    // a silent rejection or interruption; left unchecked, an interactive
+    // loop would pause with a blank gate or burn the full max_iterations
+    // budget producing nothing. Idle-timeout exits are exempt — the
+    // notification above has already told the user the iteration completed
+    // via timeout, and flipping that to a failure would contradict it.
+    if (!iterationIdleTimedOut && fullOutput.trim() === '') {
+      const iterationDuration = Date.now() - iterationStart;
+      const emptyError =
+        'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
+      getLog().error(
+        { nodeId: node.id, iteration: i, durationMs: iterationDuration },
+        'loop_node.iteration_empty_output'
+      );
+      getWorkflowEventEmitter().emit({
+        type: 'loop_iteration_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        iteration: i,
+        error: emptyError,
+      });
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'loop_iteration_failed',
+          step_name: node.id,
+          data: {
+            iteration: i,
+            error: emptyError,
+            duration: iterationDuration,
+            nodeId: node.id,
+          },
+        })
+        .catch((evtErr: Error) => {
+          logEventStoreError(evtErr, i);
+        });
+      return {
+        state: 'failed',
+        output: '',
+        error: `Loop iteration ${i} failed: ${emptyError}`,
+        costUsd: loopTotalCostUsd,
+      };
     }
 
     // Batch mode: send accumulated output
@@ -2306,9 +2429,12 @@ async function executeApprovalNode(
     // Fall through to re-pause at the approval gate
   }
 
-  // Standard approval gate — send message and pause
+  // Standard approval gate — send message and pause.
+  // Resolve $nodeId.output[.field] references so the human sees concrete values
+  // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
+  const renderedMessage = substituteNodeOutputRefs(node.approval.message, nodeOutputs);
   const approvalMsg =
-    `⏸ **Approval required**: ${node.approval.message}\n\n` +
+    `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
     `Approve: \`/workflow approve ${workflowRun.id}\` | Reject: \`/workflow reject ${workflowRun.id}\``;
   await safeSendMessage(platform, conversationId, approvalMsg, msgContext);
@@ -2318,7 +2444,7 @@ async function executeApprovalNode(
       workflow_run_id: workflowRun.id,
       event_type: 'approval_requested',
       step_name: node.id,
-      data: { message: node.approval.message },
+      data: { message: renderedMessage },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -2328,7 +2454,7 @@ async function executeApprovalNode(
     });
 
   await deps.store.pauseWorkflowRun(workflowRun.id, {
-    message: node.approval.message,
+    message: renderedMessage,
     nodeId: node.id,
     type: 'approval',
     captureResponse: node.approval.capture_response,
@@ -2340,7 +2466,7 @@ async function executeApprovalNode(
     type: 'approval_pending',
     runId: workflowRun.id,
     nodeId: node.id,
-    message: node.approval.message,
+    message: renderedMessage,
   });
 
   // Return completed — the between-layer status check will see 'paused' and break.
@@ -2596,26 +2722,25 @@ export async function executeDagWorkflow(
 
           // 3b. Loop node dispatch — manages its own AI sessions and iteration
           if (isLoopNode(node)) {
-            // Resolve per-node provider/model overrides (same logic as other node types)
-            const loopProvider: string =
-              node.provider ?? inferProviderFromModel(node.model, workflowProvider);
+            // Resolve per-node provider/model overrides (same logic as other node types).
+            // Provider is explicit; model passes through to the SDK. Throw on an
+            // unknown provider so the outer catch below emits the standard
+            // node_failed event + user-facing message — the same path
+            // resolveNodeProviderAndModel uses for non-loop nodes.
+            const loopProvider: string = node.provider ?? workflowProvider;
+            if (!isRegisteredProvider(loopProvider)) {
+              throw new Error(
+                `Node '${node.id}': unknown provider '${loopProvider}'. Registered: ${getRegisteredProviders()
+                  .map(p => p.id)
+                  .join(', ')}`
+              );
+            }
             const loopAssistantConfig = config.assistants[loopProvider];
             const loopModel: string | undefined =
               node.model ??
               (loopProvider === workflowProvider
                 ? workflowModel
                 : (loopAssistantConfig?.model as string | undefined));
-
-            if (!isModelCompatible(loopProvider, loopModel)) {
-              return {
-                nodeId: node.id,
-                output: {
-                  state: 'failed' as const,
-                  output: '',
-                  error: `Node '${node.id}': model "${loopModel ?? 'default'}" is not compatible with provider "${loopProvider}"`,
-                },
-              };
-            }
 
             const output = await executeLoopNode(
               deps,

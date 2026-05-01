@@ -1,21 +1,15 @@
-name: maintainer-standup
+name: maintainer-standup-minimax
 description: |
-  Use when: Maintainer wants their morning briefing — what changed on dev,
-  what's in the review queue, what to focus on today across PRs and issues.
-  Triggers: "morning standup", "maintainer standup", "what's new today",
-            "daily brief", "morning brief", "what should i work on today",
-            "start my day".
-  Does: Pulls latest dev, fetches all open PRs and assigned issues, cross-
-        references against direction.md to flag polite-decline candidates,
-        compares against prior run state to surface progress (merged, closed,
-        what you shipped), produces a prioritized P1-P4 brief. Saves dated
-        brief + state for next-run continuity.
-  NOT for: Fixing issues (use archon-fix-github-issue), reviewing a specific
-           PR (use archon-comprehensive-pr-review), repo-wide triage automation
-           (use repo-triage).
+  Minimax variant of maintainer-standup. Identical workflow shape — same
+  gather scripts, same synthesizer command, same persist node — but the
+  synthesize node runs on Pi/Minimax M2.7 instead of Claude Sonnet.
+  Use when: nested-Claude-Code session hangs (#1067) block the Claude variant,
+            or when you'd rather not spend Claude tokens on the daily brief.
+  Triggers: "morning standup minimax", "standup minimax", "daily brief minimax".
+  NOT for: First-time setup — run the Claude variant first to validate state.
 
-provider: claude
-model: sonnet
+provider: pi
+model: minimax/MiniMax-M2.7
 
 worktree:
   enabled: false   # Live checkout — needs to git pull and read .archon/maintainer-standup/

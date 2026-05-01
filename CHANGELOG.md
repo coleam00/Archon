@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-04-29
+
+Maintainer workflow suite, loop output variables, and broad workflow engine fixes
+
+### Added
+
+- Bundled maintainer workflow suite: `maintainer-standup` for daily PR/issue triage (#1428), contributor-reply surfacing (#1457), `maintainer-review-pr` for automated code review (#1430), cross-workflow review memory (#1458), and a Pi/Minimax variant of standup (#1480).
+- `$LOOP_PREV_OUTPUT` substitution variable in loop node prompts, giving each iteration access to the cleaned output of the previous pass (#1367).
+- `mutates_checkout` flag on workflow nodes to permit concurrent runs against a live checkout without requiring worktree isolation (#1438).
+- Explicit `tags` field in workflow YAML for categorization and filtering (#1190).
+- Pi provider `ModelRegistry` support for custom model slugs and automatic auth bypass for unmapped providers (#1284).
+- Autodetection of canonical Claude and Codex binary install paths so explicit config is not required on standard installations (#1361).
+
+### Changed
+
+- Model validation delegated entirely to provider SDKs; Archon no longer rejects unknown model strings at workflow load time, so new vendor models work immediately without an Archon update (#1463).
+- Claude Agent SDK updated to 0.2.121 and Codex SDK to 0.125.0 (#1460).
+- Default Opus model pin switched to the `opus[1m]` alias (#1395).
+
+### Fixed
+
+- PR-creating workflows now correctly target `$BASE_BRANCH` instead of a hardcoded branch name (#1479).
+- Markdown code blocks inside `$nodeId.output` values no longer trigger false DAG validation errors (#1478).
+- `CLAUDE_BIN_PATH` environment variable now honoured in dev mode on hosts with libc mismatches (#1481).
+- Orchestrator clears stale session IDs on `error_during_execution` to prevent infinite failure loops (#1294).
+- Bash and script node failure messages shortened and made more actionable (#1393).
+- Pi provider structured-output parser now tolerates prose preamble before the JSON payload (#1440).
+- Docker bind-mount restarts now register `safe.directory` for all repos, not only the primary one (#1307).
+- CLI commands such as `--version` and `--help` no longer crash when bundled skill source files are absent (#1394).
+- `--no-env-file` flag no longer incorrectly passed to the native Claude binary in dev mode (#1461).
+- `$nodeId.output` references now substituted correctly inside approval gate messages (#1426).
+- `ARTIFACTS_DIR`, `LOG_DIR`, and `BASE_BRANCH` now exported into bash node subprocess environments (#1387).
+- Approval gate no longer bypassed after a reject-with-redraft on workflow resume (#1435).
+- Discord login failure now contained so it does not crash the server process (#1365).
+- Pi provider package-directory shim installed in compiled binary so Pi workflows run correctly outside a source checkout (#1360).
+
+### Added
+
+- **`$LOOP_PREV_OUTPUT` workflow variable (loop nodes only)** — exposes the previous iteration's cleaned output (after `<promise>` tag stripping) to the current iteration's prompt. Empty on the first iteration and on the first iteration after resuming from an interactive approval gate. Enables `fresh_context: true` loops to reference what the prior pass said or did without carrying full session history. (#1367)
+
+### Changed
+
+- **Provider/model resolution: trust the SDK, drop allow-lists.** Removed `inferProviderFromModel` and `isModelCompatible` entirely. Provider is now resolved via a flat explicit chain — `node.provider ?? workflow.provider ?? config.assistant` — and never inferred from the model string. Model strings pass through to the SDK unchanged; the SDK validates them at request time. Codex's stream loop now matches Claude's contract (every terminal close emits exactly one `result` chunk; `error` events without a recovering `turn.completed` synthesize `result.isError` with subtype `codex_stream_incomplete`; `turn.failed` becomes `codex_turn_failed`). AI nodes that exit the streaming loop with empty assistant text and no structured output now fail loudly with `dag.node_empty_output` instead of completing as silent zero-output successes. Provider-id typos (workflow-level and per-node) are caught at YAML load time. **Migration**: workflows that previously relied on cross-provider model inference (e.g. `model: gpt-5.2-codex` with no `provider:`, expecting Archon to pick `codex` because Claude's allow-list rejected the string) must now set `provider:` explicitly. Workflows that already set both `provider:` and `model:` — and workflows that set only `model:` matching `config.assistant` — keep working unchanged. (#1463)
+
+### Fixed
+
+- **Bash and script node failures no longer leak the inline script body into user-visible errors and logs.** When a `bash:` or `script:` DAG node failed, the error string interpolated `err.message` from Node's `ExecFileException`, which begins with `Command failed: bash -c <body>` (or `bun -e <body>`) — embedding the entire substituted script body. Pino's default error serializer compounded this by writing `err.message`, `err.stack`, and `err.cmd` separately, producing three copies of the body per failure across the CLI, Web UI, and `node_failed` event payload. Diagnostic output (e.g. `Expected ")" but found "x" at [eval]:4:241`) was buried at the end. A new `formatSubprocessFailure()` helper now strips the `Command failed:` prefix line, prefers `stderr` over the message body, tail-caps at 2 KB, and exposes a controlled `{exitCode, killed, stderrTail}` log subset — never the raw error. Timeout / ENOENT / EACCES branches now also log through the sanitized helper, so the body cannot leak via the timeout path either. (#1389)
+- **Claude provider crashed in dev mode with `error: unknown option '--no-env-file'`.** The Claude Agent SDK switched from shipping `cli.js` to per-platform native binaries (via optional deps) in the 0.2.x series. Archon's `shouldPassNoEnvFile` predicate kept emitting the Bun-only `--no-env-file` flag in dev mode (when the SDK resolves its bundled binary), which the native binary rejects. Tightened the predicate to only emit the flag for explicitly-configured Bun-runnable JS entry points (`.js`/`.mjs`/`.cjs`). Target-repo `.env` isolation is unchanged — `stripCwdEnv()` at process boot remains the primary guard, and the native Claude binary does not auto-load `.env` from its cwd. (#1461)
+- **Pi structured-output now tolerates reasoning-model prose preamble.** `tryParseStructuredOutput` previously returned `undefined` whenever the assistant text wasn't pure JSON, even when the JSON object was clearly emitted at the end of a "Let me evaluate..." preamble. Reasoning models — observed on Minimax M2.7 — routinely "think out loud" before emitting structured output despite explicit JSON-only prompts. The parser now falls back to a forward-scan from the first `{` when the clean parse fails, recovering the structured output without changing the success path for fully compliant models. (#1440)
+- **`CLAUDE_BIN_PATH` is now honored in dev mode.** Previously the env var was silently ignored when running from source (`BUNDLED_IS_BINARY=false`) — `resolveClaudeBinaryPath()` early-returned `undefined` before reading it, leaving glibc Linux contributors with no working escape hatch when the Claude SDK's bundled-binary auto-resolution picked the musl variant first. The env-var check now runs in both modes; config-file path (`assistants.claude.claudeBinaryPath`) remains binary-mode-only since it's a per-repo, not per-machine setting. Env-loading and target-repo `.env` isolation are unchanged — same `stripCwdEnv()` boot-time guard and same `shouldPassNoEnvFile()` predicate run downstream. (#1481)
+
 ## [0.3.9] - 2026-04-22
 
 First release with working compiled binaries since v0.3.6. Both v0.3.7 and v0.3.8 were tagged but neither shipped release assets — v0.3.7 was blocked by two genuine binary-runtime bugs (Pi SDK's module-init crash + Bun `--bytecode` producing broken output), and v0.3.8 was blocked by an unrelated CI smoke-test regression where `release.yml`'s Claude resolver test required an `origin` remote that the fresh `git init` test repo didn't have. Both superseded tags remain for history; their GitHub Releases were deleted at the time of tagging so `releases/latest` fell back to v0.3.6 throughout, keeping `install.sh` and Homebrew safe. v0.3.9 is what users actually install.

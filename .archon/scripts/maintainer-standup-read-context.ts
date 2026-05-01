@@ -55,6 +55,20 @@ const deadlineDate = new Date(todayDate);
 deadlineDate.setDate(deadlineDate.getDate() + 3);
 const deadline_3d = deadlineDate.toLocaleDateString('sv-SE');
 
+// Cross-workflow memory: which PRs has maintainer-review-pr already triaged?
+// Written by maintainer-review-pr's `record-review` node; surfaced here so
+// the standup synthesizer can mark "✓ reviewed Nd ago" next to P1-P4 entries
+// and flag staleness when the contributor pushes after a prior review.
+const reviewedPrsPath = resolve(baseDir, 'reviewed-prs.json');
+let reviewedPrs: unknown = {};
+if (existsSync(reviewedPrsPath)) {
+  try {
+    reviewedPrs = JSON.parse(readFileSync(reviewedPrsPath, 'utf8'));
+  } catch {
+    reviewedPrs = {};
+  }
+}
+
 console.log(
   JSON.stringify({
     direction,
@@ -63,5 +77,6 @@ console.log(
     recent_briefs: recentBriefs,
     today,
     deadline_3d,
+    reviewed_prs: reviewedPrs,
   }),
 );

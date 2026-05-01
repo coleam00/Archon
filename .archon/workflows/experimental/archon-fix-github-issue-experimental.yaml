@@ -287,7 +287,14 @@ nodes:
 
       ## Instructions
 
-      1. Check git status — ensure all changes are committed. If uncommitted changes exist, stage and commit them.
+      1. Check git status. If uncommitted changes exist, stage and commit ONLY source files that are part of the fix:
+         - List them by name with `git add <path1> <path2> ...` — never `git add -A`, `git add .`, or `git add -u`
+         - **Never commit** scratch / review / PR-body artifacts, even if they appear in `git status`:
+           - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md` at any path
+           - `review/`, `*-report.md` at the repo root
+           - Anything under `$ARTIFACTS_DIR`
+         - Verify with `git status --porcelain` that nothing scratch is staged before committing
+         - If files you don't recognize as part of the fix appear modified or untracked, leave them alone
       2. Push the branch: `git push -u origin HEAD`
       3. Read implementation artifacts from `$ARTIFACTS_DIR/` for context:
          - `$ARTIFACTS_DIR/investigation.md` or `$ARTIFACTS_DIR/plan.md`
@@ -299,6 +306,7 @@ nodes:
       6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
          - Title: concise, imperative mood, under 70 chars
          - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
+         - **PR body file location**: if you write the body to a file (e.g. for `--body-file`), the file MUST live at `$ARTIFACTS_DIR/pr-body.md` or under `/tmp/` — NEVER inside the worktree. Files like `.pr-body.md` at the repo root will be picked up by later commits.
          - Link to issue: include `Fixes #...` or `Closes #...`
       7. Capture PR identifiers:
          ```bash

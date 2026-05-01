@@ -19,6 +19,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# This project uses Bun (bun.lock); npm/yarn lockfiles must not be committed.
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
 # ESLint cache
 .eslintcache
 
@@ -52,6 +57,7 @@ e2e-screenshots/
 .archon/maintainer-standup/profile.md
 .archon/maintainer-standup/state.json
 .archon/maintainer-standup/briefs/
+.archon/maintainer-standup/reviewed-prs.json
 
 # Agent artifacts (generated, local only)
 .agents/

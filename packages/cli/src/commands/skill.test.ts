@@ -19,8 +19,8 @@ describe('copyArchonSkill', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('writes every bundled skill file under .claude/skills/archon/', () => {
-    copyArchonSkill(tempDir);
+  it('writes every bundled skill file under .claude/skills/archon/', async () => {
+    await copyArchonSkill(tempDir);
 
     const skillRoot = join(tempDir, '.claude', 'skills', 'archon');
     for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
@@ -30,16 +30,16 @@ describe('copyArchonSkill', () => {
     }
   });
 
-  it('overwrites pre-existing skill files with bundled content', () => {
+  it('overwrites pre-existing skill files with bundled content', async () => {
     const skillRoot = join(tempDir, '.claude', 'skills', 'archon');
     const skillMdPath = join(skillRoot, 'SKILL.md');
 
     // Pre-seed with stale content; copyArchonSkill must overwrite it.
-    copyArchonSkill(tempDir);
+    await copyArchonSkill(tempDir);
     writeFileSync(skillMdPath, 'STALE');
     expect(readFileSync(skillMdPath, 'utf-8')).toBe('STALE');
 
-    copyArchonSkill(tempDir);
+    await copyArchonSkill(tempDir);
     expect(readFileSync(skillMdPath, 'utf-8')).toBe(BUNDLED_SKILL_FILES['SKILL.md']);
   });
 });

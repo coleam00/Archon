@@ -1824,7 +1824,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     const skillTarget = skillTargetRaw;
     s.start('Installing Archon skill...');
     try {
-      copyArchonSkill(skillTarget);
+      await copyArchonSkill(skillTarget);
     } catch (err) {
       s.stop('Archon skill installation failed');
       cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);

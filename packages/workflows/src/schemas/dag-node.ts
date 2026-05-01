@@ -15,7 +15,6 @@ import { stepRetryConfigSchema } from './retry';
 import { loopNodeConfigSchema } from './loop';
 import { workflowNodeHooksSchema } from './hooks';
 import { isValidCommandName } from '../command-validation';
-import { isModelCompatible } from '../model-validation';
 
 // ---------------------------------------------------------------------------
 // TriggerRule
@@ -365,10 +364,13 @@ export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter
  * - Non-empty id
  * - Exactly one of command/prompt/bash/loop (mutual exclusivity)
  * - command name validity (via isValidCommandName)
- * - Model/provider compatibility (via isModelCompatible)
  * - idle_timeout must be a finite positive number
  * - retry not allowed on loop nodes
  * - timeout on bash must be positive
+ *
+ * Note: provider identity is validated in loader.ts (workflow-level) and
+ * dag-executor.ts (node-level). Model strings are passed through to the SDK
+ * unchanged — the SDK is the source of truth for what model names exist.
  */
 export const dagNodeSchema = dagNodeBaseSchema
   .extend({
@@ -521,24 +523,6 @@ export const dagNodeSchema = dagNodeBaseSchema
         message: "'idle_timeout' must be a finite positive number (ms)",
         path: ['idle_timeout'],
       });
-    }
-
-    // Provider/model compatibility (AI nodes only)
-    if (!hasBash && !hasLoop && !hasScript && data.provider && data.model) {
-      try {
-        if (!isModelCompatible(data.provider, data.model)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `model "${data.model}" is not compatible with provider "${data.provider}"`,
-          });
-        }
-      } catch (e) {
-        // isModelCompatible throws on unknown providers — surface as a validation issue
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: (e as Error).message,
-        });
-      }
     }
   })
   .transform((data): DagNode => {
