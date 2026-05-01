@@ -46,15 +46,18 @@ if [ -z "${CLAUDE_BIN_PATH:-}" ]; then
   case "$(uname -m)" in
     x86_64)  _CLAUDE_BIN_CANDIDATE="/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude" ;;
     aarch64) _CLAUDE_BIN_CANDIDATE="/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude" ;;
-    *) echo "WARN: Unsupported CPU architecture $(uname -m). Set CLAUDE_BIN_PATH manually if Claude fails to start." >&2 ;;
+    *)
+      echo "ERROR: Unsupported CPU architecture $(uname -m). Set CLAUDE_BIN_PATH manually to a glibc Claude binary." >&2
+      exit 1
+      ;;
   esac
-  if [ -n "${_CLAUDE_BIN_CANDIDATE:-}" ]; then
-    if [ -f "$_CLAUDE_BIN_CANDIDATE" ]; then
-      export CLAUDE_BIN_PATH="$_CLAUDE_BIN_CANDIDATE"
-    else
-      echo "WARN: Pinned Claude binary not found at ${_CLAUDE_BIN_CANDIDATE}. SDK will use its default resolver — Claude may fail to start." >&2
-    fi
+  if [ -x "$_CLAUDE_BIN_CANDIDATE" ]; then
+    export CLAUDE_BIN_PATH="$_CLAUDE_BIN_CANDIDATE"
+  else
+    echo "ERROR: Pinned Claude binary missing or non-executable at ${_CLAUDE_BIN_CANDIDATE}. The SDK package layout may have changed; set CLAUDE_BIN_PATH manually." >&2
+    exit 1
   fi
+  unset _CLAUDE_BIN_CANDIDATE
 fi
 
 # Run setup-auth (exits after configuring Codex credentials), then exec the server
