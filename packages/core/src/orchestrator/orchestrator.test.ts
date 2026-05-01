@@ -618,7 +618,11 @@ describe('orchestrator-agent handleMessage', () => {
       await handleMessage(platform, 'chat-456', 'help me');
 
       expect(mockListCodebases).toHaveBeenCalled();
-      expect(mockBuildOrchestratorPrompt).toHaveBeenCalledWith([mockCodebase], expect.any(Array));
+      expect(mockBuildOrchestratorPrompt).toHaveBeenCalledWith(
+        [mockCodebase],
+        expect.any(Array),
+        expect.any(String)
+      );
     });
 
     test('builds project-scoped prompt when conversation has codebase_id', async () => {
@@ -635,7 +639,8 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildProjectScopedPrompt).toHaveBeenCalledWith(
         mockCodebase,
         [mockCodebase],
-        expect.any(Array)
+        expect.any(Array),
+        expect.any(String)
       );
     });
 
