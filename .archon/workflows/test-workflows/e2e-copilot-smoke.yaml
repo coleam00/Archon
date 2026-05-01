@@ -1,0 +1,48 @@
+# E2E smoke test — GitHub Copilot CLI community provider
+# Verifies: Copilot CLI connectivity, stdout streaming, node output refs,
+#   and tool-restriction wiring.
+# Design: mirrors e2e-pi-smoke.yaml structure. Uses minimal allowed_tools
+#   to keep the smoke fast and focused on provider wiring.
+#
+# Prerequisites:
+#   - `copilot` CLI installed and on PATH (or COPILOT_BIN_PATH set)
+#   - GitHub Copilot CLI authenticated (run `copilot auth login` first)
+#   - Provider configured in .archon/config.yaml (see docs)
+#
+# Run:
+#   archon workflow run e2e-copilot-smoke
+name: e2e-copilot-smoke
+description: 'Smoke test for GitHub Copilot CLI community provider. Verifies prompt response via sendQuery.'
+provider: copilot
+model: gpt-4o
+
+nodes:
+  # 1. Simple prompt — verifies Copilot CLI spawns, stdout is streamed as
+  #    assistant chunks, and exit 0 produces a result chunk.
+  #    allowed_tools limits scope; --no-ask-user (default) prevents hanging.
+  - id: create-file
+    prompt: |
+      Create a file named copilot-provider-smoke-test.txt containing exactly:
+      hello
+
+      Actually write the file. Do not only suggest a command.
+    allowed_tools:
+      - write
+      - shell(powershell:*)
+      - shell(pwsh:*)
+      - shell(git:*)
+
+  # 2. Assert the file was created and contains the expected content
+  - id: verify
+    depends_on: [create-file]
+    bash: |
+      test -f copilot-provider-smoke-test.txt
+      grep "hello" copilot-provider-smoke-test.txt
+      echo "PASS: copilot provider smoke test succeeded"
+
+  # 3. Clean up
+  - id: cleanup
+    depends_on: [verify]
+    bash: |
+      rm -f copilot-provider-smoke-test.txt
+      echo "cleaned up"

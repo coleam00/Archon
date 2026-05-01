@@ -389,6 +389,168 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
 
+## GitHub Copilot CLI (Community Provider)
+
+**Requires a GitHub Copilot subscription (Individual, Business, or Enterprise).**
+
+Archon integrates the [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/copilot-cli-reference/about-copilot-cli) as the `provider: copilot` community provider. It spawns `copilot -p <prompt>` in non-interactive mode and streams the CLI's output as Archon message chunks.
+
+> **Experimental** — `provider: copilot` is registered as `builtIn: false`. It validates the community-provider seam. If it proves stable it may be promoted to `builtIn: true` later.
+
+### Install the Copilot CLI
+
+Follow the [official Copilot CLI setup guide](https://docs.github.com/en/copilot/reference/copilot-cli-reference/about-copilot-cli):
+
+```bash
+# npm (any platform)
+npm install -g @github/copilot-cli
+
+# Or via GitHub CLI extension
+gh extension install github/gh-copilot
+```
+
+Verify the install:
+
+```bash
+copilot --version
+```
+
+### Authenticate
+
+```bash
+copilot auth login
+# Follow the browser authentication flow
+```
+
+### Binary path configuration
+
+If `copilot` is not on your PATH, supply the path via:
+
+1. **Environment variable** (highest precedence):
+   ```ini
+   COPILOT_BIN_PATH=/absolute/path/to/copilot
+   ```
+2. **Config file** (`~/.archon/config.yaml`):
+   ```yaml
+   assistants:
+     copilot:
+       copilotBinaryPath: /absolute/path/to/copilot
+   ```
+
+If neither is set, Archon uses `copilot` (or `copilot.exe` on Windows) and lets the OS resolve it via PATH.
+
+### Configuration options
+
+```yaml
+# ~/.archon/config.yaml
+assistants:
+  copilot:
+    # Model selection (overridden per-workflow with `model:` field)
+    model: gpt-4o
+
+    # Disable interactive prompting — keeps workflows from hanging.
+    # Default: true. Set to false only if you need interactive fallback.
+    noAskUser: true
+
+    # Tool restrictions (merged with per-node allowed_tools / denied_tools)
+    allowTools:
+      - read
+      - write
+    denyTools:
+      - shell
+
+    # Broad permission flags — disabled by default. Enabling emits a warning chunk.
+    # allowAllTools: false
+    # allowAll: false
+    # allowAllPaths: false
+
+    # Additional directories made available to the agent
+    # addDirs:
+    #   - /absolute/path/to/other/repo
+
+    # URL allowlist / denylist
+    # allowUrls:
+    #   - https://api.example.com
+    # denyUrls:
+    #   - https://blocked.example.com
+    # allowAllUrls: false
+
+    # Env vars to redact from logs and transcripts (passed as --secret-env-vars)
+    # secretEnvVars:
+    #   - MY_SECRET_TOKEN
+
+    # Extra CLI args appended verbatim — for experimental flags
+    # extraArgs:
+    #   - --available-tools=write_powershell
+
+    # Timeouts
+    firstEventTimeoutMs: 60000   # 60s: kill if no output at all
+    processTimeoutMs: 600000     # 10min: kill if still running
+
+    # Optional: absolute path to the copilot binary (overrides COPILOT_BIN_PATH)
+    # copilotBinaryPath: /usr/local/bin/copilot
+```
+
+### Usage in workflows
+
+```yaml
+name: my-copilot-workflow
+provider: copilot
+model: gpt-4o
+
+nodes:
+  - id: write-code
+    prompt: |
+      Create a Python function that reverses a string.
+      Write it to reverse_string.py.
+    allowed_tools:
+      - write
+      - read
+
+  - id: verify
+    depends_on: [write-code]
+    bash: |
+      python3 reverse_string.py || echo "file not found"
+```
+
+### Per-node model override
+
+```yaml
+nodes:
+  - id: fast-node
+    provider: copilot
+    model: gpt-4o-mini    # per-node override
+    prompt: "Quick task..."
+    allowed_tools: [read]
+```
+
+### Copilot CLI capabilities
+
+| Feature | Support | Notes |
+|---|---|---|
+| Tool restrictions | ✅ | `allowed_tools` / `denied_tools` → `--allow-tool` / `--deny-tool` |
+| Environment injection | ✅ | `requestOptions.env` merged over `process.env` before spawn |
+| Session resume | ❌ | CLI is stateless per invocation |
+| MCP servers | ❌ | Not exposed via CLI flags in v1 |
+| Claude-SDK hooks | ❌ | Claude-specific format |
+| Structured output | ❌ | No JSON-mode in v1 |
+| Skills / agents | ✅ | Injected into the prompt text |
+| Cost limits | ❌ | No token budget API in the CLI |
+| Reasoning effort | ❌ | Not wired in v1 |
+| Sandbox | ❌ | Not wired in v1 |
+
+### Security notes
+
+- `--allow-all`, `--allow-all-tools`, and `--allow-all-paths` are **off by default**. Enabling any of them emits a visible `system` warning chunk in the workflow output.
+- Prompts and arguments are passed via `spawn(binary, argv)` — never shell string concatenation — so special characters in prompts are safe.
+- Use `secretEnvVars` to prevent sensitive env var values from appearing in logs or transcripts.
+
+### Set as Default (Optional)
+
+```ini
+DEFAULT_AI_ASSISTANT=copilot
+```
+
 ## How Assistant Selection Works
 
 - Assistant type is set per codebase via the `assistant` field in `.archon/config.yaml` or the `DEFAULT_AI_ASSISTANT` env var

@@ -82,6 +82,71 @@ export interface PiProviderDefaults {
   env?: Record<string, string>;
 }
 
+/**
+ * Community provider defaults for GitHub Copilot CLI.
+ * Maps to the `copilot -p <prompt>` CLI flags.
+ * Conservative defaults: allowAll, allowAllTools, allowAllPaths are all false/unset.
+ */
+export interface CopilotProviderDefaults {
+  [key: string]: unknown;
+  /** Absolute path to the Copilot CLI binary. Overrides COPILOT_BIN_PATH env var and PATH default. */
+  copilotBinaryPath?: string;
+  /** Default model passed as --model=<model>. Can be overridden per-request via requestOptions.model. */
+  model?: string;
+  /** Extra CLI args appended verbatim after all mapped args. Use for experimental flags like --available-tools=write_powershell. */
+  extraArgs?: string[];
+  /**
+   * Disable interactive prompting. Passed as --no-ask-user.
+   * Defaults to true (non-interactive safety for workflow execution).
+   * Set to false only if you explicitly need interactive fallback behavior.
+   * @default true
+   */
+  noAskUser?: boolean;
+  /** Allow specific tools via --allow-tool=<tool>. Also merged with nodeConfig.allowed_tools. */
+  allowTools?: string[];
+  /** Deny specific tools via --deny-tool=<tool>. Also merged with nodeConfig.denied_tools. */
+  denyTools?: string[];
+  /**
+   * Allow all tools via --allow-all-tools.
+   * ⚠️ Security warning: emits a visible warning chunk when enabled.
+   * @default false
+   */
+  allowAllTools?: boolean;
+  /**
+   * Grant unrestricted access via --allow-all.
+   * ⚠️ Security warning: emits a visible warning chunk when enabled.
+   * @default false
+   */
+  allowAll?: boolean;
+  /** Allow all filesystem paths via --allow-all-paths. @default false */
+  allowAllPaths?: boolean;
+  /** Additional directories to add to the allowed set via --add-dir=<dir>. */
+  addDirs?: string[];
+  /** Allow specific URLs via --allow-url=<url>. */
+  allowUrls?: string[];
+  /** Deny specific URLs via --deny-url=<url>. */
+  denyUrls?: string[];
+  /** Allow all URLs via --allow-all-urls. @default false */
+  allowAllUrls?: boolean;
+  /**
+   * Environment variable names whose values should be redacted from logs/transcripts.
+   * Passed as --secret-env-vars=VAR1,VAR2,... (comma-separated).
+   */
+  secretEnvVars?: string[];
+  /**
+   * Timeout in ms to receive the first stdout or stderr byte.
+   * If no output arrives by this deadline the process is killed and an error result is yielded.
+   * @default 60000
+   */
+  firstEventTimeoutMs?: number;
+  /**
+   * Total process timeout in ms.
+   * If the process is still running after this deadline it is killed and an error result is yielded.
+   * @default 600000 (10 min)
+   */
+  processTimeoutMs?: number;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
