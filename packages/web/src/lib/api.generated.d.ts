@@ -2164,6 +2164,345 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/skills': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List discovered skills (global + project) */
+    get: {
+      parameters: {
+        query?: {
+          cwd?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SkillListResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    /** Create a new skill directory */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CreateSkillBody'];
+        };
+      };
+      responses: {
+        /** @description Created */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SkillDetail'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Skill already exists */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/skills/{name}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Fetch a single skill (frontmatter, body, file tree) */
+    get: {
+      parameters: {
+        query?: {
+          cwd?: string;
+          source?: 'global' | 'project';
+        };
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Skill detail */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SkillDetail'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    /** Save (overwrite) SKILL.md for an existing skill */
+    put: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SaveSkillBody'];
+        };
+      };
+      responses: {
+        /** @description Saved */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SkillDetail'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    post?: never;
+    /** Delete a skill directory */
+    delete: {
+      parameters: {
+        query?: {
+          cwd?: string;
+          source?: 'global' | 'project';
+        };
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Deleted */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['DeleteSkillResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/skills/{name}/files': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List supporting files inside a skill directory */
+    get: {
+      parameters: {
+        query?: {
+          cwd?: string;
+          source?: 'global' | 'project';
+        };
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SkillFileListResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/config': {
     parameters: {
       query?: never;
@@ -3422,6 +3761,69 @@ export interface components {
     };
     CommandListResponse: {
       commands: components['schemas']['CommandEntry'][];
+    };
+    /** @enum {string} */
+    SkillSource: 'global' | 'project';
+    SkillSummary: {
+      name: string;
+      description: string;
+      source: components['schemas']['SkillSource'];
+      path: string;
+      isSymlink: boolean;
+      realPath: string | null;
+      mtime: string;
+      hasScripts: boolean;
+      hasReferences: boolean;
+      hasAssets: boolean;
+      prefix: string | null;
+      parseError: string | null;
+    };
+    SkillLoadError: {
+      name: string;
+      source: components['schemas']['SkillSource'];
+      path: string;
+      error: string;
+    };
+    SkillListResponse: {
+      skills: components['schemas']['SkillSummary'][];
+      errors?: components['schemas']['SkillLoadError'][];
+    };
+    SkillFileNode: {
+      path: string;
+      isDirectory: boolean;
+      size?: number;
+      isSymlink?: boolean;
+    };
+    SkillDetail: components['schemas']['SkillSummary'] & {
+      frontmatter: {
+        [key: string]: unknown;
+      };
+      body: string;
+      files: components['schemas']['SkillFileNode'][];
+    };
+    CreateSkillBody: {
+      name: string;
+      source: components['schemas']['SkillSource'];
+      cwd?: string;
+      frontmatter: {
+        [key: string]: unknown;
+      };
+      body: string;
+    };
+    SaveSkillBody: {
+      source: components['schemas']['SkillSource'];
+      cwd?: string;
+      frontmatter: {
+        [key: string]: unknown;
+      };
+      body: string;
+    };
+    DeleteSkillResponse: {
+      deleted: boolean;
+      name: string;
+    };
+    SkillFileListResponse: {
+      files: components['schemas']['SkillFileNode'][];
     };
     ProviderDefaults: {
       [key: string]: unknown;

@@ -98,6 +98,20 @@ import {
   rejectWorkflowRunBodySchema,
 } from './schemas/workflow.schemas';
 import {
+  skillListResponseSchema,
+  skillDetailSchema,
+  skillFileListResponseSchema,
+  createSkillBodySchema,
+  saveSkillBodySchema,
+  deleteSkillResponseSchema,
+} from './schemas/skill.schemas';
+import * as skillsCore from '@archon/core/skills';
+import {
+  SkillFrontmatterError,
+  SkillNameError,
+  SkillPathTraversalError,
+} from '@archon/core/skills/types';
+import {
   conversationListResponseSchema,
   listConversationsQuerySchema,
   conversationIdParamsSchema,
@@ -340,6 +354,129 @@ const getCommandsRoute = createRoute({
       description: 'OK',
     },
     400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+// =========================================================================
+// Skill route configs
+// =========================================================================
+
+const skillSourceQuerySchema = z.object({
+  cwd: z.string().optional(),
+  source: z.enum(['global', 'project']).optional(),
+});
+
+const getSkillsRoute = createRoute({
+  method: 'get',
+  path: '/api/skills',
+  tags: ['Skills'],
+  summary: 'List discovered skills (global + project)',
+  request: { query: cwdQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: skillListResponseSchema } },
+      description: 'OK',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const getSkillRoute = createRoute({
+  method: 'get',
+  path: '/api/skills/{name}',
+  tags: ['Skills'],
+  summary: 'Fetch a single skill (frontmatter, body, file tree)',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: skillSourceQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: skillDetailSchema } },
+      description: 'Skill detail',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const createSkillRoute = createRoute({
+  method: 'post',
+  path: '/api/skills',
+  tags: ['Skills'],
+  summary: 'Create a new skill directory',
+  request: {
+    body: { content: { 'application/json': { schema: createSkillBodySchema } }, required: true },
+  },
+  responses: {
+    201: {
+      content: { 'application/json': { schema: skillDetailSchema } },
+      description: 'Created',
+    },
+    400: jsonError('Bad request'),
+    409: jsonError('Skill already exists'),
+    500: jsonError('Server error'),
+  },
+});
+
+const saveSkillRoute = createRoute({
+  method: 'put',
+  path: '/api/skills/{name}',
+  tags: ['Skills'],
+  summary: 'Save (overwrite) SKILL.md for an existing skill',
+  request: {
+    params: z.object({ name: z.string() }),
+    body: { content: { 'application/json': { schema: saveSkillBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: skillDetailSchema } },
+      description: 'Saved',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const deleteSkillRoute = createRoute({
+  method: 'delete',
+  path: '/api/skills/{name}',
+  tags: ['Skills'],
+  summary: 'Delete a skill directory',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: skillSourceQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deleteSkillResponseSchema } },
+      description: 'Deleted',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getSkillFilesRoute = createRoute({
+  method: 'get',
+  path: '/api/skills/{name}/files',
+  tags: ['Skills'],
+  summary: 'List supporting files inside a skill directory',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: skillSourceQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: skillFileListResponseSchema } },
+      description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -2909,6 +3046,359 @@ export function registerApiRoutes(
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err }, 'commands.list_failed');
       return apiError(c, 500, 'Failed to list commands');
+    }
+  });
+
+  // =========================================================================
+  // Skill registry endpoints
+  //
+  // Skills live in `~/.claude/skills/<name>/` (global) and
+  // `<cwd>/.claude/skills/<name>/` (project). Each skill is a directory with
+  // a SKILL.md + optional scripts/, references/, assets/. Edits write directly
+  // to disk so the existing Claude/Pi resolvers and workflow validator pick
+  // them up automatically.
+  // =========================================================================
+
+  /** Resolve `cwd` for skill operations: query param > first codebase > $HOME. */
+  async function resolveSkillCwd(c: Context): Promise<string> {
+    const cwd = c.req.query('cwd');
+    if (cwd) {
+      if (!(await validateCwd(cwd))) {
+        throw new Error('Invalid cwd: must match a registered codebase path');
+      }
+      return cwd;
+    }
+    const codebases = await codebaseDb.listCodebases();
+    if (codebases.length > 0) return codebases[0].default_cwd;
+    return getArchonHome();
+  }
+
+  /** Map skill-domain errors to HTTP status. */
+  function skillErrorToStatus(err: unknown): { status: 400 | 404 | 500; message: string } {
+    if (err instanceof SkillNameError) return { status: 400, message: err.message };
+    if (err instanceof SkillFrontmatterError) return { status: 400, message: err.message };
+    if (err instanceof SkillPathTraversalError) return { status: 400, message: err.message };
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT') return { status: 404, message: 'Skill or file not found' };
+    if (code === 'EEXIST') return { status: 400, message: 'Already exists' };
+    const msg = err instanceof Error ? err.message : 'Internal error';
+    return { status: 500, message: msg };
+  }
+
+  // GET /api/skills - List discovered skills
+  registerOpenApiRoute(getSkillsRoute, async c => {
+    let workingDir: string;
+    try {
+      workingDir = await resolveSkillCwd(c);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const result = await skillsCore.discoverSkills(workingDir);
+      return c.json({
+        skills: result.skills,
+        errors: result.errors.length > 0 ? result.errors : undefined,
+      });
+    } catch (error) {
+      getLog().error({ err: error, workingDir }, 'skills.list_failed');
+      return apiError(c, 500, 'Failed to list skills');
+    }
+  });
+
+  // GET /api/skills/:name - Fetch a single skill
+  registerOpenApiRoute(getSkillRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    const source = (c.req.query('source') ?? 'global') as 'global' | 'project';
+    if (source !== 'global' && source !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    let workingDir: string;
+    try {
+      workingDir = await resolveSkillCwd(c);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const detail = await skillsCore.readSkill(name, source, workingDir);
+      return c.json(detail);
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500) getLog().error({ err, name, source }, 'skills.read_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // POST /api/skills - Create a new skill
+  registerOpenApiRoute(createSkillRoute, async c => {
+    const body = getValidatedBody(c, createSkillBodySchema);
+    if (!isValidCommandName(body.name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    let workingDir: string;
+    try {
+      if (body.cwd) {
+        if (!(await validateCwd(body.cwd))) {
+          return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+        }
+        workingDir = body.cwd;
+      } else {
+        const codebases = await codebaseDb.listCodebases();
+        workingDir = codebases.length > 0 ? codebases[0].default_cwd : getArchonHome();
+      }
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const detail = await skillsCore.createSkill(
+        body.name,
+        body.source,
+        workingDir,
+        body.frontmatter,
+        body.body
+      );
+      return c.json(detail, 201);
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500)
+        getLog().error({ err, name: body.name, source: body.source }, 'skills.create_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // PUT /api/skills/:name - Save (overwrite) SKILL.md
+  registerOpenApiRoute(saveSkillRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    const body = getValidatedBody(c, saveSkillBodySchema);
+    let workingDir: string;
+    try {
+      if (body.cwd) {
+        if (!(await validateCwd(body.cwd))) {
+          return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+        }
+        workingDir = body.cwd;
+      } else {
+        const codebases = await codebaseDb.listCodebases();
+        workingDir = codebases.length > 0 ? codebases[0].default_cwd : getArchonHome();
+      }
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const detail = await skillsCore.writeSkillMd(
+        name,
+        body.source,
+        workingDir,
+        body.frontmatter,
+        body.body
+      );
+      return c.json(detail);
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500) getLog().error({ err, name, source: body.source }, 'skills.save_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // DELETE /api/skills/:name - Delete a skill directory
+  registerOpenApiRoute(deleteSkillRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    const source = (c.req.query('source') ?? 'global') as 'global' | 'project';
+    if (source !== 'global' && source !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    let workingDir: string;
+    try {
+      workingDir = await resolveSkillCwd(c);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      await skillsCore.deleteSkill(name, source, workingDir);
+      return c.json({ deleted: true, name });
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500) getLog().error({ err, name, source }, 'skills.delete_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // GET /api/skills/:name/files - List skill directory contents
+  registerOpenApiRoute(getSkillFilesRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    const source = (c.req.query('source') ?? 'global') as 'global' | 'project';
+    if (source !== 'global' && source !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    let workingDir: string;
+    try {
+      workingDir = await resolveSkillCwd(c);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const files = await skillsCore.listSkillFiles(name, source, workingDir);
+      return c.json({ files });
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500) getLog().error({ err, name, source }, 'skills.files_list_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  /**
+   * Extract the wildcard `*` portion of a skill-file URL after the path prefix.
+   * Hono matches but does not capture wildcards — we slice it ourselves.
+   */
+  function extractSkillFilePath(c: Context, name: string): string | null {
+    const prefix = `/api/skills/${name}/files/`;
+    if (!c.req.path.startsWith(prefix)) return null;
+    const rawEncoded = c.req.path.slice(prefix.length);
+    try {
+      const decoded = decodeURIComponent(rawEncoded);
+      if (decoded.includes('\0')) return null;
+      return decoded;
+    } catch {
+      return null;
+    }
+  }
+
+  // GET /api/skills/:name/files/* - Read a single file's contents (binary-safe)
+  app.get('/api/skills/:name/files/*', async c => {
+    const name = c.req.param('name');
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    const sourceParam = c.req.query('source') ?? 'global';
+    if (sourceParam !== 'global' && sourceParam !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    const relPath = extractSkillFilePath(c, name);
+    if (!relPath) return apiError(c, 400, 'Invalid file path');
+    let workingDir: string;
+    try {
+      workingDir = await resolveSkillCwd(c);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const { bytes, mime } = await skillsCore.readSkillFile(
+        name,
+        sourceParam,
+        workingDir,
+        relPath
+      );
+      return new Response(bytes, {
+        headers: {
+          'Content-Type': mime,
+          'Content-Length': String(bytes.byteLength),
+        },
+      });
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500)
+        getLog().error({ err, name, source: sourceParam, relPath }, 'skills.file_read_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // PUT /api/skills/:name/files/* - Write a file (text JSON or multipart upload)
+  app.put('/api/skills/:name/files/*', async c => {
+    const name = c.req.param('name');
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    const sourceParam = c.req.query('source') ?? 'global';
+    if (sourceParam !== 'global' && sourceParam !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    const relPath = extractSkillFilePath(c, name);
+    if (!relPath) return apiError(c, 400, 'Invalid file path');
+    let workingDir: string;
+    try {
+      workingDir = await resolveSkillCwd(c);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+
+    const contentType = c.req.header('content-type') ?? '';
+    let content: string | Uint8Array;
+
+    try {
+      if (contentType.startsWith('multipart/form-data')) {
+        const form = await c.req.formData();
+        const file = form.get('file');
+        if (!(file instanceof Blob)) {
+          return apiError(c, 400, 'Multipart upload requires a "file" field');
+        }
+        content = new Uint8Array(await file.arrayBuffer());
+      } else if (contentType.includes('application/json')) {
+        const body = await c.req.json();
+        if (typeof body.content !== 'string') {
+          return apiError(c, 400, 'Body must include "content" as a string');
+        }
+        if (body.encoding === 'base64') {
+          content = Uint8Array.from(Buffer.from(body.content, 'base64'));
+        } else {
+          content = body.content;
+        }
+      } else {
+        // Raw bytes — treat the body as the file contents.
+        const buf = await c.req.arrayBuffer();
+        content = new Uint8Array(buf);
+      }
+    } catch (err) {
+      return apiError(c, 400, `Failed to read request body: ${(err as Error).message}`);
+    }
+
+    try {
+      await skillsCore.writeSkillFile(name, sourceParam, workingDir, relPath, content);
+      return c.json({ ok: true, path: relPath });
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500)
+        getLog().error({ err, name, source: sourceParam, relPath }, 'skills.file_write_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // DELETE /api/skills/:name/files/* - Delete a single file or empty directory
+  app.delete('/api/skills/:name/files/*', async c => {
+    const name = c.req.param('name');
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid skill name');
+    }
+    const sourceParam = c.req.query('source') ?? 'global';
+    if (sourceParam !== 'global' && sourceParam !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    const relPath = extractSkillFilePath(c, name);
+    if (!relPath) return apiError(c, 400, 'Invalid file path');
+    let workingDir: string;
+    try {
+      workingDir = await resolveSkillCwd(c);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      await skillsCore.deleteSkillFile(name, sourceParam, workingDir, relPath);
+      return c.json({ ok: true, path: relPath });
+    } catch (err) {
+      const { status, message } = skillErrorToStatus(err);
+      if (status === 500)
+        getLog().error({ err, name, source: sourceParam, relPath }, 'skills.file_delete_failed');
+      return apiError(c, status, message);
     }
   });
 

@@ -725,3 +725,188 @@ export async function promoteCompassGhost(
     }
   );
 }
+
+// =============================================================================
+// Skill registry — Claude Agent SDK skill management
+// =============================================================================
+
+export type SkillSource = components['schemas']['SkillSource'];
+export type SkillSummary = components['schemas']['SkillSummary'];
+export type SkillDetail = components['schemas']['SkillDetail'];
+export type SkillFileNode = components['schemas']['SkillFileNode'];
+
+export interface SkillListResponse {
+  skills: SkillSummary[];
+  errors?: { name: string; source: SkillSource; path: string; error: string }[];
+}
+
+export async function listSkills(cwd?: string): Promise<SkillListResponse> {
+  const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+  return fetchJSON<SkillListResponse>(`/api/skills${params}`);
+}
+
+export async function getSkill(
+  name: string,
+  source: SkillSource,
+  cwd?: string
+): Promise<SkillDetail> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  return fetchJSON<SkillDetail>(`/api/skills/${encodeURIComponent(name)}?${sp.toString()}`);
+}
+
+export interface CreateSkillInput {
+  name: string;
+  source: SkillSource;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  cwd?: string;
+}
+
+export async function createSkill(input: CreateSkillInput): Promise<SkillDetail> {
+  return fetchJSON<SkillDetail>('/api/skills', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export interface SaveSkillInput {
+  source: SkillSource;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  cwd?: string;
+}
+
+export async function saveSkill(name: string, input: SaveSkillInput): Promise<SkillDetail> {
+  return fetchJSON<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteSkill(
+  name: string,
+  source: SkillSource,
+  cwd?: string
+): Promise<{ deleted: boolean; name: string }> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  return fetchJSON(`/api/skills/${encodeURIComponent(name)}?${sp.toString()}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listSkillFiles(
+  name: string,
+  source: SkillSource,
+  cwd?: string
+): Promise<SkillFileNode[]> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  const result = await fetchJSON<{ files: SkillFileNode[] }>(
+    `/api/skills/${encodeURIComponent(name)}/files?${sp.toString()}`
+  );
+  return result.files;
+}
+
+/**
+ * Read a skill file as text. Use this for SKILL.md and any other text content.
+ * Binary files should be fetched directly via the URL returned by `skillFileUrl`.
+ */
+export async function readSkillFileText(
+  name: string,
+  source: SkillSource,
+  relPath: string,
+  cwd?: string
+): Promise<string> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  const url = `/api/skills/${encodeURIComponent(name)}/files/${relPath
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}?${sp.toString()}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API error ${String(res.status)} (${url}): ${body.slice(0, 200)}`);
+  }
+  return res.text();
+}
+
+/** Build the URL to fetch a skill file (used for <img> previews and similar). */
+export function skillFileUrl(
+  name: string,
+  source: SkillSource,
+  relPath: string,
+  cwd?: string
+): string {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  return `/api/skills/${encodeURIComponent(name)}/files/${relPath
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}?${sp.toString()}`;
+}
+
+export async function writeSkillFileText(
+  name: string,
+  source: SkillSource,
+  relPath: string,
+  content: string,
+  cwd?: string
+): Promise<void> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  const url = `/api/skills/${encodeURIComponent(name)}/files/${relPath
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}?${sp.toString()}`;
+  await fetchJSON(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+}
+
+export async function uploadSkillFile(
+  name: string,
+  source: SkillSource,
+  relPath: string,
+  file: File | Blob,
+  cwd?: string
+): Promise<void> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  const url = `/api/skills/${encodeURIComponent(name)}/files/${relPath
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}?${sp.toString()}`;
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(url, { method: 'PUT', body: form });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API error ${String(res.status)} (${url}): ${body.slice(0, 200)}`);
+  }
+}
+
+export async function deleteSkillFile(
+  name: string,
+  source: SkillSource,
+  relPath: string,
+  cwd?: string
+): Promise<void> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  const url = `/api/skills/${encodeURIComponent(name)}/files/${relPath
+    .split('/')
+    .map(encodeURIComponent)
+    .join('/')}?${sp.toString()}`;
+  const res = await fetch(url, { method: 'DELETE' });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API error ${String(res.status)} (${url}): ${body.slice(0, 200)}`);
+  }
+}

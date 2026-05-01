@@ -12,6 +12,7 @@ import { WorkflowBuilderPage } from '@/routes/WorkflowBuilderPage';
 import { SymphonyPage } from '@/routes/SymphonyPage';
 import { MissionPage } from '@/routes/MissionPage';
 import { CompassPage } from '@/routes/CompassPage';
+import { SkillsPage } from '@/routes/SkillsPage';
 import { SettingsPage } from '@/routes/SettingsPage';
 
 interface ErrorBoundaryState {
@@ -81,6 +82,8 @@ export function App(): React.ReactElement {
                 <Route path="/symphony" element={<SymphonyPage />} />
                 <Route path="/mission" element={<MissionPage />} />
                 <Route path="/compass" element={<CompassPage />} />
+                <Route path="/skills" element={<SkillsPage />} />
+                <Route path="/skills/:name" element={<SkillsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Routes>

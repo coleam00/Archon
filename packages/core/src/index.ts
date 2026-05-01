@@ -147,3 +147,8 @@ export { getPort } from './utils/port-allocation';
 
 // Worktree sync
 export { syncArchonToWorktree } from './utils/worktree-sync';
+
+// =============================================================================
+// Skills (Claude Agent SDK skill registry — filesystem-backed)
+// =============================================================================
+export * as skills from './skills';
