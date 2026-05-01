@@ -46,6 +46,7 @@ if [ -z "${CLAUDE_BIN_PATH:-}" ]; then
   case "$(uname -m)" in
     x86_64)  export CLAUDE_BIN_PATH="/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude" ;;
     aarch64) export CLAUDE_BIN_PATH="/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude" ;;
+    *) echo "WARN: Unsupported CPU architecture $(uname -m). Set CLAUDE_BIN_PATH manually if Claude fails to start." >&2 ;;
   esac
 fi
 
