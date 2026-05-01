@@ -150,6 +150,20 @@ describe('buildCopilotArgs', () => {
     expect(denyToolArgs).toContain('--deny-tool=shell');
   });
 
+  test('deny tools take precedence over overlapping allow tools', () => {
+    const args = buildCopilotArgs({
+      prompt: 'test',
+      config: { allowTools: ['read', 'shell'], denyTools: ['shell'] },
+      nodeConfig: { allowed_tools: ['bash'], denied_tools: ['bash'] },
+    });
+
+    expect(args).toContain('--allow-tool=read');
+    expect(args).toContain('--deny-tool=shell');
+    expect(args).toContain('--deny-tool=bash');
+    expect(args).not.toContain('--allow-tool=shell');
+    expect(args).not.toContain('--allow-tool=bash');
+  });
+
   test('addDirs → repeated --add-dir=', () => {
     const args = buildCopilotArgs({
       prompt: 'test',
@@ -259,6 +273,26 @@ describe('parseCopilotConfig', () => {
     expect(result.processTimeoutMs).toBe(600000);
   });
 
+  test('invalid timeout fields are dropped', () => {
+    const result = parseCopilotConfig({
+      firstEventTimeoutMs: Number.NaN,
+      processTimeoutMs: -1,
+    });
+
+    expect(result.firstEventTimeoutMs).toBeUndefined();
+    expect(result.processTimeoutMs).toBeUndefined();
+  });
+
+  test('positive fractional timeout fields are truncated', () => {
+    const result = parseCopilotConfig({
+      firstEventTimeoutMs: 123.9,
+      processTimeoutMs: 456.1,
+    });
+
+    expect(result.firstEventTimeoutMs).toBe(123);
+    expect(result.processTimeoutMs).toBe(456);
+  });
+
   test('valid string arrays are parsed', () => {
     const result = parseCopilotConfig({
       allowTools: ['read', 'write'],
@@ -276,6 +310,14 @@ describe('parseCopilotConfig', () => {
     expect(result.allowUrls).toEqual(['https://example.com']);
     expect(result.denyUrls).toEqual(['https://blocked.example']);
     expect(result.secretEnvVars).toEqual(['MY_TOKEN']);
+  });
+
+  test('blank string array entries are trimmed and dropped', () => {
+    const result = parseCopilotConfig({
+      allowTools: [' read ', '', '   ', 'write'],
+    });
+
+    expect(result.allowTools).toEqual(['read', 'write']);
   });
 
   test('non-string entries in array fields are dropped', () => {
@@ -325,8 +367,8 @@ describe('resolveCopilotBinaryPath', () => {
   test('returns default command name when no env or config', () => {
     delete process.env.COPILOT_BIN_PATH;
     const result = resolveCopilotBinaryPath(undefined);
-    // Should be 'copilot' on non-windows or 'copilot.exe' on windows
-    expect(result).toMatch(/^copilot(\.exe)?$/);
+    // Should be 'copilot' on non-windows or 'copilot.cmd' on windows
+    expect(result).toMatch(/^copilot(\.cmd)?$/);
   });
 
   test('COPILOT_BIN_PATH bare name is returned without existence check', () => {
@@ -908,6 +950,61 @@ describe('CopilotProvider.sendQuery', () => {
     }>;
     const warningChunk = systemChunks.find(c => c.content.includes('allowAllPaths'));
     expect(warningChunk).toBeDefined();
+  });
+
+  test('security warning emitted for allowAllUrls from final argv', async () => {
+    const fake = new FakeChildProcess();
+    fake.scheduleExit(0, null, 10);
+
+    const spawnMod = await import('node:child_process');
+    (spawnMod.spawn as ReturnType<typeof mock>).mockImplementationOnce(
+      (_b: string, _a: string[]) => {
+        Promise.resolve().then(() => fake.start());
+        return fake as unknown as ChildProcess;
+      }
+    );
+
+    const provider = await createProvider();
+    const chunks = await collect(
+      provider.sendQuery('test', '/tmp', undefined, {
+        assistantConfig: { extraArgs: ['--allow-all-urls'] },
+      })
+    );
+
+    const systemChunks = chunks.filter(c => c.type === 'system') as Array<{
+      type: 'system';
+      content: string;
+    }>;
+    const warningChunk = systemChunks.find(c => c.content.includes('allowAllUrls'));
+    expect(warningChunk).toBeDefined();
+  });
+
+  test('missing stdout or stderr pipes yields explicit error result', async () => {
+    const childWithoutPipes = Object.assign(new EventEmitter(), {
+      stdout: undefined,
+      stderr: undefined,
+      killed: false,
+      kill() {
+        this.killed = true;
+        return true;
+      },
+    });
+
+    const spawnMod = await import('node:child_process');
+    (spawnMod.spawn as ReturnType<typeof mock>).mockImplementationOnce(
+      (_b: string, _a: string[]) => childWithoutPipes as unknown as ChildProcess
+    );
+
+    const provider = await createProvider();
+    const chunks = await collect(provider.sendQuery('test', '/tmp', undefined, {}));
+    const resultChunk = chunks.find(c => c.type === 'result') as
+      | { type: 'result'; isError?: boolean; errorSubtype?: string; errors?: string[] }
+      | undefined;
+
+    expect(resultChunk).toBeDefined();
+    expect(resultChunk?.isError).toBe(true);
+    expect(resultChunk?.errorSubtype).toBe('copilot_cli_exit');
+    expect(resultChunk?.errors).toContain('Copilot CLI did not expose stdout/stderr pipes.');
   });
 
   test('no allowAll warning when allowAll is false or not set', async () => {

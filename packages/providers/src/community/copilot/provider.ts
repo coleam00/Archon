@@ -7,7 +7,7 @@
  * Security requirements:
  * - Uses spawn(binary, args, ...) — NEVER shell string concatenation.
  * - Inherits process.env and merges requestOptions.env (request env wins).
- * - Emits warning system chunk when allowAll or allowAllTools is enabled.
+ * - Emits warning system chunk when broad permission flags are enabled.
  * - Conservative defaults: noAskUser defaults to true.
  * - Does not default allowAll, allowAllTools, or allowAllPaths to true.
  */
@@ -65,18 +65,20 @@ function makeEventQueue(): {
   next: () => Promise<ProcessEvent>;
 } {
   const buffer: ProcessEvent[] = [];
-  const waiters: Array<(item: ProcessEvent) => void> = [];
+  const waiters: ((item: ProcessEvent) => void)[] = [];
 
   const push = (item: ProcessEvent): void => {
-    if (waiters.length > 0) {
-      waiters.shift()!(item);
-    } else {
-      buffer.push(item);
+    const waiter = waiters.shift();
+    if (waiter) {
+      waiter(item);
+      return;
     }
+    buffer.push(item);
   };
 
   const next = (): Promise<ProcessEvent> => {
-    if (buffer.length > 0) return Promise.resolve(buffer.shift()!);
+    const item = buffer.shift();
+    if (item !== undefined) return Promise.resolve(item);
     return new Promise<ProcessEvent>(resolve => {
       waiters.push(resolve);
     });
@@ -180,6 +182,14 @@ export class CopilotProvider implements IAgentProvider {
           'Set allowAllPaths: false in your config to restore conservative defaults.',
       };
     }
+    if (argv.includes('--allow-all-urls')) {
+      yield {
+        type: 'system',
+        content:
+          '⚠️  copilot: allowAllUrls (--allow-all-urls) is enabled — all URLs are permitted. ' +
+          'Set allowAllUrls: false in your config to restore conservative defaults.',
+      };
+    }
 
     const binary = resolveCopilotBinaryPath(config.copilotBinaryPath);
 
@@ -213,6 +223,19 @@ export class CopilotProvider implements IAgentProvider {
       }
     };
 
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (!stdout || !stderr) {
+      killProcess('missing_stdio_pipe');
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'copilot_cli_exit',
+        errors: ['Copilot CLI did not expose stdout/stderr pipes.'],
+      };
+      return;
+    }
+
     // Abort signal handler — pushes an explicit abort event so the consumer
     // sees it even if it's currently blocked in `next()`.
     const onAbort = (): void => {
@@ -235,12 +258,12 @@ export class CopilotProvider implements IAgentProvider {
     };
 
     // stdout producer
-    pipeLinesToQueue(child.stdout!, 'stdout', push, markFirstOutput);
+    pipeLinesToQueue(stdout, 'stdout', push, markFirstOutput);
 
     // stderr producer
     const stderrLines: string[] = [];
     pipeLinesToQueue(
-      child.stderr!,
+      stderr,
       'stderr',
       item => {
         if (item.kind === 'stderr') stderrLines.push(item.line);

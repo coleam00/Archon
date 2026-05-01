@@ -4,12 +4,16 @@
  * Resolution order:
  *  1. COPILOT_BIN_PATH environment variable
  *  2. assistants.copilot.copilotBinaryPath in config
- *  3. Default command name: 'copilot' / 'copilot.exe' (relies on PATH lookup by the OS)
+ *  3. Default command name: 'copilot' / 'copilot.cmd' (relies on PATH lookup by the OS)
  *
  * Unlike the Codex resolver, we do NOT check for file existence when a
  * PATH-based name (no path separators) is returned — the OS does the PATH
  * lookup at spawn time. We only do existence checks for absolute/relative
  * paths explicitly configured by the user.
+ *
+ * On Windows, Copilot CLI is commonly installed as an npm/VS Code shim
+ * (`copilot.cmd`/`copilot.bat`) rather than a real `copilot.exe`. Bun's spawn
+ * does not resolve PATHEXT for bare names, so the default must include `.cmd`.
  */
 import { existsSync as _existsSync } from 'node:fs';
 import { createLogger } from '@archon/paths';
@@ -80,7 +84,7 @@ export function resolveCopilotBinaryPath(configBinaryPath?: string): string {
   }
 
   // 3. PATH default — rely on OS PATH lookup at spawn time
-  const defaultName = process.platform === 'win32' ? 'copilot.exe' : 'copilot';
+  const defaultName = process.platform === 'win32' ? 'copilot.cmd' : 'copilot';
   getLog().debug({ binaryPath: defaultName, source: 'path-default' }, 'copilot.binary_resolved');
   return defaultName;
 }

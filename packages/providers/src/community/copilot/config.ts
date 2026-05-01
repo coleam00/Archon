@@ -9,6 +9,10 @@ import type { CopilotProviderDefaults } from '../../types';
 
 export type { CopilotProviderDefaults };
 
+function isValidTimeoutMs(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 /**
  * Parse raw YAML-derived config into typed Copilot defaults.
  * All fields are optional and validated defensively.
@@ -44,12 +48,12 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
     result.allowAllUrls = raw.allowAllUrls;
   }
 
-  if (typeof raw.firstEventTimeoutMs === 'number') {
-    result.firstEventTimeoutMs = raw.firstEventTimeoutMs;
+  if (isValidTimeoutMs(raw.firstEventTimeoutMs)) {
+    result.firstEventTimeoutMs = Math.trunc(raw.firstEventTimeoutMs);
   }
 
-  if (typeof raw.processTimeoutMs === 'number') {
-    result.processTimeoutMs = raw.processTimeoutMs;
+  if (isValidTimeoutMs(raw.processTimeoutMs)) {
+    result.processTimeoutMs = Math.trunc(raw.processTimeoutMs);
   }
 
   // String arrays
@@ -64,7 +68,9 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
   ] as const) {
     const value = raw[key];
     if (Array.isArray(value)) {
-      const strings = value.filter((v): v is string => typeof v === 'string');
+      const strings = value
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map(v => v.trim());
       if (strings.length > 0) {
         (result as Record<string, unknown>)[key] = strings;
       }

@@ -399,14 +399,11 @@ Archon integrates the [GitHub Copilot CLI](https://docs.github.com/en/copilot/re
 
 ### Install the Copilot CLI
 
-Follow the [official Copilot CLI setup guide](https://docs.github.com/en/copilot/reference/copilot-cli-reference/about-copilot-cli):
+Follow the official Copilot CLI setup guide:
 
 ```bash
 # npm (any platform)
-npm install -g @github/copilot-cli
-
-# Or via GitHub CLI extension
-gh extension install github/gh-copilot
+npm install -g @github/copilot
 ```
 
 Verify the install:
@@ -418,7 +415,7 @@ copilot --version
 ### Authenticate
 
 ```bash
-copilot auth login
+copilot login
 # Follow the browser authentication flow
 ```
 
@@ -487,7 +484,7 @@ assistants:
     firstEventTimeoutMs: 60000   # 60s: kill if no output at all
     processTimeoutMs: 600000     # 10min: kill if still running
 
-    # Optional: absolute path to the copilot binary (overrides COPILOT_BIN_PATH)
+    # Optional: absolute path to the copilot binary (used when COPILOT_BIN_PATH is not set)
     # copilotBinaryPath: /usr/local/bin/copilot
 ```
 

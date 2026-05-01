@@ -89,7 +89,7 @@ export interface PiProviderDefaults {
  */
 export interface CopilotProviderDefaults {
   [key: string]: unknown;
-  /** Absolute path to the Copilot CLI binary. Overrides COPILOT_BIN_PATH env var and PATH default. */
+  /** Absolute path to the Copilot CLI binary. Used when COPILOT_BIN_PATH is not set. */
   copilotBinaryPath?: string;
   /** Default model passed as --model=<model>. Can be overridden per-request via requestOptions.model. */
   model?: string;

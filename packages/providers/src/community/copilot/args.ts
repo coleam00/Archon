@@ -83,9 +83,6 @@ export function buildCopilotArgs(opts: BuildCopilotArgsOptions): string[] {
   for (const tool of nodeConfig?.allowed_tools ?? []) {
     allowToolSet.add(tool);
   }
-  for (const tool of allowToolSet) {
-    args.push(`--allow-tool=${tool}`);
-  }
 
   // Deny tools: config level + node level (deduplicated)
   const denyToolSet = new Set<string>();
@@ -95,6 +92,16 @@ export function buildCopilotArgs(opts: BuildCopilotArgsOptions): string[] {
   for (const tool of nodeConfig?.denied_tools ?? []) {
     denyToolSet.add(tool);
   }
+
+  // Deterministic conflict resolution: deny wins over allow.
+  for (const deniedTool of denyToolSet) {
+    allowToolSet.delete(deniedTool);
+  }
+
+  for (const tool of allowToolSet) {
+    args.push(`--allow-tool=${tool}`);
+  }
+
   for (const tool of denyToolSet) {
     args.push(`--deny-tool=${tool}`);
   }
