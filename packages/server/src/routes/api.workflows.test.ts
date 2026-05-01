@@ -458,7 +458,10 @@ describe('PUT /api/workflows/:name', () => {
     expect(body.error).toContain('definition');
   });
 
-  test('falls back to getArchonHome() when no cwd and no codebases registered', async () => {
+  test('falls back to home-scoped (~/.archon/workflows/) when no cwd and no codebases registered', async () => {
+    // Regression: previously this fell through to
+    // <archonHome>/.archon/workflows/, which is the legacy pre-0.x path the
+    // migration warning explicitly tells users to abandon. Closes #1524.
     const testArchonHome = join(tmpdir(), `archon-home-test-${Date.now()}`);
     process.env.ARCHON_HOME = testArchonHome;
 
@@ -485,7 +488,12 @@ describe('PUT /api/workflows/:name', () => {
       });
       expect(response.status).toBe(200);
       const body = (await response.json()) as { workflow: object; source: string };
-      expect(body.source).toBe('project');
+      // The save must land in ~/.archon/workflows/ (source 'global'), NOT
+      // ~/.archon/.archon/workflows/ (source 'project' on a legacy path).
+      expect(body.source).toBe('global');
+      const savedPath = join(testArchonHome, 'workflows', 'my-workflow.yaml');
+      const stat = await import('fs/promises').then(m => m.stat(savedPath));
+      expect(stat.isFile()).toBe(true);
     } finally {
       delete process.env.ARCHON_HOME;
       await rm(testArchonHome, { recursive: true, force: true });
@@ -588,6 +596,40 @@ describe('DELETE /api/workflows/:name', () => {
     expect(response.status).toBe(404);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('nonexistent-no-cwd-test');
+  });
+
+  test('removes home-scoped workflow when no cwd / no codebases registered', async () => {
+    // Regression for #1524: DELETE used to fall through to
+    // <archonHome>/.archon/workflows/, the legacy path, leaving real
+    // home-scoped files untouched. Now it deletes from ~/.archon/workflows/.
+    const testArchonHome = join(tmpdir(), `archon-home-del-${Date.now()}`);
+    const homeWorkflowDir = join(testArchonHome, 'workflows');
+    await mkdir(homeWorkflowDir, { recursive: true });
+    await writeFile(
+      join(homeWorkflowDir, 'home-only.yaml'),
+      'name: home-only\ndescription: x\nnodes: []\n'
+    );
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => []);
+
+      const response = await app.request('/api/workflows/home-only', { method: 'DELETE' });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { deleted: boolean; name: string };
+      expect(body.deleted).toBe(true);
+      expect(body.name).toBe('home-only');
+
+      // Verify the file is actually gone from the home-scoped location.
+      const fs = await import('fs/promises');
+      await expect(fs.stat(join(homeWorkflowDir, 'home-only.yaml'))).rejects.toThrow();
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
   });
 
   test('removes existing workflow file and returns deleted:true', async () => {

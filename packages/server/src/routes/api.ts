@@ -2321,6 +2321,7 @@ export function registerApiRoutes(
         return c.json({ workflow: result.workflow, filename, source: 'bundled' as WorkflowSource });
       }
 
+      // 4. Source-build fallback: filesystem-backed defaults
       if (!isBinaryBuild()) {
         const defaultFilePath = join(getDefaultWorkflowsPath(), filename);
         try {
@@ -2357,18 +2358,21 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
+    // Resolve where to write. If `cwd` is provided (or a codebase exists)
+    // we write into that project's `.archon/workflows/`. With no project at
+    // all, fall back to the home-scoped layer (`~/.archon/workflows/`) —
+    // NOT to `<archonHome>/.archon/workflows/`, which is the legacy path
+    // the migration warning in `workflow-discovery.ts` explicitly tells
+    // users to abandon.
     const cwd = c.req.query('cwd');
-    let workingDir = cwd;
+    let projectDir: string | undefined = cwd;
     if (cwd) {
       if (!(await validateCwd(cwd))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
     } else {
       const codebases = await codebaseDb.listCodebases();
-      if (codebases.length > 0) workingDir = codebases[0].default_cwd;
-    }
-    if (!workingDir) {
-      workingDir = getArchonHome();
+      if (codebases.length > 0) projectDir = codebases[0].default_cwd;
     }
 
     const { definition } = getValidatedBody(c, saveWorkflowBodySchema);
@@ -2388,20 +2392,29 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Workflow definition is invalid', parsed.error.error);
     }
 
-    try {
+    let dirPath: string;
+    let savedSource: WorkflowSource;
+    if (projectDir) {
       const [workflowFolder] = getWorkflowFolderSearchPaths();
-      const dirPath = join(workingDir, workflowFolder);
+      dirPath = join(projectDir, workflowFolder);
+      savedSource = 'project';
+    } else {
+      dirPath = getHomeWorkflowsPath();
+      savedSource = 'global';
+    }
+
+    try {
       await mkdir(dirPath, { recursive: true });
       const filePath = join(dirPath, `${name}.yaml`);
       await writeFile(filePath, yamlContent, 'utf-8');
       return c.json({
         workflow: parsed.workflow,
         filename: `${name}.yaml`,
-        source: 'project' as WorkflowSource,
+        source: savedSource,
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      getLog().error({ err, name }, 'workflow.save_failed');
+      getLog().error({ err, name, dirPath }, 'workflow.save_failed');
       return apiError(c, 500, 'Failed to save workflow');
     }
   });
@@ -2418,22 +2431,28 @@ export function registerApiRoutes(
       return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
     }
 
+    // Mirror PUT's resolution: project-scoped if a cwd or registered codebase
+    // exists, home-scoped (`~/.archon/workflows/`) otherwise. Same rationale
+    // for steering away from the legacy `<archonHome>/.archon/workflows/`
+    // path applies.
     const cwd = c.req.query('cwd');
-    let workingDir = cwd;
+    let projectDir: string | undefined = cwd;
     if (cwd) {
       if (!(await validateCwd(cwd))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
     } else {
       const codebases = await codebaseDb.listCodebases();
-      if (codebases.length > 0) workingDir = codebases[0].default_cwd;
-    }
-    if (!workingDir) {
-      workingDir = getArchonHome();
+      if (codebases.length > 0) projectDir = codebases[0].default_cwd;
     }
 
-    const [workflowFolder] = getWorkflowFolderSearchPaths();
-    const filePath = join(workingDir, workflowFolder, `${name}.yaml`);
+    let filePath: string;
+    if (projectDir) {
+      const [workflowFolder] = getWorkflowFolderSearchPaths();
+      filePath = join(projectDir, workflowFolder, `${name}.yaml`);
+    } else {
+      filePath = join(getHomeWorkflowsPath(), `${name}.yaml`);
+    }
 
     try {
       await unlink(filePath);
