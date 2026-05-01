@@ -158,6 +158,12 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
         }
       : {}),
   };
+  if (isError) {
+    getLog().error(
+      { stopReason: last.stopReason, errorMessage: last.errorMessage, model: last.model },
+      'pi.event-bridge.result_error'
+    );
+  }
   return chunk;
 }
 

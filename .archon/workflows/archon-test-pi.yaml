@@ -8,7 +8,6 @@ model: kiro/minimax-m2-5
 
 nodes:
   - id: hello
-    model: kiro/minimax-m2-5
     prompt: |
       Who won the 1984 Major League Baseball World Series? Answer in one sentence.
 
