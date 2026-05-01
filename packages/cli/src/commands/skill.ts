@@ -53,19 +53,17 @@ export async function skillInstallCommand(targetPath: string): Promise<number> {
   }
 
   const skillRoot = join(absoluteTarget, '.claude', 'skills', 'archon');
-  const { BUNDLED_SKILL_FILES } = await import('../bundled-skill');
-  const fileCount = Object.keys(BUNDLED_SKILL_FILES).length;
-
-  console.log(`Installing Archon skill (${fileCount} files) into ${skillRoot}`);
-
   try {
+    const { BUNDLED_SKILL_FILES } = await import('../bundled-skill');
+    const fileCount = Object.keys(BUNDLED_SKILL_FILES).length;
+    console.log(`Installing Archon skill (${fileCount} files) into ${skillRoot}`);
+
     await copyArchonSkill(absoluteTarget);
+    console.log('Done. Restart Claude Code to load the skill.');
+    return 0;
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     console.error(`Error: Failed to install skill: ${err.message}`);
     return 1;
   }
-
-  console.log('Done. Restart Claude Code to load the skill.');
-  return 0;
 }
