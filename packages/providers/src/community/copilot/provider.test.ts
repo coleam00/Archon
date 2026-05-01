@@ -581,8 +581,9 @@ describe('CopilotProvider.sendQuery', () => {
     expect((resultChunk as { type: 'result'; isError?: boolean }).isError).toBeUndefined();
 
     // Verify spawn was called with correct binary and -p flag
-    expect(lastSpawnArgs[0]).toBe('-p');
-    expect(lastSpawnArgs[1]).toBe('test prompt');
+    const promptFlagIndex = lastSpawnArgs.indexOf('-p');
+    expect(promptFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(lastSpawnArgs[promptFlagIndex + 1]).toBe('test prompt');
     expect(lastSpawnArgs).toContain('--model=gpt-5');
   });
 

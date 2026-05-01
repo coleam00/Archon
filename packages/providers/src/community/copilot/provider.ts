@@ -12,6 +12,8 @@
  * - Does not default allowAll, allowAllTools, or allowAllPaths to true.
  */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { createLogger } from '@archon/paths';
 import type {
   IAgentProvider,
@@ -44,6 +46,42 @@ function buildCopilotEnv(requestEnv?: Record<string, string>): Record<string, st
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
   return { ...baseEnv, ...(requestEnv ?? {}) };
+}
+
+interface SpawnCommand {
+  command: string;
+  args: string[];
+}
+
+function resolvePathCommand(command: string): string {
+  if (isAbsolute(command) || command.includes('/') || command.includes('\\')) {
+    return command;
+  }
+
+  for (const pathDir of (process.env.PATH ?? '').split(delimiter)) {
+    if (!pathDir) continue;
+    const candidate = join(pathDir, command);
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return command;
+}
+
+function buildSpawnCommand(binary: string, argv: string[]): SpawnCommand {
+  if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(binary)) {
+    return { command: binary, args: argv };
+  }
+
+  const resolvedBinary = resolvePathCommand(binary);
+  const npmLoaderPath = join(dirname(resolvedBinary), 'node_modules', '@github', 'copilot', 'npm-loader.js');
+  if (existsSync(npmLoaderPath)) {
+    return { command: 'node', args: [npmLoaderPath, ...argv] };
+  }
+
+  return {
+    command: process.env.ComSpec ?? 'cmd.exe',
+    args: ['/d', '/s', '/c', resolvedBinary, ...argv],
+  };
 }
 
 // ─── Unified event queue ────────────────────────────────────────────────────
@@ -192,9 +230,10 @@ export class CopilotProvider implements IAgentProvider {
     }
 
     const binary = resolveCopilotBinaryPath(config.copilotBinaryPath);
+    const spawnCommand = buildSpawnCommand(binary, argv);
 
     // Log args with prompt redacted for safety
-    getLog().info({ binary, argc: argv.length }, 'copilot.spawn');
+    getLog().info({ binary: spawnCommand.command, argc: spawnCommand.args.length }, 'copilot.spawn');
 
     const env = buildCopilotEnv(options?.env);
 
@@ -203,7 +242,7 @@ export class CopilotProvider implements IAgentProvider {
     const abortSignal = options?.abortSignal;
 
     // ── Spawn ──────────────────────────────────────────────────────────────
-    const child = spawn(binary, argv, {
+    const child = spawn(spawnCommand.command, spawnCommand.args, {
       cwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
