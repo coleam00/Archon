@@ -36,6 +36,24 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Default timeouts */
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 60_000; // 60s to see any output
 const DEFAULT_PROCESS_TIMEOUT_MS = 10 * 60_000; // 10min total
+const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
+const MODEL_ACCESS_PATTERNS = [
+  'model not available',
+  'model is not available',
+  'not available for your account',
+  'unsupported model',
+  'unknown model',
+  'invalid model',
+  'model access',
+];
+
+type CopilotFailureKind = 'rate_limit' | 'model_access' | 'unknown';
+
+interface CopilotAttemptResult {
+  success: boolean;
+  emittedAssistant: boolean;
+  failureKind?: CopilotFailureKind;
+}
 
 /**
  * Merge process env with request-scoped env overrides.
@@ -88,6 +106,13 @@ function buildSpawnCommand(binary: string, argv: string[]): SpawnCommand {
     command: process.env.ComSpec ?? 'cmd.exe',
     args: ['/d', '/s', '/c', resolvedBinary, ...argv],
   };
+}
+
+function classifyCopilotFailure(errors: string[]): CopilotFailureKind {
+  const message = errors.join('\n').toLowerCase();
+  if (RATE_LIMIT_PATTERNS.some(pattern => message.includes(pattern))) return 'rate_limit';
+  if (MODEL_ACCESS_PATTERNS.some(pattern => message.includes(pattern))) return 'model_access';
+  return 'unknown';
 }
 
 // ─── Unified event queue ────────────────────────────────────────────────────
@@ -192,16 +217,42 @@ export class CopilotProvider implements IAgentProvider {
     options?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
     const config = parseCopilotConfig(options?.assistantConfig ?? {});
+    const primaryModel = options?.model ?? config.model;
+    const fallbackModel = options?.fallbackModel;
+    const primaryAttempt = yield* this.runAttempt(prompt, cwd, options, config, primaryModel);
 
+    if (
+      !primaryAttempt.success &&
+      !primaryAttempt.emittedAssistant &&
+      fallbackModel &&
+      fallbackModel !== primaryModel &&
+      (primaryAttempt.failureKind === 'rate_limit' || primaryAttempt.failureKind === 'model_access')
+    ) {
+      yield {
+        type: 'system',
+        content:
+          `⚠️  copilot: primary model "${primaryModel ?? 'configured default'}" failed ` +
+          `due to ${primaryAttempt.failureKind === 'rate_limit' ? 'a rate limit' : 'model access'}. ` +
+          `Retrying with fallback model "${fallbackModel}".`,
+      };
+      yield* this.runAttempt(prompt, cwd, options, config, fallbackModel);
+    }
+  }
+
+  private async *runAttempt(
+    prompt: string,
+    cwd: string,
+    options: SendQueryOptions | undefined,
+    config: ReturnType<typeof parseCopilotConfig>,
+    modelOverride?: string
+  ): AsyncGenerator<MessageChunk, CopilotAttemptResult> {
     const argv = buildCopilotArgs({
       prompt,
-      modelOverride: options?.model,
+      modelOverride,
       config,
       nodeConfig: options?.nodeConfig,
     });
 
-    // Security warnings for broad permission flags — inspect final argv so
-    // extraArgs cannot silently bypass the provider's safety notice.
     if (argv.includes('--allow-all') || argv.includes('--yolo')) {
       yield {
         type: 'system',
@@ -241,14 +292,10 @@ export class CopilotProvider implements IAgentProvider {
     try {
       const binary = resolveCopilotBinaryPath(config.copilotBinaryPath);
       spawnCommand = buildSpawnCommand(binary, argv);
-
-      // Log args with prompt redacted for safety
       getLog().info(
         { binary: spawnCommand.command, argc: spawnCommand.args.length },
         'copilot.spawn'
       );
-
-      // ── Spawn ──────────────────────────────────────────────────────────────
       child = spawn(spawnCommand.command, spawnCommand.args, {
         cwd,
         env,
@@ -263,16 +310,20 @@ export class CopilotProvider implements IAgentProvider {
         errorSubtype: 'copilot_cli_exit',
         errors: [message],
       };
-      return;
+      return {
+        success: false,
+        emittedAssistant: false,
+        failureKind: classifyCopilotFailure([message]),
+      };
     }
 
     const firstEventTimeoutMs = config.firstEventTimeoutMs ?? DEFAULT_FIRST_EVENT_TIMEOUT_MS;
     const processTimeoutMs = config.processTimeoutMs ?? DEFAULT_PROCESS_TIMEOUT_MS;
     const abortSignal = options?.abortSignal;
-
     const { push, next } = makeEventQueue();
     let processExited = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let emittedAssistant = false;
 
     const clearKillTimer = (): void => {
       if (killTimer) {
@@ -281,7 +332,6 @@ export class CopilotProvider implements IAgentProvider {
       }
     };
 
-    // Helper: kill the child process with a SIGTERM → SIGKILL escalation
     const killProcess = (reason: string): void => {
       if (!processExited) {
         clearKillTimer();
@@ -299,17 +349,20 @@ export class CopilotProvider implements IAgentProvider {
     if (!stdout || !stderr) {
       killProcess('missing_stdio_pipe');
       clearKillTimer();
+      const errors = ['Copilot CLI did not expose stdout/stderr pipes.'];
       yield {
         type: 'result',
         isError: true,
         errorSubtype: 'copilot_cli_exit',
-        errors: ['Copilot CLI did not expose stdout/stderr pipes.'],
+        errors,
       };
-      return;
+      return {
+        success: false,
+        emittedAssistant: false,
+        failureKind: classifyCopilotFailure(errors),
+      };
     }
 
-    // Abort signal handler — pushes an explicit abort event so the consumer
-    // sees it even if it's currently blocked in `next()`.
     const onAbort = (): void => {
       killProcess('abort_signal');
       push({ kind: 'abort' });
@@ -323,16 +376,13 @@ export class CopilotProvider implements IAgentProvider {
       }
     }
 
-    // ── Producers ─────────────────────────────────────────────────────────
     let firstOutputSeen = false;
     const markFirstOutput = (): void => {
       firstOutputSeen = true;
     };
 
-    // stdout producer
     pipeLinesToQueue(stdout, 'stdout', push, markFirstOutput);
 
-    // stderr producer
     const stderrLines: string[] = [];
     pipeLinesToQueue(
       stderr,
@@ -344,7 +394,6 @@ export class CopilotProvider implements IAgentProvider {
       markFirstOutput
     );
 
-    // close producer — waits until stdio streams are closed, preserving final buffered output.
     child.once('close', (code, signal) => {
       processExited = true;
       clearKillTimer();
@@ -354,9 +403,7 @@ export class CopilotProvider implements IAgentProvider {
       push({ kind: 'error', err });
     });
 
-    // ── Timeout producers ─────────────────────────────────────────────────
     const timers: ReturnType<typeof setTimeout>[] = [];
-
     const firstEventTimer = setTimeout(() => {
       if (!firstOutputSeen) {
         push({ kind: 'timeout', reason: 'first_event' });
@@ -373,7 +420,6 @@ export class CopilotProvider implements IAgentProvider {
       for (const t of timers) clearTimeout(t);
     };
 
-    // ── Consumer loop ──────────────────────────────────────────────────────
     try {
       let done = false;
 
@@ -384,6 +430,7 @@ export class CopilotProvider implements IAgentProvider {
           case 'stdout': {
             const line = event.line.trimEnd();
             if (line.length > 0) {
+              emittedAssistant = true;
               yield { type: 'assistant', content: line };
             }
             break;
@@ -399,14 +446,18 @@ export class CopilotProvider implements IAgentProvider {
 
           case 'error': {
             getLog().error({ err: event.err.message }, 'copilot.stream_error');
+            const errors = [event.err.message];
             yield {
               type: 'result',
               isError: true,
               errorSubtype: 'copilot_cli_exit',
-              errors: [event.err.message],
+              errors,
             };
-            done = true;
-            break;
+            return {
+              success: false,
+              emittedAssistant,
+              failureKind: classifyCopilotFailure(errors),
+            };
           }
 
           case 'exit': {
@@ -415,20 +466,25 @@ export class CopilotProvider implements IAgentProvider {
 
             if (code === 0) {
               yield { type: 'result' };
-            } else {
-              const exitMsg =
-                signal != null
-                  ? `Copilot CLI was killed by signal ${signal}`
-                  : `Copilot CLI exited with code ${code ?? 'unknown'}`;
-              yield {
-                type: 'result',
-                isError: true,
-                errorSubtype: 'copilot_cli_exit',
-                errors: [exitMsg, ...stderrLines.filter(l => l.trim().length > 0)],
-              };
+              return { success: true, emittedAssistant };
             }
-            done = true;
-            break;
+
+            const exitMsg =
+              signal != null
+                ? `Copilot CLI was killed by signal ${signal}`
+                : `Copilot CLI exited with code ${code ?? 'unknown'}`;
+            const errors = [exitMsg, ...stderrLines.filter(l => l.trim().length > 0)];
+            yield {
+              type: 'result',
+              isError: true,
+              errorSubtype: 'copilot_cli_exit',
+              errors,
+            };
+            return {
+              success: false,
+              emittedAssistant,
+              failureKind: classifyCopilotFailure(errors),
+            };
           }
 
           case 'timeout': {
@@ -440,29 +496,39 @@ export class CopilotProvider implements IAgentProvider {
                   'Check that the copilot binary is installed and authenticated.'
                 : `Copilot CLI exceeded the process timeout of ${processTimeoutMs}ms and was killed.`;
             getLog().error({ reason, firstEventTimeoutMs, processTimeoutMs }, 'copilot.timeout');
+            const errors = [errMsg];
             yield {
               type: 'result',
               isError: true,
               errorSubtype: 'copilot_cli_exit',
-              errors: [errMsg],
+              errors,
             };
-            done = true;
-            break;
+            return {
+              success: false,
+              emittedAssistant,
+              failureKind: classifyCopilotFailure(errors),
+            };
           }
 
           case 'abort': {
             getLog().info({}, 'copilot.aborted');
+            const errors = ['Copilot CLI query was aborted.'];
             yield {
               type: 'result',
               isError: true,
               errorSubtype: 'copilot_cli_exit',
-              errors: ['Copilot CLI query was aborted.'],
+              errors,
             };
-            done = true;
-            break;
+            return {
+              success: false,
+              emittedAssistant,
+              failureKind: classifyCopilotFailure(errors),
+            };
           }
         }
       }
+
+      return { success: false, emittedAssistant, failureKind: 'unknown' };
     } finally {
       clearTimers();
       clearKillTimer();

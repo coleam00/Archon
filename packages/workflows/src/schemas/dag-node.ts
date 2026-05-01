@@ -346,11 +346,11 @@ export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
 
 /**
  * AI-specific fields that are unsupported on loop nodes.
- * `model` and `provider` are excluded because the DAG executor resolves and
+ * `model`, `provider`, and `fallbackModel` are excluded because the DAG executor resolves and
  * forwards them to each iteration's AI call (see dag-executor.ts:2602-2648).
  */
 export const LOOP_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS.filter(
-  f => f !== 'model' && f !== 'provider'
+  f => f !== 'model' && f !== 'provider' && f !== 'fallbackModel'
 );
 
 // ---------------------------------------------------------------------------

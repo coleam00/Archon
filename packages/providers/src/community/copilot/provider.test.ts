@@ -557,12 +557,14 @@ class FakeChildProcess extends EventEmitter {
 
 /** The spawn call arguments for the last invocation. */
 let lastSpawnArgs: string[] = [];
+let spawnArgHistory: string[][] = [];
 
 // Intercept node:child_process spawn
 mock.module('node:child_process', () => ({
   spawn: mock((binary: string, args: string[]) => {
     void binary;
     lastSpawnArgs = args;
+    spawnArgHistory.push(args);
     const child = new FakeChildProcess();
     // Schedule start asynchronously so the provider can attach listeners first
     Promise.resolve().then(() => child.start());
@@ -577,6 +579,7 @@ mock.module('node:child_process', () => ({
 describe('CopilotProvider.sendQuery', () => {
   beforeEach(() => {
     lastSpawnArgs = [];
+    spawnArgHistory = [];
     delete process.env.COPILOT_BIN_PATH;
   });
 
@@ -598,12 +601,13 @@ describe('CopilotProvider.sendQuery', () => {
 
     const spawnMod = await import('node:child_process');
     (spawnMod.spawn as ReturnType<typeof mock>).mockImplementationOnce(
-      (binary: string, args: string[]) => {
-        void binary;
-        lastSpawnArgs = args;
-        Promise.resolve().then(() => fake.start());
-        return fake as unknown as ChildProcess;
-      }
+        (binary: string, args: string[]) => {
+          void binary;
+          lastSpawnArgs = args;
+          spawnArgHistory.push(args);
+          Promise.resolve().then(() => fake.start());
+          return fake as unknown as ChildProcess;
+        }
     );
 
     const chunks = await collect(
@@ -1097,5 +1101,80 @@ describe('CopilotProvider.sendQuery', () => {
     expect(caps.sessionResume).toBe(false);
     expect(caps.mcp).toBe(false);
     expect(caps.structuredOutput).toBe(false);
+    expect(caps.fallbackModel).toBe(true);
+  });
+
+  test('retries with fallbackModel on rate-limit failure before assistant output', async () => {
+    const first = new FakeChildProcess();
+    first.scheduleStderr('Error: rate limit exceeded\n', 5);
+    first.scheduleExit(1, null, 20);
+
+    const second = new FakeChildProcess();
+    second.scheduleStdout('Recovered with fallback\n', 5);
+    second.scheduleExit(0, null, 20);
+
+    const spawnMod = await import('node:child_process');
+    (spawnMod.spawn as ReturnType<typeof mock>)
+      .mockImplementationOnce((_b: string, args: string[]) => {
+        lastSpawnArgs = args;
+        spawnArgHistory.push(args);
+        Promise.resolve().then(() => first.start());
+        return first as unknown as ChildProcess;
+      })
+      .mockImplementationOnce((_b: string, args: string[]) => {
+        lastSpawnArgs = args;
+        spawnArgHistory.push(args);
+        Promise.resolve().then(() => second.start());
+        return second as unknown as ChildProcess;
+      });
+
+    const provider = await createProvider();
+    const chunks = await collect(
+      provider.sendQuery('test', '/tmp', undefined, {
+        model: 'claude-haiku-4.5',
+        fallbackModel: 'gpt-5-mini',
+      })
+    );
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant') as Array<{
+      type: 'assistant';
+      content: string;
+    }>;
+    const systemChunks = chunks.filter(c => c.type === 'system') as SystemChunk[];
+    const resultChunk = chunks.findLast(c => c.type === 'result') as ResultChunk | undefined;
+
+    expect(spawnArgHistory).toHaveLength(2);
+    expect(spawnArgHistory[0]).toContain('--model=claude-haiku-4.5');
+    expect(spawnArgHistory[1]).toContain('--model=gpt-5-mini');
+    expect(systemChunks.some(c => c.content.includes('Retrying with fallback model "gpt-5-mini"'))).toBe(true);
+    expect(assistantChunks.map(c => c.content)).toContain('Recovered with fallback');
+    expect(resultChunk?.isError).toBeUndefined();
+  });
+
+  test('does not retry fallback after assistant output has already started', async () => {
+    const first = new FakeChildProcess();
+    first.scheduleStdout('Partial output\n', 5);
+    first.scheduleStderr('Error: rate limit exceeded\n', 10);
+    first.scheduleExit(1, null, 20);
+
+    const spawnMod = await import('node:child_process');
+    (spawnMod.spawn as ReturnType<typeof mock>).mockImplementationOnce((_b: string, args: string[]) => {
+      lastSpawnArgs = args;
+      spawnArgHistory.push(args);
+      Promise.resolve().then(() => first.start());
+      return first as unknown as ChildProcess;
+    });
+
+    const provider = await createProvider();
+    const chunks = await collect(
+      provider.sendQuery('test', '/tmp', undefined, {
+        model: 'claude-haiku-4.5',
+        fallbackModel: 'gpt-5-mini',
+      })
+    );
+
+    const resultChunk = chunks.findLast(c => c.type === 'result') as ResultChunk | undefined;
+    expect(spawnArgHistory).toHaveLength(1);
+    expect(resultChunk?.isError).toBe(true);
   });
 });

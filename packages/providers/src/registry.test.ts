@@ -297,7 +297,7 @@ describe('registry', () => {
       expect(caps.costControl).toBe(false);
       expect(caps.effortControl).toBe(false);
       expect(caps.thinkingControl).toBe(false);
-      expect(caps.fallbackModel).toBe(false);
+      expect(caps.fallbackModel).toBe(true);
       expect(caps.sandbox).toBe(false);
     });
 

@@ -19,7 +19,7 @@ import type { ProviderCapabilities } from '../../types';
  * costControl:   false — no token budget API in the CLI.
  * effortControl: false — no reasoning-effort flag in v1.
  * thinkingControl: false — no thinking-level flag in v1.
- * fallbackModel: false — not wired.
+ * fallbackModel: true  — retries once with fallbackModel on rate-limit/model-access failures.
  * sandbox:       false — not wired.
  */
 export const COPILOT_CAPABILITIES: ProviderCapabilities = {
@@ -34,6 +34,6 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   costControl: false,
   effortControl: false,
   thinkingControl: false,
-  fallbackModel: false,
+  fallbackModel: true,
   sandbox: false,
 };

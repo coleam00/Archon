@@ -1689,6 +1689,7 @@ async function executeScriptNode(
 function buildLoopNodeOptions(
   provider: string,
   model: string | undefined,
+  node: LoopNode,
   config: WorkflowConfig,
   workflowLevelOptions?: WorkflowLevelOptions
 ): SendQueryOptions {
@@ -1705,7 +1706,7 @@ function buildLoopNodeOptions(
       thinking: workflowLevelOptions.thinking,
       sandbox: workflowLevelOptions.sandbox,
       betas: workflowLevelOptions.betas,
-      fallbackModel: workflowLevelOptions.fallbackModel,
+      fallbackModel: node.fallbackModel ?? workflowLevelOptions.fallbackModel,
     };
   }
   return options;
@@ -1791,6 +1792,7 @@ async function executeLoopNode(
   const resolvedOptions = buildLoopNodeOptions(
     workflowProvider,
     workflowModel,
+    node,
     config,
     workflowLevelOptions
   );
