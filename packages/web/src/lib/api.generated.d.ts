@@ -2503,6 +2503,503 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/agents/_template': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read the scaffold template (auto-bootstraps if missing) */
+    get: {
+      parameters: {
+        query?: {
+          cwd?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AgentTemplateResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    /** Save the scaffold template (writes to project location) */
+    put: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SaveAgentTemplateBody'];
+        };
+      };
+      responses: {
+        /** @description Saved */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['SaveAgentTemplateResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agents': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List discovered agents (global + project) */
+    get: {
+      parameters: {
+        query?: {
+          cwd?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AgentListResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    /** Create a new agent (seeded from the scaffold template) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CreateAgentBody'];
+        };
+      };
+      responses: {
+        /** @description Created */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AgentDetail'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Agent already exists */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agents/{name}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Fetch a single agent (frontmatter, body) */
+    get: {
+      parameters: {
+        query?: {
+          cwd?: string;
+          source?: 'global' | 'project';
+        };
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Agent detail */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AgentDetail'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    /** Save (overwrite) an existing agent file */
+    put: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SaveAgentBody'];
+        };
+      };
+      responses: {
+        /** @description Saved */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AgentDetail'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    post?: never;
+    /** Delete an agent file */
+    delete: {
+      parameters: {
+        query?: {
+          cwd?: string;
+          source?: 'global' | 'project';
+        };
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Deleted */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['DeleteAgentResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agents/{name}/validate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Smoke-validate an agent definition by running a one-turn query */
+    post: {
+      parameters: {
+        query?: {
+          cwd?: string;
+          source?: 'global' | 'project';
+        };
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Validation report */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ValidateAgentResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/agents/{name}/chat': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** One-shot chat with an agent (no session, no streaming) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          name: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['AgentChatBody'];
+        };
+      };
+      responses: {
+        /** @description Reply */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AgentChatResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/config': {
     parameters: {
       query?: never;
@@ -3472,6 +3969,7 @@ export interface components {
           maxTurns?: number;
         };
       };
+      agent_ref?: string;
       /** @enum {string} */
       effort?: 'low' | 'medium' | 'high' | 'max';
       thinking?:
@@ -3824,6 +4322,98 @@ export interface components {
     };
     SkillFileListResponse: {
       files: components['schemas']['SkillFileNode'][];
+    };
+    AgentTemplateResponse: {
+      content: string;
+      path: string;
+      /** @enum {string} */
+      source: 'project' | 'global';
+      preExisting: boolean;
+    };
+    SaveAgentTemplateResponse: {
+      path: string;
+      /** @enum {string} */
+      source: 'project' | 'global';
+    };
+    SaveAgentTemplateBody: {
+      content: string;
+      cwd?: string;
+    };
+    /** @enum {string} */
+    AgentSource: 'global' | 'project';
+    /** @enum {string} */
+    AgentStatus: 'active' | 'draft' | 'archived';
+    AgentSummary: {
+      name: string;
+      description: string;
+      source: components['schemas']['AgentSource'];
+      path: string;
+      isSymlink: boolean;
+      realPath: string | null;
+      mtime: string;
+      status: components['schemas']['AgentStatus'];
+      model: string | null;
+      skillCount: number;
+      toolCount: number;
+      parseError: string | null;
+    };
+    AgentLoadError: {
+      name: string;
+      source: components['schemas']['AgentSource'];
+      path: string;
+      error: string;
+    };
+    AgentListResponse: {
+      agents: components['schemas']['AgentSummary'][];
+      errors?: components['schemas']['AgentLoadError'][];
+    };
+    AgentDetail: components['schemas']['AgentSummary'] & {
+      frontmatter: {
+        [key: string]: unknown;
+      };
+      body: string;
+    };
+    CreateAgentBody: {
+      name: string;
+      source: components['schemas']['AgentSource'];
+      description: string;
+      cwd?: string;
+    };
+    SaveAgentBody: {
+      source: components['schemas']['AgentSource'];
+      cwd?: string;
+      frontmatter: {
+        [key: string]: unknown;
+      };
+      body: string;
+    };
+    DeleteAgentResponse: {
+      deleted: boolean;
+      name: string;
+    };
+    ValidateMcpServer: {
+      name: string;
+      status: string;
+    };
+    ValidateAgentResponse: {
+      ok: boolean;
+      model: string | null;
+      activeTools: string[];
+      mcpServers: components['schemas']['ValidateMcpServer'][];
+      skillsLoaded: string[];
+      missingEnvVars: string[];
+      warnings: string[];
+      errors: string[];
+      sampleReply: string | null;
+      costUsd: number | null;
+    };
+    AgentChatResponse: {
+      reply: string;
+    };
+    AgentChatBody: {
+      source: components['schemas']['AgentSource'];
+      cwd?: string;
+      message: string;
     };
     ProviderDefaults: {
       [key: string]: unknown;

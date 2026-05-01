@@ -112,6 +112,22 @@ import {
   SkillPathTraversalError,
 } from '@archon/core/skills/types';
 import {
+  agentListResponseSchema,
+  agentDetailSchema,
+  createAgentBodySchema,
+  saveAgentBodySchema,
+  deleteAgentResponseSchema,
+  validateAgentResponseSchema,
+  agentTemplateResponseSchema,
+  saveAgentTemplateBodySchema,
+  saveAgentTemplateResponseSchema,
+  agentChatBodySchema,
+  agentChatResponseSchema,
+} from './schemas/agent.schemas';
+import * as agentsCore from '@archon/core/agents';
+import { AgentFrontmatterError, AgentNameError } from '@archon/core/agents/types';
+import { validateAgentSmoke, parseClaudeConfig } from '@archon/providers';
+import {
   conversationListResponseSchema,
   listConversationsQuerySchema,
   conversationIdParamsSchema,
@@ -474,6 +490,185 @@ const getSkillFilesRoute = createRoute({
     200: {
       content: { 'application/json': { schema: skillFileListResponseSchema } },
       description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+// =========================================================================
+// Agent registry route configs
+// =========================================================================
+
+const agentSourceQuerySchema = z.object({
+  cwd: z.string().optional(),
+  source: z.enum(['global', 'project']).optional(),
+});
+
+const getAgentsRoute = createRoute({
+  method: 'get',
+  path: '/api/agents',
+  tags: ['Agents'],
+  summary: 'List discovered agents (global + project)',
+  request: { query: cwdQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: agentListResponseSchema } },
+      description: 'OK',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const getAgentTemplateRoute = createRoute({
+  method: 'get',
+  path: '/api/agents/_template',
+  tags: ['Agents'],
+  summary: 'Read the scaffold template (auto-bootstraps if missing)',
+  request: { query: cwdQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: agentTemplateResponseSchema } },
+      description: 'OK',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
+const saveAgentTemplateRoute = createRoute({
+  method: 'put',
+  path: '/api/agents/_template',
+  tags: ['Agents'],
+  summary: 'Save the scaffold template (writes to project location)',
+  request: {
+    body: {
+      content: { 'application/json': { schema: saveAgentTemplateBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: saveAgentTemplateResponseSchema } },
+      description: 'Saved',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getAgentRoute = createRoute({
+  method: 'get',
+  path: '/api/agents/{name}',
+  tags: ['Agents'],
+  summary: 'Fetch a single agent (frontmatter, body)',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: agentSourceQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: agentDetailSchema } },
+      description: 'Agent detail',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const createAgentRoute = createRoute({
+  method: 'post',
+  path: '/api/agents',
+  tags: ['Agents'],
+  summary: 'Create a new agent (seeded from the scaffold template)',
+  request: {
+    body: { content: { 'application/json': { schema: createAgentBodySchema } }, required: true },
+  },
+  responses: {
+    201: {
+      content: { 'application/json': { schema: agentDetailSchema } },
+      description: 'Created',
+    },
+    400: jsonError('Bad request'),
+    409: jsonError('Agent already exists'),
+    500: jsonError('Server error'),
+  },
+});
+
+const saveAgentRoute = createRoute({
+  method: 'put',
+  path: '/api/agents/{name}',
+  tags: ['Agents'],
+  summary: 'Save (overwrite) an existing agent file',
+  request: {
+    params: z.object({ name: z.string() }),
+    body: { content: { 'application/json': { schema: saveAgentBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: agentDetailSchema } },
+      description: 'Saved',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const deleteAgentRoute = createRoute({
+  method: 'delete',
+  path: '/api/agents/{name}',
+  tags: ['Agents'],
+  summary: 'Delete an agent file',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: agentSourceQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: deleteAgentResponseSchema } },
+      description: 'Deleted',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const validateAgentRoute = createRoute({
+  method: 'post',
+  path: '/api/agents/{name}/validate',
+  tags: ['Agents'],
+  summary: 'Smoke-validate an agent definition by running a one-turn query',
+  request: {
+    params: z.object({ name: z.string() }),
+    query: agentSourceQuerySchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: validateAgentResponseSchema } },
+      description: 'Validation report',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const agentChatRoute = createRoute({
+  method: 'post',
+  path: '/api/agents/{name}/chat',
+  tags: ['Agents'],
+  summary: 'One-shot chat with an agent (no session, no streaming)',
+  request: {
+    params: z.object({ name: z.string() }),
+    body: { content: { 'application/json': { schema: agentChatBodySchema } }, required: true },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: agentChatResponseSchema } },
+      description: 'Reply',
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
@@ -3400,6 +3595,350 @@ export function registerApiRoutes(
         getLog().error({ err, name, source: sourceParam, relPath }, 'skills.file_delete_failed');
       return apiError(c, status, message);
     }
+  });
+
+  // =========================================================================
+  // Agent registry endpoints
+  //
+  // Agents live in `~/.claude/agents/<name>.md` (global) and
+  // `<cwd>/.claude/agents/<name>.md` (project). Each agent is a single .md
+  // file with YAML frontmatter (name, description required) plus a markdown
+  // body that becomes the agent's system prompt. Edits write directly to
+  // disk so Claude Code subagent invocation and archon workflow agent_ref
+  // resolution pick them up automatically.
+  // =========================================================================
+
+  /** Resolve `cwd` for agent operations: query/body cwd > first codebase > $HOME. */
+  async function resolveAgentCwd(suppliedCwd: string | undefined): Promise<string> {
+    if (suppliedCwd) {
+      if (!(await validateCwd(suppliedCwd))) {
+        throw new Error('Invalid cwd: must match a registered codebase path');
+      }
+      return suppliedCwd;
+    }
+    const codebases = await codebaseDb.listCodebases();
+    if (codebases.length > 0) return codebases[0].default_cwd;
+    return getArchonHome();
+  }
+
+  /** Map agent-domain errors to HTTP status. */
+  function agentErrorToStatus(err: unknown): { status: 400 | 404 | 500; message: string } {
+    if (err instanceof AgentNameError) return { status: 400, message: err.message };
+    if (err instanceof AgentFrontmatterError) return { status: 400, message: err.message };
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT') return { status: 404, message: 'Agent not found' };
+    if (code === 'EEXIST') return { status: 400, message: 'Already exists' };
+    const msg = err instanceof Error ? err.message : 'Internal error';
+    return { status: 500, message: msg };
+  }
+
+  // GET /api/agents/_template - read the scaffold template (must be registered
+  // BEFORE GET /api/agents/{name} so the literal '_template' path matches first).
+  registerOpenApiRoute(getAgentTemplateRoute, async c => {
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(c.req.query('cwd'));
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const { content, location } = await agentsCore.readScaffoldTemplate(workingDir);
+      return c.json({
+        content,
+        path: location.path,
+        source: location.source,
+        preExisting: location.preExisting,
+      });
+    } catch (err) {
+      getLog().error({ err, workingDir }, 'agents.template_read_failed');
+      return apiError(c, 500, 'Failed to read agent template');
+    }
+  });
+
+  // PUT /api/agents/_template
+  registerOpenApiRoute(saveAgentTemplateRoute, async c => {
+    const body = getValidatedBody(c, saveAgentTemplateBodySchema);
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(body.cwd);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const location = await agentsCore.writeScaffoldTemplate(workingDir, body.content);
+      return c.json({ path: location.path, source: location.source });
+    } catch (err) {
+      getLog().error({ err, workingDir }, 'agents.template_save_failed');
+      return apiError(c, 500, 'Failed to save agent template');
+    }
+  });
+
+  // GET /api/agents - list discovered agents
+  registerOpenApiRoute(getAgentsRoute, async c => {
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(c.req.query('cwd'));
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const result = await agentsCore.discoverAgents(workingDir);
+      return c.json({
+        agents: result.agents,
+        errors: result.errors.length > 0 ? result.errors : undefined,
+      });
+    } catch (err) {
+      getLog().error({ err, workingDir }, 'agents.list_failed');
+      return apiError(c, 500, 'Failed to list agents');
+    }
+  });
+
+  // GET /api/agents/:name - fetch a single agent
+  registerOpenApiRoute(getAgentRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid agent name');
+    }
+    const source = (c.req.query('source') ?? 'project') as 'global' | 'project';
+    if (source !== 'global' && source !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(c.req.query('cwd'));
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const detail = await agentsCore.readAgent(name, source, workingDir);
+      return c.json(detail);
+    } catch (err) {
+      const { status, message } = agentErrorToStatus(err);
+      if (status === 500) getLog().error({ err, name, source }, 'agents.read_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // POST /api/agents - create from scaffold template
+  registerOpenApiRoute(createAgentRoute, async c => {
+    const body = getValidatedBody(c, createAgentBodySchema);
+    if (!isValidCommandName(body.name)) {
+      return apiError(c, 400, 'Invalid agent name');
+    }
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(body.cwd);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const { content: tplContent } = await agentsCore.readScaffoldTemplate(workingDir);
+      const seeded = agentsCore.renderScaffold(tplContent, {
+        name: body.name,
+        description: body.description,
+      });
+      const parsed = agentsCore.parseAgentMd(seeded);
+      const detail = await agentsCore.createAgent(
+        body.name,
+        body.source,
+        workingDir,
+        { ...parsed.frontmatter, name: body.name, description: body.description },
+        parsed.body
+      );
+      return c.json(detail, 201);
+    } catch (err) {
+      const { status, message } = agentErrorToStatus(err);
+      if (status === 500)
+        getLog().error({ err, name: body.name, source: body.source }, 'agents.create_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // PUT /api/agents/:name - save (overwrite)
+  registerOpenApiRoute(saveAgentRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid agent name');
+    }
+    const body = getValidatedBody(c, saveAgentBodySchema);
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(body.cwd);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      const detail = await agentsCore.writeAgent(
+        name,
+        body.source,
+        workingDir,
+        body.frontmatter,
+        body.body
+      );
+      return c.json(detail);
+    } catch (err) {
+      const { status, message } = agentErrorToStatus(err);
+      if (status === 500) getLog().error({ err, name, source: body.source }, 'agents.save_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // DELETE /api/agents/:name
+  registerOpenApiRoute(deleteAgentRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid agent name');
+    }
+    const source = (c.req.query('source') ?? 'project') as 'global' | 'project';
+    if (source !== 'global' && source !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(c.req.query('cwd'));
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+    try {
+      await agentsCore.deleteAgent(name, source, workingDir);
+      return c.json({ deleted: true, name });
+    } catch (err) {
+      const { status, message } = agentErrorToStatus(err);
+      if (status === 500) getLog().error({ err, name, source }, 'agents.delete_failed');
+      return apiError(c, status, message);
+    }
+  });
+
+  // POST /api/agents/:name/validate - run a smoke validation query
+  registerOpenApiRoute(validateAgentRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid agent name');
+    }
+    const source = (c.req.query('source') ?? 'project') as 'global' | 'project';
+    if (source !== 'global' && source !== 'project') {
+      return apiError(c, 400, "source must be 'global' or 'project'");
+    }
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(c.req.query('cwd'));
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+
+    let detail: agentsCore.AgentDetail;
+    try {
+      detail = await agentsCore.readAgent(name, source, workingDir);
+    } catch (err) {
+      const { status, message } = agentErrorToStatus(err);
+      return apiError(c, status, message);
+    }
+
+    if (detail.parseError) {
+      return c.json({
+        ok: false,
+        model: null,
+        activeTools: [],
+        mcpServers: [],
+        skillsLoaded: [],
+        missingEnvVars: [],
+        warnings: [],
+        errors: [detail.parseError],
+        sampleReply: null,
+        costUsd: null,
+      });
+    }
+
+    const fm = detail.frontmatter;
+    const claudeBinaryPath = ((): string | undefined => {
+      const cfg = parseClaudeConfig({});
+      return cfg.claudeBinaryPath;
+    })();
+    const result = await validateAgentSmoke(
+      workingDir,
+      {
+        name: detail.name,
+        model: typeof fm.model === 'string' ? fm.model : null,
+        ...(Array.isArray(fm.tools)
+          ? { tools: (fm.tools as unknown[]).filter((x): x is string => typeof x === 'string') }
+          : {}),
+        ...(Array.isArray(fm.disallowedTools)
+          ? {
+              disallowedTools: (fm.disallowedTools as unknown[]).filter(
+                (x): x is string => typeof x === 'string'
+              ),
+            }
+          : {}),
+        ...(typeof fm.mcp === 'string' ? { mcp: fm.mcp } : {}),
+        ...(Array.isArray(fm.skills)
+          ? { skills: (fm.skills as unknown[]).filter((x): x is string => typeof x === 'string') }
+          : {}),
+        ...(typeof fm.max_turns === 'number' ? { maxTurns: fm.max_turns } : {}),
+      },
+      detail.body,
+      claudeBinaryPath
+    );
+    return c.json(result);
+  });
+
+  // POST /api/agents/:name/chat - one-shot chat for the editor preview
+  registerOpenApiRoute(agentChatRoute, async c => {
+    const name = c.req.param('name') ?? '';
+    if (!isValidCommandName(name)) {
+      return apiError(c, 400, 'Invalid agent name');
+    }
+    const body = getValidatedBody(c, agentChatBodySchema);
+    let workingDir: string;
+    try {
+      workingDir = await resolveAgentCwd(body.cwd);
+    } catch (err) {
+      return apiError(c, 400, (err as Error).message);
+    }
+
+    let detail: agentsCore.AgentDetail;
+    try {
+      detail = await agentsCore.readAgent(name, body.source, workingDir);
+    } catch (err) {
+      const { status, message } = agentErrorToStatus(err);
+      return apiError(c, status, message);
+    }
+
+    // Build a minimal directive prefix from identity knobs so the user can
+    // see tone/length changes reflected in the preview.
+    const identity = (detail.frontmatter.identity ?? {}) as Record<string, unknown>;
+    const directives: string[] = [];
+    if (typeof identity.responseLength === 'string') {
+      const len = identity.responseLength.toLowerCase();
+      if (len === 'concise') directives.push('Reply concisely (1-3 sentences).');
+      else if (len === 'detailed') directives.push('Reply with a thorough answer.');
+    }
+    if (typeof identity.tone === 'string') {
+      directives.push(`Tone: ${identity.tone}.`);
+    }
+    if (typeof identity.emoji === 'string') {
+      const e = identity.emoji.toLowerCase();
+      if (e === 'none') directives.push('Do not use emoji.');
+      else if (e === 'often') directives.push('Use emojis throughout the reply.');
+    }
+    const systemPrompt = detail.body + (directives.length > 0 ? `\n\n${directives.join(' ')}` : '');
+
+    const claudeBinaryPath = ((): string | undefined => {
+      const cfg = parseClaudeConfig({});
+      return cfg.claudeBinaryPath;
+    })();
+    const result = await validateAgentSmoke(
+      workingDir,
+      {
+        name: detail.name,
+        model: typeof detail.frontmatter.model === 'string' ? detail.frontmatter.model : null,
+      },
+      systemPrompt,
+      { prompt: body.message, ...(claudeBinaryPath ? { claudeBinaryPath } : {}) }
+    );
+    if (!result.ok) {
+      return c.json({ reply: `(preview unavailable: ${result.errors.join('; ')})` });
+    }
+    return c.json({ reply: result.sampleReply ?? '(no reply)' });
   });
 
   // GET /api/artifacts/:runId - Directory manifest of all artifact files for a run

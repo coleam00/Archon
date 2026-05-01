@@ -910,3 +910,118 @@ export async function deleteSkillFile(
     throw new Error(`API error ${String(res.status)} (${url}): ${body.slice(0, 200)}`);
   }
 }
+
+// =============================================================================
+// Agent registry — Claude Agent SDK agent management
+// =============================================================================
+
+export type AgentSource = components['schemas']['AgentSource'];
+export type AgentStatus = components['schemas']['AgentStatus'];
+export type AgentSummary = components['schemas']['AgentSummary'];
+export type AgentDetail = components['schemas']['AgentDetail'];
+export type ValidateAgentResponse = components['schemas']['ValidateAgentResponse'];
+export type AgentTemplateResponse = components['schemas']['AgentTemplateResponse'];
+
+export interface AgentListResponse {
+  agents: AgentSummary[];
+  errors?: { name: string; source: AgentSource; path: string; error: string }[];
+}
+
+export async function listAgents(cwd?: string): Promise<AgentListResponse> {
+  const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+  return fetchJSON<AgentListResponse>(`/api/agents${params}`);
+}
+
+export async function getAgent(
+  name: string,
+  source: AgentSource,
+  cwd?: string
+): Promise<AgentDetail> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  return fetchJSON<AgentDetail>(`/api/agents/${encodeURIComponent(name)}?${sp.toString()}`);
+}
+
+export interface CreateAgentInput {
+  name: string;
+  source: AgentSource;
+  description: string;
+  cwd?: string;
+}
+
+export async function createAgent(input: CreateAgentInput): Promise<AgentDetail> {
+  return fetchJSON<AgentDetail>('/api/agents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export interface SaveAgentInput {
+  source: AgentSource;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  cwd?: string;
+}
+
+export async function saveAgent(name: string, input: SaveAgentInput): Promise<AgentDetail> {
+  return fetchJSON<AgentDetail>(`/api/agents/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteAgent(
+  name: string,
+  source: AgentSource,
+  cwd?: string
+): Promise<{ deleted: boolean; name: string }> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  return fetchJSON(`/api/agents/${encodeURIComponent(name)}?${sp.toString()}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function validateAgent(
+  name: string,
+  source: AgentSource,
+  cwd?: string
+): Promise<ValidateAgentResponse> {
+  const sp = new URLSearchParams({ source });
+  if (cwd) sp.set('cwd', cwd);
+  return fetchJSON<ValidateAgentResponse>(
+    `/api/agents/${encodeURIComponent(name)}/validate?${sp.toString()}`,
+    { method: 'POST' }
+  );
+}
+
+export async function chatWithAgent(
+  name: string,
+  source: AgentSource,
+  message: string,
+  cwd?: string
+): Promise<{ reply: string }> {
+  return fetchJSON<{ reply: string }>(`/api/agents/${encodeURIComponent(name)}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, message, ...(cwd ? { cwd } : {}) }),
+  });
+}
+
+export async function getAgentTemplate(cwd?: string): Promise<AgentTemplateResponse> {
+  const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+  return fetchJSON<AgentTemplateResponse>(`/api/agents/_template${params}`);
+}
+
+export async function saveAgentTemplate(
+  content: string,
+  cwd?: string
+): Promise<{ path: string; source: 'project' | 'global' }> {
+  return fetchJSON('/api/agents/_template', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, ...(cwd ? { cwd } : {}) }),
+  });
+}

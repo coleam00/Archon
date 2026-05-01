@@ -405,6 +405,23 @@ export async function validateWorkflowResources(
       }
     }
 
+    // --- agent_ref: hard-fail if the referenced agent file is missing ---
+    if ('agent_ref' in node && typeof node.agent_ref === 'string') {
+      const projectAgentPath = join(cwd, '.claude', 'agents', `${node.agent_ref}.md`);
+      const userAgentPath = join(homedir(), '.claude', 'agents', `${node.agent_ref}.md`);
+      const projectExists = await fileExists(projectAgentPath);
+      const userExists = await fileExists(userAgentPath);
+      if (!projectExists && !userExists) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'agent_ref',
+          message: `Agent '${node.agent_ref}' not found in .claude/agents/ or ~/.claude/agents/`,
+          hint: `Create the agent at .claude/agents/${node.agent_ref}.md (frontmatter + body) or remove the agent_ref field`,
+        });
+      }
+    }
+
     // --- Skills nodes: check skill directories exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
       for (const skillName of node.skills) {

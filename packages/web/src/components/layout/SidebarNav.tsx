@@ -20,6 +20,7 @@ import {
   Sun,
   Moon,
   BookOpen,
+  Bot,
   type LucideIcon,
 } from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck, getOperator, type CodebaseResponse } from '@/lib/api';
@@ -48,6 +49,7 @@ function applyTheme(mode: ThemeMode): void {
 const APP_TABS: { to: string; icon: LucideIcon; label: string }[] = [
   { to: '/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/mission', icon: Radio, label: 'Mission' },
+  { to: '/agents', icon: Bot, label: 'Agents' },
   { to: '/workflows', icon: Workflow, label: 'Workflows' },
   { to: '/skills', icon: BookOpen, label: 'Skills' },
   { to: '/compass', icon: Compass, label: 'Compass' },

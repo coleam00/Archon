@@ -200,6 +200,14 @@ export interface NodeConfig {
       maxTurns?: number;
     }
   >;
+  /**
+   * Reference to a named agent in `.claude/agents/<name>.md` (project or
+   * global). Resolved by the workflow executor before this nodeConfig is
+   * passed to the provider — by the time the provider sees nodeConfig, any
+   * agent_ref has already been folded into the other fields. Providers
+   * should not need to read this field.
+   */
+  agent_ref?: string;
   allowed_tools?: string[];
   denied_tools?: string[];
   effort?: string;

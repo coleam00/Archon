@@ -152,3 +152,8 @@ export { syncArchonToWorktree } from './utils/worktree-sync';
 // Skills (Claude Agent SDK skill registry — filesystem-backed)
 // =============================================================================
 export * as skills from './skills';
+
+// =============================================================================
+// Agents (Claude Agent SDK agent registry — filesystem-backed, .md files)
+// =============================================================================
+export * as agents from './agents';

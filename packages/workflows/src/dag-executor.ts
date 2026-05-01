@@ -25,6 +25,7 @@ import {
   getProviderCapabilities,
   getRegisteredProviders,
   isRegisteredProvider,
+  loadAgentFile,
 } from '@archon/providers';
 import type {
   DagNode,
@@ -338,13 +339,28 @@ async function resolveNodeProviderAndModel(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRunId: string,
-  _cwd: string,
+  cwd: string,
   workflowLevelOptions: WorkflowLevelOptions
 ): Promise<{
   provider: string;
   model: string | undefined;
   options: SendQueryOptions | undefined;
 }> {
+  // Resolve agent_ref before provider/model selection so the agent's
+  // frontmatter can supply a model where the node hasn't set one. Hard-fail
+  // on missing agents — silent fallback would let typos run with the wrong
+  // identity.
+  let agentOverlay: Awaited<ReturnType<typeof loadAgentFile>> = null;
+  if (node.agent_ref !== undefined) {
+    agentOverlay = await loadAgentFile(node.agent_ref, cwd);
+    if (!agentOverlay) {
+      throw new Error(
+        `Node '${node.id}': agent_ref '${node.agent_ref}' not found in .claude/agents/ ` +
+          'or ~/.claude/agents/. Create the agent file or remove the agent_ref.'
+      );
+    }
+  }
+
   // Provider is explicit: node.provider ?? workflow.provider. Model never
   // influences provider selection. Model strings pass through to the SDK.
   const provider: string = node.provider ?? workflowProvider;
@@ -360,6 +376,7 @@ async function resolveNodeProviderAndModel(
   const providerAssistantConfig = config.assistants[provider];
   const model: string | undefined =
     node.model ??
+    agentOverlay?.model ??
     (provider === workflowProvider
       ? workflowModel
       : (providerAssistantConfig?.model as string | undefined));
@@ -433,7 +450,10 @@ async function resolveNodeProviderAndModel(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
-  if (node.systemPrompt !== undefined) baseOptions.systemPrompt = node.systemPrompt;
+  // Resolve systemPrompt: node.systemPrompt > agent.body > undefined.
+  const resolvedSystemPrompt =
+    node.systemPrompt !== undefined ? node.systemPrompt : (agentOverlay?.systemPrompt ?? undefined);
+  if (resolvedSystemPrompt !== undefined) baseOptions.systemPrompt = resolvedSystemPrompt;
   if (node.maxBudgetUsd !== undefined) baseOptions.maxBudgetUsd = node.maxBudgetUsd;
   const fb = node.fallbackModel ?? workflowLevelOptions.fallbackModel;
   if (fb) baseOptions.fallbackModel = fb;
@@ -441,21 +461,32 @@ async function resolveNodeProviderAndModel(
     baseOptions.outputFormat = { type: 'json_schema', schema: node.output_format };
   }
 
-  // Build raw nodeConfig — provider translates internally
+  // Build raw nodeConfig — provider translates internally.
+  // Agent overlay populates fields where the node has not set them. Node-
+  // level explicit settings always win — the agent is a default identity,
+  // not an override.
   const nodeConfig: NodeConfig = {
-    mcp: node.mcp,
+    mcp: node.mcp ?? agentOverlay?.mcp ?? undefined,
     hooks: node.hooks,
-    skills: node.skills,
+    skills:
+      node.skills ??
+      (agentOverlay?.skills && agentOverlay.skills.length > 0 ? agentOverlay.skills : undefined),
     agents: node.agents,
-    allowed_tools: node.allowed_tools,
-    denied_tools: node.denied_tools,
+    allowed_tools:
+      node.allowed_tools ??
+      (agentOverlay?.tools && agentOverlay.tools.length > 0 ? agentOverlay.tools : undefined),
+    denied_tools:
+      node.denied_tools ??
+      (agentOverlay?.disallowedTools && agentOverlay.disallowedTools.length > 0
+        ? agentOverlay.disallowedTools
+        : undefined),
     effort: node.effort ?? workflowLevelOptions.effort,
     thinking: node.thinking ?? workflowLevelOptions.thinking,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
     maxBudgetUsd: node.maxBudgetUsd,
-    systemPrompt: node.systemPrompt,
+    systemPrompt: resolvedSystemPrompt,
     fallbackModel: fb,
   };
 

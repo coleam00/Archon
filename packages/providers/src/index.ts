@@ -53,3 +53,13 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+// Agent validation (smoke run for the Web UI's Validate button)
+export {
+  validateAgentSmoke,
+  type ValidateAgentResult,
+  type AgentValidationFrontmatter,
+} from './claude/validate-agent';
+
+// Agent-ref resolution (loaded by workflows at execution time)
+export { loadAgentFile, type ResolvedAgent } from './claude/load-agent';

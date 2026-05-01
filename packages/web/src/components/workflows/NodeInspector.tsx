@@ -1,11 +1,14 @@
 import { useState, useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { DagNodeData } from './DagNodeComponent';
 import type { CommandEntry, DagNode } from '@/lib/api';
+import { listAgents } from '@/lib/api';
 import { useProviders } from '@/hooks/useProviders';
+import { useProject } from '@/contexts/ProjectContext';
 
 // Keep in sync with triggerRuleSchema.options in @archon/workflows/schemas/dag-node.ts
 // (api.generated.d.ts is type-only and cannot export runtime values)
@@ -86,6 +89,47 @@ function ProviderField({
           </option>
         ))}
       </select>
+    </Field>
+  );
+}
+
+function AgentRefField({
+  node,
+  onUpdate,
+  selectClass: cls,
+}: {
+  node: DagNodeData;
+  onUpdate: (updates: Partial<DagNodeData>) => void;
+  selectClass: string;
+}): React.ReactElement {
+  const { selectedProjectId, codebases } = useProject();
+  const cwd = codebases?.find(c => c.id === selectedProjectId)?.default_cwd;
+  const { data } = useQuery({
+    queryKey: ['agents', cwd ?? null],
+    queryFn: () => listAgents(cwd),
+    refetchOnWindowFocus: false,
+  });
+  const agents = data?.agents ?? [];
+  return (
+    <Field label="Agent (agent_ref)">
+      <select
+        value={node.agent_ref ?? ''}
+        onChange={(e): void => {
+          onUpdate({ agent_ref: e.target.value || undefined });
+        }}
+        className={cls}
+      >
+        <option value="">— None —</option>
+        {agents.map(a => (
+          <option key={`${a.source}:${a.name}`} value={a.name}>
+            {a.name} ({a.source})
+          </option>
+        ))}
+      </select>
+      <p className="text-[9px] text-text-tertiary">
+        Resolved at execution time from .claude/agents/. Agent's frontmatter overlays this node's
+        config (model, tools, mcp, skills) and the body becomes the system prompt.
+      </p>
     </Field>
   );
 }
@@ -1040,6 +1084,8 @@ function AdvancedTab({
           onUpdate({ output_format: v });
         }}
       />
+
+      <AgentRefField node={node} onUpdate={onUpdate} selectClass={selectClass} />
 
       <Field label="Skills">
         <input

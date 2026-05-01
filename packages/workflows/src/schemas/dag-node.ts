@@ -155,6 +155,19 @@ export const dagNodeBaseSchema = z.object({
     )
     .refine(map => Object.keys(map).length > 0, "'agents' must have at least one entry")
     .optional(),
+  /**
+   * Reference to a named agent in the agents registry. Resolved at execution
+   * time against `.claude/agents/<name>.md` (project) and
+   * `~/.claude/agents/<name>.md` (global). The agent's frontmatter populates
+   * `model`, `allowed_tools`, `mcp`, `skills`, etc. on the node where the
+   * node has not already set them; the agent's body becomes the node's
+   * `systemPrompt` (unless the node already has one). Hard-fail at execution
+   * time if the referenced agent is missing.
+   */
+  agent_ref: z
+    .string()
+    .regex(AGENT_ID_REGEX, "'agent_ref' must be a kebab-case agent name (a-z, 0-9, hyphen)")
+    .optional(),
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),
   maxBudgetUsd: z.number().positive().optional(),
@@ -556,6 +569,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
+      ...(data.agent_ref !== undefined ? { agent_ref: data.agent_ref } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
       ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
       ...(data.maxBudgetUsd !== undefined ? { maxBudgetUsd: data.maxBudgetUsd } : {}),

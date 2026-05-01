@@ -13,6 +13,7 @@ import { SymphonyPage } from '@/routes/SymphonyPage';
 import { MissionPage } from '@/routes/MissionPage';
 import { CompassPage } from '@/routes/CompassPage';
 import { SkillsPage } from '@/routes/SkillsPage';
+import { AgentsPage } from '@/routes/AgentsPage';
 import { SettingsPage } from '@/routes/SettingsPage';
 
 interface ErrorBoundaryState {
@@ -84,6 +85,8 @@ export function App(): React.ReactElement {
                 <Route path="/compass" element={<CompassPage />} />
                 <Route path="/skills" element={<SkillsPage />} />
                 <Route path="/skills/:name" element={<SkillsPage />} />
+                <Route path="/agents" element={<AgentsPage />} />
+                <Route path="/agents/:name" element={<AgentsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
             </Routes>
