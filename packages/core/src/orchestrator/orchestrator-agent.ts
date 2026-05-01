@@ -700,6 +700,7 @@ export async function handleMessage(
         'commands',
         'init',
         'worktree',
+        'symphony',
       ];
 
       if (deterministicCommands.includes(command)) {

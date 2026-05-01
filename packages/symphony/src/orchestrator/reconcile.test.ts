@@ -7,15 +7,18 @@ import { buildSnapshot, type ConfigSnapshot } from '../config/snapshot';
 import {
   makeFakeBridge,
   makeFakeEmitter,
+  makeFakeWorkflowDefinition,
   type FakeBridge,
   type FakeEmitter,
 } from '../test/fake-bridge';
+import { makeFakeTracker, makeIssue } from '../test/fake-tracker';
 import {
   insertDispatch,
   attachWorkflowRun,
   updateStatus,
   getDispatchByDispatchKey,
 } from '../db/dispatches';
+import { buildDispatchKey } from './state';
 
 let dbPath = '';
 let db: SqliteAdapter;
@@ -258,5 +261,187 @@ describe('reconcileOnStart hydrates state from prior process runs', () => {
     await orch.reconcileOnStart();
     // Just asserting the call does not throw.
     expect(orch.internalState.completed.size).toBe(0);
+  });
+});
+
+describe('reconcileRunningIssues detects stale in-flight entries', () => {
+  beforeEach(async () => {
+    dbPath = join(
+      import.meta.dir,
+      `.test-reconcile-running-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+    );
+    db = new SqliteAdapter(dbPath);
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      ['cb-1', 'Codebase 1', '/tmp/cb-1']
+    );
+    emitter = makeFakeEmitter();
+    fakeBridge = makeFakeBridge({
+      db,
+      codebases: new Map([['cb-1', { id: 'cb-1', name: 'Codebase 1', default_cwd: '/tmp/cb-1' }]]),
+      workflows: {
+        'archon-feature-development': makeFakeWorkflowDefinition('archon-feature-development'),
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await db.close();
+    for (const suffix of ['', '-wal', '-shm']) {
+      try {
+        unlinkSync(dbPath + suffix);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  async function seedAndDispatch(
+    identifier: string,
+    issueId: string
+  ): Promise<{ orch: Orchestrator; runId: string; dk: string }> {
+    const issue = makeIssue({ id: issueId, identifier, state: 'Todo' });
+    const { tracker } = makeFakeTracker([issue]);
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    orch.start();
+    await orch.runTick();
+    const dk = buildDispatchKey('linear', identifier);
+    const entry = orch.getRunning(dk);
+    if (!entry?.workflow_run_id) throw new Error('expected running entry');
+    return { orch, runId: entry.workflow_run_id, dk };
+  }
+
+  test('terminal upstream status → applyTerminalEvent called, state updated', async () => {
+    const { orch, runId, dk } = await seedAndDispatch('APP-R1', 'l-r1');
+
+    // Mark the upstream run as completed in the fake store
+    fakeBridge.store.setStatus(runId, 'completed');
+
+    await orch.reconcileRunningIssues(snap());
+
+    expect(orch.internalState.running.has(dk)).toBe(false);
+    expect(orch.internalState.completed.has(dk)).toBe(true);
+
+    const row = await getDispatchByDispatchKey(db, dk);
+    expect(row?.status).toBe('completed');
+
+    await orch.stop();
+  });
+
+  test('upstream failed → state updated, retry scheduled', async () => {
+    let scheduled: ReturnType<typeof setTimeout> | null = null;
+    const issue = makeIssue({ id: 'l-r2', identifier: 'APP-R2', state: 'Todo' });
+    const { tracker } = makeFakeTracker([issue]);
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: (fn, ms) => {
+        if (ms > 0) scheduled = setTimeout(() => undefined, 100000);
+        return scheduled ?? (0 as unknown as ReturnType<typeof setTimeout>);
+      },
+      cancelTimeout: handle => {
+        if (handle) clearTimeout(handle);
+      },
+    });
+    orch.start();
+    await orch.runTick();
+    const dk = buildDispatchKey('linear', 'APP-R2');
+    const entry = orch.getRunning(dk);
+    if (!entry?.workflow_run_id) throw new Error('expected running entry');
+
+    fakeBridge.store.setStatus(entry.workflow_run_id, 'failed');
+    await orch.reconcileRunningIssues(snap());
+
+    expect(orch.internalState.running.has(dk)).toBe(false);
+    expect(orch.getRetry(dk)).toBeDefined();
+
+    await orch.stop();
+  });
+
+  test('issue no longer active → cancelWorkflowRun called, state updated', async () => {
+    const issue = makeIssue({ id: 'l-r3', identifier: 'APP-R3', state: 'Todo' });
+    const { tracker, controls } = makeFakeTracker([issue]);
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    orch.start();
+    await orch.runTick();
+    const dk = buildDispatchKey('linear', 'APP-R3');
+    const entry = orch.getRunning(dk);
+    if (!entry?.workflow_run_id) throw new Error('expected running entry');
+    const runId = entry.workflow_run_id;
+
+    // Move issue to a non-active state
+    controls.patchIssue('l-r3', { state: 'Done' });
+    await orch.reconcileRunningIssues(snap());
+
+    expect(orch.internalState.running.has(dk)).toBe(false);
+    expect(orch.internalState.completed.has(dk)).toBe(true);
+    // The upstream run should have been cancelled
+    expect(fakeBridge.store.runs.get(runId)?.status).toBe('cancelled');
+
+    await orch.stop();
+  });
+
+  test('workflow still running, issue still active → no state change', async () => {
+    const { orch, runId, dk } = await seedAndDispatch('APP-R4', 'l-r4');
+
+    // upstream is still 'running'
+    fakeBridge.store.setStatus(runId, 'running');
+
+    await orch.reconcileRunningIssues(snap());
+
+    expect(orch.internalState.running.has(dk)).toBe(true);
+    expect(orch.internalState.completed.has(dk)).toBe(false);
+
+    await orch.stop();
+  });
+
+  test('getWorkflowRunStatus throws → warn-logged, no state change, other entries still processed', async () => {
+    const { orch, runId, dk } = await seedAndDispatch('APP-R5', 'l-r5');
+
+    // Make the store throw for this runId
+    const origGet = fakeBridge.store.getWorkflowRunStatus.bind(fakeBridge.store);
+    fakeBridge.store.getWorkflowRunStatus = async (id: string) => {
+      if (id === runId) throw new Error('simulated store error');
+      return origGet(id);
+    };
+
+    await orch.reconcileRunningIssues(snap());
+
+    // Error entry is untouched (no state change)
+    expect(orch.internalState.running.has(dk)).toBe(true);
+
+    await orch.stop();
+  });
+
+  test('no bridge wired → reconcileRunningIssues is a no-op', async () => {
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: {},
+      getDb: () => db,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    // Doesn't throw, doesn't touch state
+    await orch.reconcileRunningIssues(snap());
+    expect(orch.internalState.running.size).toBe(0);
   });
 });

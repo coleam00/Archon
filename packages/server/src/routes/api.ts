@@ -122,6 +122,7 @@ import {
 } from './schemas/config.schemas';
 import { providerListResponseSchema } from './schemas/provider.schemas';
 import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import type { SymphonyServiceHandle } from '@archon/symphony';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -821,6 +822,19 @@ const getHealthRoute = createRoute({
               version: z.string().optional(),
               is_docker: z.boolean(),
               activePlatforms: z.array(z.string()).optional(),
+              symphony: z
+                .object({
+                  generated_at: z.string(),
+                  counts: z.object({
+                    running: z.number(),
+                    retrying: z.number(),
+                    completed: z.number(),
+                  }),
+                  running: z.array(z.record(z.unknown())),
+                  retrying: z.array(z.record(z.unknown())),
+                })
+                .nullable()
+                .optional(),
             })
             .openapi('HealthResponse'),
         },
@@ -854,7 +868,8 @@ export function registerApiRoutes(
   app: OpenAPIHono,
   webAdapter: WebAdapter,
   lockManager: ConversationLockManager,
-  activePlatforms?: readonly string[]
+  activePlatforms?: readonly string[],
+  symphonyHandle?: SymphonyServiceHandle
 ): void {
   function apiError(
     c: Context,
@@ -2703,6 +2718,7 @@ export function registerApiRoutes(
       version: appVersion,
       is_docker: isDocker(),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
+      symphony: symphonyHandle?.orchestrator.getSnapshotView() ?? null,
     });
   });
 

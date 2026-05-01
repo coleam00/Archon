@@ -12,6 +12,7 @@ import {
   type FakeBridge,
   type FakeEmitter,
 } from '../test/fake-bridge';
+import type { CommentOnIssueInput, Tracker } from '../tracker/types';
 import { getDispatchByDispatchKey } from '../db/dispatches';
 import { buildDispatchKey } from './state';
 
@@ -259,6 +260,211 @@ describe('terminal workflow events drive Symphony state transitions', () => {
     const dk = buildDispatchKey('linear', 'APP-4');
     const row = await getDispatchByDispatchKey(db, dk);
     expect(row?.status).toBe('cancelled');
+
+    await orch.stop();
+  });
+});
+
+describe('tracker backlink via commentOnIssue', () => {
+  let commentCalls: CommentOnIssueInput[] = [];
+  let commentError: Error | null = null;
+
+  function makeTrackerWithComment(issue: ReturnType<typeof makeIssue>): Tracker {
+    const { tracker: base } = makeFakeTracker([issue]);
+    return {
+      ...base,
+      commentOnIssue: async input => {
+        commentCalls.push(input);
+        if (commentError) throw commentError;
+        return { id: 'c-1' };
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    commentCalls = [];
+    commentError = null;
+    dbPath = join(
+      import.meta.dir,
+      `.test-backlink-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+    );
+    db = new SqliteAdapter(dbPath);
+    await db.query(
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      ['cb-1', 'Codebase 1', '/tmp/cb-1']
+    );
+    emitter = makeFakeEmitter();
+    fakeBridge = makeFakeBridge({
+      db,
+      codebases: new Map([['cb-1', { id: 'cb-1', name: 'Codebase 1', default_cwd: '/tmp/cb-1' }]]),
+      workflows: {
+        'archon-feature-development': makeFakeWorkflowDefinition('archon-feature-development'),
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await db.close();
+    for (const suffix of ['', '-wal', '-shm']) {
+      try {
+        unlinkSync(dbPath + suffix);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  test('comment posted on workflow_completed', async () => {
+    const issue = makeIssue({ id: 'l-b1', identifier: 'APP-B1', state: 'Todo' });
+    const tracker = makeTrackerWithComment(issue);
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    orch.start();
+    await orch.runTick();
+    const runId = orch.getRunning(buildDispatchKey('linear', 'APP-B1'))?.workflow_run_id;
+    if (!runId) throw new Error('expected running entry');
+
+    emitter.emit({
+      type: 'workflow_completed',
+      runId,
+      workflowName: 'archon-feature-development',
+      duration: 5,
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(commentCalls).toHaveLength(1);
+    expect(commentCalls[0]?.body).toContain('completed');
+    expect(commentCalls[0]?.body).toContain('APP-B1');
+
+    await orch.stop();
+  });
+
+  test('comment posted on workflow_failed', async () => {
+    const issue = makeIssue({ id: 'l-b2', identifier: 'APP-B2', state: 'Todo' });
+    const tracker = makeTrackerWithComment(issue);
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    orch.start();
+    await orch.runTick();
+    const runId = orch.getRunning(buildDispatchKey('linear', 'APP-B2'))?.workflow_run_id;
+    if (!runId) throw new Error('expected running entry');
+
+    emitter.emit({
+      type: 'workflow_failed',
+      runId,
+      workflowName: 'archon-feature-development',
+      error: 'turn timeout',
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(commentCalls).toHaveLength(1);
+    expect(commentCalls[0]?.body).toContain('failed');
+    expect(commentCalls[0]?.body).toContain('turn timeout');
+
+    await orch.stop();
+  });
+
+  test('no comment on workflow_cancelled', async () => {
+    const issue = makeIssue({ id: 'l-b3', identifier: 'APP-B3', state: 'Todo' });
+    const tracker = makeTrackerWithComment(issue);
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    orch.start();
+    await orch.runTick();
+    const runId = orch.getRunning(buildDispatchKey('linear', 'APP-B3'))?.workflow_run_id;
+    if (!runId) throw new Error('expected running entry');
+
+    emitter.emit({ type: 'workflow_cancelled', runId, nodeId: 'n0', reason: 'user_requested' });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(commentCalls).toHaveLength(0);
+
+    await orch.stop();
+  });
+
+  test('commentOnIssue throws → warn logged, state still cleaned up', async () => {
+    const issue = makeIssue({ id: 'l-b4', identifier: 'APP-B4', state: 'Todo' });
+    commentError = new Error('github_unsupported_operation');
+    const tracker = makeTrackerWithComment(issue);
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    orch.start();
+    await orch.runTick();
+    const dk = buildDispatchKey('linear', 'APP-B4');
+    const runId = orch.getRunning(dk)?.workflow_run_id;
+    if (!runId) throw new Error('expected running entry');
+
+    emitter.emit({
+      type: 'workflow_completed',
+      runId,
+      workflowName: 'archon-feature-development',
+      duration: 5,
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    // State cleanup still happened despite comment failure
+    expect(orch.internalState.running.has(dk)).toBe(false);
+    expect(orch.internalState.completed.has(dk)).toBe(true);
+
+    await orch.stop();
+  });
+
+  test('tracker has no commentOnIssue → no-op', async () => {
+    const issue = makeIssue({ id: 'l-b5', identifier: 'APP-B5', state: 'Todo' });
+    const { tracker } = makeFakeTracker([issue]); // no commentOnIssue method
+    const orch = new Orchestrator({
+      getSnapshot: () => snap(),
+      trackers: { linear: tracker },
+      getDb: () => db,
+      bridge: fakeBridge.bridge,
+      getEventEmitter: () => emitter,
+      scheduleTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      cancelTimeout: () => undefined,
+    });
+    orch.start();
+    await orch.runTick();
+    const dk = buildDispatchKey('linear', 'APP-B5');
+    const runId = orch.getRunning(dk)?.workflow_run_id;
+    if (!runId) throw new Error('expected running entry');
+
+    emitter.emit({
+      type: 'workflow_completed',
+      runId,
+      workflowName: 'archon-feature-development',
+      duration: 5,
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(commentCalls).toHaveLength(0);
+    expect(orch.internalState.completed.has(dk)).toBe(true);
 
     await orch.stop();
   });

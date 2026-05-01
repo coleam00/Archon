@@ -516,13 +516,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     return c.json({ error: 'Internal server error' }, 500);
   });
 
-  // Register Web UI API routes
-  registerApiRoutes(app, webAdapter, lockManager, activePlatforms);
-
   // Optionally boot the Symphony service + register /api/symphony/* routes.
   // Opt-in by file presence: missing ~/.archon/symphony.yaml → silent no-op.
   const symphonyHandle = await maybeStartSymphony(app, webAdapter);
   if (symphonyHandle) activePlatforms.push('Symphony');
+
+  // Register Web UI API routes after symphony so /api/health can include its state
+  registerApiRoutes(app, webAdapter, lockManager, activePlatforms, symphonyHandle ?? undefined);
 
   // GitHub webhook endpoint
   if (github) {

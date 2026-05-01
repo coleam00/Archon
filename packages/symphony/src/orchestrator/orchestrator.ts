@@ -332,6 +332,30 @@ export class Orchestrator {
       }
     }
 
+    // Post backlink comment to tracker (best-effort, fire-and-forget)
+    if (entry && event.type !== 'workflow_cancelled') {
+      const tracker = this.deps.trackers[entry.tracker];
+      if (tracker?.commentOnIssue) {
+        const body =
+          event.type === 'workflow_completed'
+            ? `Symphony workflow completed for ${entry.identifier}.`
+            : `Symphony workflow failed for ${entry.identifier}: ${event.error}`;
+        try {
+          void tracker.commentOnIssue({ issueId: entry.issue_id, body }).catch((e: unknown) => {
+            log.warn(
+              { dispatch_key: dispatchKey, err: (e as Error).message },
+              'symphony.comment_failed'
+            );
+          });
+        } catch (e) {
+          log.warn(
+            { dispatch_key: dispatchKey, err: (e as Error).message },
+            'symphony.comment_failed'
+          );
+        }
+      }
+    }
+
     this.runIdToDispatchKey.delete(event.runId);
     if (entry) {
       this.state.running.delete(dispatchKey);
@@ -710,15 +734,100 @@ export class Orchestrator {
     return match?.codebaseId ?? null;
   }
 
-  /**
-   * Phase 2 leaves reconcile as a no-op stub. Phase 3 will fill in:
-   *   - poll workflow_run statuses for in-flight entries,
-   *   - on terminal status, update the in-memory state and persist
-   *     `status` on the symphony_dispatches row.
-   */
-  async reconcileRunningIssues(_snap: ConfigSnapshot): Promise<void> {
-    // intentionally empty in Phase 2
-    return;
+  async reconcileRunningIssues(snap: ConfigSnapshot): Promise<void> {
+    if (!this.deps.bridge) return;
+    const log = getLog();
+
+    // Snapshot entries to avoid mutating the map we're iterating (applyTerminalEvent deletes)
+    const entries = [...this.state.running.entries()];
+    for (const [dispatchKey, entry] of entries) {
+      try {
+        if (!entry.workflow_run_id) continue;
+
+        // Step A: Check workflow run status
+        let upstreamStatus: string | null;
+        try {
+          upstreamStatus = await this.deps.bridge.workflowDeps.store.getWorkflowRunStatus(
+            entry.workflow_run_id
+          );
+        } catch (e) {
+          log.warn(
+            {
+              dispatch_key: dispatchKey,
+              run_id: entry.workflow_run_id,
+              err: (e as Error).message,
+            },
+            'symphony.reconcile_running_lookup_failed'
+          );
+          continue;
+        }
+
+        if (
+          upstreamStatus &&
+          (TERMINAL_WORKFLOW_STATUSES as readonly string[]).includes(upstreamStatus)
+        ) {
+          let syntheticEvent:
+            | { type: 'workflow_completed'; runId: string }
+            | { type: 'workflow_failed'; runId: string; error: string }
+            | { type: 'workflow_cancelled'; runId: string; reason: string };
+          if (upstreamStatus === 'completed') {
+            syntheticEvent = { type: 'workflow_completed', runId: entry.workflow_run_id };
+          } else if (upstreamStatus === 'cancelled') {
+            syntheticEvent = {
+              type: 'workflow_cancelled',
+              runId: entry.workflow_run_id,
+              reason: 'reconcile: already cancelled',
+            };
+          } else {
+            syntheticEvent = {
+              type: 'workflow_failed',
+              runId: entry.workflow_run_id,
+              error: `reconcile: upstream status was ${upstreamStatus}`,
+            };
+          }
+          await this.applyTerminalEvent(syntheticEvent, dispatchKey);
+          continue;
+        }
+
+        // Step B: Check tracker issue state
+        const tracker = this.deps.trackers[entry.tracker];
+        const trackerCfg = findTrackerConfig(snap, entry.tracker);
+        if (!tracker || !trackerCfg) continue;
+
+        let issues: Issue[];
+        try {
+          issues = await tracker.fetchIssueStatesByIds([entry.issue_id]);
+        } catch (e) {
+          log.warn(
+            {
+              dispatch_key: dispatchKey,
+              issue_id: entry.issue_id,
+              err: (e as Error).message,
+            },
+            'symphony.reconcile_running_tracker_fetch_failed'
+          );
+          continue;
+        }
+
+        const issue = issues.find(i => i.id === entry.issue_id);
+        if (!issue || !isStateActive(issue.state, trackerCfg)) {
+          await this.deps.bridge.workflowDeps.store.cancelWorkflowRun(entry.workflow_run_id);
+          await this.applyTerminalEvent(
+            {
+              type: 'workflow_cancelled',
+              runId: entry.workflow_run_id,
+              reason: 'issue left active state',
+            },
+            dispatchKey
+          );
+        }
+      } catch (e) {
+        log.warn(
+          { dispatch_key: dispatchKey, err: (e as Error).message },
+          'symphony.reconcile_running_entry_failed'
+        );
+      }
+    }
   }
 
   // Retry scheduler kept for forward compatibility with Phase 3; currently

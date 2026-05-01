@@ -3,12 +3,17 @@ import { join } from 'node:path';
 import { getArchonHome } from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { getDatabase } from '@archon/core/db';
+import { setSymphonyCommandHandler } from '@archon/core/handlers';
 import { parseSymphonyConfig } from './config/parse';
 import { buildSnapshot, type ConfigSnapshot, type TrackerConfig } from './config/snapshot';
 import { LinearTracker } from './tracker/linear';
 import { GitHubTracker } from './tracker/github';
 import type { Tracker } from './tracker/types';
-import { Orchestrator, type TrackerMap } from './orchestrator/orchestrator';
+import {
+  Orchestrator,
+  type TrackerMap,
+  type OrchestratorSnapshotView,
+} from './orchestrator/orchestrator';
 import type { BridgeDeps } from './workflow-bridge/types';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -43,6 +48,30 @@ export interface SymphonyServiceHandle {
 
 function defaultConfigPath(): string {
   return join(getArchonHome(), 'symphony.yaml');
+}
+
+function formatSnapshotView(view: OrchestratorSnapshotView): string {
+  const lines: string[] = [
+    '## Symphony Status',
+    '',
+    `**Running:** ${String(view.counts.running)} | **Retrying:** ${String(view.counts.retrying)} | **Completed:** ${String(view.counts.completed)}`,
+  ];
+  if (view.running.length > 0) {
+    lines.push('', '### Running');
+    for (const r of view.running) {
+      lines.push(
+        `- ${r.dispatch_key} (${r.issue_identifier}, ${r.state}) — started ${r.started_at}`
+      );
+    }
+  }
+  if (view.retrying.length > 0) {
+    lines.push('', '### Retrying');
+    for (const r of view.retrying) {
+      const errSuffix = r.error ? `: ${r.error}` : '';
+      lines.push(`- ${r.dispatch_key} attempt ${String(r.attempt)}, due ${r.due_at}${errSuffix}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function buildTrackers(snapshot: ConfigSnapshot): TrackerMap {
@@ -134,11 +163,24 @@ export async function startSymphonyService(
 
   orchestrator.start();
 
+  setSymphonyCommandHandler({
+    getStatusText(): string {
+      return formatSnapshotView(orchestrator.getSnapshotView());
+    },
+    async requestImmediateDispatch(key) {
+      return orchestrator.requestImmediateDispatch(key);
+    },
+    requestCancel(key) {
+      return orchestrator.requestCancel(key);
+    },
+  });
+
   return {
     orchestrator,
     snapshot,
     configPath,
     stop: async (): Promise<void> => {
+      setSymphonyCommandHandler(null);
       await orchestrator.stop();
       log.info({ config_path: configPath }, 'symphony.service_stopped');
     },

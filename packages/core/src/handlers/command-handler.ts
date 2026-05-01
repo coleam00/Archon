@@ -44,6 +44,17 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+export interface ISymphonyCommandHandler {
+  getStatusText(): string;
+  requestImmediateDispatch(dispatchKey: string): Promise<{ ok: boolean; reason?: string }>;
+  requestCancel(dispatchKey: string): { ok: boolean; reason?: string };
+}
+
+let symphonyHandler: ISymphonyCommandHandler | null = null;
+export function setSymphonyCommandHandler(h: ISymphonyCommandHandler | null): void {
+  symphonyHandler = h;
+}
+
 /**
  * Workflow timing information calculated from database values
  */
@@ -928,6 +939,12 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/reset\` — Clear conversation and start fresh
 - \`/help\` — Show this help message
 
+**Symphony**
+- \`/symphony status\` — Show Symphony orchestrator status
+- \`/symphony work on <id>\` — Dispatch an issue immediately
+- \`/symphony cancel <id>\` — Cancel a running dispatch
+- \`/symphony help\` — Show Symphony subcommands
+
 ### Tips
 - You don't need to select a project first — just describe what you want
 - The orchestrator knows all your registered projects and available workflows
@@ -1141,10 +1158,66 @@ Commands are auto-discovered from .archon/commands/ — no registration needed.`
       }
     }
 
+    case 'symphony':
+      return handleSymphonyCommand(args);
+
     default:
       return {
         success: false,
         message: `Unknown command: /${command}\n\nType /help to see available commands.`,
+      };
+  }
+}
+
+async function handleSymphonyCommand(args: string[]): Promise<CommandResult> {
+  if (!symphonyHandler) {
+    return { success: false, message: 'Symphony is not running.' };
+  }
+  const sub = args[0] ?? 'status';
+
+  switch (sub) {
+    case 'status':
+      return { success: true, message: symphonyHandler.getStatusText() };
+
+    case 'work': {
+      if (args[1] !== 'on' || !args[2]) {
+        return { success: false, message: 'Usage: /symphony work on <id>' };
+      }
+      const rawId = args.slice(2).join(' ');
+      const dispatchKey = rawId.includes(':') ? rawId : `linear:${rawId}`;
+      const result = await symphonyHandler.requestImmediateDispatch(dispatchKey);
+      return result.ok
+        ? { success: true, message: `Dispatching ${dispatchKey}...` }
+        : { success: false, message: `Failed: ${result.reason ?? 'unknown'}` };
+    }
+
+    case 'cancel': {
+      const rawId = args.slice(1).join(' ');
+      if (!rawId) {
+        return { success: false, message: 'Usage: /symphony cancel <id>' };
+      }
+      const dispatchKey = rawId.includes(':') ? rawId : `linear:${rawId}`;
+      const result = symphonyHandler.requestCancel(dispatchKey);
+      return result.ok
+        ? { success: true, message: `Cancelled ${dispatchKey}.` }
+        : { success: false, message: `Failed: ${result.reason ?? 'unknown'}` };
+    }
+
+    case 'help':
+      return {
+        success: true,
+        message: `## Symphony Commands
+
+- \`/symphony status\` — Show orchestrator status
+- \`/symphony work on <id>\` — Immediately dispatch an issue (e.g. APP-123)
+- \`/symphony cancel <id>\` — Cancel a running dispatch
+- \`/symphony help\` — Show this help`,
+      };
+
+    default:
+      return {
+        success: false,
+        message: `Unknown symphony subcommand: ${sub}\n\nType /symphony help for usage.`,
       };
   }
 }
