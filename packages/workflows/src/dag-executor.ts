@@ -1735,10 +1735,30 @@ async function executeLoopNode(
   nodeOutputs: Map<string, NodeOutput>,
   config: WorkflowConfig,
   issueContext?: string,
-  workflowLevelOptions?: WorkflowLevelOptions
+  workflowLevelOptions?: WorkflowLevelOptions,
+  configuredCommandFolder?: string
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
+  let rawLoopPrompt = loop.prompt;
+
+  if (loop.command !== undefined) {
+    const promptResult = await loadCommandPrompt(deps, cwd, loop.command, configuredCommandFolder);
+    if (!promptResult.success) {
+      const errMsg = promptResult.message;
+      getLog().error({ nodeId: node.id, command: loop.command, error: errMsg }, 'loop_node_command_load_failed');
+      await logNodeError(logDir, workflowRun.id, node.id, errMsg);
+      return { state: 'failed', output: '', error: errMsg };
+    }
+    rawLoopPrompt = promptResult.content;
+  }
+
+  if (rawLoopPrompt === undefined) {
+    const errMsg = `Loop node '${node.id}' has no prompt or command content.`;
+    getLog().error({ nodeId: node.id }, 'loop_node_prompt_missing');
+    await logNodeError(logDir, workflowRun.id, node.id, errMsg);
+    return { state: 'failed', output: '', error: errMsg };
+  }
 
   // Resolve AI client — fail fast with descriptive error
   let aiClient: ReturnType<typeof deps.getAgentProvider>;
@@ -1842,7 +1862,7 @@ async function executeLoopNode(
       // executor starts a fresh `lastIterationOutput` variable, so the first iteration of
       // the resume also receives an empty $LOOP_PREV_OUTPUT.
       const { prompt: substitutedPrompt } = substituteWorkflowVariables(
-        loop.prompt,
+        rawLoopPrompt,
         workflowRun.id,
         workflowRun.user_message,
         artifactsDir,
@@ -2243,19 +2263,30 @@ async function executeLoopNode(
           error: `Loop gate message failed to deliver for node '${node.id}' — cannot pause safely`,
         };
       }
+      const { prompt: substitutedGateMessage } = substituteWorkflowVariables(
+        loop.gate_message,
+        workflowRun.id,
+        workflowRun.user_message,
+        artifactsDir,
+        baseBranch,
+        docsDir,
+        issueContext
+      );
+      const renderedGateMessage = substituteNodeOutputRefs(substitutedGateMessage, nodeOutputs);
+
       deps.store
         .createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'approval_requested',
           step_name: node.id,
-          data: { message: loop.gate_message, iteration: i },
+          data: { message: renderedGateMessage, iteration: i },
         })
         .catch((err: Error) => {
           logEventStoreError(err, i);
         });
       await deps.store.pauseWorkflowRun(workflowRun.id, {
         nodeId: node.id,
-        message: loop.gate_message,
+        message: renderedGateMessage,
         type: 'interactive_loop',
         iteration: i,
         sessionId: currentSessionId,
@@ -2264,7 +2295,7 @@ async function executeLoopNode(
         type: 'approval_pending',
         runId: workflowRun.id,
         nodeId: node.id,
-        message: loop.gate_message,
+        message: renderedGateMessage,
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
@@ -2432,7 +2463,16 @@ async function executeApprovalNode(
   // Standard approval gate — send message and pause.
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
-  const renderedMessage = substituteNodeOutputRefs(node.approval.message, nodeOutputs);
+  const { prompt: substitutedApprovalMessage } = substituteWorkflowVariables(
+    node.approval.message,
+    workflowRun.id,
+    workflowRun.user_message ?? '',
+    artifactsDir,
+    baseBranch,
+    docsDir,
+    issueContext
+  );
+  const renderedMessage = substituteNodeOutputRefs(substitutedApprovalMessage, nodeOutputs);
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
@@ -2758,7 +2798,8 @@ export async function executeDagWorkflow(
               nodeOutputs,
               config,
               issueContext,
-              workflowLevelOptions
+              workflowLevelOptions,
+              configuredCommandFolder
             );
             return { nodeId: node.id, output };
           }

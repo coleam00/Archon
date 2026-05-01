@@ -5,8 +5,10 @@ import { z } from '@hono/zod-openapi';
 
 export const loopNodeConfigSchema = z
   .object({
+    /** Named command loaded from .archon/commands/ and executed each iteration. */
+    command: z.string().min(1, "'loop.command' must be a non-empty string").optional(),
     /** Inline prompt text executed each iteration. */
-    prompt: z.string().min(1, "loop node requires 'loop.prompt' (non-empty string)"),
+    prompt: z.string().min(1, "'loop.prompt' must be a non-empty string").optional(),
     /** Completion signal string detected in AI output (e.g., "COMPLETE"). */
     until: z.string().min(1, "loop node requires 'loop.until' (completion signal string)"),
     /** Maximum iterations allowed; exceeding this fails the node. */
@@ -21,6 +23,20 @@ export const loopNodeConfigSchema = z
     gate_message: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    if (!data.command && !data.prompt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "loop node requires either 'loop.command' or 'loop.prompt'",
+        path: ['prompt'],
+      });
+    }
+    if (data.command && data.prompt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "loop node can use either 'loop.command' or 'loop.prompt', not both",
+        path: ['command'],
+      });
+    }
     if (data.interactive === true && !data.gate_message) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
