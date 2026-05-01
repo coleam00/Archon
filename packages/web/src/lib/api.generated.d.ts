@@ -2431,6 +2431,317 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/compass/{codebaseId}/graph': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Fetch the compass graph for a codebase (real + ghosts + north star) */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          codebaseId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['CompassGraphResponse'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/compass/{codebaseId}/ghosts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create or update a ghost feature node */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          codebaseId: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CompassUpsertGhostBody'];
+        };
+      };
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['CompassUpsertGhostResponse'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/compass/{codebaseId}/ghosts/{ghostId}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Delete a ghost feature node */
+    delete: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          codebaseId: string;
+          ghostId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['CompassDeleteGhostResponse'];
+          };
+        };
+        /** @description Codebase or ghost not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/compass/{codebaseId}/annotate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Run AI annotation on a ghost (sync; returns full annotation) */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          codebaseId: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CompassAnnotateGhostBody'];
+        };
+      };
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['CompassAnnotateGhostResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase or ghost not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/compass/{codebaseId}/promote': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Promote a ghost: queue locally, draft a GitHub issue, or kick off /workflow run plan */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          codebaseId: string;
+        };
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['CompassPromoteGhostBody'];
+        };
+      };
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['CompassPromoteGhostResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase or ghost not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3178,6 +3489,114 @@ export interface components {
       currentVersion: string;
       latestVersion: string;
       releaseUrl: string;
+    };
+    /** @enum {string} */
+    RealFeatureKind: 'route' | 'endpoint' | 'workflow' | 'component' | 'module';
+    RealFeatureNode: {
+      id: string;
+      kind: components['schemas']['RealFeatureKind'];
+      label: string;
+      filePath: string;
+      lineStart?: number;
+      lineEnd?: number;
+      exports?: string[];
+      imports?: string[];
+    };
+    RealFeatureEdge: {
+      id: string;
+      source: string;
+      target: string;
+      /** @enum {string} */
+      kind: 'imports' | 'calls' | 'triggers';
+    };
+    CompassPosition: {
+      x: number;
+      y: number;
+    };
+    /** @enum {string} */
+    CompassGhostStatus: 'draft' | 'queued' | 'promoted';
+    /** @enum {string} */
+    CompassAnnotationAlignment: 'strengthens' | 'weakens' | 'neutral';
+    /** @enum {string} */
+    CompassAnnotationScope: '1h' | 'half-day' | 'multi-day';
+    CompassAnnotationCitation: {
+      path: string;
+      lineStart?: number;
+      lineEnd?: number;
+      why: string;
+    };
+    CompassAnnotation: {
+      drift_score: number;
+      north_star_alignment: {
+        [key: string]: components['schemas']['CompassAnnotationAlignment'];
+      };
+      scope: components['schemas']['CompassAnnotationScope'];
+      citations: components['schemas']['CompassAnnotationCitation'][];
+      dependencies: string[];
+      why_now: string;
+      generated_at: string;
+    } | null;
+    CompassGhostFeatureNode: {
+      id: string;
+      title: string;
+      notes?: string;
+      position: components['schemas']['CompassPosition'];
+      status: components['schemas']['CompassGhostStatus'];
+      annotation: components['schemas']['CompassAnnotation'];
+      /** @enum {string|null} */
+      promoted_target: 'issue' | 'workflow' | 'queue' | null;
+      promoted_ref: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+    CompassObjective: {
+      id: string;
+      one_liner: string;
+      /** @default [] */
+      examples_of_drift: string[];
+    };
+    CompassNorthStar: {
+      objectives: components['schemas']['CompassObjective'][];
+    } | null;
+    CompassGraphResponse: {
+      realNodes: components['schemas']['RealFeatureNode'][];
+      realEdges: components['schemas']['RealFeatureEdge'][];
+      ghostNodes: components['schemas']['CompassGhostFeatureNode'][];
+      northStar: components['schemas']['CompassNorthStar'];
+      lastScannedAt: string | null;
+      /** @default [] */
+      scanWarnings: string[];
+    };
+    CompassUpsertGhostResponse: {
+      ghost: components['schemas']['CompassGhostFeatureNode'];
+    };
+    CompassUpsertGhostBody: {
+      id?: string;
+      title: string;
+      notes?: string;
+      position: components['schemas']['CompassPosition'];
+    };
+    CompassDeleteGhostResponse: {
+      deleted: boolean;
+      id: string;
+    };
+    CompassAnnotateGhostResponse: {
+      ghost: components['schemas']['CompassGhostFeatureNode'];
+      annotation: components['schemas']['CompassAnnotation'];
+    };
+    CompassAnnotateGhostBody: {
+      ghostId: string;
+    };
+    CompassPromoteGhostResponse: {
+      ghost: components['schemas']['CompassGhostFeatureNode'];
+      issueUrl: string | null;
+      conversationId: string | null;
+    };
+    /** @enum {string} */
+    CompassPromoteTarget: 'issue' | 'workflow' | 'queue';
+    CompassPromoteGhostBody: {
+      ghostId: string;
+      target: components['schemas']['CompassPromoteTarget'];
     };
   };
   responses: never;

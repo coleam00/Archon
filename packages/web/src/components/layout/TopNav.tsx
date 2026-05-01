@@ -1,6 +1,6 @@
 import { NavLink, Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Inbox, MessageSquare, Radio, Workflow, Settings } from 'lucide-react';
+import { Compass, Inbox, MessageSquare, Radio, Workflow, Settings } from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -8,6 +8,7 @@ const tabs = [
   { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
   { to: '/mission', end: false, icon: Radio, label: 'Mission' },
   { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
+  { to: '/compass', end: false, icon: Compass, label: 'Compass' },
   { to: '/symphony', end: false, icon: Inbox, label: 'Symphony' },
   { to: '/settings', end: false, icon: Settings, label: 'Settings' },
 ] as const;

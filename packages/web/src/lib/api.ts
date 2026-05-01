@@ -648,3 +648,74 @@ export type UpdateCheckResult = components['schemas']['UpdateCheckResponse'];
 export async function getUpdateCheck(): Promise<UpdateCheckResult> {
   return fetchJSON<UpdateCheckResult>('/api/update-check');
 }
+
+// =========================================================================
+// Compass — visual canvas for "what feature to build next"
+// =========================================================================
+
+export type CompassRealFeatureNode = components['schemas']['RealFeatureNode'];
+export type CompassRealFeatureEdge = components['schemas']['RealFeatureEdge'];
+export type CompassGhostFeatureNode = components['schemas']['CompassGhostFeatureNode'];
+export type CompassAnnotation = components['schemas']['CompassAnnotation'];
+export type CompassNorthStar = components['schemas']['CompassNorthStar'];
+export type CompassObjective = components['schemas']['CompassObjective'];
+export type CompassGraphResponse = components['schemas']['CompassGraphResponse'];
+export type CompassPosition = components['schemas']['CompassPosition'];
+export type CompassPromoteTarget = components['schemas']['CompassPromoteTarget'];
+export type CompassPromoteResponse = components['schemas']['CompassPromoteGhostResponse'];
+export type CompassUpsertResponse = components['schemas']['CompassUpsertGhostResponse'];
+export type CompassAnnotateResponse = components['schemas']['CompassAnnotateGhostResponse'];
+
+export async function fetchCompassGraph(codebaseId: string): Promise<CompassGraphResponse> {
+  return fetchJSON<CompassGraphResponse>(`/api/compass/${encodeURIComponent(codebaseId)}/graph`);
+}
+
+export async function upsertCompassGhost(
+  codebaseId: string,
+  body: { id?: string; title: string; notes?: string; position: CompassPosition }
+): Promise<CompassUpsertResponse> {
+  return fetchJSON<CompassUpsertResponse>(`/api/compass/${encodeURIComponent(codebaseId)}/ghosts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteCompassGhost(
+  codebaseId: string,
+  ghostId: string
+): Promise<{ deleted: boolean; id: string }> {
+  return fetchJSON(
+    `/api/compass/${encodeURIComponent(codebaseId)}/ghosts/${encodeURIComponent(ghostId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+export async function annotateCompassGhost(
+  codebaseId: string,
+  ghostId: string
+): Promise<CompassAnnotateResponse> {
+  return fetchJSON<CompassAnnotateResponse>(
+    `/api/compass/${encodeURIComponent(codebaseId)}/annotate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ghostId }),
+    }
+  );
+}
+
+export async function promoteCompassGhost(
+  codebaseId: string,
+  ghostId: string,
+  target: CompassPromoteTarget
+): Promise<CompassPromoteResponse> {
+  return fetchJSON<CompassPromoteResponse>(
+    `/api/compass/${encodeURIComponent(codebaseId)}/promote`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ghostId, target }),
+    }
+  );
+}
