@@ -105,6 +105,7 @@ export interface ResolvedOmpTools {
 
 function normalizeToolName(name: string, unknownTools: string[]): string | undefined {
   const lower = name.toLowerCase();
+  if (lower.startsWith('mcp__')) return lower;
   if (KNOWN_OMP_TOOL_NAMES.has(lower)) return lower;
   unknownTools.push(name);
   return undefined;

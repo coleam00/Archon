@@ -165,8 +165,8 @@ nodes:
     provider: claude             # Per-node provider override
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
-    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude only)
-    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude only) — see skills guide
+    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude and Oh My Pi)
+    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude, Pi, and Oh My Pi) — see skills guide
 ```
 
 ### Node Fields
@@ -205,7 +205,7 @@ nodes:
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Supported by Claude, Pi, and Oh My Pi (use each provider's tool names; OMP uses `search`, not `grep`) |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Supported by Claude, Pi, and Oh My Pi |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Claude only. See [MCP Servers](/guides/mcp-servers/) |
+| `mcp` | string | — | Path to MCP server config JSON file. Supported by Claude and Oh My Pi. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Skills to preload. Supported by Claude, Pi, and Oh My Pi. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Supported by Claude, Pi, and Oh My Pi (`max` maps to provider-specific strongest setting). Also settable at workflow level |
@@ -680,12 +680,12 @@ GitHub always run workflows in foreground mode regardless of this setting.
 ### Provider Validation
 
 Workflows are validated at load time for **provider identity only**:
-- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`).
+- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`, `omp`).
 - Validation errors are shown in `/workflow list`.
 
 Example validation error:
 ```
-Unknown provider 'claud'. Registered: claude, codex, pi
+Unknown provider 'claud'. Registered: claude, codex, pi, omp
 ```
 
 Model strings are not validated at load time — they're forwarded to the SDK as-is and validated by the upstream API at request time.
@@ -1172,13 +1172,13 @@ Before deploying a workflow:
 5. **Parallel by default** — nodes in the same topological layer run concurrently
 6. **Conditional branching** — `when:` conditions and `trigger_rule` control which nodes run
 7. **`output_format`** — enforce structured JSON output from AI nodes for reliable branching
-8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude only, SDK-enforced)
+8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude, Pi, and Oh My Pi; use provider-specific tool names)
 9. **`retry:`** — auto-retries transient errors (default: 2 retries / 3 total attempts, 3 s backoff); customize per node
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
-11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude only)
-12. **`skills:`** — preload skills into Claude nodes for domain expertise
+11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude and Oh My Pi)
+12. **`skills:`** — preload skills into node agents (Claude, Pi, and Oh My Pi)
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
+14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude, Pi, and Oh My Pi; Claude also supports object-form `thinking`)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)

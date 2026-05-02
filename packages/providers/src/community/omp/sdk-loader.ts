@@ -18,6 +18,29 @@ export interface OmpModelRegistry {
 
 export type OmpSessionManager = object;
 
+export interface OmpMcpSourceMeta {
+  provider: string;
+  providerName: string;
+  path: string;
+  level: 'project' | 'user' | 'native';
+}
+
+export interface OmpMcpLoadResult {
+  tools: unknown[];
+  errors: Map<string, string>;
+  connectedServers: string[];
+  exaApiKeys: string[];
+}
+
+export interface OmpMcpManager {
+  connectServers(
+    configs: Record<string, unknown>,
+    sources: Record<string, OmpMcpSourceMeta>,
+    onConnecting?: (serverNames: string[]) => void
+  ): Promise<OmpMcpLoadResult>;
+  disconnectAll(): Promise<void>;
+}
+
 export interface OmpSessionInfo {
   id: string;
   path: string;
@@ -57,11 +80,14 @@ export interface OmpCreateAgentSessionOptions {
   additionalExtensionPaths?: string[];
   thinkingLevel?: string;
   systemPrompt?: string;
+  mcpManager?: OmpMcpManager;
+  customTools?: unknown[];
   toolNames: string[];
   hasUI: boolean;
 }
 
 export interface OmpCodingAgentSdk {
+  MCPManager: new (cwd: string, toolCache?: unknown) => OmpMcpManager;
   createAgentSession(options: OmpCreateAgentSessionOptions): Promise<OmpCreateAgentSessionResult>;
   discoverAuthStorage(agentDir?: string): Promise<OmpAuthStorage>;
   ModelRegistry: new (authStorage: OmpAuthStorage) => OmpModelRegistry;
@@ -76,5 +102,9 @@ export interface OmpCodingAgentSdk {
 }
 
 export async function loadOmpSdk(): Promise<OmpCodingAgentSdk> {
-  return (await dynamicImport('@oh-my-pi/pi-coding-agent')) as OmpCodingAgentSdk;
+  const [sdk, mcp] = await Promise.all([
+    dynamicImport('@oh-my-pi/pi-coding-agent'),
+    dynamicImport('@oh-my-pi/pi-coding-agent/mcp'),
+  ]);
+  return { ...(sdk as object), ...(mcp as object) } as OmpCodingAgentSdk;
 }

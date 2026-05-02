@@ -347,7 +347,7 @@ describe('registry', () => {
       expect(caps.effortControl).toBe(true);
       expect(caps.thinkingControl).toBe(true);
       expect(caps.envInjection).toBe(false);
-      expect(caps.mcp).toBe(false);
+      expect(caps.mcp).toBe(true);
       expect(caps.hooks).toBe(false);
       expect(caps.agents).toBe(false);
       expect(caps.costControl).toBe(false);

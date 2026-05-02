@@ -1,6 +1,6 @@
 ---
 title: Per-Node Skills
-description: Preload specialized knowledge into individual workflow nodes using the Claude Agent SDK skills system.
+description: Preload specialized knowledge into individual workflow nodes using provider-supported skill runtimes.
 category: guides
 area: workflows
 audience: [user]
@@ -13,7 +13,7 @@ DAG workflow nodes support a `skills` field that preloads named skills into the
 node's agent context. Each node gets specialized procedural knowledge — code review
 patterns, Remotion best practices, testing conventions — without polluting other nodes.
 
-**Claude only** — Codex nodes will warn and ignore the `skills` field.
+**Supported on Claude, Pi, and Oh My Pi** — Codex nodes will warn and ignore the `skills` field.
 
 ## Quick Start
 
@@ -43,9 +43,11 @@ gotchas) without the user having to paste instructions into the prompt.
 
 ## How It Works
 
-When a node has `skills: [name, ...]`, the executor wraps it in an
+When a Claude node has `skills: [name, ...]`, the executor wraps it in an
 [AgentDefinition](https://platform.claude.com/docs/en/agent-sdk/subagents) — the
-Claude Agent SDK mechanism for scoping skills to subagents.
+Claude Agent SDK mechanism for scoping skills to subagents. Pi and Oh My Pi
+resolve the same YAML field through their native skill discovery and pass the
+resolved skills into their runtime.
 
 ```
 YAML: skills: [remotion-best-practices]
@@ -63,8 +65,8 @@ SDK loads skill content into agent context at startup
 Agent executes with full skill knowledge available
 ```
 
-The `Skill` tool is automatically added to `allowedTools` so the agent can invoke
-skills. You don't need to add it manually.
+For Claude nodes, the `Skill` tool is automatically added to `allowedTools` so the
+agent can invoke skills. You don't need to add it manually.
 
 ## Installing Skills
 
@@ -212,14 +214,14 @@ Warning: Node 'review' has skills set but uses Codex — per-node skills
 are not supported for Codex.
 ```
 
-To use skills, ensure the node uses Claude (the default provider, or set
-`provider: claude` explicitly).
+To use skills, ensure the node uses a provider with skill support (`claude`, `pi`,
+or `omp`).
 
 ## Limitations
 
 - **Pre-installation required** — skills must exist on disk before the workflow runs.
   There is no on-demand fetching (yet).
-- **Claude only** — the SDK's `AgentDefinition.skills` field is Claude-specific.
+- **Provider-specific runtime** — Claude uses `AgentDefinition.skills`; Pi and Oh My Pi use their native skill discovery/runtime.
 - **Full injection** — skill content is fully injected at startup, not progressively
   disclosed. Keep skills concise.
 - **No validation** — if a named skill doesn't exist, the SDK may fail silently.
@@ -230,7 +232,7 @@ To use skills, ensure the node uses Claude (the default provider, or set
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Skill not found | Not installed | Run `npx skills add <source>` |
-| Skill ignored | Node uses Codex provider | Set `provider: claude` on the node |
+| Skill ignored | Node uses Codex provider | Set `provider:` to `claude`, `pi`, or `omp` on the node |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |
 | Skill has no effect | Description too vague | Rewrite SKILL.md with specific, actionable instructions |
 
