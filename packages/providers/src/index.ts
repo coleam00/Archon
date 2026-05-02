@@ -45,8 +45,10 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 export { resetCodexSingleton } from './codex/provider';
 export {
   getDefaultSkillRoots,
+  getAgentSkillRoots,
   getSkillSearchRoots,
   resolveSkillReferences,
+  resolveProviderSkillReferences,
   loadResolvedSkills,
   formatMissingSkills,
   type SkillResolutionOptions,

@@ -5,6 +5,8 @@ import { homedir } from 'os';
 
 export interface SkillResolutionOptions {
   skillRoots?: string[];
+  defaultRoots?: string[];
+  allowPathRefs?: boolean;
 }
 
 export interface ResolvedSkill {
@@ -17,6 +19,7 @@ export interface ResolvedSkill {
 export interface MissingSkill {
   ref: string;
   searchedPaths: string[];
+  reason?: string;
 }
 
 export interface SkillResolutionResult {
@@ -29,14 +32,24 @@ export interface LoadedSkill extends ResolvedSkill {
   content: string;
 }
 
+type SkillCandidateStatus =
+  | { status: 'readable'; path: string }
+  | { status: 'missing'; path: string }
+  | { status: 'unreadable'; path: string; code?: string; message: string };
+
+function getHomeDir(): string {
+  return process.env.HOME ?? homedir();
+}
+
 function expandRoot(root: string, cwd: string): string {
-  if (root === '~') return homedir();
-  if (root.startsWith(`~${sep}`)) return join(homedir(), root.slice(2));
+  const home = getHomeDir();
+  if (root === '~') return home;
+  if (root.startsWith(`~${sep}`)) return join(home, root.slice(2));
   return isAbsolute(root) ? root : resolve(cwd, root);
 }
 
 export function getDefaultSkillRoots(cwd: string): string[] {
-  const home = process.env.HOME ?? homedir();
+  const home = getHomeDir();
   return [
     join(cwd, '.agents', 'skills'),
     join(cwd, '.codex', 'skills'),
@@ -48,10 +61,20 @@ export function getDefaultSkillRoots(cwd: string): string[] {
   ];
 }
 
+export function getAgentSkillRoots(cwd: string): string[] {
+  const home = getHomeDir();
+  return [
+    join(cwd, '.agents', 'skills'),
+    join(cwd, '.claude', 'skills'),
+    join(home, '.agents', 'skills'),
+    join(home, '.claude', 'skills'),
+  ];
+}
+
 export function getSkillSearchRoots(cwd: string, options: SkillResolutionOptions = {}): string[] {
   const roots = [
     ...(options.skillRoots ?? []).map(root => expandRoot(root, cwd)),
-    ...getDefaultSkillRoots(cwd),
+    ...(options.defaultRoots ?? getDefaultSkillRoots(cwd)),
   ];
 
   const seen = new Set<string>();
@@ -72,12 +95,16 @@ function looksLikePath(ref: string): boolean {
   );
 }
 
-async function canReadFile(path: string): Promise<boolean> {
+async function checkSkillCandidate(path: string): Promise<SkillCandidateStatus> {
   try {
     await access(path, constants.R_OK);
-    return true;
-  } catch {
-    return false;
+    return { status: 'readable', path };
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+      return { status: 'missing', path };
+    }
+    return { status: 'unreadable', path, code: err.code, message: err.message };
   }
 }
 
@@ -111,6 +138,7 @@ export async function resolveSkillReferences(
   options: SkillResolutionOptions = {}
 ): Promise<SkillResolutionResult> {
   const searchRoots = getSkillSearchRoots(cwd, options);
+  const allowPathRefs = options.allowPathRefs ?? true;
   const resolved: ResolvedSkill[] = [];
   const missing: MissingSkill[] = [];
   const seenRefs = new Set<string>();
@@ -123,7 +151,17 @@ export async function resolveSkillReferences(
 
     if (looksLikePath(ref)) {
       const candidate = skillPathForRef(ref, cwd);
-      if (await canReadFile(candidate.skillPath)) {
+      if (!allowPathRefs) {
+        missing.push({
+          ref,
+          searchedPaths: [candidate.skillPath],
+          reason: 'Path-based skill references are not supported by this provider',
+        });
+        continue;
+      }
+
+      const status = await checkSkillCandidate(candidate.skillPath);
+      if (status.status === 'readable') {
         if (!seenPaths.has(candidate.skillPath)) {
           seenPaths.add(candidate.skillPath);
           resolved.push({
@@ -134,16 +172,28 @@ export async function resolveSkillReferences(
           });
         }
       } else {
-        missing.push({ ref, searchedPaths: [candidate.skillPath] });
+        missing.push({
+          ref,
+          searchedPaths: [candidate.skillPath],
+          ...(status.status === 'unreadable'
+            ? { reason: `Cannot read ${status.path}: ${status.message}` }
+            : {}),
+        });
       }
       continue;
     }
 
     const searchedPaths = searchRoots.map(root => join(root, ref, 'SKILL.md'));
     let skillPath: string | undefined;
+    let failureReason: string | undefined;
     for (const candidate of searchedPaths) {
-      if (await canReadFile(candidate)) {
+      const status = await checkSkillCandidate(candidate);
+      if (status.status === 'readable') {
         skillPath = candidate;
+        break;
+      }
+      if (status.status === 'unreadable') {
+        failureReason = `Cannot read ${status.path}: ${status.message}`;
         break;
       }
     }
@@ -155,11 +205,27 @@ export async function resolveSkillReferences(
         resolved.push({ ref, name: ref, dirPath, skillPath });
       }
     } else {
-      missing.push({ ref, searchedPaths });
+      missing.push({ ref, searchedPaths, ...(failureReason ? { reason: failureReason } : {}) });
     }
   }
 
   return { resolved, missing, searchRoots };
+}
+
+export async function resolveProviderSkillReferences(
+  provider: string | undefined,
+  cwd: string,
+  skillRefs: readonly string[] | undefined,
+  options: SkillResolutionOptions = {}
+): Promise<SkillResolutionResult> {
+  if (provider === 'claude' || provider === 'pi') {
+    return resolveSkillReferences(cwd, skillRefs, {
+      defaultRoots: getAgentSkillRoots(cwd),
+      allowPathRefs: false,
+    });
+  }
+
+  return resolveSkillReferences(cwd, skillRefs, options);
 }
 
 export async function loadResolvedSkills(skills: readonly ResolvedSkill[]): Promise<LoadedSkill[]> {
@@ -179,7 +245,8 @@ export function formatMissingSkills(missing: readonly MissingSkill[]): string {
   return missing
     .map(skill => {
       const searched = skill.searchedPaths.map(path => `  - ${path}`).join('\n');
-      return `Skill '${skill.ref}' not found or not readable. Searched:\n${searched}`;
+      const reason = skill.reason ? `${skill.reason}. ` : '';
+      return `Skill '${skill.ref}' not found or not readable. ${reason}Searched:\n${searched}`;
     })
     .join('\n\n');
 }

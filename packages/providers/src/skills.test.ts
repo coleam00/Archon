@@ -1,8 +1,13 @@
 import { describe, test, expect, afterEach } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { loadResolvedSkills, resolveSkillReferences } from './skills';
+import {
+  getSkillSearchRoots,
+  loadResolvedSkills,
+  resolveProviderSkillReferences,
+  resolveSkillReferences,
+} from './skills';
 
 const tempDirs: string[] = [];
 
@@ -76,6 +81,51 @@ describe('skill resolution', () => {
     expect(result.missing).toHaveLength(1);
     expect(result.missing[0]?.ref).toBe('missing');
     expect(result.missing[0]?.searchedPaths[0]).toBe(join(configuredRoot, 'missing', 'SKILL.md'));
+  });
+
+  test('stops when a higher-precedence skill exists but is unreadable', async () => {
+    const cwd = await makeTempDir();
+    const configuredRoot = join(cwd, 'custom-skills');
+    const configuredSkillDir = await writeSkill(configuredRoot, 'alpha');
+    await writeSkill(join(cwd, '.agents', 'skills'), 'alpha', 'Lower precedence.');
+    await chmod(join(configuredSkillDir, 'SKILL.md'), 0o000);
+
+    const result = await resolveSkillReferences(cwd, ['alpha'], {
+      skillRoots: [configuredRoot],
+    });
+
+    expect(result.resolved).toEqual([]);
+    expect(result.missing).toHaveLength(1);
+    expect(result.missing[0]?.reason).toContain('Cannot read');
+    expect(result.missing[0]?.searchedPaths[0]).toBe(join(configuredSkillDir, 'SKILL.md'));
+  });
+
+  test('uses provider-specific roots for Claude and Pi skill names', async () => {
+    const cwd = await makeTempDir();
+    await writeSkill(join(cwd, '.codex', 'skills'), 'alpha');
+
+    const piResult = await resolveProviderSkillReferences('pi', cwd, ['alpha']);
+    const claudeResult = await resolveProviderSkillReferences('claude', cwd, ['alpha']);
+    const codexResult = await resolveProviderSkillReferences('codex', cwd, ['alpha']);
+
+    expect(piResult.resolved).toEqual([]);
+    expect(claudeResult.resolved).toEqual([]);
+    expect(codexResult.missing).toEqual([]);
+    expect(codexResult.resolved[0]?.skillPath).toBe(
+      join(cwd, '.codex', 'skills', 'alpha', 'SKILL.md')
+    );
+  });
+
+  test('expands configured relative roots and removes duplicate roots', async () => {
+    const cwd = await makeTempDir();
+    const root = join(cwd, 'skills');
+
+    const roots = getSkillSearchRoots(cwd, {
+      skillRoots: ['skills', root],
+    });
+
+    expect(roots[0]).toBe(root);
+    expect(roots.filter(candidate => candidate === root)).toHaveLength(1);
   });
 
   test('loads skill content and frontmatter name', async () => {

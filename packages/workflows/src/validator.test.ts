@@ -275,6 +275,28 @@ describe('validateWorkflowResources — skills validation', () => {
     expect(issues.filter(i => i.field === 'skills')).toHaveLength(0);
   });
 
+  test('uses provider-specific skill roots when validating non-Codex providers', async () => {
+    await createSkill(join(tmpDir, '.codex', 'skills'), 'alpha');
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'do stuff',
+          provider: 'pi',
+          skills: ['alpha'],
+        } as unknown as DagNode,
+      ],
+      'pi'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const skillErrors = issues.filter(i => i.field === 'skills' && i.level === 'error');
+
+    expect(skillErrors).toHaveLength(1);
+    expect(skillErrors[0].hint).not.toContain(join(tmpDir, '.codex', 'skills'));
+  });
+
   test('errors when skill is missing', async () => {
     const workflow = makeWorkflow('test', [
       { id: 'step1', prompt: 'do stuff', skills: ['missing'] } as unknown as DagNode,

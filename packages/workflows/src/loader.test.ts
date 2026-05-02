@@ -39,10 +39,13 @@ import * as bundledDefaults from './defaults/bundled-defaults';
 
 describe('Workflow Loader', () => {
   let testDir: string;
+  let originalArchonHome: string | undefined;
 
   beforeEach(async () => {
     // Create unique temp directory for each test
+    originalArchonHome = process.env.ARCHON_HOME;
     testDir = join(tmpdir(), `workflow-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    process.env.ARCHON_HOME = join(testDir, 'archon-home');
     await mkdir(testDir, { recursive: true });
   });
 
@@ -52,6 +55,11 @@ describe('Workflow Loader', () => {
       await rm(testDir, { recursive: true, force: true });
     } catch {
       // Ignore cleanup errors
+    }
+    if (originalArchonHome === undefined) {
+      delete process.env.ARCHON_HOME;
+    } else {
+      process.env.ARCHON_HOME = originalArchonHome;
     }
   });
 

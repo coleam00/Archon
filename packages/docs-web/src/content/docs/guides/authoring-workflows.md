@@ -166,7 +166,7 @@ nodes:
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
     # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude only)
-    # skills: [remotion-best-practices]  # Optional: per-node skills (Claude only) — see skills guide
+    # skills: [remotion-best-practices]  # Optional: per-node skills — see skills guide
 ```
 
 ### Node Fields
@@ -206,7 +206,7 @@ nodes:
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Claude only |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string | — | Path to MCP server config JSON file. Claude only. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Skills to preload. Claude only. See [Skills](/guides/skills/) |
+| `skills` | string[] | — | Skills to preload. Supported by Claude, Codex, and Pi with provider-specific mechanics. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Claude only. Also settable at workflow level |
 | `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude only. Also settable at workflow level |
@@ -218,7 +218,7 @@ nodes:
 
 ### Claude SDK Advanced Options
 
-These fields map directly to Claude Agent SDK options. All are Claude-only — Codex nodes emit a warning and ignore them. They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd` and `systemPrompt` are per-node only.
+Except for `skills`, these fields map directly to Claude Agent SDK options. Claude-only fields emit a warning and are ignored by providers that do not support them. They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd` and `systemPrompt` are per-node only.
 
 **effort** — reasoning depth:
 
@@ -1174,7 +1174,7 @@ Before deploying a workflow:
 9. **`retry:`** — auto-retries transient errors (default: 2 retries / 3 total attempts, 3 s backoff); customize per node
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude only)
-12. **`skills:`** — preload skills into Claude nodes for domain expertise
+12. **`skills:`** — preload selected skills into supported provider nodes for domain expertise
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
 14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude only)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)

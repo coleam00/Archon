@@ -22,7 +22,7 @@ import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
 import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
-import { resolveSkillReferences } from '@archon/providers/skills';
+import { resolveProviderSkillReferences } from '@archon/providers/skills';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -406,21 +406,8 @@ export async function validateWorkflowResources(
       }
     }
 
-    // --- Skills nodes: check skill directories exist ---
+    // --- Skills nodes: check provider-supported skill references exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
-      const skillRoots = provider ? config?.skillRootsByProvider?.[provider] : undefined;
-      const skillResolution = await resolveSkillReferences(cwd, node.skills, { skillRoots });
-      for (const missingSkill of skillResolution.missing) {
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'skills',
-          message: `Skill '${missingSkill.ref}' not found or not readable`,
-          hint: `Searched:\n${missingSkill.searchedPaths.map(path => `  - ${path}`).join('\n')}`,
-        });
-      }
-
-      // Warn if using skills with a provider that doesn't support them
       if (provider && isRegisteredProvider(provider)) {
         const caps = getProviderCapabilities(provider);
         if (!caps.skills) {
@@ -431,7 +418,23 @@ export async function validateWorkflowResources(
             message: `Skills are not supported by provider '${provider}' — this will be ignored`,
             hint: 'Remove the skills field or switch to a provider that supports skills',
           });
+          continue;
         }
+      }
+
+      const skillRoots = provider ? config?.skillRootsByProvider?.[provider] : undefined;
+      const skillResolution = await resolveProviderSkillReferences(provider, cwd, node.skills, {
+        skillRoots,
+      });
+      for (const missingSkill of skillResolution.missing) {
+        const reason = missingSkill.reason ? `${missingSkill.reason}\n` : '';
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'skills',
+          message: `Skill '${missingSkill.ref}' not found or not readable`,
+          hint: `${reason}Searched:\n${missingSkill.searchedPaths.map(path => `  - ${path}`).join('\n')}`,
+        });
       }
     }
 
