@@ -246,12 +246,27 @@ async function readShortSha(workspacePath: RepoPath, ref: string): Promise<strin
   }
 }
 
-/** Working tree has uncommitted modifications */
+/**
+ * Working tree has uncommitted modifications to **tracked** files.
+ *
+ * Untracked files are explicitly excluded (`--untracked-files=no`): they are
+ * safe across all `syncWorkspace` paths, because neither `git merge --ff-only`
+ * nor `git reset --hard origin/<branch>` ever touch untracked files. Treating
+ * untracked files as "dirty" would block fast-forward sync on every macOS
+ * checkout (`.DS_Store`) or every claude/skill cache write — false positives
+ * with no destructive risk to defend against.
+ *
+ * (Distinct from `branch.ts:hasUncommittedChanges`, which keeps the broader
+ * default for worktree-cleanup safety and intentionally refuses to delete
+ * worktrees that have any local files at all.)
+ */
 async function isDirty(workspacePath: RepoPath): Promise<boolean> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', workspacePath, 'status', '--porcelain'], {
-      timeout: 10000,
-    });
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'status', '--porcelain', '--untracked-files=no'],
+      { timeout: 10000 }
+    );
     return stdout.trim().length > 0;
   } catch {
     return false;
