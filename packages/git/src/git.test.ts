@@ -1451,7 +1451,7 @@ branch refs/heads/feature/auth
         "Configured base branch 'does-not-exist' not found on remote"
       );
       await expect(git.syncWorkspace('/workspace/repo', 'does-not-exist')).rejects.toThrow(
-        'update worktree.baseBranch'
+        'update default_branch on the codebase'
       );
     });
 
@@ -1467,7 +1467,9 @@ branch refs/heads/feature/auth
       await expect(git.syncWorkspace('/workspace/repo')).rejects.toThrow(
         'Sync fetch from origin/main failed'
       );
-      await expect(git.syncWorkspace('/workspace/repo')).rejects.not.toThrow('worktree.baseBranch');
+      await expect(git.syncWorkspace('/workspace/repo')).rejects.not.toThrow(
+        'update default_branch on the codebase'
+      );
     });
 
     test("default mode 'fast-forward' never runs reset", async () => {
