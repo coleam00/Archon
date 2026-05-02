@@ -872,11 +872,14 @@ After upgrading, run 'archon setup' again.`,
         cancel('Please upgrade Node.js to 18+ and run setup again.');
         process.exit(0);
       }
-      delete selectedProviders.codex;
+      selectedProviders.codex = false;
     }
   }
 
-  if (Object.keys(selectedProviders).length === 0) {
+  // Filter to only truly selected providers (truthy values)
+  const enabledProviderIds = Object.keys(selectedProviders).filter(id => selectedProviders[id]);
+
+  if (enabledProviderIds.length === 0) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
       selectedProviders: {},
@@ -907,11 +910,11 @@ After upgrading, run 'archon setup' again.`,
   // Community providers (Pi, etc.) manage their own auth externally - no collection needed
   let defaultAssistant =
     providers.find(p => p.builtIn && selectedProviders[p.id])?.id ??
-    Object.keys(selectedProviders)[0] ??
+    enabledProviderIds[0] ??
     providers[0]?.id ??
     'claude';
 
-  if (Object.keys(selectedProviders).length > 1) {
+  if (enabledProviderIds.length > 1) {
     const defaultChoices = providers
       .filter(p => selectedProviders[p.id])
       .map(p => ({

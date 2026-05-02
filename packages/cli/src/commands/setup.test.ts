@@ -89,8 +89,9 @@ CODEX_ACCOUNT_ID=account1
       );
 
       // Register providers so checkExistingConfig can detect them
-      const { registerBuiltinProviders, registerCommunityProviders } =
+      const { registerBuiltinProviders, registerCommunityProviders, clearRegistry } =
         await import('@archon/providers');
+      clearRegistry();
       registerBuiltinProviders();
       registerCommunityProviders();
 
@@ -113,6 +114,7 @@ CODEX_ACCOUNT_ID=account1
       } else {
         process.env.ARCHON_HOME = originalHome;
       }
+      clearRegistry();
     });
 
     it('should detect PostgreSQL database configuration', () => {
