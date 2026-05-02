@@ -42,10 +42,12 @@ export async function reportUnpushedWorkInSource(
 ): Promise<void> {
   if (!platform.sendStructuredEvent) return;
 
-  const sourcePath = toRepoPath(codebase.default_cwd);
-  const branchName = codebase.default_branch ? toBranchName(codebase.default_branch) : null;
-
   try {
+    // toRepoPath/toBranchName throw on empty strings — keep them inside the
+    // try so the non-fatal contract holds even on degenerate codebase rows.
+    const sourcePath = toRepoPath(codebase.default_cwd);
+    const branchName = codebase.default_branch ? toBranchName(codebase.default_branch) : null;
+
     const dirty = await hasUncommittedChanges(sourcePath);
     // If we don't know the branch, we can't compare to origin/<branch>.
     // Skip the unpushed-commits check; only the dirty bit is informative.
