@@ -179,4 +179,49 @@ describe('ParityEnforcer', () => {
     expect(report.drift).toBe(false);
     expect(report.actionTaken).toBe('none');
   });
+
+  it('calls onError handler when action handler throws', async () => {
+    let errorReceived = false;
+    enforcer.onAction(() => {
+      throw new Error('action failed');
+    });
+    enforcer.onError(() => {
+      errorReceived = true;
+    });
+
+    const now = Date.now() as Timestamp;
+    const expected = createTrade({ symbol: 'BTC/USD', entryTime: now as Timestamp, pnl: 1000 });
+    const actual = createTrade({
+      symbol: 'BTC/USD',
+      entryTime: (now + 1000) as Timestamp,
+      pnl: 500,
+    });
+
+    enforcer.addExpectedTrade(expected);
+    enforcer.addActualTrade(actual);
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(errorReceived).toBe(true);
+  });
+
+  it('fires action handler exactly once per drift event', async () => {
+    let callCount = 0;
+    enforcer.onAction(() => {
+      callCount++;
+    });
+
+    const now = Date.now() as Timestamp;
+    const expected = createTrade({ symbol: 'BTC/USD', entryTime: now as Timestamp, pnl: 1000 });
+    const actual = createTrade({
+      symbol: 'BTC/USD',
+      entryTime: (now + 1000) as Timestamp,
+      pnl: 500,
+    });
+
+    enforcer.addExpectedTrade(expected);
+    enforcer.addActualTrade(actual);
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(callCount).toBe(1);
+  });
 });

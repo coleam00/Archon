@@ -1,5 +1,6 @@
 import type {
   ActionHandler,
+  DriftAction,
   DriftReport,
   EnforcerConfig,
   RollingDriftMetrics,
@@ -75,6 +76,10 @@ export class ParityEnforcer {
     this.responder.onAction(handler);
   }
 
+  onError(handler: (error: unknown, action: DriftAction, report: DriftReport) => void): void {
+    this.responder.onError(handler);
+  }
+
   onDrift(handler: (report: DriftReport) => void): void {
     this.driftListeners.push(handler);
   }
@@ -136,11 +141,9 @@ export class ParityEnforcer {
 
     let actionTaken: DriftReport['actionTaken'] = 'none';
     if (drift) {
-      // Synchronous wrapper — respond is async only for handler callback
       const action = this.responder.getAction(severity);
       if (action === 'stop_trading') {
-        // Mark halted synchronously to prevent race
-        void this.responder.respond(severity, null as unknown as DriftReport);
+        this.responder.halt();
       }
       actionTaken = action;
     }
@@ -157,7 +160,6 @@ export class ParityEnforcer {
     };
 
     if (drift) {
-      // Fire async handler (non-blocking)
       void this.responder.respond(severity, report);
       this.emitDrift(report);
     }

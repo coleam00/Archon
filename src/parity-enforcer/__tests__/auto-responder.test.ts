@@ -104,4 +104,48 @@ describe('AutoResponder', () => {
     responder.resetHalt();
     expect(responder.isHalted()).toBe(false);
   });
+
+  it('halt() sets halted state without invoking handler', () => {
+    let handlerCalled = false;
+    const responder = new AutoResponder(defaultActions, () => {
+      handlerCalled = true;
+    });
+
+    responder.halt();
+    expect(responder.isHalted()).toBe(true);
+    expect(handlerCalled).toBe(false);
+  });
+
+  it('calls onError handler when action handler throws', async () => {
+    const handlerError = new Error('handler broke');
+    let receivedError: unknown = null;
+    let receivedAction: DriftAction | null = null;
+
+    const responder = new AutoResponder(defaultActions, () => {
+      throw handlerError;
+    });
+    responder.onError((error, action) => {
+      receivedError = error;
+      receivedAction = action;
+    });
+
+    const report = makeDriftReport('LOW');
+    await responder.respond('LOW', report);
+
+    expect(receivedError).toBe(handlerError);
+    expect(receivedAction).toBe('alert');
+  });
+
+  it('does not crash when onError handler itself throws', async () => {
+    const responder = new AutoResponder(defaultActions, () => {
+      throw new Error('handler error');
+    });
+    responder.onError(() => {
+      throw new Error('error handler also broken');
+    });
+
+    const report = makeDriftReport('LOW');
+    const action = await responder.respond('LOW', report);
+    expect(action).toBe('alert');
+  });
 });

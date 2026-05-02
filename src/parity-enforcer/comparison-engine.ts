@@ -7,6 +7,7 @@ export function compareTrade(expected: Trade, actual: Trade): TradeComparison {
   const exitDeviation = Math.abs(actual.exitPrice - expected.exitPrice);
   const exitDeviationPct = expected.exitPrice !== 0 ? exitDeviation / expected.exitPrice : 0;
 
+  // Gross price range (|exit - entry| * qty), not market slippage vs expected fill
   const expectedSlippage = Math.abs(expected.exitPrice - expected.entryPrice) * expected.quantity;
   const actualSlippage = Math.abs(actual.exitPrice - actual.entryPrice) * actual.quantity;
   const slippageDiff = actualSlippage - expectedSlippage;

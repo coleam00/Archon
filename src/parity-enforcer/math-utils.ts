@@ -1,3 +1,5 @@
+import type { Timestamp } from './types';
+
 export function mean(values: number[]): number {
   if (values.length === 0) return 0;
   let sum = 0;
@@ -21,6 +23,7 @@ export function sharpeRatio(returns: number[], riskFreeRate = 0): number {
   const avg = mean(returns);
   const std = standardDeviation(returns);
   if (std === 0) return 0;
+  // Annualize assuming daily returns (252 trading days/year)
   return ((avg - riskFreeRate) / std) * Math.sqrt(252);
 }
 
@@ -52,5 +55,3 @@ export function tradeFrequency(timestamps: Timestamp[], windowMs: number): numbe
   if (span === 0) return 0;
   return (timestamps.length / span) * windowMs;
 }
-
-type Timestamp = number;
