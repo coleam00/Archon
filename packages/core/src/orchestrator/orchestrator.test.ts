@@ -621,7 +621,7 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockBuildOrchestratorPrompt).toHaveBeenCalledWith(
         [mockCodebase],
         expect.any(Array),
-        expect.any(String)
+        '/home/test/.archon/workspaces'
       );
     });
 
@@ -640,7 +640,7 @@ describe('orchestrator-agent handleMessage', () => {
         mockCodebase,
         [mockCodebase],
         expect.any(Array),
-        expect.any(String)
+        '/home/test/.archon/workspaces'
       );
     });
 

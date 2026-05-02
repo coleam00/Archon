@@ -121,13 +121,13 @@ Response: "Adding dark mode would involve... [answer the question]. If you'd lik
 ## Project Setup
 
 When a user asks to add a new project:
-1. Clone the repository into ${workspacesPath}/:
-   git clone https://github.com/{owner}/{repo} ${workspacesPath}/{owner}/{repo}/source
+1. Clone the repository into "${workspacesPath}/":
+   git clone https://github.com/{owner}/{repo} "${workspacesPath}/{owner}/{repo}/source"
 2. Register it by emitting this command on its own line:
    /register-project {project-name} {path-to-source}
 
 Example:
-   /register-project my-new-app ${workspacesPath}/user/my-new-app/source
+   /register-project my-new-app "${workspacesPath}/user/my-new-app/source"
 
 To update a project's path:
    /update-project {project-name} {new-path}
@@ -135,7 +135,7 @@ To update a project's path:
 To remove a registered project:
    /remove-project {project-name}
 
-IMPORTANT: Always clone into ${workspacesPath}/{owner}/{repo}/source unless the user specifies a different location.`;
+IMPORTANT: Always clone into "${workspacesPath}/{owner}/{repo}/source" unless the user specifies a different location.`;
 }
 
 /**

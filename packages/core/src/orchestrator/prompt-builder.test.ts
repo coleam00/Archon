@@ -30,6 +30,12 @@ describe('buildRoutingRulesWithProject', () => {
 
     expect(rules).toContain('NO knowledge of the conversation history');
   });
+
+  test('clone instruction uses provided workspacesPath', () => {
+    const rules = buildRoutingRulesWithProject(undefined, '/.archon/workspaces');
+    expect(rules).toContain('/.archon/workspaces');
+    expect(rules).not.toContain('~/.archon');
+  });
 });
 
 describe('formatWorkflowContextSection', () => {
