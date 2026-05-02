@@ -924,6 +924,29 @@ describe('orchestrator-agent handleMessage', () => {
       // Workflow is still dispatched
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
     });
+
+    test('dispatches workflow when command body arrives after /invoke-workflow detection', async () => {
+      mockListCodebases.mockResolvedValue([mockCodebase]);
+      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
+      mockFindWorkflow.mockImplementation(
+        (name: string, workflows: readonly WorkflowDefinition[]) =>
+          workflows.find(w => w.name === name)
+      );
+
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'assistant', content: '/invoke-workflow ' };
+        yield { type: 'assistant', content: 'fix-bug ' };
+        yield { type: 'assistant', content: '--project test-project' };
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      await handleMessage(platform, 'chat-456', 'fix the bug');
+
+      expect(platform.sendMessage).not.toHaveBeenCalledWith('chat-456', '/invoke-workflow ');
+      expect(platform.sendMessage).not.toHaveBeenCalledWith('chat-456', 'fix-bug ');
+      expect(platform.sendMessage).not.toHaveBeenCalledWith('chat-456', '--project test-project');
+      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    });
   });
 
   // ─── Batch Mode ────────────────────────────────────────────────────────
@@ -1057,6 +1080,24 @@ describe('orchestrator-agent handleMessage', () => {
       await handleMessage(platform, 'chat-456', 'fix the bug');
 
       expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+    });
+
+    test('batch mode dispatches workflow when command body arrives after detection', async () => {
+      platform.getStreamingMode.mockReturnValue('batch');
+      mockClient.sendQuery.mockImplementation(async function* () {
+        yield { type: 'assistant', content: '/invoke-workflow ' };
+        yield { type: 'assistant', content: 'fix-bug ' };
+        yield { type: 'assistant', content: '--project test-project' };
+        yield { type: 'result', sessionId: 'session-id' };
+      });
+
+      await handleMessage(platform, 'chat-456', 'fix the bug');
+
+      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
+      expect(platform.sendMessage).not.toHaveBeenCalledWith(
+        'chat-456',
+        expect.stringContaining('/invoke-workflow')
+      );
     });
 
     test('passes synthesizedPrompt to workflow dispatch instead of original message', async () => {
