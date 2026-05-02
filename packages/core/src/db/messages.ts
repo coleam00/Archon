@@ -48,7 +48,14 @@ export async function addMessage(
 }
 
 /**
- * List messages for a conversation, oldest first.
+ * List the most recent messages for a conversation, returned oldest-first.
+ *
+ * The DB query orders DESC and takes the top `limit` (i.e. the newest N), then
+ * reverses to oldest-first for the chronological-display contract callers
+ * expect. This matters for conversations with more than `limit` messages: the
+ * previous "ORDER BY created_at ASC" returned the *oldest* N, which made the
+ * latest messages invisible in the Web UI for any conversation past the cap.
+ *
  * conversationId is the database UUID (not platform_conversation_id).
  */
 export async function listMessages(
@@ -58,11 +65,13 @@ export async function listMessages(
   const result = await pool.query<MessageRow>(
     `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
-     ORDER BY created_at ASC
+     ORDER BY created_at DESC
      LIMIT $2`,
     [conversationId, limit]
   );
-  return result.rows;
+  // Reverse to oldest-first so callers don't have to. (DB-side reverse via
+  // a subquery is also possible but adds a layer of indirection for no gain.)
+  return [...result.rows].reverse();
 }
 
 /**

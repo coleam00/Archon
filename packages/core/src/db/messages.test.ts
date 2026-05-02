@@ -100,20 +100,23 @@ describe('messages', () => {
   });
 
   describe('listMessages', () => {
-    test('returns rows from query result', async () => {
-      const messages: MessageRow[] = [
-        mockMessage,
+    test('queries newest-first then reverses to chronological order', async () => {
+      // DB returns DESC (newest first); listMessages reverses to oldest-first
+      // for display so callers see the natural reading order.
+      const newestFirst: MessageRow[] = [
         { ...mockMessage, id: 'msg-124', role: 'assistant', content: 'Hi!' },
+        mockMessage,
       ];
-      mockQuery.mockResolvedValueOnce(createQueryResult(messages));
+      mockQuery.mockResolvedValueOnce(createQueryResult(newestFirst));
 
       const result = await listMessages('conv-456');
 
-      expect(result).toEqual(messages);
+      // Caller-visible order: oldest first (reversed from query result)
+      expect(result).toEqual([...newestFirst].reverse());
       expect(mockQuery).toHaveBeenCalledWith(
         `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
-     ORDER BY created_at ASC
+     ORDER BY created_at DESC
      LIMIT $2`,
         ['conv-456', 200]
       );
