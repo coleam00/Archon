@@ -1,6 +1,6 @@
 {
   "name": "archon",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -49,7 +49,11 @@
   },
   "overrides": {
     "test-exclude": "^7.0.1",
-    "axios": "^1.15.0"
+    "axios": "^1.15.0",
+    "follow-redirects": "^1.16.0",
+    "path-to-regexp": "^8.4.2",
+    "qs": "^6.15.1",
+    "flatted": "^3.4.2"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.121"

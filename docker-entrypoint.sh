@@ -37,6 +37,29 @@ if [ -n "$GH_TOKEN" ]; then
     '!f() { echo "username=x-access-token"; echo "password=${GH_TOKEN}"; }; f'
 fi
 
+# Pin the glibc Claude Code binary to bypass the SDK's musl-first resolver.
+# Bun's hoisted linker installs both glibc and musl optional-dep variants for
+# the current CPU arch; the SDK picks musl first, which fails to execute on
+# this Debian (glibc) image. Only sets CLAUDE_BIN_PATH if the user has not
+# already provided one via docker run -e or docker-compose env_file.
+if [ -z "${CLAUDE_BIN_PATH:-}" ]; then
+  case "$(uname -m)" in
+    x86_64)  _CLAUDE_BIN_CANDIDATE="/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude" ;;
+    aarch64) _CLAUDE_BIN_CANDIDATE="/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude" ;;
+    *)
+      echo "ERROR: Unsupported CPU architecture $(uname -m). Set CLAUDE_BIN_PATH manually to a glibc Claude binary." >&2
+      exit 1
+      ;;
+  esac
+  if [ -x "$_CLAUDE_BIN_CANDIDATE" ]; then
+    export CLAUDE_BIN_PATH="$_CLAUDE_BIN_CANDIDATE"
+  else
+    echo "ERROR: Pinned Claude binary missing or non-executable at ${_CLAUDE_BIN_CANDIDATE}. The SDK package layout may have changed; set CLAUDE_BIN_PATH manually." >&2
+    exit 1
+  fi
+  unset _CLAUDE_BIN_CANDIDATE
+fi
+
 # Run setup-auth (exits after configuring Codex credentials), then exec the server
 # exec ensures bun is PID 1 and receives SIGTERM for graceful shutdown
 $RUNNER bun run setup-auth

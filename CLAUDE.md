@@ -253,6 +253,10 @@ bun run cli serve
 bun run cli serve --port 4000
 bun run cli serve --download-only  # Download without starting
 
+# Install the bundled Archon skill into a project
+bun run cli skill install
+bun run cli skill install /path/to/project
+
 # Show version
 bun run cli version
 ```
