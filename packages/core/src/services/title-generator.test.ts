@@ -181,7 +181,7 @@ describe('title-generator', () => {
     const assistantConfig = { model: 'gpt-5.4', modelReasoningEffort: 'medium' };
 
     await generateAndSetTitle(
-      'conv-12',
+      'conv-17',
       'Some message',
       'codex',
       '/tmp',

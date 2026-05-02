@@ -142,6 +142,7 @@ nodes also include codebase-scoped env vars in that expansion.
 
 **Rules:**
 - Pattern: `$UPPER_CASE_VAR` (matches `[A-Z_][A-Z0-9_]*`)
+- Lowercase or mixed-case references are ignored and left unchanged
 - Only `env` and `headers` values are expanded — `command`, `args`, `url` are left untouched
 - Undefined vars are replaced with empty string and a warning is shown:
   `Warning: Node 'X' MCP config references undefined env vars: VAR_NAME`

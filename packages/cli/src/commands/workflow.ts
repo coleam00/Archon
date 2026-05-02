@@ -14,7 +14,6 @@ import { createLogger, getArchonHome } from '@archon/paths';
 import { join } from 'node:path';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { inferProviderFromModel } from '@archon/workflows/model-validation';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow } from '@archon/workflows/executor';
 import {
@@ -142,7 +141,6 @@ function resolveTitleAssistantType(
 ): string {
   const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
   if (workflow.provider) return workflow.provider;
-  if (workflow.model) return inferProviderFromModel(workflow.model, fallbackAssistant);
   return fallbackAssistant;
 }
 
@@ -673,7 +671,7 @@ export async function workflowRunCommand(
         userMessage,
         titleAssistantType,
         workingCwd,
-        workflowName,
+        workflow.name,
         titleAssistantConfig
       );
     } catch (error) {

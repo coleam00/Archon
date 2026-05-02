@@ -335,6 +335,20 @@ archon serve --download-only
 
 The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
 
+### `skill install [path]`
+
+Install the bundled Archon skill files into a project's `.claude/skills/archon/` directory. Always overwrites existing files to ensure the latest version shipped with the current Archon binary is installed.
+
+```bash
+# Install into the current directory
+archon skill install
+
+# Install into a specific project
+archon skill install /path/to/project
+```
+
+The Archon skill teaches Claude Code how to work with Archon workflows, commands, and project conventions. It is also installed automatically during `archon setup`.
+
 ### `version`
 
 Show version, build type, and database info.

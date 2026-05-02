@@ -35,7 +35,7 @@ import {
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { parse as parseDotenv } from 'dotenv';
 import { join, dirname } from 'path';
-import { BUNDLED_SKILL_FILES } from '../bundled-skill';
+import { copyArchonSkill } from './skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import { spawn, execSync, type ChildProcess } from 'child_process';
@@ -1444,23 +1444,6 @@ export function writeScopedEnv(
   return { targetPath, backupPath, preservedKeys, forced: options.force && exists };
 }
 
-/**
- * Copy the bundled Archon skill files to <targetPath>/.claude/skills/archon/
- *
- * Always overwrites existing files to ensure the latest skill version is installed.
- */
-export function copyArchonSkill(targetPath: string): void {
-  const skillRoot = join(targetPath, '.claude', 'skills', 'archon');
-  for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
-    const dest = join(skillRoot, relativePath);
-    const destDir = dirname(dest);
-    if (!existsSync(destDir)) {
-      mkdirSync(destDir, { recursive: true });
-    }
-    writeFileSync(dest, content);
-  }
-}
-
 // =============================================================================
 // Terminal Spawning
 // =============================================================================
@@ -1841,7 +1824,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     const skillTarget = skillTargetRaw;
     s.start('Installing Archon skill...');
     try {
-      copyArchonSkill(skillTarget);
+      await copyArchonSkill(skillTarget);
     } catch (err) {
       s.stop('Archon skill installation failed');
       cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);

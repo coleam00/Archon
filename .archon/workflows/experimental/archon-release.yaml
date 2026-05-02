@@ -632,12 +632,26 @@ nodes:
     bash: |
       set -euo pipefail
 
-      # Ensure dev contains the merge commit from main so they don't diverge.
+      # After squash-merge, dev and main contain the same content but have
+      # divergent commit histories. The previous `--ff-only` strategy fails
+      # because main's squash commit has a different SHA than dev's release
+      # commit, so dev is never fast-forwardable to main.
+      #
+      # Resetting dev to main was tried but BLOWS UP open PRs targeting dev:
+      # rewriting dev's history shifts every PR's merge-base to a much older
+      # commit, and their diffs balloon to include thousands of lines of
+      # release content as "missing from base". Don't do this.
+      #
+      # Instead use a regular merge (matches the /release SKILL's Step 9):
+      # `git pull origin main` brings main's squash into dev as a merge
+      # commit. Open PRs' merge-bases stay at their original commits, their
+      # diffs stay small, no history is rewritten. The merge commit shows
+      # up in dev's `git log`, which is the cost of preserving open-PR sanity.
       git checkout dev
-      git pull origin main --ff-only --quiet
+      git pull origin main --no-edit
       git push origin dev
 
-      echo "dev fast-forwarded to include main's merge commit"
+      echo "dev synced to main via merge commit"
     timeout: 60000
     depends_on: [tag-and-release]
     when: "$parse-args.output.dryRun == 'false'"
@@ -816,18 +830,29 @@ nodes:
 
       ver=$bump-version.output.newVersion
 
+      # fetch-and-update-formula left the formula change uncommitted on dev.
+      # `git checkout main` refuses while ANY tracked file is dirty (not just
+      # the formula — e.g. an in-progress workflow-yaml edit during recovery
+      # would block too), so stash everything → checkout → pop carries the
+      # change across. Then commit only the formula (any other restored dirt
+      # stays uncommitted) and push on main.
+      git stash push -m "release-commit-formula-pending"
+      git fetch origin --quiet
       git checkout main
       git pull origin main --ff-only --quiet
+      git stash pop
       git add homebrew/archon.rb
       git commit -m "chore(homebrew): update formula to v$ver"
       git push origin main
 
-      # Sync dev with main so the formula update is on both branches
+      # Sync dev with main so the formula update is on both branches.
+      # Use a regular merge (not reset --hard) for the same reason as
+      # sync-dev-with-main: rewriting dev's history blows up open PRs.
       git checkout dev
-      git pull origin main --ff-only --quiet
+      git pull origin main --no-edit
       git push origin dev
 
-      echo "Formula committed to main and synced to dev"
+      echo "Formula committed to main and synced to dev via merge commit"
     timeout: 90000
     depends_on: [fetch-and-update-formula, bump-version]
     when: "$parse-args.output.dryRun == 'false' && $check-homebrew.output == 'true'"

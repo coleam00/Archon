@@ -293,7 +293,7 @@ defaults:
 | `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
-| `Model X is not valid for provider Y` | Provider/model mismatch | Each provider accepts specific models — check the provider's `isModelCompatible` rules. Claude accepts `sonnet`, `opus`, `haiku`, `claude-*`; Codex accepts other models. |
+| `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
 | Workflow hangs with no output | Node idle timeout hit | Increase `idle_timeout` on the node (milliseconds) |
 

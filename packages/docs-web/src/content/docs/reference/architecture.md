@@ -414,7 +414,6 @@ export function registerBuiltinProviders(): void {
       displayName: 'Your Assistant',
       factory: () => new YourAssistantProvider(),
       capabilities: YOUR_ASSISTANT_CAPABILITIES,
-      isModelCompatible: (model) => /* pattern check */,
       builtIn: true,
     },
     // ...existing entries

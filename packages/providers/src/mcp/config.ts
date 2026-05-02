@@ -32,6 +32,7 @@ function expandEnvVarsInRecord(
         `MCP config ${fieldPath}.${key} must be a string (got ${describeJsonType(val)})`
       );
     }
+    // Only uppercase env references are expanded; lowercase or mixed-case names are left literal.
     result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
       const envVal = envSource[varName];
       if (envVal === undefined) {

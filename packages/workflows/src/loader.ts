@@ -4,7 +4,7 @@
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, WorkflowNodeHooks } from './schemas';
 import { isLoopNode, isApprovalNode, isCancelNode, isScriptNode } from './schemas';
 import { createLogger } from '@archon/paths';
-import { isModelCompatible } from './model-validation';
+import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import {
   dagNodeSchema,
   BASH_NODE_AI_FIELDS,
@@ -143,14 +143,25 @@ function validateDagStructure(nodes: DagNode[]): string | null {
     return `Cycle detected among nodes: ${cycleNodes.join(', ')}`;
   }
 
-  // Check $nodeId.output references in when: and prompt: fields
+  // Check $nodeId.output references in when: and prompt: fields.
+  // Triple-backtick fenced blocks and single-backtick inline code inside a
+  // prompt body are documentation meant to render literally to the LLM
+  // (e.g. the workflow-builder shows authors how to write
+  // `$<other-node>.output` inside a script-node example); strip them before
+  // scanning so they don't false-match as real cross-node references. when:
+  // clauses are JS-like expressions and never carry markdown code, so they
+  // pass through unchanged.
   const outputRefPattern = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+  const stripMarkdownCode = (s: string): string =>
+    s.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
   for (const node of nodes) {
     const sources: string[] = [];
     if (node.when) sources.push(node.when);
-    if ('prompt' in node && typeof node.prompt === 'string') sources.push(node.prompt);
+    if ('prompt' in node && typeof node.prompt === 'string') {
+      sources.push(stripMarkdownCode(node.prompt));
+    }
     if (isLoopNode(node)) {
-      sources.push(node.loop.prompt);
+      sources.push(stripMarkdownCode(node.loop.prompt));
     }
     for (const source of sources) {
       let m: RegExpExecArray | null;
@@ -277,16 +288,35 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       typeof raw.provider === 'string' && raw.provider.length > 0 ? raw.provider : undefined;
     const model = typeof raw.model === 'string' ? raw.model : undefined;
 
-    // Validate model/provider compatibility at workflow level
-    if (provider && model && !isModelCompatible(provider, model)) {
+    // Validate provider identity at load time, both at the workflow level and
+    // per node. Model strings are NOT validated — they pass through to the SDK
+    // at run time, which is the source of truth for what model names exist
+    // (vendor SDKs ship new models faster than Archon can update).
+    if (provider && !isRegisteredProvider(provider)) {
       return {
         workflow: null,
         error: {
           filename,
-          error: `Model "${model}" is not compatible with provider "${provider}"`,
+          error: `Unknown provider '${provider}'. Registered: ${getRegisteredProviders()
+            .map(p => p.id)
+            .join(', ')}`,
           errorType: 'validation_error',
         },
       };
+    }
+    for (const node of dagNodes) {
+      if (node.provider !== undefined && !isRegisteredProvider(node.provider)) {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${getRegisteredProviders()
+              .map(p => p.id)
+              .join(', ')}`,
+            errorType: 'validation_error',
+          },
+        };
+      }
     }
 
     // Validate modelReasoningEffort — warn and ignore invalid values (preserve original behavior)

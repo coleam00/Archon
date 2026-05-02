@@ -253,6 +253,10 @@ bun run cli serve
 bun run cli serve --port 4000
 bun run cli serve --download-only  # Download without starting
 
+# Install the bundled Archon skill into a project
+bun run cli skill install
+bun run cli skill install /path/to/project
+
 # Show version
 bun run cli version
 ```
@@ -501,10 +505,9 @@ assistants:
 3. SDK defaults
 
 **Model Validation:**
-- Workflows are validated at load time for provider/model compatibility
-- Claude models: `sonnet`, `opus`, `haiku`, `claude-*`, `inherit`
-- Codex models: Any model except Claude-specific aliases
-- Invalid combinations fail workflow loading with clear error messages
+- Workflows are validated at load time for provider _identity_ only — `provider:` (workflow-level and per-node) must be a registered provider id, otherwise the YAML is rejected with `Unknown provider '<id>'. Registered: claude, codex, pi`.
+- Model strings are NOT validated by Archon. Whatever the user writes in `model:` is forwarded verbatim to the resolved SDK. Vendor SDKs ship new models faster than Archon can update; the SDK and the upstream API are the source of truth for what names exist.
+- Provider is resolved via an explicit chain: `node.provider ?? workflow.provider ?? config.assistant`. Model never influences provider selection.
 
 ### Running the App in Worktrees
 

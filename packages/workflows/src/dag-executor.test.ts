@@ -23,12 +23,12 @@ mock.module('@archon/paths', () => ({
     if (folder) paths.unshift(folder);
     return paths;
   },
-  getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
-  getDefaultCommandsPath: () => '/nonexistent/defaults',
-  getDefaultWorkflowsPath: () => '/nonexistent/defaults/workflows',
-  getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
-  getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
-  getArchonHome: () => '/nonexistent/home',
+  getWorkflowFolderSearchPaths: (): string[] => ['.archon/workflows'],
+  getDefaultCommandsPath: (): string => '/nonexistent/defaults',
+  getDefaultWorkflowsPath: (): string => '/nonexistent/defaults/workflows',
+  getHomeWorkflowsPath: (): string => '/nonexistent/home/workflows',
+  getLegacyHomeWorkflowsPath: (): string => '/nonexistent/home/.archon/workflows',
+  getArchonHome: (): string => '/nonexistent/home',
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
@@ -1141,6 +1141,54 @@ describe('executeDagWorkflow -- bash nodes', () => {
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
     expect(failMsg).toBeDefined();
+  });
+
+  it('failure message surfaces stderr and does not leak the "Command failed: bash -c <body>" prefix', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-1389-run-id', {
+      workflow_name: 'bash-1389',
+      conversation_id: 'conv-1389b',
+      user_message: 'test',
+    });
+
+    // Marker is echoed to stdout only (so it lands in the command line embedded
+    // in err.message but never in stderr). If it shows up in errorMsg the
+    // prefix line was not stripped.
+    const bashNode: BashNode = {
+      id: 'fail-bash-1389',
+      bash: 'echo UNIQUE_CMDLINE_MARKER_1389; echo "diagnostic from stderr" >&2; exit 1',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-1389b',
+      testDir,
+      { name: 'bash-1389', nodes: [bashNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'fail-bash-1389'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain("Bash node 'fail-bash-1389' failed");
+    expect(errorMsg).toContain('[exit 1]');
+    expect(errorMsg).not.toContain('Command failed:');
+    expect(errorMsg).not.toContain('UNIQUE_CMDLINE_MARKER_1389');
+    expect(errorMsg).toContain('diagnostic from stderr');
   });
 
   it('variable substitution works in bash scripts', async () => {
@@ -4545,17 +4593,21 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(result).toBe('Final summary text');
   });
 
-  it('returns undefined when the single terminal node produces no output', async () => {
+  it('fails node when the AI stream closes with no assistant output', async () => {
+    // Empty assistant output on AI nodes (`command:`/`prompt:`) typically
+    // indicates a silent provider rejection or stream interruption that
+    // didn't yield a result.isError chunk. Treat it as a node failure
+    // rather than a successful empty completion.
     mockSendQueryDag.mockImplementation(async function* () {
-      // No assistant content — empty output
       yield { type: 'result', sessionId: 'sess-empty' };
     });
 
-    const mockDeps = createMockDeps();
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
 
-    const result = await executeDagWorkflow(
+    await executeDagWorkflow(
       mockDeps,
       platform,
       'conv-dag',
@@ -4571,7 +4623,120 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       minimalConfig
     );
 
-    expect(result).toBeUndefined();
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents.length).toBeGreaterThan(0);
+    const failedData = (nodeFailedEvents[0][0] as Record<string, unknown>).data as Record<
+      string,
+      unknown
+    >;
+    expect(failedData.error).toContain('produced no assistant output');
+    // Workflow-level failure must propagate, not just the node event.
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it('does NOT fail node when stream yields no assistant text but a structuredOutput is present', async () => {
+    // Output-format nodes legitimately produce zero free-form text — the
+    // useful payload is the structuredOutput field. The empty-output guard
+    // must spare them.
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        sessionId: 'sess-structured',
+        structuredOutput: { category: 'math' },
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'structured-only-dag',
+        nodes: [
+          {
+            id: 'classify',
+            prompt: 'Classify this',
+            output_format: { type: 'object', properties: {} },
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents.length).toBe(0);
+    const nodeCompletedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
+    );
+    expect(nodeCompletedEvents.length).toBeGreaterThan(0);
+  });
+
+  it('fails the run when a node specifies an unknown provider (defense-in-depth at execution time)', async () => {
+    // Loader-time validation also catches this (loader.ts iterates dagNodes
+    // after parsing), but the dag-executor's resolveNodeProviderAndModel
+    // throws as defense-in-depth in case a code path bypasses the loader.
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'unknown-provider-dag',
+        nodes: [
+          {
+            id: 'bad',
+            command: 'my-cmd',
+            provider: 'claud', // typo
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    // The "unknown provider" detail surfaces on the node_failed event; the
+    // workflow-level fail message is a generic "no successful nodes" summary.
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents.length).toBeGreaterThan(0);
+    const nodeFailedData = (nodeFailedEvents[0][0] as Record<string, unknown>).data as Record<
+      string,
+      unknown
+    >;
+    expect(nodeFailedData.error).toContain("unknown provider 'claud'");
   });
 
   it('excludes intermediate nodes with dependents from terminal set (fan-in DAG)', async () => {
@@ -5722,6 +5887,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(function* () {
       callCount++;
+      yield { type: 'assistant', content: `Step ${String(callCount)} output` };
       yield { type: 'result', sessionId: `sid-${String(callCount)}`, cost: 0.001 };
     });
 
@@ -5763,6 +5929,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
 
   it('omits total_cost_usd from completeWorkflowRun when no cost yielded', async () => {
     mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Some output' };
       yield { type: 'result', sessionId: 'sid-no-cost' };
     });
 
@@ -6067,6 +6234,60 @@ describe('executeDagWorkflow -- script nodes', () => {
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
     expect(failMsg).toBeDefined();
+  });
+
+  it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-1389-run-id', {
+      workflow_name: 'script-1389',
+      conversation_id: 'conv-1389s',
+      user_message: 'test',
+    });
+
+    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // so any leak of the script body via err.message would violate the length
+    // assertion below. Bun's stderr echoes only a few lines of context.
+    const paddingAboveMax = '// padding line '.repeat(200);
+    const scriptNode: ScriptNode = {
+      id: 'fail-script-1389',
+      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      runtime: 'bun',
+    };
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-1389s',
+      testDir,
+      { name: 'script-1389', nodes: [scriptNode] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const failedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_failed' &&
+        (call[0] as { step_name: string }).step_name === 'fail-script-1389'
+    );
+    expect(failedEvent).toBeDefined();
+    const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
+    expect(errorMsg).toContain("Script node 'fail-script-1389' failed");
+    expect(errorMsg).not.toContain('Command failed:');
+    expect(errorMsg).not.toContain('padding line padding line padding line');
+    // 2 KB diagnostic cap + label prefix + truncation marker should stay under
+    // 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
+    expect(errorMsg.length).toBeLessThan(2100);
+    // Bun emits `error: <description>\n    at [eval]:L:C` for parse failures —
+    // the location marker is the strongest signal that the diagnostic survived.
+    expect(errorMsg).toContain('[eval]');
   });
 
   it('timeout kills subprocess', async () => {
