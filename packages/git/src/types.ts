@@ -36,13 +36,34 @@ export type GitError =
   | { code: 'no_space'; path: string }
   | { code: 'unknown'; message: string };
 
+/**
+ * Mode for `syncWorkspace`.
+ *
+ * - `fast-forward` (default): fetch + ff-only-merge if `HEAD` is strictly
+ *   behind `origin/<branch>`. Never destructive — leaves HEAD unchanged when
+ *   ahead, diverged, or working tree dirty. Suitable for any path where local
+ *   work must be preserved (e.g. chat-tick refresh on the canonical clone).
+ *
+ * - `reset`: fetch + `git reset --hard origin/<branch>`. Destructive — discards
+ *   uncommitted changes and pulls `HEAD` to `origin/<branch>` even if local
+ *   commits exist. Suitable only where a known-clean base state is required
+ *   (e.g. immediately before creating a new worktree).
+ */
+export type SyncMode = 'fast-forward' | 'reset';
+
 /** Result of a workspace sync operation */
 export interface WorkspaceSyncResult {
   branch: BranchName;
   synced: boolean;
-  /** HEAD SHA before the reset (short, 8 chars) */
+  /**
+   * Observed relationship between HEAD and origin/<branch> before the
+   * operation. `dirty` means working tree had uncommitted changes (orthogonal
+   * to ancestor state but reported as dominant mode for simplicity).
+   */
+  state: 'in_sync' | 'behind' | 'ahead' | 'diverged' | 'dirty';
+  /** HEAD SHA before the operation (short, 8 chars) */
   previousHead: string;
-  /** HEAD SHA after the reset (short, 8 chars) */
+  /** HEAD SHA after the operation (short, 8 chars) */
   newHead: string;
   /** True if the working tree was updated (HEAD changed) */
   updated: boolean;

@@ -426,26 +426,20 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
     try {
       const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
       if (codebase) {
-        // Sync canonical source with remote before the AI reads codebase state.
-        // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
-        // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
+        // Refresh the canonical source clone from origin before the AI reads
+        // codebase state. Default mode is 'fast-forward' — never destructive:
+        // local commits, uncommitted modifications, and non-default branches
+        // are preserved (state is reported via SoftSyncResult.state for the UI).
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
         try {
-          const isManagedClone = codebase.default_cwd
-            .replace(/\\/g, '/')
-            .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
           syncResult = await syncWorkspace(
             toRepoPath(codebase.default_cwd),
-            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
-            {
-              resetAfterFetch: isManagedClone,
-            }
+            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
           );
           getLog().debug(
             {
               codebaseId: codebase.id,
               repoPath: codebase.default_cwd,
-              isManagedClone,
               ...syncResult,
             },
             'workspace.sync_completed'
@@ -763,18 +757,28 @@ export async function handleMessage(
       );
     }
 
-    // Emit workspace sync status only when something noteworthy happened
-    // (HEAD moved or sync failed). Skip the "up to date" case to avoid noise.
+    // Emit workspace sync status only when something noteworthy happened.
+    // Silent cases (in_sync, ahead, dirty) match the previous "no message if
+    // not updated" behaviour. The diverged case surfaces a state where local
+    // work and remote both moved \u2014 user must decide how to reconcile.
     if (syncError && platform.sendStructuredEvent) {
       await platform.sendStructuredEvent(conversationId, {
         type: 'system',
         content: 'Sync failed \u2014 using local state',
       });
-    } else if (syncResult?.updated && platform.sendStructuredEvent) {
-      await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
-        content: `Synced with origin/${syncResult.branch} \u2014 updated ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
-      });
+    } else if (syncResult && platform.sendStructuredEvent) {
+      if (syncResult.state === 'behind' && syncResult.updated) {
+        await platform.sendStructuredEvent(conversationId, {
+          type: 'system',
+          content: `Fast-forwarded to origin/${syncResult.branch} \u2014 ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
+        });
+      } else if (syncResult.state === 'diverged') {
+        await platform.sendStructuredEvent(conversationId, {
+          type: 'system',
+          content: `Local source/ has diverged from origin/${syncResult.branch} \u2014 manual merge or rebase needed`,
+        });
+      }
+      // in_sync, ahead, dirty: silent
     }
 
     // Build workflow context for follow-up awareness
