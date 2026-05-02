@@ -1392,9 +1392,16 @@ async function handleRegisterProject(
   const config = await loadConfig();
   let detectedBranch: string | undefined;
   try {
-    detectedBranch = await getCurrentBranch(toRepoPath(projectPath));
+    const branch = await getCurrentBranch(toRepoPath(projectPath));
+    // Detached HEAD returns the literal string "HEAD" (not an exception) —
+    // treat as "not detected" so the codebase row gets NULL and syncWorkspace
+    // auto-detects the default branch on first sync. Mirrors the same guard
+    // already used in clone.ts:cloneRepository.
+    if (branch && branch !== 'HEAD') {
+      detectedBranch = branch;
+    }
   } catch {
-    // non-git directory or detached HEAD — fall back to DB default 'main'
+    // non-git directory — leave undefined so DB stores NULL (auto-detect at sync)
   }
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
