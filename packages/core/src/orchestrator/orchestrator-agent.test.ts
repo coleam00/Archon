@@ -54,6 +54,7 @@ const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
+  ensureArchonWorkspacesPath: mock(() => Promise.resolve('/home/test/.archon/workspaces')),
   getArchonHome: mock(() => '/home/test/.archon'),
 }));
 
