@@ -248,7 +248,7 @@ export class SqliteAdapter implements IDatabase {
         name TEXT NOT NULL,
         repository_url TEXT,
         default_cwd TEXT NOT NULL,
-        default_branch TEXT DEFAULT 'main',
+        default_branch TEXT,
         ai_assistant_type TEXT DEFAULT 'claude',
         commands TEXT DEFAULT '{}',
         created_at TEXT DEFAULT (datetime('now')),
