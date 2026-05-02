@@ -1,6 +1,6 @@
 /** Parsed Oh My Pi model reference. */
 export interface OmpModelRef {
-  /** OMP provider id, e.g. 'anthropic', 'openai', 'google'. */
+  /** OMP provider id, e.g. 'anthropic', 'openai', 'llama.cpp'. */
   provider: string;
   /** Model id; may contain additional slashes for routed providers. */
   modelId: string;
@@ -17,7 +17,7 @@ export function parseOmpModelRef(raw: string): OmpModelRef | undefined {
   const provider = raw.slice(0, idx);
   const modelId = raw.slice(idx + 1);
 
-  if (!/^[a-z][a-z0-9-]*$/.test(provider)) return undefined;
+  if (!/^[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*$/.test(provider)) return undefined;
   if (modelId.length === 0) return undefined;
 
   return { provider, modelId };

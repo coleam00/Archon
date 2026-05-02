@@ -17,6 +17,13 @@ describe('parseOmpModelRef', () => {
     });
   });
 
+  test('allows dotted OMP provider ids', () => {
+    expect(parseOmpModelRef('llama.cpp/qwen2.5-coder')).toEqual({
+      provider: 'llama.cpp',
+      modelId: 'qwen2.5-coder',
+    });
+  });
+
   test('rejects malformed refs', () => {
     expect(parseOmpModelRef('')).toBeUndefined();
     expect(parseOmpModelRef('anthropic')).toBeUndefined();
@@ -24,5 +31,7 @@ describe('parseOmpModelRef', () => {
     expect(parseOmpModelRef('anthropic/')).toBeUndefined();
     expect(parseOmpModelRef('Anthropic/claude')).toBeUndefined();
     expect(parseOmpModelRef('anthropic_beta/claude')).toBeUndefined();
+    expect(parseOmpModelRef('anthropic..beta/claude')).toBeUndefined();
+    expect(parseOmpModelRef('anthropic./claude')).toBeUndefined();
   });
 });
