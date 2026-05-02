@@ -917,8 +917,18 @@ export async function handleMessage(
     // in source/. Non-destructive sync default preserves such work, but it is
     // still local-only and at risk if a /worktree create or external git op
     // runs next. Only meaningful when a codebase is attached.
-    if (conversation.codebase_id) {
-      const attachedCodebase = codebases.find(c => c.id === conversation.codebase_id);
+    //
+    // dispatchOrchestratorWorkflow may have just persisted codebase_id (auto-
+    // attach on first turn), so the in-memory `conversation` can be stale. Re-
+    // read by platform id when codebase_id isn't set in our snapshot.
+    const reminderCodebaseId =
+      conversation.codebase_id ??
+      (await db
+        .getConversationByPlatformId(platform.getPlatformType(), conversationId)
+        .then(c => c?.codebase_id ?? null)
+        .catch(() => null));
+    if (reminderCodebaseId) {
+      const attachedCodebase = codebases.find(c => c.id === reminderCodebaseId);
       if (attachedCodebase) {
         await reportUnpushedWorkInSource(platform, conversationId, attachedCodebase);
       }
