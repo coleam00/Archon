@@ -780,9 +780,14 @@ export class WorktreeProvider implements IIsolationProvider {
       // Locally-registered repos may contain the user's uncommitted work in
       // the canonical path, so we use the non-destructive fast-forward mode
       // there and rely on the worktree-add itself to use origin/<branch>.
-      const isManagedClone = repoPath
-        .replace(/\\/g, '/')
-        .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
+      //
+      // Path comparison normalizes trailing slashes and requires a directory
+      // separator boundary so siblings like `<root>/workspaces-old/...` are
+      // not misclassified as managed.
+      const normalizedRepoPath = repoPath.replace(/\\/g, '/').replace(/\/+$/, '');
+      const managedRoot = getArchonWorkspacesPath().replace(/\\/g, '/').replace(/\/+$/, '');
+      const isManagedClone =
+        normalizedRepoPath === managedRoot || normalizedRepoPath.startsWith(`${managedRoot}/`);
       const mode: SyncMode = isManagedClone ? 'reset' : 'fast-forward';
       const { branch } = await syncWorkspace(
         repoPath,
