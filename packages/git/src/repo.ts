@@ -1,6 +1,6 @@
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
-import { getDefaultBranch } from './branch';
+import { getCurrentBranch, getDefaultBranch } from './branch';
 import type { RepoPath, BranchName, GitResult, SyncMode, WorkspaceSyncResult } from './types';
 import { toRepoPath } from './types';
 
@@ -175,8 +175,31 @@ export async function syncWorkspace(
     };
   }
 
-  // mode === 'fast-forward': only safe if behind and tree clean
+  // mode === 'fast-forward': only safe if behind, tree clean, AND HEAD is on
+  // the target branch. Without the branch check, a topic branch that happens
+  // to be an ancestor of `origin/<branchToSync>` would silently advance to
+  // origin's tip — violating the "non-default branches are preserved" guarantee.
   if (state === 'behind') {
+    let currentBranch: string | undefined;
+    try {
+      currentBranch = await getCurrentBranch(workspacePath);
+    } catch {
+      // Detached HEAD or unreadable — treat as "not on target branch", noop.
+    }
+
+    if (currentBranch !== branchToSync) {
+      // HEAD is on a different branch (or detached). Skip the merge to
+      // preserve user state; the agent still sees fresh remote refs via fetch.
+      return {
+        branch: branchToSync,
+        synced: true,
+        state,
+        previousHead,
+        newHead: previousHead,
+        updated: false,
+      };
+    }
+
     try {
       await execFileAsync(
         'git',
