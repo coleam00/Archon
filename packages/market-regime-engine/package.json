@@ -1,15 +1,16 @@
 {
-  "name": "market-regime-engine",
-  "version": "0.1.0",
+  "name": "@archon/market-regime-engine",
+  "version": "0.3.10",
   "type": "module",
   "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "scripts": {
     "test": "bun test src/",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "pino": "^9.0.0",
-    "pino-pretty": "^13.0.0",
+    "@archon/paths": "workspace:*",
+    "@hono/zod-openapi": "^0.19.6",
     "zod": "^3.23.0"
   },
   "devDependencies": {

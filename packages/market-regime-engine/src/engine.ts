@@ -2,7 +2,7 @@ import { createTradeStore } from './db';
 import { aggregatePerformance } from './aggregator';
 import { selectStrategy } from './selector';
 import { tradeRecordSchema, marketStateSchema } from './schemas';
-import { createLogger } from './logger';
+import { createLogger } from '@archon/paths';
 import type {
   ITradeStore,
   TradeRecord,
@@ -15,11 +15,7 @@ import type {
   EngineConfig,
 } from './types';
 
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('engine');
-  return cachedLog;
-}
+const log = createLogger('market-regime.engine');
 
 const DEFAULTS: Required<EngineConfig> = {
   dbPath: ':memory:',
@@ -28,6 +24,13 @@ const DEFAULTS: Required<EngineConfig> = {
   minWinRate: 0.4,
 };
 
+/**
+ * Facade for recording trades and querying regime-aware strategy recommendations.
+ *
+ * Backed by a SQLite trade store. Aggregated performance is cached and
+ * invalidated on every new trade. Strategy selection uses an epsilon-greedy
+ * explore/exploit approach (see `selectStrategy` in `selector.ts`).
+ */
 export class RegimeEngine {
   private store: ITradeStore;
   private config: Required<EngineConfig>;
@@ -36,14 +39,17 @@ export class RegimeEngine {
   constructor(config?: EngineConfig) {
     this.config = { ...DEFAULTS, ...config };
     this.store = createTradeStore(this.config.dbPath);
-    getLog().info({ dbPath: this.config.dbPath }, 'engine.create_completed');
+    log.info({ dbPath: this.config.dbPath }, 'engine.create_completed');
   }
 
   recordTrade(trade: TradeRecord): StoredTrade {
     const validated = tradeRecordSchema.parse(trade);
     const stored = this.store.insertTrade(validated);
     this.cachedPerformance = null; // invalidate cache
-    getLog().info({ tradeId: stored.id, strategy: stored.strategy, regime: stored.regime }, 'engine.trade_recorded');
+    log.info(
+      { tradeId: stored.id, strategy: stored.strategy, regime: stored.regime },
+      'engine.trade_recorded'
+    );
     return stored;
   }
 
@@ -55,7 +61,7 @@ export class RegimeEngine {
       minTradesForConfidence: this.config.minTradesForConfidence,
       minWinRate: this.config.minWinRate,
     });
-    getLog().info(
+    log.info(
       { regime: validated.regime, selected: recommendation.selected_strategy },
       'engine.recommendation_completed'
     );
@@ -80,6 +86,6 @@ export class RegimeEngine {
 
   close(): void {
     this.store.close();
-    getLog().info('engine.close_completed');
+    log.info('engine.close_completed');
   }
 }

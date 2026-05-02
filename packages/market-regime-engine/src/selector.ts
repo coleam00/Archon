@@ -1,5 +1,22 @@
-import type { PerformanceMetrics, StrategyPerformance, Regime, Recommendation, EngineConfig } from './types';
+import type {
+  PerformanceMetrics,
+  StrategyPerformance,
+  Regime,
+  Recommendation,
+  EngineConfig,
+} from './types';
 
+/**
+ * Score = expected_return * confidence * stability
+ *
+ * - expected_return: average PnL (avg_return)
+ * - confidence: trade count / minTrades, capped at 1.0 — ramps up as data grows
+ * - stability: win rate (winrate) — penalises volatile strategies
+ *
+ * Sharpe is deliberately excluded: it already factors into strategy selection via
+ * the `isDisabled` gate, and including it here would double-penalise high-variance
+ * strategies that pass the win-rate filter.
+ */
 export function scoreStrategy(metrics: PerformanceMetrics, minTrades: number): number {
   const expectedReturn = metrics.avg_return;
   const confidence = Math.min(metrics.trades_count / minTrades, 1.0);
@@ -11,14 +28,16 @@ export function isDisabled(metrics: PerformanceMetrics, minWinRate: number): boo
   return metrics.avg_return < 0 || metrics.winrate < minWinRate;
 }
 
-type SelectorConfig = Required<Pick<EngineConfig, 'explorationRate' | 'minTradesForConfidence' | 'minWinRate'>>;
+type SelectorConfig = Required<
+  Pick<EngineConfig, 'explorationRate' | 'minTradesForConfidence' | 'minWinRate'>
+>;
 
 export function selectStrategy(
   performance: StrategyPerformance,
   regime: Regime,
   config: SelectorConfig
 ): Recommendation {
-  const candidates: Array<{ strategy: string; score: number; metrics: PerformanceMetrics }> = [];
+  const candidates: { strategy: string; score: number; metrics: PerformanceMetrics }[] = [];
 
   for (const [strategy, regimeMap] of Object.entries(performance)) {
     const metrics = regimeMap[regime];
@@ -53,8 +72,8 @@ export function selectStrategy(
   );
 
   const alternatives = candidates
-    .filter((c) => c.strategy !== selected.strategy)
-    .map((c) => ({ strategy: c.strategy, score: c.score, metrics: c.metrics }));
+    .filter(c => c.strategy !== selected.strategy)
+    .map(c => ({ strategy: c.strategy, score: c.score, metrics: c.metrics }));
 
   return {
     selected_strategy: selected.strategy,

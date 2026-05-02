@@ -48,9 +48,27 @@ describe('RegimeEngine', () => {
 
   test('getRecommendation returns valid recommendation', () => {
     engine = new RegimeEngine();
-    engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 250, success: true });
-    engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.18, pnl: 150, success: true });
-    engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.12, pnl: -50, success: false });
+    engine.recordTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 250,
+      success: true,
+    });
+    engine.recordTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.18,
+      pnl: 150,
+      success: true,
+    });
+    engine.recordTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.12,
+      pnl: -50,
+      success: false,
+    });
 
     const rec = engine.getRecommendation({ regime: 'trending', volatility: 0.16 });
     expect(rec).toHaveProperty('selected_strategy');
@@ -68,8 +86,20 @@ describe('RegimeEngine', () => {
 
   test('getPerformance returns aggregated data', () => {
     engine = new RegimeEngine();
-    engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 100, success: true });
-    engine.recordTrade({ strategy: 'mean-revert', regime: 'ranging', volatility: 0.08, pnl: 200, success: true });
+    engine.recordTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 100,
+      success: true,
+    });
+    engine.recordTrade({
+      strategy: 'mean-revert',
+      regime: 'ranging',
+      volatility: 0.08,
+      pnl: 200,
+      success: true,
+    });
 
     const perf = engine.getPerformance();
     expect(perf['momentum']?.trending).toBeDefined();
@@ -78,7 +108,13 @@ describe('RegimeEngine', () => {
 
   test('getStrategyPerformance returns specific metrics', () => {
     engine = new RegimeEngine();
-    engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 100, success: true });
+    engine.recordTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 100,
+      success: true,
+    });
 
     const metrics = engine.getStrategyPerformance('momentum', 'trending');
     expect(metrics).not.toBeNull();
@@ -93,7 +129,13 @@ describe('RegimeEngine', () => {
 
   test('getTradeHistory returns all trades', () => {
     engine = new RegimeEngine();
-    engine.recordTrade({ strategy: 'a', regime: 'trending', volatility: 0.1, pnl: 10, success: true });
+    engine.recordTrade({
+      strategy: 'a',
+      regime: 'trending',
+      volatility: 0.1,
+      pnl: 10,
+      success: true,
+    });
     engine.recordTrade({ strategy: 'b', regime: 'calm', volatility: 0.2, pnl: 20, success: false });
 
     const history = engine.getTradeHistory();
@@ -102,12 +144,24 @@ describe('RegimeEngine', () => {
 
   test('performance cache invalidated after recordTrade', () => {
     engine = new RegimeEngine();
-    engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 100, success: true });
+    engine.recordTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 100,
+      success: true,
+    });
 
     const perf1 = engine.getPerformance();
     expect(perf1['momentum']?.trending?.trades_count).toBe(1);
 
-    engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 200, success: true });
+    engine.recordTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 200,
+      success: true,
+    });
 
     const perf2 = engine.getPerformance();
     expect(perf2['momentum']?.trending?.trades_count).toBe(2);
@@ -117,11 +171,23 @@ describe('RegimeEngine', () => {
     engine = new RegimeEngine();
     // Record losing trades to make momentum disabled in trending
     for (let i = 0; i < 5; i++) {
-      engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: -100, success: false });
+      engine.recordTrade({
+        strategy: 'momentum',
+        regime: 'trending',
+        volatility: 0.15,
+        pnl: -100,
+        success: false,
+      });
     }
     // Record winning trades for mean-revert
     for (let i = 0; i < 5; i++) {
-      engine.recordTrade({ strategy: 'mean-revert', regime: 'trending', volatility: 0.15, pnl: 100, success: true });
+      engine.recordTrade({
+        strategy: 'mean-revert',
+        regime: 'trending',
+        volatility: 0.15,
+        pnl: 100,
+        success: true,
+      });
     }
 
     const rec = engine.getRecommendation({ regime: 'trending', volatility: 0.15 });
@@ -132,7 +198,13 @@ describe('RegimeEngine', () => {
     const dbPath = join(tmpdir(), `regime-test-${Date.now()}.db`);
     try {
       engine = new RegimeEngine({ dbPath });
-      engine.recordTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 100, success: true });
+      engine.recordTrade({
+        strategy: 'momentum',
+        regime: 'trending',
+        volatility: 0.15,
+        pnl: 100,
+        success: true,
+      });
       engine.close();
 
       // Reopen and verify data persists

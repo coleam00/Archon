@@ -54,9 +54,27 @@ describe('createTradeStore', () => {
 
   test('getTradesByStrategyAndRegime filters correctly', () => {
     store = createTradeStore();
-    store.insertTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 250, success: true });
-    store.insertTrade({ strategy: 'momentum', regime: 'ranging', volatility: 0.08, pnl: 50, success: true });
-    store.insertTrade({ strategy: 'mean-revert', regime: 'trending', volatility: 0.15, pnl: -30, success: false });
+    store.insertTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 250,
+      success: true,
+    });
+    store.insertTrade({
+      strategy: 'momentum',
+      regime: 'ranging',
+      volatility: 0.08,
+      pnl: 50,
+      success: true,
+    });
+    store.insertTrade({
+      strategy: 'mean-revert',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: -30,
+      success: false,
+    });
 
     const result = store.getTradesByStrategyAndRegime('momentum', 'trending');
     expect(result).toHaveLength(1);
@@ -66,9 +84,27 @@ describe('createTradeStore', () => {
 
   test('getAllStrategies returns distinct strategies', () => {
     store = createTradeStore();
-    store.insertTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 100, success: true });
-    store.insertTrade({ strategy: 'momentum', regime: 'ranging', volatility: 0.08, pnl: 50, success: true });
-    store.insertTrade({ strategy: 'mean-revert', regime: 'calm', volatility: 0.05, pnl: 30, success: true });
+    store.insertTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 100,
+      success: true,
+    });
+    store.insertTrade({
+      strategy: 'momentum',
+      regime: 'ranging',
+      volatility: 0.08,
+      pnl: 50,
+      success: true,
+    });
+    store.insertTrade({
+      strategy: 'mean-revert',
+      regime: 'calm',
+      volatility: 0.05,
+      pnl: 30,
+      success: true,
+    });
 
     const strategies = store.getAllStrategies();
     expect(strategies).toHaveLength(2);
@@ -78,7 +114,13 @@ describe('createTradeStore', () => {
 
   test('getAllTrades returns all trades', () => {
     store = createTradeStore();
-    store.insertTrade({ strategy: 'a', regime: 'trending', volatility: 0.1, pnl: 10, success: true });
+    store.insertTrade({
+      strategy: 'a',
+      regime: 'trending',
+      volatility: 0.1,
+      pnl: 10,
+      success: true,
+    });
     store.insertTrade({ strategy: 'b', regime: 'calm', volatility: 0.2, pnl: 20, success: false });
 
     const trades = store.getAllTrades();
@@ -94,8 +136,20 @@ describe('createTradeStore', () => {
 
   test('auto-increments ids', () => {
     store = createTradeStore();
-    const t1 = store.insertTrade({ strategy: 'a', regime: 'trending', volatility: 0.1, pnl: 10, success: true });
-    const t2 = store.insertTrade({ strategy: 'b', regime: 'calm', volatility: 0.2, pnl: 20, success: true });
+    const t1 = store.insertTrade({
+      strategy: 'a',
+      regime: 'trending',
+      volatility: 0.1,
+      pnl: 10,
+      success: true,
+    });
+    const t2 = store.insertTrade({
+      strategy: 'b',
+      regime: 'calm',
+      volatility: 0.2,
+      pnl: 20,
+      success: true,
+    });
     expect(t2.id).toBe(t1.id + 1);
   });
 });

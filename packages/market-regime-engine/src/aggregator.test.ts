@@ -34,11 +34,7 @@ describe('calculateMetrics', () => {
   });
 
   test('calculates avg_return correctly', () => {
-    const trades = [
-      makeTrade({ pnl: 100 }),
-      makeTrade({ pnl: 200 }),
-      makeTrade({ pnl: -50 }),
-    ];
+    const trades = [makeTrade({ pnl: 100 }), makeTrade({ pnl: 200 }), makeTrade({ pnl: -50 })];
     const m = calculateMetrics(trades);
     expect(m.avg_return).toBeCloseTo(83.33, 1);
   });
@@ -56,20 +52,13 @@ describe('calculateMetrics', () => {
 
   test('calculates sharpe ratio correctly', () => {
     // Known values: pnl = [100, 200, 300], mean = 200, stddev = 81.65
-    const trades = [
-      makeTrade({ pnl: 100 }),
-      makeTrade({ pnl: 200 }),
-      makeTrade({ pnl: 300 }),
-    ];
+    const trades = [makeTrade({ pnl: 100 }), makeTrade({ pnl: 200 }), makeTrade({ pnl: 300 })];
     const m = calculateMetrics(trades);
     expect(m.sharpe).toBeCloseTo(200 / 81.65, 1);
   });
 
   test('returns sharpe 0 when all pnl values are the same', () => {
-    const trades = [
-      makeTrade({ pnl: 100 }),
-      makeTrade({ pnl: 100 }),
-    ];
+    const trades = [makeTrade({ pnl: 100 }), makeTrade({ pnl: 100 })];
     const m = calculateMetrics(trades);
     expect(m.sharpe).toBe(0);
   });
@@ -96,9 +85,27 @@ describe('aggregatePerformance', () => {
 
   test('groups by strategy and regime', () => {
     store = createTradeStore();
-    store.insertTrade({ strategy: 'momentum', regime: 'trending', volatility: 0.15, pnl: 100, success: true });
-    store.insertTrade({ strategy: 'momentum', regime: 'ranging', volatility: 0.08, pnl: 50, success: true });
-    store.insertTrade({ strategy: 'mean-revert', regime: 'ranging', volatility: 0.08, pnl: 200, success: true });
+    store.insertTrade({
+      strategy: 'momentum',
+      regime: 'trending',
+      volatility: 0.15,
+      pnl: 100,
+      success: true,
+    });
+    store.insertTrade({
+      strategy: 'momentum',
+      regime: 'ranging',
+      volatility: 0.08,
+      pnl: 50,
+      success: true,
+    });
+    store.insertTrade({
+      strategy: 'mean-revert',
+      regime: 'ranging',
+      volatility: 0.08,
+      pnl: 200,
+      success: true,
+    });
 
     const perf = aggregatePerformance(store);
 

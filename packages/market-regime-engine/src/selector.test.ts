@@ -4,25 +4,45 @@ import type { PerformanceMetrics, StrategyPerformance } from './types';
 
 describe('scoreStrategy', () => {
   test('calculates score as expectedReturn * confidence * stability', () => {
-    const metrics: PerformanceMetrics = { avg_return: 100, winrate: 0.7, sharpe: 1.5, trades_count: 10 };
+    const metrics: PerformanceMetrics = {
+      avg_return: 100,
+      winrate: 0.7,
+      sharpe: 1.5,
+      trades_count: 10,
+    };
     const score = scoreStrategy(metrics, 10);
     expect(score).toBeCloseTo(100 * 1.0 * 0.7);
   });
 
   test('confidence capped at 1.0', () => {
-    const metrics: PerformanceMetrics = { avg_return: 100, winrate: 0.7, sharpe: 1.5, trades_count: 20 };
+    const metrics: PerformanceMetrics = {
+      avg_return: 100,
+      winrate: 0.7,
+      sharpe: 1.5,
+      trades_count: 20,
+    };
     const score = scoreStrategy(metrics, 10);
     expect(score).toBeCloseTo(100 * 1.0 * 0.7);
   });
 
   test('low trade count reduces confidence', () => {
-    const metrics: PerformanceMetrics = { avg_return: 100, winrate: 0.7, sharpe: 1.5, trades_count: 5 };
+    const metrics: PerformanceMetrics = {
+      avg_return: 100,
+      winrate: 0.7,
+      sharpe: 1.5,
+      trades_count: 5,
+    };
     const score = scoreStrategy(metrics, 10);
     expect(score).toBeCloseTo(100 * 0.5 * 0.7);
   });
 
   test('negative return produces negative score', () => {
-    const metrics: PerformanceMetrics = { avg_return: -50, winrate: 0.3, sharpe: -1, trades_count: 10 };
+    const metrics: PerformanceMetrics = {
+      avg_return: -50,
+      winrate: 0.3,
+      sharpe: -1,
+      trades_count: 10,
+    };
     const score = scoreStrategy(metrics, 10);
     expect(score).toBeLessThan(0);
   });
@@ -30,22 +50,42 @@ describe('scoreStrategy', () => {
 
 describe('isDisabled', () => {
   test('disables negative avg_return', () => {
-    const metrics: PerformanceMetrics = { avg_return: -10, winrate: 0.6, sharpe: 0, trades_count: 10 };
+    const metrics: PerformanceMetrics = {
+      avg_return: -10,
+      winrate: 0.6,
+      sharpe: 0,
+      trades_count: 10,
+    };
     expect(isDisabled(metrics, 0.4)).toBe(true);
   });
 
   test('disables low winrate', () => {
-    const metrics: PerformanceMetrics = { avg_return: 100, winrate: 0.3, sharpe: 1, trades_count: 10 };
+    const metrics: PerformanceMetrics = {
+      avg_return: 100,
+      winrate: 0.3,
+      sharpe: 1,
+      trades_count: 10,
+    };
     expect(isDisabled(metrics, 0.4)).toBe(true);
   });
 
   test('does not disable good strategy', () => {
-    const metrics: PerformanceMetrics = { avg_return: 100, winrate: 0.6, sharpe: 1.5, trades_count: 10 };
+    const metrics: PerformanceMetrics = {
+      avg_return: 100,
+      winrate: 0.6,
+      sharpe: 1.5,
+      trades_count: 10,
+    };
     expect(isDisabled(metrics, 0.4)).toBe(false);
   });
 
   test('disables exactly at threshold winrate', () => {
-    const metrics: PerformanceMetrics = { avg_return: 100, winrate: 0.39, sharpe: 1, trades_count: 10 };
+    const metrics: PerformanceMetrics = {
+      avg_return: 100,
+      winrate: 0.39,
+      sharpe: 1,
+      trades_count: 10,
+    };
     expect(isDisabled(metrics, 0.4)).toBe(true);
   });
 });
@@ -54,9 +94,9 @@ describe('selectStrategy', () => {
   const config = { explorationRate: 0.2, minTradesForConfidence: 10, minWinRate: 0.4 };
 
   const goodPerformance: StrategyPerformance = {
-    'momentum': { trending: { avg_return: 200, winrate: 0.7, sharpe: 2.0, trades_count: 20 } },
+    momentum: { trending: { avg_return: 200, winrate: 0.7, sharpe: 2.0, trades_count: 20 } },
     'mean-revert': { trending: { avg_return: 100, winrate: 0.6, sharpe: 1.5, trades_count: 15 } },
-    'breakout': { trending: { avg_return: 50, winrate: 0.5, sharpe: 1.0, trades_count: 12 } },
+    breakout: { trending: { avg_return: 50, winrate: 0.5, sharpe: 1.0, trades_count: 12 } },
   };
 
   let origRandom: () => number;
@@ -86,8 +126,8 @@ describe('selectStrategy', () => {
 
   test('all disabled returns null strategy', () => {
     const perf: StrategyPerformance = {
-      'bad1': { trending: { avg_return: -10, winrate: 0.3, sharpe: -1, trades_count: 10 } },
-      'bad2': { trending: { avg_return: -20, winrate: 0.2, sharpe: -2, trades_count: 10 } },
+      bad1: { trending: { avg_return: -10, winrate: 0.3, sharpe: -1, trades_count: 10 } },
+      bad2: { trending: { avg_return: -20, winrate: 0.2, sharpe: -2, trades_count: 10 } },
     };
     const rec = selectStrategy(perf, 'trending', config);
     expect(rec.selected_strategy).toBeNull();
@@ -105,7 +145,7 @@ describe('selectStrategy', () => {
 
   test('single available strategy selected with correct confidence', () => {
     const perf: StrategyPerformance = {
-      'only': { trending: { avg_return: 150, winrate: 0.8, sharpe: 1.5, trades_count: 5 } },
+      only: { trending: { avg_return: 150, winrate: 0.8, sharpe: 1.5, trades_count: 5 } },
     };
     Math.random = () => 0.1; // explore, but only one option
     const rec = selectStrategy(perf, 'trending', config);
