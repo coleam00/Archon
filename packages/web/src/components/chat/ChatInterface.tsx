@@ -450,8 +450,20 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
             // avoid losing messages that exist only on the client.
             setMessages(prev => {
               const hydratedIds = new Set(hydrated.map(m => m.id));
-              // Keep any client-only messages (system, SSE-only) not present in hydrated set
-              const clientOnly = prev.filter(m => !hydratedIds.has(m.id));
+              // Keep only meaningful client-only messages not present in hydrated set.
+              // Exclude optimistic user rows and empty thinking placeholders.
+              const clientOnly = prev.filter(m => {
+                if (hydratedIds.has(m.id)) return false;
+                if (m.role === 'system') return true;
+                if (m.role !== 'assistant') return false;
+                return (
+                  Boolean(m.content) ||
+                  Boolean(m.error) ||
+                  Boolean(m.workflowDispatch) ||
+                  Boolean(m.workflowResult) ||
+                  Boolean(m.toolCalls?.length)
+                );
+              });
               if (clientOnly.length === 0) return hydrated;
               // Interleave client-only messages at their original positions by timestamp
               const merged = [...hydrated];
