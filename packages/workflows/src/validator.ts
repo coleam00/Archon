@@ -10,7 +10,6 @@
  */
 
 import { join, resolve, isAbsolute } from 'path';
-import { homedir } from 'os';
 import { access, readFile } from 'fs/promises';
 import {
   createLogger,
@@ -23,6 +22,7 @@ import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { isValidCommandName } from './command-validation';
 import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
+import { resolveSkillReferences } from '@archon/providers/skills';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -83,6 +83,7 @@ export interface CommandValidationResult {
 export interface ValidationConfig {
   loadDefaultCommands?: boolean;
   commandFolder?: string;
+  skillRootsByProvider?: Record<string, string[]>;
 }
 
 // =============================================================================
@@ -407,22 +408,16 @@ export async function validateWorkflowResources(
 
     // --- Skills nodes: check skill directories exist ---
     if ('skills' in node && Array.isArray(node.skills)) {
-      for (const skillName of node.skills) {
-        const projectSkillPath = join(cwd, '.claude', 'skills', skillName, 'SKILL.md');
-        const userSkillPath = join(homedir(), '.claude', 'skills', skillName, 'SKILL.md');
-
-        const projectExists = await fileExists(projectSkillPath);
-        const userExists = await fileExists(userSkillPath);
-
-        if (!projectExists && !userExists) {
-          issues.push({
-            level: 'warning',
-            nodeId: node.id,
-            field: 'skills',
-            message: `Skill '${skillName}' not found in .claude/skills/ or ~/.claude/skills/`,
-            hint: `Install with: npx skills add <repo> — or create manually at .claude/skills/${skillName}/SKILL.md`,
-          });
-        }
+      const skillRoots = provider ? config?.skillRootsByProvider?.[provider] : undefined;
+      const skillResolution = await resolveSkillReferences(cwd, node.skills, { skillRoots });
+      for (const missingSkill of skillResolution.missing) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'skills',
+          message: `Skill '${missingSkill.ref}' not found or not readable`,
+          hint: `Searched:\n${missingSkill.searchedPaths.map(path => `  - ${path}`).join('\n')}`,
+        });
       }
 
       // Warn if using skills with a provider that doesn't support them

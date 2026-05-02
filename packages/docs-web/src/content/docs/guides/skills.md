@@ -1,6 +1,6 @@
 ---
 title: Per-Node Skills
-description: Preload specialized knowledge into individual workflow nodes using the Claude Agent SDK skills system.
+description: Preload specialized knowledge into individual workflow nodes.
 category: guides
 area: workflows
 audience: [user]
@@ -13,8 +13,6 @@ DAG workflow nodes support a `skills` field that preloads named skills into the
 node's agent context. Each node gets specialized procedural knowledge — code review
 patterns, Remotion best practices, testing conventions — without polluting other nodes.
 
-**Claude only** — Codex nodes will warn and ignore the `skills` field.
-
 ## Quick Start
 
 1. Install a skill (e.g., the official Remotion skill):
@@ -24,6 +22,7 @@ npx skills add remotion-dev/skills
 ```
 
 This places SKILL.md files in `.claude/skills/remotion-best-practices/`.
+Codex-style skills can also live in `.agents/skills/`.
 
 2. Reference it in your workflow:
 
@@ -43,8 +42,14 @@ gotchas) without the user having to paste instructions into the prompt.
 
 ## How It Works
 
-When a node has `skills: [name, ...]`, the executor wraps it in an
-[AgentDefinition](https://platform.claude.com/docs/en/agent-sdk/subagents) — the
+When a node has `skills: [name, ...]`, Archon resolves each selected skill before
+the node runs. Missing or unreadable skills fail validation with the searched
+paths.
+
+### Claude
+
+For Claude nodes, the executor wraps the node in an
+[AgentDefinition](https://platform.claude.com/docs/en/agent-sdk/subagents), the
 Claude Agent SDK mechanism for scoping skills to subagents.
 
 ```
@@ -65,6 +70,22 @@ Agent executes with full skill knowledge available
 
 The `Skill` tool is automatically added to `allowedTools` so the agent can invoke
 skills. You don't need to add it manually.
+
+### Codex
+
+For Codex nodes, Archon resolves the selected `SKILL.md` files and prepends them
+to the Codex turn as explicit workflow-selected skill context. This makes
+`skills:` deterministic even when the skill lives outside Codex's native
+auto-discovery roots.
+
+Codex can also use its native `$skill-name` invocation for skills installed under
+`.agents/skills/` or user/admin/system Codex roots. The workflow `skills:` field
+is for selecting exactly which skills a node should receive.
+
+### Pi
+
+For Pi nodes, Archon resolves skill names to skill directories and passes them to
+Pi as additional skill paths.
 
 ## Installing Skills
 
@@ -101,10 +122,11 @@ npx skills add git@github.com:org/private-skills.git
 
 ### Manual
 
-Create a directory in `.claude/skills/` with a `SKILL.md` file:
+Create a directory in `.claude/skills/` or `.agents/skills/` with a `SKILL.md`
+file:
 
 ```
-.claude/skills/my-skill/
+.agents/skills/my-skill/
 └── SKILL.md
 ```
 
@@ -123,16 +145,35 @@ Step-by-step content here. The agent loads this when the skill activates.
 
 ## Skill Discovery
 
-Skills are discovered from these locations (via `settingSources: ['project']`
-set in ClaudeProvider):
+Skills are discovered from these default locations:
 
 | Location | Scope |
 |----------|-------|
+| `.agents/skills/` (in cwd) | Project-level, Codex/Pi convention |
+| `.codex/skills/` (in cwd) | Project-level, Codex convention |
 | `.claude/skills/` (in cwd) | Project-level |
+| `~/.agents/skills/` | User-level Codex/Pi convention |
+| `~/.codex/skills/` | User-level Codex convention |
 | `~/.claude/skills/` | User-level (all projects) |
+| `/etc/codex/skills/` | Admin/system Codex convention |
 
-Skills installed via `npx skills add` land in `.claude/skills/` by default.
-Use `-g` for global installation to `~/.claude/skills/`.
+Codex nodes can add extra roots in config:
+
+```yaml
+assistants:
+  codex:
+    skillRoots:
+      - /absolute/path/to/team-skills
+```
+
+Skill entries can also be explicit paths to a skill directory or a `SKILL.md`
+file:
+
+```yaml
+skills:
+  - /absolute/path/to/team-skills/release-checklist
+  - ./.agents/skills/local-skill/SKILL.md
+```
 
 ## Scoping: Installed vs Active
 
@@ -205,32 +246,26 @@ produce better results than either alone.
 
 ## Codex Compatibility
 
-Codex nodes with `skills` log a warning and continue without the skills:
-
-```
-Warning: Node 'review' has skills set but uses Codex — per-node skills
-are not supported for Codex.
-```
-
-To use skills, ensure the node uses Claude (the default provider, or set
-`provider: claude` explicitly).
+Codex supports `skills:` on workflow prompt and command nodes. Archon injects the
+resolved skill content into the Codex turn, so missing skills fail before the
+model runs instead of being silently ignored.
 
 ## Limitations
 
 - **Pre-installation required** — skills must exist on disk before the workflow runs.
   There is no on-demand fetching (yet).
-- **Claude only** — the SDK's `AgentDefinition.skills` field is Claude-specific.
 - **Full injection** — skill content is fully injected at startup, not progressively
   disclosed. Keep skills concise.
-- **No validation** — if a named skill doesn't exist, the SDK may fail silently.
-  Verify skills are installed with `npx skills list`.
+- **Provider mechanics differ** — Claude uses SDK `AgentDefinition.skills`, Codex
+  receives explicit skill context in the turn prompt, and Pi receives additional
+  skill paths.
 
 ## Troubleshooting
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Skill not found | Not installed | Run `npx skills add <source>` |
-| Skill ignored | Node uses Codex provider | Set `provider: claude` on the node |
+| Skill not found in custom location | Root not configured | Add `assistants.codex.skillRoots` or reference the skill by explicit path |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |
 | Skill has no effect | Description too vague | Rewrite SKILL.md with specific, actionable instructions |
 

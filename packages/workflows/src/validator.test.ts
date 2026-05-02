@@ -46,6 +46,15 @@ async function createCommandFile(name: string, content = '# Do something'): Prom
   await writeFile(join(dir, `${name}.md`), content);
 }
 
+async function createSkill(root: string, name: string): Promise<void> {
+  const dir = join(root, name);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: Test skill\n---\n\n# ${name}\n`
+  );
+}
+
 // =============================================================================
 // levenshtein
 // =============================================================================
@@ -224,6 +233,58 @@ describe('validateWorkflowResources — MCP validation', () => {
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
     expect(mcpWarnings).toHaveLength(1);
     expect(mcpWarnings[0].message).toContain('not supported by provider');
+  });
+});
+
+// =============================================================================
+// validateWorkflowResources — skills validation
+// =============================================================================
+
+describe('validateWorkflowResources — skills validation', () => {
+  test('no issue when skill exists in default project roots', async () => {
+    await createSkill(join(tmpDir, '.claude', 'skills'), 'alpha');
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', prompt: 'do stuff', skills: ['alpha'] } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+
+    expect(issues.filter(i => i.field === 'skills')).toHaveLength(0);
+  });
+
+  test('resolves skill names from provider configured roots', async () => {
+    const skillRoot = join(tmpDir, 'custom-skills');
+    await createSkill(skillRoot, 'alpha');
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          prompt: 'do stuff',
+          provider: 'codex',
+          skills: ['alpha'],
+        } as unknown as DagNode,
+      ],
+      'codex'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {
+      skillRootsByProvider: { codex: [skillRoot] },
+    });
+
+    expect(issues.filter(i => i.field === 'skills')).toHaveLength(0);
+  });
+
+  test('errors when skill is missing', async () => {
+    const workflow = makeWorkflow('test', [
+      { id: 'step1', prompt: 'do stuff', skills: ['missing'] } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const skillErrors = issues.filter(i => i.field === 'skills' && i.level === 'error');
+
+    expect(skillErrors).toHaveLength(1);
+    expect(skillErrors[0].message).toContain("Skill 'missing' not found");
   });
 });
 

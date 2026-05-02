@@ -94,6 +94,7 @@ export interface WorkflowConfig {
       modelReasoningEffort?: ModelReasoningEffort;
       webSearchMode?: WebSearchMode;
       additionalDirectories?: string[];
+      skillRoots?: string[];
     };
   };
 }

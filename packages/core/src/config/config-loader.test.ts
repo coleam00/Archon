@@ -310,7 +310,7 @@ streaming:
       let globalConfigRead = false;
       mockReadConfigFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
-          return `assistants:\n  codex:\n    webSearchMode: live\n    additionalDirectories:\n      - /repo\n`;
+          return `assistants:\n  codex:\n    webSearchMode: live\n    additionalDirectories:\n      - /repo\n    skillRoots:\n      - /repo/.agents/skills\n`;
         }
         if (pathMatches(path, '.archon/config.yaml') && !globalConfigRead) {
           globalConfigRead = true;
@@ -327,6 +327,7 @@ streaming:
       expect(config.assistants.codex.modelReasoningEffort).toBe('medium');
       expect(config.assistants.codex.webSearchMode).toBe('live');
       expect(config.assistants.codex.additionalDirectories).toEqual(['/repo']);
+      expect(config.assistants.codex.skillRoots).toEqual(['/repo/.agents/skills']);
     });
 
     test('propagates baseBranch from repo worktree config', async () => {
@@ -613,16 +614,19 @@ assistants:
       expect(safe).not.toHaveProperty('commands');
     });
 
-    test('strips additionalDirectories from assistants.codex', async () => {
+    test('strips local path fields from assistants.codex', async () => {
       mockReadConfigFile.mockResolvedValue(`
 assistants:
   codex:
     additionalDirectories:
       - /sensitive/path
+    skillRoots:
+      - /sensitive/skills
 `);
       const config = await loadConfig();
       const safe = toSafeConfig(config);
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
+      expect(safe.assistants.codex).not.toHaveProperty('skillRoots');
     });
 
     test('preserves non-sensitive fields', async () => {

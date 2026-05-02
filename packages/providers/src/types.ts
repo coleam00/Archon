@@ -27,6 +27,8 @@ export interface CodexProviderDefaults {
   /** Structurally matches @archon/workflows WebSearchMode */
   webSearchMode?: 'disabled' | 'cached' | 'live';
   additionalDirectories?: string[];
+  /** Additional skill root directories searched for workflow `skills:` refs. */
+  skillRoots?: string[];
   /** Path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. */
   codexBinaryPath?: string;
 }

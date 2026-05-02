@@ -1,4 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
@@ -74,7 +77,7 @@ describe('CodexProvider', () => {
         sessionResume: true,
         mcp: false,
         hooks: false,
-        skills: false,
+        skills: true,
         agents: false,
         toolRestrictions: false,
         structuredOutput: true,
@@ -655,6 +658,70 @@ describe('CodexProvider', () => {
           additionalDirectories: ['/other/repo'],
         })
       );
+    });
+
+    test('prepends workflow skills resolved from configured roots to Codex prompt', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-skills-'));
+      const skillRoot = join(testDir, 'skills');
+      const skillDir = join(skillRoot, 'alpha');
+
+      try {
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(
+          join(skillDir, 'SKILL.md'),
+          '---\nname: alpha\ndescription: Test skill\n---\n\n# Alpha\n\nReturn ALPHA_SENTINEL.\n'
+        );
+
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+
+        for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
+          nodeConfig: { skills: ['alpha'] },
+          assistantConfig: { skillRoots: [skillRoot] },
+        })) {
+          // consume
+        }
+
+        const promptArg = mockRunStreamed.mock.calls[0]?.[0] as string;
+        expect(promptArg).toContain('BEGIN SKILL alpha');
+        expect(promptArg).toContain('Return ALPHA_SENTINEL.');
+        expect(promptArg).toContain('--- USER PROMPT ---\ntest prompt');
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          {
+            skills: ['alpha'],
+            skillPaths: [join(skillDir, 'SKILL.md')],
+          },
+          'codex.skills_loaded'
+        );
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
+    });
+
+    test('throws clear error when workflow skill cannot be resolved', async () => {
+      const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-missing-skill-'));
+
+      try {
+        let caught: Error | undefined;
+        try {
+          for await (const _ of client.sendQuery('test prompt', testDir, undefined, {
+            nodeConfig: { skills: ['missing-skill'] },
+          })) {
+            // consume
+          }
+        } catch (error) {
+          caught = error as Error;
+        }
+
+        expect(caught).toBeDefined();
+        expect(caught?.message).toContain("Skill 'missing-skill' not found or not readable");
+        expect(mockRunStreamed).not.toHaveBeenCalled();
+      } finally {
+        await rm(testDir, { recursive: true, force: true });
+      }
     });
 
     test('passes outputFormat schema as outputSchema in TurnOptions', async () => {
