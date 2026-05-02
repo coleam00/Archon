@@ -1,0 +1,19 @@
+{
+  "name": "market-regime-engine",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "test": "bun test src/",
+    "type-check": "bun x tsc --noEmit"
+  },
+  "dependencies": {
+    "pino": "^9.0.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.3.0"
+  }
+}
