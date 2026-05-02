@@ -71,13 +71,20 @@ git status --porcelain
 
 ### 2.2 Stage Changes
 
-Stage all implementation changes:
+Stage **only** the implementation files you actually edited — never `git add -A`, `git add .`, or `git add -u`. List them by name:
 
 ```bash
-git add -A
+git add path/to/file1 path/to/file2 ...
+git status --porcelain  # verify nothing else is staged
 ```
 
-**Review staged files** - ensure no sensitive files (.env, credentials) are included:
+**Never stage** scratch / review / PR-body artifacts, even if they appear in `git status`:
+
+- `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
+- `review/`, `*-report.md` at the repo root
+- Anything under `$ARTIFACTS_DIR`
+
+**Review staged files** — ensure no sensitive files (`.env`, credentials) and no scratch artifacts are included:
 
 ```bash
 git diff --cached --name-only
