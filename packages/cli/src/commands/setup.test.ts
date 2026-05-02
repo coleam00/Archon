@@ -70,7 +70,7 @@ describe('setup command', () => {
       }
     });
 
-    it('should detect existing configuration values', () => {
+    it('should detect existing configuration values', async () => {
       const envDir = join(TEST_DIR, '.archon');
       mkdirSync(envDir, { recursive: true });
       const envPath = join(envDir, '.env');
@@ -88,14 +88,20 @@ CODEX_ACCOUNT_ID=account1
 `.trim()
       );
 
+      // Register providers so checkExistingConfig can detect them
+      const { registerBuiltinProviders, registerCommunityProviders } =
+        await import('@archon/providers');
+      registerBuiltinProviders();
+      registerCommunityProviders();
+
       const originalHome = process.env.ARCHON_HOME;
       process.env.ARCHON_HOME = envDir;
 
       const result = checkExistingConfig();
 
       expect(result).not.toBeNull();
-      expect(result?.hasClaude).toBe(true);
-      expect(result?.hasCodex).toBe(true);
+      expect(result?.hasProvider.claude).toBe(true);
+      expect(result?.hasProvider.codex).toBe(true);
       expect(result?.platforms.telegram).toBe(true);
       expect(result?.platforms.github).toBe(false);
       expect(result?.platforms.slack).toBe(false);
@@ -137,9 +143,12 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'global',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -164,10 +173,13 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'postgresql', url: 'postgresql://localhost:5432/archon' },
         ai: {
-          claude: true,
-          claudeAuthType: 'apiKey',
-          claudeApiKey: 'sk-test-key',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'apiKey',
+              apiKey: 'sk-test-key',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -188,10 +200,13 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          claudeBinaryPath: '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'global',
+              binaryPath: '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false, discord: false },
@@ -207,9 +222,12 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'global',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false, discord: false },
@@ -223,9 +241,12 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'global',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -261,13 +282,14 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: false,
-          codex: true,
-          codexTokens: {
-            idToken: 'id-token',
-            accessToken: 'access-token',
-            refreshToken: 'refresh-token',
-            accountId: 'account-id',
+          selectedProviders: { codex: true },
+          providerAuth: {
+            codex: {
+              idToken: 'id-token',
+              accessToken: 'access-token',
+              refreshToken: 'refresh-token',
+              accountId: 'account-id',
+            },
           },
           defaultAssistant: 'codex',
         },
@@ -291,9 +313,12 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'global',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -312,9 +337,12 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'global',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -333,9 +361,12 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
+          selectedProviders: { claude: true },
+          providerAuth: {
+            claude: {
+              authType: 'global',
+            },
+          },
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -362,9 +393,8 @@ CODEX_ACCOUNT_ID=account1
       const content = generateEnvContent({
         database: { type: 'sqlite' },
         ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
+          selectedProviders: {},
+          providerAuth: {},
           defaultAssistant: 'claude',
         },
         platforms: {

@@ -55,15 +55,10 @@ interface SetupConfig {
     url?: string;
   };
   ai: {
-    claude: boolean;
-    claudeAuthType?: 'global' | 'apiKey' | 'oauthToken';
-    claudeApiKey?: string;
-    claudeOauthToken?: string;
-    /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
-     *  in ~/.archon/.env. Required in compiled Archon binaries; harmless in dev. */
-    claudeBinaryPath?: string;
-    codex: boolean;
-    codexTokens?: CodexTokens;
+    /** Map of provider id -> whether it's selected */
+    selectedProviders: Record<string, boolean>;
+    /** Auth config per provider - keyed by provider id */
+    providerAuth: ProviderAuthConfig;
     defaultAssistant: string;
   };
   platforms: {
@@ -77,6 +72,17 @@ interface SetupConfig {
   slack?: SlackConfig;
   discord?: DiscordConfig;
   botDisplayName: string;
+}
+
+/** Auth config union for all provider types */
+interface ProviderAuthConfig {
+  claude?: {
+    authType: 'global' | 'apiKey' | 'oauthToken';
+    apiKey?: string;
+    oauthToken?: string;
+    binaryPath?: string;
+  };
+  codex?: CodexTokens;
 }
 
 interface GitHubConfig {
@@ -111,8 +117,8 @@ interface CodexTokens {
 
 interface ExistingConfig {
   hasDatabase: boolean;
-  hasClaude: boolean;
-  hasCodex: boolean;
+  /** Map of provider id -> whether it's configured */
+  hasProvider: Record<string, boolean>;
   platforms: {
     github: boolean;
     telegram: boolean;
@@ -342,17 +348,37 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
 
   const content = readFileSync(path, 'utf-8');
 
+  // Check providers dynamically - built-in providers have specific env var requirements,
+  // community providers are considered "configured" if DEFAULT_AI_ASSISTANT is set to them
+  const providers = getRegisteredProviders();
+  const hasProvider: Record<string, boolean> = {};
+
+  for (const provider of providers) {
+    if (provider.builtIn) {
+      // Built-in providers have specific env var checks
+      if (provider.id === 'claude') {
+        hasProvider.claude =
+          hasEnvValue(content, 'CLAUDE_API_KEY') ||
+          hasEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN') ||
+          hasEnvValue(content, 'CLAUDE_USE_GLOBAL_AUTH');
+      } else if (provider.id === 'codex') {
+        hasProvider.codex =
+          hasEnvValue(content, 'CODEX_ID_TOKEN') &&
+          hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
+          hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
+          hasEnvValue(content, 'CODEX_ACCOUNT_ID');
+      }
+    } else {
+      // Community providers (like Pi) manage their own auth externally,
+      // so they're "configured" if they're set as the default assistant
+      const defaultAssistant = extractEnvValue(content, 'DEFAULT_AI_ASSISTANT');
+      hasProvider[provider.id] = defaultAssistant === provider.id;
+    }
+  }
+
   return {
     hasDatabase: hasEnvValue(content, 'DATABASE_URL'),
-    hasClaude:
-      hasEnvValue(content, 'CLAUDE_API_KEY') ||
-      hasEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN') ||
-      hasEnvValue(content, 'CLAUDE_USE_GLOBAL_AUTH'),
-    hasCodex:
-      hasEnvValue(content, 'CODEX_ID_TOKEN') &&
-      hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
-      hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
-      hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    hasProvider,
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
@@ -360,6 +386,31 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
       discord: hasEnvValue(content, 'DISCORD_BOT_TOKEN'),
     },
   };
+}
+
+/**
+ * Extract a single key's value from env file content
+ */
+function extractEnvValue(content: string, key: string): string | undefined {
+  const regex = new RegExp('^' + key + '=(.+)$', 'm');
+  const match = content.match(regex);
+  return match ? match[1].trim() : undefined;
+}
+
+/**
+ * Format a summary of configured providers
+ */
+function formatProvidersSummary(hasProvider: Record<string, boolean>): string {
+  const providers = getRegisteredProviders();
+  const configured: string[] = [];
+
+  for (const provider of providers) {
+    if (hasProvider[provider.id]) {
+      configured.push(provider.displayName);
+    }
+  }
+
+  return configured.length > 0 ? configured.join(', ') : 'None';
 }
 
 // =============================================================================
@@ -692,51 +743,85 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
 
 /**
  * Collect AI assistant configuration
+ * Dynamically builds options from the provider registry, including both
+ * built-in (Claude, Codex) and community providers (Pi, Copilot, etc.).
+ * Community providers are skipped for auth collection since they manage
+ * their own credentials externally.
  */
 async function collectAIConfig(): Promise<SetupConfig['ai']> {
-  const assistants = await multiselect({
-    message:
-      'Which built-in AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
-    options: [
-      { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
-      { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
-    ],
+  const providers = getRegisteredProviders();
+  const builtInProviders = providers.filter(p => p.builtIn);
+  const communityProviders = providers.filter(p => !p.builtIn);
+
+  // Build provider options - built-in first with hints, then community
+  const providerOptions: { value: string; label: string; hint: string }[] = [];
+
+  for (const provider of builtInProviders) {
+    const isRecommended = provider.id === 'claude';
+    providerOptions.push({
+      value: provider.id,
+      label: isRecommended ? `${provider.displayName} (Recommended)` : provider.displayName,
+      hint: `Built-in: ${provider.id}`,
+    });
+  }
+
+  for (const provider of communityProviders) {
+    providerOptions.push({
+      value: provider.id,
+      label: provider.displayName,
+      hint: 'Community provider',
+    });
+  }
+
+  const selectedProviderIds = await multiselect({
+    message: 'Which AI assistant(s) will you use? (up/down navigate, space select, enter confirm)',
+    options: providerOptions,
     required: false,
   });
 
-  if (isCancel(assistants)) {
+  if (isCancel(selectedProviderIds)) {
     cancel('Setup cancelled.');
     process.exit(0);
   }
 
-  let hasClaude = assistants.includes('claude');
-  let hasCodex = assistants.includes('codex');
-
-  // Check if selected CLI tools are installed
-  if (hasClaude && !isCommandAvailable('claude')) {
-    note(CLI_INSTALL_INSTRUCTIONS.claude.instructions, 'Claude Code Not Found');
-    const continueWithoutClaude = await confirm({
-      message: 'Continue setup without Claude?',
-      initialValue: false,
-    });
-    if (isCancel(continueWithoutClaude)) {
-      cancel('Setup cancelled.');
-      process.exit(0);
-    }
-    if (!continueWithoutClaude) {
-      cancel('Please install Claude Code and run setup again.');
-      process.exit(0);
-    }
-    hasClaude = false;
+  const selectedProviders: Record<string, boolean> = {};
+  for (const id of selectedProviderIds) {
+    selectedProviders[id] = true;
   }
 
-  if (hasCodex && !isCommandAvailable('codex')) {
-    // On non-macOS platforms, npm is the only install method and requires Node.js 18+
-    if (process.platform !== 'darwin') {
-      const nodeVersion = getNodeVersion();
-      if (!nodeVersion) {
-        note(
-          `Node.js is required to install Codex CLI via npm.
+  // Check CLI availability for built-in providers
+  for (const provider of builtInProviders) {
+    if (selectedProviders[provider.id]) {
+      const needsCliCheck = provider.id === 'claude' || provider.id === 'codex';
+      if (needsCliCheck && !isCommandAvailable(provider.id)) {
+        const instructions =
+          CLI_INSTALL_INSTRUCTIONS[provider.id as keyof typeof CLI_INSTALL_INSTRUCTIONS];
+        if (instructions) {
+          note(instructions.instructions, `${provider.displayName} Not Found`);
+        }
+        const continueWithout = await confirm({
+          message: `Continue setup without ${provider.displayName}?`,
+          initialValue: false,
+        });
+        if (isCancel(continueWithout)) {
+          cancel('Setup cancelled.');
+          process.exit(0);
+        }
+        if (!continueWithout) {
+          cancel(`Please install ${provider.displayName} and run setup again.`);
+          process.exit(0);
+        }
+        selectedProviders[provider.id] = false;
+      }
+    }
+  }
+
+  // Check Codex Node.js requirement
+  if (selectedProviders.codex && process.platform !== 'darwin') {
+    const nodeVersion = getNodeVersion();
+    if (!nodeVersion) {
+      note(
+        `Node.js is required to install Codex CLI via npm.
 
 Install Node.js 18 or later from:
     https://nodejs.org/
@@ -746,54 +831,8 @@ Or use a version manager like nvm:
     nvm install 18
 
 After installing Node.js, run 'archon setup' again.`,
-          'Node.js Not Found'
-        );
-        const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
-          initialValue: false,
-        });
-        if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
-          process.exit(0);
-        }
-        if (!continueWithoutCodex) {
-          cancel('Please install Node.js 18+ and run setup again.');
-          process.exit(0);
-        }
-        hasCodex = false;
-      } else if (nodeVersion.major < 18) {
-        note(
-          `Node.js ${nodeVersion.major}.${nodeVersion.minor}.${nodeVersion.patch} is installed, but Codex CLI requires Node.js 18 or later.
-
-Upgrade Node.js from:
-    https://nodejs.org/
-
-Or use a version manager like nvm:
-    nvm install 18
-    nvm use 18
-
-After upgrading, run 'archon setup' again.`,
-          'Node.js Version Too Old'
-        );
-        const continueWithoutCodex = await confirm({
-          message: 'Continue setup without Codex?',
-          initialValue: false,
-        });
-        if (isCancel(continueWithoutCodex)) {
-          cancel('Setup cancelled.');
-          process.exit(0);
-        }
-        if (!continueWithoutCodex) {
-          cancel('Please upgrade Node.js to 18+ and run setup again.');
-          process.exit(0);
-        }
-        hasCodex = false;
-      }
-    }
-
-    // If we still want Codex (Node check passed or on macOS), show install instructions
-    if (hasCodex) {
-      note(CLI_INSTALL_INSTRUCTIONS.codex.instructions, 'Codex CLI Not Found');
+        'Node.js Not Found'
+      );
       const continueWithoutCodex = await confirm({
         message: 'Continue setup without Codex?',
         initialValue: false,
@@ -803,50 +842,78 @@ After upgrading, run 'archon setup' again.`,
         process.exit(0);
       }
       if (!continueWithoutCodex) {
-        cancel('Please install Codex CLI and run setup again.');
+        cancel('Please install Node.js 18+ and run setup again.');
         process.exit(0);
       }
-      hasCodex = false;
+      delete selectedProviders.codex;
+    } else if (nodeVersion.major < 18) {
+      note(
+        `Node.js ${nodeVersion.major}.${nodeVersion.minor}.${nodeVersion.patch} is installed, but Codex CLI requires Node.js 18 or later.
+
+Upgrade Node.js from:
+    https://nodejs.org/
+
+Or use a version manager like nvm:
+    nvm install 18
+    nvm use 18
+
+After upgrading, run 'archon setup' again.`,
+        'Node.js Version Too Old'
+      );
+      const continueWithoutCodex = await confirm({
+        message: 'Continue setup without Codex?',
+        initialValue: false,
+      });
+      if (isCancel(continueWithoutCodex)) {
+        cancel('Setup cancelled.');
+        process.exit(0);
+      }
+      if (!continueWithoutCodex) {
+        cancel('Please upgrade Node.js to 18+ and run setup again.');
+        process.exit(0);
+      }
+      delete selectedProviders.codex;
     }
   }
 
-  if (!hasClaude && !hasCodex) {
+  if (Object.keys(selectedProviders).length === 0) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
-      claude: false,
-      codex: false,
-      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+      selectedProviders: {},
+      providerAuth: {},
+      defaultAssistant: providers.find(p => p.builtIn)?.id ?? providers[0]?.id ?? 'claude',
     };
   }
 
-  let claudeAuthType: 'global' | 'apiKey' | 'oauthToken' | undefined;
-  let claudeApiKey: string | undefined;
-  let claudeOauthToken: string | undefined;
-  let claudeBinaryPath: string | undefined;
-  let codexTokens: CodexTokens | undefined;
+  const providerAuth: ProviderAuthConfig = {};
 
-  // Collect Claude auth if selected
-  if (hasClaude) {
+  if (selectedProviders.claude) {
     const claudeAuth = await collectClaudeAuth();
-    claudeAuthType = claudeAuth.authType;
-    claudeApiKey = claudeAuth.apiKey;
-    claudeOauthToken = claudeAuth.oauthToken;
-    claudeBinaryPath = await collectClaudeBinaryPath();
+    providerAuth.claude = {
+      authType: claudeAuth.authType,
+      apiKey: claudeAuth.apiKey,
+      oauthToken: claudeAuth.oauthToken,
+      binaryPath: await collectClaudeBinaryPath(),
+    };
   }
 
-  // Collect Codex auth if selected
-  if (hasCodex) {
-    const tokens = await collectCodexAuth();
-    codexTokens = tokens ?? undefined;
+  if (selectedProviders.codex) {
+    const codexTokens = await collectCodexAuth();
+    if (codexTokens) {
+      providerAuth.codex = codexTokens;
+    }
   }
 
-  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
-  // Default to first registered built-in provider rather than hardcoding 'claude'.
-  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
+  // Community providers (Pi, etc.) manage their own auth externally - no collection needed
+  let defaultAssistant =
+    providers.find(p => p.builtIn && selectedProviders[p.id])?.id ??
+    Object.keys(selectedProviders)[0] ??
+    providers[0]?.id ??
+    'claude';
 
-  if (hasClaude && hasCodex) {
-    const providerChoices = getRegisteredProviders()
-      .filter(p => p.builtIn)
+  if (Object.keys(selectedProviders).length > 1) {
+    const defaultChoices = providers
+      .filter(p => selectedProviders[p.id])
       .map(p => ({
         value: p.id,
         label: p.id === 'claude' ? `${p.displayName} (Recommended)` : p.displayName,
@@ -854,7 +921,7 @@ After upgrading, run 'archon setup' again.`,
 
     const defaultChoice = await select({
       message: 'Which should be the default AI assistant?',
-      options: providerChoices,
+      options: defaultChoices,
     });
 
     if (isCancel(defaultChoice)) {
@@ -863,18 +930,11 @@ After upgrading, run 'archon setup' again.`,
     }
 
     defaultAssistant = defaultChoice;
-  } else if (hasCodex && !hasClaude) {
-    defaultAssistant = 'codex';
   }
 
   return {
-    claude: hasClaude,
-    claudeAuthType,
-    claudeApiKey,
-    claudeOauthToken,
-    ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
-    codex: hasCodex,
-    codexTokens,
+    selectedProviders,
+    providerAuth,
     defaultAssistant,
   };
 }
@@ -1223,31 +1283,37 @@ export function generateEnvContent(config: SetupConfig): string {
   // AI Assistants
   lines.push('# AI Assistants');
 
-  if (config.ai.claude) {
-    if (config.ai.claudeAuthType === 'global') {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=true');
-    } else if (config.ai.claudeAuthType === 'apiKey' && config.ai.claudeApiKey) {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
-      lines.push(`CLAUDE_API_KEY=${config.ai.claudeApiKey}`);
-    } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
-      lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
-      lines.push(`CLAUDE_CODE_OAUTH_TOKEN=${config.ai.claudeOauthToken}`);
-    }
-    if (config.ai.claudeBinaryPath) {
-      lines.push(`CLAUDE_BIN_PATH=${config.ai.claudeBinaryPath}`);
+  if (config.ai.selectedProviders.claude) {
+    const claudeAuth = config.ai.providerAuth.claude;
+    if (claudeAuth) {
+      if (claudeAuth.authType === 'global') {
+        lines.push('CLAUDE_USE_GLOBAL_AUTH=true');
+      } else if (claudeAuth.authType === 'apiKey' && claudeAuth.apiKey) {
+        lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
+        lines.push(`CLAUDE_API_KEY=${claudeAuth.apiKey}`);
+      } else if (claudeAuth.authType === 'oauthToken' && claudeAuth.oauthToken) {
+        lines.push('CLAUDE_USE_GLOBAL_AUTH=false');
+        lines.push(`CLAUDE_CODE_OAUTH_TOKEN=${claudeAuth.oauthToken}`);
+      }
+      if (claudeAuth.binaryPath) {
+        lines.push(`CLAUDE_BIN_PATH=${claudeAuth.binaryPath}`);
+      }
     }
   } else {
     lines.push('# Claude not configured');
   }
   lines.push('');
 
-  if (config.ai.codex && config.ai.codexTokens) {
-    lines.push('# Codex Authentication');
-    lines.push(`CODEX_ID_TOKEN=${config.ai.codexTokens.idToken}`);
-    lines.push(`CODEX_ACCESS_TOKEN=${config.ai.codexTokens.accessToken}`);
-    lines.push(`CODEX_REFRESH_TOKEN=${config.ai.codexTokens.refreshToken}`);
-    lines.push(`CODEX_ACCOUNT_ID=${config.ai.codexTokens.accountId}`);
-    lines.push('');
+  if (config.ai.selectedProviders.codex) {
+    const codexTokens = config.ai.providerAuth.codex;
+    if (codexTokens) {
+      lines.push('# Codex Authentication');
+      lines.push(`CODEX_ID_TOKEN=${codexTokens.idToken}`);
+      lines.push(`CODEX_ACCESS_TOKEN=${codexTokens.accessToken}`);
+      lines.push(`CODEX_REFRESH_TOKEN=${codexTokens.refreshToken}`);
+      lines.push(`CODEX_ACCOUNT_ID=${codexTokens.accountId}`);
+      lines.push('');
+    }
   }
 
   // Default AI Assistant
@@ -1652,8 +1718,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
     const summary = [
       `Database: ${existing.hasDatabase ? 'PostgreSQL' : 'SQLite'}`,
-      `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
-      `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
+      `AI Providers: ${formatProvidersSummary(existing.hasProvider)}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     ].join('\n');
 
@@ -1689,8 +1754,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     config = {
       database: { type: 'sqlite' },
       ai: {
-        claude: existing?.hasClaude ?? false,
-        codex: existing?.hasCodex ?? false,
+        // Copy existing provider selection from config
+        selectedProviders: existing?.hasProvider ?? {},
+        providerAuth: {}, // Auth not needed for 'add' mode - providers already configured
         defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
       },
       platforms: {
@@ -1875,18 +1941,28 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   if (config.platforms.slack) configuredPlatforms.push('Slack');
   if (config.platforms.discord) configuredPlatforms.push('Discord');
 
+  // Build list of configured AI providers
+  const providers = getRegisteredProviders();
   const aiConfigured: string[] = [];
-  if (config.ai.claude) {
-    const authMethod =
-      config.ai.claudeAuthType === 'global'
-        ? 'global auth'
-        : config.ai.claudeAuthType === 'apiKey'
-          ? 'API key'
-          : 'OAuth token';
-    aiConfigured.push(`Claude (${authMethod})`);
-  }
-  if (config.ai.codex && config.ai.codexTokens) {
-    aiConfigured.push('Codex');
+
+  for (const provider of providers) {
+    if (config.ai.selectedProviders[provider.id]) {
+      if (provider.id === 'claude') {
+        const claudeAuth = config.ai.providerAuth.claude;
+        const authMethod =
+          claudeAuth?.authType === 'global'
+            ? 'global auth'
+            : claudeAuth?.authType === 'apiKey'
+              ? 'API key'
+              : 'OAuth token';
+        aiConfigured.push(`Claude (${authMethod})`);
+      } else if (provider.id === 'codex') {
+        aiConfigured.push('Codex');
+      } else {
+        // Community provider - just show name
+        aiConfigured.push(provider.displayName);
+      }
+    }
   }
 
   const summaryLines = [
