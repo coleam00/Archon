@@ -446,16 +446,19 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
           .then((rows: MessageResponse[]) => {
             if (rows.length === 0) return;
             const hydrated = rows.map(mapMessageRow);
-            // Preserve client-only system messages (e.g., sync status) when rehydrating
+            // Merge hydrated DB messages with client-only state (system, live SSE) to
+            // avoid losing messages that exist only on the client.
             setMessages(prev => {
-              const systemMessages = prev.filter(m => m.role === 'system');
-              if (systemMessages.length === 0) return hydrated;
-              // Interleave system messages at their original positions by timestamp
+              const hydratedIds = new Set(hydrated.map(m => m.id));
+              // Keep any client-only messages (system, SSE-only) not present in hydrated set
+              const clientOnly = prev.filter(m => !hydratedIds.has(m.id));
+              if (clientOnly.length === 0) return hydrated;
+              // Interleave client-only messages at their original positions by timestamp
               const merged = [...hydrated];
-              for (const sys of systemMessages) {
-                const insertIdx = merged.findIndex(m => m.timestamp > sys.timestamp);
-                if (insertIdx === -1) merged.push(sys);
-                else merged.splice(insertIdx, 0, sys);
+              for (const msg of clientOnly) {
+                const insertIdx = merged.findIndex(m => m.timestamp > msg.timestamp);
+                if (insertIdx === -1) merged.push(msg);
+                else merged.splice(insertIdx, 0, msg);
               }
               return merged;
             });

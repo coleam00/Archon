@@ -49,6 +49,8 @@ export async function addMessage(
 
 /**
  * List messages for a conversation, oldest first.
+ * Fetches the newest `limit` messages so that the most recent history is always
+ * returned, then reverses to preserve chronological (oldest-first) order.
  * conversationId is the database UUID (not platform_conversation_id).
  */
 export async function listMessages(
@@ -58,11 +60,11 @@ export async function listMessages(
   const result = await pool.query<MessageRow>(
     `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
-     ORDER BY created_at ASC
+     ORDER BY created_at DESC
      LIMIT $2`,
     [conversationId, limit]
   );
-  return result.rows;
+  return [...result.rows].reverse();
 }
 
 /**
