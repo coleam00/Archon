@@ -3,6 +3,7 @@ import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
+  OmpMcpManager,
   OmpModelRegistry,
   OmpSessionManager,
 } from './sdk-loader';
@@ -18,6 +19,7 @@ import type {
 import { OMP_CAPABILITIES } from './capabilities';
 import { parseOmpConfig } from './config';
 import { bridgeSession } from './event-bridge';
+import { resolveOmpMcp, type ResolvedOmpMcp } from './mcp';
 import { parseOmpModelRef } from './model-ref';
 import {
   applyConfigEnv,
@@ -154,6 +156,8 @@ function buildSessionOptions(args: {
   additionalExtensionPaths?: string[];
   thinkingLevel?: string;
   systemPrompt?: string;
+  mcpManager?: OmpMcpManager;
+  customTools?: unknown[];
   toolNames: string[];
   hasUI: boolean;
 }): OmpCreateAgentSessionOptions {
@@ -176,6 +180,8 @@ function buildSessionOptions(args: {
       : {}),
     ...(args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}),
     ...(args.systemPrompt !== undefined ? { systemPrompt: args.systemPrompt } : {}),
+    ...(args.mcpManager ? { mcpManager: args.mcpManager } : {}),
+    ...(args.customTools ? { customTools: args.customTools } : {}),
     toolNames: args.toolNames,
     hasUI: args.hasUI,
   };
@@ -220,6 +226,16 @@ function extensionFlagWarning(
 ): string | undefined {
   if (!extensionFlagsConfigured || hasRunner) return undefined;
   return '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.';
+}
+
+function mcpEnvWarning(missingVars: readonly string[]): string | undefined {
+  if (missingVars.length === 0) return undefined;
+  const uniqueVars = [...new Set(missingVars)];
+  return `⚠️ MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`;
+}
+
+function mergeToolNames(baseToolNames: string[], mcpToolNames: string[]): string[] {
+  return [...new Set([...baseToolNames, ...mcpToolNames])];
 }
 
 /**
@@ -294,47 +310,82 @@ export class OmpProvider implements IAgentProvider {
     const extensionsDisabled = ompConfig.disableExtensionDiscovery === true;
     const uiBridge = interactive ? createArchonOmpUIBridge() : undefined;
 
-    const sessionOptions = buildSessionOptions({
-      cwd,
-      agentDir: ompConfig.agentDir,
-      model,
-      authStorage,
-      modelRegistry,
-      sessionManager,
-      settings,
-      skills,
-      enableMCP: ompConfig.enableMCP === true,
-      enableLsp: ompConfig.enableLsp !== false,
-      disableExtensionDiscovery: ompConfig.disableExtensionDiscovery,
-      additionalExtensionPaths: ompConfig.additionalExtensionPaths,
-      thinkingLevel,
-      systemPrompt,
-      toolNames,
-      hasUI: interactive,
-    });
-
     const releaseConfigEnvLock = await acquireConfigEnvLock();
     configEnvKeysApplied = applyConfigEnv(ompConfig.env);
     if (configEnvKeysApplied.length > 0) {
       getLog().debug({ keys: configEnvKeysApplied }, 'omp.config_env_applied');
     }
 
-    logSessionStart({
-      provider: parsed.provider,
-      modelId: parsed.modelId,
-      cwd,
-      thinkingLevel,
-      toolCount: toolNames.length,
-      skillCount: skills.length,
-      missingSkillCount: missingSkills.length,
-      resumed: resumeSessionId !== undefined && !resumeFailed,
-      settingsOverrideCount: Object.keys(settingsOverrides).length,
-      configEnvKeysApplied: configEnvKeysApplied.length,
-      interactive,
-      extensionsDisabled,
-    });
-
+    let resolvedMcp: ResolvedOmpMcp | undefined;
     try {
+      if (nodeConfig?.mcp) {
+        resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp);
+        getLog().info(
+          { serverNames: resolvedMcp.serverNames, mcpPath: nodeConfig.mcp },
+          'omp.mcp_config_loaded'
+        );
+
+        const envWarning = mcpEnvWarning(resolvedMcp.missingVars);
+        if (envWarning) {
+          getLog().warn(
+            { missingVars: [...new Set(resolvedMcp.missingVars)] },
+            'omp.mcp_env_vars_missing'
+          );
+          yield { type: 'system', content: envWarning };
+        }
+
+        for (const mcpError of resolvedMcp.errors) {
+          getLog().warn(
+            { mcpPath: nodeConfig.mcp, serverName: mcpError.path, error: mcpError.error },
+            'omp.mcp_tool_load_failed'
+          );
+          yield {
+            type: 'system',
+            content: `MCP server connection failed: ${mcpError.path} (${mcpError.error})`,
+          };
+        }
+      }
+
+      const effectiveToolNames = resolvedMcp
+        ? mergeToolNames(toolNames, resolvedMcp.toolNames)
+        : toolNames;
+      const sessionOptions = buildSessionOptions({
+        cwd,
+        agentDir: ompConfig.agentDir,
+        model,
+        authStorage,
+        modelRegistry,
+        sessionManager,
+        settings,
+        skills,
+        enableMCP: nodeConfig?.mcp ? true : ompConfig.enableMCP === true,
+        enableLsp: ompConfig.enableLsp !== false,
+        disableExtensionDiscovery: ompConfig.disableExtensionDiscovery,
+        additionalExtensionPaths: ompConfig.additionalExtensionPaths,
+        thinkingLevel,
+        systemPrompt,
+        ...(resolvedMcp
+          ? { mcpManager: resolvedMcp.manager, customTools: resolvedMcp.customTools }
+          : {}),
+        toolNames: effectiveToolNames,
+        hasUI: interactive,
+      });
+
+      logSessionStart({
+        provider: parsed.provider,
+        modelId: parsed.modelId,
+        cwd,
+        thinkingLevel,
+        toolCount: effectiveToolNames.length,
+        skillCount: skills.length,
+        missingSkillCount: missingSkills.length,
+        resumed: resumeSessionId !== undefined && !resumeFailed,
+        settingsOverrideCount: Object.keys(settingsOverrides).length,
+        configEnvKeysApplied: configEnvKeysApplied.length,
+        interactive,
+        extensionsDisabled,
+      });
+
       const agentSessionResult = await sdk.createAgentSession(sessionOptions);
       const { session, modelFallbackMessage } = agentSessionResult;
 
@@ -379,6 +430,13 @@ export class OmpProvider implements IAgentProvider {
         throw err;
       }
     } finally {
+      if (resolvedMcp) {
+        try {
+          await resolvedMcp.manager.disconnectAll();
+        } catch (err) {
+          getLog().warn({ err, mcpPath: nodeConfig?.mcp }, 'omp.mcp_disconnect_failed');
+        }
+      }
       restoreConfigEnv(configEnvKeysApplied);
       releaseConfigEnvLock?.();
     }

@@ -1,10 +1,15 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdir, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 import { augmentPromptForJsonSchema, OmpProvider } from './provider';
 import type {
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
   OmpExtensionRunner,
+  OmpMcpManager,
+  OmpMcpSourceMeta,
   OmpSession,
 } from './sdk-loader';
 import type { MessageChunk } from '../../types';
@@ -18,17 +23,44 @@ interface FakeSdkOptions {
   onSetToolUIContext?: (uiContext: unknown, hasUI: boolean) => void;
   onSetRuntimeApiKey?: (provider: string, apiKey: string) => void;
   onPrompt?: () => void | Promise<void>;
+  mcpTools?: unknown[];
+  mcpErrors?: Map<string, string>;
+  onConnectMcp?: (args: {
+    configs: Record<string, unknown>;
+    sources: Record<string, OmpMcpSourceMeta>;
+    manager: OmpMcpManager;
+  }) => void;
+  onDisconnectMcp?: () => void;
 }
 
 async function collectChunks(
   provider: OmpProvider,
-  options: Parameters<OmpProvider['sendQuery']>[3]
+  options: Parameters<OmpProvider['sendQuery']>[3],
+  cwd = '/repo'
 ): Promise<MessageChunk[]> {
   const chunks: MessageChunk[] = [];
-  for await (const chunk of provider.sendQuery('hi', '/repo', undefined, options)) {
+  for await (const chunk of provider.sendQuery('hi', cwd, undefined, options)) {
     chunks.push(chunk);
   }
   return chunks;
+}
+
+async function writeTempMcpConfig(config: Record<string, unknown>): Promise<{
+  dir: string;
+  cleanup: () => Promise<void>;
+}> {
+  const dir = join(
+    tmpdir(),
+    `omp-provider-mcp-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'mcp.json'), JSON.stringify(config));
+  return {
+    dir,
+    cleanup: async () => {
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
 }
 
 function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
@@ -60,6 +92,29 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
   } as OmpSession & { listener?: (event: unknown) => void };
 
   return {
+    MCPManager: class implements OmpMcpManager {
+      constructor(
+        readonly cwd: string,
+        readonly toolCache?: unknown
+      ) {}
+
+      async connectServers(
+        configs: Record<string, unknown>,
+        sources: Record<string, OmpMcpSourceMeta>
+      ) {
+        options.onConnectMcp?.({ configs, sources, manager: this });
+        return {
+          tools: options.mcpTools ?? [],
+          errors: options.mcpErrors ?? new Map<string, string>(),
+          connectedServers: Object.keys(configs).filter(name => !options.mcpErrors?.has(name)),
+          exaApiKeys: [],
+        };
+      }
+
+      async disconnectAll(): Promise<void> {
+        options.onDisconnectMcp?.();
+      }
+    },
     async createAgentSession(sessionOptions) {
       options.onCreateAgentSession?.(sessionOptions);
       return {
@@ -410,6 +465,223 @@ describe('OmpProvider', () => {
       type: 'system',
       content: '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.',
     });
+  });
+
+  test('passes workflow mcp config through OMP MCP manager', async () => {
+    const temp = await writeTempMcpConfig({
+      github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
+    });
+    let connectArgs: Parameters<NonNullable<FakeSdkOptions['onConnectMcp']>>[0] | undefined;
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    let disconnectCount = 0;
+    const mcpTool = { name: 'mcp__github_create_issue' };
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        mcpTools: [mcpTool],
+        onConnectMcp(args) {
+          connectArgs = args;
+        },
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+        onDisconnectMcp() {
+          disconnectCount += 1;
+        },
+      })
+    );
+
+    try {
+      await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json' },
+          assistantConfig: { enableMCP: false },
+        },
+        temp.dir
+      );
+
+      expect(connectArgs?.configs).toEqual({
+        github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
+      });
+      expect(connectArgs?.sources.github).toEqual({
+        provider: 'archon',
+        providerName: 'Archon workflow mcp',
+        path: join(temp.dir, 'mcp.json'),
+        level: 'project',
+      });
+      expect(sessionOptions?.enableMCP).toBe(true);
+      expect(sessionOptions?.mcpManager).toBe(connectArgs?.manager);
+      expect(sessionOptions?.customTools).toEqual([mcpTool]);
+      expect(disconnectCount).toBe(1);
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  test('adds loaded MCP tool names to OMP toolNames allowlist', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        mcpTools: [{ name: 'mcp__github_create_issue' }],
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    try {
+      await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json', allowed_tools: ['read'] },
+        },
+        temp.dir
+      );
+
+      expect(sessionOptions?.toolNames).toEqual(['read', 'mcp__github_create_issue']);
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  test('surfaces missing MCP env vars', async () => {
+    delete process.env.MISSING_OMP_MCP_TOKEN;
+    const temp = await writeTempMcpConfig({
+      github: { command: 'npx', env: { GITHUB_TOKEN: '$MISSING_OMP_MCP_TOKEN' } },
+    });
+    const provider = new OmpProvider(async () => makeSdk());
+
+    try {
+      const chunks = await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json' },
+        },
+        temp.dir
+      );
+
+      expect(chunks).toContainEqual({
+        type: 'system',
+        content:
+          '⚠️ MCP config references undefined env vars: MISSING_OMP_MCP_TOKEN. These will be empty strings — MCP servers may fail to authenticate.',
+      });
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  test('expands MCP env vars from OMP config env inside the session lock', async () => {
+    const temp = await writeTempMcpConfig({
+      github: { command: 'npx', env: { GITHUB_TOKEN: '$OMP_PROVIDER_MCP_TOKEN' } },
+    });
+    let connectArgs: Parameters<NonNullable<FakeSdkOptions['onConnectMcp']>>[0] | undefined;
+    const originalToken = process.env.OMP_PROVIDER_MCP_TOKEN;
+    delete process.env.OMP_PROVIDER_MCP_TOKEN;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onConnectMcp(args) {
+          connectArgs = args;
+        },
+      })
+    );
+
+    try {
+      await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json' },
+          assistantConfig: { env: { OMP_PROVIDER_MCP_TOKEN: 'configured-token' } },
+        },
+        temp.dir
+      );
+
+      expect(connectArgs?.configs).toEqual({
+        github: { command: 'npx', env: { GITHUB_TOKEN: 'configured-token' } },
+      });
+      expect(process.env.OMP_PROVIDER_MCP_TOKEN).toBeUndefined();
+    } finally {
+      await temp.cleanup();
+      if (originalToken === undefined) delete process.env.OMP_PROVIDER_MCP_TOKEN;
+      else process.env.OMP_PROVIDER_MCP_TOKEN = originalToken;
+    }
+  });
+
+  test('reports per-server MCP connection failures with executor-compatible prefix', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    const provider = new OmpProvider(async () =>
+      makeSdk({ mcpErrors: new Map([['github', 'connect failed']]) })
+    );
+
+    try {
+      const chunks = await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json' },
+        },
+        temp.dir
+      );
+
+      expect(
+        chunks.some(
+          chunk =>
+            chunk.type === 'system' &&
+            chunk.content.startsWith('MCP server connection failed: github')
+        )
+      ).toBe(true);
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  test('does not enable broad OMP discovery when no node mcp is configured', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { enableMCP: false },
+    });
+
+    expect(sessionOptions?.enableMCP).toBe(false);
+    expect(sessionOptions?.mcpManager).toBeUndefined();
+    expect(sessionOptions?.customTools).toBeUndefined();
+  });
+
+  test('preserves broad OMP discovery when enabled and no node mcp is configured', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { enableMCP: true },
+    });
+
+    expect(sessionOptions?.enableMCP).toBe(true);
+    expect(sessionOptions?.mcpManager).toBeUndefined();
+    expect(sessionOptions?.customTools).toBeUndefined();
+  });
+  test('reports capabilities mcp true', () => {
+    const provider = new OmpProvider(async () => makeSdk());
+
+    expect(provider.getCapabilities().mcp).toBe(true);
   });
 });
 

@@ -1,6 +1,6 @@
 ---
 title: Per-Node Skills
-description: Preload specialized knowledge into individual workflow nodes using the Claude Agent SDK skills system.
+description: Preload specialized knowledge into individual workflow nodes using provider-supported skill runtimes.
 category: guides
 area: workflows
 audience: [user]
@@ -13,10 +13,10 @@ DAG workflow nodes support a `skills` field that preloads named skills into the
 node's agent context. Each node gets specialized procedural knowledge — code review
 patterns, Remotion best practices, testing conventions — without polluting other nodes.
 
-Both Claude and Codex support skills. Claude injects per-node skills via the
-SDK's `AgentDefinition.skills` field (only listed skills are loaded for that node).
+Claude, Codex, Pi, and Oh My Pi support skills. Claude injects per-node skills via the
+SDK's `AgentDefinition.skills` field. Pi and Oh My Pi use their native skill runtimes.
 Codex auto-discovers skills from the filesystem (`.agents/skills/`), so every
-installed skill is available on every Codex node — the YAML `skills:` list is
+installed skill is available on every Codex node and the YAML `skills:` list is
 informational for Codex.
 
 ## Quick Start
@@ -47,9 +47,11 @@ gotchas) without the user having to paste instructions into the prompt.
 
 ## How It Works
 
-When a node has `skills: [name, ...]`, the executor wraps it in an
+When a Claude node has `skills: [name, ...]`, the executor wraps it in an
 [AgentDefinition](https://platform.claude.com/docs/en/agent-sdk/subagents) — the
-Claude Agent SDK mechanism for scoping skills to subagents.
+Claude Agent SDK mechanism for scoping skills to subagents. Pi and Oh My Pi
+resolve the same YAML field through their native skill discovery and pass the
+resolved skills into their runtime.
 
 ```
 YAML: skills: [remotion-best-practices]
@@ -67,8 +69,8 @@ SDK loads skill content into agent context at startup
 Agent executes with full skill knowledge available
 ```
 
-The `Skill` tool is automatically added to `allowedTools` so the agent can invoke
-skills. You don't need to add it manually.
+For Claude nodes, the `Skill` tool is automatically added to `allowedTools` so the
+agent can invoke skills. You don't need to add it manually.
 
 ## Installing Skills
 
@@ -229,18 +231,18 @@ Important differences vs Claude:
   as Claude Code. Any Claude-specific `!bash` execution lines in a skill body
   are treated as literal text by Codex (no error, no execution).
 
-To opt out of a skill on Codex, remove it from `.agents/skills/`. To force
-per-node scoping, use `provider: claude` on the node — Claude honors the
-`skills:` list strictly.
+To opt out of a skill on Codex, remove it from `.agents/skills/`. For per-node
+skill activation, use a provider with scoped or native skill support: `claude`,
+`pi`, or `omp`.
 
 ## Limitations
 
 - **Pre-installation required** — skills must exist on disk before the workflow runs.
   There is no on-demand fetching (yet).
-- **Per-node scoping is Claude-only** — Claude honors the YAML `skills:` list via
-  the SDK's `AgentDefinition.skills` field. Codex auto-discovers all installed
-  skills from `.agents/skills/`; for Codex the `skills:` list is informational
-  and every installed skill is available on every node.
+- **Provider-specific runtime** — Claude honors the YAML `skills:` list through
+  `AgentDefinition.skills`; Pi and Oh My Pi use their native skill discovery/runtime.
+  Codex auto-discovers all installed skills from `.agents/skills/`, so its
+  `skills:` list is informational and does not provide per-node scoping.
 - **Full injection** — skill content is fully injected at startup, not progressively
   disclosed. Keep skills concise.
 - **No validation** — if a named skill doesn't exist, the SDK may fail silently.
@@ -251,7 +253,7 @@ per-node scoping, use `provider: claude` on the node — Claude honors the
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Skill not found | Not installed | Run `npx skills add <source>` (or `archon skill install` for the bundled Archon skills) |
-| Skill loads on wrong node | Codex auto-discovers all installed skills; the `skills:` list is informational for Codex | Use `provider: claude` to scope per-node, or remove the skill from `.agents/skills/` |
+| Skill loads on wrong node | Codex auto-discovers all installed skills; the `skills:` list is informational for Codex | Use `provider: claude`, `pi`, or `omp` for per-node activation, or remove the skill from `.agents/skills/` |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |
 | Skill has no effect | Description too vague | Rewrite SKILL.md with specific, actionable instructions |
 
