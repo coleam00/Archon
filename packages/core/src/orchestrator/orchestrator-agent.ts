@@ -42,6 +42,7 @@ import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
+import { reportUnpushedWorkInSource } from './post-message-reminder';
 import { IsolationBlockedError } from '@archon/isolation';
 import {
   buildOrchestratorPrompt,
@@ -910,6 +911,17 @@ export async function handleMessage(
         issueContext,
         requestOptions
       );
+    }
+
+    // Post-message advisory: warn if the agent (or anyone) left unpushed work
+    // in source/. Non-destructive sync default preserves such work, but it is
+    // still local-only and at risk if a /worktree create or external git op
+    // runs next. Only meaningful when a codebase is attached.
+    if (conversation.codebase_id) {
+      const attachedCodebase = codebases.find(c => c.id === conversation.codebase_id);
+      if (attachedCodebase) {
+        await reportUnpushedWorkInSource(platform, conversationId, attachedCodebase);
+      }
     }
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');

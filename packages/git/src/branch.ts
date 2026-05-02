@@ -90,6 +90,38 @@ export async function getCurrentBranch(repoPath: RepoPath): Promise<BranchName> 
 }
 
 /**
+ * Count commits in HEAD that are not in `origin/<branch>` (i.e. unpushed work).
+ *
+ * Returns:
+ * - `n >= 0`: HEAD has `n` commits not yet on origin/<branch>
+ * - `-1`: origin/<branch> does not exist locally (e.g. branch never pushed) —
+ *   treat as "everything is unpushed" for warning purposes
+ *
+ * Non-throwing: callers use this for advisory warnings, not safety-critical
+ * decisions. If git fails for an unexpected reason, returns 0 (silent — better
+ * to under-warn than to spam on every message).
+ */
+export async function countCommitsAhead(repoPath: RepoPath, branch: BranchName): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'rev-list', '--count', `origin/${branch}..HEAD`],
+      { timeout: 10000 }
+    );
+    const count = parseInt(stdout.trim(), 10);
+    return Number.isFinite(count) ? count : 0;
+  } catch (error) {
+    const err = error as Error;
+    const msg = err.message.toLowerCase();
+    // origin/<branch> doesn't exist locally — branch never pushed
+    if (msg.includes('unknown revision') || msg.includes('bad revision')) {
+      return -1;
+    }
+    return 0;
+  }
+}
+
+/**
  * Checkout a branch (creating it if it doesn't exist)
  */
 export async function checkout(repoPath: RepoPath, branchName: BranchName): Promise<void> {
