@@ -8,12 +8,19 @@ mkdir -p /.archon/workspaces /.archon/worktrees
 
 # Determine if we need to use gosu for privilege dropping
 if [ "$(id -u)" = "0" ]; then
-  # Running as root: fix volume permissions, then drop to appuser
-  if ! chown -Rh appuser:appuser /.archon 2>/dev/null; then
-    echo "ERROR: Failed to fix ownership of /.archon — volume may be read-only or mounted with incompatible options" >&2
-    exit 1
+  # Running as root: try to fix volume permissions, then drop to appuser.
+  # chown may fail on bind mounts (e.g. macOS VirtioFS) where the host controls
+  # ownership and host UIDs (e.g. 501) don't map to appuser (1001). Treat this
+  # as a warning and fall back to running as root so the container still starts
+  # rather than crash-looping. IS_SANDBOX=1 lets ClaudeProvider skip its UID-0
+  # safety check (we're still inside Docker — sandboxed in the meaningful sense).
+  if chown -Rh appuser:appuser /.archon 2>/dev/null; then
+    RUNNER="gosu appuser"
+  else
+    echo "WARNING: Could not fix ownership of /.archon (bind mount with incompatible options?) — running as root" >&2
+    export IS_SANDBOX=1
+    RUNNER=""
   fi
-  RUNNER="gosu appuser"
 else
   # Already running as non-root (e.g., --user flag or Kubernetes)
   RUNNER=""
