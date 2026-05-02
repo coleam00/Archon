@@ -27,7 +27,7 @@ import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { syncWorkspace, toRepoPath } from '@archon/git';
+import { syncWorkspace, getCurrentBranch, toRepoPath, toBranchName } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow } from '@archon/workflows/router';
@@ -434,9 +434,13 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
           const isManagedClone = codebase.default_cwd
             .replace(/\\/g, '/')
             .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
-          syncResult = await syncWorkspace(toRepoPath(codebase.default_cwd), undefined, {
-            resetAfterFetch: isManagedClone,
-          });
+          syncResult = await syncWorkspace(
+            toRepoPath(codebase.default_cwd),
+            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
+            {
+              resetAfterFetch: isManagedClone,
+            }
+          );
           getLog().debug(
             {
               codebaseId: codebase.id,
@@ -1360,9 +1364,16 @@ async function handleRegisterProject(
 
   // Use config default provider instead of hardcoding 'claude'
   const config = await loadConfig();
+  let detectedBranch: string | undefined;
+  try {
+    detectedBranch = await getCurrentBranch(toRepoPath(projectPath));
+  } catch {
+    // non-git directory or detached HEAD — fall back to DB default 'main'
+  }
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: projectPath,
+    default_branch: detectedBranch,
     ai_assistant_type: config.assistant,
   });
 

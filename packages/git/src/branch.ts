@@ -78,6 +78,18 @@ export async function getDefaultBranch(repoPath: RepoPath): Promise<BranchName> 
 }
 
 /**
+ * Get the currently checked-out branch name
+ */
+export async function getCurrentBranch(repoPath: RepoPath): Promise<BranchName> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
+    { timeout: 10000 }
+  );
+  return toBranchName(stdout.trim());
+}
+
+/**
  * Checkout a branch (creating it if it doesn't exist)
  */
 export async function checkout(repoPath: RepoPath, branchName: BranchName): Promise<void> {

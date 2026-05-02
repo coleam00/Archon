@@ -40,7 +40,8 @@ export interface RegisterResult {
 async function registerRepoAtPath(
   targetPath: string,
   name: string,
-  repositoryUrl: string | null
+  repositoryUrl: string | null,
+  defaultBranch?: string
 ): Promise<RegisterResult> {
   // Auto-detect assistant type based on SDK folder conventions.
   // Built-in providers use well-known folders (.claude/, .codex/).
@@ -125,6 +126,7 @@ async function registerRepoAtPath(
     name,
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
+    default_branch: defaultBranch ?? undefined,
     ai_assistant_type: suggestedAssistant,
   });
 
@@ -279,7 +281,29 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
   getLog().debug({ path: targetPath }, 'safe_directory_added');
 
-  const result = await registerRepoAtPath(targetPath, `${ownerName}/${repoName}`, workingUrl);
+  // Detect the actual branch checked out after clone (may differ from 'main' for repos with
+  // a non-default HEAD). Non-fatal: falls back to DB schema default if detection fails.
+  let detectedBranch: string | undefined;
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', targetPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
+      { timeout: 5000 }
+    );
+    const branch = stdout.trim();
+    if (branch && branch !== 'HEAD') {
+      detectedBranch = branch;
+    }
+  } catch {
+    // Non-fatal — leave undefined so DB default applies
+  }
+
+  const result = await registerRepoAtPath(
+    targetPath,
+    `${ownerName}/${repoName}`,
+    workingUrl,
+    detectedBranch
+  );
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
 }
