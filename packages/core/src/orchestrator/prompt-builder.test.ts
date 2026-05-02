@@ -35,6 +35,7 @@ describe('buildRoutingRulesWithProject', () => {
     const rules = buildRoutingRulesWithProject(undefined, '/.archon/workspaces');
     expect(rules).toContain('/.archon/workspaces');
     expect(rules).not.toContain('~/.archon');
+    expect(rules).not.toContain('/home/user/.archon/workspaces');
   });
 });
 
