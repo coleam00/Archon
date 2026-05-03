@@ -692,18 +692,50 @@ async function handleWorkflowCommand(
             'Usage: /workflow resume <id>\n\nResumes a failed workflow from completed nodes.',
         };
       }
+      let run;
       try {
-        const run = await resumeWorkflow(runId);
-        const pathInfo = run.working_path ? `\nPath: \`${run.working_path}\`` : '';
-        return {
-          success: true,
-          message: `Workflow run \`${run.workflow_name}\` (${runId}) is ready to resume.${pathInfo}\nRun the same workflow again to auto-resume from completed nodes.`,
-        };
+        run = await resumeWorkflow(runId);
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_resume_failed');
         return { success: false, message: `Failed to resume workflow run: ${err.message}` };
       }
+
+      // Resolve the workflow definition so the orchestrator can dispatch
+      // immediately. Without this, the user would have to re-type
+      // `/workflow run <name> "<args>"`, which (with the failed-run prompt
+      // introduced alongside this change) would just show the prompt again
+      // and leave them in an explicit-resume loop.
+      let workflowEntries: readonly WorkflowWithSource[];
+      try {
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        workflowEntries = result.workflows;
+      } catch (error) {
+        const err = error as Error;
+        getLog().error({ err, runId }, 'cmd.workflow_resume_discover_failed');
+        return {
+          success: false,
+          message: `Resume validated but failed to load workflow definitions: ${err.message}`,
+        };
+      }
+      const workflow = workflowEntries.find(w => w.workflow.name === run.workflow_name)?.workflow;
+      if (!workflow) {
+        return {
+          success: false,
+          message: `Resume validated but workflow \`${run.workflow_name}\` is no longer present on disk. Restore the YAML and try again.`,
+        };
+      }
+
+      const pathInfo = run.working_path ? `\nPath: \`${run.working_path}\`` : '';
+      return {
+        success: true,
+        message: `Resuming workflow \`${run.workflow_name}\` (${runId})…${pathInfo}`,
+        workflow: {
+          definition: workflow,
+          args: run.user_message ?? '',
+          resumeRunId: runId,
+        },
+      };
     }
 
     case 'abandon': {

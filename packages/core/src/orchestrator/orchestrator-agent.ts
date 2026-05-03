@@ -222,7 +222,7 @@ async function dispatchOrchestratorWorkflow(
   workflow: WorkflowDefinition,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
-  options?: { force?: boolean }
+  options?: { force?: boolean; resumeRunId?: string }
 ): Promise<void> {
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -282,10 +282,16 @@ async function dispatchOrchestratorWorkflow(
       ? null
       : await workflowDb.findResumableRunByParentConversation(workflow.name, conversation.id);
     if (resumableRun?.working_path) {
-      // Auto-resume only for paused runs (= awaiting approval). Failed runs
-      // hold the previous run's persisted user_message; silently resuming
-      // would hijack a fresh /workflow run with stale args. Prompt the user.
-      if (resumableRun.status === 'paused') {
+      // Auto-resume is safe in two cases:
+      //   1. status === 'paused' — awaiting approval; the user's next
+      //      message is a continuation by definition.
+      //   2. options.resumeRunId === resumableRun.id — caller explicitly
+      //      asked to resume this run. Set by `/workflow resume <id>` and
+      //      by the natural-language approval handler so they bypass the
+      //      prompt that would otherwise loop them indefinitely.
+      // For any other failed run we prompt the user instead of silently
+      // resuming with stale args.
+      if (resumableRun.status === 'paused' || resumableRun.id === options?.resumeRunId) {
         getLog().info(
           {
             workflowName: workflow.name,
@@ -713,7 +719,11 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            // approveWorkflow has just transitioned the run to 'failed' so
+            // findResumableRun picks it up here. Pass resumeRunId so the
+            // V2a-prompt branch is bypassed and the run actually resumes.
+            { resumeRunId: pausedRun.id }
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -784,7 +794,10 @@ export async function handleMessage(
             result.workflow.definition,
             result.workflow.args ?? message,
             isolationHints,
-            { force: result.workflow.force ?? false }
+            {
+              force: result.workflow.force ?? false,
+              resumeRunId: result.workflow.resumeRunId,
+            }
           );
         }
         return;
@@ -1496,7 +1509,7 @@ async function handleWorkflowRunCommand(
   workflow: WorkflowDefinition,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
-  options?: { force?: boolean }
+  options?: { force?: boolean; resumeRunId?: string }
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {

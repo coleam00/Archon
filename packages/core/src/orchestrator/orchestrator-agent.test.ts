@@ -1185,6 +1185,45 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(prompt).toContain('--force');
   });
 
+  test('resumeRunId option: failed run DOES auto-resume when CommandResult.workflow.resumeRunId matches', async () => {
+    // Regression for the `/workflow resume <id>` path (and the natural-language
+    // approval flow that transitions a paused run to 'failed' before
+    // dispatching). Without this bypass, the V2a prompt would fire on every
+    // explicit-resume attempt because failed runs stay 'failed' — the user
+    // would be told to resume a run that they JUST asked to resume, in an
+    // infinite loop.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    const result = makeWorkflowResult(true); // interactive — uses executeWorkflow path
+    (result.workflow as { resumeRunId?: string }).resumeRunId = 'failed-run-7';
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(result));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-7',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+      })
+    );
+
+    const platform = makePlatform();
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    await handleMessage(platform, 'conv-1', '/workflow resume failed-run-7');
+
+    // Auto-resumes via the existing paused-run code path
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
+    expect(callArgs[10]).toBe('conv-1');
+
+    // The V2a prompt MUST NOT have been emitted — that would mean the
+    // explicit-resume request was ignored.
+    const allSends = sendMessage.mock.calls.map(c => (c as unknown[])[1] as string);
+    const promptedAnyway = allSends.some(s => s.includes('Found a prior failed run'));
+    expect(promptedAnyway).toBe(false);
+  });
+
   test('--force flag: skips resume detection and dispatches a fresh run even if a failed run exists', async () => {
     // /workflow run X --force "..." must bypass findResumableRun and start
     // a clean execution, leaving any prior failed run untouched in the DB.
