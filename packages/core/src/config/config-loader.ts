@@ -286,7 +286,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
+    assistant: providers.find(p => p.builtIn)?.id ?? process.env.DEFAULT_AI_ASSISTANT ?? 'claude',
     assistants: registeredAssistants,
     streaming: {
       telegram: 'stream',

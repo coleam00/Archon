@@ -24,7 +24,7 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 - **Used by**: Router prompt — this is the primary signal the AI uses to select a workflow. Include `Use when:` and `NOT for:` sections.
 
 ### `provider` (optional)
-- **Type**: `'claude'` | `'codex'`
+- **Type**: `'claude'` | `'codex'` | `'pi'`
 - **Default**: falls back to `.archon/config.yaml` assistants default (Claude)
 
 ### `model` (optional)

@@ -65,6 +65,7 @@ interface SetupConfig {
     codex: boolean;
     codexTokens?: CodexTokens;
     defaultAssistant: string;
+    pi: boolean;
   };
   platforms: {
     github: boolean;
@@ -113,6 +114,7 @@ interface ExistingConfig {
   hasDatabase: boolean;
   hasClaude: boolean;
   hasCodex: boolean;
+  hasPi: boolean;
   platforms: {
     github: boolean;
     telegram: boolean;
@@ -353,6 +355,11 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
       hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
       hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
       hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    hasPi:
+      hasEnvValue(content, 'PI_CODING_AGENT_DIR') ||
+      hasEnvValue(content, 'PI_CODING_AGENT_SESSION_DIR') ||
+      hasEnvValue(content, 'PI_PACKAGE_DIR') ||
+      hasEnvValue(content, 'PI_CONFIG_DIR'),
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
@@ -700,6 +707,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
       { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
+      { value: 'pi', label: 'pi', hint: 'pi coding agent' },
     ],
     required: false,
   });
@@ -711,6 +719,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
 
   let hasClaude = assistants.includes('claude');
   let hasCodex = assistants.includes('codex');
+  const hasPi = assistants.includes('pi');
 
   // Check if selected CLI tools are installed
   if (hasClaude && !isCommandAvailable('claude')) {
@@ -810,12 +819,16 @@ After upgrading, run 'archon setup' again.`,
     }
   }
 
-  if (!hasClaude && !hasCodex) {
+  if (!hasClaude && !hasCodex && !hasPi) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
       claude: false,
       codex: false,
-      defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+      pi: false,
+      defaultAssistant:
+        getRegisteredProviders().find(p => p.builtIn)?.id ??
+        process.env.DEFAULT_AI_ASSISTANT ??
+        'claude',
     };
   }
 
@@ -842,7 +855,10 @@ After upgrading, run 'archon setup' again.`,
 
   // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
   // Default to first registered built-in provider rather than hardcoding 'claude'.
-  let defaultAssistant = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
+  let defaultAssistant =
+    getRegisteredProviders().find(p => p.builtIn)?.id ??
+    process.env.DEFAULT_AI_ASSISTANT ??
+    'claude';
 
   if (hasClaude && hasCodex) {
     const providerChoices = getRegisteredProviders()
@@ -869,11 +885,12 @@ After upgrading, run 'archon setup' again.`,
 
   return {
     claude: hasClaude,
+    codex: hasCodex,
+    pi: hasPi,
     claudeAuthType,
     claudeApiKey,
     claudeOauthToken,
     ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
-    codex: hasCodex,
     codexTokens,
     defaultAssistant,
   };
@@ -1654,6 +1671,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       `Database: ${existing.hasDatabase ? 'PostgreSQL' : 'SQLite'}`,
       `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
       `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
+      `pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
     ].join('\n');
 
@@ -1691,7 +1709,11 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
-        defaultAssistant: getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude',
+        pi: existing?.hasPi ?? false,
+        defaultAssistant:
+          getRegisteredProviders().find(p => p.builtIn)?.id ??
+          process.env.DEFAULT_AI_ASSISTANT ??
+          'claude',
       },
       platforms: {
         github: existing?.platforms.github ?? false,
@@ -1887,6 +1909,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
   if (config.ai.codex && config.ai.codexTokens) {
     aiConfigured.push('Codex');
+  }
+  if (config.ai.pi) {
+    aiConfigured.push('pi');
   }
 
   const summaryLines = [
