@@ -43,6 +43,7 @@ export {
 // Repository operations
 export {
   findRepoRoot,
+  getDefaultRemote,
   getRemoteUrl,
   syncWorkspace,
   cloneRepository,

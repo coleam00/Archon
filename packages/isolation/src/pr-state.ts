@@ -30,17 +30,17 @@ export type PrState = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
 export async function getPrState(
   branch: BranchName,
   repoPath: RepoPath,
-  cache?: Map<string, PrState>
+  cache?: Map<string, PrState>,
+  remote = 'origin'
 ): Promise<PrState> {
   const cached = cache?.get(branch);
   if (cached !== undefined) {
     return cached;
   }
 
-  // Check whether the remote is on GitHub. Non-GitHub remotes are out of scope.
   let remoteUrl = '';
   try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], {
+    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', remote], {
       timeout: 10000,
     });
     remoteUrl = stdout.trim();
