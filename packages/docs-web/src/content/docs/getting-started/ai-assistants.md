@@ -279,6 +279,19 @@ assistants:
 
 Archon logs an info-level `pi.auth_missing` event when no credentials are found and continues — Pi's SDK then connects directly to the local endpoint defined in `models.json`. If the provider does require auth (a less-common cloud backend not in the env-var table) the SDK call fails downstream; the `pi.auth_missing` breadcrumb in the log lets you trace it back to a missing env-var mapping.
 
+### Pi settings (baseline behaviour)
+
+Archon reads your Pi settings files as the starting point for every session:
+
+- **`~/.pi/agent/settings.json`** — global Pi preferences (retry counts, transport, compaction strategy, thinking budgets, default model, etc.)
+- **`<repo>/.pi/settings.json`** — project-level overrides on top of global
+
+All settings flow in automatically. You do not need to re-state them in Archon's `config.yaml`. To configure baseline Pi settings, edit `~/.pi/agent/settings.json` directly.
+
+Archon never writes back to these files — `~/.pi/agent/settings.json` is read-only from Archon's perspective. Session-level changes (model switches, thinking-level adjustments) are held in memory only and discarded when the session ends, matching Claude and Codex behaviour.
+
+If Pi settings files do not exist (Docker, first-time setup, compiled binary with no Pi home directory), Archon falls back to Pi SDK defaults. Parse errors in the settings files are logged as warnings (`pi.settings_load_error`) and never prevent the session from starting.
+
 ### Extensions (on by default)
 
 A major reason to pick Pi is its **extension ecosystem**: community packages (installed via `pi install npm:<package>`) and your own local ones that hook into the agent's lifecycle. Extensions can intercept tool calls, gate execution on human review, post to external systems, render UIs — anything the Pi extension API exposes.
