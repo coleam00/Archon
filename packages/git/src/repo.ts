@@ -49,21 +49,15 @@ export async function findRepoRoot(startPath: string): Promise<RepoPath | null> 
  * Callers can override via `worktree.remote` in `.archon/config.yaml`.
  */
 export async function getDefaultRemote(repoPath: RepoPath): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
-    const remotes = stdout
-      .trim()
-      .split('\n')
-      .filter(r => r.length > 0);
-    if (remotes.length === 0) return null;
-    if (remotes.includes('origin')) return 'origin';
-    if (remotes.length === 1) return remotes[0];
-    return null;
-  } catch (error) {
-    const err = error as Error & { stderr?: string };
-    getLog().error({ repoPath, err, stderr: err.stderr }, 'get_default_remote_failed');
-    return null;
-  }
+  const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
+  const remotes = stdout
+    .split(/\r?\n/)
+    .map(r => r.trim())
+    .filter(r => r.length > 0);
+  if (remotes.length === 0) return null;
+  if (remotes.includes('origin')) return 'origin';
+  if (remotes.length === 1) return remotes[0];
+  return null;
 }
 
 /**
