@@ -30,6 +30,26 @@ describe('buildRoutingRulesWithProject', () => {
 
     expect(rules).toContain('NO knowledge of the conversation history');
   });
+
+  test('includes workflow slash-command catalog so the orchestrator stops hallucinating answers', () => {
+    // Regression: the orchestrator used to answer "you can't abandon a failed
+    // run, it's already terminal" when a user typed `workflow abandon X`
+    // without the leading slash. The agent had no information about which
+    // workflow slash-commands exist or what they do, so it guessed from
+    // training-time defaults. We now ship an authoritative catalog in the
+    // system prompt and instruct the agent to redirect to slash-prefix
+    // rather than answer from speculation.
+    const rules = buildRoutingRulesWithProject();
+
+    expect(rules).toContain('## Workflow Slash Commands');
+    expect(rules).toContain('/workflow run');
+    expect(rules).toContain('/workflow resume');
+    expect(rules).toContain('/workflow abandon');
+    expect(rules).toContain('--force');
+    // The hard rule: don't speculate about workflow internals.
+    expect(rules).toContain('Do not invent rules about which statuses');
+    expect(rules).toContain('with the leading slash');
+  });
 });
 
 describe('formatWorkflowContextSection', () => {
