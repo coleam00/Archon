@@ -16,7 +16,12 @@ import {
   onConversationClosed,
   ConversationLockManager,
 } from '@archon/core';
-import { getArchonWorkspacesPath, getCommandFolderSearchPaths, createLogger } from '@archon/paths';
+import {
+  ensureProjectStructure,
+  getCommandFolderSearchPaths,
+  getProjectSourcePath,
+  createLogger,
+} from '@archon/paths';
 import {
   syncRepository,
   addSafeDirectory,
@@ -457,6 +462,15 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     // to prevent macOS Keychain from intercepting and blocking the clone
     getLog().info({ projectPath, repoPath }, 'gitlab.repo_cloning');
 
+    // Create project structure (source/, worktrees/, artifacts/, logs/) before
+    // cloning so worktree paths resolve correctly on first webhook clone.
+    // For nested namespaces (group/subgroup/repo), the namespace becomes the
+    // owner and the leaf segment becomes the repo.
+    const cloneSegments = projectPath.split('/');
+    const cloneRepo = cloneSegments[cloneSegments.length - 1];
+    const cloneOwner = cloneSegments.slice(0, -1).join('/');
+    await ensureProjectStructure(cloneOwner, cloneRepo);
+
     const urlObj = new URL(this.gitlabUrl);
     const repoUrl = `${urlObj.protocol}//oauth2:${this.token}@${urlObj.host}/${projectPath}.git`;
 
@@ -546,7 +560,15 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);
     existing ??= await codebaseDb.findCodebaseByRepoUrl(repoUrlWithGit);
 
-    const canonicalPath = join(getArchonWorkspacesPath(), ...projectPath.split('/'));
+    // Canonical path uses the project source/ subdirectory so that worktrees/,
+    // artifacts/, and logs/ live as siblings of the cloned repo (not nested
+    // inside it). For nested GitLab namespaces (group/subgroup/repo), the
+    // namespace becomes the owner, the leaf segment becomes the repo. Mirrors
+    // the CLI /clone path; see issue #1547.
+    const segments = projectPath.split('/');
+    const gitlabRepo = segments[segments.length - 1];
+    const gitlabOwner = segments.slice(0, -1).join('/');
+    const canonicalPath = getProjectSourcePath(gitlabOwner, gitlabRepo);
 
     if (existing) {
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
