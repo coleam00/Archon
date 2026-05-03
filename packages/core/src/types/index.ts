@@ -96,6 +96,13 @@ export interface CommandResult {
     // If set, orchestrator should execute this workflow
     definition: WorkflowDefinition;
     args: string;
+    /**
+     * If true, skip the resume-detection lookup in
+     * dispatchOrchestratorWorkflow. Set when the user types
+     * `/workflow run <name> --force "..."` to start a fresh run while
+     * leaving any prior failed run untouched.
+     */
+    force?: boolean;
   };
 }
 

@@ -785,7 +785,15 @@ async function handleWorkflowCommand(
     case 'run': {
       // Directly invoke a workflow by name (bypasses AI router)
       const workflowName = args[1];
-      const workflowArgs = args.slice(2).join(' ');
+      // Extract optional `--force` flag from anywhere in the user's args
+      // (most natural at position 2, but be lenient: `/workflow run X "..." --force`
+      // and `/workflow run X --force "..."` both work).
+      const restArgs = args.slice(2);
+      const forceIndex = restArgs.findIndex(a => a === '--force');
+      const force = forceIndex >= 0;
+      const workflowArgs = (force ? restArgs.filter((_, i) => i !== forceIndex) : restArgs).join(
+        ' '
+      );
 
       if (!workflowName) {
         return {
@@ -874,6 +882,7 @@ async function handleWorkflowCommand(
         workflow: {
           definition: workflow,
           args: workflowArgs,
+          force,
         },
       };
     }
