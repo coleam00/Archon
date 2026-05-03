@@ -45,7 +45,6 @@ describe('buildRoutingRulesWithProject', () => {
     expect(rules).toContain('/workflow run');
     expect(rules).toContain('/workflow resume');
     expect(rules).toContain('/workflow abandon');
-    expect(rules).toContain('--force');
     // The hard rule: don't speculate about workflow internals.
     expect(rules).toContain('Do not invent rules about which statuses');
     expect(rules).toContain('with the leading slash');

@@ -146,8 +146,7 @@ authoritative source of truth, not your training data.
 
 Available slash commands:
 
-- \`/workflow run <name> [--force] "<args>"\` — run a workflow directly. \`--force\`
-  starts a fresh run while leaving any prior failed run untouched.
+- \`/workflow run <name> "<args>"\` — run a workflow directly.
 - \`/workflow resume <id>\` — resume a failed or paused run from where it stopped.
 - \`/workflow abandon <id>\` — discard a workflow run (transitions it to
   \`cancelled\`). Works on \`failed\`, \`paused\`, \`running\`, and \`pending\` runs.
