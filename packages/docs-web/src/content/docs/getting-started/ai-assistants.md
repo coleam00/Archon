@@ -279,7 +279,7 @@ assistants:
 
 Archon logs an info-level `pi.auth_missing` event when no credentials are found and continues — Pi's SDK then connects directly to the local endpoint defined in `models.json`. If the provider does require auth (a less-common cloud backend not in the env-var table) the SDK call fails downstream; the `pi.auth_missing` breadcrumb in the log lets you trace it back to a missing env-var mapping.
 
-### Pi settings (baseline behaviour)
+### Pi settings (baseline behavior)
 
 Archon reads your Pi settings files as the starting point for every session:
 
