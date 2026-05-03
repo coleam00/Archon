@@ -1577,11 +1577,17 @@ branch refs/heads/feature/auth
       expect(result).toBeNull();
     });
 
-    test('returns null on git error', async () => {
+    test('propagates git errors instead of swallowing them', async () => {
       execSpy.mockRejectedValue(new Error('not a git repository'));
 
+      await expect(git.getDefaultRemote('/workspace/repo')).rejects.toThrow('not a git repository');
+    });
+
+    test('handles CRLF line endings from git output', async () => {
+      execSpy.mockResolvedValue({ stdout: 'origin\r\nupstream\r\n', stderr: '' });
+
       const result = await git.getDefaultRemote('/workspace/repo');
-      expect(result).toBeNull();
+      expect(result).toBe('origin');
     });
   });
 
