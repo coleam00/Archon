@@ -64,9 +64,15 @@ if [ -f scripts/build-binaries.sh ] && [ -f packages/cli/src/cli.ts ]; then
     packages/cli/src/cli.ts
 
   # Smoke test: the binary must start and exit 0 on a safe, non-interactive command.
-  # `version` or `--help` are both acceptable — pick one that does NOT touch the
-  # network, database, or require env vars.
-  if ! "$TMP_BINARY" version > /tmp/archon-preflight.log 2>&1; then
+  # Use `--help` (NOT `version`). The `version` command's compiled-binary code
+  # path depends on BUNDLED_IS_BINARY=true, which is set by scripts/build-binaries.sh
+  # — but we're doing a bare `bun build --compile` here to keep the smoke fast,
+  # so BUNDLED_IS_BINARY is still `false`. That sends `version` down the dev
+  # branch of version.ts which tries to read package.json from a path that only
+  # exists in node_modules, producing a false-positive ENOENT. `--help` has no
+  # such dev/binary branch and exercises the same module-init graph we're
+  # actually testing. Must NOT touch network, database, or require env vars.
+  if ! "$TMP_BINARY" --help > /tmp/archon-preflight.log 2>&1; then
     echo "ERROR: compiled binary crashed at startup"
     cat /tmp/archon-preflight.log
     echo ""
@@ -248,6 +254,21 @@ git push origin dev
 > dev and main diverge. The CI `update-homebrew` job only pushes the formula
 > commit to dev — it does not bring the PR merge commit onto dev. This manual
 > `git pull origin main` is what ensures dev has the merge commit.
+
+> **Do NOT** use `git pull origin main --ff-only` or `git reset --hard origin/main`
+> for this sync. Fast-forward is impossible across a squash merge — main's squash
+> commit has a different SHA than dev's release commit, so dev is never
+> fast-forwardable to main. And resetting dev to main rewrites dev's history,
+> which severs every open PR's merge-base from its original commit and balloons
+> their diffs to thousands of lines (confirmed against v0.3.10's release: PRs
+> went from `+80/-1` to `+6626/-300` after a `git reset --hard origin/main` on
+> dev). The plain `git pull origin main` above creates a regular merge commit on
+> dev. The merge bubble in dev's `git log` is the right cost for preserving
+> open-PR sanity. If the merge produces a `homebrew/archon.rb` conflict during a
+> recovery flow, resolve with `git checkout origin/main -- homebrew/archon.rb`
+> (note: `origin/main`, NOT `main` — local main is often stale because the
+> release pushes via `git push origin dev:main` without fast-forwarding the local
+> branch).
 
 The GitHub Release is distinct from the git tag — without it, the release won't appear on the repository's Releases page. Always create it.
 

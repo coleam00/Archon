@@ -189,7 +189,7 @@ nodes:
   - id: implement
     depends_on: [validate-prd]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
+    model: opus[1m]
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation
@@ -399,13 +399,21 @@ nodes:
 
         ## Phase 4: COMMIT — Save Changes
 
-        ### 4.1 Review Staged Changes
+        ### 4.1 Stage Only Files You Edited
+
+        Stage **only** the files you actually edited for this story — never `git add -A`, `git add .`, or `git add -u`. List them by name:
 
         ```bash
-        git add -A
-        git status
+        git add path/to/file1 path/to/file2 ...
+        git status --porcelain  # verify nothing scratch/review/PR-body is staged
         git diff --cached --stat
         ```
+
+        **Never stage** scratch / review / PR-body artifacts, even if they show up in `git status`:
+
+        - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
+        - `review/`, `*-report.md` at the repo root
+        - Anything under `$ARTIFACTS_DIR`
 
         Verify only expected files are staged. If unexpected files appear, investigate before committing.
 
@@ -648,13 +656,27 @@ nodes:
       max_iterations: 15
       fresh_context: true
 
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [implement]
+
   # ═══════════════════════════════════════════════════════════════
   # NODE 5: COMPLETION REPORT
   # Reads final state and produces a summary.
   # ═══════════════════════════════════════════════════════════════
 
   - id: report
-    depends_on: [implement]
+    depends_on: [verify-pr-base]
     prompt: |
       # Completion Report
 

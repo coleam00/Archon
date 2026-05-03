@@ -1,0 +1,61 @@
+name: maintainer-standup
+description: |
+  Use when: Maintainer wants their morning briefing — what changed on dev,
+  what's in the review queue, what to focus on today across PRs and issues.
+  Triggers: "morning standup", "maintainer standup", "what's new today",
+            "daily brief", "morning brief", "what should i work on today",
+            "start my day".
+  Does: Pulls latest dev, fetches all open PRs and assigned issues, cross-
+        references against direction.md to flag polite-decline candidates,
+        compares against prior run state to surface progress (merged, closed,
+        what you shipped), produces a prioritized P1-P4 brief. Saves dated
+        brief + state for next-run continuity.
+  NOT for: Fixing issues (use archon-fix-github-issue), reviewing a specific
+           PR (use archon-comprehensive-pr-review), repo-wide triage automation
+           (use repo-triage).
+
+provider: claude
+model: sonnet
+
+worktree:
+  enabled: false   # Live checkout — needs to git pull and read .archon/maintainer-standup/
+
+nodes:
+  # ── Layer 0: gather facts in parallel ──
+
+  - id: git-status
+    script: maintainer-standup-git-status
+    runtime: bun
+    timeout: 60000
+
+  - id: gh-data
+    script: maintainer-standup-gh-data
+    runtime: bun
+    timeout: 180000
+
+  - id: read-context
+    script: maintainer-standup-read-context
+    runtime: bun
+    timeout: 10000
+
+  # ── Layer 1: synthesize the brief (plain text + delimited state block) ──
+
+  - id: synthesize
+    command: maintainer-standup
+    depends_on: [git-status, gh-data, read-context]
+
+  # ── Layer 2: persist state and dated brief ──
+  #
+  # Bash node so the framework shell-quotes $synthesize.output (raw text
+  # containing markdown code fences and prose isn't a valid JS expression
+  # if substituted into a bun script body). The bash node pipes the synth
+  # output into the persist script, which handles both the preferred
+  # delimiter format and the fallback JSON-wrapper format Pi/Minimax emits.
+
+  - id: persist
+    depends_on: [synthesize]
+    timeout: 30000
+    bash: |
+      set -uo pipefail
+      RAW=$synthesize.output
+      printf '%s' "$RAW" | bun .archon/scripts/maintainer-standup-persist.ts

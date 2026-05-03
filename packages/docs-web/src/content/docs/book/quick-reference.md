@@ -124,7 +124,10 @@ All nodes share these base fields:
 | `command` | One of | string | Name of a command file in `.archon/commands/` |
 | `prompt` | One of | string | Inline AI instructions |
 | `bash` | One of | string | Shell script (runs without AI; stdout captured as `$nodeId.output`) |
+| `script` | One of | string | TypeScript/JavaScript (bun) or Python (uv) — inline or named ref to `.archon/scripts/`. Requires `runtime`. See [Script Nodes](/guides/script-nodes/) |
 | `loop` | One of | object | Loop configuration (see Loop Options below) |
+| `approval` | One of | object | Pause for human review; see [Approval Nodes](/guides/approval-nodes/) |
+| `cancel` | One of | string | Reason string; terminates the run with `cancelled` status (not `failed`). Usually gated with `when:` |
 | `depends_on` | No | string[] | Node IDs that must complete before this node runs |
 | `when` | No | string | Condition expression; node is skipped if false |
 | `trigger_rule` | No | string | Join semantics when multiple upstreams exist (see Trigger Rules) |
@@ -135,12 +138,30 @@ All nodes share these base fields:
 | `allowed_tools` | No | string[] | Restrict available tools to this list (Claude only) |
 | `denied_tools` | No | string[] | Remove specific tools from this node's context (Claude only) |
 | `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 5 minutes) |
-| `retry` | No | object | Retry configuration for transient failures (see Retry Options) |
+| `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
 | `skills` | No | string[] | Skill names to preload into this node's context (Claude only) |
+| `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
 
-> **bash node timeout**: The `timeout` field on bash nodes is in **milliseconds** (default: 120000). This differs from hook `timeout`, which is in seconds.
+**Script-specific fields** (required when `script:` is set):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `runtime` | Yes | `'bun'` \| `'uv'` | Which runtime executes the script. Must match file extension for named scripts (`.ts`/`.js` → bun, `.py` → uv) |
+| `deps` | No | string[] | Python dependencies for `uv run --with`. Ignored for bun (bun auto-installs) |
+| `timeout` | No | number | Hard kill in ms. Default: 120000 (2 min). Same semantics as `bash` timeout |
+
+**Approval-specific fields** (required when `approval:` is set):
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `approval.message` | Yes | string | The message shown to the user when the workflow pauses |
+| `approval.capture_response` | No | boolean | `true` = user's comment becomes `$<node-id>.output`. Default: `false` |
+| `approval.on_reject.prompt` | No | string | AI rework prompt when the user rejects. `$REJECTION_REASON` substituted |
+| `approval.on_reject.max_attempts` | No | number | Max rework iterations before cancel. Range 1-10, default 3 |
+
+> **bash and script node timeout**: The `timeout` field is in **milliseconds** (default: 120000). This differs from hook `timeout`, which is in seconds.
 
 ### Trigger Rules
 
@@ -272,7 +293,7 @@ defaults:
 | `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
-| `Model X is not valid for provider Y` | Provider/model mismatch | Each provider accepts specific models — check the provider's `isModelCompatible` rules. Claude accepts `sonnet`, `opus`, `haiku`, `claude-*`; Codex accepts other models. |
+| `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
 | `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
 | Workflow hangs with no output | Node idle timeout hit | Increase `idle_timeout` on the node (milliseconds) |
 

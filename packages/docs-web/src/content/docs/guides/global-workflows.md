@@ -6,7 +6,7 @@ area: workflows
 audience: [user]
 status: current
 sidebar:
-  order: 8
+  order: 9
 ---
 
 Workflows placed in `~/.archon/workflows/`, commands in `~/.archon/commands/`, and scripts in `~/.archon/scripts/` are loaded globally -- they appear in every project and can be invoked from any repository. Workflows and commands carry the `source: 'global'` label in the Web UI node palette; scripts resolve under the same repo-wins-over-home precedence.

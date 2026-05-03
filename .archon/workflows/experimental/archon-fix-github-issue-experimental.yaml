@@ -1,0 +1,448 @@
+name: archon-fix-github-issue-experimental
+description: |
+  EXPERIMENTAL: Path A variant of archon-fix-github-issue. Same DAG shape — same nodes,
+  same dependencies, same command files. Additions:
+    - Two extra classifier fields: `scope` (small/medium/large) and `needs_external_research`.
+    - A new `smoke-validate` node that checks the issue's concrete claims (file paths,
+      line numbers, symbols, repro commands) against the current codebase before any
+      skip gate fires. Every skip gate has a `claims_accurate == 'false'` override so an
+      inaccurate issue cannot cause a skip.
+    - `when:` gates on web-research and 4 reviewers so small, claim-verified issues
+      skip them. For medium/large issues or when the issue claims don't match the code,
+      behavior is identical to the full workflow.
+
+  Skip gates (all overridden when smoke-validate flags the issue as inaccurate):
+    - web-research       → runs when needs_external_research=='true' OR smoke=='false'
+    - error-handling     → runs when review-classify says yes AND (scope!='small' OR smoke=='false')
+    - test-coverage      → same as error-handling
+    - comment-quality    → same as error-handling
+    - docs-impact        → same as error-handling
+
+  Always runs (same as full): classify, smoke-validate, investigate/plan, bridge-artifacts,
+  implement, validate, create-pr, review-scope, review-classify, code-review, synthesize,
+  self-fix, simplify, report.
+
+  Use when: User wants to FIX, RESOLVE, or IMPLEMENT a solution for a GitHub issue.
+  Triggers: "fix this issue", "implement issue #123", "resolve this bug", "fix it",
+            "fix issue", "resolve issue", "fix #123".
+  NOT for: Comprehensive multi-agent reviews (use archon-issue-review-full),
+           questions about issues, CI failures, PR reviews, general exploration.
+
+  DAG workflow that:
+  1. Classifies the issue (bug/feature/enhancement/etc)
+  2. Researches context (web research + codebase exploration via investigate/plan)
+  3. Routes to investigate (bugs) or plan (features) based on classification
+  4. Implements the fix/feature with validation
+  5. Creates a draft PR using the repo's PR template
+  6. Runs smart review (always code review + CLAUDE.md check, conditional additional agents)
+  7. Aggressively self-fixes all findings (tests, docs, error handling)
+  8. Simplifies changed code (implements fixes directly, not just reports)
+  9. Reports results back to the GitHub issue with follow-up suggestions
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: FETCH & CLASSIFY
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: extract-issue-number
+    prompt: |
+      Find the GitHub issue number for this request.
+
+      Request: $ARGUMENTS
+
+      Rules:
+      - If the message contains an explicit issue number (e.g., "#709", "issue 709", "709"), extract that number.
+      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list` to search for matching issues and pick the best match.
+
+      CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation. Example correct output: 709
+
+  - id: fetch-issue
+    bash: |
+      # Strip quotes, whitespace, markdown backticks from AI output
+      ISSUE_NUM=$(echo "$extract-issue-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "Failed to extract issue number from: $extract-issue-number.output" >&2
+        exit 1
+      fi
+      gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
+    depends_on: [extract-issue-number]
+
+  - id: classify
+    prompt: |
+      You are an issue classifier. Analyze the GitHub issue below and determine:
+      (1) its type, (2) its scope, and (3) whether external web research is needed.
+
+      ## Issue Content
+
+      $fetch-issue.output
+
+      ## Type
+
+      | Type | Indicators |
+      |------|------------|
+      | bug | "broken", "error", "crash", "doesn't work", stack traces, regression |
+      | feature | "add", "new", "support", "would be nice", net-new capability |
+      | enhancement | "improve", "better", "update existing", "extend", incremental improvement |
+      | refactor | "clean up", "simplify", "reorganize", "restructure" |
+      | chore | "update deps", "upgrade", "maintenance", "CI/CD" |
+      | documentation | "docs", "readme", "clarify", "examples" |
+
+      ## Scope
+
+      Estimate how much code the fix is likely to touch. The issue body is your best
+      signal — reporter-pointed file paths, length of the reproducer, how specific the
+      request is. When uncertain, round UP (pick the larger scope).
+
+      | Scope | Indicators |
+      |-------|------------|
+      | small | 1-3 files, single subsystem, clear from the body. Typos, one-line bugs, isolated refactors, doc fixes, small enhancements pointing at specific code. |
+      | medium | 3-10 files, one or two subsystems, some investigation needed. Most features, non-trivial bugs, refactors that cross a few files. |
+      | large | 10+ files, cross-subsystem, vague/exploratory, or requires real codebase discovery before a fix direction is clear. |
+
+      ## External Research
+
+      Does this issue need external (web) research to fix correctly? Say "true" only if
+      the fix depends on specifics of an external library, API, protocol, or standard
+      that are NOT already apparent from the codebase. Internal plumbing, refactoring,
+      obvious bug fixes, and issues where the reporter already cited the relevant docs
+      → "false".
+
+      Provide reasoning that covers all three decisions.
+    depends_on: [fetch-issue]
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        issue_type:
+          type: string
+          enum: ["bug", "feature", "enhancement", "refactor", "chore", "documentation"]
+        title:
+          type: string
+        scope:
+          type: string
+          enum: ["small", "medium", "large"]
+        needs_external_research:
+          type: string
+          enum: ["true", "false"]
+        reasoning:
+          type: string
+      required: [issue_type, title, scope, needs_external_research, reasoning]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1.5: SMOKE-VALIDATE
+  # Verifies that the issue's concrete claims (file paths, line numbers,
+  # symbols, repro commands) match the current codebase. Its `claims_accurate`
+  # verdict gates every skip decision downstream — if the issue body is
+  # inaccurate, the workflow falls back to the full pipeline.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: smoke-validate
+    prompt: |
+      You are a smoke validator. Your job: verify that the issue's claims about the
+      code are ACCURATE, so downstream skip decisions rest on a reliable foundation.
+
+      ## Context
+
+      ### Issue content
+      $fetch-issue.output
+
+      ### Classifier verdict
+      $classify.output
+
+      ## Your Task
+
+      Extract the concrete, verifiable claims from the issue body and comments:
+      - File paths mentioned (e.g. "packages/core/src/foo.ts")
+      - Line numbers or specific code snippets quoted
+      - Function, class, type, or symbol names referenced
+      - Reproduction commands (e.g. "run bun test X")
+
+      Then verify each concrete claim against the current codebase — TARGETED checks,
+      no Explore sub-agent:
+      - Use the Read tool on cited file paths. Confirm the file exists.
+      - If a line or region is cited, Read it and check the described code is there.
+      - If a symbol is cited, `grep -rn "<symbol>" packages/` to confirm it exists.
+      - If a repro command is cited, check `package.json` / the referenced file to
+        confirm the command is plausible. Do NOT execute it.
+
+      ## Budget
+
+      Spend at most ~30 seconds on this. Check the 2-3 most concrete claims — the
+      ones the fix most likely hinges on. Don't exhaustively verify every mention.
+      Prefer false-negative safety (flag inaccurate when uncertain) over
+      false-positive (risking a skip on shaky evidence).
+
+      If the issue has NO concrete claims (purely descriptive — "feature X is broken",
+      no file paths, no line numbers, no symbols), default to `claims_accurate: "false"`.
+      Vibes aren't a reliable foundation for skipping work.
+
+      ## Output
+
+      Set `claims_accurate`:
+      - "true": The concrete claims you checked match the current code. The issue body
+        is a reliable spec — downstream gates can trust the classifier's skip verdict.
+      - "false": One or more claims don't match reality — cited file doesn't exist, the
+        line doesn't contain the described code, the symbol was renamed/removed, the
+        repro command doesn't fit the project. The issue body is NOT a reliable
+        foundation for skipping. Downstream gates will fall back to the full pipeline
+        (research + all review agents).
+
+      In `reasoning`, list exactly what you checked and what you found.
+    depends_on: [classify]
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        claims_accurate:
+          type: string
+          enum: ["true", "false"]
+        reasoning:
+          type: string
+      required: [claims_accurate, reasoning]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: RESEARCH (parallel with PR template fetch)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: web-research
+    command: archon-web-research
+    depends_on: [classify, smoke-validate]
+    # Runs when research is flagged OR smoke-validate finds the issue unreliable (fallback)
+    when: "$classify.output.needs_external_research == 'true' || $smoke-validate.output.claims_accurate == 'false'"
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: INVESTIGATE (bugs) / PLAN (features)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: investigate
+    command: archon-investigate-issue
+    depends_on: [classify, web-research]
+    when: "$classify.output.issue_type == 'bug'"
+    # Allow web-research to be skipped (needs_external_research == 'false') without blocking
+    trigger_rule: none_failed_min_one_success
+    context: fresh
+
+  - id: plan
+    command: archon-create-plan
+    depends_on: [classify, web-research]
+    when: "$classify.output.issue_type != 'bug'"
+    # Allow web-research to be skipped (needs_external_research == 'false') without blocking
+    trigger_rule: none_failed_min_one_success
+    context: fresh
+
+  # Bridge: ensure investigation.md exists for the implement step
+  # archon-fix-issue reads from $ARTIFACTS_DIR/investigation.md
+  # archon-create-plan writes to $ARTIFACTS_DIR/plan.md
+  # This node copies plan.md → investigation.md when the plan path was taken
+  - id: bridge-artifacts
+    bash: |
+      if [ -f "$ARTIFACTS_DIR/plan.md" ] && [ ! -f "$ARTIFACTS_DIR/investigation.md" ]; then
+        cp "$ARTIFACTS_DIR/plan.md" "$ARTIFACTS_DIR/investigation.md"
+        echo "Bridged plan.md to investigation.md for implement step"
+      elif [ -f "$ARTIFACTS_DIR/investigation.md" ]; then
+        echo "investigation.md exists from investigate step"
+      else
+        echo "WARNING: No investigation.md or plan.md found — implement may fail"
+      fi
+    depends_on: [investigate, plan]
+    trigger_rule: one_success
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: IMPLEMENT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement
+    command: archon-fix-issue
+    depends_on: [bridge-artifacts]
+    context: fresh
+    model: opus[1m]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: VALIDATE
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: CREATE DRAFT PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-pr
+    prompt: |
+      Create a draft pull request for the current branch.
+
+      ## Context
+
+      - **Issue**: $ARGUMENTS
+      - **Classification**: $classify.output
+      - **Issue title**: $classify.output.title
+
+      ## Instructions
+
+      1. Check git status. If uncommitted changes exist, stage and commit ONLY source files that are part of the fix:
+         - List them by name with `git add <path1> <path2> ...` — never `git add -A`, `git add .`, or `git add -u`
+         - **Never commit** scratch / review / PR-body artifacts, even if they appear in `git status`:
+           - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md` at any path
+           - `review/`, `*-report.md` at the repo root
+           - Anything under `$ARTIFACTS_DIR`
+         - Verify with `git status --porcelain` that nothing scratch is staged before committing
+         - If files you don't recognize as part of the fix appear modified or untracked, leave them alone
+      2. Push the branch: `git push -u origin HEAD`
+      3. Read implementation artifacts from `$ARTIFACTS_DIR/` for context:
+         - `$ARTIFACTS_DIR/investigation.md` or `$ARTIFACTS_DIR/plan.md`
+         - `$ARTIFACTS_DIR/implementation.md`
+         - `$ARTIFACTS_DIR/validation.md`
+      4. Check if a PR already exists for this branch: `gh pr list --head $(git branch --show-current)`
+         - If PR exists, skip creation and capture its number
+      5. Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
+      6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
+         - Title: concise, imperative mood, under 70 chars
+         - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
+         - **PR body file location**: if you write the body to a file (e.g. for `--body-file`), the file MUST live at `$ARTIFACTS_DIR/pr-body.md` or under `/tmp/` — NEVER inside the worktree. Files like `.pr-body.md` at the repo root will be picked up by later commits.
+         - Link to issue: include `Fixes #...` or `Closes #...`
+      7. Capture PR identifiers:
+         ```bash
+         PR_NUMBER=$(gh pr view --json number -q '.number')
+         echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+         PR_URL=$(gh pr view --json url -q '.url')
+         echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
+         ```
+    depends_on: [validate]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 7: REVIEW
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: review-scope
+    command: archon-pr-review-scope
+    depends_on: [create-pr]
+    context: fresh
+
+  - id: review-classify
+    prompt: |
+      You are a PR review classifier. Analyze the PR scope and determine
+      which review agents should run.
+
+      ## PR Scope
+
+      $review-scope.output
+
+      ## Rules
+
+      - **Code review**: ALWAYS run. This is mandatory for every PR. It also checks
+        the PR against CLAUDE.md rules and project conventions.
+      - **Error handling**: Run if the diff touches code with try/catch, error handling,
+        async/await, or adds new failure paths.
+      - **Test coverage**: Run if the diff touches source code (not just tests, docs, or config).
+      - **Comment quality**: Run if the diff adds or modifies comments, docstrings, JSDoc,
+        or significant documentation within code files.
+      - **Docs impact**: Run if the diff adds/removes/renames public APIs, commands, CLI flags,
+        environment variables, or user-facing features.
+
+      Provide your reasoning for each decision.
+    depends_on: [review-scope]
+    model: haiku
+    allowed_tools: []
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        run_code_review:
+          type: string
+          enum: ["true", "false"]
+        run_error_handling:
+          type: string
+          enum: ["true", "false"]
+        run_test_coverage:
+          type: string
+          enum: ["true", "false"]
+        run_comment_quality:
+          type: string
+          enum: ["true", "false"]
+        run_docs_impact:
+          type: string
+          enum: ["true", "false"]
+        reasoning:
+          type: string
+      required:
+        - run_code_review
+        - run_error_handling
+        - run_test_coverage
+        - run_comment_quality
+        - run_docs_impact
+        - reasoning
+
+  # Code review always runs — mandatory
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [review-classify]
+    context: fresh
+
+  # Reviewer gates: run when review-classify flags them AND the scope is non-small,
+  # OR when smoke-validate found the issue claims unreliable (fallback to full review).
+  # Expression form: A && B || A && C  (the condition evaluator has no parens; && binds tighter than ||)
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_error_handling == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_error_handling == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    context: fresh
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_test_coverage == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_test_coverage == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    context: fresh
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_comment_quality == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_comment_quality == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    context: fresh
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_docs_impact == 'true' && $classify.output.scope != 'small' || $review-classify.output.run_docs_impact == 'true' && $smoke-validate.output.claims_accurate == 'false'"
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 8: SYNTHESIZE + SELF-FIX
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    trigger_rule: one_success
+    context: fresh
+
+  - id: self-fix
+    command: archon-self-fix-all
+    depends_on: [synthesize]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 9: SIMPLIFY
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: simplify
+    command: archon-simplify-changes
+    depends_on: [self-fix]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 10: REPORT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: report
+    command: archon-issue-completion-report
+    depends_on: [simplify]
+    context: fresh

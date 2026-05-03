@@ -128,8 +128,8 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 
 Archon prevents target repo `.env` from leaking into subprocesses through structural protection:
 
-1. **Boot cleanup:** `stripCwdEnv()` removes Bun-auto-loaded CWD `.env` keys from `process.env` before any application code runs.
-2. **Claude Code subprocess:** `executableArgs: ['--no-env-file']` prevents Bun from auto-loading `.env` in the Claude Code subprocess CWD.
+1. **Boot cleanup:** `stripCwdEnv()` removes Bun-auto-loaded CWD `.env` keys from `process.env` before any application code runs. **This is the primary guard** — every subprocess Archon spawns inherits from the already-cleaned `process.env`.
+2. **Claude Code subprocess:** when the SDK is configured to spawn a Bun-runnable JS entry point (legacy npm-installed `cli.js`/`cli.mjs`/`cli.cjs`), Archon also passes `executableArgs: ['--no-env-file']` so Bun skips its env autoload inside the spawned process. SDK 0.2.x ships per-platform native binaries instead — those don't auto-load `.env` from cwd, so the flag is unnecessary and is omitted.
 3. **Bun script nodes:** `bun --no-env-file` prevents script node subprocesses from loading target repo `.env`.
 4. **Bash nodes:** Not affected — bash does not auto-load `.env` files.
 

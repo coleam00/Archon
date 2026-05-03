@@ -26,6 +26,7 @@ All variables are available in all workflows. The only exception is `$nodeId.out
 - **Command files** (`.archon/commands/*.md`) — all variables except `$nodeId.output`
 - **Inline `prompt:` fields** — in DAG prompt nodes and loop node prompts
 - **`bash:` scripts in DAG nodes** — `$nodeId.output` references are automatically shell-quoted (single-quoted with `'` escaped)
+- **`script:` bodies in DAG nodes** — same substitution as bash, but `$nodeId.output` values are **NOT** shell-quoted. For TypeScript/bun scripts, assign directly (`const data = $nodeId.output;`) — JSON is valid JS expression syntax. **Avoid `String.raw\`$nodeId.output\``** — it silently breaks when the output contains a backtick (common in AI-generated markdown and `output_format` payloads).
 
 ## Substitution Order
 
