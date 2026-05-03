@@ -266,9 +266,10 @@ export interface WorktreeCreateConfig {
   /**
    * Git remote name to use for fetch/push operations.
    *
-   * Most repos use the standard 'origin' remote, but some (e.g. Salesforce Core)
-   * use numbered or named remotes. When set, all git operations (fetch, push,
-   * branch tracking) use this remote instead of 'origin'.
+   * Most repos use the standard 'origin' remote, but some use custom-named
+   * remotes (e.g. 'jan', 'feb', 'mar' for release-based remotes). When set,
+   * all git operations (fetch, push, branch tracking) use this remote
+   * instead of 'origin'.
    *
    * When omitted, auto-detected via `getDefaultRemote()`:
    *   1. 'origin' if it exists
@@ -276,7 +277,7 @@ export interface WorktreeCreateConfig {
    *   3. Fails with actionable error if ambiguous
    *
    * Sourced from `.archon/config.yaml > worktree.remote` in the repo.
-   * @example '264'
+   * @example 'upstream'
    */
   remote?: string;
 }

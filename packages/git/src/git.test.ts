@@ -1499,11 +1499,11 @@ branch refs/heads/feature/auth
     test('uses custom remote when provided in options', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
-      await git.syncWorkspace('/workspace/repo', 'main', { remote: '264' });
+      await git.syncWorkspace('/workspace/repo', 'main', { remote: 'mar' });
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'fetch', '264', 'main'],
+        ['-C', '/workspace/repo', 'fetch', 'mar', 'main'],
         expect.any(Object)
       );
 
@@ -1512,7 +1512,7 @@ branch refs/heads/feature/auth
         return args.includes('reset');
       });
       expect(resetCalls).toHaveLength(1);
-      expect(resetCalls[0][1]).toEqual(['-C', '/workspace/repo', 'reset', '--hard', '264/main']);
+      expect(resetCalls[0][1]).toEqual(['-C', '/workspace/repo', 'reset', '--hard', 'mar/main']);
     });
 
     test('passes custom remote to getDefaultBranch when baseBranch not provided', async () => {
@@ -1527,13 +1527,13 @@ branch refs/heads/feature/auth
     test('includes remote name in error message for custom remote', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('fetch')) {
-          throw new Error("fatal: '264' does not appear to be a git repository");
+          throw new Error("fatal: 'mar' does not appear to be a git repository");
         }
         return { stdout: '', stderr: '' };
       });
 
-      await expect(git.syncWorkspace('/workspace/repo', 'main', { remote: '264' })).rejects.toThrow(
-        'Sync fetch from 264/main failed'
+      await expect(git.syncWorkspace('/workspace/repo', 'main', { remote: 'mar' })).rejects.toThrow(
+        'Sync fetch from mar/main failed'
       );
     });
   });
@@ -1557,14 +1557,14 @@ branch refs/heads/feature/auth
     });
 
     test('returns sole remote when only one is configured', async () => {
-      execSpy.mockResolvedValue({ stdout: '264\n', stderr: '' });
+      execSpy.mockResolvedValue({ stdout: 'mar\n', stderr: '' });
 
       const result = await git.getDefaultRemote('/workspace/repo');
-      expect(result).toBe('264');
+      expect(result).toBe('mar');
     });
 
     test('returns null when multiple non-origin remotes exist', async () => {
-      execSpy.mockResolvedValue({ stdout: '260\n262\n264\n', stderr: '' });
+      execSpy.mockResolvedValue({ stdout: 'jan\nfeb\nmar\n', stderr: '' });
 
       const result = await git.getDefaultRemote('/workspace/repo');
       expect(result).toBeNull();

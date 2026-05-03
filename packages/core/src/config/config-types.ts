@@ -203,16 +203,16 @@ export interface RepoConfig {
     /**
      * Git remote name for fetch/push operations.
      *
-     * Most repos use the standard 'origin' remote, but some (e.g. enterprise
-     * monorepos) use numbered or custom-named remotes. When set, all git
-     * operations (fetch, push, branch tracking) use this remote instead of
-     * 'origin'.
+     * Most repos use the standard 'origin' remote, but some use custom-named
+     * remotes (e.g. 'jan', 'feb', 'mar' for release-based remotes). When set,
+     * all git operations (fetch, push, branch tracking) use this remote
+     * instead of 'origin'.
      *
      * When omitted, auto-detected: 'origin' if it exists, otherwise the sole
      * remote if only one is configured. Fails with an actionable error if
      * multiple non-origin remotes exist and none is named 'origin'.
      *
-     * @example '264'
+     * @example 'upstream'
      */
     remote?: string;
   };
