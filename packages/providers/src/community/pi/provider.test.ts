@@ -1609,6 +1609,44 @@ describe('PiProvider', () => {
     expect(mockSettingsManagerInMemory).toHaveBeenCalledWith({ retry: { enabled: true } });
   });
 
+  test('settings: object values are shallow-merged one level deep, while primitives and arrays override', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      retry: {
+        enabled: false,
+        attempts: 1,
+        nested: { source: 'global', keep: true },
+      },
+      timeoutMs: 1000,
+      allow: ['global'],
+    }));
+    mockSettingsManagerGetProjectSettings.mockImplementation(() => ({
+      retry: {
+        enabled: true,
+        backoff: 'exp',
+        nested: { source: 'project' },
+      },
+      timeoutMs: 2000,
+      allow: ['project'],
+    }));
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+    );
+
+    expect(mockSettingsManagerInMemory).toHaveBeenCalledWith({
+      retry: {
+        enabled: true,
+        attempts: 1,
+        backoff: 'exp',
+        nested: { source: 'project' }, // nested objects are NOT recursively merged — one level deep only
+      },
+      timeoutMs: 2000,
+      allow: ['project'],
+    });
+  });
+
   test('settings: parse errors logged as warnings, session still proceeds', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
