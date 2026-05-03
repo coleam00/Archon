@@ -199,6 +199,22 @@ export interface RepoConfig {
      * @example '.worktrees'
      */
     path?: string;
+
+    /**
+     * Git remote name for fetch/push operations.
+     *
+     * Most repos use the standard 'origin' remote, but some (e.g. enterprise
+     * monorepos) use numbered or custom-named remotes. When set, all git
+     * operations (fetch, push, branch tracking) use this remote instead of
+     * 'origin'.
+     *
+     * When omitted, auto-detected: 'origin' if it exists, otherwise the sole
+     * remote if only one is configured. Fails with an actionable error if
+     * multiple non-origin remotes exist and none is named 'origin'.
+     *
+     * @example '264'
+     */
+    remote?: string;
   };
 
   /**
@@ -286,6 +302,11 @@ export interface MergedConfig {
    * When undefined, workflows referencing $BASE_BRANCH will fail with an error.
    */
   baseBranch?: string;
+  /**
+   * Git remote name from repo config (worktree.remote).
+   * When undefined, auto-detected at runtime via getDefaultRemote().
+   */
+  remote?: string;
   /**
    * Docs directory path from repo config (docs.path).
    * Used for $DOCS_DIR substitution in workflow commands.
