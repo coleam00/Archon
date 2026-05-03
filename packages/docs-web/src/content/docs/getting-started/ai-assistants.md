@@ -288,7 +288,7 @@ Archon reads your Pi settings files as the starting point for every session:
 
 All settings flow in automatically. You do not need to re-state them in Archon's `config.yaml`. To configure baseline Pi settings, edit `~/.pi/agent/settings.json` directly.
 
-Archon never writes back to these files — `~/.pi/agent/settings.json` is read-only from Archon's perspective. Session-level changes (model switches, thinking-level adjustments) are held in memory only and discarded when the session ends, matching Claude and Codex behaviour.
+Archon never writes back to these files — `~/.pi/agent/settings.json` is read-only from Archon's perspective. Session-level changes (model switches, thinking-level adjustments) are held in memory only and discarded when the session ends, matching Claude and Codex behavior.
 
 If Pi settings files do not exist (Docker, first-time setup, compiled binary with no Pi home directory), Archon falls back to Pi SDK defaults. Parse errors in the settings files are logged as warnings (`pi.settings_load_error`) and never prevent the session from starting.
 
