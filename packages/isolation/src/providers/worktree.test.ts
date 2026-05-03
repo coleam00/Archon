@@ -2904,7 +2904,7 @@ describe('WorktreeProvider', () => {
     test('uses configured remote from worktree config', async () => {
       const customProvider = new WorktreeProvider(async () => ({
         baseBranch: 'main',
-        remote: '264',
+        remote: 'mar',
       }));
 
       await customProvider.create(baseRequest);
@@ -2913,10 +2913,10 @@ describe('WorktreeProvider', () => {
       expect(syncWorkspaceSpy).toHaveBeenCalledWith(
         '/workspace/repo',
         'main',
-        expect.objectContaining({ remote: '264' })
+        expect.objectContaining({ remote: 'mar' })
       );
 
-      // worktree add should use 264/main as start-point
+      // worktree add should use mar/main as start-point
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         expect.arrayContaining([
@@ -2925,7 +2925,7 @@ describe('WorktreeProvider', () => {
           expect.any(String),
           '-b',
           'archon/issue-42',
-          '264/main',
+          'mar/main',
         ]),
         expect.any(Object)
       );
@@ -2948,7 +2948,7 @@ describe('WorktreeProvider', () => {
       getDefaultRemoteSpy.mockResolvedValue(null);
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('remote') && !args.includes('get-url')) {
-          return { stdout: '260\n262\n264\n', stderr: '' };
+          return { stdout: 'jan\nfeb\nmar\n', stderr: '' };
         }
         return { stdout: '', stderr: '' };
       });
