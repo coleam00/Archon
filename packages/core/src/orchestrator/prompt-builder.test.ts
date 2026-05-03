@@ -42,9 +42,26 @@ describe('buildRoutingRulesWithProject', () => {
     const rules = buildRoutingRulesWithProject();
 
     expect(rules).toContain('## Workflow Slash Commands');
-    expect(rules).toContain('/workflow run');
-    expect(rules).toContain('/workflow resume');
-    expect(rules).toContain('/workflow abandon');
+    // Catalog-completeness: every documented subcommand must be present so the
+    // catalog stays the authoritative source the prompt claims it is. If any
+    // entry drifts out, the agent will silently fall back to training-time
+    // speculation for that command — exactly the failure mode this PR fixes.
+    // Pragmatic source-of-truth: this list mirrors the case statements in
+    // command-handler.ts:handleWorkflowCommand. When a new subcommand is added
+    // there, it should also be added to the prompt catalog (and to this list).
+    const expectedSubcommands = [
+      'run',
+      'resume',
+      'abandon',
+      'list',
+      'status',
+      'cancel',
+      'approve',
+      'reject',
+    ];
+    for (const cmd of expectedSubcommands) {
+      expect(rules).toContain(`/workflow ${cmd}`);
+    }
     // The hard rule: don't speculate about workflow internals.
     expect(rules).toContain('Do not invent rules about which statuses');
     expect(rules).toContain('with the leading slash');
