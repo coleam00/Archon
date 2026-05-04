@@ -43,6 +43,7 @@ const mockSetFlagValue = mock((_name: string, _value: boolean | string) => undef
 const mockExtensionRunner = {
   setFlagValue: mockSetFlagValue,
 };
+const mockSetModel = mock(async (_model: unknown) => undefined);
 const mockSession = {
   subscribe: mockSubscribe,
   prompt: mockPrompt,
@@ -50,6 +51,7 @@ const mockSession = {
   dispose: mockDispose,
   bindExtensions: mockBindExtensions,
   extensionRunner: mockExtensionRunner,
+  setModel: mockSetModel,
   isStreaming: false,
   sessionId: 'mock-session-uuid',
 };
@@ -86,7 +88,7 @@ const mockModelRegistryFind = mock((provider: string, modelId: string) => {
   if (provider === 'nonexistent') return undefined;
   return { id: modelId, provider, name: `${provider}/${modelId}` };
 });
-const mockModelRegistryCreate = mock(() => ({
+const mockModelRegistryInMemory = mock(() => ({
   find: mockModelRegistryFind,
 }));
 
@@ -122,7 +124,7 @@ const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 mock.module('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
-  ModelRegistry: { create: mockModelRegistryCreate },
+  ModelRegistry: { inMemory: mockModelRegistryInMemory },
   SessionManager: {
     create: mockSessionCreate,
     open: mockSessionOpen,
@@ -177,11 +179,12 @@ describe('PiProvider', () => {
     mockDispose.mockClear();
     mockSubscribe.mockClear();
     mockBindExtensions.mockClear();
+    mockSetModel.mockClear();
     mockSetFlagValue.mockClear();
     mockResourceLoaderReload.mockClear();
     mockCreateAgentSession.mockClear();
     mockAuthCreate.mockClear();
-    mockModelRegistryCreate.mockClear();
+    mockModelRegistryInMemory.mockClear();
     mockModelRegistryFind.mockClear();
     mockSetRuntimeApiKey.mockClear();
     mockGetApiKey.mockClear();
@@ -261,12 +264,10 @@ describe('PiProvider', () => {
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
   });
 
-  test('ModelRegistry.create receives the AuthStorage instance', async () => {
-    // Headline-fix wiring: ModelRegistry.create must receive the same
-    // AuthStorage instance returned by AuthStorage.create(), so registry
-    // lookups can resolve user-configured custom models from
-    // ~/.pi/agent/models.json (LM Studio, ollama, llamacpp, etc.). Without
-    // this wiring the registry only sees the static built-in catalog.
+  test('ModelRegistry.inMemory receives the AuthStorage instance', async () => {
+    // ModelRegistry.inMemory must receive the same AuthStorage instance
+    // returned by AuthStorage.create(), so extension providers can resolve
+    // credentials and register models during bindExtensions().
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -277,9 +278,9 @@ describe('PiProvider', () => {
     );
 
     expect(mockAuthCreate).toHaveBeenCalledTimes(1);
-    expect(mockModelRegistryCreate).toHaveBeenCalledTimes(1);
+    expect(mockModelRegistryInMemory).toHaveBeenCalledTimes(1);
     const authInstance = mockAuthCreate.mock.results[0]?.value;
-    expect(mockModelRegistryCreate).toHaveBeenCalledWith(authInstance);
+    expect(mockModelRegistryInMemory).toHaveBeenCalledWith(authInstance);
   });
 
   test('AuthStorage.create() throwing surfaces a contextualized error', async () => {
@@ -309,16 +310,20 @@ describe('PiProvider', () => {
 
   test('Pi model not found includes models.json load error when registry reports one', async () => {
     // ModelRegistry swallows models.json parse/validation errors into an
-    // internal loadError. When find() returns undefined we surface that
-    // error in both the structured log and the throw message so users
-    // debugging a custom-provider config see the actual reason.
+    // internal loadError. When find() returns undefined at step 3, we log
+    // the warning and defer to extension resolution. If still not found
+    // after bindExtensions(), the provider throws.
     process.env.GEMINI_API_KEY = 'sk-test';
+    // find() is called twice: step 3 (static catalog) and step 4g (after
+    // bindExtensions). Both must return undefined to trigger the error.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
-    mockModelRegistryCreate.mockImplementationOnce(() => ({
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryInMemory.mockImplementationOnce(() => ({
       find: mockModelRegistryFind,
       getError: () => 'Provider lm-studio: "baseUrl" is required when defining custom models.',
     }));
 
+    resetScript(scriptedAgentEnd());
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'lm-studio/some-model',
@@ -326,15 +331,14 @@ describe('PiProvider', () => {
     );
 
     expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('models.json failed to load');
-    expect(error?.message).toContain('"baseUrl" is required');
-    expect(mockLogger.error).toHaveBeenCalledWith(
+    expect(error?.message).toContain('provider extension');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         piProvider: 'lm-studio',
         modelId: 'some-model',
         loadError: expect.stringContaining('"baseUrl" is required'),
       }),
-      'pi.model_not_found'
+      'pi.model_registry_load_error'
     );
   });
 
@@ -388,17 +392,18 @@ describe('PiProvider', () => {
 
   test('throws when ModelRegistry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
-    // 'nonexistent' is handled in mockModelRegistryFind to return undefined, but
-    // the adapter rejects unknown providers. To exercise
-    // the not-found branch, use a known provider but unknown modelId by
-    // temporarily swapping mockModelRegistryFind to always return undefined.
+    // find() is called twice: step 3 (static catalog) and step 4g (after
+    // bindExtensions). Both must return undefined to trigger the error.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    resetScript(scriptedAgentEnd());
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/unknown-model-id',
       })
     );
     expect(error?.message).toContain('Pi model not found');
+    expect(error?.message).toContain('provider extension');
   });
 
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {

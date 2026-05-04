@@ -1,0 +1,35 @@
+name: archon-test-pi
+description: |
+  Simple test workflow to verify the pi provider works with Archon.
+  Triggers: "test pi", "test pi provider".
+
+provider: pi
+model: kiro/minimax-m2-5
+
+nodes:
+  - id: hello
+    model: kiro/minimax-m2-5
+    prompt: |
+      Who won the 1984 Major League Baseball World Series? Answer in one sentence.
+
+  - id: hello-ollama
+    model: ollama/qwen3.5
+    prompt: |
+      Who won the 1984 Major League Baseball World Series? Answer in one sentence.
+
+  - id: verify
+    prompt: |
+      The extension model node said:
+
+      $hello.output
+
+      The ollama node said:
+
+      $hello-ollama.output
+
+      If both answers mention the Detroit Tigers, say "Pi provider verified ✅ (extension + ollama)".
+      If only the extension model is correct, say "Pi extension verified ✅, ollama FAILED ❌".
+      If only ollama is correct, say "Pi ollama verified ✅, extension FAILED ❌".
+      If neither is correct, say "Pi provider FAILED ❌ — both wrong".
+      Say nothing else.
+    depends_on: [hello, hello-ollama]
