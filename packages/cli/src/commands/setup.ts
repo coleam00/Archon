@@ -2,9 +2,11 @@
  * Setup command - Interactive CLI wizard for Archon credential configuration
  *
  * Guides users through configuring:
- * - Database (SQLite default vs PostgreSQL)
  * - AI assistants (Claude and/or Codex)
- * - Platform connections (GitHub, Telegram, Slack, Discord)
+ * - Platform connections (GitHub, Telegram, Slack — all skippable)
+ *
+ * SQLite is the implicit default; no database prompt. PostgreSQL users set
+ * DATABASE_URL by hand (documented separately).
  *
  * Writes configuration to one archon-owned env file, chosen by --scope:
  *   - 'home'    (default)  → ~/.archon/.env
@@ -38,7 +40,8 @@ import { join, dirname } from 'path';
 import { copyArchonSkill } from './skill';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
-import { spawn, execSync, type ChildProcess } from 'child_process';
+import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
+import { execFileAsync } from '@archon/git';
 import { getRegisteredProviders } from '@archon/providers';
 import {
   getArchonEnvPath as pathsGetArchonEnvPath,
@@ -50,10 +53,6 @@ import {
 // =============================================================================
 
 interface SetupConfig {
-  database: {
-    type: 'sqlite' | 'postgresql';
-    url?: string;
-  };
   ai: {
     claude: boolean;
     claudeAuthType?: 'global' | 'apiKey' | 'oauthToken';
@@ -70,12 +69,10 @@ interface SetupConfig {
     github: boolean;
     telegram: boolean;
     slack: boolean;
-    discord: boolean;
   };
   github?: GitHubConfig;
   telegram?: TelegramConfig;
   slack?: SlackConfig;
-  discord?: DiscordConfig;
   botDisplayName: string;
 }
 
@@ -97,11 +94,6 @@ interface SlackConfig {
   allowedUserIds: string;
 }
 
-interface DiscordConfig {
-  botToken: string;
-  allowedUserIds: string;
-}
-
 interface CodexTokens {
   idToken: string;
   accessToken: string;
@@ -110,14 +102,12 @@ interface CodexTokens {
 }
 
 interface ExistingConfig {
-  hasDatabase: boolean;
   hasClaude: boolean;
   hasCodex: boolean;
   platforms: {
     github: boolean;
     telegram: boolean;
     slack: boolean;
-    discord: boolean;
   };
 }
 
@@ -343,7 +333,6 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
   const content = readFileSync(path, 'utf-8');
 
   return {
-    hasDatabase: hasEnvValue(content, 'DATABASE_URL'),
     hasClaude:
       hasEnvValue(content, 'CLAUDE_API_KEY') ||
       hasEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN') ||
@@ -357,7 +346,6 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
       slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
-      discord: hasEnvValue(content, 'DISCORD_BOT_TOKEN'),
     },
   };
 }
@@ -365,53 +353,6 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
 // =============================================================================
 // Data Collection Functions
 // =============================================================================
-
-/**
- * Collect database configuration
- */
-async function collectDatabaseConfig(): Promise<SetupConfig['database']> {
-  const dbType = await select({
-    message: 'Which database do you want to use?',
-    options: [
-      {
-        value: 'sqlite',
-        label: 'SQLite (default - no setup needed)',
-        hint: 'Recommended for single user',
-      },
-      { value: 'postgresql', label: 'PostgreSQL', hint: 'For server deployments' },
-    ],
-  });
-
-  if (isCancel(dbType)) {
-    cancel('Setup cancelled.');
-    process.exit(0);
-  }
-
-  if (dbType === 'postgresql') {
-    const url = await text({
-      message: 'Enter your PostgreSQL connection string:',
-      placeholder: 'postgresql://user:pass@localhost:5432/archon',
-      validate: value => {
-        if (!value) {
-          return 'Connection string is required';
-        }
-        if (!value.startsWith('postgresql://') && !value.startsWith('postgres://')) {
-          return 'Must be a valid PostgreSQL URL (postgresql:// or postgres://)';
-        }
-        return undefined;
-      },
-    });
-
-    if (isCancel(url)) {
-      cancel('Setup cancelled.');
-      process.exit(0);
-    }
-
-    return { type: 'postgresql', url };
-  }
-
-  return { type: 'sqlite' };
-}
 
 /**
  * Try to read Codex tokens from ~/.codex/auth.json
@@ -463,12 +404,28 @@ function tryReadCodexAuth(): CodexTokens | null {
  * Returns undefined if the user declines to configure (setup continues; the
  * compiled binary will error with clear instructions on first Claude query).
  */
+/**
+ * Try to spawn the Claude binary with `--version` to confirm it actually runs.
+ * Returns true on success, false on any spawn or non-zero exit. Bounded to 5s
+ * so a hung process can't stall setup.
+ */
+async function probeClaudeBinarySpawns(path: string): Promise<boolean> {
+  try {
+    await execFileAsync(path, ['--version'], { timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function collectClaudeBinaryPath(): Promise<string | undefined> {
   const detected = detectClaudeExecutablePath();
 
   if (detected) {
+    const spawnsOk = await probeClaudeBinarySpawns(detected);
+    const suffix = spawnsOk ? '(spawns OK)' : '(could not spawn — verify it works)';
     const useDetected = await confirm({
-      message: `Found Claude Code at ${detected}. Write this to CLAUDE_BIN_PATH?`,
+      message: `Found Claude Code at ${detected} ${suffix}. Write this to CLAUDE_BIN_PATH?`,
       initialValue: true,
     });
     if (isCancel(useDetected)) {
@@ -508,6 +465,14 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
   if (!existsSync(trimmed)) {
     log.warning(
       `Path does not exist: ${trimmed}. Saving anyway — the compiled binary will error on first use until this is correct.`
+    );
+    return trimmed;
+  }
+
+  const spawnsOk = await probeClaudeBinarySpawns(trimmed);
+  if (!spawnsOk) {
+    log.warning(
+      `Could not spawn ${trimmed} --version. Saving anyway — verify the binary works (try running it directly).`
     );
   }
   return trimmed;
@@ -884,12 +849,12 @@ After upgrading, run 'archon setup' again.`,
  */
 async function collectPlatforms(): Promise<SetupConfig['platforms']> {
   const platforms = await multiselect({
-    message: 'Which platforms do you want to connect? (↑↓ navigate, space select, enter confirm)',
+    message:
+      'Which chat adapters do you want to connect? (all optional — Archon works as CLI + skill without any)\n(↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
       { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
       { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
-      { value: 'discord', label: 'Discord', hint: 'Server bot' },
     ],
     required: false,
   });
@@ -903,7 +868,6 @@ async function collectPlatforms(): Promise<SetupConfig['platforms']> {
     github: platforms.includes('github'),
     telegram: platforms.includes('telegram'),
     slack: platforms.includes('slack'),
-    discord: platforms.includes('discord'),
   };
 }
 
@@ -937,6 +901,38 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
   if (isCancel(token)) {
     cancel('Setup cancelled.');
     process.exit(0);
+  }
+
+  // Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
+  // create`, `gh pr edit`) need this even if the PAT is set, because they call
+  // the local `gh` binary, not the API directly.
+  const ghSpin = spinner();
+  ghSpin.start('Checking gh CLI authentication...');
+  let ghAuthOk = false;
+  try {
+    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
+    ghAuthOk = true;
+    ghSpin.stop('gh CLI is authenticated');
+  } catch {
+    ghSpin.stop('gh CLI is not authenticated');
+  }
+
+  if (!ghAuthOk) {
+    log.warning(
+      'gh auth status failed. Workflows using `gh` shell commands will fail until you authenticate.\n' +
+        'Run: gh auth login'
+    );
+    // gh auth login is an interactive OAuth flow — only offer it from a TTY.
+    if (process.stdout.isTTY) {
+      const runGhLogin = await confirm({
+        message: 'Run `gh auth login` now?',
+        initialValue: true,
+      });
+      if (!isCancel(runGhLogin) && runGhLogin) {
+        // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
+        spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
+      }
+    }
   }
 
   const allowedUsers = await text({
@@ -995,17 +991,22 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
  */
 async function collectTelegramConfig(): Promise<TelegramConfig> {
   note(
+    'SECURITY: Telegram bots are public by default — anyone can DM your bot.\n' +
+      'Set TELEGRAM_ALLOWED_USER_IDS to restrict access to your user ID only.\n\n' +
+      'To find your user ID:\n' +
+      '1. Open Telegram and search for @userinfobot\n' +
+      '2. Send any message — it replies with your user ID (a number)',
+    'Telegram Security'
+  );
+
+  note(
     'Telegram Bot Setup\n\n' +
       'Step 1: Create your bot\n' +
       '1. Open Telegram and search for @BotFather\n' +
       '2. Send /newbot\n' +
       '3. Choose a display name (e.g., "My Archon Bot")\n' +
       '4. Choose a username (must end in "bot")\n' +
-      '5. Copy the token BotFather gives you\n\n' +
-      'Step 2: Get your user ID\n' +
-      '1. Search for @userinfobot on Telegram\n' +
-      '2. Send any message\n' +
-      '3. It will reply with your user ID (a number)',
+      '5. Copy the token BotFather gives you',
     'Telegram Setup'
   );
 
@@ -1024,14 +1025,24 @@ async function collectTelegramConfig(): Promise<TelegramConfig> {
     process.exit(0);
   }
 
+  // Do NOT set required: true — clack's text() blocks the enter key when
+  // required is true and the value is empty, which traps the user. Validate
+  // post-hoc with a warning instead.
   const allowedUserIds = await text({
-    message: 'Enter allowed Telegram user IDs (comma-separated, or leave empty for all):',
+    message: 'Enter allowed Telegram user IDs (comma-separated):',
     placeholder: '123456789,987654321',
   });
 
   if (isCancel(allowedUserIds)) {
     cancel('Setup cancelled.');
     process.exit(0);
+  }
+
+  if (!allowedUserIds?.trim()) {
+    log.warning(
+      'No allowlist set — your Telegram bot will accept messages from ANYONE.\n' +
+        'Add TELEGRAM_ALLOWED_USER_IDS to ~/.archon/.env after setup to restrict access.'
+    );
   }
 
   return {
@@ -1111,58 +1122,6 @@ async function collectSlackConfig(): Promise<SlackConfig> {
 }
 
 /**
- * Collect Discord credentials
- */
-async function collectDiscordConfig(): Promise<DiscordConfig> {
-  note(
-    'Discord Bot Setup\n\n' +
-      '1. Go to discord.com/developers/applications\n' +
-      '2. Click "New Application" and name it\n' +
-      '3. Go to "Bot" in sidebar:\n' +
-      '   - Click "Reset Token" and copy it\n' +
-      '   - Enable "MESSAGE CONTENT INTENT"\n' +
-      '4. Go to "OAuth2" -> "URL Generator":\n' +
-      '   - Select scope: bot\n' +
-      '   - Select permissions: Send Messages, Read Message History\n' +
-      '   - Open generated URL to add bot to your server\n\n' +
-      'Get your user ID:\n' +
-      '- Discord Settings -> Advanced -> Enable Developer Mode\n' +
-      '- Right-click yourself -> Copy User ID',
-    'Discord Setup'
-  );
-
-  const botToken = await password({
-    message: 'Enter your Discord Bot Token:',
-    validate: value => {
-      if (!value || value.length < 50) {
-        return 'Please enter a valid Discord bot token';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
-    process.exit(0);
-  }
-
-  const allowedUserIds = await text({
-    message: 'Enter allowed Discord user IDs (comma-separated, or leave empty for all):',
-    placeholder: '123456789012345678,987654321098765432',
-  });
-
-  if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
-    process.exit(0);
-  }
-
-  return {
-    botToken,
-    allowedUserIds: allowedUserIds || '',
-  };
-}
-
-/**
  * Collect bot display name
  */
 async function collectBotDisplayName(): Promise<string> {
@@ -1213,11 +1172,8 @@ export function generateEnvContent(config: SetupConfig): string {
 
   // Database
   lines.push('# Database');
-  if (config.database.type === 'postgresql' && config.database.url) {
-    lines.push(`DATABASE_URL=${config.database.url}`);
-  } else {
-    lines.push('# Using SQLite (default) - no DATABASE_URL needed');
-  }
+  lines.push('# Using SQLite (default) - no DATABASE_URL needed');
+  lines.push('# Set DATABASE_URL=postgresql://... to use PostgreSQL instead.');
   lines.push('');
 
   // AI Assistants
@@ -1290,17 +1246,6 @@ export function generateEnvContent(config: SetupConfig): string {
       lines.push(`SLACK_ALLOWED_USER_IDS=${config.slack.allowedUserIds}`);
     }
     lines.push('SLACK_STREAMING_MODE=batch');
-    lines.push('');
-  }
-
-  // Discord
-  if (config.platforms.discord && config.discord) {
-    lines.push('# Discord');
-    lines.push(`DISCORD_BOT_TOKEN=${config.discord.botToken}`);
-    if (config.discord.allowedUserIds) {
-      lines.push(`DISCORD_ALLOWED_USER_IDS=${config.discord.allowedUserIds}`);
-    }
-    lines.push('DISCORD_STREAMING_MODE=batch');
     lines.push('');
   }
 
@@ -1648,10 +1593,8 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     if (existing.platforms.github) configuredPlatforms.push('GitHub');
     if (existing.platforms.telegram) configuredPlatforms.push('Telegram');
     if (existing.platforms.slack) configuredPlatforms.push('Slack');
-    if (existing.platforms.discord) configuredPlatforms.push('Discord');
 
     const summary = [
-      `Database: ${existing.hasDatabase ? 'PostgreSQL' : 'SQLite'}`,
       `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
       `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
       `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
@@ -1687,7 +1630,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
 
     // Read existing config values - for simplicity, start with defaults and merge
     config = {
-      database: { type: 'sqlite' },
       ai: {
         claude: existing?.hasClaude ?? false,
         codex: existing?.hasCodex ?? false,
@@ -1697,7 +1639,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
         github: existing?.platforms.github ?? false,
         telegram: existing?.platforms.telegram ?? false,
         slack: existing?.platforms.slack ?? false,
-        discord: existing?.platforms.discord ?? false,
       },
       botDisplayName: 'Archon',
     };
@@ -1713,7 +1654,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       github: config.platforms.github || newPlatforms.github,
       telegram: config.platforms.telegram || newPlatforms.telegram,
       slack: config.platforms.slack || newPlatforms.slack,
-      discord: config.platforms.discord || newPlatforms.discord,
     };
 
     // Collect credentials for new platforms only
@@ -1726,17 +1666,12 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     if (newPlatforms.slack && !existing?.platforms.slack) {
       config.slack = await collectSlackConfig();
     }
-    if (newPlatforms.discord && !existing?.platforms.discord) {
-      config.discord = await collectDiscordConfig();
-    }
   } else {
-    // Fresh or update mode - collect everything
-    const database = await collectDatabaseConfig();
+    // Fresh or update mode - collect everything (SQLite is implicit; no DB prompt)
     const ai = await collectAIConfig();
     const platforms = await collectPlatforms();
 
     config = {
-      database,
       ai,
       platforms,
       botDisplayName: 'Archon',
@@ -1751,9 +1686,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     }
     if (platforms.slack) {
       config.slack = await collectSlackConfig();
-    }
-    if (platforms.discord) {
-      config.discord = await collectDiscordConfig();
     }
 
     // Collect bot display name
@@ -1873,7 +1805,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   if (config.platforms.github) configuredPlatforms.push('GitHub');
   if (config.platforms.telegram) configuredPlatforms.push('Telegram');
   if (config.platforms.slack) configuredPlatforms.push('Slack');
-  if (config.platforms.discord) configuredPlatforms.push('Discord');
 
   const aiConfigured: string[] = [];
   if (config.ai.claude) {
@@ -1890,10 +1821,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   const summaryLines = [
-    `Database: ${config.database.type === 'postgresql' ? 'PostgreSQL' : 'SQLite (default)'}`,
     `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : 'None configured'}`,
     `Default: ${config.ai.defaultAssistant}`,
-    `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
+    `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None (CLI + skill only)'}`,
     '',
     `File written (${scope} scope):`,
     `  ${writeResult.targetPath}`,
@@ -1924,5 +1854,25 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     'Additional Options'
   );
 
-  outro('Setup complete! Run `archon version` to verify.');
+  // Update instructions — always shown so users know how to upgrade.
+  note(
+    'To update Archon:\n' +
+      '  Homebrew:  brew upgrade coleam00/archon/archon\n' +
+      '  curl:      curl -fsSL https://raw.githubusercontent.com/coleam00/Archon/main/scripts/install.sh | bash\n' +
+      '  Docker:    docker pull ghcr.io/coleam00/archon:latest',
+    'Update Instructions'
+  );
+
+  // Offer to verify with `archon doctor`. Failures inside doctor don't abort
+  // setup — the wizard already wrote the env file successfully.
+  const runDoctor = await confirm({
+    message: 'Run `archon doctor` now to verify your setup?',
+    initialValue: true,
+  });
+  if (!isCancel(runDoctor) && runDoctor) {
+    const { doctorCommand } = await import('./doctor');
+    await doctorCommand();
+  }
+
+  outro('Setup complete!');
 }

@@ -106,6 +106,7 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
+  doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version, --version, -V     Show version info (also -v when used alone)
@@ -267,7 +268,16 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve', 'skill'];
+  const noGitCommands = [
+    'version',
+    'help',
+    'setup',
+    'chat',
+    'continue',
+    'serve',
+    'skill',
+    'doctor',
+  ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
@@ -598,6 +608,11 @@ async function main(): Promise<number> {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
         return await serveCommand({ port: servePort, downloadOnly });
+      }
+
+      case 'doctor': {
+        const { doctorCommand } = await import('./commands/doctor');
+        return await doctorCommand();
       }
 
       case 'skill': {

@@ -1,0 +1,225 @@
+/**
+ * Doctor command - Verifies the local Archon setup.
+ *
+ * Runs a green/red checklist that probes the things `archon setup` configures:
+ * Claude binary spawn, gh CLI auth (only if GitHub is configured), database
+ * connectivity, workspace dir writability, bundled defaults loadability, and
+ * adapter token pings (Slack/Telegram, best-effort).
+ *
+ * Returns an exit code: 0 if all checks pass (or are skipped), 1 if any
+ * critical check fails. Adapter token pings that fail because of network
+ * issues degrade to `skip`, never `fail`, so a flaky network does not flip
+ * the overall result red.
+ *
+ * Re-runnable at any time. Also invoked from the end of `archon setup`; the
+ * setup wizard discards the return value so a doctor failure does not abort
+ * setup (the env file was already written successfully).
+ */
+import { existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { join } from 'path';
+import { execFileAsync } from '@archon/git';
+import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('cli.doctor');
+  return cachedLog;
+}
+
+export interface CheckResult {
+  label: string;
+  status: 'pass' | 'fail' | 'skip';
+  message: string;
+}
+
+export async function checkClaudeBinary(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'Claude binary';
+  // In dev mode the SDK resolves Claude via node_modules; the env var is unused.
+  if (!BUNDLED_IS_BINARY) {
+    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
+  }
+  const path = env.CLAUDE_BIN_PATH;
+  if (!path) {
+    return {
+      label,
+      status: 'fail',
+      message: 'CLAUDE_BIN_PATH is not set. Run `archon setup` to configure.',
+    };
+  }
+  if (!existsSync(path)) {
+    return { label, status: 'fail', message: `${path} does not exist` };
+  }
+  try {
+    await execFileAsync(path, ['--version'], { timeout: 5000 });
+    return { label, status: 'pass', message: `${path} (spawns OK)` };
+  } catch (err) {
+    return {
+      label,
+      status: 'fail',
+      message: `${path} did not spawn: ${(err as Error).message}`,
+    };
+  }
+}
+
+export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'gh CLI';
+  // Skip silently for users without GitHub configured — gh auth is irrelevant
+  // to a CLI-only or Slack/Telegram setup, so reporting fail would be noise.
+  if (!env.GITHUB_TOKEN && !env.GH_TOKEN) {
+    return { label, status: 'skip', message: 'GitHub not configured (no GITHUB_TOKEN)' };
+  }
+  try {
+    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
+    return { label, status: 'pass', message: 'authenticated' };
+  } catch (err) {
+    return {
+      label,
+      status: 'fail',
+      message: `gh auth status failed: ${(err as Error).message}. Run \`gh auth login\`.`,
+    };
+  }
+}
+
+export async function checkDatabase(): Promise<CheckResult> {
+  const label = 'Database';
+  try {
+    // Lazy import so doctor doesn't pull in the full @archon/core graph just
+    // to print --help or run a different check.
+    const { pool, getDatabaseType } = await import('@archon/core');
+    const dbType = getDatabaseType();
+    await pool.query('SELECT 1');
+    return { label, status: 'pass', message: `reachable (${dbType})` };
+  } catch (err) {
+    return { label, status: 'fail', message: `not reachable: ${(err as Error).message}` };
+  }
+}
+
+export async function checkWorkspaceWritable(): Promise<CheckResult> {
+  const label = 'Workspace';
+  const home = getArchonHome();
+  try {
+    mkdirSync(home, { recursive: true });
+    const probe = join(home, `.doctor-probe-${process.pid}-${Date.now()}`);
+    writeFileSync(probe, 'ok');
+    rmSync(probe, { force: true });
+    return { label, status: 'pass', message: `${home} is writable` };
+  } catch (err) {
+    return { label, status: 'fail', message: `${home} not writable: ${(err as Error).message}` };
+  }
+}
+
+export async function checkBundledDefaults(): Promise<CheckResult> {
+  const label = 'Bundled defaults';
+  try {
+    const { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS } = await import('@archon/workflows/defaults');
+    const commands = Object.keys(BUNDLED_COMMANDS).length;
+    const workflows = Object.keys(BUNDLED_WORKFLOWS).length;
+    return {
+      label,
+      status: 'pass',
+      message: `${workflows} workflow(s), ${commands} command(s) loaded`,
+    };
+  } catch (err) {
+    return { label, status: 'fail', message: `failed to load: ${(err as Error).message}` };
+  }
+}
+
+export async function checkSlack(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'Slack';
+  const token = env.SLACK_BOT_TOKEN;
+  if (!token) {
+    return { label, status: 'skip', message: 'no SLACK_BOT_TOKEN set' };
+  }
+  try {
+    const res = await fetch('https://slack.com/api/auth.test', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = (await res.json()) as { ok?: boolean; error?: string };
+    if (body.ok) {
+      return { label, status: 'pass', message: 'auth.test OK' };
+    }
+    return { label, status: 'fail', message: `auth.test rejected: ${body.error ?? 'unknown'}` };
+  } catch (err) {
+    // Network errors → skip, not fail — best-effort by design.
+    return {
+      label,
+      status: 'skip',
+      message: `ping skipped (network error: ${(err as Error).message})`,
+    };
+  }
+}
+
+export async function checkTelegram(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'Telegram';
+  const token = env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    return { label, status: 'skip', message: 'no TELEGRAM_BOT_TOKEN set' };
+  }
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = (await res.json()) as { ok?: boolean; description?: string };
+    if (body.ok) {
+      return { label, status: 'pass', message: 'getMe OK' };
+    }
+    return {
+      label,
+      status: 'fail',
+      message: `getMe rejected: ${body.description ?? 'unknown'}`,
+    };
+  } catch (err) {
+    return {
+      label,
+      status: 'skip',
+      message: `ping skipped (network error: ${(err as Error).message})`,
+    };
+  }
+}
+
+function renderResult(r: CheckResult): string {
+  const icon = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '○';
+  return `${icon} ${r.label}: ${r.message}`;
+}
+
+export async function doctorCommand(): Promise<number> {
+  console.log('archon doctor — verifying your setup\n');
+  getLog().info('doctor.run_started');
+  const env = process.env;
+
+  // Promise.allSettled so one rejection (e.g. a thrown SDK error) doesn't
+  // skip the remaining checks. Each check function already catches its own
+  // errors and returns a CheckResult — allSettled is belt-and-braces.
+  const settled = await Promise.allSettled([
+    checkClaudeBinary(env),
+    checkGhAuth(env),
+    checkDatabase(),
+    checkWorkspaceWritable(),
+    checkBundledDefaults(),
+    checkSlack(env),
+    checkTelegram(env),
+  ]);
+
+  let failures = 0;
+  for (const s of settled) {
+    if (s.status === 'rejected') {
+      failures++;
+      console.log(`✗ unknown: check threw: ${(s.reason as Error).message}`);
+      continue;
+    }
+    if (s.value.status === 'fail') failures++;
+    console.log(renderResult(s.value));
+  }
+
+  console.log('');
+  if (failures === 0) {
+    console.log('All checks passed.');
+    getLog().info('doctor.run_completed');
+    return 0;
+  }
+  console.log(`${failures} check(s) failed. Run \`archon setup\` to reconfigure.`);
+  getLog().warn({ failures }, 'doctor.run_failed');
+  return 1;
+}
