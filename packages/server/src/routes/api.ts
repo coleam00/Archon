@@ -6,7 +6,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
-import { rm, readFile, writeFile, unlink, mkdir } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
@@ -37,6 +37,7 @@ import {
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -2260,7 +2261,53 @@ export function registerApiRoutes(
         }
       }
 
-      // 2. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
+      // 2. Try home-scoped global workflow (~/.archon/workflows/<name>.yaml),
+      //    mirroring discovery's 1-level subfolder support (e.g. ~/.archon/workflows/group/foo.yaml).
+      const globalBase = getHomeWorkflowsPath();
+      const globalCandidates: string[] = [join(globalBase, filename)];
+      try {
+        const entries = await readdir(globalBase);
+        for (const entry of entries) {
+          const entryPath = join(globalBase, entry);
+          try {
+            const entryStat = await stat(entryPath);
+            if (entryStat.isDirectory()) globalCandidates.push(join(entryPath, filename));
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              getLog().error({ err, entryPath, name }, 'workflow.global_entry_stat_failed');
+              return apiError(c, 500, 'Failed to inspect global workflow directory');
+            }
+            // Entry disappeared between readdir and stat — safe to skip.
+          }
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().error({ err, globalBase, name }, 'workflow.global_dir_list_failed');
+          return apiError(c, 500, 'Failed to list global workflows');
+        }
+        // global dir doesn't exist — globalCandidates stays as [direct path]
+      }
+      for (const globalFilePath of globalCandidates) {
+        try {
+          const content = await readFile(globalFilePath, 'utf-8');
+          const result = parseWorkflow(content, filename);
+          if (result.error) {
+            return apiError(c, 500, `Global workflow file is invalid: ${result.error.error}`);
+          }
+          return c.json({
+            workflow: result.workflow,
+            filename,
+            source: 'global' as WorkflowSource,
+          });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            getLog().error({ err, name }, 'workflow.fetch_global_failed');
+            return apiError(c, 500, 'Failed to read global workflow');
+          }
+        }
+      }
+
+      // 3. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
         const bundledContent = BUNDLED_WORKFLOWS[name];
         const result = parseWorkflow(bundledContent, filename);
