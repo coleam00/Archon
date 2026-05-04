@@ -208,6 +208,25 @@ describe('workflow-events', () => {
       ]);
     });
 
+    test('returns outputs from node_skipped_prior_success events (multi-resume)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'node-a', data: { node_output: 'output A' } },
+          { step_name: 'node-b', data: { reason: 'prior_success', node_output: 'output B' } },
+        ])
+      );
+
+      const result = await getCompletedDagNodeOutputs('run-resume');
+
+      expect(result.size).toBe(2);
+      expect(result.get('node-a')).toBe('output A');
+      expect(result.get('node-b')).toBe('output B');
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('node_skipped_prior_success'),
+        ['run-resume']
+      );
+    });
+
     test('parses JSON string data (SQLite path)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([

@@ -127,7 +127,7 @@ export async function getCompletedDagNodeOutputs(
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type = 'node_completed'
+     WHERE workflow_run_id = $1 AND event_type IN ('node_completed', 'node_skipped_prior_success')
      ORDER BY created_at ASC`,
     [workflowRunId]
   );

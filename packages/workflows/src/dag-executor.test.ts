@@ -1173,10 +1173,10 @@ describe('executeDagWorkflow -- bash nodes', () => {
     );
 
     // The workflow should complete (it handles failures) but the node failed
-    // The mock platform should have received a failure message about no successful nodes
+    // The mock platform should have received a failure message about the failed node
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('fail'));
     expect(failMsg).toBeDefined();
   });
 
@@ -6212,7 +6212,7 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('fail-script'));
     expect(failMsg).toBeDefined();
   });
 
@@ -6306,7 +6306,7 @@ describe('executeDagWorkflow -- script nodes', () => {
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     // Workflow fails because the only node failed (timeout)
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('slow-script'));
     expect(failMsg).toBeDefined();
   }, 10000);
 

@@ -2567,7 +2567,10 @@ export async function executeDagWorkflow(
                 workflow_run_id: workflowRun.id,
                 event_type: 'node_skipped_prior_success',
                 step_name: node.id,
-                data: { reason: 'prior_success' },
+                data: {
+                  reason: 'prior_success',
+                  node_output: priorCompletedNodes.get(node.id) ?? '',
+                },
               })
               .catch((err: Error) => {
                 getLog().error(
@@ -3066,9 +3069,16 @@ export async function executeDagWorkflow(
 
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    const failedNodes: string[] = [];
+    for (const [nodeId, o] of nodeOutputs) {
+      if (o.state === 'failed') failedNodes.push(nodeId);
+    }
     const failMsg =
-      `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
-      'Check node conditions, trigger rules, and upstream failures.';
+      failedNodes.length > 0
+        ? `DAG workflow '${workflow.name}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
+          `${nodeCounts.skipped} downstream node${nodeCounts.skipped !== 1 ? 's were' : ' was'} skipped.`
+        : `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
+          'Check node conditions, trigger rules, and upstream failures.';
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe.
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
