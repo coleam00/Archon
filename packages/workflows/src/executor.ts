@@ -100,7 +100,7 @@ async function safeSendMessage(
       unknownErrorTracker.count++;
       if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
         throw new Error(
-          `${String(UNKNOWN_ERROR_THRESHOLD)} consecutive unrecognized errors - aborting workflow: ${err.message}`
+          `${UNKNOWN_ERROR_THRESHOLD} consecutive unrecognized errors - aborting workflow: ${err.message}`
         );
       }
     }
@@ -827,5 +827,24 @@ export async function executeWorkflow(
     }
     // Return failure result instead of re-throwing
     return { success: false, workflowRunId: workflowRun.id, error: err.message };
+  } finally {
+    // Defensive backstop: if the workflow run is still 'running' after all
+    // normal and exceptional code paths, flip it to 'failed' to prevent zombie
+    // accumulation. Guards against any future code path that exits without
+    // calling failWorkflowRun (e.g. a generator cleanup that exits without
+    // throwing). Only fires when the process stays alive long enough to run
+    // this finally — see #1561 for the originating zombie-state incident.
+    if (workflowRun) {
+      const runId = workflowRun.id;
+      const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch(() => null);
+      if (backstopStatus === 'running') {
+        getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
+        await deps.store
+          .failWorkflowRun(runId, 'Workflow exited without finalizing — see logs')
+          .catch((err: unknown) => {
+            getLog().error({ err, workflowRunId: runId }, 'executor.backstop_fail_failed');
+          });
+      }
+    }
   }
 }

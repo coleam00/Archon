@@ -6,6 +6,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  bootstrapProjectConfig,
   checkExistingConfig,
   generateEnvContent,
   generateWebhookSecret,
@@ -99,30 +100,6 @@ CODEX_ACCOUNT_ID=account1
       expect(result?.platforms.telegram).toBe(true);
       expect(result?.platforms.github).toBe(false);
       expect(result?.platforms.slack).toBe(false);
-      expect(result?.platforms.discord).toBe(false);
-      expect(result?.hasDatabase).toBe(false);
-
-      if (originalHome === undefined) {
-        delete process.env.ARCHON_HOME;
-      } else {
-        process.env.ARCHON_HOME = originalHome;
-      }
-    });
-
-    it('should detect PostgreSQL database configuration', () => {
-      const envDir = join(TEST_DIR, '.archon2');
-      mkdirSync(envDir, { recursive: true });
-      const envPath = join(envDir, '.env');
-
-      writeFileSync(envPath, 'DATABASE_URL=postgresql://localhost:5432/test');
-
-      const originalHome = process.env.ARCHON_HOME;
-      process.env.ARCHON_HOME = envDir;
-
-      const result = checkExistingConfig();
-
-      expect(result).not.toBeNull();
-      expect(result?.hasDatabase).toBe(true);
 
       if (originalHome === undefined) {
         delete process.env.ARCHON_HOME;
@@ -135,7 +112,6 @@ CODEX_ACCOUNT_ID=account1
   describe('generateEnvContent', () => {
     it('should generate valid .env content for SQLite configuration', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: true,
           claudeAuthType: 'global',
@@ -146,7 +122,6 @@ CODEX_ACCOUNT_ID=account1
           github: false,
           telegram: false,
           slack: false,
-          discord: false,
         },
         botDisplayName: 'Archon',
       });
@@ -157,36 +132,13 @@ CODEX_ACCOUNT_ID=account1
       // PORT is intentionally commented out — server and Vite both default to 3090 when unset (#1152).
       expect(content).toContain('# PORT=3090');
       expect(content).not.toMatch(/^PORT=/m);
-      expect(content).not.toContain('DATABASE_URL=');
-    });
-
-    it('should generate valid .env content for PostgreSQL configuration', () => {
-      const content = generateEnvContent({
-        database: { type: 'postgresql', url: 'postgresql://localhost:5432/archon' },
-        ai: {
-          claude: true,
-          claudeAuthType: 'apiKey',
-          claudeApiKey: 'sk-test-key',
-          codex: false,
-          defaultAssistant: 'claude',
-        },
-        platforms: {
-          github: false,
-          telegram: false,
-          slack: false,
-          discord: false,
-        },
-        botDisplayName: 'Archon',
-      });
-
-      expect(content).toContain('DATABASE_URL=postgresql://localhost:5432/archon');
-      expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=false');
-      expect(content).toContain('CLAUDE_API_KEY=sk-test-key');
+      // Sanity: never emit an active DATABASE_URL line. The "# Set DATABASE_URL=..."
+      // hint is a comment and is fine — only an unprefixed assignment would be wrong.
+      expect(content).not.toMatch(/^DATABASE_URL=/m);
     });
 
     it('emits CLAUDE_BIN_PATH when claudeBinaryPath is configured', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: true,
           claudeAuthType: 'global',
@@ -194,7 +146,7 @@ CODEX_ACCOUNT_ID=account1
           codex: false,
           defaultAssistant: 'claude',
         },
-        platforms: { github: false, telegram: false, slack: false, discord: false },
+        platforms: { github: false, telegram: false, slack: false },
         botDisplayName: 'Archon',
       });
 
@@ -205,14 +157,13 @@ CODEX_ACCOUNT_ID=account1
 
     it('omits CLAUDE_BIN_PATH when not configured', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: true,
           claudeAuthType: 'global',
           codex: false,
           defaultAssistant: 'claude',
         },
-        platforms: { github: false, telegram: false, slack: false, discord: false },
+        platforms: { github: false, telegram: false, slack: false },
         botDisplayName: 'Archon',
       });
 
@@ -221,7 +172,6 @@ CODEX_ACCOUNT_ID=account1
 
     it('should include platform configurations', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: true,
           claudeAuthType: 'global',
@@ -232,7 +182,6 @@ CODEX_ACCOUNT_ID=account1
           github: true,
           telegram: true,
           slack: false,
-          discord: false,
         },
         github: {
           token: 'ghp_testtoken',
@@ -259,7 +208,6 @@ CODEX_ACCOUNT_ID=account1
 
     it('should include Codex tokens when configured', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: false,
           codex: true,
@@ -275,7 +223,6 @@ CODEX_ACCOUNT_ID=account1
           github: false,
           telegram: false,
           slack: false,
-          discord: false,
         },
         botDisplayName: 'Archon',
       });
@@ -289,7 +236,6 @@ CODEX_ACCOUNT_ID=account1
 
     it('should include custom bot display name', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: true,
           claudeAuthType: 'global',
@@ -300,7 +246,6 @@ CODEX_ACCOUNT_ID=account1
           github: false,
           telegram: false,
           slack: false,
-          discord: false,
         },
         botDisplayName: 'MyCustomBot',
       });
@@ -310,7 +255,6 @@ CODEX_ACCOUNT_ID=account1
 
     it('should not include bot display name when default', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: true,
           claudeAuthType: 'global',
@@ -321,7 +265,6 @@ CODEX_ACCOUNT_ID=account1
           github: false,
           telegram: false,
           slack: false,
-          discord: false,
         },
         botDisplayName: 'Archon',
       });
@@ -331,7 +274,6 @@ CODEX_ACCOUNT_ID=account1
 
     it('should include Slack configuration', () => {
       const content = generateEnvContent({
-        database: { type: 'sqlite' },
         ai: {
           claude: true,
           claudeAuthType: 'global',
@@ -342,7 +284,6 @@ CODEX_ACCOUNT_ID=account1
           github: false,
           telegram: false,
           slack: true,
-          discord: false,
         },
         slack: {
           botToken: 'xoxb-test',
@@ -356,33 +297,6 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('SLACK_APP_TOKEN=xapp-test');
       expect(content).toContain('SLACK_ALLOWED_USER_IDS=U123');
       expect(content).toContain('SLACK_STREAMING_MODE=batch');
-    });
-
-    it('should include Discord configuration', () => {
-      const content = generateEnvContent({
-        database: { type: 'sqlite' },
-        ai: {
-          claude: true,
-          claudeAuthType: 'global',
-          codex: false,
-          defaultAssistant: 'claude',
-        },
-        platforms: {
-          github: false,
-          telegram: false,
-          slack: false,
-          discord: true,
-        },
-        discord: {
-          botToken: 'discord-bot-token-test',
-          allowedUserIds: '123456789',
-        },
-        botDisplayName: 'Archon',
-      });
-
-      expect(content).toContain('DISCORD_BOT_TOKEN=discord-bot-token-test');
-      expect(content).toContain('DISCORD_ALLOWED_USER_IDS=123456789');
-      expect(content).toContain('DISCORD_STREAMING_MODE=batch');
     });
   });
 
@@ -458,6 +372,65 @@ CODEX_ACCOUNT_ID=account1
       await copyArchonSkill(target);
 
       expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+    });
+  });
+
+  describe('bootstrapProjectConfig', () => {
+    it('creates .archon/config.yaml when it does not exist', () => {
+      const target = join(TEST_DIR, 'bootstrap-target');
+      mkdirSync(target, { recursive: true });
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('created');
+      expect(result.path).toBe(join(target, '.archon', 'config.yaml'));
+      expect(existsSync(result.path)).toBe(true);
+      const content = readFileSync(result.path, 'utf-8');
+      // Must be valid YAML — comment lines only — so loaders treat it as empty.
+      expect(content.split('\n').every(line => line === '' || line.startsWith('#'))).toBe(true);
+      expect(content).toContain('Project-scoped Archon config');
+      expect(content).toContain('archon.diy/reference/configuration');
+    });
+
+    it('creates the .archon directory if missing (idempotent on parent)', () => {
+      const target = join(TEST_DIR, 'bootstrap-no-archon-dir');
+      mkdirSync(target, { recursive: true });
+      // Do NOT pre-create .archon — bootstrap must create it
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('created');
+      expect(existsSync(join(target, '.archon'))).toBe(true);
+    });
+
+    it('is idempotent — leaves an existing config untouched', () => {
+      const target = join(TEST_DIR, 'bootstrap-existing');
+      const archonDir = join(target, '.archon');
+      mkdirSync(archonDir, { recursive: true });
+      const userContent = '# my custom config\nassistants:\n  claude:\n    model: opus\n';
+      writeFileSync(join(archonDir, 'config.yaml'), userContent);
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('existed');
+      const after = readFileSync(join(archonDir, 'config.yaml'), 'utf-8');
+      expect(after).toBe(userContent);
+    });
+
+    it('returns failed state without throwing when the target path is unwritable', () => {
+      // Pointing at a path inside a non-existent parent that mkdirSync can
+      // create succeeds. Use a deeply-nested path inside a regular file
+      // (which fs cannot mkdir into) to force a real failure.
+      const blocker = join(TEST_DIR, 'blocker-file');
+      writeFileSync(blocker, 'not a directory');
+      // mkdir under a file path fails with ENOTDIR — that's the failure mode
+      // we want to model (read-only FS, permission denied, etc.).
+      const result = bootstrapProjectConfig(blocker);
+
+      expect(result.state).toBe('failed');
+      if (result.state === 'failed') {
+        expect(result.error.length).toBeGreaterThan(0);
+      }
     });
   });
 });

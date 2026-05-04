@@ -152,7 +152,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs `check:bundled`, type-check, lint, format check, and tests. All five must pass for CI to succeed.
+This runs `check:bundled`, `check:bundled-skill`, type-check, lint, format check, and tests. All six must pass for CI to succeed.
 
 ### ESLint Guidelines
 
@@ -256,6 +256,9 @@ bun run cli serve --download-only  # Download without starting
 # Install the bundled Archon skill into a project
 bun run cli skill install
 bun run cli skill install /path/to/project
+
+# Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+bun run cli doctor
 
 # Show version
 bun run cli version
@@ -418,7 +421,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 **Package Split:**
 - **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
 - **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
-- **@archon/providers**: AI agent providers (Claude, Codex, Pi community) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally. Core providers live under `claude/` and `codex/`; community providers live under `community/` (currently `community/pi/`, registered with `builtIn: false`).
+- **@archon/providers**: AI agent providers (Claude, Codex, Pi community, OMP community) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally. Core providers live under `claude/` and `codex/`; community providers live under `community/` (currently `community/pi/` and `community/omp/`, both registered with `builtIn: false`).
 - **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
 - **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @archon/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
 - **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
@@ -463,6 +466,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - **ClaudeProvider**: `@anthropic-ai/claude-agent-sdk`
 - **CodexProvider**: `@openai/codex-sdk`
 - **PiProvider** (community, `builtIn: false`): `@mariozechner/pi-coding-agent` — one harness for ~20 LLM backends via `<provider>/<model>` refs (e.g. `anthropic/claude-haiku-4-5`, `openrouter/qwen/qwen3-coder`); supports extensions, skills, tool restrictions, thinking level, best-effort structured output. See `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` for setup, capability matrix, and extension config.
+- **OmpProvider** (community, `builtIn: false`): `@oh-my-pi/pi-coding-agent` — native OMP provider registered as `provider: omp`; supports typed assistant defaults, runtime auth handoff, best-effort structured output, and workflow-scoped Archon `mcp:` translation without enabling broad OMP-native MCP discovery. See `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` for setup and capability boundaries.
 - Streaming: `for await (const event of events) { await platform.send(event) }`
 
 ### Configuration
@@ -480,9 +484,9 @@ The system supports configuring default models and options per assistant in `.ar
 assistants:
   claude:
     model: sonnet  # or 'opus', 'haiku', 'claude-*', 'inherit'
-    settingSources:  # Controls which CLAUDE.md files Claude SDK loads
-      - project      # Default: only project-level CLAUDE.md
-      - user         # Optional: also load ~/.claude/CLAUDE.md
+    settingSources:  # Controls which CLAUDE.md, skills, commands, and agents the SDK loads
+      - project      # Project-level <cwd>/.claude/ (included in default)
+      - user         # User-level ~/.claude/ (included in default; omit both to restrict to project-only)
     claudeBinaryPath: /absolute/path/to/claude  # Optional: Claude Code executable.
                                                 # Native binary (curl installer at
                                                 # ~/.local/bin/claude) or npm cli.js.
@@ -724,7 +728,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 - Source builds: Loaded from filesystem at runtime
 - Merged with repo-specific commands/workflows (repo overrides defaults by name)
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
-- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and will fail loudly if the generated file is stale.
+- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and `check:bundled-skill` and will fail loudly if either generated file is stale.
 
 **Home-scoped ("global") workflows, commands, and scripts** (user-level, applies to every project):
 - Workflows: `~/.archon/workflows/` (or `$ARCHON_HOME/workflows/`)

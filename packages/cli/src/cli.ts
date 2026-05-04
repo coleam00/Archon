@@ -65,6 +65,7 @@ import { setupCommand } from './commands/setup';
 import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
+import { doctorCommand } from './commands/doctor';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -106,9 +107,10 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
   skill install [path]       Install the bundled Archon skill into .claude/skills/archon
+  doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
-  version                    Show version info
+  version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
 Options:
@@ -170,6 +172,21 @@ async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
  * Main CLI entry point
  * Returns exit code (0 = success, non-zero = failure)
  */
+/**
+ * Detect a request for version output. Treats `--version`, `-V`, and the
+ * single-dash typo `-version` as version flags anywhere in argv. `-v` keeps
+ * its role as the short alias for `--verbose`, except when used alone — then
+ * it falls back to version output to match the convention used by node, npm,
+ * bun, and most other CLIs.
+ */
+function isVersionRequest(args: string[]): boolean {
+  if (args.length === 1 && args[0] === '-v') return true;
+  for (const arg of args) {
+    if (arg === '--version' || arg === '-V' || arg === '-version') return true;
+  }
+  return false;
+}
+
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
@@ -177,6 +194,18 @@ async function main(): Promise<number> {
   if (args.length === 0) {
     printUsage();
     return 0;
+  }
+
+  // Version flag aliases bypass option parsing and the git-repo check so
+  // `archon --version` works the same as `archon version` from any directory.
+  if (isVersionRequest(args)) {
+    try {
+      await versionCommand();
+      return 0;
+    } finally {
+      await shutdownTelemetry();
+      await closeDb();
+    }
   }
 
   // Parse global options
@@ -240,7 +269,16 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve', 'skill'];
+  const noGitCommands = [
+    'version',
+    'help',
+    'setup',
+    'chat',
+    'continue',
+    'serve',
+    'skill',
+    'doctor',
+  ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
@@ -571,6 +609,10 @@ async function main(): Promise<number> {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
         return await serveCommand({ port: servePort, downloadOnly });
+      }
+
+      case 'doctor': {
+        return await doctorCommand();
       }
 
       case 'skill': {

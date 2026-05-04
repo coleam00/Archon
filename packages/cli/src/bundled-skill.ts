@@ -9,7 +9,7 @@
  */
 
 // =============================================================================
-// Skill Files (18 total)
+// Skill Files (21 total)
 // =============================================================================
 
 import skillMd from '../../../.claude/skills/archon/SKILL.md' with { type: 'text' };
@@ -26,8 +26,11 @@ import telegramGuide from '../../../.claude/skills/archon/guides/telegram.md' wi
 import authoringCommands from '../../../.claude/skills/archon/references/authoring-commands.md' with { type: 'text' };
 import cliCommands from '../../../.claude/skills/archon/references/cli-commands.md' with { type: 'text' };
 import dagAdvanced from '../../../.claude/skills/archon/references/dag-advanced.md' with { type: 'text' };
+import goodPractices from '../../../.claude/skills/archon/references/good-practices.md' with { type: 'text' };
 import interactiveWorkflows from '../../../.claude/skills/archon/references/interactive-workflows.md' with { type: 'text' };
+import parameterMatrix from '../../../.claude/skills/archon/references/parameter-matrix.md' with { type: 'text' };
 import repoInit from '../../../.claude/skills/archon/references/repo-init.md' with { type: 'text' };
+import troubleshooting from '../../../.claude/skills/archon/references/troubleshooting.md' with { type: 'text' };
 import variables from '../../../.claude/skills/archon/references/variables.md' with { type: 'text' };
 import workflowDag from '../../../.claude/skills/archon/references/workflow-dag.md' with { type: 'text' };
 
@@ -53,8 +56,11 @@ export const BUNDLED_SKILL_FILES: Record<string, string> = {
   'references/authoring-commands.md': authoringCommands,
   'references/cli-commands.md': cliCommands,
   'references/dag-advanced.md': dagAdvanced,
+  'references/good-practices.md': goodPractices,
   'references/interactive-workflows.md': interactiveWorkflows,
+  'references/parameter-matrix.md': parameterMatrix,
   'references/repo-init.md': repoInit,
+  'references/troubleshooting.md': troubleshooting,
   'references/variables.md': variables,
   'references/workflow-dag.md': workflowDag,
 };
