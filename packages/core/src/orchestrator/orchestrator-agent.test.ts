@@ -1139,6 +1139,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
     // parentConversationId (position 10) should still be the caller conversation id
     expect(callArgs[10]).toBe('conv-1');
+    // allowAutoResume (position 12) must be true — core of the foreground-resume fix
+    expect(callArgs[12]).toBe(true);
   });
 
   test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {

@@ -336,7 +336,13 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
+        true // allowAutoResume
       );
 
       // No createWorkflowRun — resume used existing run
@@ -376,7 +382,13 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
+        true // allowAutoResume
       );
 
       // No createWorkflowRun — resume used existing run
@@ -415,7 +427,13 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        undefined, // codebaseId
+        undefined, // issueContext
+        undefined, // isolationContext
+        undefined, // parentConversationId
+        undefined, // preCreatedRun
+        true // allowAutoResume
       );
 
       expect(result.success).toBe(false);
