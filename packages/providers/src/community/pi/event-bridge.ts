@@ -322,7 +322,10 @@ export async function* bridgeSession(
         queue.push({ kind: 'chunk', chunk });
       }
     } catch (err) {
-      queue.push({ kind: 'error', error: err as Error });
+      queue.push({
+        kind: 'error',
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     }
   });
 
@@ -347,7 +350,10 @@ export async function* bridgeSession(
       queue.push({ kind: 'done' });
     },
     (err: unknown) => {
-      queue.push({ kind: 'error', error: err as Error });
+      queue.push({
+        kind: 'error',
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     }
   );
 
