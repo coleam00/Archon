@@ -2944,6 +2944,37 @@ describe('WorktreeProvider', () => {
       );
     });
 
+    test('uses fromBranch as start-point with custom remote (task workflow)', async () => {
+      const taskRequest: IsolationRequest = {
+        codebaseId: 'cb-123',
+        canonicalRepoPath: '/workspace/repo',
+        workflowType: 'task',
+        identifier: 'my-feature',
+        fromBranch: 'develop',
+      };
+
+      const customProvider = new WorktreeProvider(async () => ({
+        baseBranch: 'main',
+        remote: 'upstream',
+      }));
+
+      await customProvider.create(taskRequest);
+
+      // fromBranch overrides remote/baseBranch as start-point
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining([
+          'worktree',
+          'add',
+          expect.any(String),
+          '-b',
+          'archon/task-my-feature',
+          'develop',
+        ]),
+        expect.any(Object)
+      );
+    });
+
     test('throws actionable error when remote is ambiguous', async () => {
       getDefaultRemoteSpy.mockResolvedValue(null);
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {

@@ -447,7 +447,8 @@ export interface CleanupOperationResult {
  */
 export async function getWorktreeStatusBreakdown(
   codebaseId: string,
-  mainRepoPath: string
+  mainRepoPath: string,
+  remote?: string
 ): Promise<WorktreeStatusBreakdown> {
   const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
 
@@ -462,7 +463,7 @@ export async function getWorktreeStatusBreakdown(
     activeEnvs: [],
   };
 
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await getDefaultBranch(repoPath, remote);
 
   for (const env of environments) {
     // Skip Telegram (never shown as stale)
@@ -560,7 +561,8 @@ async function isSafeToRemove(
   branchName: BranchName,
   mainBranch: BranchName,
   prStateCache: Map<string, PrState>,
-  includeClosed: boolean
+  includeClosed: boolean,
+  remote?: string
 ): Promise<{ safe: boolean; openPr: boolean }> {
   // (a) Fast path — fast-forward / merge-commit ancestry
   if (await isBranchMerged(repoPath, branchName, mainBranch)) {
@@ -571,7 +573,7 @@ async function isSafeToRemove(
     return { safe: true, openPr: false };
   }
   // (c) GitHub PR state
-  const prState = await getPrState(branchName, repoPath, prStateCache);
+  const prState = await getPrState(branchName, repoPath, prStateCache, remote);
   if (prState === 'MERGED') return { safe: true, openPr: false };
   if (prState === 'CLOSED') return { safe: includeClosed, openPr: false };
   if (prState === 'OPEN') return { safe: false, openPr: true };
@@ -585,17 +587,16 @@ async function isSafeToRemove(
 export async function cleanupMergedWorktrees(
   codebaseId: string,
   mainRepoPath: string,
-  options: { includeClosed?: boolean } = {}
+  options: { includeClosed?: boolean; remote?: string } = {}
 ): Promise<CleanupOperationResult> {
   const result: CleanupOperationResult = { removed: [], skipped: [] };
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
-  const mainBranch = await getDefaultBranch(repoPath);
+  const mainBranch = await getDefaultBranch(repoPath, options.remote);
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrState>();
 
   for (const env of environments) {
-    // Check if safe to remove via union of signals (skip env on unexpected errors)
     let safe = false;
     let openPr = false;
     try {
@@ -605,7 +606,8 @@ export async function cleanupMergedWorktrees(
         branchName,
         mainBranch,
         prStateCache,
-        includeClosed
+        includeClosed,
+        options.remote
       );
       safe = decision.safe;
       openPr = decision.openPr;

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `worktree.remote` config option in `.archon/config.yaml` for repos using non-standard git remote names
+- `getDefaultRemote()` auto-detection: prefers `origin`, falls back to sole remote, errors on ambiguity
+
 ## [0.3.10] - 2026-04-29
 
 Maintainer workflow suite, loop output variables, and broad workflow engine fixes

@@ -266,10 +266,9 @@ export interface WorktreeCreateConfig {
   /**
    * Git remote name to use for fetch/push operations.
    *
-   * Most repos use the standard 'origin' remote, but some use custom-named
-   * remotes (e.g. 'jan', 'feb', 'mar' for release-based remotes). When set,
-   * all git operations (fetch, push, branch tracking) use this remote
-   * instead of 'origin'.
+   * When set, all git operations (fetch, push, branch tracking) use this
+   * remote instead of 'origin'. Useful for repos with multiple remotes or
+   * non-standard naming conventions.
    *
    * When omitted, auto-detected via `getDefaultRemote()`:
    *   1. 'origin' if it exists

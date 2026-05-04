@@ -133,6 +133,8 @@ worktree:
                         # <repoRoot>/.worktrees/<branch> instead of under
                         # ~/.archon/workspaces/<owner>/<repo>/worktrees/.
                         # Must be relative; no absolute, no `..` segments.
+  remote: origin        # Optional: git remote name for fetch/push. Auto-detected
+                        # when omitted (origin if exists, sole remote otherwise).
 
 # Documentation directory
 docs:
@@ -206,9 +208,14 @@ worktree:
 
 **Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories. Set `worktree.initSubmodules: false` to opt out.
 
+**Remote behavior:** By default, all git operations (fetch, push, branch tracking) use the `origin` remote. If your repo uses a different remote name, configure `worktree.remote`. Resolution order:
+1. If `worktree.remote` is set: Uses the configured remote name for all operations.
+2. If omitted: Auto-detects via `getDefaultRemote()` — returns `origin` if it exists, otherwise the sole remote if only one is configured.
+3. If multiple non-origin remotes exist and none is named `origin`: **Fails with an actionable error** listing the available remotes and suggesting the config fix.
+
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
-1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on remote (no silent fallback).
-2. If omitted: Auto-detects the default branch via `git remote show origin`. Works without any config for standard repos.
+1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
+2. If omitted: Auto-detects the default branch via symbolic-ref on the resolved remote. Works without any config for standard repos.
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).

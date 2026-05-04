@@ -61,8 +61,8 @@ export async function getDefaultRemote(repoPath: RepoPath): Promise<string | nul
 }
 
 /**
- * Get the remote URL for a remote (defaults to 'origin').
- * Returns null if no remote is configured.
+ * Get the URL configured for a git remote.
+ * Returns null if the remote does not exist.
  */
 export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promise<string | null> {
   try {
