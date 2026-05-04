@@ -452,6 +452,10 @@ By default this is a Docker-managed volume. To store data at a specific location
 ARCHON_DATA=/opt/archon-data
 ```
 
+:::note
+`ARCHON_HOME` from `.env.example` is **ignored inside Docker** — the container always uses `/.archon`. Use `ARCHON_DATA` (host-side bind-mount source) to control *where on the host* `/.archon` lives. Both `ARCHON_HOME` and `ARCHON_DATA` leak into the container env via `env_file: .env`, which is harmless but expected.
+:::
+
 The directory is created automatically. Make sure the path is writable by UID 1001 (the container user):
 
 ```bash
@@ -460,6 +464,40 @@ sudo chown -R 1001:1001 /opt/archon-data
 ```
 
 If `ARCHON_DATA` is not set, Docker manages the volume automatically (`archon_data`) — data persists across restarts and rebuilds but lives inside Docker's storage.
+
+### User Home Directory (Persisted)
+
+The container runs as `appuser` with `$HOME=/home/appuser`. The base compose mounts `/home/appuser` as a named volume (`archon_user_home`) by default, so user-specific state survives container rebuilds without any operator action:
+
+| Path | What it persists |
+|------|------------------|
+| `~/.claude/` | Claude Code skills, commands, agents, hooks, MCP config, projects (conversation history), memory, OAuth state, keybindings, file-history |
+| `~/.codex/` | Codex auth (`auth.json` from interactive `codex login`; the env-var path via `setup-auth` overwrites this on every container start) |
+| `~/.pi/agent/` | Pi `auth.json` from interactive `pi /login` (Archon's Pi adapter reads this on every request) |
+| `~/.gitconfig` | Author identity, signing config, custom aliases, plus the `safe.directory` entries baked into the image |
+| `~/.bash_history` | Shell history when you `docker compose exec app bash` |
+| `~/.config/gh/` | GitHub CLI auth from interactive `gh auth login` (the `GH_TOKEN` env-var path works without it) |
+
+To bind-mount a host path instead of the default named volume, set `ARCHON_USER_HOME` in `.env`:
+
+```ini
+ARCHON_USER_HOME=/opt/archon-user-home
+```
+
+The host path must be writable by UID 1001 — chown it once before first start:
+
+```bash
+mkdir -p /opt/archon-user-home
+sudo chown -R 1001:1001 /opt/archon-user-home
+```
+
+The entrypoint re-applies ownership on every container start, so subsequent rebuilds work without re-running `chown`.
+
+:::caution
+Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
+:::
+
+If `ARCHON_USER_HOME` is not set, Docker manages the volume automatically (`archon_user_home`) — config persists across restarts and rebuilds but lives inside Docker's storage. To wipe it: `docker compose down && docker volume rm archon_archon_user_home`.
 
 ### GitHub CLI Authentication
 
