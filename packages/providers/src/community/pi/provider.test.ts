@@ -99,7 +99,15 @@ const mockSessionList = mock(
   async (_cwd: string) => [] as { id: string; path: string; cwd: string }[]
 );
 
-const mockSettingsManagerInMemory = mock(() => ({}));
+const mockSettingsManagerDrainErrors = mock(() => []);
+const mockSettingsManagerGetGlobalSettings = mock(() => ({}));
+const mockSettingsManagerGetProjectSettings = mock(() => ({}));
+const mockSettingsManagerCreate = mock(() => ({
+  drainErrors: mockSettingsManagerDrainErrors,
+  getGlobalSettings: mockSettingsManagerGetGlobalSettings,
+  getProjectSettings: mockSettingsManagerGetProjectSettings,
+}));
+const mockSettingsManagerInMemory = mock((_settings?: unknown) => ({}));
 const mockResourceLoaderReload = mock(async () => undefined);
 // Return-style constructor: bun's mock() wraps the function such that the
 // `this`-binding doesn't reliably propagate to `new` call sites. Returning a
@@ -128,7 +136,10 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
     open: mockSessionOpen,
     list: mockSessionList,
   },
-  SettingsManager: { inMemory: mockSettingsManagerInMemory },
+  SettingsManager: {
+    create: mockSettingsManagerCreate,
+    inMemory: mockSettingsManagerInMemory,
+  },
   DefaultResourceLoader: MockDefaultResourceLoader,
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
@@ -197,6 +208,14 @@ describe('PiProvider', () => {
     mockSessionOpen.mockClear();
     mockSessionList.mockClear();
     mockSessionList.mockImplementation(async () => []);
+    mockSettingsManagerInMemory.mockClear();
+    mockSettingsManagerCreate.mockClear();
+    mockSettingsManagerDrainErrors.mockReset();
+    mockSettingsManagerDrainErrors.mockImplementation(() => []);
+    mockSettingsManagerGetGlobalSettings.mockReset();
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({}));
+    mockSettingsManagerGetProjectSettings.mockReset();
+    mockSettingsManagerGetProjectSettings.mockImplementation(() => ({}));
     capturedListener = undefined;
     scriptedEvents.length = 0;
     fileCreds = {};
@@ -1563,5 +1582,90 @@ describe('PiProvider', () => {
       c => c[1] === 'pi.semaphore_initialized'
     );
     expect(initCalls).toHaveLength(0);
+  });
+
+  test('settings: create(cwd) called, inMemory seeded with pre-merged global+project (empty project → just global)', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({ defaultProvider: 'google' }));
+    mockSettingsManagerGetProjectSettings.mockImplementation(() => ({}));
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+    );
+
+    expect(mockSettingsManagerCreate).toHaveBeenCalledTimes(1);
+    expect(mockSettingsManagerCreate).toHaveBeenCalledWith('/tmp');
+    expect(mockSettingsManagerInMemory).toHaveBeenCalledWith({ defaultProvider: 'google' });
+  });
+
+  test('settings: inMemory seeded with project settings merged on top of global', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({}));
+    mockSettingsManagerGetProjectSettings.mockImplementation(() => ({ retry: { enabled: true } }));
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+    );
+
+    expect(mockSettingsManagerInMemory).toHaveBeenCalledWith({ retry: { enabled: true } });
+  });
+
+  test('settings: object values are shallow-merged one level deep, while primitives and arrays override', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      retry: {
+        enabled: false,
+        attempts: 1,
+        nested: { source: 'global', keep: true },
+      },
+      timeoutMs: 1000,
+      allow: ['global'],
+    }));
+    mockSettingsManagerGetProjectSettings.mockImplementation(() => ({
+      retry: {
+        enabled: true,
+        backoff: 'exp',
+        nested: { source: 'project' },
+      },
+      timeoutMs: 2000,
+      allow: ['project'],
+    }));
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+    );
+
+    expect(mockSettingsManagerInMemory).toHaveBeenCalledWith({
+      retry: {
+        enabled: true,
+        attempts: 1,
+        backoff: 'exp',
+        nested: { source: 'project' }, // nested objects are NOT recursively merged — one level deep only
+      },
+      timeoutMs: 2000,
+      allow: ['project'],
+    });
+  });
+
+  test('settings: parse errors logged as warnings, session still proceeds', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    const loadError = new Error('bad JSON');
+    mockSettingsManagerDrainErrors.mockImplementation(() => [
+      { scope: 'global', error: loadError },
+    ]);
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+    );
+
+    expect(error).toBeUndefined();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: 'global', err: loadError }),
+      'pi.settings_load_error'
+    );
   });
 });

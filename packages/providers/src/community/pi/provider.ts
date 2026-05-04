@@ -400,12 +400,58 @@ export class PiProvider implements IAgentProvider {
       };
     }
 
-    // Settings stay in-memory — only sessions persist, to match Claude/Codex.
-    // Resource loader still suppresses filesystem except for explicitly-passed
-    // skill paths and — when piConfig.enableExtensions is true — Pi's community
-    // extension ecosystem (tools + lifecycle hooks from ~/.pi/agent/extensions/
-    // and packages installed via `pi install npm:<pkg>`).
-    const settingsManager = piCodingAgent.SettingsManager.inMemory();
+    // Load user's Pi settings from disk (~/.pi/agent/settings.json for global,
+    // <cwd>/.pi/settings.json for project) as the starting point, then seed an
+    // in-memory instance. The in-memory instance guarantees no write-back to
+    // the user's settings files — AgentSession setter calls (setModel, etc.)
+    // write only to the in-process InMemorySettingsStorage object.
+    //
+    // NOTE: fileSettings is used only for the initial load; it is NOT passed to
+    // DefaultResourceLoader or AgentSession. DefaultResourceLoader creates its own
+    // file-backed SettingsManager internally for extension discovery. Sharing this
+    // instance is unsafe: DefaultResourceLoader.reload() calls
+    // settingsManager.reload(), which resets InMemorySettingsStorage to {} (the
+    // storage's global/project fields are undefined after inMemory() construction,
+    // so reload() produces empty settings, wiping all loaded user preferences).
+    const fileSettings = piCodingAgent.SettingsManager.create(cwd);
+
+    // Drain and log any settings file parse errors (malformed JSON, etc.) — non-fatal.
+    const settingsErrors = fileSettings.drainErrors();
+    for (const { scope, error: err } of settingsErrors) {
+      getLog().warn({ scope, err }, 'pi.settings_load_error');
+    }
+
+    // Pre-merge global + project settings before seeding inMemory().
+    // NOTE: Using applyOverrides() after construction is unsafe due to Pi SDK internals:
+    // SettingsManager.save() (dist/core/settings-manager.js) recalculates
+    //   this.settings = deepMergeSettings(this.globalSettings, this.projectSettings)
+    // wiping any applyOverrides() work, because inMemory() always constructs with
+    // this.projectSettings = {}. save() is called by setDefaultModelAndProvider()
+    // (dist/core/settings-manager.js), which AgentSession.setModel() calls
+    // (dist/core/agent-session.js) whenever an extension switches models in an
+    // interactive session — silently wiping project overrides mid-session.
+    // deepMergeSettings is not exported from the Pi SDK; replicate its one-level-deep
+    // semantics (nested objects merged one level deep, primitives/arrays override).
+    const globalSettings = fileSettings.getGlobalSettings();
+    const projectSettings = fileSettings.getProjectSettings();
+    const seedSettings: Record<string, unknown> = { ...globalSettings };
+    for (const key of Object.keys(projectSettings)) {
+      const pv = (projectSettings as Record<string, unknown>)[key];
+      if (pv === undefined) continue;
+      const gv = seedSettings[key];
+      seedSettings[key] =
+        typeof pv === 'object' &&
+        pv !== null &&
+        !Array.isArray(pv) &&
+        typeof gv === 'object' &&
+        gv !== null &&
+        !Array.isArray(gv)
+          ? { ...(gv as Record<string, unknown>), ...(pv as Record<string, unknown>) }
+          : pv;
+    }
+    const settingsManager = piCodingAgent.SettingsManager.inMemory(
+      seedSettings as ReturnType<typeof fileSettings.getGlobalSettings>
+    );
     // Default ON: extensions (community packages like @plannotator/pi-extension
     // or your own local ones) are a core reason users run Pi. Opt out with
     // `assistants.pi.enableExtensions: false` (or `interactive: false`) in
