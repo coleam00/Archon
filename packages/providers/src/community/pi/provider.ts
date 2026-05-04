@@ -34,6 +34,45 @@ import { parsePiModelRef } from './model-ref';
 // sendQuery, write a stub package.json to tmpdir and point Pi at it via
 // its own documented `PI_PACKAGE_DIR` escape hatch.
 
+// ─── Concurrency throttle ────────────────────────────────────────────────────
+
+/**
+ * Simple counting semaphore for capping concurrent Pi `session.prompt()` calls.
+ * Pi/Minimax has no built-in SDK-level throttling; without this, large parallel
+ * workflow batches (e.g. 10+ concurrent review PRs × 5 aspects each) hit rate
+ * limits and cascade-fail. Module-level so it's shared across all PiProvider
+ * instances within a process — Pi concurrency is global (one upstream backend).
+ */
+class Semaphore {
+  private available: number;
+  private readonly waiters: (() => void)[] = [];
+
+  constructor(count: number) {
+    this.available = count;
+  }
+
+  acquire(): Promise<void> {
+    if (this.available > 0) {
+      this.available--;
+      return Promise.resolve();
+    }
+    return new Promise<void>(resolve => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  release(): void {
+    const next = this.waiters.shift();
+    if (next) {
+      next();
+    } else {
+      this.available++;
+    }
+  }
+}
+
+let piSemaphore: Semaphore | undefined;
+
 /**
  * Write a minimal package.json to a stable tmpdir and set `PI_PACKAGE_DIR`
  * so Pi's `config.js` short-circuits its `dirname(process.execPath)` walk
@@ -458,6 +497,22 @@ export class PiProvider implements IAgentProvider {
     //    bridgeSession owns dispose() and abort wiring. When `interactive`
     //    is on, it also binds/unbinds the UI stub's emitter so extension
     //    notifications land on the same queue as Pi events.
+    //
+    //    The module-level semaphore is initialized lazily from the first
+    //    config that sets maxConcurrent and reused for the lifetime of the
+    //    process — this is a known v1 tradeoff. Pi concurrency is global
+    //    (one upstream backend) so a process-wide cap is the right scope.
+    const maxConcurrent = piConfig.maxConcurrent;
+    if (maxConcurrent !== undefined && piSemaphore === undefined) {
+      piSemaphore = new Semaphore(maxConcurrent);
+      getLog().info({ maxConcurrent }, 'pi.semaphore_initialized');
+    }
+
+    if (piSemaphore !== undefined) {
+      getLog().debug('pi.semaphore_acquiring');
+      await piSemaphore.acquire();
+      getLog().debug('pi.semaphore_acquired');
+    }
     try {
       yield* bridgeSession(
         session,
@@ -470,6 +525,8 @@ export class PiProvider implements IAgentProvider {
     } catch (err) {
       getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
       throw err;
+    } finally {
+      piSemaphore?.release();
     }
   }
 

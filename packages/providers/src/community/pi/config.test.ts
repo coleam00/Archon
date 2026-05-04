@@ -160,4 +160,17 @@ describe('parsePiConfig', () => {
       env: { PLANNOTATOR_REMOTE: '1' },
     });
   });
+
+  test('parses maxConcurrent as positive integer', () => {
+    expect(parsePiConfig({ maxConcurrent: 4 })).toEqual({ maxConcurrent: 4 });
+    expect(parsePiConfig({ maxConcurrent: 1 })).toEqual({ maxConcurrent: 1 });
+  });
+
+  test('drops invalid maxConcurrent values silently', () => {
+    expect(parsePiConfig({ maxConcurrent: 0 })).toEqual({});
+    expect(parsePiConfig({ maxConcurrent: -1 })).toEqual({});
+    expect(parsePiConfig({ maxConcurrent: 1.5 })).toEqual({});
+    expect(parsePiConfig({ maxConcurrent: 'four' })).toEqual({});
+    expect(parsePiConfig({ maxConcurrent: null })).toEqual({});
+  });
 });

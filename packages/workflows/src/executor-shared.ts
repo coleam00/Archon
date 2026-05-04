@@ -50,6 +50,8 @@ export const TRANSIENT_PATTERNS = [
   '429',
   '503',
   '502',
+  '529', // Anthropic HTTP 529 = service overloaded
+  'overloaded', // Anthropic/Minimax overload message text
   'network error',
   'socket hang up',
   'exited with code',

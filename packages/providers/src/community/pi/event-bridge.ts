@@ -146,7 +146,16 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     tokens,
     ...(tokens.cost !== undefined ? { cost: tokens.cost } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
-    ...(isError ? { isError: true, errorSubtype: last.stopReason } : {}),
+    ...(isError
+      ? {
+          isError: true,
+          errorSubtype: last.stopReason,
+          // Surfacing errorMessage in errors[] is what makes the executor's
+          // transient-error classifier (which pattern-matches on the thrown
+          // message) able to retry Pi-side 429/overload failures.
+          ...(last.errorMessage ? { errors: [last.errorMessage] } : {}),
+        }
+      : {}),
   };
   return chunk;
 }

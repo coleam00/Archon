@@ -178,13 +178,24 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('flags isError for stopReason=error', () => {
+  test('flags isError for stopReason=error and surfaces errorMessage', () => {
     const chunk = buildResultChunk([
       { role: 'assistant', usage, stopReason: 'error', errorMessage: 'auth', content: [] },
     ]);
     if (chunk.type === 'result') {
       expect(chunk.isError).toBe(true);
       expect(chunk.errorSubtype).toBe('error');
+      expect(chunk.errors).toEqual(['auth']);
+    }
+  });
+
+  test('does not populate errors when errorMessage is absent', () => {
+    const chunk = buildResultChunk([
+      { role: 'assistant', usage, stopReason: 'error', content: [] },
+    ]);
+    if (chunk.type === 'result') {
+      expect(chunk.isError).toBe(true);
+      expect(chunk.errors).toBeUndefined();
     }
   });
 
