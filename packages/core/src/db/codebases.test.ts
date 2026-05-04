@@ -35,6 +35,7 @@ describe('codebases', () => {
     name: 'test-project',
     repository_url: 'https://github.com/user/repo',
     default_cwd: '/workspace/test-project',
+    default_branch: 'main',
     ai_assistant_type: 'claude',
     commands: { plan: { path: '.claude/commands/plan.md', description: 'Plan feature' } },
     created_at: new Date(),
@@ -54,8 +55,8 @@ describe('codebases', () => {
 
       expect(result).toEqual(mockCodebase);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-        ['test-project', 'https://github.com/user/repo', '/workspace/test-project', 'claude']
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        ['test-project', 'https://github.com/user/repo', '/workspace/test-project', null, 'claude']
       );
     });
 
@@ -73,8 +74,25 @@ describe('codebases', () => {
 
       expect(result).toEqual(codebaseWithoutOptional);
       expect(mockQuery).toHaveBeenCalledWith(
-        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-        ['test-project', null, '/workspace/test-project', 'claude']
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        ['test-project', null, '/workspace/test-project', null, 'claude']
+      );
+    });
+
+    test('creates codebase with explicit default_branch', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([{ ...mockCodebase, default_branch: 'develop' }])
+      );
+
+      await createCodebase({
+        name: 'test-project',
+        default_cwd: '/workspace/test-project',
+        default_branch: 'develop',
+      });
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        ['test-project', null, '/workspace/test-project', 'develop', 'claude']
       );
     });
 
@@ -312,6 +330,7 @@ describe('codebases', () => {
             id: 'cb-123',
             name: 'test-repo',
             default_cwd: '/workspace/test-repo',
+            default_branch: null,
             ai_assistant_type: 'claude',
             repository_url: null,
             commands: {},
