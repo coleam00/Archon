@@ -38,6 +38,10 @@ export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDef
     );
   }
 
+  if (Array.isArray(raw.skillRoots)) {
+    result.skillRoots = raw.skillRoots.filter((d): d is string => typeof d === 'string');
+  }
+
   if (typeof raw.codexBinaryPath === 'string') {
     result.codexBinaryPath = raw.codexBinaryPath;
   }

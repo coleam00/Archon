@@ -43,6 +43,20 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';
+export {
+  getDefaultSkillRoots,
+  getAgentSkillRoots,
+  getSkillSearchRoots,
+  resolveSkillReferences,
+  resolveProviderSkillReferences,
+  loadResolvedSkills,
+  formatMissingSkills,
+  type SkillResolutionOptions,
+  type SkillResolutionResult,
+  type ResolvedSkill,
+  type MissingSkill,
+  type LoadedSkill,
+} from './skills';
 export { resolveCodexBinaryPath, fileExists as codexFileExists } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
 

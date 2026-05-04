@@ -19,6 +19,12 @@ import { parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
+import {
+  formatMissingSkills,
+  loadResolvedSkills,
+  resolveSkillReferences,
+  type LoadedSkill,
+} from '../skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -85,6 +91,25 @@ function buildCodexEnv(requestEnv: Record<string, string>): Record<string, strin
   );
   // Managed project env intentionally overrides inherited process env for project-scoped execution.
   return { ...baseEnv, ...requestEnv };
+}
+
+function buildCodexSkillContext(skills: readonly LoadedSkill[]): string {
+  const blocks = skills.map(
+    skill =>
+      `--- BEGIN SKILL ${skill.name} (${skill.skillPath}) ---\n${skill.content.trim()}\n--- END SKILL ${skill.name} ---`
+  );
+
+  return [
+    'The following Archon workflow skills were explicitly selected for this Codex turn.',
+    'Treat their SKILL.md contents as active task instructions and use them when relevant.',
+    '',
+    ...blocks,
+  ].join('\n');
+}
+
+function prependCodexSkillContext(prompt: string, skills: readonly LoadedSkill[]): string {
+  if (skills.length === 0) return prompt;
+  return `${buildCodexSkillContext(skills)}\n\n--- USER PROMPT ---\n${prompt}`;
 }
 
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
@@ -545,6 +570,26 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
+    let effectivePrompt = prompt;
+
+    if (requestOptions?.nodeConfig?.skills && requestOptions.nodeConfig.skills.length > 0) {
+      const result = await resolveSkillReferences(cwd, requestOptions.nodeConfig.skills, {
+        skillRoots: codexConfig.skillRoots,
+      });
+      if (result.missing.length > 0) {
+        throw new Error(formatMissingSkills(result.missing));
+      }
+
+      const loadedSkills = await loadResolvedSkills(result.resolved);
+      effectivePrompt = prependCodexSkillContext(prompt, loadedSkills);
+      getLog().info(
+        {
+          skills: loadedSkills.map(skill => skill.name),
+          skillPaths: loadedSkills.map(skill => skill.skillPath),
+        },
+        'codex.skills_loaded'
+      );
+    }
 
     // 1. Initialize SDK and build thread options
     const codex = await this.createCodexClient(codexConfig.codexBinaryPath, requestOptions?.env);
@@ -618,7 +663,7 @@ export class CodexProvider implements IAgentProvider {
 
       try {
         // 4. Run streamed turn
-        const result = await thread.runStreamed(prompt, turnOptions);
+        const result = await thread.runStreamed(effectivePrompt, turnOptions);
 
         // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
         yield* streamCodexEvents(

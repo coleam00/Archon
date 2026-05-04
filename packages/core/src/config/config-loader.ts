@@ -161,6 +161,8 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #     webSearchMode: disabled
 #     additionalDirectories:
 #       - /absolute/path/to/other/repo
+#     skillRoots:
+#       - /absolute/path/to/skills
 
 # Streaming mode per platform (stream or batch)
 # streaming:

@@ -24,6 +24,11 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   getDefaultCommandsPath: () => '/nonexistent/defaults',
+  getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
+  getDefaultWorkflowsPath: () => '/nonexistent/default-workflows',
+  getHomeWorkflowsPath: () => '/nonexistent/home-workflows',
+  getLegacyHomeWorkflowsPath: () => '/nonexistent/legacy-home-workflows',
+  getArchonHome: () => '/nonexistent/archon-home',
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
@@ -120,7 +125,7 @@ const mockCodexCapabilities = () => ({
   sessionResume: true,
   mcp: false,
   hooks: false,
-  skills: false,
+  skills: true,
   agents: false,
   toolRestrictions: false,
   structuredOutput: true,
@@ -2481,7 +2486,7 @@ describe('executeDagWorkflow -- skills options', () => {
     expect(nodeConfig?.allowed_tools).toEqual(['Read', 'Grep']);
   });
 
-  it('warns user when Codex DAG node has skills and does not pass agents', async () => {
+  it('passes skills to Codex sendQuery nodeConfig without unsupported-capability warning', async () => {
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: mockSendQueryDag,
       getType: () => 'codex',
@@ -2513,11 +2518,16 @@ describe('executeDagWorkflow -- skills options', () => {
       { ...minimalConfig, assistant: 'codex' }
     );
 
-    // Warning sent to user
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0]?.[3] as Record<string, unknown>;
+    const nodeConfig = optionsArg?.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig?.skills).toEqual(['codebase-search']);
+
+    // No unsupported-capability warning is sent for Codex skills now.
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     const warning = messages.find(m => m.includes('skills') && m.includes('codex'));
-    expect(warning).toBeDefined();
+    expect(warning).toBeUndefined();
   });
 
   it('passes agents to sendQuery nodeConfig when node has inline agents', async () => {
@@ -2654,6 +2664,21 @@ nodes:
     skills: []
 `;
     const result = parseWorkflow(yaml, 'empty.yaml');
+    expect(result.error).not.toBeNull();
+    expect(result.error!.error).toContain('skills');
+  });
+
+  it('rejects blank skill names after trimming', () => {
+    const yaml = `
+name: blank-skills
+description: test
+nodes:
+  - id: review
+    prompt: "Review"
+    skills:
+      - "   "
+`;
+    const result = parseWorkflow(yaml, 'blank.yaml');
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('skills');
   });

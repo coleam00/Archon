@@ -145,7 +145,7 @@ export const dagNodeBaseSchema = z.object({
   hooks: workflowNodeHooksSchema.optional(),
   mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
   skills: z
-    .array(z.string().min(1, 'each skill must be a non-empty string'))
+    .array(z.string().trim().min(1, 'each skill must be a non-empty string'))
     .nonempty("'skills' must be a non-empty array")
     .optional(),
   agents: z

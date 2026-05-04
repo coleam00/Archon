@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -25,6 +24,7 @@ import type { ThinkingLevel } from '@mariozechner/pi-ai';
 type PiTool = (typeof codingTools)[number];
 
 import type { NodeConfig } from '../../types';
+import { getAgentSkillRoots } from '../../skills';
 
 // ─── Thinking level ────────────────────────────────────────────────────────
 
@@ -272,17 +272,7 @@ export interface ResolvedSkills {
  * skills win when Archon runs out of a subdirectory.
  */
 function skillSearchRoots(cwd: string): string[] {
-  // Prefer `HOME` env var when set — Bun's os.homedir() bypasses `HOME` and
-  // reads from the system uid lookup, which is correct in production but
-  // makes tests using staged temp homes impossible. The fallback to
-  // homedir() keeps behavior identical in non-test contexts.
-  const home = process.env.HOME ?? homedir();
-  return [
-    join(cwd, '.agents', 'skills'),
-    join(cwd, '.claude', 'skills'),
-    join(home, '.agents', 'skills'),
-    join(home, '.claude', 'skills'),
-  ];
+  return getAgentSkillRoots(cwd);
 }
 
 /**

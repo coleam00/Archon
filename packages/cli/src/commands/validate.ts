@@ -41,6 +41,24 @@ async function buildValidationConfig(cwd: string): Promise<ValidationConfig> {
   }
 }
 
+function buildSkillRootsByProvider(
+  assistants: Record<string, Record<string, unknown>>
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+
+  for (const [providerId, defaults] of Object.entries(assistants)) {
+    const roots = defaults.skillRoots;
+    if (!Array.isArray(roots)) continue;
+
+    const stringRoots = roots.filter((root): root is string => typeof root === 'string');
+    if (stringRoots.length > 0) {
+      result[providerId] = stringRoots;
+    }
+  }
+
+  return result;
+}
+
 // =============================================================================
 // Output formatting
 // =============================================================================
@@ -86,6 +104,7 @@ export async function validateWorkflowsCommand(
 ): Promise<number> {
   const config = await buildValidationConfig(cwd);
   const mergedConfig = await loadConfig(cwd);
+  config.skillRootsByProvider = buildSkillRootsByProvider(mergedConfig.assistants);
   const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
     cwd,
