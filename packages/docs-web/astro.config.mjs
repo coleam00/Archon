@@ -13,6 +13,7 @@ export default defineConfig({
         baseUrl: 'https://github.com/coleam00/Archon/edit/main/packages/docs-web/',
       },
       sidebar: [
+        { label: '🗺️  Roadmap', link: '/roadmap/' },
         {
           label: 'The Book of Archon',
           autogenerate: { directory: 'book' },

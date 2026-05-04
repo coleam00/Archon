@@ -10,6 +10,10 @@ hero:
       link: /getting-started/installation/
       icon: right-arrow
       variant: primary
+    - text: Roadmap
+      link: /roadmap/
+      icon: right-arrow
+      variant: secondary
     - text: View on GitHub
       link: https://github.com/coleam00/Archon
       icon: external
