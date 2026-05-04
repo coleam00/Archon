@@ -107,6 +107,10 @@ describe('serializeToolResult', () => {
     expect(serializeToolResult([1, 2, 3])).toBe('[1,2,3]');
   });
 
+  test('falls back to String() for undefined', () => {
+    expect(serializeToolResult(undefined)).toBe('undefined');
+  });
+
   test('falls back to String() for circular refs', () => {
     const circular: { self?: unknown } = {};
     circular.self = circular;

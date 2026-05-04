@@ -5,6 +5,7 @@ import { join } from 'path';
 
 import { augmentPromptForJsonSchema, OmpProvider } from './provider';
 import type {
+  OmpAuthStorage,
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
   OmpExtensionRunner,
@@ -31,6 +32,7 @@ interface FakeSdkOptions {
     manager: OmpMcpManager;
   }) => void;
   onDisconnectMcp?: () => void;
+  onSetMcpAuthStorage?: (authStorage: OmpAuthStorage) => void;
 }
 
 async function collectChunks(
@@ -91,12 +93,25 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
     },
   } as OmpSession & { listener?: (event: unknown) => void };
 
+  const authStorage: OmpAuthStorage = {
+    setRuntimeApiKey(provider, apiKey) {
+      options.onSetRuntimeApiKey?.(provider, apiKey);
+    },
+    async getApiKey() {
+      return options.apiKey ?? 'sk-test';
+    },
+  };
+
   return {
     MCPManager: class implements OmpMcpManager {
       constructor(
         readonly cwd: string,
         readonly toolCache?: unknown
       ) {}
+
+      setAuthStorage(authStorage: OmpAuthStorage): void {
+        options.onSetMcpAuthStorage?.(authStorage);
+      }
 
       async connectServers(
         configs: Record<string, unknown>,
@@ -125,14 +140,7 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
       };
     },
     async discoverAuthStorage() {
-      return {
-        setRuntimeApiKey(provider, apiKey) {
-          options.onSetRuntimeApiKey?.(provider, apiKey);
-        },
-        async getApiKey() {
-          return options.apiKey ?? 'sk-test';
-        },
-      };
+      return authStorage;
     },
     ModelRegistry: class {
       refreshInBackground(): void {
@@ -514,11 +522,46 @@ describe('OmpProvider', () => {
       expect(sessionOptions?.mcpManager).toBe(connectArgs?.manager);
       expect(sessionOptions?.customTools).toEqual([mcpTool]);
       expect(disconnectCount).toBe(1);
+      expect(connectArgs?.manager).toBeDefined();
     } finally {
       await temp.cleanup();
     }
   });
 
+  test('wires OMP auth storage into workflow MCP manager', async () => {
+    const temp = await writeTempMcpConfig({
+      github: {
+        type: 'http',
+        url: 'https://mcp.example.com',
+        auth: { type: 'oauth', credentialId: 'github-oauth' },
+      },
+    });
+    let mcpAuthStorage: OmpAuthStorage | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSetMcpAuthStorage(authStorage) {
+          mcpAuthStorage = authStorage;
+        },
+      })
+    );
+
+    try {
+      await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json' },
+        },
+        temp.dir
+      );
+
+      expect(mcpAuthStorage).toBeDefined();
+      if (!mcpAuthStorage) throw new Error('MCP auth storage was not wired');
+      await expect(mcpAuthStorage.getApiKey('anthropic')).resolves.toBe('sk-test');
+    } finally {
+      await temp.cleanup();
+    }
+  });
   test('adds loaded MCP tool names to OMP toolNames allowlist', async () => {
     const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
     let sessionOptions: OmpCreateAgentSessionOptions | undefined;
@@ -547,6 +590,40 @@ describe('OmpProvider', () => {
     }
   });
 
+  test('filters denied loaded MCP tools from allowlist and custom tools', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const deniedTool = { name: 'mcp__github_create_issue' };
+    const allowedTool = { name: 'mcp__github_list_issues' };
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        mcpTools: [deniedTool, allowedTool],
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    try {
+      await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: {
+            mcp: 'mcp.json',
+            allowed_tools: ['read'],
+            denied_tools: ['mcp__github_create_issue'],
+          },
+        },
+        temp.dir
+      );
+
+      expect(sessionOptions?.toolNames).toEqual(['read', 'mcp__github_list_issues']);
+      expect(sessionOptions?.customTools).toEqual([allowedTool]);
+    } finally {
+      await temp.cleanup();
+    }
+  });
   test('surfaces missing MCP env vars', async () => {
     delete process.env.MISSING_OMP_MCP_TOKEN;
     const temp = await writeTempMcpConfig({
@@ -639,6 +716,36 @@ describe('OmpProvider', () => {
     }
   });
 
+  test('disconnects workflow MCP manager when session creation fails', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    let disconnectCount = 0;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession() {
+          throw new Error('session failed');
+        },
+        onDisconnectMcp() {
+          disconnectCount += 1;
+        },
+      })
+    );
+
+    try {
+      await expect(
+        collectChunks(
+          provider,
+          {
+            model: 'anthropic/claude-sonnet-4-5',
+            nodeConfig: { mcp: 'mcp.json' },
+          },
+          temp.dir
+        )
+      ).rejects.toThrow('session failed');
+      expect(disconnectCount).toBe(1);
+    } finally {
+      await temp.cleanup();
+    }
+  });
   test('does not enable broad OMP discovery when no node mcp is configured', async () => {
     let sessionOptions: OmpCreateAgentSessionOptions | undefined;
     const provider = new OmpProvider(async () =>

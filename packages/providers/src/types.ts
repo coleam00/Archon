@@ -117,7 +117,7 @@ export interface OmpProviderDefaults {
   model?: string;
   /** Advanced override for OMP auth/session/settings root. */
   agentDir?: string;
-  /** Enable OMP's own MCP discovery. Archon's mcp: YAML is not translated. */
+  /** Enable OMP's own MCP discovery; separate from node-scoped Archon workflow `mcp:` translation. */
   enableMCP?: boolean;
   /** Enable OMP LSP-backed tools and warmup. */
   enableLsp?: boolean;

@@ -3,9 +3,7 @@ import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
-  OmpMcpManager,
   OmpModelRegistry,
-  OmpSessionManager,
 } from './sdk-loader';
 
 import { loadOmpSdk } from './sdk-loader';
@@ -141,52 +139,6 @@ async function ensureProviderCredentials(
   );
 }
 
-function buildSessionOptions(args: {
-  cwd: string;
-  agentDir: string | undefined;
-  model: unknown;
-  authStorage: OmpAuthStorage;
-  modelRegistry: OmpModelRegistry;
-  sessionManager: OmpSessionManager;
-  settings: unknown;
-  skills: unknown[];
-  enableMCP: boolean;
-  enableLsp: boolean;
-  disableExtensionDiscovery?: boolean;
-  additionalExtensionPaths?: string[];
-  thinkingLevel?: string;
-  systemPrompt?: string;
-  mcpManager?: OmpMcpManager;
-  customTools?: unknown[];
-  toolNames: string[];
-  hasUI: boolean;
-}): OmpCreateAgentSessionOptions {
-  return {
-    cwd: args.cwd,
-    ...(args.agentDir ? { agentDir: args.agentDir } : {}),
-    model: args.model,
-    authStorage: args.authStorage,
-    modelRegistry: args.modelRegistry,
-    sessionManager: args.sessionManager,
-    settings: args.settings,
-    skills: args.skills,
-    enableMCP: args.enableMCP,
-    enableLsp: args.enableLsp,
-    ...(args.disableExtensionDiscovery !== undefined
-      ? { disableExtensionDiscovery: args.disableExtensionDiscovery }
-      : {}),
-    ...(args.additionalExtensionPaths
-      ? { additionalExtensionPaths: args.additionalExtensionPaths }
-      : {}),
-    ...(args.thinkingLevel ? { thinkingLevel: args.thinkingLevel } : {}),
-    ...(args.systemPrompt !== undefined ? { systemPrompt: args.systemPrompt } : {}),
-    ...(args.mcpManager ? { mcpManager: args.mcpManager } : {}),
-    ...(args.customTools ? { customTools: args.customTools } : {}),
-    toolNames: args.toolNames,
-    hasUI: args.hasUI,
-  };
-}
-
 function logSessionStart(args: {
   provider: string;
   modelId: string;
@@ -236,6 +188,29 @@ function mcpEnvWarning(missingVars: readonly string[]): string | undefined {
 
 function mergeToolNames(baseToolNames: string[], mcpToolNames: string[]): string[] {
   return [...new Set([...baseToolNames, ...mcpToolNames])];
+}
+
+function getToolName(tool: unknown): string | undefined {
+  if (typeof tool !== 'object' || tool === null) return undefined;
+  const name = (tool as { name?: unknown }).name;
+  return typeof name === 'string' ? name : undefined;
+}
+
+function filterDeniedMcpTools(
+  mcp: ResolvedOmpMcp,
+  deniedTools: readonly string[] | undefined
+): Pick<ResolvedOmpMcp, 'customTools' | 'toolNames'> {
+  if (!deniedTools || deniedTools.length === 0) {
+    return { customTools: mcp.customTools, toolNames: mcp.toolNames };
+  }
+
+  const denied = new Set(deniedTools.map(name => name.toLowerCase()));
+  const customTools = mcp.customTools.filter(tool => {
+    const toolName = getToolName(tool);
+    return toolName === undefined || !denied.has(toolName.toLowerCase());
+  });
+  const toolNames = mcp.toolNames.filter(name => !denied.has(name.toLowerCase()));
+  return { customTools, toolNames };
 }
 
 /**
@@ -319,7 +294,7 @@ export class OmpProvider implements IAgentProvider {
     let resolvedMcp: ResolvedOmpMcp | undefined;
     try {
       if (nodeConfig?.mcp) {
-        resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp);
+        resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp, authStorage);
         getLog().info(
           { serverNames: resolvedMcp.serverNames, mcpPath: nodeConfig.mcp },
           'omp.mcp_config_loaded'
@@ -346,12 +321,15 @@ export class OmpProvider implements IAgentProvider {
         }
       }
 
-      const effectiveToolNames = resolvedMcp
-        ? mergeToolNames(toolNames, resolvedMcp.toolNames)
+      const effectiveMcpTools = resolvedMcp
+        ? filterDeniedMcpTools(resolvedMcp, nodeConfig?.denied_tools)
+        : undefined;
+      const effectiveToolNames = effectiveMcpTools
+        ? mergeToolNames(toolNames, effectiveMcpTools.toolNames)
         : toolNames;
-      const sessionOptions = buildSessionOptions({
+      const sessionOptions: OmpCreateAgentSessionOptions = {
         cwd,
-        agentDir: ompConfig.agentDir,
+        ...(ompConfig.agentDir ? { agentDir: ompConfig.agentDir } : {}),
         model,
         authStorage,
         modelRegistry,
@@ -360,16 +338,19 @@ export class OmpProvider implements IAgentProvider {
         skills,
         enableMCP: nodeConfig?.mcp ? true : ompConfig.enableMCP === true,
         enableLsp: ompConfig.enableLsp !== false,
-        disableExtensionDiscovery: ompConfig.disableExtensionDiscovery,
-        additionalExtensionPaths: ompConfig.additionalExtensionPaths,
-        thinkingLevel,
-        systemPrompt,
-        ...(resolvedMcp
-          ? { mcpManager: resolvedMcp.manager, customTools: resolvedMcp.customTools }
+        ...(ompConfig.disableExtensionDiscovery !== undefined
+          ? { disableExtensionDiscovery: ompConfig.disableExtensionDiscovery }
           : {}),
+        ...(ompConfig.additionalExtensionPaths
+          ? { additionalExtensionPaths: ompConfig.additionalExtensionPaths }
+          : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+        ...(resolvedMcp ? { mcpManager: resolvedMcp.manager } : {}),
+        ...(effectiveMcpTools ? { customTools: effectiveMcpTools.customTools } : {}),
         toolNames: effectiveToolNames,
         hasUI: interactive,
-      });
+      };
 
       logSessionStart({
         provider: parsed.provider,

@@ -38,6 +38,7 @@ export interface OmpMcpManager {
     sources: Record<string, OmpMcpSourceMeta>,
     onConnecting?: (serverNames: string[]) => void
   ): Promise<OmpMcpLoadResult>;
+  setAuthStorage(authStorage: OmpAuthStorage): void;
   disconnectAll(): Promise<void>;
 }
 
