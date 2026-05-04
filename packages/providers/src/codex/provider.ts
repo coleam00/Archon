@@ -170,9 +170,10 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
     turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
   }
-  if (requestOptions?.abortSignal) {
-    turnOptions.signal = requestOptions.abortSignal;
-  }
+  // Signal assignment is intentionally per-attempt (in sendQuery's retry
+  // loop), not here. Reusing a single AbortSignal across retries can poison
+  // later attempts once any earlier attempt's subprocess is SIGTERM'd.
+  // See issue #1266.
   return { turnOptions, hasOutputFormat };
 }
 
@@ -603,56 +604,84 @@ export class CodexProvider implements IAgentProvider {
         throw new Error('Query aborted');
       }
 
-      if (attempt > 0) {
-        getLog().debug({ cwd, attempt }, 'starting_new_thread');
-        try {
-          thread = codex.startThread(threadOptions);
-        } catch (startError) {
-          const err = startError as Error;
-          if (isModelAccessError(err.message)) {
-            throw new Error(buildModelAccessMessage(requestOptions?.model));
-          }
-          throw new Error(`Codex query failed: ${err.message}`);
-        }
+      // Fresh AbortController per attempt. Caller's abortSignal, if any, is
+      // chained in via a once-listener so cancellation still propagates.
+      // Without this, a signal aborted during attempt N (e.g. when the
+      // Codex subprocess crashes and Node.js reacts to the `spawn({ signal })`
+      // linkage) would wire an already-aborted signal into attempt N+1's
+      // `spawn`, SIGTERMing the freshly spawned child before it reads any
+      // input. The "Reading prompt from stdin..." in the resulting error is
+      // Codex CLI's startup banner, not an indicator of crash location.
+      // See issue #1266.
+      const attemptController = new AbortController();
+      const onCallerAbort = (): void => {
+        attemptController.abort();
+      };
+      if (requestOptions?.abortSignal) {
+        requestOptions.abortSignal.addEventListener('abort', onCallerAbort, { once: true });
       }
+      turnOptions.signal = attemptController.signal;
 
       try {
-        // 4. Run streamed turn
-        const result = await thread.runStreamed(prompt, turnOptions);
-
-        // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
-        yield* streamCodexEvents(
-          result.events as AsyncIterable<Record<string, unknown>>,
-          hasOutputFormat,
-          thread.id,
-          requestOptions?.abortSignal
-        );
-        return;
-      } catch (error) {
-        const err = error as Error;
-
-        if (requestOptions?.abortSignal?.aborted) {
-          throw new Error('Query aborted');
+        if (attempt > 0) {
+          getLog().debug({ cwd, attempt }, 'starting_new_thread');
+          try {
+            thread = codex.startThread(threadOptions);
+          } catch (startError) {
+            const err = startError as Error;
+            if (isModelAccessError(err.message)) {
+              throw new Error(buildModelAccessMessage(requestOptions?.model));
+            }
+            throw new Error(`Codex query failed: ${err.message}`);
+          }
         }
 
-        const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
-          err,
-          requestOptions?.model
-        );
+        try {
+          // 4. Run streamed turn
+          const result = await thread.runStreamed(prompt, turnOptions);
 
-        getLog().error(
-          { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
-          'query_error'
-        );
+          // 5. Stream normalized events (fresh state per attempt to avoid dedup leaks)
+          yield* streamCodexEvents(
+            result.events as AsyncIterable<Record<string, unknown>>,
+            hasOutputFormat,
+            thread.id,
+            attemptController.signal
+          );
+          return;
+        } catch (error) {
+          const err = error as Error;
 
-        if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
-          throw enrichedError;
+          if (requestOptions?.abortSignal?.aborted) {
+            throw new Error('Query aborted');
+          }
+
+          const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichCodexError(
+            err,
+            requestOptions?.model
+          );
+
+          getLog().error(
+            { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
+            'query_error'
+          );
+
+          if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
+            throw enrichedError;
+          }
+
+          const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
+          getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          lastError = enrichedError;
         }
-
-        const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
-        getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        lastError = enrichedError;
+      } finally {
+        if (requestOptions?.abortSignal) {
+          requestOptions.abortSignal.removeEventListener('abort', onCallerAbort);
+        }
+        // Signal to any downstream consumers that this attempt is done.
+        // Next iteration creates a fresh controller; caller's signal state
+        // is unchanged.
+        attemptController.abort();
       }
     }
 
