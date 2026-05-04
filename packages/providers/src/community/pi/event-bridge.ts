@@ -402,25 +402,19 @@ export async function* bridgeSession(
       // debug so SDK regressions surface without polluting normal output.
       getLog().debug({ err }, 'pi.event-bridge.dispose_failed');
     }
-    // Ensure the prompt promise settles so callers see no dangling work.
-    // Safety net: if Pi's session.prompt() doesn't settle within 10 s after
-    // dispose(), give up rather than hanging forever. Without this, a Pi
-    // session that never rejects/resolves after dispose() keeps the caller's
-    // generator.return() suspended indefinitely. Bun then drains its event
-    // loop (no remaining I/O sources) and exits with code 0 — leaving the
-    // workflow run zombie in 'running' (#1561).
-    let cleanupTimeoutId: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      promptPromise.catch((err: unknown) => {
-        // Errors from prompt() during normal iteration are already surfaced through
-        // the queue. Any rejection here is a secondary cleanup-phase error from the
-        // Pi SDK — log at debug so SDK regressions surface without polluting output.
-        getLog().debug({ err }, 'pi.event-bridge.prompt_rejected_during_cleanup');
-      }),
-      new Promise<void>(resolve => {
-        cleanupTimeoutId = setTimeout(resolve, 10_000);
-      }),
-    ]);
-    clearTimeout(cleanupTimeoutId);
+    // Don't await promptPromise. The queue is closed above (line 392), and the
+    // .then() handlers attached at construction (line 344) only push to that
+    // queue — closed pushes are no-ops. There's nothing the caller is waiting
+    // for; whether prompt() resolves in 1ms or never, no observable behavior
+    // changes. Awaiting it is what caused #1561: Pi's session.prompt() can
+    // hang indefinitely after dispose(), keeping generator.return() suspended,
+    // draining Bun's event loop, and exiting with code 0 mid-workflow.
+    //
+    // Attach .catch() defensively so a stray async rejection (the .then()
+    // handlers should preclude this, but belt-and-suspenders) doesn't bubble
+    // up as an unhandled-rejection process exit.
+    promptPromise.catch((err: unknown) => {
+      getLog().debug({ err }, 'pi.event-bridge.prompt_rejected_after_close');
+    });
   }
 }

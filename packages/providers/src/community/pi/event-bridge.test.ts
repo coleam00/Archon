@@ -476,12 +476,18 @@ describe('tryParseStructuredOutput', () => {
 
 describe('bridgeSession cleanup', () => {
   // Regression for #1561: when the consumer throws mid-iteration, bridgeSession's
-  // finally block calls session.dispose() then awaits the prompt promise. If
-  // dispose() does not cause prompt() to settle, the await hangs forever, the
-  // consumer's catch never runs, Bun drains its event loop, and the workflow
-  // run is left zombie in 'running'. The fix wraps the await in Promise.race
-  // against a 10 s timeout so cleanup always completes.
-  test('completes within ~10s when session.prompt() never settles after dispose()', async () => {
+  // finally block calls session.dispose() and used to await the prompt promise
+  // for a "settle so callers see no dangling work" guarantee. That guarantee
+  // was illusory — the queue is closed before the await, so a settled prompt
+  // pushes into a closed queue (no-op). The await only existed to suppress
+  // unhandled rejections, and it caused #1561: when Pi's prompt() hung after
+  // dispose(), the await blocked forever, the consumer's catch never ran, and
+  // Bun drained its event loop and exited with code 0 mid-workflow.
+  //
+  // The fix is to not await at all — attach a fire-and-forget .catch() so a
+  // late rejection doesn't crash the process. Cleanup is non-blocking
+  // regardless of whether prompt() settles.
+  test('cleanup does not block when session.prompt() hangs forever after dispose()', async () => {
     const neverSettles = new Promise<void>(() => {
       /* intentionally never resolves */
     });
@@ -533,22 +539,29 @@ describe('bridgeSession cleanup', () => {
 
     expect(receivedChunk).toBe(true);
     expect(caught?.message).toBe('simulated consumer abort');
-    // Timeout fires at 10 s; allow 1 s of slack for scheduling overhead.
-    expect(elapsed).toBeLessThan(11_000);
-  }, 15_000);
+    // Cleanup must return immediately — no timer, no waiting on prompt().
+    // 200ms is generous for scheduling overhead while still catching any
+    // future regression that re-introduces an await on promptPromise.
+    expect(elapsed).toBeLessThan(200);
+  }, 5_000);
 
-  test('completes quickly when session.prompt() settles promptly after dispose()', async () => {
-    let resolvePrompt!: () => void;
+  test('a late prompt() rejection does not become an unhandled rejection', async () => {
+    // The .then() handlers in bridgeSession should preclude promptPromise
+    // ever rejecting (both fulfillment and rejection paths convert to queue
+    // pushes). The fire-and-forget .catch() is belt-and-suspenders in case
+    // of a synchronous throw inside the handlers. This test verifies that
+    // belt holds: a late rejection doesn't crash the test process.
+    let rejectPrompt!: (err: Error) => void;
     let listenerRef: ((e: AgentSessionEvent) => void) | undefined;
 
     const mockSession = {
       sessionId: 'test-session-id',
       prompt: () =>
-        new Promise<void>(r => {
-          resolvePrompt = r;
+        new Promise<void>((_, reject) => {
+          rejectPrompt = reject;
         }),
       dispose: () => {
-        resolvePrompt();
+        /* noop */
       },
       subscribe: (l: (e: AgentSessionEvent) => void) => {
         listenerRef = l;
@@ -570,16 +583,18 @@ describe('bridgeSession cleanup', () => {
       } as unknown as AgentSessionEvent);
     });
 
-    const start = Date.now();
     try {
       for await (const _chunk of gen) {
         throw new Error('simulated consumer abort');
       }
     } catch {}
-    const elapsed = Date.now() - start;
 
-    // If the timeout is not cleared after promptPromise wins, the process would
-    // hang for up to 10 s — catching that regression here.
-    expect(elapsed).toBeLessThan(1_000);
+    // Reject prompt() AFTER cleanup has run. If the .catch() weren't
+    // attached, this would propagate as an unhandled rejection. Bun would
+    // log it; we can't assert on the absence directly, but the test simply
+    // continuing to completion (and not failing the suite) is the assertion.
+    rejectPrompt(new Error('late pi error'));
+    // Yield to let the microtask queue drain so the .catch() runs.
+    await new Promise(resolve => setTimeout(resolve, 10));
   }, 5_000);
 });
