@@ -69,6 +69,40 @@ const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
 
+// ─── Reaction Helpers ───────────────────────────────────────────────────────
+
+/**
+ * Safely add a reaction to a message.
+ * Errors are logged but not thrown to avoid breaking core message handling.
+ */
+export async function safeAddReaction(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  reaction: string
+): Promise<void> {
+  try {
+    await platform.addReaction?.(conversationId, reaction);
+  } catch (error) {
+    getLog().warn({ err: error, conversationId, reaction }, 'orchestrator.reaction_add_failed');
+  }
+}
+
+/**
+ * Safely remove a reaction from a message.
+ * Errors are logged but not thrown to avoid breaking core message handling.
+ */
+export async function safeRemoveReaction(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  reaction: string
+): Promise<void> {
+  try {
+    await platform.removeReaction?.(conversationId, reaction);
+  } catch (error) {
+    getLog().warn({ err: error, conversationId, reaction }, 'orchestrator.reaction_remove_failed');
+  }
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WorkflowInvocation {
@@ -547,6 +581,9 @@ export async function handleMessage(
   try {
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
+    // React with 👀 to acknowledge message received
+    await safeAddReaction(platform, conversationId, 'eyes');
+
     // 1. Get/create conversation and inherit thread context
     let conversation = await db.getOrCreateConversation(
       platform.getPlatformType(),
@@ -836,6 +873,9 @@ export async function handleMessage(
     const aiClient = getAgentProvider(conversation.ai_assistant_type);
     getLog().debug({ assistantType: conversation.ai_assistant_type }, 'sending_to_ai');
 
+    // React with 🔄 when work begins
+    await safeAddReaction(platform, conversationId, 'arrows_counterclockwise');
+
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
     const config = discoveredConfig ?? (await loadConfig());
@@ -905,9 +945,34 @@ export async function handleMessage(
     }
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
+
+    // Reaction cleanup and final status (ensures even on early returns)
+    try {
+      // Remove intermediate reactions before adding final status
+      await safeRemoveReaction(platform, conversationId, 'eyes');
+      await safeRemoveReaction(platform, conversationId, 'arrows_counterclockwise');
+
+      // React with ✅ on success
+      await safeAddReaction(platform, conversationId, 'white_check_mark');
+    } catch {
+      // Silently ignore reaction errors
+    }
   } catch (error) {
     const err = toError(error);
     getLog().error({ err, conversationId }, 'orchestrator_message_failed');
+
+    // Reaction cleanup and final status (ensures even on exceptions)
+    try {
+      // Remove intermediate reactions before adding final status
+      await safeRemoveReaction(platform, conversationId, 'eyes');
+      await safeRemoveReaction(platform, conversationId, 'arrows_counterclockwise');
+
+      // React with ❌ on failure
+      await safeAddReaction(platform, conversationId, 'x');
+    } catch {
+      // Silently ignore reaction errors
+    }
+
     const userMessage = classifyAndFormatError(err);
     try {
       await platform.sendMessage(conversationId, userMessage);

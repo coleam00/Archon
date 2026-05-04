@@ -26,6 +26,8 @@ mock.module('@archon/paths', () => ({
 // Create mock functions
 const mockPostMessage = mock(() => Promise.resolve(undefined));
 const mockReplies = mock(() => Promise.resolve({ messages: [] }));
+const mockReactionsAdd = mock(() => Promise.resolve(undefined));
+const mockReactionsRemove = mock(() => Promise.resolve(undefined));
 const mockEvent = mock(() => {});
 const mockStart = mock(() => Promise.resolve(undefined));
 const mockStop = mock(() => Promise.resolve(undefined));
@@ -37,6 +39,10 @@ const mockApp = {
     },
     conversations: {
       replies: mockReplies,
+    },
+    reactions: {
+      add: mockReactionsAdd,
+      remove: mockReactionsRemove,
     },
   },
   event: mockEvent,
@@ -364,6 +370,96 @@ describe('SlackAdapter', () => {
           blocks: [{ type: 'markdown', text: '' }],
         })
       );
+    });
+  });
+
+  describe('addReaction', () => {
+    let adapter: SlackAdapter;
+
+    beforeEach(() => {
+      mockReactionsAdd.mockClear();
+      adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+    });
+
+    test('should add reaction to valid conversation ID', async () => {
+      await adapter.addReaction('C123:1234567890.123456', 'eyes');
+
+      expect(mockReactionsAdd).toHaveBeenCalledWith({
+        channel: 'C123',
+        name: 'eyes',
+        timestamp: '1234567890.123456',
+      });
+    });
+
+    test('should handle different emoji names', async () => {
+      await adapter.addReaction('C456:1111111111.111111', 'white_check_mark');
+      await adapter.addReaction('C789:2222222222.222222', 'x');
+
+      expect(mockReactionsAdd).toHaveBeenCalledTimes(2);
+      expect(mockReactionsAdd).toHaveBeenNthCalledWith(1, {
+        channel: 'C456',
+        name: 'white_check_mark',
+        timestamp: '1111111111.111111',
+      });
+      expect(mockReactionsAdd).toHaveBeenNthCalledWith(2, {
+        channel: 'C789',
+        name: 'x',
+        timestamp: '2222222222.222222',
+      });
+    });
+
+    test('should silently handle invalid conversation ID format', async () => {
+      // No colon separator - should be ignored
+      await adapter.addReaction('invalid-id-no-colon', 'eyes');
+
+      expect(mockReactionsAdd).not.toHaveBeenCalled();
+    });
+
+    test('should silently handle missing timestamp', async () => {
+      await adapter.addReaction('C123:', 'eyes');
+
+      expect(mockReactionsAdd).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeReaction', () => {
+    let adapter: SlackAdapter;
+
+    beforeEach(() => {
+      mockReactionsRemove.mockClear();
+      adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+    });
+
+    test('should remove reaction from valid conversation ID', async () => {
+      await adapter.removeReaction('C123:1234567890.123456', 'eyes');
+
+      expect(mockReactionsRemove).toHaveBeenCalledWith({
+        channel: 'C123',
+        name: 'eyes',
+        timestamp: '1234567890.123456',
+      });
+    });
+
+    test('should handle different emoji names', async () => {
+      await adapter.removeReaction('C456:1111111111.111111', 'arrows_counterclockwise');
+
+      expect(mockReactionsRemove).toHaveBeenCalledWith({
+        channel: 'C456',
+        name: 'arrows_counterclockwise',
+        timestamp: '1111111111.111111',
+      });
+    });
+
+    test('should silently handle invalid conversation ID format', async () => {
+      await adapter.removeReaction('invalid-id-no-colon', 'eyes');
+
+      expect(mockReactionsRemove).not.toHaveBeenCalled();
+    });
+
+    test('should silently handle missing timestamp', async () => {
+      await adapter.removeReaction('C123:', 'eyes');
+
+      expect(mockReactionsRemove).not.toHaveBeenCalled();
     });
   });
 });

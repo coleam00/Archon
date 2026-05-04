@@ -199,6 +199,58 @@ export class SlackAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Add a reaction (emoji) to a message
+   * @param conversationId - Slack: "channel:timestamp"
+   * @param reaction - Emoji shortname (e.g., "eyes", "white_check_mark", "x")
+   */
+  async addReaction(conversationId: string, reaction: string): Promise<void> {
+    // Parse conversationId: "channel:timestamp" format
+    const [channelId, timestamp] = conversationId.split(':');
+    if (!channelId || !timestamp) {
+      getLog().warn({ conversationId, reaction }, 'slack.reaction_invalid_conversation_id');
+      return;
+    }
+
+    try {
+      await this.app.client.reactions.add({
+        channel: channelId,
+        name: reaction,
+        timestamp: timestamp,
+      });
+      getLog().debug({ channelId, timestamp, reaction }, 'slack.reaction_added');
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn({ err, channelId, timestamp, reaction }, 'slack.reaction_failed');
+    }
+  }
+
+  /**
+   * Remove a reaction from a message
+   * @param conversationId - Slack: "channel:timestamp"
+   * @param reaction - Emoji shortname to remove (e.g., "eyes", "arrows_counterclockwise")
+   */
+  async removeReaction(conversationId: string, reaction: string): Promise<void> {
+    // Parse conversationId: "channel:timestamp" format
+    const [channelId, timestamp] = conversationId.split(':');
+    if (!channelId || !timestamp) {
+      getLog().warn({ conversationId, reaction }, 'slack.remove_reaction_invalid_conversation_id');
+      return;
+    }
+
+    try {
+      await this.app.client.reactions.remove({
+        channel: channelId,
+        name: reaction,
+        timestamp: timestamp,
+      });
+      getLog().debug({ channelId, timestamp, reaction }, 'slack.reaction_removed');
+    } catch (error) {
+      const err = error as Error;
+      getLog().warn({ err, channelId, timestamp, reaction }, 'slack.remove_reaction_failed');
+    }
+  }
+
+  /**
    * Strip bot mention from message text and normalize Slack formatting
    */
   stripBotMention(text: string): string {

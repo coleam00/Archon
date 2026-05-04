@@ -55,6 +55,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
 3. Add these scopes to bot token scopes:
    - `app_mentions:read` -- Receive @mention events
    - `chat:write` -- Send messages
+   - `reactions:write` -- Add emoji reactions to messages (👀 → 🔄 → ✅/❌ feedback)
    - `channels:history` -- Read messages in public channels (for thread context)
    - `channels:join` -- Allow bot to join public channels
    - `groups:history` -- Read messages in private channels (optional)
@@ -147,6 +148,19 @@ You can also DM the bot directly -- no @mention needed:
 ```
 /help
 ```
+
+## Reaction Feedback
+
+Archon displays emoji reactions on your messages to show workflow progress:
+
+| Reaction | Meaning |
+|----------|---------|
+| 👀 | Message received, processing started |
+| 🔄 | AI is working on your request |
+| ✅ | Workflow completed successfully |
+| ❌ | Workflow failed (check the error message) |
+
+The reactions are automatically added and cleaned up during execution. If the `reactions:write` scope is not granted, the feature silently degrades without affecting core functionality.
 
 ## Troubleshooting
 
