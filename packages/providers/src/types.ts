@@ -209,6 +209,9 @@ export interface NodeConfig {
   output_format?: Record<string, unknown>;
   maxBudgetUsd?: number;
   systemPrompt?: string;
+  /** Per-node override for Claude Code's settingSources flag. Defaults to ['project']
+   *  in provider when not set. Use ['user'] to skip project CLAUDE.md auto-load. */
+  settingSources?: ('project' | 'user')[];
   fallbackModel?: string;
   idle_timeout?: number;
   [key: string]: unknown;

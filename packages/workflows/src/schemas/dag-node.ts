@@ -159,6 +159,10 @@ export const dagNodeBaseSchema = z.object({
   thinking: thinkingConfigSchema.optional(),
   maxBudgetUsd: z.number().positive().optional(),
   systemPrompt: z.string().min(1).optional(),
+  /** Per-node override for Claude Code's settingSources flag. Defaults to ['project']
+   *  (loads project CLAUDE.md). Set to ['user'] to skip project context for lean
+   *  agents (reviewers, verifiers) that don't need codebase steering docs. */
+  settingSources: z.array(z.enum(['project', 'user'])).optional(),
   fallbackModel: z.string().min(1).optional(),
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
@@ -336,6 +340,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'thinking',
   'maxBudgetUsd',
   'systemPrompt',
+  'settingSources',
   'fallbackModel',
   'betas',
   'sandbox',
@@ -560,6 +565,7 @@ export const dagNodeSchema = dagNodeBaseSchema
       ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
       ...(data.maxBudgetUsd !== undefined ? { maxBudgetUsd: data.maxBudgetUsd } : {}),
       ...(data.systemPrompt !== undefined ? { systemPrompt: data.systemPrompt } : {}),
+      ...(data.settingSources !== undefined ? { settingSources: data.settingSources } : {}),
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
       ...(data.betas !== undefined ? { betas: data.betas } : {}),
       ...(data.sandbox !== undefined ? { sandbox: data.sandbox } : {}),
