@@ -8,20 +8,47 @@ mkdir -p /.archon/workspaces /.archon/worktrees
 
 # Determine if we need to use gosu for privilege dropping
 if [ "$(id -u)" = "0" ]; then
-  # Running as root: fix volume permissions, then drop to appuser
-  if ! chown -Rh appuser:appuser /.archon 2>/dev/null; then
-    echo "ERROR: Failed to fix ownership of /.archon — volume may be read-only or mounted with incompatible options" >&2
-    exit 1
+  # Running as root: try to fix volume permissions, then drop to appuser.
+  # chown can fail when a host bind-mount controls ownership (e.g. macOS
+  # VirtioFS: host UID 501 cannot be remapped to container appuser 1001).
+  # On Linux the same failure is also produced by SELinux/AppArmor denials,
+  # read-only mounts, or wrong --mount type — and they look identical from
+  # inside the container, so we cannot auto-distinguish.
+  #
+  # Capture chown stderr so the diagnosis is actionable, then require an
+  # explicit opt-in (ARCHON_ALLOW_ROOT_FALLBACK=1) before bypassing the
+  # UID-0 safety guard in ClaudeProvider (provider.ts checks
+  # `getProcessUid() === 0 && IS_SANDBOX !== '1'` and refuses to start).
+  # Without the opt-in we exit loud — better than a silent root-execution
+  # path on a misconfigured Linux host.
+  chown_failed=0
+  chown_errors=""
+  if ! chown_err=$(chown -Rh appuser:appuser /.archon 2>&1); then
+    chown_failed=1
+    chown_errors="${chown_errors}  /.archon: ${chown_err}"$'\n'
   fi
   # /home/appuser is persisted to a named volume (or bind-mounted via
   # ARCHON_USER_HOME) so Claude/Codex/Pi config, ~/.gitconfig, shell history,
-  # and other user-specific state survive rebuilds. On bind mounts, host UIDs
-  # don't map to appuser (1001), so fix ownership the same way we do /.archon.
-  if ! chown -Rh appuser:appuser /home/appuser 2>/dev/null; then
-    echo "ERROR: Failed to fix ownership of /home/appuser — volume may be read-only or mounted with incompatible options" >&2
-    exit 1
+  # and other user-specific state survive rebuilds. Same chown story as
+  # /.archon — bind mounts may carry host UIDs that don't map to appuser.
+  if ! chown_err=$(chown -Rh appuser:appuser /home/appuser 2>&1); then
+    chown_failed=1
+    chown_errors="${chown_errors}  /home/appuser: ${chown_err}"$'\n'
   fi
-  RUNNER="gosu appuser"
+  if [ "$chown_failed" = "0" ]; then
+    RUNNER="gosu appuser"
+  else
+    echo "WARNING: chown failed:" >&2
+    printf "%s" "$chown_errors" >&2
+    if [ "${ARCHON_ALLOW_ROOT_FALLBACK:-0}" = "1" ]; then
+      echo "WARNING: ARCHON_ALLOW_ROOT_FALLBACK=1 — continuing as root with IS_SANDBOX=1." >&2
+      export IS_SANDBOX=1
+      RUNNER=""
+    else
+      echo "ERROR: refusing to run as root. On macOS VirtioFS this is expected — set ARCHON_ALLOW_ROOT_FALLBACK=1 in your environment to opt in. On Linux, fix volume ownership instead." >&2
+      exit 1
+    fi
+  fi
 else
   # Already running as non-root (e.g., --user flag or Kubernetes)
   RUNNER=""
