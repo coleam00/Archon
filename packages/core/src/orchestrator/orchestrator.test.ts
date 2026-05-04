@@ -555,7 +555,8 @@ describe('orchestrator-agent handleMessage', () => {
 
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/workspace/test-project',
-        expect.any(Function)
+        expect.any(Function),
+        { globalSearchPath: expect.any(String) }
       );
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',

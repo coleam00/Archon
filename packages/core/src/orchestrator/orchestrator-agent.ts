@@ -1497,7 +1497,9 @@ async function handleWorkflowRunCommand(
 
     let discovery;
     try {
-      discovery = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+      discovery = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, {
+        globalSearchPath: getArchonHome(),
+      });
     } catch (error) {
       const err = error as Error;
       getLog().error({ err, cwd: workflowCwd }, 'workflow_discovery_failed');
