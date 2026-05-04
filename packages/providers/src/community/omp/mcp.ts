@@ -49,19 +49,24 @@ export async function resolveOmpMcp(
   const manager = new sdk.MCPManager(cwd, null);
   manager.setAuthStorage(authStorage);
   const resolvedPath = isAbsolute(mcpPath) ? mcpPath : resolve(cwd, mcpPath);
-  const result = await manager.connectServers(servers, buildSources(serverNames, resolvedPath));
+  try {
+    const result = await manager.connectServers(servers, buildSources(serverNames, resolvedPath));
 
-  const toolNames = result.tools
-    .map(getToolName)
-    .filter((name): name is string => name !== undefined);
-  const errors = [...result.errors].map(([serverName, error]) => ({ path: serverName, error }));
+    const toolNames = result.tools
+      .map(getToolName)
+      .filter((name): name is string => name !== undefined);
+    const errors = [...result.errors].map(([serverName, error]) => ({ path: serverName, error }));
 
-  return {
-    manager,
-    customTools: result.tools,
-    toolNames: [...new Set(toolNames)],
-    serverNames,
-    missingVars,
-    errors,
-  };
+    return {
+      manager,
+      customTools: result.tools,
+      toolNames: [...new Set(toolNames)],
+      serverNames,
+      missingVars,
+      errors,
+    };
+  } catch (error) {
+    await manager.disconnectAll().catch(() => undefined);
+    throw error;
+  }
 }

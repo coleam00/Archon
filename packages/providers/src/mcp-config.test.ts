@@ -144,4 +144,22 @@ describe('loadMcpConfig', () => {
       'MCP server config must be a JSON object: github in bad-server.json'
     );
   });
+
+  test('throws on non-object env or headers entries', async () => {
+    await writeFile(
+      join(testDir, 'bad-env.json'),
+      JSON.stringify({ github: { command: 'npx', env: ['bad'] } })
+    );
+    await writeFile(
+      join(testDir, 'bad-headers.json'),
+      JSON.stringify({ api: { type: 'http', url: 'https://example.com', headers: ['bad'] } })
+    );
+
+    await expect(loadMcpConfig('bad-env.json', testDir)).rejects.toThrow(
+      'MCP server env must be a JSON object: github in bad-env.json'
+    );
+    await expect(loadMcpConfig('bad-headers.json', testDir)).rejects.toThrow(
+      'MCP server headers must be a JSON object: api in bad-headers.json'
+    );
+  });
 });

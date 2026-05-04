@@ -65,7 +65,7 @@ SDK loads skill content into agent context at startup
 Agent executes with full skill knowledge available
 ```
 
-For Claude nodes, the `Skill` tool is automatically added to `allowedTools` so the
+For Claude nodes, the `Skill` tool is automatically added to `allowed_tools` so the
 agent can invoke skills. You don't need to add it manually.
 
 ## Installing Skills

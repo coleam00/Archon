@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 
-import { buildResultChunk, mapOmpEvent, tryParseStructuredOutput } from './event-bridge';
+import {
+  bridgeSession,
+  buildResultChunk,
+  mapOmpEvent,
+  tryParseStructuredOutput,
+} from './event-bridge';
+import type { OmpSession } from './sdk-loader';
 
 describe('mapOmpEvent', () => {
   test('maps text and thinking deltas', () => {
@@ -115,5 +121,85 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput('{"ok":true}')).toEqual({ ok: true });
     expect(tryParseStructuredOutput('```json\n{"ok":true}\n```')).toEqual({ ok: true });
     expect(tryParseStructuredOutput('done\n{"ok":true}')).toEqual({ ok: true });
+  });
+});
+
+describe('bridgeSession', () => {
+  test('waits for terminal result after prompt resolves', async () => {
+    let listener: ((event: unknown) => void) | undefined;
+    let releaseAgentEnd: (() => void) | undefined;
+    const agentEndReleased = new Promise<void>(resolve => {
+      releaseAgentEnd = resolve;
+    });
+    const session: OmpSession = {
+      sessionId: 'sess-late',
+      subscribe(fn) {
+        listener = fn;
+        return () => {
+          listener = undefined;
+        };
+      },
+      async prompt() {
+        listener?.({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: '{"ok":true}' },
+        });
+        queueMicrotask(() => {
+          releaseAgentEnd?.();
+          listener?.({
+            type: 'agent_end',
+            messages: [
+              { role: 'assistant', usage: { input: 1, output: 1 }, stopReason: 'end_turn' },
+            ],
+          });
+        });
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        return undefined;
+      },
+    };
+
+    const chunks: unknown[] = [];
+    for await (const chunk of bridgeSession(session, 'hi', undefined, { type: 'object' })) {
+      chunks.push(chunk);
+    }
+    await agentEndReleased;
+
+    expect(chunks.at(-1)).toEqual({
+      type: 'result',
+      tokens: { input: 1, output: 1 },
+      stopReason: 'end_turn',
+      sessionId: 'sess-late',
+      structuredOutput: { ok: true },
+    });
+  });
+
+  test('emits an error result when prompt resolves without a terminal event', async () => {
+    const session: OmpSession = {
+      subscribe() {
+        return () => undefined;
+      },
+      async prompt() {
+        return undefined;
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        return undefined;
+      },
+    };
+
+    const chunks: unknown[] = [];
+    for await (const chunk of bridgeSession(session, 'hi')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' },
+    ]);
   });
 });

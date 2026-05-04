@@ -26,6 +26,7 @@ interface FakeSdkOptions {
   onPrompt?: () => void | Promise<void>;
   mcpTools?: unknown[];
   mcpErrors?: Map<string, string>;
+  mcpConnectError?: Error;
   onConnectMcp?: (args: {
     configs: Record<string, unknown>;
     sources: Record<string, OmpMcpSourceMeta>;
@@ -118,6 +119,7 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
         sources: Record<string, OmpMcpSourceMeta>
       ) {
         options.onConnectMcp?.({ configs, sources, manager: this });
+        if (options.mcpConnectError) throw options.mcpConnectError;
         return {
           tools: options.mcpTools ?? [],
           errors: options.mcpErrors ?? new Map<string, string>(),
@@ -286,6 +288,49 @@ describe('OmpProvider', () => {
     }
   });
 
+  test('uses assistant config env for runtime auth override', async () => {
+    let runtimeOverride: [string, string] | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSetRuntimeApiKey(providerName, apiKey) {
+          runtimeOverride = [providerName, apiKey];
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { env: { ANTHROPIC_API_KEY: 'config-key' } },
+    });
+
+    expect(runtimeOverride).toEqual(['anthropic', 'config-key']);
+  });
+
+  test('prefers shell auth env over assistant config env', async () => {
+    const originalAnthropic = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'shell-key';
+    let runtimeOverride: [string, string] | undefined;
+
+    try {
+      const provider = new OmpProvider(async () =>
+        makeSdk({
+          onSetRuntimeApiKey(providerName, apiKey) {
+            runtimeOverride = [providerName, apiKey];
+          },
+        })
+      );
+
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        assistantConfig: { env: { ANTHROPIC_API_KEY: 'config-key' } },
+      });
+
+      expect(runtimeOverride).toEqual(['anthropic', 'shell-key']);
+    } finally {
+      if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalAnthropic;
+    }
+  });
   test('does not apply config env when model validation fails', async () => {
     const originalNew = process.env.OMP_PROVIDER_TEST_INVALID_MODEL;
     delete process.env.OMP_PROVIDER_TEST_INVALID_MODEL;
@@ -688,6 +733,35 @@ describe('OmpProvider', () => {
     }
   });
 
+  test('disconnects workflow MCP manager when MCP bootstrap fails', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    let disconnectCount = 0;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        mcpConnectError: new Error('bootstrap failed'),
+        onDisconnectMcp() {
+          disconnectCount += 1;
+        },
+      })
+    );
+
+    try {
+      await expect(
+        collectChunks(
+          provider,
+          {
+            model: 'anthropic/claude-sonnet-4-5',
+            nodeConfig: { mcp: 'mcp.json' },
+          },
+          temp.dir
+        )
+      ).rejects.toThrow('bootstrap failed');
+      expect(disconnectCount).toBe(1);
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
   test('reports per-server MCP connection failures with executor-compatible prefix', async () => {
     const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
     const provider = new OmpProvider(async () =>
@@ -794,8 +868,11 @@ describe('OmpProvider', () => {
 
 describe('augmentPromptForJsonSchema', () => {
   test('adds JSON-only instruction and schema', () => {
-    const result = augmentPromptForJsonSchema('answer', { type: 'object' });
-    expect(result).toContain('Respond with ONLY a JSON object');
-    expect(result).toContain('"type": "object"');
+    const result = augmentPromptForJsonSchema('answer', {
+      type: 'array',
+      items: { type: 'string' },
+    });
+    expect(result).toContain('Respond with ONLY valid JSON matching the schema below');
+    expect(result).toContain('"type": "array"');
   });
 });

@@ -167,7 +167,7 @@ A single config file can define multiple servers:
 
 ## Automatic Tool Activation
 
-When a Claude node loads MCP servers, tool wildcards are automatically added to `allowedTools`.
+When a Claude node loads MCP servers, tool wildcards are automatically added to `allowed_tools`.
 For servers named `github` and `postgres`, the node gets:
 
 - `mcp__github__*`

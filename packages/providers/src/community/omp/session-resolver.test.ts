@@ -60,4 +60,79 @@ describe('resolveOmpSession', () => {
       resumeFailed: false,
     });
   });
+
+  test('falls back to fresh session when session listing throws', async () => {
+    const sdk: Pick<OmpCodingAgentSdk, 'SessionManager'> = {
+      SessionManager: {
+        getDefaultSessionDir() {
+          return '/tmp/omp-sessions';
+        },
+        create(cwd: string, sessionDir?: string) {
+          return { kind: 'create', cwd, sessionDir };
+        },
+        async list() {
+          const error = new Error('ENOENT') as Error & { code?: string };
+          error.code = 'ENOENT';
+          throw error;
+        },
+        async open() {
+          throw new Error('should not open');
+        },
+      },
+    };
+
+    await expect(resolveOmpSession(sdk, '/repo', 'abc')).resolves.toEqual({
+      sessionManager: { kind: 'create', cwd: '/repo', sessionDir: undefined },
+      resumeFailed: true,
+    });
+  });
+
+  test('throws when opening a matching session fails unexpectedly', async () => {
+    const sdk: Pick<OmpCodingAgentSdk, 'SessionManager'> = {
+      SessionManager: {
+        getDefaultSessionDir() {
+          return '/tmp/omp-sessions';
+        },
+        create(cwd: string, sessionDir?: string) {
+          return { kind: 'create', cwd, sessionDir };
+        },
+        async list() {
+          return [{ id: 'abc', path: '/s/abc.jsonl' }];
+        },
+        async open() {
+          throw new Error('open failed');
+        },
+      },
+    };
+
+    await expect(resolveOmpSession(sdk, '/repo', 'abc')).rejects.toThrow(
+      "Oh My Pi session resume failed for 'abc': open failed"
+    );
+  });
+
+  test('falls back to fresh session when opening a matching session is missing', async () => {
+    const sdk: Pick<OmpCodingAgentSdk, 'SessionManager'> = {
+      SessionManager: {
+        getDefaultSessionDir() {
+          return '/tmp/omp-sessions';
+        },
+        create(cwd: string, sessionDir?: string) {
+          return { kind: 'create', cwd, sessionDir };
+        },
+        async list() {
+          return [{ id: 'abc', path: '/s/abc.jsonl' }];
+        },
+        async open() {
+          const error = new Error('ENOENT') as Error & { code?: string };
+          error.code = 'ENOENT';
+          throw error;
+        },
+      },
+    };
+
+    await expect(resolveOmpSession(sdk, '/repo', 'abc')).resolves.toEqual({
+      sessionManager: { kind: 'create', cwd: '/repo', sessionDir: undefined },
+      resumeFailed: true,
+    });
+  });
 });

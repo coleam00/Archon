@@ -42,6 +42,13 @@ describe('resolveOmpToolNames', () => {
       unknownTools: [],
     });
   });
+
+  test('respects explicit empty assistant toolNames list', () => {
+    expect(resolveOmpToolNames(undefined, { toolNames: [] })).toEqual({
+      toolNames: [],
+      unknownTools: [],
+    });
+  });
 });
 
 describe('buildOmpSettingsOverrides', () => {

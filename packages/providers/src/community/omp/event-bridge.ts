@@ -253,6 +253,10 @@ function attachResultMetadata(
   return terminal;
 }
 
+function missingTerminalResultChunk(): ResultChunk {
+  return { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' };
+}
+
 export async function* bridgeSession(
   session: OmpSession,
   prompt: string,
@@ -263,6 +267,14 @@ export async function* bridgeSession(
   const queue = new AsyncQueue<BridgeQueueItem>();
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
+  let promptSettled = false;
+  let sawTerminalResult = false;
+
+  const maybeFinish = (): void => {
+    if (promptSettled && sawTerminalResult) {
+      queue.push({ kind: 'done' });
+    }
+  };
 
   uiBridge?.setEmitter(chunk => {
     queue.push({ kind: 'chunk', chunk });
@@ -272,7 +284,9 @@ export async function* bridgeSession(
     try {
       for (const chunk of mapOmpEvent(event as { type?: string } & Record<string, unknown>)) {
         if (wantsStructured && chunk.type === 'assistant') assistantBuffer += chunk.content;
+        if (chunk.type === 'result') sawTerminalResult = true;
         queue.push({ kind: 'chunk', chunk });
+        if (chunk.type === 'result') maybeFinish();
       }
     } catch (err) {
       queue.push({ kind: 'error', error: err as Error });
@@ -291,7 +305,20 @@ export async function* bridgeSession(
 
   const promptPromise = session.prompt(prompt).then(
     () => {
-      queue.push({ kind: 'done' });
+      promptSettled = true;
+      if (sawTerminalResult) {
+        maybeFinish();
+        return;
+      }
+      queueMicrotask(() => {
+        if (sawTerminalResult) {
+          maybeFinish();
+          return;
+        }
+        sawTerminalResult = true;
+        queue.push({ kind: 'chunk', chunk: missingTerminalResultChunk() });
+        maybeFinish();
+      });
     },
     (err: unknown) => {
       queue.push({ kind: 'error', error: err as Error });
