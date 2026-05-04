@@ -5,6 +5,15 @@ description: |
   Capability: Full Claude Code agent with all tools available.
   Note: Will inform user when assist mode is used for tracking.
 
+# Run in the live checkout, not in a fresh sub-worktree. Without this, every
+# auto-routed `archon-assist` invocation creates an isolated sub-worktree
+# whose edits are unreachable from the calling chat (no commit step, no
+# branch propagation back). With `worktree.enabled: false`, edits land in
+# the parent's working tree where syncWorkspace's #1516 fast-forward
+# default keeps them safe across chat ticks. Closes #1546.
+worktree:
+  enabled: false
+
 nodes:
   - id: assist
     command: archon-assist
