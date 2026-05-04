@@ -240,8 +240,7 @@ export async function touchConversation(id: string): Promise<void> {
 /**
  * Update conversation title.
  *
- * Fire-and-forget safe — does not throw when the conversation does not exist.
- * The caller (title-generator) already wraps this in a try-catch.
+ * Throws ConversationNotFoundError when the conversation does not exist.
  */
 export async function updateConversationTitle(id: string, title: string): Promise<void> {
   const dialect = getDialect();
@@ -251,7 +250,8 @@ export async function updateConversationTitle(id: string, title: string): Promis
     [title, id]
   );
   if (result.rowCount === 0) {
-    log.warn({ conversationId: id }, 'update_conversation_title_not_found');
+    log.error({ conversationId: id }, 'update_conversation_title_not_found');
+    throw new ConversationNotFoundError(id);
   }
 }
 
