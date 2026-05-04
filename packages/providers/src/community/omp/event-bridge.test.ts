@@ -202,4 +202,68 @@ describe('bridgeSession', () => {
       { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' },
     ]);
   });
+  test('cleans up session state when subscribe throws during setup', async () => {
+    let disposed = false;
+    const emitterStates: Array<unknown> = [];
+    const session: OmpSession = {
+      subscribe() {
+        throw new Error('subscribe failed');
+      },
+      async prompt() {
+        return undefined;
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        disposed = true;
+      },
+    };
+    const uiBridge = {
+      setEmitter(fn: unknown) {
+        emitterStates.push(fn);
+      },
+    };
+
+    await expect(async () => {
+      for await (const _chunk of bridgeSession(session, 'hi', undefined, undefined, uiBridge)) {
+        // consume
+      }
+    }).toThrow('subscribe failed');
+
+    expect(disposed).toBe(true);
+    expect(emitterStates).toHaveLength(2);
+    expect(typeof emitterStates.at(0)).toBe('function');
+    expect(emitterStates.at(1)).toBeUndefined();
+  });
+
+  test('cleans up session state when prompt throws before returning a promise', async () => {
+    let disposed = false;
+    let unsubscribed = false;
+    const session: OmpSession = {
+      subscribe() {
+        return () => {
+          unsubscribed = true;
+        };
+      },
+      prompt(): Promise<unknown> {
+        throw new Error('prompt setup failed');
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        disposed = true;
+      },
+    };
+
+    await expect(async () => {
+      for await (const _chunk of bridgeSession(session, 'hi')) {
+        // consume
+      }
+    }).toThrow('prompt setup failed');
+
+    expect(unsubscribed).toBe(true);
+    expect(disposed).toBe(true);
+  });
 });

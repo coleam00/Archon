@@ -17,7 +17,13 @@ import type {
 import { OMP_CAPABILITIES } from './capabilities';
 import { parseOmpConfig } from './config';
 import { bridgeSession } from './event-bridge';
-import { resolveOmpMcp, type ResolvedOmpMcp } from './mcp';
+import {
+  combineCleanupError,
+  disconnectOmpMcpManager,
+  normalizeOmpError,
+  resolveOmpMcp,
+  type ResolvedOmpMcp,
+} from './mcp';
 import { parseOmpModelRef } from './model-ref';
 import {
   applyConfigEnv,
@@ -37,22 +43,74 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-let configEnvLock: Promise<void> = Promise.resolve();
+type ConfigEnvLeaseRelease = () => void;
+interface ConfigEnvWaiter {
+  exclusive: boolean;
+  resolve: (release: ConfigEnvLeaseRelease) => void;
+}
 
-async function acquireConfigEnvLock(): Promise<() => void> {
-  let release: (() => void) | undefined;
-  const previous = configEnvLock;
-  const current = new Promise<void>(resolve => {
-    release = resolve;
-  });
-  configEnvLock = previous.then(
-    () => current,
-    () => current
-  );
-  await previous.catch(() => undefined);
+let configEnvReaders = 0;
+let configEnvWriterActive = false;
+const configEnvWaiters: ConfigEnvWaiter[] = [];
+
+function createReaderRelease(): ConfigEnvLeaseRelease {
+  let released = false;
   return () => {
-    release?.();
+    if (released) return;
+    released = true;
+    configEnvReaders -= 1;
+    if (configEnvReaders === 0) flushConfigEnvWaiters();
   };
+}
+
+function createWriterRelease(): ConfigEnvLeaseRelease {
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    configEnvWriterActive = false;
+    flushConfigEnvWaiters();
+  };
+}
+
+function flushConfigEnvWaiters(): void {
+  if (configEnvWriterActive || configEnvReaders > 0 || configEnvWaiters.length === 0) return;
+
+  const next = configEnvWaiters[0];
+  if (next?.exclusive) {
+    configEnvWaiters.shift();
+    configEnvWriterActive = true;
+    next.resolve(createWriterRelease());
+    return;
+  }
+
+  while (configEnvWaiters[0] && !configEnvWaiters[0].exclusive) {
+    const waiter = configEnvWaiters.shift();
+    if (!waiter) break;
+    configEnvReaders += 1;
+    waiter.resolve(createReaderRelease());
+  }
+}
+
+async function acquireConfigEnvLease(exclusive: boolean): Promise<ConfigEnvLeaseRelease> {
+  if (exclusive) {
+    if (!configEnvWriterActive && configEnvReaders === 0 && configEnvWaiters.length === 0) {
+      configEnvWriterActive = true;
+      return createWriterRelease();
+    }
+  } else if (!configEnvWriterActive && configEnvWaiters.length === 0) {
+    configEnvReaders += 1;
+    return createReaderRelease();
+  }
+
+  return await new Promise(resolve => {
+    configEnvWaiters.push({ exclusive, resolve });
+    flushConfigEnvWaiters();
+  });
+}
+
+function hasConfigEnv(env: Record<string, string> | undefined): env is Record<string, string> {
+  return env !== undefined && Object.keys(env).length > 0;
 }
 
 export function augmentPromptForJsonSchema(
@@ -286,14 +344,20 @@ export class OmpProvider implements IAgentProvider {
     const interactive = ompConfig.interactive !== false;
     const extensionsDisabled = ompConfig.disableExtensionDiscovery === true;
     const uiBridge = interactive ? createArchonOmpUIBridge() : undefined;
-
-    const releaseConfigEnvLock = await acquireConfigEnvLock();
-    configEnvKeysApplied = applyConfigEnv(ompConfig.env);
-    if (configEnvKeysApplied.length > 0) {
-      getLog().debug({ keys: configEnvKeysApplied }, 'omp.config_env_applied');
+    // Env-free sessions may run together, but sessions that inject assistants.omp.env
+    // need exclusive access so other prompts never observe temporary process.env state.
+    const requiresExclusiveConfigEnvLease = hasConfigEnv(ompConfig.env);
+    const releaseConfigEnvLease = await acquireConfigEnvLease(requiresExclusiveConfigEnvLease);
+    if (requiresExclusiveConfigEnvLease) {
+      configEnvKeysApplied = applyConfigEnv(ompConfig.env);
+      if (configEnvKeysApplied.length > 0) {
+        getLog().debug({ keys: configEnvKeysApplied }, 'omp.config_env_applied');
+      }
     }
 
     let resolvedMcp: ResolvedOmpMcp | undefined;
+    let sendQueryError: unknown;
+    let disconnectError: Error | undefined;
     try {
       if (nodeConfig?.mcp) {
         resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp, authStorage);
@@ -412,17 +476,37 @@ export class OmpProvider implements IAgentProvider {
         getLog().error({ err, ompProvider: parsed.provider }, 'omp.prompt_failed');
         throw err;
       }
+    } catch (err) {
+      sendQueryError = err;
     } finally {
       if (resolvedMcp) {
-        try {
-          await resolvedMcp.manager.disconnectAll();
-        } catch (err) {
-          getLog().warn({ err, mcpPath: nodeConfig?.mcp }, 'omp.mcp_disconnect_failed');
+        disconnectError = await disconnectOmpMcpManager(
+          resolvedMcp.manager,
+          'Oh My Pi MCP teardown failed'
+        );
+        if (disconnectError) {
+          getLog().error(
+            { err: disconnectError, mcpPath: nodeConfig?.mcp },
+            'omp.mcp_disconnect_failed'
+          );
         }
       }
       restoreConfigEnv(configEnvKeysApplied);
-      releaseConfigEnvLock?.();
+      releaseConfigEnvLease();
     }
+
+    if (disconnectError) {
+      if (sendQueryError) {
+        throw combineCleanupError(
+          sendQueryError,
+          disconnectError,
+          'Oh My Pi request failed and MCP teardown also failed.'
+        );
+      }
+      throw disconnectError;
+    }
+
+    if (sendQueryError) throw normalizeOmpError(sendQueryError, 'Oh My Pi request failed.');
   }
 
   getType(): string {
