@@ -101,12 +101,14 @@ export async function getOrCreateConversation(
       [codebaseId]
     );
     if (codebase.rows[0]) {
-      assistantType = codebase.rows[0].ai_assistant_type;
+      // Treat NULL as unset so loadConfig() can supply the assistant.
+      const raw = codebase.rows[0].ai_assistant_type;
+      assistantType = raw != null ? raw : undefined;
     }
   }
 
   // Fall back to config.assistant (single source of truth: merged config)
-  if (assistantType === undefined) {
+  if (!assistantType) {
     const config = await loadConfig();
     assistantType = config.assistant;
   }
