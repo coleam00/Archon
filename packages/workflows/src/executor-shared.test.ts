@@ -18,6 +18,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+import type { IWorkflowPlatform } from './deps';
 import {
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -27,6 +28,8 @@ import {
   isInlineScript,
   formatSubprocessFailure,
   classifyError,
+  safeSendMessage,
+  type UnknownErrorTracker,
 } from './executor-shared';
 
 describe('substituteWorkflowVariables', () => {
@@ -590,5 +593,135 @@ describe('classifyError', () => {
 
   it('classifies unknown errors as UNKNOWN', () => {
     expect(classifyError(new Error('something completely unexpected happened'))).toBe('UNKNOWN');
+  });
+});
+
+describe('safeSendMessage', () => {
+  const makePlatform = (impl: () => Promise<void>) => ({
+    sendMessage: mock(impl),
+    getPlatformType: mock(() => 'test'),
+  });
+
+  it('returns true and resets tracker to 0 on success', async () => {
+    const platform = makePlatform(() => Promise.resolve());
+    const tracker: UnknownErrorTracker = { count: 5 };
+    const result = await safeSendMessage(
+      platform as unknown as IWorkflowPlatform,
+      'conv-1',
+      'hello',
+      undefined,
+      undefined,
+      tracker
+    );
+    expect(result).toBe(true);
+    expect(tracker.count).toBe(0);
+  });
+
+  it('returns false on TRANSIENT error without throwing', async () => {
+    const platform = makePlatform(() => Promise.reject(new Error('timeout connecting')));
+    const result = await safeSendMessage(
+      platform as unknown as IWorkflowPlatform,
+      'conv-1',
+      'hello'
+    );
+    expect(result).toBe(false);
+  });
+
+  it('rethrows FATAL errors', async () => {
+    const platform = makePlatform(() => Promise.reject(new Error('unauthorized')));
+    await expect(
+      safeSendMessage(platform as unknown as IWorkflowPlatform, 'conv-1', 'hello')
+    ).rejects.toThrow('Platform authentication/permission error: unauthorized');
+  });
+
+  it('increments UNKNOWN tracker and returns false below threshold', async () => {
+    const platform = makePlatform(() => Promise.reject(new Error('some unclassified glitch')));
+    const tracker: UnknownErrorTracker = { count: 0 };
+    const result = await safeSendMessage(
+      platform as unknown as IWorkflowPlatform,
+      'conv-1',
+      'hello',
+      undefined,
+      undefined,
+      tracker
+    );
+    expect(result).toBe(false);
+    expect(tracker.count).toBe(1);
+  });
+
+  it('throws after three consecutive UNKNOWN errors', async () => {
+    const platform = makePlatform(() => Promise.reject(new Error('some unclassified glitch')));
+    const tracker: UnknownErrorTracker = { count: 2 };
+    await expect(
+      safeSendMessage(
+        platform as unknown as IWorkflowPlatform,
+        'conv-1',
+        'hello',
+        undefined,
+        undefined,
+        tracker
+      )
+    ).rejects.toThrow('3 consecutive unrecognized errors');
+  });
+
+  it('TRANSIENT resets tracker so subsequent UNKNOWN does not trip threshold', async () => {
+    // Sequence: UNKNOWN (count→1), TRANSIENT (count→0), UNKNOWN (count→1) — no throw
+    const errors = [
+      new Error('some unclassified glitch'), // UNKNOWN
+      new Error('timeout'), // TRANSIENT
+      new Error('some unclassified glitch'), // UNKNOWN
+    ];
+    let callCount = 0;
+    const platform = {
+      sendMessage: mock(async () => {
+        throw errors[callCount++];
+      }),
+      getPlatformType: mock(() => 'test'),
+    };
+    const tracker: UnknownErrorTracker = { count: 0 };
+
+    await safeSendMessage(
+      platform as unknown as IWorkflowPlatform,
+      'conv-1',
+      'msg',
+      undefined,
+      undefined,
+      tracker
+    );
+    expect(tracker.count).toBe(1);
+
+    await safeSendMessage(
+      platform as unknown as IWorkflowPlatform,
+      'conv-1',
+      'msg',
+      undefined,
+      undefined,
+      tracker
+    );
+    expect(tracker.count).toBe(0);
+
+    const result = await safeSendMessage(
+      platform as unknown as IWorkflowPlatform,
+      'conv-1',
+      'msg',
+      undefined,
+      undefined,
+      tracker
+    );
+    expect(result).toBe(false);
+    expect(tracker.count).toBe(1);
+  });
+
+  it('works correctly without unknownErrorTracker (DAG executor path)', async () => {
+    const platform = makePlatform(() => Promise.reject(new Error('some unclassified glitch')));
+    // No tracker passed — UNKNOWN errors never throw regardless of call count
+    for (let i = 0; i < 5; i++) {
+      const result = await safeSendMessage(
+        platform as unknown as IWorkflowPlatform,
+        'conv-1',
+        'hello'
+      );
+      expect(result).toBe(false);
+    }
   });
 });
