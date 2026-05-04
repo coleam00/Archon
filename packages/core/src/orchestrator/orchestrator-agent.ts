@@ -27,7 +27,7 @@ import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
-import { syncWorkspace, toRepoPath } from '@archon/git';
+import { syncWorkspace, getCurrentBranch, toRepoPath, toBranchName } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow } from '@archon/workflows/router';
@@ -42,6 +42,7 @@ import { loadConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
+import { reportUnpushedWorkInSource } from './post-message-reminder';
 import { IsolationBlockedError } from '@archon/isolation';
 import {
   buildOrchestratorPrompt,
@@ -426,22 +427,20 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
     try {
       const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
       if (codebase) {
-        // Sync canonical source with remote before the AI reads codebase state.
-        // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
-        // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
+        // Refresh the canonical source clone from origin before the AI reads
+        // codebase state. Default mode is 'fast-forward' — never destructive:
+        // local commits, uncommitted modifications, and non-default branches
+        // are preserved (state is reported via SoftSyncResult.state for the UI).
         // Non-fatal: if fetch fails (network, no remote), proceed with local state.
         try {
-          const isManagedClone = codebase.default_cwd
-            .replace(/\\/g, '/')
-            .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
-          syncResult = await syncWorkspace(toRepoPath(codebase.default_cwd), undefined, {
-            resetAfterFetch: isManagedClone,
-          });
+          syncResult = await syncWorkspace(
+            toRepoPath(codebase.default_cwd),
+            codebase.default_branch ? toBranchName(codebase.default_branch) : undefined
+          );
           getLog().debug(
             {
               codebaseId: codebase.id,
               repoPath: codebase.default_cwd,
-              isManagedClone,
               ...syncResult,
             },
             'workspace.sync_completed'
@@ -759,18 +758,28 @@ export async function handleMessage(
       );
     }
 
-    // Emit workspace sync status only when something noteworthy happened
-    // (HEAD moved or sync failed). Skip the "up to date" case to avoid noise.
+    // Emit workspace sync status only when something noteworthy happened.
+    // Silent cases (in_sync, ahead, dirty) match the previous "no message if
+    // not updated" behaviour. The diverged case surfaces a state where local
+    // work and remote both moved \u2014 user must decide how to reconcile.
     if (syncError && platform.sendStructuredEvent) {
       await platform.sendStructuredEvent(conversationId, {
         type: 'system',
         content: 'Sync failed \u2014 using local state',
       });
-    } else if (syncResult?.updated && platform.sendStructuredEvent) {
-      await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
-        content: `Synced with origin/${syncResult.branch} \u2014 updated ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
-      });
+    } else if (syncResult && platform.sendStructuredEvent) {
+      if (syncResult.state === 'behind' && syncResult.updated) {
+        await platform.sendStructuredEvent(conversationId, {
+          type: 'system',
+          content: `Fast-forwarded to origin/${syncResult.branch} \u2014 ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
+        });
+      } else if (syncResult.state === 'diverged') {
+        await platform.sendStructuredEvent(conversationId, {
+          type: 'system',
+          content: `Local source/ has diverged from origin/${syncResult.branch} \u2014 manual merge or rebase needed`,
+        });
+      }
+      // in_sync, ahead, dirty: silent
     }
 
     // Build workflow context for follow-up awareness
@@ -902,6 +911,27 @@ export async function handleMessage(
         issueContext,
         requestOptions
       );
+    }
+
+    // Post-message advisory: warn if the agent (or anyone) left unpushed work
+    // in source/. Non-destructive sync default preserves such work, but it is
+    // still local-only and at risk if a /worktree create or external git op
+    // runs next. Only meaningful when a codebase is attached.
+    //
+    // dispatchOrchestratorWorkflow may have just persisted codebase_id (auto-
+    // attach on first turn), so the in-memory `conversation` can be stale. Re-
+    // read by platform id when codebase_id isn't set in our snapshot.
+    const reminderCodebaseId =
+      conversation.codebase_id ??
+      (await db
+        .getConversationByPlatformId(platform.getPlatformType(), conversationId)
+        .then(c => c?.codebase_id ?? null)
+        .catch(() => null));
+    if (reminderCodebaseId) {
+      const attachedCodebase = codebases.find(c => c.id === reminderCodebaseId);
+      if (attachedCodebase) {
+        await reportUnpushedWorkInSource(platform, conversationId, attachedCodebase);
+      }
     }
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
@@ -1360,9 +1390,23 @@ async function handleRegisterProject(
 
   // Use config default provider instead of hardcoding 'claude'
   const config = await loadConfig();
+  let detectedBranch: string | undefined;
+  try {
+    const branch = await getCurrentBranch(toRepoPath(projectPath));
+    // Detached HEAD returns the literal string "HEAD" (not an exception) —
+    // treat as "not detected" so the codebase row gets NULL and syncWorkspace
+    // auto-detects the default branch on first sync. Mirrors the same guard
+    // already used in clone.ts:cloneRepository.
+    if (branch && branch !== 'HEAD') {
+      detectedBranch = branch;
+    }
+  } catch {
+    // non-git directory — leave undefined so DB stores NULL (auto-detect at sync)
+  }
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: projectPath,
+    default_branch: detectedBranch,
     ai_assistant_type: config.assistant,
   });
 

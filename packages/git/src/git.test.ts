@@ -1339,9 +1339,12 @@ branch refs/heads/feature/auth
 
       const result = await git.syncWorkspace('/workspace/repo', 'main');
 
+      // Default mode is 'fast-forward'. With empty SHAs the function falls
+      // through ancestor checks (mock always succeeds) → state='diverged' → noop.
       expect(result).toEqual({
         branch: 'main',
         synced: true,
+        state: 'diverged',
         previousHead: '',
         newHead: '',
         updated: false,
@@ -1354,10 +1357,10 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('hard-resets working tree to origin after fetch', async () => {
+    test("hard-resets working tree to origin after fetch (mode: 'reset')", async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
-      await git.syncWorkspace('/workspace/repo', 'main');
+      await git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset' });
 
       const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[];
@@ -1368,7 +1371,7 @@ branch refs/heads/feature/auth
       expect(resetCalls[0][1]).toEqual(['-C', '/workspace/repo', 'reset', '--hard', 'origin/main']);
     });
 
-    test('throws if reset fails after successful fetch', async () => {
+    test("throws if reset fails after successful fetch (mode: 'reset')", async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('reset')) {
           throw new Error('fatal: Could not reset index file');
@@ -1376,7 +1379,7 @@ branch refs/heads/feature/auth
         return { stdout: '', stderr: '' };
       });
 
-      await expect(git.syncWorkspace('/workspace/repo', 'main')).rejects.toThrow(
+      await expect(git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset' })).rejects.toThrow(
         'Reset to origin/main failed'
       );
     });
@@ -1428,6 +1431,7 @@ branch refs/heads/feature/auth
       expect(result).toEqual({
         branch: 'develop',
         synced: true,
+        state: 'diverged',
         previousHead: '',
         newHead: '',
         updated: false,
@@ -1447,7 +1451,7 @@ branch refs/heads/feature/auth
         "Configured base branch 'does-not-exist' not found on remote"
       );
       await expect(git.syncWorkspace('/workspace/repo', 'does-not-exist')).rejects.toThrow(
-        'update worktree.baseBranch'
+        'update default_branch on the codebase'
       );
     });
 
@@ -1463,19 +1467,24 @@ branch refs/heads/feature/auth
       await expect(git.syncWorkspace('/workspace/repo')).rejects.toThrow(
         'Sync fetch from origin/main failed'
       );
-      await expect(git.syncWorkspace('/workspace/repo')).rejects.not.toThrow('worktree.baseBranch');
+      await expect(git.syncWorkspace('/workspace/repo')).rejects.not.toThrow(
+        'update default_branch on the codebase'
+      );
     });
 
-    test('skips reset when resetAfterFetch is false (fetch-only mode)', async () => {
+    test("default mode 'fast-forward' never runs reset", async () => {
+      // All git invocations return empty stdout (success). With empty SHAs the
+      // function falls through to the ancestor check; mocked execFile always
+      // succeeds, so both ancestor probes report true → state = 'diverged' →
+      // no-op (neither reset nor merge). The fetch must still happen.
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
-      const result = await git.syncWorkspace('/workspace/repo', 'main', {
-        resetAfterFetch: false,
-      });
+      const result = await git.syncWorkspace('/workspace/repo', 'main');
 
       expect(result).toEqual({
         branch: 'main',
         synced: true,
+        state: 'diverged',
         previousHead: '',
         newHead: '',
         updated: false,
@@ -1488,12 +1497,24 @@ branch refs/heads/feature/auth
       });
       expect(fetchCalls).toHaveLength(1);
 
-      // Reset should NOT have been called
+      // Reset must NOT have been called — fast-forward is non-destructive
       const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
         const args = call[1] as string[];
         return args.includes('reset');
       });
       expect(resetCalls).toHaveLength(0);
+    });
+
+    test("explicit mode: 'reset' runs git reset --hard", async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await git.syncWorkspace('/workspace/repo', 'main', { mode: 'reset' });
+
+      const resetCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('reset') && args.includes('--hard');
+      });
+      expect(resetCalls).toHaveLength(1);
     });
   });
 

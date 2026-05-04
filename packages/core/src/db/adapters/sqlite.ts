@@ -215,6 +215,20 @@ export class SqliteAdapter implements IDatabase {
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_session_columns_failed');
     }
+
+    // Codebases columns
+    try {
+      const codebaseCols = this.db.prepare("PRAGMA table_info('remote_agent_codebases')").all() as {
+        name: string;
+      }[];
+      const codebaseColNames = new Set(codebaseCols.map(c => c.name));
+
+      if (!codebaseColNames.has('default_branch')) {
+        this.db.run('ALTER TABLE remote_agent_codebases ADD COLUMN default_branch TEXT');
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
+    }
   }
 
   /**
@@ -234,7 +248,7 @@ export class SqliteAdapter implements IDatabase {
         name TEXT NOT NULL,
         repository_url TEXT,
         default_cwd TEXT NOT NULL,
-        default_branch TEXT DEFAULT 'main',
+        default_branch TEXT,
         ai_assistant_type TEXT DEFAULT 'claude',
         commands TEXT DEFAULT '{}',
         created_at TEXT DEFAULT (datetime('now')),
