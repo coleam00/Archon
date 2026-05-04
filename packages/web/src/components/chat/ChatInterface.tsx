@@ -446,17 +446,41 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
           .then((rows: MessageResponse[]) => {
             if (rows.length === 0) return;
             const hydrated = rows.map(mapMessageRow);
-            // Preserve client-only system messages (e.g., sync status) when rehydrating
+            // Merge by id rather than replacing the whole list. Anything in the
+            // current React state that the DB snapshot doesn't contain is kept
+            // verbatim — that includes:
+            //   - client-only system messages (sync banners, errors)
+            //   - in-flight tool-call/streaming messages with synthetic
+            //     'msg-{timestamp}' IDs that never collide with DB IDs
+            //   - any messages newer than the server response (race window)
+            // The previous implementation replaced wholesale and only carried
+            // system messages forward, which silently dropped the live state of
+            // long conversations whose tail wasn't in the server's window.
             setMessages(prev => {
-              const systemMessages = prev.filter(m => m.role === 'system');
-              if (systemMessages.length === 0) return hydrated;
-              // Interleave system messages at their original positions by timestamp
-              const merged = [...hydrated];
-              for (const sys of systemMessages) {
-                const insertIdx = merged.findIndex(m => m.timestamp > sys.timestamp);
-                if (insertIdx === -1) merged.push(sys);
-                else merged.splice(insertIdx, 0, sys);
-              }
+              const hydratedIds = new Set(hydrated.map(m => m.id));
+              // Without a narrower filter, every prev message that lacks a
+              // hydrated counterpart is preserved — including stale
+              // `thinking-*` placeholders and optimistic `msg-*` entries that
+              // already have canonical hydrated rows under different ids,
+              // producing duplicate bubbles and stuck `isStreaming` flags.
+              // Keep only entries that carry SSE-only state (system messages,
+              // actively-streaming content, tool-calls) or arrived after the
+              // server's snapshot window (race-window protection).
+              const newestHydratedTs = hydrated.reduce(
+                (max, m) => Math.max(max, m.timestamp),
+                Number.NEGATIVE_INFINITY
+              );
+              const clientOnly = prev.filter(m => {
+                if (hydratedIds.has(m.id)) return false;
+                const preserveSseOnly =
+                  m.role === 'system' ||
+                  (m.isStreaming && m.content.length > 0) ||
+                  (m.toolCalls?.length ?? 0) > 0;
+                const newerThanSnapshot = m.timestamp > newestHydratedTs;
+                return preserveSseOnly || newerThanSnapshot;
+              });
+              const merged = [...hydrated, ...clientOnly];
+              merged.sort((a, b) => a.timestamp - b.timestamp);
               return merged;
             });
           })
