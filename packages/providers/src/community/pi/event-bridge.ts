@@ -92,7 +92,8 @@ export function serializeToolResult(result: unknown): string {
   if (typeof result === 'string') return result;
   try {
     return JSON.stringify(result);
-  } catch {
+  } catch (err) {
+    getLog().warn({ err }, 'pi.event-bridge.tool_result_serialize_failed');
     return String(result);
   }
 }

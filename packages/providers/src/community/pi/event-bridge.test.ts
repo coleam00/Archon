@@ -189,13 +189,22 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('does not populate errors when errorMessage is absent', () => {
-    const chunk = buildResultChunk([
+  test('does not populate errors when errorMessage is absent or empty', () => {
+    // undefined errorMessage
+    const chunk1 = buildResultChunk([
       { role: 'assistant', usage, stopReason: 'error', content: [] },
     ]);
-    if (chunk.type === 'result') {
-      expect(chunk.isError).toBe(true);
-      expect(chunk.errors).toBeUndefined();
+    if (chunk1.type === 'result') {
+      expect(chunk1.isError).toBe(true);
+      expect(chunk1.errors).toBeUndefined();
+    }
+    // empty string — also falsy, also excluded from errors[]
+    const chunk2 = buildResultChunk([
+      { role: 'assistant', usage, stopReason: 'error', errorMessage: '', content: [] },
+    ]);
+    if (chunk2.type === 'result') {
+      expect(chunk2.isError).toBe(true);
+      expect(chunk2.errors).toBeUndefined();
     }
   });
 

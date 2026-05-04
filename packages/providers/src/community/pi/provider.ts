@@ -508,9 +508,13 @@ export class PiProvider implements IAgentProvider {
       getLog().info({ maxConcurrent }, 'pi.semaphore_initialized');
     }
 
-    if (piSemaphore !== undefined) {
+    // Snapshot before the first await — if a concurrent call initializes the
+    // module-level piSemaphore after this point, sem stays undefined and the
+    // finally block correctly skips release (we never acquired).
+    const sem = piSemaphore;
+    if (sem !== undefined) {
       getLog().debug('pi.semaphore_acquiring');
-      await piSemaphore.acquire();
+      await sem.acquire();
       getLog().debug('pi.semaphore_acquired');
     }
     try {
@@ -526,7 +530,7 @@ export class PiProvider implements IAgentProvider {
       getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
       throw err;
     } finally {
-      piSemaphore?.release();
+      sem?.release();
     }
   }
 

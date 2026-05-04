@@ -173,4 +173,18 @@ describe('parsePiConfig', () => {
     expect(parsePiConfig({ maxConcurrent: 'four' })).toEqual({});
     expect(parsePiConfig({ maxConcurrent: null })).toEqual({});
   });
+
+  test('combines maxConcurrent with model and other fields', () => {
+    expect(
+      parsePiConfig({
+        model: 'google/gemini-2.5-pro',
+        maxConcurrent: 4,
+        enableExtensions: true,
+      })
+    ).toEqual({
+      model: 'google/gemini-2.5-pro',
+      maxConcurrent: 4,
+      enableExtensions: true,
+    });
+  });
 });
