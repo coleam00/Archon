@@ -136,6 +136,8 @@ export interface WorktreeDestroyOptions extends DestroyOptions {
   canonicalRepoPath?: RepoPath;
   /** Delete the remote branch (best-effort, e.g., after PR merge) */
   deleteRemoteBranch?: boolean;
+  /** Git remote name for remote branch deletion (default: 'origin') */
+  remote?: string;
 }
 
 /**
@@ -261,6 +263,23 @@ export interface WorktreeCreateConfig {
    * @example '.worktrees'
    */
   path?: string;
+  /**
+   * Git remote name to use for fetch/push operations.
+   *
+   * Most repos use the standard 'origin' remote, but some use custom-named
+   * remotes (e.g. 'jan', 'feb', 'mar' for release-based remotes). When set,
+   * all git operations (fetch, push, branch tracking) use this remote
+   * instead of 'origin'.
+   *
+   * When omitted, auto-detected via `getDefaultRemote()`:
+   *   1. 'origin' if it exists
+   *   2. The sole remote if only one is configured
+   *   3. Fails with actionable error if ambiguous
+   *
+   * Sourced from `.archon/config.yaml > worktree.remote` in the repo.
+   * @example 'upstream'
+   */
+  remote?: string;
 }
 
 export type RepoConfigLoader = (repoPath: string) => Promise<WorktreeCreateConfig | null>;

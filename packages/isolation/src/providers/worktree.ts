@@ -13,6 +13,7 @@ import {
   execFileAsync,
   findWorktreeByBranch,
   getCanonicalRepoPath,
+  getDefaultRemote,
   getWorktreeBase,
   listWorktrees,
   mkdirAsync,
@@ -287,12 +288,12 @@ export class WorktreeProvider implements IIsolationProvider {
     if (options?.branchName) {
       result.branchDeleted = await this.deleteBranchTracked(repoPath, options.branchName, result);
 
-      // Delete remote branch if requested (e.g., after PR merge)
       if (options.deleteRemoteBranch) {
         result.remoteBranchDeleted = await this.deleteRemoteBranchTracked(
           repoPath,
           options.branchName,
-          result
+          result,
+          options.remote
         );
       }
     }
@@ -381,10 +382,11 @@ export class WorktreeProvider implements IIsolationProvider {
   private async deleteRemoteBranchTracked(
     repoPath: string,
     branchName: string,
-    result: DestroyResult
+    result: DestroyResult,
+    remote = 'origin'
   ): Promise<boolean> {
     try {
-      await execFileAsync('git', ['-C', repoPath, 'push', 'origin', '--delete', branchName], {
+      await execFileAsync('git', ['-C', repoPath, 'push', remote, '--delete', branchName], {
         timeout: GIT_OPERATION_TIMEOUT_MS,
       });
       getLog().debug({ repoPath, branchName }, 'remote_branch_deleted');
@@ -704,24 +706,27 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<{ warnings: string[] }> {
     const repoPath = request.canonicalRepoPath;
 
+    // Resolve git remote name: explicit config > auto-detect > 'origin' fallback
+    const remote = await this.resolveRemote(repoPath, worktreeConfig?.remote);
+
     // Sync uses only the configured base branch (or auto-detects via getDefaultBranch).
     // request.fromBranch is the start-point for worktree creation, not a sync target.
-    const baseBranch = await this.syncWorkspaceBeforeCreate(repoPath, worktreeConfig?.baseBranch);
+    const baseBranch = await this.syncWorkspaceBeforeCreate(
+      repoPath,
+      worktreeConfig?.baseBranch,
+      remote
+    );
 
     const override: WorktreeBaseOverride = {
       repoLocal: resolveRepoLocalOverride(worktreeConfig?.path, repoPath),
     };
     const { base: worktreeBase } = getWorktreeBase(repoPath, request.codebaseName, override);
-    // In both layouts the base already carries repo context — creating it
-    // recursively is enough.
     await mkdirAsync(worktreeBase, { recursive: true });
 
     if (isPRIsolationRequest(request)) {
-      // For PRs: fetch and checkout the PR branch (actual or synthetic)
-      await this.createFromPR(request, worktreePath);
+      await this.createFromPR(request, worktreePath, remote);
     } else {
-      // For issues, tasks, threads: create new branch
-      await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch);
+      await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch, remote);
     }
 
     // Initialize submodules unless explicitly opted out. The check is free
@@ -749,49 +754,74 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Sync workspace with remote before creating a new worktree
-   * Ensures new work starts from the latest code on the base branch.
+   * Resolve the git remote name to use for all fetch/push operations.
    *
-   * Branch resolution:
-   * - If configuredBaseBranch is provided: Uses that branch. Fails with actionable
-   *   error if the branch doesn't exist - no silent fallback to default.
-   * - If configuredBaseBranch is omitted: Auto-detects the default branch via git.
+   * Resolution order:
+   *   1. Explicit config (worktree.remote in .archon/config.yaml)
+   *   2. Auto-detect via getDefaultRemote() ('origin' if exists, sole remote, or null)
+   *   3. Fail with actionable error if ambiguous
+   */
+  private async resolveRemote(repoPath: RepoPath, configuredRemote?: string): Promise<string> {
+    if (configuredRemote) {
+      getLog().debug({ repoPath, remote: configuredRemote }, 'worktree.remote_from_config');
+      return configuredRemote;
+    }
+
+    const detected = await getDefaultRemote(repoPath);
+    if (detected) {
+      if (detected !== 'origin') {
+        getLog().info({ repoPath, remote: detected }, 'worktree.remote_auto_detected');
+      }
+      return detected;
+    }
+
+    // List remotes for actionable error message
+    let remoteList = '<unknown>';
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote'], { timeout: 10000 });
+      remoteList = stdout.trim().split('\n').join(', ');
+    } catch {
+      // Best-effort for error message
+    }
+
+    throw new Error(
+      `Cannot determine git remote for ${repoPath}: no 'origin' remote found and ` +
+        `multiple remotes exist (${remoteList}). ` +
+        'Set worktree.remote in .archon/config.yaml to specify which remote to use.'
+    );
+  }
+
+  /**
+   * Sync workspace with remote before creating a new worktree.
+   * Ensures new work starts from the latest code on the base branch.
    *
    * All sync failures are fatal — creating a worktree from an unknown
    * start-point risks branching from the wrong commit.
-   *
-   * Error classification (for user-facing messages):
-   * - Permission denied → file permission hint
-   * - Not a git repository → workspace integrity hint
-   * - Configured base branch missing → config fix hint
-   * - Network errors, timeouts → connectivity hint
    */
   private async syncWorkspaceBeforeCreate(
     repoPath: RepoPath,
-    configuredBaseBranch?: string
+    configuredBaseBranch?: string,
+    remote = 'origin'
   ): Promise<string> {
     try {
       getLog().debug(
-        { repoPath, branch: configuredBaseBranch ?? 'auto-detect' },
+        { repoPath, branch: configuredBaseBranch ?? 'auto-detect', remote },
         'workspace_sync_starting'
       );
-      // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
-      // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
       const isManagedClone = repoPath
         .replace(/\\/g, '/')
         .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
       const { branch } = await syncWorkspace(
         repoPath,
         configuredBaseBranch ? toBranchName(configuredBaseBranch) : undefined,
-        { resetAfterFetch: isManagedClone }
+        { resetAfterFetch: isManagedClone, remote }
       );
-      getLog().debug({ repoPath, branch }, 'workspace_synced');
+      getLog().debug({ repoPath, branch, remote }, 'workspace_synced');
       return branch;
     } catch (error) {
       const err = error as Error & { code?: string };
       const errorMessage = err.message.toLowerCase();
 
-      // Fatal errors - throw to prevent confusing downstream failures
       if (err.code === 'EACCES' || errorMessage.includes('permission denied')) {
         throw new Error(
           `Permission denied accessing repository at ${repoPath}. ` +
@@ -803,13 +833,11 @@ export class WorktreeProvider implements IIsolationProvider {
             'Ensure the workspace was cloned correctly.'
         );
       } else if (errorMessage.includes('configured base branch')) {
-        // Configured branch errors are fatal - user needs to fix their config
         throw err;
       } else {
-        // Network errors, timeouts — cannot guarantee correct start-point
         throw new Error(
-          `Failed to fetch base branch from origin: ${err.message}. ` +
-            'Check your network connection and try again.'
+          `Failed to fetch base branch from '${remote}': ${err.message}. ` +
+            'Check your network connection and remote configuration.'
         );
       }
     }
@@ -890,8 +918,11 @@ export class WorktreeProvider implements IIsolationProvider {
    * When prSha is provided, the worktree is initially created at the specific
    * commit (detached HEAD), then a local tracking branch is created.
    */
-  private async createFromPR(request: PRIsolationRequest, worktreePath: string): Promise<void> {
-    // Clean up any orphan directory before creating worktree
+  private async createFromPR(
+    request: PRIsolationRequest,
+    worktreePath: string,
+    remote = 'origin'
+  ): Promise<void> {
     await this.cleanOrphanDirectoryIfExists(worktreePath);
 
     const repoPath = request.canonicalRepoPath;
@@ -899,15 +930,11 @@ export class WorktreeProvider implements IIsolationProvider {
 
     try {
       if (!request.isForkPR) {
-        // Same-repo PR: Use the actual branch so changes push directly to PR
-        await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch);
+        await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch, remote);
       } else {
-        // Fork PR: Use synthetic review branch
-        await this.createFromForkPR(repoPath, worktreePath, prNumber, request.prSha);
+        await this.createFromForkPR(repoPath, worktreePath, prNumber, remote, request.prSha);
       }
     } catch (error) {
-      // Clean up orphaned git-registered worktree from partial failure
-      // (e.g., worktree add succeeded but createBranchWithStaleRetry failed)
       await this.cleanOrphanWorktreeIfExists(repoPath, worktreePath);
       const err = error as Error;
       throw new Error(`Failed to create worktree for PR #${prNumber}: ${err.message}`);
@@ -920,24 +947,21 @@ export class WorktreeProvider implements IIsolationProvider {
   private async createFromSameRepoPR(
     repoPath: string,
     worktreePath: string,
-    prBranch: string
+    prBranch: string,
+    remote = 'origin'
   ): Promise<void> {
-    // Fetch the PR's actual branch
-    await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', prBranch], {
+    await execFileAsync('git', ['-C', repoPath, 'fetch', remote, prBranch], {
       timeout: GIT_OPERATION_TIMEOUT_MS,
     });
 
-    // Try to create worktree with the branch
     try {
-      // If branch doesn't exist locally, create it tracking remote
       await execFileAsync(
         'git',
-        ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `origin/${prBranch}`],
+        ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `${remote}/${prBranch}`],
         { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (error) {
       const err = error as Error & { stderr?: string };
-      // Branch already exists locally - use it directly
       if (err.stderr?.includes('already exists')) {
         await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch], {
           timeout: GIT_OPERATION_TIMEOUT_MS,
@@ -947,16 +971,14 @@ export class WorktreeProvider implements IIsolationProvider {
       }
     }
 
-    // Set up tracking for push/pull (non-fatal - worktree is usable without it)
     try {
       await execFileAsync(
         'git',
-        ['-C', worktreePath, 'branch', '--set-upstream-to', `origin/${prBranch}`],
+        ['-C', worktreePath, 'branch', '--set-upstream-to', `${remote}/${prBranch}`],
         { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
     } catch (trackingError) {
       getLog().warn({ err: trackingError, worktreePath, prBranch }, 'upstream_tracking_failed');
-      // Continue - the worktree was created successfully, tracking is just convenience
     }
   }
 
@@ -970,13 +992,13 @@ export class WorktreeProvider implements IIsolationProvider {
     repoPath: string,
     worktreePath: string,
     prNumber: string,
+    remote = 'origin',
     prSha?: string
   ): Promise<void> {
     const reviewBranch = `pr-${prNumber}-review`;
 
     if (prSha) {
-      // SHA provided: create at specific commit for reproducible reviews
-      await execFileAsync('git', ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head`], {
+      await execFileAsync('git', ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head`], {
         timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
@@ -984,7 +1006,6 @@ export class WorktreeProvider implements IIsolationProvider {
         timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
-      // Create a local tracking branch so it's not detached HEAD
       await this.createBranchWithStaleRetry(
         repoPath,
         () =>
@@ -994,13 +1015,12 @@ export class WorktreeProvider implements IIsolationProvider {
         reviewBranch
       );
     } else {
-      // No SHA: fetch and create review branch
       await this.createBranchWithStaleRetry(
         repoPath,
         () =>
           execFileAsync(
             'git',
-            ['-C', repoPath, 'fetch', 'origin', `pull/${prNumber}/head:${reviewBranch}`],
+            ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head:${reviewBranch}`],
             { timeout: GIT_OPERATION_TIMEOUT_MS }
           ),
         reviewBranch
@@ -1045,16 +1065,15 @@ export class WorktreeProvider implements IIsolationProvider {
     repoPath: string,
     worktreePath: string,
     branchName: string,
-    baseBranch: string
+    baseBranch: string,
+    remote = 'origin'
   ): Promise<void> {
-    // Clean up any orphan directory before creating worktree
     await this.cleanOrphanDirectoryIfExists(worktreePath);
 
-    // Determine start-point: explicit fromBranch overrides base branch
     const startPoint =
       request.workflowType === 'task' && request.fromBranch
         ? request.fromBranch
-        : `origin/${baseBranch}`;
+        : `${remote}/${baseBranch}`;
 
     try {
       // Try to create with new branch

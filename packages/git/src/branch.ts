@@ -14,23 +14,26 @@ function getLog(): ReturnType<typeof createLogger> {
  * Get the default branch name for a repository
  * Uses git symbolic-ref to get the remote HEAD reference
  *
- * Fallback chain: symbolic-ref -> origin/main -> throw
- * Note: Throws if neither origin/HEAD nor origin/main can be resolved.
+ * Fallback chain: symbolic-ref -> <remote>/main -> throw
+ * Note: Throws if neither <remote>/HEAD nor <remote>/main can be resolved.
  * Callers can set worktree.baseBranch in .archon/config.yaml as a manual override.
  *
  * Only falls back for expected git errors (ref not found, branch not found).
  * Throws for unexpected errors (permission denied, git corruption, etc.)
+ *
+ * @param repoPath - Path to the git repository
+ * @param remote - Remote name to check (default: 'origin')
  */
-export async function getDefaultBranch(repoPath: RepoPath): Promise<BranchName> {
+export async function getDefaultBranch(repoPath: RepoPath, remote = 'origin'): Promise<BranchName> {
   // Try to get from remote HEAD
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', repoPath, 'symbolic-ref', 'refs/remotes/origin/HEAD', '--short'],
+      ['-C', repoPath, 'symbolic-ref', `refs/remotes/${remote}/HEAD`, '--short'],
       { timeout: 10000 }
     );
     // stdout is like "origin/main" - extract just the branch name
-    return toBranchName(stdout.trim().replace('origin/', ''));
+    return toBranchName(stdout.trim().replace(`${remote}/`, ''));
   } catch (error) {
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`;
@@ -40,17 +43,20 @@ export async function getDefaultBranch(repoPath: RepoPath): Promise<BranchName> 
       errorText.includes('not a symbolic ref') ||
       errorText.includes('No such file or directory')
     ) {
-      getLog().debug({ repoPath, err }, 'symbolic_ref_fallback');
+      getLog().debug({ repoPath, remote, err }, 'symbolic_ref_fallback');
     } else {
       // Unexpected error (permission denied, git corruption, etc.) - surface it
-      getLog().error({ repoPath, err, stderr: err.stderr }, 'default_branch_symbolic_ref_failed');
+      getLog().error(
+        { repoPath, remote, err, stderr: err.stderr },
+        'default_branch_symbolic_ref_failed'
+      );
       throw new Error(`Failed to get default branch for ${repoPath}: ${err.message}`);
     }
   }
 
-  // Fallback: check if origin/main exists, otherwise throw
+  // Fallback: check if <remote>/main exists, otherwise throw
   try {
-    await execFileAsync('git', ['-C', repoPath, 'rev-parse', '--verify', 'origin/main'], {
+    await execFileAsync('git', ['-C', repoPath, 'rev-parse', '--verify', `${remote}/main`], {
       timeout: 10000,
     });
     return toBranchName('main');
@@ -58,21 +64,21 @@ export async function getDefaultBranch(repoPath: RepoPath): Promise<BranchName> 
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`;
 
-    // Expected: origin/main doesn't exist — no safe default, fail fast
+    // Expected: <remote>/main doesn't exist — no safe default, fail fast
     if (
       errorText.includes('Not a valid object name') ||
       errorText.includes('Needed a single revision') ||
       errorText.includes('unknown revision')
     ) {
-      getLog().warn({ repoPath }, 'default_branch_detection_failed');
+      getLog().warn({ repoPath, remote }, 'default_branch_detection_failed');
       throw new Error(
-        `Cannot detect default branch for ${repoPath}: neither origin/HEAD nor origin/main exist. ` +
+        `Cannot detect default branch for ${repoPath}: neither ${remote}/HEAD nor ${remote}/main exist. ` +
           'Set worktree.baseBranch in .archon/config.yaml to specify the branch explicitly.'
       );
     }
 
     // Unexpected error - surface it
-    getLog().error({ repoPath, err, stderr: err.stderr }, 'verify_origin_main_failed');
+    getLog().error({ repoPath, remote, err, stderr: err.stderr }, 'verify_origin_main_failed');
     throw new Error(`Failed to get default branch for ${repoPath}: ${err.message}`);
   }
 }

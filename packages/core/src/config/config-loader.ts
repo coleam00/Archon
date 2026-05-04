@@ -455,6 +455,11 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     result.baseBranch = repo.worktree.baseBranch.trim();
   }
 
+  // Propagate git remote name for non-origin remote support
+  if (repo.worktree?.remote?.trim()) {
+    result.remote = repo.worktree.remote.trim();
+  }
+
   // Propagate docs path for $DOCS_DIR substitution in workflow commands
   if (repo.docs?.path !== undefined) {
     const trimmed = repo.docs.path.trim();
