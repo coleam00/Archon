@@ -489,7 +489,10 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
     if (
       status &&
       status !== prevStatus &&
-      (status === 'completed' || status === 'failed' || status === 'cancelled')
+      (status === 'completed' ||
+        status === 'failed' ||
+        status === 'cancelled' ||
+        status === 'paused')
     ) {
       onLockChange(false);
     }
