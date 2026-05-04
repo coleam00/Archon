@@ -84,6 +84,18 @@ archon setup --spawn              # open in a new terminal window
 
 **Write safety**: `archon setup` never writes to `<cwd>/.env` — that file belongs to you. The wizard always targets one archon-owned file chosen by `--scope`, merges into existing content (so user-added keys survive), and writes a timestamped backup before every rewrite (e.g. `~/.archon/.env.archon-backup-2026-04-20T09-28-11-000Z`).
 
+### `doctor`
+
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, database reachability, workspace writability, bundled defaults, and adapter token pings (Slack/Telegram, best-effort).
+
+```bash
+archon doctor
+```
+
+Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
+
+Also runs automatically at the end of `archon setup` (optional).
+
 ### `workflow list`
 
 List workflows available in target directory.

@@ -152,7 +152,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs `check:bundled`, type-check, lint, format check, and tests. All five must pass for CI to succeed.
+This runs `check:bundled`, `check:bundled-skill`, type-check, lint, format check, and tests. All six must pass for CI to succeed.
 
 ### ESLint Guidelines
 
@@ -256,6 +256,9 @@ bun run cli serve --download-only  # Download without starting
 # Install the bundled Archon skill into a project
 bun run cli skill install
 bun run cli skill install /path/to/project
+
+# Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+bun run cli doctor
 
 # Show version
 bun run cli version

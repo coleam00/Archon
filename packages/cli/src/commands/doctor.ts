@@ -63,7 +63,7 @@ export async function checkClaudeBinary(env: NodeJS.ProcessEnv): Promise<CheckRe
 
 export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   const label = 'gh CLI';
-  // Skip silently for users without GitHub configured — gh auth is irrelevant
+  // Skip for users without GitHub configured — gh auth is irrelevant
   // to a CLI-only or Slack/Telegram setup, so reporting fail would be noise.
   if (!env.GITHUB_TOKEN && !env.GH_TOKEN) {
     return { label, status: 'skip', message: 'GitHub not configured (no GITHUB_TOKEN)' };
@@ -97,15 +97,19 @@ export async function checkDatabase(): Promise<CheckResult> {
 export async function checkWorkspaceWritable(): Promise<CheckResult> {
   const label = 'Workspace';
   const home = getArchonHome();
+  const probe = join(home, `.doctor-probe-${process.pid}-${Date.now()}`);
   try {
     mkdirSync(home, { recursive: true });
-    const probe = join(home, `.doctor-probe-${process.pid}-${Date.now()}`);
     writeFileSync(probe, 'ok');
-    rmSync(probe, { force: true });
-    return { label, status: 'pass', message: `${home} is writable` };
   } catch (err) {
     return { label, status: 'fail', message: `${home} not writable: ${(err as Error).message}` };
   }
+  try {
+    rmSync(probe, { force: true });
+  } catch {
+    // Deletion failure is cosmetic — the write succeeded, so the dir is writable.
+  }
+  return { label, status: 'pass', message: `${home} is writable` };
 }
 
 export async function checkBundledDefaults(): Promise<CheckResult> {
@@ -146,7 +150,7 @@ export async function checkSlack(env: NodeJS.ProcessEnv): Promise<CheckResult> {
     return {
       label,
       status: 'skip',
-      message: `ping skipped (network error: ${(err as Error).message})`,
+      message: `ping skipped (${(err as Error).message})`,
     };
   }
 }
@@ -174,7 +178,7 @@ export async function checkTelegram(env: NodeJS.ProcessEnv): Promise<CheckResult
     return {
       label,
       status: 'skip',
-      message: `ping skipped (network error: ${(err as Error).message})`,
+      message: `ping skipped (${(err as Error).message})`,
     };
   }
 }
@@ -206,7 +210,9 @@ export async function doctorCommand(): Promise<number> {
   for (const s of settled) {
     if (s.status === 'rejected') {
       failures++;
-      console.log(`✗ unknown: check threw: ${(s.reason as Error).message}`);
+      const msg = s.reason instanceof Error ? s.reason.message : String(s.reason);
+      console.log(`✗ unknown: check threw: ${msg}`);
+      getLog().error({ reason: s.reason }, 'doctor.check_threw_unexpectedly');
       continue;
     }
     if (s.value.status === 'fail') failures++;

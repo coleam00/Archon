@@ -396,15 +396,6 @@ function tryReadCodexAuth(): CodexTokens | null {
 }
 
 /**
- * Collect Claude authentication method
- */
-/**
- * Resolve the Claude Code executable path for CLAUDE_BIN_PATH.
- * Auto-detects common install locations and falls back to prompting the user.
- * Returns undefined if the user declines to configure (setup continues; the
- * compiled binary will error with clear instructions on first Claude query).
- */
-/**
  * Try to spawn the Claude binary with `--version` to confirm it actually runs.
  * Returns true on success, false on any spawn or non-zero exit. Bounded to 5s
  * so a hung process can't stall setup.
@@ -418,6 +409,12 @@ async function probeClaudeBinarySpawns(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Resolve the Claude Code executable path for CLAUDE_BIN_PATH.
+ * Auto-detects common install locations and falls back to prompting the user.
+ * Returns undefined if the user declines to configure (setup continues; the
+ * compiled binary will error with clear instructions on first Claude query).
+ */
 async function collectClaudeBinaryPath(): Promise<string | undefined> {
   const detected = detectClaudeExecutablePath();
 
@@ -478,6 +475,9 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
   return trimmed;
 }
 
+/**
+ * Collect Claude authentication method (API key, OAuth token, or global auth).
+ */
 async function collectClaudeAuth(): Promise<{
   authType: 'global' | 'apiKey' | 'oauthToken';
   apiKey?: string;
@@ -909,18 +909,24 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
   const ghSpin = spinner();
   ghSpin.start('Checking gh CLI authentication...');
   let ghAuthOk = false;
+  let ghAuthError: string | undefined;
   try {
     await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
     ghAuthOk = true;
     ghSpin.stop('gh CLI is authenticated');
-  } catch {
-    ghSpin.stop('gh CLI is not authenticated');
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    ghAuthError =
+      e.code === 'ENOENT'
+        ? 'gh not found in PATH — install it first (https://cli.github.com)'
+        : (e.message ?? 'unknown error');
+    ghSpin.stop('gh CLI check failed');
   }
 
   if (!ghAuthOk) {
     log.warning(
-      'gh auth status failed. Workflows using `gh` shell commands will fail until you authenticate.\n' +
-        'Run: gh auth login'
+      `gh auth check failed: ${ghAuthError}\n` +
+        (ghAuthError?.includes('not found') ? '' : 'Run: gh auth login')
     );
     // gh auth login is an interactive OAuth flow — only offer it from a TTY.
     if (process.stdout.isTTY) {
@@ -930,7 +936,13 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
       });
       if (!isCancel(runGhLogin) && runGhLogin) {
         // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
-        spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
+        const ghLoginResult = spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
+        if (ghLoginResult.error) {
+          log.warning(
+            `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
+              'Install the gh CLI from https://cli.github.com/ and run it manually.'
+          );
+        }
       }
     }
   }

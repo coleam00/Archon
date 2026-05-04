@@ -1,9 +1,10 @@
 /**
  * Tests for `archon doctor` check functions.
  *
- * Uses spyOn for `@archon/git.execFileAsync` and `@archon/paths.BUNDLED_IS_BINARY`
- * indirection. Avoids `mock.module()` because it is process-global and
- * irreversible in Bun, which would pollute other test files in this package.
+ * Uses spyOn for `@archon/git.execFileAsync`. BUNDLED_IS_BINARY is not spied —
+ * it is false in dev builds, so the dev-mode branch is exercised directly.
+ * Avoids `mock.module()` because it is process-global and irreversible in Bun,
+ * which would pollute other test files in this package.
  */
 import { describe, it, expect, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
@@ -14,6 +15,7 @@ import {
   checkClaudeBinary,
   checkGhAuth,
   checkWorkspaceWritable,
+  checkBundledDefaults,
   checkSlack,
   checkTelegram,
 } from './doctor';
@@ -106,6 +108,16 @@ describe('checkWorkspaceWritable', () => {
     rmSync(TMP, { recursive: true, force: true });
     const result = await checkWorkspaceWritable();
     expect(result.status).toBe('pass');
+  });
+});
+
+describe('checkBundledDefaults', () => {
+  it('returns pass with workflow and command counts in dev mode', async () => {
+    const result = await checkBundledDefaults();
+    expect(result.status).toBe('pass');
+    expect(result.label).toBe('Bundled defaults');
+    expect(result.message).toMatch(/\d+ workflow/);
+    expect(result.message).toMatch(/\d+ command/);
   });
 });
 
