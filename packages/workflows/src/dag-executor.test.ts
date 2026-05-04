@@ -6225,13 +6225,15 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // 420 × 5 chars = 2100 chars — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
     // so any leak of the script body via err.message would violate the length
-    // assertion below. Bun's stderr echoes only a few lines of context.
-    const paddingAboveMax = '// padding line '.repeat(200);
+    // assertion below. Single-line form (no embedded newlines) avoids a Windows
+    // limitation where child_process.execFile does not preserve newlines in
+    // command-line arguments passed to bun's -e flag.
+    const paddingAboveMax = 'null;'.repeat(420);
     const scriptNode: ScriptNode = {
       id: 'fail-script-1389',
-      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      script: `${paddingAboveMax}throw new Error("fail-1389")`,
       runtime: 'bun',
     };
 
@@ -6261,11 +6263,12 @@ describe('executeDagWorkflow -- script nodes', () => {
     const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
     expect(errorMsg).toContain("Script node 'fail-script-1389' failed");
     expect(errorMsg).not.toContain('Command failed:');
-    expect(errorMsg).not.toContain('padding line padding line padding line');
     // 2 KB diagnostic cap + label prefix + truncation marker should stay under
     // 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
+    // (err.message = "Command failed: bun -e <2100-char body>" ≈ 2160 chars —
+    // leaking it would violate this assertion.)
     expect(errorMsg.length).toBeLessThan(2100);
-    // Bun emits `error: <description>\n    at [eval]:L:C` for parse failures —
+    // Bun emits `error: <description>\n    at [eval]:L:C` for runtime failures —
     // the location marker is the strongest signal that the diagnostic survived.
     expect(errorMsg).toContain('[eval]');
   });
