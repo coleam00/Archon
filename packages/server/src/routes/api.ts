@@ -1415,7 +1415,10 @@ export function registerApiRoutes(
     try {
       conv = await conversationDb.findConversationByPlatformId(conversationId);
     } catch (e: unknown) {
-      getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+      // findConversationByPlatformId throws on DB errors; bubble as 500.
+      const err = e as Error;
+      getLog().error({ err, conversationId }, 'conversation_lookup_failed');
+      return c.json({ error: 'Failed to look up conversation: ' + err.message }, 500);
     }
     // Auto-create conversation if not found (web chat creates ID but never persists it)
     if (!conv) {
@@ -1424,6 +1427,20 @@ export function registerApiRoutes(
       } catch (e: unknown) {
         const err = e as Error;
         getLog().error({ err, conversationId }, 'conversation_auto_create_failed');
+        // Attempt a single retry of findConversationByPlatformId to handle a racing insert.
+        try {
+          conv = await conversationDb.findConversationByPlatformId(conversationId);
+        } catch (retryErr: unknown) {
+          const retry = retryErr as Error;
+          getLog().error({ err: retry, conversationId }, 'conversation_lookup_retry_failed');
+          return c.json({ error: 'Failed to persist conversation: ' + err.message }, 500);
+        }
+        // If retry still yields no conversation (unique constraint violation race survived
+        // but row is still missing), error out.
+        if (!conv) {
+          getLog().error({ conversationId }, 'conversation_race_retry_empty');
+          return c.json({ error: 'Failed to persist conversation' }, 500);
+        }
       }
     }
 
