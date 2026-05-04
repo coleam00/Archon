@@ -54,6 +54,10 @@ GitHub App auth for the bot, multi-user attribution, Slack UX overhaul, experime
 - **`safeSendMessage`** consolidated into `executor-shared` to remove duplication across executor variants (#1496).
 - **Direction docs**: community-providers policy section added (#1736).
 
+
+- `worktree.remote` config option in `.archon/config.yaml` for repos using non-standard git remote names
+- `getDefaultRemote()` auto-detection: prefers `origin`, falls back to sole remote, errors on ambiguity
+
 ### Fixed
 
 - **`workflow approve/resume/reject` no longer fail with "Workflow not found" when the run's working path is a worktree or workspace clone.** Resume, approve, and reject now use `codebase.default_cwd` for workflow YAML discovery, falling back to `working_path` when no codebase record is found. Fixes #1663 (#1743).
