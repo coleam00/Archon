@@ -37,6 +37,7 @@ import {
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -2260,7 +2261,30 @@ export function registerApiRoutes(
         }
       }
 
-      // 2. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
+      // 2. Try home-scoped workflow at <ARCHON_HOME>/workflows/<name>.yaml
+      //    Mirrors discoverWorkflows() priority (project > global > bundled) and
+      //    aligns with PUT /api/workflows/:name which already defaults saves to
+      //    getArchonHome() when no cwd matches.
+      const homeFilePath = join(getHomeWorkflowsPath(), filename);
+      try {
+        const content = await readFile(homeFilePath, 'utf-8');
+        const result = parseWorkflow(content, filename);
+        if (result.error) {
+          return apiError(c, 500, `Home workflow is invalid: ${result.error.error}`);
+        }
+        return c.json({
+          workflow: result.workflow,
+          filename,
+          source: 'global' as WorkflowSource,
+        });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          getLog().error({ err, name }, 'workflow.fetch_home_failed');
+          return apiError(c, 500, 'Failed to read home workflow');
+        }
+      }
+
+      // 3. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
         const bundledContent = BUNDLED_WORKFLOWS[name];
         const result = parseWorkflow(bundledContent, filename);
