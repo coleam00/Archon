@@ -751,9 +751,51 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
     expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo 'hello\nworld'");
   });
 
-  it('object JSON field becomes quoted empty string when escapedForBash=true', () => {
+  it('object JSON field becomes JSON stringified when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ nested: { x: 1 } }))]]);
-    expect(substituteNodeOutputRefs('echo $a.output.nested', outputs, true)).toBe("echo ''");
+    expect(substituteNodeOutputRefs('echo $a.output.nested', outputs, true)).toBe(
+      'echo \'{"x":1}\''
+    );
+  });
+
+  it('array JSON field becomes JSON stringified', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', JSON.stringify({ items: ['todo', 'fix'] }))],
+    ]);
+    expect(substituteNodeOutputRefs('$a.output.items', outputs)).toBe('["todo","fix"]');
+  });
+
+  it('array JSON field is shell-quoted when escapedForBash=true', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', JSON.stringify({ items: ['todo', 'fix'] }))],
+    ]);
+    expect(substituteNodeOutputRefs('echo $a.output.items', outputs, true)).toBe(
+      'echo \'["todo","fix"]\''
+    );
+  });
+
+  it('nested object in array field becomes JSON stringified', () => {
+    const outputs = new Map([
+      [
+        'a',
+        makeOutput('completed', JSON.stringify({ files: [{ name: 'a.ts', status: 'modified' }] })),
+      ],
+    ]);
+    expect(substituteNodeOutputRefs('$a.output.files', outputs)).toBe(
+      '[{"name":"a.ts","status":"modified"}]'
+    );
+  });
+
+  it('null values in arrays stringify to "null"', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', JSON.stringify({ items: [null, 'ok'] }))],
+    ]);
+    expect(substituteNodeOutputRefs('$a.output.items', outputs)).toBe('[null,"ok"]');
+  });
+
+  it('null object field becomes JSON stringified "null"', () => {
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ config: null }))]]);
+    expect(substituteNodeOutputRefs('$a.output.config', outputs)).toBe('null');
   });
 
   it('dot notation on invalid JSON returns quoted empty string when escapedForBash=true', () => {
