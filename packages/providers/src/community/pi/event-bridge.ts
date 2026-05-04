@@ -409,13 +409,18 @@ export async function* bridgeSession(
     // generator.return() suspended indefinitely. Bun then drains its event
     // loop (no remaining I/O sources) and exits with code 0 — leaving the
     // workflow run zombie in 'running' (#1561).
+    let cleanupTimeoutId: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      promptPromise.catch(() => {
-        /* errors already surfaced through the queue */
+      promptPromise.catch((err: unknown) => {
+        // Errors from prompt() during normal iteration are already surfaced through
+        // the queue. Any rejection here is a secondary cleanup-phase error from the
+        // Pi SDK — log at debug so SDK regressions surface without polluting output.
+        getLog().debug({ err }, 'pi.event-bridge.prompt_rejected_during_cleanup');
       }),
       new Promise<void>(resolve => {
-        setTimeout(resolve, 10_000);
+        cleanupTimeoutId = setTimeout(resolve, 10_000);
       }),
     ]);
+    clearTimeout(cleanupTimeoutId);
   }
 }

@@ -536,4 +536,50 @@ describe('bridgeSession cleanup', () => {
     // Timeout fires at 10 s; allow 1 s of slack for scheduling overhead.
     expect(elapsed).toBeLessThan(11_000);
   }, 15_000);
+
+  test('completes quickly when session.prompt() settles promptly after dispose()', async () => {
+    let resolvePrompt!: () => void;
+    let listenerRef: ((e: AgentSessionEvent) => void) | undefined;
+
+    const mockSession = {
+      sessionId: 'test-session-id',
+      prompt: () =>
+        new Promise<void>(r => {
+          resolvePrompt = r;
+        }),
+      dispose: () => {
+        resolvePrompt();
+      },
+      subscribe: (l: (e: AgentSessionEvent) => void) => {
+        listenerRef = l;
+        return () => {
+          listenerRef = undefined;
+        };
+      },
+      abort: async () => {},
+    } as unknown as AgentSession;
+
+    const gen = bridgeSession(mockSession, 'test prompt');
+
+    queueMicrotask(() => {
+      listenerRef?.({
+        type: 'tool_execution_start',
+        toolName: 'echo',
+        toolCallId: 'tc1',
+        args: {},
+      } as unknown as AgentSessionEvent);
+    });
+
+    const start = Date.now();
+    try {
+      for await (const _chunk of gen) {
+        throw new Error('simulated consumer abort');
+      }
+    } catch {}
+    const elapsed = Date.now() - start;
+
+    // If the timeout is not cleared after promptPromise wins, the process would
+    // hang for up to 10 s — catching that regression here.
+    expect(elapsed).toBeLessThan(1_000);
+  }, 5_000);
 });

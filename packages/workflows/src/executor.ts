@@ -838,6 +838,7 @@ export async function executeWorkflow(
       const runId = workflowRun.id;
       const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch(() => null);
       if (backstopStatus === 'running') {
+        getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
         await deps.store
           .failWorkflowRun(runId, 'Workflow exited without finalizing — see logs')
           .catch((err: Error) => {
