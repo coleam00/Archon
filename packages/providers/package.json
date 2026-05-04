@@ -13,6 +13,7 @@
     "./codex/provider": "./src/codex/provider.ts",
     "./codex/config": "./src/codex/config.ts",
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",
+    "./mcp/config": "./src/mcp/config.ts",
     "./community/pi": "./src/community/pi/index.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts"

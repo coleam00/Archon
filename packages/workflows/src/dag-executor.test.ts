@@ -23,7 +23,12 @@ mock.module('@archon/paths', () => ({
     if (folder) paths.unshift(folder);
     return paths;
   },
-  getDefaultCommandsPath: () => '/nonexistent/defaults',
+  getWorkflowFolderSearchPaths: (): string[] => ['.archon/workflows'],
+  getDefaultCommandsPath: (): string => '/nonexistent/defaults',
+  getDefaultWorkflowsPath: (): string => '/nonexistent/defaults/workflows',
+  getHomeWorkflowsPath: (): string => '/nonexistent/home/workflows',
+  getLegacyHomeWorkflowsPath: (): string => '/nonexistent/home/.archon/workflows',
+  getArchonHome: (): string => '/nonexistent/home',
 }));
 
 // --- Bootstrap provider registry (after path mocks, before dag-executor import) ---
@@ -38,7 +43,7 @@ import {
   substituteNodeOutputRefs,
   executeDagWorkflow,
 } from './dag-executor';
-import { loadMcpConfig } from '@archon/providers/claude/provider';
+import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
@@ -118,7 +123,7 @@ const mockClaudeCapabilities = () => ({
 /** Limited capabilities for Codex mock */
 const mockCodexCapabilities = () => ({
   sessionResume: true,
-  mcp: false,
+  mcp: true,
   hooks: false,
   skills: false,
   agents: false,
@@ -2280,6 +2285,27 @@ describe('loadMcpConfig', () => {
     expect(result.missingVars).toEqual([]);
   });
 
+  it('loads standard mcpServers-wrapped config JSON', async () => {
+    const servers = { figma: { url: 'http://127.0.0.1:3845/mcp' } };
+    await writeFile(join(testDir, 'wrapped.json'), JSON.stringify({ mcpServers: servers }));
+
+    const result = await loadMcpConfig('wrapped.json', testDir);
+    expect(result.serverNames).toEqual(['figma']);
+    expect(result.servers).toEqual(servers);
+  });
+
+  it('rejects mixed mcpServers wrapper and top-level metadata', async () => {
+    const servers = { figma: { url: 'http://127.0.0.1:3845/mcp' } };
+    await writeFile(
+      join(testDir, 'mixed-wrapper.json'),
+      JSON.stringify({ $schema: 'https://example.com/schema.json', mcpServers: servers })
+    );
+
+    await expect(loadMcpConfig('mixed-wrapper.json', testDir)).rejects.toThrow(
+      'cannot mix top-level "mcpServers" with other keys'
+    );
+  });
+
   it('loads multiple servers from one config', async () => {
     const config = {
       github: { command: 'npx', args: ['-y', '@mcp/server-github'] },
@@ -2373,6 +2399,42 @@ describe('loadMcpConfig', () => {
   it('throws on non-object JSON (string)', async () => {
     await writeFile(join(testDir, 'str.json'), '"hello"');
     await expect(loadMcpConfig('str.json', testDir)).rejects.toThrow('must be a JSON object');
+  });
+
+  it('throws on array-valued server config', async () => {
+    await writeFile(join(testDir, 'server-array.json'), JSON.stringify({ figma: [] }));
+
+    await expect(loadMcpConfig('server-array.json', testDir)).rejects.toThrow(
+      'MCP server "figma" must be a JSON object'
+    );
+  });
+
+  it('throws on non-string env values', async () => {
+    await writeFile(
+      join(testDir, 'env-number.json'),
+      JSON.stringify({ figma: { command: 'figma-mcp', env: { TOKEN: 123 } } })
+    );
+
+    await expect(loadMcpConfig('env-number.json', testDir)).rejects.toThrow(
+      'MCP config figma.env.TOKEN must be a string'
+    );
+  });
+
+  it('throws on non-string header values', async () => {
+    await writeFile(
+      join(testDir, 'header-array.json'),
+      JSON.stringify({
+        figma: {
+          type: 'http',
+          url: 'http://127.0.0.1:3845/mcp',
+          headers: { Authorization: ['Bearer token'] },
+        },
+      })
+    );
+
+    await expect(loadMcpConfig('header-array.json', testDir)).rejects.toThrow(
+      'MCP config figma.headers.Authorization must be a string'
+    );
   });
 });
 

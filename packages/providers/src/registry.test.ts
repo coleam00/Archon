@@ -112,7 +112,7 @@ describe('registry', () => {
       const codexCaps = codex.getCapabilities();
 
       expect(claudeCaps.mcp).toBe(true);
-      expect(codexCaps.mcp).toBe(false);
+      expect(codexCaps.mcp).toBe(true);
       expect(claudeCaps.hooks).toBe(true);
       expect(codexCaps.hooks).toBe(false);
     });
@@ -128,7 +128,7 @@ describe('registry', () => {
 
     test('returns Codex capabilities without instantiation', () => {
       const caps = getProviderCapabilities('codex');
-      expect(caps.mcp).toBe(false);
+      expect(caps.mcp).toBe(true);
       expect(caps.hooks).toBe(false);
       expect(caps.envInjection).toBe(true);
     });

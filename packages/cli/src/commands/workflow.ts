@@ -20,7 +20,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
-import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
+import type { WorkflowDefinition, WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
@@ -127,6 +127,21 @@ function buildRegistrationFailureError(action: string, error: Error): Error {
   return new Error(
     `Cannot ${action}: repository registration failed.\nError: ${error.message}\n${hint}`
   );
+}
+
+/**
+ * Resolve the provider used for CLI conversation titles from the workflow itself.
+ * This keeps auxiliary title generation aligned with workflow execution instead
+ * of falling back to a stale conversation default.
+ */
+function resolveTitleAssistantType(
+  workflow: WorkflowDefinition,
+  defaultAssistant: string | undefined,
+  conversationAssistant: string | undefined
+): string {
+  const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
+  if (workflow.provider) return workflow.provider;
+  return fallbackAssistant;
 }
 
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
@@ -636,13 +651,36 @@ export async function workflowRunCommand(
   }
 
   // Auto-generate title for CLI workflow conversations (fire-and-forget)
-  void generateAndSetTitle(
-    conversation.id,
-    userMessage,
-    conversation.ai_assistant_type,
-    workingCwd,
-    workflowName
-  );
+  void (async (): Promise<void> => {
+    let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+    try {
+      workflowConfig = await loadConfig(cwd);
+    } catch (error) {
+      getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
+    }
+
+    try {
+      const titleAssistantType = resolveTitleAssistantType(
+        workflow,
+        workflowConfig?.assistant,
+        conversation.ai_assistant_type
+      );
+      const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+      await generateAndSetTitle(
+        conversation.id,
+        userMessage,
+        titleAssistantType,
+        workingCwd,
+        workflow.name,
+        titleAssistantConfig
+      );
+    } catch (error) {
+      getLog().warn(
+        { err: error as Error, conversationId: conversation.id },
+        'workflow.title_generation_failed'
+      );
+    }
+  })();
 
   // Register cleanup handlers for graceful termination
   let terminating = false;

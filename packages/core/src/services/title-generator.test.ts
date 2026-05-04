@@ -27,7 +27,7 @@ const mockSendQuery = mock(async function* (): AsyncGenerator<MessageChunk> {
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    options?: { model?: string; tools?: string[] }
+    options?: { model?: string; tools?: string[]; assistantConfig?: Record<string, unknown> }
   ) => AsyncGenerator<MessageChunk>
 >;
 
@@ -175,6 +175,24 @@ describe('title-generator', () => {
       nodeConfig?: { allowed_tools?: string[] };
     };
     expect(optionsArg.nodeConfig?.allowed_tools).toEqual([]);
+  });
+
+  test('passes assistantConfig through to the provider', async () => {
+    const assistantConfig = { model: 'gpt-5.4', modelReasoningEffort: 'medium' };
+
+    await generateAndSetTitle(
+      'conv-17',
+      'Some message',
+      'codex',
+      '/tmp',
+      'figma-mcp-smoke',
+      assistantConfig
+    );
+
+    const optionsArg = mockSendQuery.mock.calls[0][3] as {
+      assistantConfig?: Record<string, unknown>;
+    };
+    expect(optionsArg.assistantConfig).toEqual(assistantConfig);
   });
 
   test('handles double failure gracefully (AI fails + fallback DB write fails)', async () => {

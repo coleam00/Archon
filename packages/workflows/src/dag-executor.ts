@@ -325,7 +325,7 @@ export function substituteNodeOutputRefs(
 }
 
 // buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
-// loadMcpConfig moved to @archon/providers/src/claude/provider.ts
+// loadMcpConfig moved to @archon/providers/src/mcp/config.ts
 
 /**
  * Resolve per-node provider and model.
