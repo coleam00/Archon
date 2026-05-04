@@ -23,7 +23,6 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-
 /**
  * Delay execution for specified milliseconds
  */
