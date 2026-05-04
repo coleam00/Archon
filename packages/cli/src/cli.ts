@@ -169,23 +169,23 @@ async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
 }
 
 /**
- * Main CLI entry point
- * Returns exit code (0 = success, non-zero = failure)
- */
-/**
  * Detect a request for version output. Treats `--version`, `-V`, and the
  * single-dash typo `-version` as version flags anywhere in argv. `-v` keeps
  * its role as the short alias for `--verbose`, except when used alone — then
  * it falls back to version output to match the convention used by node, npm,
  * bun, and most other CLIs.
  */
+const VERSION_FLAGS = new Set(['--version', '-V', '-version']);
+
 function isVersionRequest(args: string[]): boolean {
   if (args.length === 1 && args[0] === '-v') return true;
-  for (const arg of args) {
-    if (arg === '--version' || arg === '-V' || arg === '-version') return true;
-  }
-  return false;
+  return args.some(arg => VERSION_FLAGS.has(arg));
 }
+
+/**
+ * Main CLI entry point
+ * Returns exit code (0 = success, non-zero = failure)
+ */
 
 async function main(): Promise<number> {
   const args = process.argv.slice(2);

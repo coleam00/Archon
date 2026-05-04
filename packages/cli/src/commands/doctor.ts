@@ -10,11 +10,7 @@ import { join } from 'path';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
 
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('cli.doctor');
-  return cachedLog;
-}
+const log = createLogger('cli.doctor');
 
 export interface CheckResult {
   label: string;
@@ -89,7 +85,7 @@ export async function checkDatabase(
     // Distinguish module-load failure from query failure — surfacing
     // "not reachable" for an import error misleads the user into running
     // `archon setup` when the real fix is a binary rebuild.
-    getLog().error({ err }, 'doctor.db_module_load_failed');
+    log.error({ err }, 'doctor.db_module_load_failed');
     return {
       label,
       status: 'fail',
@@ -101,7 +97,7 @@ export async function checkDatabase(
     await deps.pool.query('SELECT 1');
     return { label, status: 'pass', message: `reachable (${dbType})` };
   } catch (err) {
-    getLog().error({ err }, 'doctor.db_query_failed');
+    log.error({ err }, 'doctor.db_query_failed');
     return { label, status: 'fail', message: `not reachable: ${(err as Error).message}` };
   }
 }
@@ -129,7 +125,7 @@ export async function checkWorkspaceWritable(): Promise<CheckResult> {
     // Deletion failure is cosmetic — the write succeeded, so the dir is
     // writable. Log so repeated failures leave a diagnostic trace instead of
     // silently accumulating .doctor-probe-* files in ARCHON_HOME.
-    getLog().warn({ probe, err }, 'doctor.workspace_probe_delete_failed');
+    log.warn({ probe, err }, 'doctor.workspace_probe_delete_failed');
   }
   return { label, status: 'pass', message: `${home} is writable` };
 }
@@ -206,7 +202,17 @@ export async function checkTelegram(env: NodeJS.ProcessEnv): Promise<CheckResult
 }
 
 function renderResult(r: CheckResult): string {
-  const icon = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '○';
+  let icon: string;
+  switch (r.status) {
+    case 'pass':
+      icon = '✓';
+      break;
+    case 'fail':
+      icon = '✗';
+      break;
+    default:
+      icon = '○';
+  }
   return `${icon} ${r.label}: ${r.message}`;
 }
 
@@ -216,7 +222,7 @@ export async function doctorCommand(
   checks?: (() => Promise<CheckResult>)[]
 ): Promise<number> {
   console.log('archon doctor — verifying your setup\n');
-  getLog().info('doctor.run_started');
+  log.info('doctor.run_started');
   const env = process.env;
 
   const promises = checks
@@ -240,7 +246,7 @@ export async function doctorCommand(
       failures++;
       const msg = s.reason instanceof Error ? s.reason.message : String(s.reason);
       console.log(`✗ unknown: check threw: ${msg}`);
-      getLog().error({ reason: s.reason }, 'doctor.check_threw_unexpectedly');
+      log.error({ reason: s.reason }, 'doctor.check_threw_unexpectedly');
       continue;
     }
     if (s.value.status === 'fail') failures++;
@@ -250,10 +256,10 @@ export async function doctorCommand(
   console.log('');
   if (failures === 0) {
     console.log('All checks passed.');
-    getLog().info('doctor.run_completed');
+    log.info('doctor.run_completed');
     return 0;
   }
   console.log(`${failures} check(s) failed. Run \`archon setup\` to reconfigure.`);
-  getLog().warn({ failures }, 'doctor.run_failed');
+  log.warn({ failures }, 'doctor.run_failed');
   return 1;
 }
