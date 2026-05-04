@@ -280,17 +280,6 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
 }
 
 /**
- * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
- *
- * Behavior:
- *  - subscribe before calling prompt, unsubscribe in finally
- *  - yield mapped events in order
- *  - complete on successful `session.prompt()` resolution
- *  - throw on `session.prompt()` rejection or listener-raised errors
- *  - forward `abortSignal` to `session.abort()` fire-and-forget
- *  - always `dispose()` the session to avoid listener accumulation
- */
-/**
  * Internal queue payload for `bridgeSession`. Exported at module scope
  * (not inside the generator) so unit tests can exercise each variant
  * independently without reaching into the generator's closure.
@@ -305,6 +294,17 @@ export interface BridgeNotifier {
   setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
 }
 
+/**
+ * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
+ *
+ * Behavior:
+ *  - subscribe before calling prompt, unsubscribe in finally
+ *  - yield mapped events in order
+ *  - complete on successful `session.prompt()` resolution
+ *  - throw on `session.prompt()` rejection or listener-raised errors
+ *  - forward `abortSignal` to `session.abort()` fire-and-forget
+ *  - always `dispose()` the session to avoid listener accumulation
+ */
 export async function* bridgeSession(
   session: AgentSession,
   prompt: string,

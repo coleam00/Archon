@@ -65,9 +65,9 @@ class Semaphore {
     const next = this.waiters.shift();
     if (next) {
       next();
-    } else {
-      this.available++;
+      return;
     }
+    this.available++;
   }
 }
 
