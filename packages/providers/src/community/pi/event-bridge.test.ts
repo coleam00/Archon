@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 
 import {
   AsyncQueue,
+  bridgeSession,
   buildResultChunk,
   mapPiEvent,
   serializeToolResult,
@@ -468,4 +470,70 @@ describe('tryParseStructuredOutput', () => {
     const withBackticks = '{"code":"run `npm test`"}';
     expect(tryParseStructuredOutput(withBackticks)).toEqual({ code: 'run `npm test`' });
   });
+});
+
+// ─── bridgeSession cleanup ─────────────────────────────────────────────────
+
+describe('bridgeSession cleanup', () => {
+  // Regression for #1561: when the consumer throws mid-iteration, bridgeSession's
+  // finally block calls session.dispose() then awaits the prompt promise. If
+  // dispose() does not cause prompt() to settle, the await hangs forever, the
+  // consumer's catch never runs, Bun drains its event loop, and the workflow
+  // run is left zombie in 'running'. The fix wraps the await in Promise.race
+  // against a 10 s timeout so cleanup always completes.
+  test('completes within ~10s when session.prompt() never settles after dispose()', async () => {
+    const neverSettles = new Promise<void>(() => {
+      /* intentionally never resolves */
+    });
+    let listenerRef: ((e: AgentSessionEvent) => void) | undefined;
+
+    const mockSession = {
+      sessionId: 'test-session-id',
+      prompt: () => neverSettles,
+      dispose: () => {
+        /* synchronous noop — does NOT settle prompt() */
+      },
+      subscribe: (l: (e: AgentSessionEvent) => void) => {
+        listenerRef = l;
+        return () => {
+          listenerRef = undefined;
+        };
+      },
+      abort: async () => {
+        /* noop */
+      },
+    } as unknown as AgentSession;
+
+    const gen = bridgeSession(mockSession, 'test prompt');
+
+    // Push an event after the generator subscribes so the for-await unblocks
+    // with a chunk. Then the test consumer throws to simulate the dag-executor
+    // throwing on `isError: true`.
+    queueMicrotask(() => {
+      listenerRef?.({
+        type: 'tool_execution_start',
+        toolName: 'echo',
+        toolCallId: 'tc1',
+        args: {},
+      } as unknown as AgentSessionEvent);
+    });
+
+    const start = Date.now();
+    let receivedChunk = false;
+    let caught: Error | undefined;
+    try {
+      for await (const _chunk of gen) {
+        receivedChunk = true;
+        throw new Error('simulated consumer abort');
+      }
+    } catch (err) {
+      caught = err as Error;
+    }
+    const elapsed = Date.now() - start;
+
+    expect(receivedChunk).toBe(true);
+    expect(caught?.message).toBe('simulated consumer abort');
+    // Timeout fires at 10 s; allow 1 s of slack for scheduling overhead.
+    expect(elapsed).toBeLessThan(11_000);
+  }, 15_000);
 });

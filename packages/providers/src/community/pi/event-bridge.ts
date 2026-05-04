@@ -403,8 +403,19 @@ export async function* bridgeSession(
       getLog().debug({ err }, 'pi.event-bridge.dispose_failed');
     }
     // Ensure the prompt promise settles so callers see no dangling work.
-    await promptPromise.catch(() => {
-      /* errors already surfaced through the queue */
-    });
+    // Safety net: if Pi's session.prompt() doesn't settle within 10 s after
+    // dispose(), give up rather than hanging forever. Without this, a Pi
+    // session that never rejects/resolves after dispose() keeps the caller's
+    // generator.return() suspended indefinitely. Bun then drains its event
+    // loop (no remaining I/O sources) and exits with code 0 — leaving the
+    // workflow run zombie in 'running' (#1561).
+    await Promise.race([
+      promptPromise.catch(() => {
+        /* errors already surfaced through the queue */
+      }),
+      new Promise<void>(resolve => {
+        setTimeout(resolve, 10_000);
+      }),
+    ]);
   }
 }
