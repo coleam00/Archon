@@ -116,10 +116,7 @@ export function resolveOmpToolNames(
   nodeConfig?: NodeConfig,
   defaults?: Pick<OmpProviderDefaults, 'toolNames'>
 ): ResolvedOmpTools {
-  const base =
-    defaults?.toolNames && defaults.toolNames.length > 0
-      ? defaults.toolNames
-      : [...DEFAULT_OMP_TOOL_NAMES];
+  const base = defaults?.toolNames !== undefined ? defaults.toolNames : [...DEFAULT_OMP_TOOL_NAMES];
   const unknownTools: string[] = [];
 
   const normalize = (name: string): string | undefined => normalizeToolName(name, unknownTools);

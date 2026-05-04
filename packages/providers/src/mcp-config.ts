@@ -14,6 +14,10 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * Expand $VAR_NAME references in string-valued records from process.env.
  */
@@ -24,7 +28,7 @@ function expandEnvVarsInRecord(
   const result: Record<string, string> = {};
   for (const [key, val] of Object.entries(record)) {
     if (typeof val !== 'string') {
-      getLog().warn({ key, valueType: typeof val }, 'mcp_env_value_coerced_to_string');
+      getLog().warn({ key, valueType: typeof val }, 'mcp.env_value_coerced_to_string');
       result[key] = String(val);
       continue;
     }
@@ -47,14 +51,17 @@ function expandEnvVars(config: Record<string, unknown>, mcpPath: string): Loaded
       throw new Error(`MCP server config must be a JSON object: ${serverName} in ${mcpPath}`);
     }
     const server = { ...(serverConfig as Record<string, unknown>) };
-    if (server.env && typeof server.env === 'object') {
-      server.env = expandEnvVarsInRecord(server.env as Record<string, unknown>, missingVars);
+    if (server.env !== undefined) {
+      if (!isRecord(server.env)) {
+        throw new Error(`MCP server env must be a JSON object: ${serverName} in ${mcpPath}`);
+      }
+      server.env = expandEnvVarsInRecord(server.env, missingVars);
     }
-    if (server.headers && typeof server.headers === 'object') {
-      server.headers = expandEnvVarsInRecord(
-        server.headers as Record<string, unknown>,
-        missingVars
-      );
+    if (server.headers !== undefined) {
+      if (!isRecord(server.headers)) {
+        throw new Error(`MCP server headers must be a JSON object: ${serverName} in ${mcpPath}`);
+      }
+      server.headers = expandEnvVarsInRecord(server.headers, missingVars);
     }
     servers[serverName] = server;
   }

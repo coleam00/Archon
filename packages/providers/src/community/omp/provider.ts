@@ -63,7 +63,7 @@ export function augmentPromptForJsonSchema(
 
 ---
 
-CRITICAL: Respond with ONLY a JSON object matching the schema below. No prose before or after the JSON. No markdown code fences. Just the raw JSON object as your final message.
+CRITICAL: Respond with ONLY valid JSON matching the schema below. No prose before or after the JSON. No markdown code fences. Just the raw JSON value as your final message.
 
 Schema:
 ${JSON.stringify(schema, null, 2)}`;
@@ -234,7 +234,9 @@ export class OmpProvider implements IAgentProvider {
     const sdk = await this.sdkLoader();
     const authStorage = await discoverAuthStorageOrThrow(sdk, ompConfig.agentDir, parsed.provider);
 
-    const runtimeOverride = getRuntimeAuthOverride(parsed.provider, requestOptions?.env);
+    const runtimeOverride =
+      getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
+      getRuntimeAuthOverride(parsed.provider, ompConfig.env);
     if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
 
     const { modelRegistry, model } = resolveSessionModel(sdk, authStorage, parsed);

@@ -6,10 +6,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function stringArray(value: unknown): string[] | undefined {
+function stringArray(value: unknown, keepExplicitEmpty = false): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const filtered = value.filter((item): item is string => typeof item === 'string');
-  return filtered.length > 0 ? filtered : undefined;
+  if (filtered.length > 0) return filtered;
+  return keepExplicitEmpty ? [] : undefined;
 }
 
 function stringRecord(value: unknown): Record<string, string> | undefined {
@@ -107,7 +108,7 @@ export function parseOmpConfig(raw: Record<string, unknown>): OmpProviderDefault
   }
 
   assignDefined(result, 'additionalExtensionPaths', stringArray(raw.additionalExtensionPaths));
-  assignDefined(result, 'toolNames', stringArray(raw.toolNames));
+  assignDefined(result, 'toolNames', stringArray(raw.toolNames, true));
   assignDefined(result, 'extensionFlags', booleanOrStringRecord(raw.extensionFlags));
   assignDefined(result, 'env', stringRecord(raw.env));
   assignDefined(result, 'settings', settingsObject(raw.settings));

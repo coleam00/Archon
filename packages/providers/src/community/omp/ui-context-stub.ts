@@ -72,6 +72,10 @@ function lastStringArg(args: unknown[]): string {
   return '';
 }
 
+async function unsupportedCustom(): Promise<never> {
+  throw new Error('OMP UI custom() is not supported in Archon UI stub');
+}
+
 export function createArchonOmpUIContext(bridge: ArchonOmpUIBridge): OmpExtensionUIContext {
   const theme = new Proxy({} as OmpTheme, {
     get(_target, prop: string | symbol): unknown {
@@ -100,7 +104,7 @@ export function createArchonOmpUIContext(bridge: ArchonOmpUIBridge): OmpExtensio
     setFooter: noop,
     setHeader: noop,
     setTitle: noop,
-    custom: async <T>() => undefined as T,
+    custom: unsupportedCustom as OmpExtensionUIContext['custom'],
     pasteToEditor: noop,
     setEditorText: noop,
     getEditorText: () => '',

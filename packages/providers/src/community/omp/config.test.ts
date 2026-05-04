@@ -92,7 +92,7 @@ describe('parseOmpConfig', () => {
     });
   });
 
-  test('drops empty arrays, records, and unknown keys', () => {
+  test('drops empty arrays, records, and unknown keys except explicit empty toolNames', () => {
     expect(
       parseOmpConfig({
         additionalExtensionPaths: [1],
@@ -111,6 +111,6 @@ describe('parseOmpConfig', () => {
         },
         x: 'y',
       })
-    ).toEqual({});
+    ).toEqual({ toolNames: [] });
   });
 });
