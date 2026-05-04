@@ -53,3 +53,15 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+export {
+  CopilotProvider,
+  parseCopilotConfig,
+  registerCopilotProvider,
+  resetCopilotSingleton,
+  type CopilotProviderDefaults,
+} from './community/copilot';
+export {
+  resolveCopilotBinaryPath,
+  fileExists as copilotFileExists,
+} from './community/copilot/binary-resolver';

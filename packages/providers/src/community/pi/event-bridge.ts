@@ -161,55 +161,11 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
   return chunk;
 }
 
-/**
- * Attempt to parse a Pi assistant transcript as the structured-output JSON
- * requested via `outputFormat`. Handles three common model failure modes:
- *  - trailing/leading whitespace (always stripped)
- *  - markdown code fences (```json ... ``` or bare ``` ... ```) that models
- *    emit despite the "no code fences" instruction in the prompt
- *  - prose preamble followed by a single trailing JSON object — pattern
- *    observed on Minimax M2.7 ("Now I have all the inputs. Let me evaluate
- *    the three gates: ... {...}"). Reasoning models tend to "think out loud"
- *    before emitting structured output despite explicit JSON-only prompts.
- *
- * Returns the parsed value on success, `undefined` on any failure. Callers
- * treat `undefined` as "structured output unavailable" and degrade via the
- * dag-executor's existing missing-structured-output warning.
- */
-export function tryParseStructuredOutput(text: string): unknown {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return undefined;
-  // Strip ```json / ``` fences if present. Match only at boundaries so we
-  // don't mangle JSON strings that legitimately contain backticks.
-  const cleaned = trimmed
-    .replace(/^```(?:json)?\s*\n?/i, '')
-    .replace(/\n?\s*```\s*$/, '')
-    .trim();
-
-  // Tier 1: clean parse — fast path for fully compliant outputs.
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    // fall through
-  }
-
-  // Tier 2: scan forward to the FIRST `{` and parse from there. Recovers the
-  // preamble-then-JSON pattern reasoning models emit. A backward scan from
-  // the last `{` was considered but rejected: it silently returns the wrong
-  // object when the prose contains a brace-bearing example after the real
-  // payload (e.g. `{"actual":1}\nFor example: {"x":2}` would yield `{x:2}`),
-  // breaking the conservative-failure contract callers rely on.
-  const firstBrace = cleaned.indexOf('{');
-  if (firstBrace > 0) {
-    try {
-      return JSON.parse(cleaned.slice(firstBrace));
-    } catch {
-      // fall through
-    }
-  }
-
-  return undefined;
-}
+// Structured-output parsing is shared across providers. Import once for local
+// use and re-export so existing callers and tests keep their import path
+// stable; new providers should import from `../../shared/structured-output`.
+export { tryParseStructuredOutput } from '../../shared/structured-output';
+import { tryParseStructuredOutput } from '../../shared/structured-output';
 
 /**
  * Pure mapper from Pi's `AgentSessionEvent` → zero-or-more Archon `MessageChunk`s.

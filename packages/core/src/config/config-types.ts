@@ -16,6 +16,7 @@
 import type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
+  CopilotProviderDefaults,
   PiProviderDefaults,
   ProviderDefaultsMap,
 } from '@archon/providers/types';
@@ -23,6 +24,7 @@ import type {
 export type {
   ClaudeProviderDefaults,
   CodexProviderDefaults,
+  CopilotProviderDefaults,
   PiProviderDefaults,
   ProviderDefaultsMap,
 };

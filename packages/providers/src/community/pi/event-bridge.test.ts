@@ -423,6 +423,15 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput('   ')).toBeUndefined();
   });
 
+  test('returns undefined for valid JSON that is not an object', () => {
+    // Schema augmentation always asks for an object — bare primitives are
+    // valid JSON but not "structured output".
+    expect(tryParseStructuredOutput('null')).toBeUndefined();
+    expect(tryParseStructuredOutput('42')).toBeUndefined();
+    expect(tryParseStructuredOutput('"answer"')).toBeUndefined();
+    expect(tryParseStructuredOutput('true')).toBeUndefined();
+  });
+
   test('returns undefined when model wraps JSON in prose with trailing text', () => {
     // Caller degrades via the executor's missing-structured-output warning.
     // Forward scan starts at the JSON object but JSON.parse rejects the

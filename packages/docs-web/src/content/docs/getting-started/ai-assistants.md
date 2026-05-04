@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, GitHub Copilot, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All three can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -401,6 +401,95 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi on GitHub](https://github.com/badlogic/pi-mono) — upstream project.
+
+## GitHub Copilot (Community Provider)
+
+**Use a GitHub Copilot subscription inside Archon workflows.** Drives the Copilot CLI via `@github/copilot-sdk`, supporting OpenAI, Anthropic via BYOK, Gemini, and the other models Copilot exposes — switch between them with the `model` field.
+
+Copilot is registered as `builtIn: false` — like Pi, a bundled community provider rather than a core built-in.
+
+### Install
+
+For source installs (`bun run`), the SDK + its bundled CLI dependency come along with `bun install` — nothing extra to do.
+
+For compiled Archon binaries, install the Copilot CLI yourself and point Archon at it:
+
+```bash
+npm install -g @github/copilot
+```
+
+Then tell Archon where the binary lives (the resolver searches these in order):
+
+```ini
+# .env
+COPILOT_BIN_PATH=/absolute/path/to/copilot
+```
+
+```yaml
+# .archon/config.yaml
+assistants:
+  copilot:
+    copilotCliPath: /absolute/path/to/copilot
+```
+
+Or place the binary at `~/.archon/vendor/copilot/copilot` (POSIX) / `~/.archon/vendor/copilot/copilot.exe` (Windows) and the resolver picks it up automatically.
+
+### Authenticate
+
+By default, Copilot uses the credentials from your local `copilot login`. Generic `GH_TOKEN` / `GITHUB_TOKEN` env vars are **not** picked up automatically — classic GitHub PATs lack Copilot entitlement and would fail with a misleading SDK error. Auth precedence (highest to lowest):
+
+1. **`COPILOT_GITHUB_TOKEN`** (env) — always wins when set; treated as explicit Copilot intent
+2. **`useLoggedInUser: false`** in `.archon/config.yaml` — opts into env-token auth, including generic `GH_TOKEN` / `GITHUB_TOKEN`
+3. **`copilot login` credentials** — the default
+
+An active GitHub Copilot subscription is required for any of these to work.
+
+### Copilot Configuration Options
+
+You can configure Copilot's behavior in `.archon/config.yaml`:
+
+```yaml
+assistants:
+  copilot:
+    model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
+    modelReasoningEffort: medium  # 'low' | 'medium' | 'high' | 'xhigh' | 'max' (alias for xhigh)
+    # configDir: /absolute/path/to/copilot-config
+    # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
+    # useLoggedInUser: false        # opt into env-token auth (GH_TOKEN / GITHUB_TOKEN); default uses `copilot login`
+    # logLevel: error               # 'none' | 'error' | 'warning' | 'info' | 'debug' | 'all'
+```
+
+Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`claude-sonnet-4.5`), Gemini, and more. When no model is configured, Archon passes `model: 'auto'` and Copilot picks.
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Returns `sessionId`; reused on resume |
+| Reasoning control | ✅ | `effort:` / string `thinking:` → Copilot `reasoningEffort`; `max` maps to SDK `xhigh` |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
+| Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |
+| MCP servers | ✅ | `mcp: path/to/servers.json` → `SessionConfig.mcpServers` (env vars `$FOO` expanded; missing vars warned) |
+| Skills | ✅ | `skills: [name]` resolved from `.agents/skills/` or `.claude/skills/` (project or home) → `SessionConfig.skillDirectories` |
+| Structured output | ✅ | best-effort via prompt augmentation; unparseable output degrades to dag-executor's missing-output warning |
+| Sub-agents (`agents:`) | ✅ | `name`/`description`/`prompt`/`tools` → `SessionConfig.customAgents`; Claude-specific fields (`model`, `disallowedTools`, `skills`, `maxTurns`) warn per agent and are ignored |
+| Fork-session retry | ⚠️ | Copilot SDK has no fork API — when Archon requests a fork (on retry), we create a fresh session and emit a system-chunk warning |
+| Hooks | ❌ | Archon hooks ≠ Copilot's `SessionHooks` event vocabulary |
+| Fallback model | ❌ | not wired |
+| Cost control | ❌ | no cost-limit API |
+| Sandbox | ❌ | Copilot permissions surface is separate from Archon's sandbox model |
+
+### Set as Default (Optional)
+
+```ini
+DEFAULT_AI_ASSISTANT=copilot
+```
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
+- [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) — upstream SDK.
 
 ## How Assistant Selection Works
 
