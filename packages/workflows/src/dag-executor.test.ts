@@ -6225,7 +6225,7 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // 420 × 5 chars = 2100 chars — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // 420 × 5 chars = 2100 chars — larger than SUBPROCESS_ERROR_MAX_CHARS (2000 chars),
     // so any leak of the script body via err.message would violate the length
     // assertion below. Single-line form (no embedded newlines) avoids a Windows
     // limitation where child_process.execFile does not preserve newlines in
@@ -6263,8 +6263,10 @@ describe('executeDagWorkflow -- script nodes', () => {
     const errorMsg = (failedEvent![0] as { data: { error: string } }).data.error;
     expect(errorMsg).toContain("Script node 'fail-script-1389' failed");
     expect(errorMsg).not.toContain('Command failed:');
-    // 2 KB diagnostic cap + label prefix + truncation marker should stay under
-    // 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
+    // 2000-char diagnostic cap + label prefix + truncation marker should stay under
+    // 2.1 KB. If the cap were raised above 2100, the full 2100-char body could
+    // appear untruncated in the error output — this length assertion is the proxy
+    // for "script body did not fully leak into the diagnostic".
     // (err.message = "Command failed: bun -e <2100-char body>" ≈ 2160 chars —
     // leaking it would violate this assertion.)
     expect(errorMsg.length).toBeLessThan(2100);
