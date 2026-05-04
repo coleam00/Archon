@@ -817,15 +817,15 @@ async function handleWorkflowCommand(
     case 'run': {
       // Directly invoke a workflow by name (bypasses AI router)
       const workflowName = args[1];
-      // Extract optional `--force` flag from anywhere in the user's args
-      // (most natural at position 2, but be lenient: `/workflow run X "..." --force`
-      // and `/workflow run X --force "..."` both work).
+      // Extract optional `--force` flag — only when it's the first bareword
+      // after the workflow name (flag-position). A previous "lenient" version
+      // matched `--force` anywhere in restArgs, but `parseCommand` already
+      // splits quoted strings into a single arg, so a user-supplied `--force`
+      // bareword can only appear in flag-position; matching anywhere risked
+      // accidental stripping when a future caller composes args differently.
       const restArgs = args.slice(2);
-      const forceIndex = restArgs.findIndex(a => a === '--force');
-      const force = forceIndex >= 0;
-      const workflowArgs = (force ? restArgs.filter((_, i) => i !== forceIndex) : restArgs).join(
-        ' '
-      );
+      const force = restArgs[0] === '--force';
+      const workflowArgs = (force ? restArgs.slice(1) : restArgs).join(' ');
 
       if (!workflowName) {
         return {

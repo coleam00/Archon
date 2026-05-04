@@ -315,7 +315,11 @@ async function dispatchOrchestratorWorkflow(
         );
       } else {
         // Failed (or other non-paused unfinished) run — surface four choices.
-        const escapedMsg = userMessage.replace(/"/g, '\\"');
+        // Escape backslash, double-quote, and backtick so the suggested
+        // command renders cleanly even when the original userMessage
+        // contained any of them — without the backtick escape, three
+        // consecutive backticks would close our Markdown code-fence early.
+        const escapedMsg = userMessage.replace(/[\\"`]/g, '\\$&');
         const baseCmd = `/workflow run ${workflow.name}`;
         const promptText = [
           `Found a prior failed run of **${workflow.name}** (run \`${resumableRun.id}\`).`,
