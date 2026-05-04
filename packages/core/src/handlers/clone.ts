@@ -65,18 +65,16 @@ async function registerRepoAtPath(
     }
   }
 
-  // Check if a codebase with this name already exists (dedup by project identity)
-  const existing = await codebaseDb.findCodebaseByName(name);
+  // Dedup by composite identity (name + path).
+  // 1. Exact (name, path) match → re-registration of the same project
+  // 2. Same name, different path → distinct clone, create a new row
+  // 3. Backward compat: existing single-clone installs where the directory
+  //    name doesn't match the remote-derived name are handled by
+  //    registerRepository's findCodebaseByDefaultCwd guard (checked before
+  //    reaching this function).
+  const existing = await codebaseDb.findCodebaseByNameAndPath(name, targetPath);
   if (existing) {
-    // Determine if the new path is "better" (local > archon-managed clone)
-    const isNewPathLocal = !targetPath.includes('/.archon/workspaces/');
-    const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
-    const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
-
     const updates: { default_cwd?: string; repository_url?: string | null } = {};
-    if (shouldUpdateCwd) {
-      updates.default_cwd = targetPath;
-    }
     // Fill in repository_url if the existing record doesn't have one
     if (!existing.repository_url && repositoryUrl) {
       updates.repository_url = repositoryUrl;
@@ -86,10 +84,9 @@ async function registerRepoAtPath(
     }
 
     // Still reload commands for the existing codebase
-    const effectiveCwd = shouldUpdateCwd ? targetPath : existing.default_cwd;
     let commandsLoaded = 0;
     for (const folder of getCommandFolderSearchPaths()) {
-      const commandPath = join(effectiveCwd, folder);
+      const commandPath = join(existing.default_cwd, folder);
       try {
         await access(commandPath);
       } catch {
@@ -113,11 +110,63 @@ async function registerRepoAtPath(
     return {
       codebaseId: existing.id,
       name: existing.name,
-      repositoryUrl: existing.repository_url,
-      defaultCwd: shouldUpdateCwd ? targetPath : existing.default_cwd,
+      repositoryUrl: existing.repository_url ?? repositoryUrl,
+      defaultCwd: existing.default_cwd,
       commandCount: commandsLoaded,
       alreadyExisted: true,
     };
+  }
+
+  // Check if a name-only match exists with a managed path that should be
+  // upgraded to the local path (archon-managed clone → local checkout).
+  const nameMatch = await codebaseDb.findCodebaseByName(name);
+  if (nameMatch) {
+    const isNewPathLocal = !targetPath.includes('/.archon/workspaces/');
+    const isExistingPathManaged = nameMatch.default_cwd.includes('/.archon/workspaces/');
+    if (isNewPathLocal && isExistingPathManaged) {
+      // Upgrade managed clone to local path (single identity, new path)
+      const updates: { default_cwd: string; repository_url?: string | null } = {
+        default_cwd: targetPath,
+      };
+      if (!nameMatch.repository_url && repositoryUrl) {
+        updates.repository_url = repositoryUrl;
+      }
+      await codebaseDb.updateCodebase(nameMatch.id, updates);
+
+      // Reload commands from the new local path
+      let commandsLoaded = 0;
+      for (const folder of getCommandFolderSearchPaths()) {
+        const commandPath = join(targetPath, folder);
+        try {
+          await access(commandPath);
+        } catch {
+          continue;
+        }
+        const markdownFiles = await findMarkdownFilesRecursive(commandPath);
+        if (markdownFiles.length > 0) {
+          const commands = { ...(await codebaseDb.getCodebaseCommands(nameMatch.id)) };
+          markdownFiles.forEach(({ commandName, relativePath }) => {
+            commands[commandName] = {
+              path: join(folder, relativePath),
+              description: `From ${folder}`,
+            };
+          });
+          await codebaseDb.updateCodebaseCommands(nameMatch.id, commands);
+          commandsLoaded = markdownFiles.length;
+          break;
+        }
+      }
+
+      return {
+        codebaseId: nameMatch.id,
+        name: nameMatch.name,
+        repositoryUrl: nameMatch.repository_url ?? repositoryUrl,
+        defaultCwd: targetPath,
+        commandCount: commandsLoaded,
+        alreadyExisted: true,
+      };
+    }
+    // Same name, different local path → distinct clone, fall through to create
   }
 
   // No existing codebase — create new
