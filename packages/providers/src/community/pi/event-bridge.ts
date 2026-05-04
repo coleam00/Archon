@@ -68,8 +68,9 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
 
   private async *iterate(): AsyncGenerator<T> {
     while (true) {
-      const next = this.buffer.shift();
-      if (next !== undefined) {
+      if (this.buffer.length > 0) {
+        // `shift()` can return undefined only when empty; length guard avoids that.
+        const next = this.buffer.shift() as T;
         yield next;
         continue;
       }
