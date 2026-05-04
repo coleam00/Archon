@@ -1,7 +1,7 @@
 import { createLogger } from '@archon/paths';
 import type { OmpSession } from './sdk-loader';
 
-import { AsyncQueue } from '../async-queue';
+import { AsyncQueue } from './async-queue';
 import type { MessageChunk, TokenUsage } from '../../types';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
