@@ -30,6 +30,9 @@ describe('mapOmpEvent', () => {
     expect(
       mapOmpEvent({ type: 'tool_execution_end', toolName: 'read', result: 'ok', toolCallId: '1' })
     ).toEqual([{ type: 'tool_result', toolName: 'read', toolOutput: 'ok', toolCallId: '1' }]);
+    expect(mapOmpEvent({ type: 'tool_execution_end', toolName: 'read', toolCallId: '2' })).toEqual([
+      { type: 'tool_result', toolName: 'read', toolOutput: 'undefined', toolCallId: '2' },
+    ]);
   });
 });
 

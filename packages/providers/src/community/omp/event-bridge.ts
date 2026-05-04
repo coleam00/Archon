@@ -1,6 +1,7 @@
 import { createLogger } from '@archon/paths';
 import type { OmpSession } from './sdk-loader';
 
+import { AsyncQueue } from '../async-queue';
 import type { MessageChunk, TokenUsage } from '../../types';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -9,57 +10,11 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-class AsyncQueue<T> implements AsyncIterable<T> {
-  private readonly buffer: T[] = [];
-  private readonly waiters: ((result: IteratorResult<T>) => void)[] = [];
-  private consumed = false;
-  private closed = false;
-
-  push(item: T): void {
-    if (this.closed) return;
-    const waiter = this.waiters.shift();
-    if (waiter) waiter({ value: item, done: false });
-    else this.buffer.push(item);
-  }
-
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      if (waiter) waiter({ value: undefined, done: true });
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    if (this.consumed) {
-      throw new Error('AsyncQueue: a single queue can only be iterated once.');
-    }
-    this.consumed = true;
-    return this.iterate();
-  }
-
-  private async *iterate(): AsyncGenerator<T> {
-    while (true) {
-      const next = this.buffer.shift();
-      if (next !== undefined) {
-        yield next;
-        continue;
-      }
-      if (this.closed) return;
-      const result = await new Promise<IteratorResult<T>>(resolve => {
-        this.waiters.push(resolve);
-      });
-      if (result.done) return;
-      yield result.value;
-    }
-  }
-}
-
 function serializeToolResult(result: unknown): string {
   if (typeof result === 'string') return result;
   try {
-    return JSON.stringify(result);
+    const json = JSON.stringify(result);
+    return json === undefined ? String(result) : json;
   } catch {
     return String(result);
   }

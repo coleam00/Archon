@@ -1,7 +1,12 @@
 import { isAbsolute, resolve } from 'path';
 
 import { loadMcpConfig } from '../../mcp-config';
-import type { OmpCodingAgentSdk, OmpMcpManager, OmpMcpSourceMeta } from './sdk-loader';
+import type {
+  OmpAuthStorage,
+  OmpCodingAgentSdk,
+  OmpMcpManager,
+  OmpMcpSourceMeta,
+} from './sdk-loader';
 
 export interface ResolvedOmpMcp {
   manager: OmpMcpManager;
@@ -37,10 +42,12 @@ function buildSources(
 export async function resolveOmpMcp(
   sdk: Pick<OmpCodingAgentSdk, 'MCPManager'>,
   cwd: string,
-  mcpPath: string
+  mcpPath: string,
+  authStorage: OmpAuthStorage
 ): Promise<ResolvedOmpMcp> {
   const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd);
   const manager = new sdk.MCPManager(cwd, null);
+  manager.setAuthStorage(authStorage);
   const resolvedPath = isAbsolute(mcpPath) ? mcpPath : resolve(cwd, mcpPath);
   const result = await manager.connectServers(servers, buildSources(serverNames, resolvedPath));
 
