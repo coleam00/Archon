@@ -84,6 +84,18 @@ export interface PiProviderDefaults {
    * @default undefined
    */
   env?: Record<string, string>;
+  /**
+   * Maximum number of concurrent Pi `session.prompt()` calls allowed.
+   * When this limit is reached, additional calls queue and wait rather than
+   * fail. Pi/Minimax does not throttle concurrent requests at the SDK layer
+   * (unlike the Claude SDK), so this prevents cascading 429/rate-limit failures
+   * when many parallel workflow nodes invoke Pi simultaneously.
+   *
+   * Set to a positive integer matching your Pi API tier's concurrency limit.
+   * Omit for unlimited (not recommended for production batches).
+   * @default undefined (unlimited)
+   */
+  maxConcurrent?: number;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */

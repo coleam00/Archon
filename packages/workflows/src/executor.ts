@@ -100,7 +100,7 @@ async function safeSendMessage(
       unknownErrorTracker.count++;
       if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
         throw new Error(
-          `${String(UNKNOWN_ERROR_THRESHOLD)} consecutive unrecognized errors - aborting workflow: ${err.message}`
+          `${UNKNOWN_ERROR_THRESHOLD} consecutive unrecognized errors - aborting workflow: ${err.message}`
         );
       }
     }

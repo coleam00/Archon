@@ -92,7 +92,8 @@ export function serializeToolResult(result: unknown): string {
   if (typeof result === 'string') return result;
   try {
     return JSON.stringify(result);
-  } catch {
+  } catch (err) {
+    getLog().warn({ err }, 'pi.event-bridge.tool_result_serialize_failed');
     return String(result);
   }
 }
@@ -146,7 +147,16 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     tokens,
     ...(tokens.cost !== undefined ? { cost: tokens.cost } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
-    ...(isError ? { isError: true, errorSubtype: last.stopReason } : {}),
+    ...(isError
+      ? {
+          isError: true,
+          errorSubtype: last.stopReason,
+          // Surfacing errorMessage in errors[] is what makes the executor's
+          // transient-error classifier (which pattern-matches on the thrown
+          // message) able to retry Pi-side 429/overload failures.
+          ...(last.errorMessage ? { errors: [last.errorMessage] } : {}),
+        }
+      : {}),
   };
   return chunk;
 }
@@ -270,17 +280,6 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
 }
 
 /**
- * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
- *
- * Behavior:
- *  - subscribe before calling prompt, unsubscribe in finally
- *  - yield mapped events in order
- *  - complete on successful `session.prompt()` resolution
- *  - throw on `session.prompt()` rejection or listener-raised errors
- *  - forward `abortSignal` to `session.abort()` fire-and-forget
- *  - always `dispose()` the session to avoid listener accumulation
- */
-/**
  * Internal queue payload for `bridgeSession`. Exported at module scope
  * (not inside the generator) so unit tests can exercise each variant
  * independently without reaching into the generator's closure.
@@ -295,6 +294,17 @@ export interface BridgeNotifier {
   setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
 }
 
+/**
+ * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
+ *
+ * Behavior:
+ *  - subscribe before calling prompt, unsubscribe in finally
+ *  - yield mapped events in order
+ *  - complete on successful `session.prompt()` resolution
+ *  - throw on `session.prompt()` rejection or listener-raised errors
+ *  - forward `abortSignal` to `session.abort()` fire-and-forget
+ *  - always `dispose()` the session to avoid listener accumulation
+ */
 export async function* bridgeSession(
   session: AgentSession,
   prompt: string,

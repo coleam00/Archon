@@ -1530,4 +1530,38 @@ describe('PiProvider', () => {
       delete process.env.PI_TEST_SHELL_WINS;
     }
   });
+
+  // Semaphore tests run last — the module-level piSemaphore singleton persists
+  // across tests once initialized, so these must not affect tests that run before.
+  test('maxConcurrent initializes semaphore and logs pi.semaphore_initialized', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        assistantConfig: { maxConcurrent: 2 },
+      })
+    );
+
+    expect(mockLogger.info).toHaveBeenCalledWith({ maxConcurrent: 2 }, 'pi.semaphore_initialized');
+    // Semaphore slot released: dispose fires on successful completion
+    expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('semaphore is not initialized when maxConcurrent is absent', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    const initCalls = (mockLogger.info.mock.calls as unknown[][]).filter(
+      c => c[1] === 'pi.semaphore_initialized'
+    );
+    expect(initCalls).toHaveLength(0);
+  });
 });
