@@ -210,9 +210,12 @@ describe('PiProvider', () => {
     mockSessionList.mockImplementation(async () => []);
     mockSettingsManagerInMemory.mockClear();
     mockSettingsManagerCreate.mockClear();
-    mockSettingsManagerDrainErrors.mockClear();
-    mockSettingsManagerGetGlobalSettings.mockClear();
-    mockSettingsManagerGetProjectSettings.mockClear();
+    mockSettingsManagerDrainErrors.mockReset();
+    mockSettingsManagerDrainErrors.mockImplementation(() => []);
+    mockSettingsManagerGetGlobalSettings.mockReset();
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({}));
+    mockSettingsManagerGetProjectSettings.mockReset();
+    mockSettingsManagerGetProjectSettings.mockImplementation(() => ({}));
     capturedListener = undefined;
     scriptedEvents.length = 0;
     fileCreds = {};
