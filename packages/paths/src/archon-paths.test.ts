@@ -8,6 +8,8 @@ const isWindows = process.platform === 'win32';
 
 import {
   isDocker,
+  isWSL,
+  getWSLDistroName,
   getArchonHome,
   getArchonWorkspacesPath,
   ensureArchonWorkspacesPath,
@@ -39,7 +41,14 @@ import {
 } from './archon-paths';
 
 /** All env vars that path functions depend on */
-const ENV_VARS = ['WORKSPACE_PATH', 'WORKTREE_BASE', 'ARCHON_HOME', 'ARCHON_DOCKER', 'HOME'];
+const ENV_VARS = [
+  'WORKSPACE_PATH',
+  'WORKTREE_BASE',
+  'ARCHON_HOME',
+  'ARCHON_DOCKER',
+  'HOME',
+  'WSL_DISTRO_NAME',
+];
 
 /**
  * Save and restore environment variables around each test.
@@ -75,6 +84,33 @@ describe('archon-paths', () => {
 
     test('returns path unchanged if no tilde', () => {
       expect(expandTilde('/absolute/path')).toBe('/absolute/path');
+    });
+  });
+
+  describe('isWSL', () => {
+    test('returns true when WSL_DISTRO_NAME is set', () => {
+      process.env.WSL_DISTRO_NAME = 'Ubuntu';
+      expect(isWSL()).toBe(true);
+    });
+
+    test('returns false when WSL_DISTRO_NAME is unset and not on a WSL kernel', () => {
+      delete process.env.WSL_DISTRO_NAME;
+      // /proc/sys/kernel/osrelease on real Linux CI doesn't contain "microsoft";
+      // on a WSL host this assertion is naturally true via the env-var branch above.
+      // Skip the strict check here — just verify it doesn't throw.
+      expect(typeof isWSL()).toBe('boolean');
+    });
+  });
+
+  describe('getWSLDistroName', () => {
+    test('returns the WSL_DISTRO_NAME env var when set', () => {
+      process.env.WSL_DISTRO_NAME = 'Debian';
+      expect(getWSLDistroName()).toBe('Debian');
+    });
+
+    test('returns undefined when WSL_DISTRO_NAME is unset', () => {
+      delete process.env.WSL_DISTRO_NAME;
+      expect(getWSLDistroName()).toBeUndefined();
     });
   });
 

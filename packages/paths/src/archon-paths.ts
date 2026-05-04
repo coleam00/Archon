@@ -17,6 +17,7 @@
 import { join, dirname, normalize, basename } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, rm } from 'fs/promises';
+import { readFileSync } from 'fs';
 import { createLogger } from './logger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -46,6 +47,47 @@ export function isDocker(): boolean {
     (process.env.HOME === '/root' && Boolean(process.env.WORKSPACE_PATH)) ||
     process.env.ARCHON_DOCKER === 'true'
   );
+}
+
+/**
+ * Detect if running inside WSL (Windows Subsystem for Linux).
+ *
+ * Two signals (either is sufficient):
+ *   - `WSL_DISTRO_NAME` env var is set (always true inside a WSL distro)
+ *   - `/proc/sys/kernel/osrelease` contains "microsoft" (lower-cased)
+ *
+ * Used by callers that need to emit Windows-host-friendly URIs — most
+ * notably the Web UI's "Open in IDE" button, which has to switch from
+ * `vscode://file/...` to `vscode://vscode-remote/wsl+<distro>/...` when
+ * the server is inside WSL but the browser is on the Windows host.
+ *
+ * Not cached: the env-var read is free and the `/proc` read is cheap
+ * enough at the call frequency this hits (one per `/api/health` request,
+ * which the Web UI polls every 30 s).
+ */
+export function isWSL(): boolean {
+  if (process.env.WSL_DISTRO_NAME) return true;
+
+  try {
+    const release = readFileSync('/proc/sys/kernel/osrelease', 'utf8').toLowerCase();
+    return release.includes('microsoft');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return the WSL distribution name (`Ubuntu`, `Debian`, …) when the process
+ * is running inside WSL, otherwise `undefined`. The value comes straight
+ * from the `WSL_DISTRO_NAME` env var that WSL sets in every distro.
+ *
+ * Returns `undefined` outside of WSL, even though `isWSL()` may technically
+ * still be true via the `/proc` fallback — without the env var we don't
+ * know what distro to put into a `vscode://vscode-remote/wsl+<distro>/...`
+ * URI, and guessing is worse than a sentinel that callers can fall back on.
+ */
+export function getWSLDistroName(): string | undefined {
+  return process.env.WSL_DISTRO_NAME ?? undefined;
 }
 
 /**

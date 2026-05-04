@@ -56,6 +56,9 @@ export interface HealthResponse {
   runningWorkflows: number;
   version?: string;
   is_docker: boolean;
+  is_wsl: boolean;
+  /** WSL distribution name (e.g. "Ubuntu") — only present when is_wsl is true. */
+  wsl_distro?: string;
   activePlatforms?: string[];
 }
 
