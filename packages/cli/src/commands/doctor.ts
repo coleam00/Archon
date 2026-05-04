@@ -22,10 +22,14 @@ export interface CheckResult {
   message: string;
 }
 
-export async function checkClaudeBinary(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+export async function checkClaudeBinary(
+  env: NodeJS.ProcessEnv,
+  // Injected so tests can drive the binary-mode branch — `BUNDLED_IS_BINARY`
+  // is a static const re-export and cannot be spied at runtime.
+  isBinary: boolean = BUNDLED_IS_BINARY
+): Promise<CheckResult> {
   const label = 'Claude binary';
-  // In dev mode the SDK resolves Claude via node_modules; the env var is unused.
-  if (!BUNDLED_IS_BINARY) {
+  if (!isBinary) {
     return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
   }
   const path = env.CLAUDE_BIN_PATH;
@@ -67,18 +71,46 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
   }
 }
 
-export async function checkDatabase(): Promise<CheckResult> {
+export interface DatabaseDeps {
+  pool: { query: (sql: string) => Promise<unknown> };
+  getDatabaseType: () => string;
+}
+
+export async function checkDatabase(
+  // Injected so tests can drive both code paths without mocking the dynamic
+  // import. Falls back to the lazy `@archon/core` import in production.
+  loadDeps: () => Promise<DatabaseDeps> = defaultLoadDatabaseDeps
+): Promise<CheckResult> {
   const label = 'Database';
+  let deps: DatabaseDeps;
   try {
-    // Lazy import so doctor doesn't pull in the full @archon/core graph just
-    // to print --help or run a different check.
-    const { pool, getDatabaseType } = await import('@archon/core');
-    const dbType = getDatabaseType();
-    await pool.query('SELECT 1');
+    deps = await loadDeps();
+  } catch (err) {
+    // Distinguish module-load failure from query failure — surfacing
+    // "not reachable" for an import error misleads the user into running
+    // `archon setup` when the real fix is a binary rebuild.
+    getLog().error({ err }, 'doctor.db_module_load_failed');
+    return {
+      label,
+      status: 'fail',
+      message: `failed to load database module: ${(err as Error).message}`,
+    };
+  }
+  try {
+    const dbType = deps.getDatabaseType();
+    await deps.pool.query('SELECT 1');
     return { label, status: 'pass', message: `reachable (${dbType})` };
   } catch (err) {
+    getLog().error({ err }, 'doctor.db_query_failed');
     return { label, status: 'fail', message: `not reachable: ${(err as Error).message}` };
   }
+}
+
+async function defaultLoadDatabaseDeps(): Promise<DatabaseDeps> {
+  // Lazy import so doctor doesn't pull in the full @archon/core graph just to
+  // print --help or run a different check.
+  const { pool, getDatabaseType } = await import('@archon/core');
+  return { pool, getDatabaseType };
 }
 
 export async function checkWorkspaceWritable(): Promise<CheckResult> {
@@ -93,8 +125,11 @@ export async function checkWorkspaceWritable(): Promise<CheckResult> {
   }
   try {
     rmSync(probe, { force: true });
-  } catch {
-    // Deletion failure is cosmetic — the write succeeded, so the dir is writable.
+  } catch (err) {
+    // Deletion failure is cosmetic — the write succeeded, so the dir is
+    // writable. Log so repeated failures leave a diagnostic trace instead of
+    // silently accumulating .doctor-probe-* files in ARCHON_HOME.
+    getLog().warn({ probe, err }, 'doctor.workspace_probe_delete_failed');
   }
   return { label, status: 'pass', message: `${home} is writable` };
 }
@@ -175,21 +210,29 @@ function renderResult(r: CheckResult): string {
   return `${icon} ${r.label}: ${r.message}`;
 }
 
-export async function doctorCommand(): Promise<number> {
+export async function doctorCommand(
+  // Injected so tests can drive the exit-code contract and the
+  // Promise.allSettled rejection branch with synthetic checks.
+  checks?: (() => Promise<CheckResult>)[]
+): Promise<number> {
   console.log('archon doctor — verifying your setup\n');
   getLog().info('doctor.run_started');
   const env = process.env;
 
+  const promises = checks
+    ? checks.map(fn => fn())
+    : [
+        checkClaudeBinary(env),
+        checkGhAuth(env),
+        checkDatabase(),
+        checkWorkspaceWritable(),
+        checkBundledDefaults(),
+        checkSlack(env),
+        checkTelegram(env),
+      ];
+
   // Promise.allSettled so one unexpected rejection doesn't skip remaining checks.
-  const settled = await Promise.allSettled([
-    checkClaudeBinary(env),
-    checkGhAuth(env),
-    checkDatabase(),
-    checkWorkspaceWritable(),
-    checkBundledDefaults(),
-    checkSlack(env),
-    checkTelegram(env),
-  ]);
+  const settled = await Promise.allSettled(promises);
 
   let failures = 0;
   for (const s of settled) {

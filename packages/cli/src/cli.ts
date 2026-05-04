@@ -65,6 +65,7 @@ import { setupCommand } from './commands/setup';
 import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
+import { doctorCommand } from './commands/doctor';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -611,7 +612,6 @@ async function main(): Promise<number> {
       }
 
       case 'doctor': {
-        const { doctorCommand } = await import('./commands/doctor');
         return await doctorCommand();
       }
 

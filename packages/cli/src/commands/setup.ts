@@ -397,15 +397,18 @@ function tryReadCodexAuth(): CodexTokens | null {
 
 /**
  * Try to spawn the Claude binary with `--version` to confirm it actually runs.
- * Returns true on success, false on any spawn or non-zero exit. Bounded to 5s
- * so a hung process can't stall setup.
+ * Returns `{ ok: true }` on success or `{ ok: false, reason }` with the spawn
+ * error message so the caller can show it to the user. Bounded to 5s so a hung
+ * process can't stall setup.
  */
-async function probeClaudeBinarySpawns(path: string): Promise<boolean> {
+async function probeClaudeBinarySpawns(
+  path: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
     await execFileAsync(path, ['--version'], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: (err as Error).message };
   }
 }
 
@@ -419,8 +422,8 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
   const detected = detectClaudeExecutablePath();
 
   if (detected) {
-    const spawnsOk = await probeClaudeBinarySpawns(detected);
-    const suffix = spawnsOk ? '(spawns OK)' : '(could not spawn — verify it works)';
+    const probe = await probeClaudeBinarySpawns(detected);
+    const suffix = probe.ok ? '(spawns OK)' : `(could not spawn: ${probe.reason})`;
     const useDetected = await confirm({
       message: `Found Claude Code at ${detected} ${suffix}. Write this to CLAUDE_BIN_PATH?`,
       initialValue: true,
@@ -466,10 +469,10 @@ async function collectClaudeBinaryPath(): Promise<string | undefined> {
     return trimmed;
   }
 
-  const spawnsOk = await probeClaudeBinarySpawns(trimmed);
-  if (!spawnsOk) {
+  const probe = await probeClaudeBinarySpawns(trimmed);
+  if (!probe.ok) {
     log.warning(
-      `Could not spawn ${trimmed} --version. Saving anyway — verify the binary works (try running it directly).`
+      `Could not spawn ${trimmed} --version: ${probe.reason}. Saving anyway — verify the binary works (try running it directly).`
     );
   }
   return trimmed;
@@ -942,6 +945,14 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
             `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
               'Install the gh CLI from https://cli.github.com/ and run it manually.'
           );
+        } else if (ghLoginResult.status !== 0) {
+          // gh exited non-zero (user cancelled, OAuth callback failed, etc.).
+          // .error is only set on spawn failure, so without this the wizard
+          // would proceed as if auth succeeded.
+          log.warning(
+            `gh auth login exited with code ${ghLoginResult.status ?? 'null'}. ` +
+              'Authentication may not have completed — re-run `gh auth login` manually if needed.'
+          );
         }
       }
     }
@@ -1317,11 +1328,10 @@ export type BootstrapProjectConfigResult =
 export function bootstrapProjectConfig(projectPath: string): BootstrapProjectConfigResult {
   const archonDir = join(projectPath, '.archon');
   const configPath = join(archonDir, 'config.yaml');
-  if (existsSync(configPath)) {
-    return { state: 'existed', path: configPath };
-  }
   try {
     mkdirSync(archonDir, { recursive: true });
+    // `wx` flag = exclusive create. Atomic against a concurrent create between
+    // a check and a write, so an in-flight user edit is never overwritten.
     writeFileSync(
       configPath,
       [
@@ -1337,14 +1347,18 @@ export function bootstrapProjectConfig(projectPath: string): BootstrapProjectCon
         '#     path: docs',
         '',
       ].join('\n'),
-      { mode: 0o644 }
+      { mode: 0o644, flag: 'wx' }
     );
     return { state: 'created', path: configPath };
   } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'EEXIST') {
+      return { state: 'existed', path: configPath };
+    }
     return {
       state: 'failed',
       path: configPath,
-      error: (err as NodeJS.ErrnoException).message,
+      error: e.message,
     };
   }
 }
@@ -1733,7 +1747,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       config.slack = await collectSlackConfig();
     }
   } else {
-    // Fresh or update mode - collect everything (SQLite is implicit; no DB prompt)
     const ai = await collectAIConfig();
     const platforms = await collectPlatforms();
 
@@ -1936,7 +1949,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     'Additional Options'
   );
 
-  // Update instructions — always shown so users know how to upgrade.
   note(
     'To update Archon:\n' +
       '  Homebrew:  brew upgrade coleam00/archon/archon\n' +
@@ -1945,8 +1957,6 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     'Update Instructions'
   );
 
-  // Offer to verify with `archon doctor`. Failures inside doctor don't abort
-  // setup — the wizard already wrote the env file successfully.
   const runDoctor = await confirm({
     message: 'Run `archon doctor` now to verify your setup?',
     initialValue: true,
