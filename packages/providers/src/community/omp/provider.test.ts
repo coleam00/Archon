@@ -33,6 +33,7 @@ interface FakeSdkOptions {
     manager: OmpMcpManager;
   }) => void;
   onDisconnectMcp?: () => void;
+  disconnectMcpError?: Error;
   onSetMcpAuthStorage?: (authStorage: OmpAuthStorage) => void;
 }
 
@@ -130,6 +131,7 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
 
       async disconnectAll(): Promise<void> {
         options.onDisconnectMcp?.();
+        if (options.disconnectMcpError) throw options.disconnectMcpError;
       }
     },
     async createAgentSession(sessionOptions) {
@@ -379,11 +381,17 @@ describe('OmpProvider', () => {
       await firstPromptEntered;
       let secondPromptStarted = false;
       let secondPromptValue: string | undefined;
+      let resolveSecondPromptEntered: ((entered: boolean) => void) | undefined;
+      const secondPromptEntered = new Promise<boolean>(resolve => {
+        resolveSecondPromptEntered = resolve;
+        setTimeout(() => resolve(false), 10);
+      });
       const providerTwo = new OmpProvider(async () =>
         makeSdk({
           onPrompt() {
             secondPromptStarted = true;
             secondPromptValue = process.env.OMP_PROVIDER_TEST_SHARED;
+            resolveSecondPromptEntered?.(true);
           },
         })
       );
@@ -391,8 +399,7 @@ describe('OmpProvider', () => {
       const secondRun = collectChunks(providerTwo, {
         model: 'anthropic/claude-sonnet-4-5',
       });
-      await Promise.resolve();
-      expect(secondPromptStarted).toBe(false);
+      expect(await secondPromptEntered).toBe(false);
 
       releaseFirst?.();
       await Promise.all([firstRun, secondRun]);
@@ -404,6 +411,55 @@ describe('OmpProvider', () => {
       releaseFirst?.();
       if (originalShared === undefined) delete process.env.OMP_PROVIDER_TEST_SHARED;
       else process.env.OMP_PROVIDER_TEST_SHARED = originalShared;
+    }
+  });
+
+  test('does not serialize overlapping sessions without config env', async () => {
+    let releaseFirst: (() => void) | undefined;
+    let markFirstPromptEntered: (() => void) | undefined;
+    const firstPromptEntered = new Promise<void>(resolve => {
+      markFirstPromptEntered = resolve;
+    });
+    const providerOne = new OmpProvider(async () =>
+      makeSdk({
+        async onPrompt() {
+          markFirstPromptEntered?.();
+          await new Promise<void>(release => {
+            releaseFirst = release;
+          });
+        },
+      })
+    );
+    const firstRun = collectChunks(providerOne, {
+      model: 'anthropic/claude-sonnet-4-5',
+    });
+
+    try {
+      await firstPromptEntered;
+      let secondPromptStarted = false;
+      let resolveSecondPromptEntered: ((entered: boolean) => void) | undefined;
+      const secondPromptEntered = new Promise<boolean>(resolve => {
+        resolveSecondPromptEntered = resolve;
+        setTimeout(() => resolve(false), 10);
+      });
+      const providerTwo = new OmpProvider(async () =>
+        makeSdk({
+          onPrompt() {
+            secondPromptStarted = true;
+            resolveSecondPromptEntered?.(true);
+          },
+        })
+      );
+
+      const secondRun = collectChunks(providerTwo, {
+        model: 'anthropic/claude-sonnet-4-5',
+      });
+      expect(await secondPromptEntered).toBe(true);
+
+      releaseFirst?.();
+      await Promise.all([firstRun, secondRun]);
+    } finally {
+      releaseFirst?.();
     }
   });
 
@@ -757,6 +813,64 @@ describe('OmpProvider', () => {
         )
       ).rejects.toThrow('bootstrap failed');
       expect(disconnectCount).toBe(1);
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  test('fails when MCP teardown fails after a successful prompt', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        mcpTools: [{ name: 'mcp__github_create_issue' }],
+        disconnectMcpError: new Error('disconnect failed'),
+      })
+    );
+
+    try {
+      await expect(
+        collectChunks(
+          provider,
+          {
+            model: 'anthropic/claude-sonnet-4-5',
+            nodeConfig: { mcp: 'mcp.json' },
+          },
+          temp.dir
+        )
+      ).rejects.toThrow('Oh My Pi MCP teardown failed: disconnect failed');
+    } finally {
+      await temp.cleanup();
+    }
+  });
+
+  test('preserves bootstrap failure when MCP cleanup also fails', async () => {
+    const temp = await writeTempMcpConfig({ github: { command: 'npx' } });
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        mcpConnectError: new Error('bootstrap failed'),
+        disconnectMcpError: new Error('disconnect failed'),
+      })
+    );
+
+    try {
+      const error = await collectChunks(
+        provider,
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          nodeConfig: { mcp: 'mcp.json' },
+        },
+        temp.dir
+      ).then(
+        () => undefined,
+        err => err
+      );
+
+      expect(error).toBeInstanceOf(AggregateError);
+      const aggregate = error as AggregateError;
+      expect(aggregate.message).toBe('Oh My Pi MCP bootstrap failed and cleanup also failed.');
+      expect(
+        aggregate.errors.map(item => (item instanceof Error ? item.message : String(item)))
+      ).toEqual(['bootstrap failed', 'Oh My Pi MCP teardown failed: disconnect failed']);
     } finally {
       await temp.cleanup();
     }

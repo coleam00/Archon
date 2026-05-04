@@ -276,56 +276,59 @@ export async function* bridgeSession(
     }
   };
 
-  uiBridge?.setEmitter(chunk => {
-    queue.push({ kind: 'chunk', chunk });
-  });
-
-  const unsubscribe = session.subscribe((event: unknown) => {
-    try {
-      for (const chunk of mapOmpEvent(event as { type?: string } & Record<string, unknown>)) {
-        if (wantsStructured && chunk.type === 'assistant') assistantBuffer += chunk.content;
-        if (chunk.type === 'result') sawTerminalResult = true;
-        queue.push({ kind: 'chunk', chunk });
-        if (chunk.type === 'result') maybeFinish();
-      }
-    } catch (err) {
-      queue.push({ kind: 'error', error: err as Error });
-    }
-  });
-
   const onAbort = (): void => {
     void session.abort().catch((err: unknown) => {
       getLog().debug({ err }, 'omp.event-bridge.abort_failed');
     });
   };
-  if (abortSignal) {
-    if (abortSignal.aborted) onAbort();
-    else abortSignal.addEventListener('abort', onAbort, { once: true });
-  }
 
-  const promptPromise = session.prompt(prompt).then(
-    () => {
-      promptSettled = true;
-      if (sawTerminalResult) {
-        maybeFinish();
-        return;
+  let unsubscribe: (() => void) | undefined;
+  let promptPromise: Promise<unknown> | undefined;
+  try {
+    uiBridge?.setEmitter(chunk => {
+      queue.push({ kind: 'chunk', chunk });
+    });
+
+    unsubscribe = session.subscribe((event: unknown) => {
+      try {
+        for (const chunk of mapOmpEvent(event as { type?: string } & Record<string, unknown>)) {
+          if (wantsStructured && chunk.type === 'assistant') assistantBuffer += chunk.content;
+          if (chunk.type === 'result') sawTerminalResult = true;
+          queue.push({ kind: 'chunk', chunk });
+          if (chunk.type === 'result') maybeFinish();
+        }
+      } catch (err) {
+        queue.push({ kind: 'error', error: err as Error });
       }
-      queueMicrotask(() => {
+    });
+
+    if (abortSignal) {
+      if (abortSignal.aborted) onAbort();
+      else abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    promptPromise = session.prompt(prompt).then(
+      () => {
+        promptSettled = true;
         if (sawTerminalResult) {
           maybeFinish();
           return;
         }
-        sawTerminalResult = true;
-        queue.push({ kind: 'chunk', chunk: missingTerminalResultChunk() });
-        maybeFinish();
-      });
-    },
-    (err: unknown) => {
-      queue.push({ kind: 'error', error: err as Error });
-    }
-  );
+        queueMicrotask(() => {
+          if (sawTerminalResult) {
+            maybeFinish();
+            return;
+          }
+          sawTerminalResult = true;
+          queue.push({ kind: 'chunk', chunk: missingTerminalResultChunk() });
+          maybeFinish();
+        });
+      },
+      (err: unknown) => {
+        queue.push({ kind: 'error', error: err as Error });
+      }
+    );
 
-  try {
     for await (const item of queue) {
       if (item.kind === 'done') return;
       if (item.kind === 'error') throw item.error;
@@ -338,9 +341,9 @@ export async function* bridgeSession(
   } finally {
     queue.close();
     uiBridge?.setEmitter(undefined);
-    unsubscribe();
+    unsubscribe?.();
     if (abortSignal) abortSignal.removeEventListener('abort', onAbort);
     session.dispose();
-    await promptPromise.catch(() => undefined);
+    await promptPromise?.catch(() => undefined);
   }
 }
