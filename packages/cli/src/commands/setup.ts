@@ -1296,6 +1296,60 @@ export function resolveScopedEnvPath(scope: 'home' | 'project', repoPath: string
 }
 
 /**
+ * Result of attempting to bootstrap project-scoped Archon config.
+ *  - `created`: `.archon/config.yaml` did not exist; we wrote a starter.
+ *  - `existed`: file already present; left untouched (idempotent re-run).
+ *  - `failed`: mkdir or write failed (permissions, read-only FS, etc.).
+ *    Setup continues — the user can hand-create the file later.
+ */
+export type BootstrapProjectConfigResult =
+  | { state: 'created'; path: string }
+  | { state: 'existed'; path: string }
+  | { state: 'failed'; path: string; error: string };
+
+/**
+ * Create `<projectPath>/.archon/config.yaml` with a commented-out template if
+ * absent. Pairs with the skill install — gives the user a place to put
+ * per-project overrides without manual mkdir. Workflows/commands/scripts
+ * subdirs are intentionally not created; empty directories would clutter
+ * users' trees and Archon's loaders handle their absence cleanly.
+ */
+export function bootstrapProjectConfig(projectPath: string): BootstrapProjectConfigResult {
+  const archonDir = join(projectPath, '.archon');
+  const configPath = join(archonDir, 'config.yaml');
+  if (existsSync(configPath)) {
+    return { state: 'existed', path: configPath };
+  }
+  try {
+    mkdirSync(archonDir, { recursive: true });
+    writeFileSync(
+      configPath,
+      [
+        '# Project-scoped Archon config',
+        '# Inherits defaults from ~/.archon/config.yaml.',
+        '# Reference: https://archon.diy/reference/configuration/',
+        '#',
+        '# Examples:',
+        '#   assistants:',
+        '#     claude:',
+        '#       model: sonnet',
+        '#   docs:',
+        '#     path: docs',
+        '',
+      ].join('\n'),
+      { mode: 0o644 }
+    );
+    return { state: 'created', path: configPath };
+  } catch (err) {
+    return {
+      state: 'failed',
+      path: configPath,
+      error: (err as NodeJS.ErrnoException).message,
+    };
+  }
+}
+
+/**
  * Serialize a key/value map back to `KEY=value` lines. Values with whitespace,
  * `#`, `"`, `'`, `\n`, or `\r` are double-quoted with `\\`, `"`, `\n`, `\r`
  * escaped so round-tripping through dotenv.parse is stable.
@@ -1752,6 +1806,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   let skillInstalledPath: string | null = null;
+  let projectConfigCreatedPath: string | null = null;
 
   if (shouldCopySkill) {
     const skillTargetRaw = await text({
@@ -1776,6 +1831,16 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     }
     s.stop('Archon skill installed');
     skillInstalledPath = join(skillTarget, '.claude', 'skills', 'archon');
+
+    const bootstrapResult = bootstrapProjectConfig(skillTarget);
+    if (bootstrapResult.state === 'created') {
+      log.info(`Created project config: ${bootstrapResult.path}`);
+      projectConfigCreatedPath = bootstrapResult.path;
+    } else if (bootstrapResult.state === 'failed') {
+      // Non-fatal — log so silent permission errors don't masquerade as a
+      // successful setup. The user can hand-create the file later.
+      log.warn(`Could not create ${bootstrapResult.path}: ${bootstrapResult.error}`);
+    }
   }
 
   // Optional: configure docs directory
@@ -1852,6 +1917,11 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     summaryLines.push('');
     summaryLines.push('Archon skill installed:');
     summaryLines.push(`  ${skillInstalledPath}`);
+    if (projectConfigCreatedPath) {
+      summaryLines.push('');
+      summaryLines.push('Project config created:');
+      summaryLines.push(`  ${projectConfigCreatedPath}`);
+    }
   }
 
   note(summaryLines.join('\n'), 'Configuration Complete');

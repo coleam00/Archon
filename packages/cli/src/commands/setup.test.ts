@@ -6,6 +6,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  bootstrapProjectConfig,
   checkExistingConfig,
   generateEnvContent,
   generateWebhookSecret,
@@ -371,6 +372,65 @@ CODEX_ACCOUNT_ID=account1
       await copyArchonSkill(target);
 
       expect(existsSync(join(target, '.claude', 'skills', 'archon', 'SKILL.md'))).toBe(true);
+    });
+  });
+
+  describe('bootstrapProjectConfig', () => {
+    it('creates .archon/config.yaml when it does not exist', () => {
+      const target = join(TEST_DIR, 'bootstrap-target');
+      mkdirSync(target, { recursive: true });
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('created');
+      expect(result.path).toBe(join(target, '.archon', 'config.yaml'));
+      expect(existsSync(result.path)).toBe(true);
+      const content = readFileSync(result.path, 'utf-8');
+      // Must be valid YAML — comment lines only — so loaders treat it as empty.
+      expect(content.split('\n').every(line => line === '' || line.startsWith('#'))).toBe(true);
+      expect(content).toContain('Project-scoped Archon config');
+      expect(content).toContain('archon.diy/reference/configuration');
+    });
+
+    it('creates the .archon directory if missing (idempotent on parent)', () => {
+      const target = join(TEST_DIR, 'bootstrap-no-archon-dir');
+      mkdirSync(target, { recursive: true });
+      // Do NOT pre-create .archon — bootstrap must create it
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('created');
+      expect(existsSync(join(target, '.archon'))).toBe(true);
+    });
+
+    it('is idempotent — leaves an existing config untouched', () => {
+      const target = join(TEST_DIR, 'bootstrap-existing');
+      const archonDir = join(target, '.archon');
+      mkdirSync(archonDir, { recursive: true });
+      const userContent = '# my custom config\nassistants:\n  claude:\n    model: opus\n';
+      writeFileSync(join(archonDir, 'config.yaml'), userContent);
+
+      const result = bootstrapProjectConfig(target);
+
+      expect(result.state).toBe('existed');
+      const after = readFileSync(join(archonDir, 'config.yaml'), 'utf-8');
+      expect(after).toBe(userContent);
+    });
+
+    it('returns failed state without throwing when the target path is unwritable', () => {
+      // Pointing at a path inside a non-existent parent that mkdirSync can
+      // create succeeds. Use a deeply-nested path inside a regular file
+      // (which fs cannot mkdir into) to force a real failure.
+      const blocker = join(TEST_DIR, 'blocker-file');
+      writeFileSync(blocker, 'not a directory');
+      // mkdir under a file path fails with ENOTDIR — that's the failure mode
+      // we want to model (read-only FS, permission denied, etc.).
+      const result = bootstrapProjectConfig(blocker);
+
+      expect(result.state).toBe('failed');
+      if (result.state === 'failed') {
+        expect(result.error.length).toBeGreaterThan(0);
+      }
     });
   });
 });
