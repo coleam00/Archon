@@ -44,24 +44,39 @@ async function registerRepoAtPath(
 ): Promise<RegisterResult> {
   // Auto-detect assistant type based on SDK folder conventions.
   // Built-in providers use well-known folders (.claude/, .codex/).
-  // Falls back to first registered built-in provider if no folder detected.
-  const { getRegisteredProviders } = await import('@archon/providers');
-  const defaultProvider =
-    getRegisteredProviders().find(p => p.builtIn)?.id ??
-    process.env.DEFAULT_AI_ASSISTANT ??
-    'claude';
+  // Validates and normalizes detected values before passing to createCodebase.
+  const { getRegisteredProviders, resolveAssistantType } = await import('@archon/providers');
+
+  // Resolve default provider: prefer DEFAULT_AI_ASSISTANT when present, validate it,
+  // fall back to first built-in provider or 'claude'.
+  let defaultProvider: string;
+  try {
+    const fallback = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
+    defaultProvider = resolveAssistantType(process.env.DEFAULT_AI_ASSISTANT ?? fallback);
+  } catch {
+    defaultProvider = 'claude';
+  }
+
   let suggestedAssistant = defaultProvider;
   const codexFolder = join(targetPath, '.codex');
   const claudeFolder = join(targetPath, '.claude');
 
   try {
     await access(codexFolder);
-    suggestedAssistant = 'codex';
+    try {
+      suggestedAssistant = resolveAssistantType('codex');
+    } catch {
+      suggestedAssistant = defaultProvider;
+    }
     getLog().debug({ path: codexFolder }, 'assistant_detected_codex');
   } catch {
     try {
       await access(claudeFolder);
-      suggestedAssistant = 'claude';
+      try {
+        suggestedAssistant = resolveAssistantType('claude');
+      } catch {
+        suggestedAssistant = defaultProvider;
+      }
       getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
     } catch {
       getLog().debug({ provider: defaultProvider }, 'assistant_default_from_registry');

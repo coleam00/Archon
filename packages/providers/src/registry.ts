@@ -102,6 +102,36 @@ export function isRegisteredProvider(id: string): boolean {
 }
 
 /**
+ * Normalize and validate an assistant type (provider ID or legacy folder name).
+ *
+ * - If it's already a registered provider ID, return it directly.
+ * - If it's a legacy folder name ('claude' / 'codex'), normalize to the
+ *   registered provider ID (e.g. folder 'claude' → registered id 'claude').
+ * - If neither, throw with the available providers list (same error pattern
+ *   used in config-loader.ts for DEFAULT_AI_ASSISTANT validation).
+ */
+export function resolveAssistantType(id: string): string {
+  const registeredNames = [...registry.keys()];
+  // Normalize folder names to registered provider IDs
+  const normalized =
+    id === 'claude'
+      ? registeredNames.includes('claude')
+        ? 'claude'
+        : ''
+      : id === 'codex'
+        ? registeredNames.includes('codex')
+          ? 'codex'
+          : ''
+        : id;
+
+  if (normalized && isRegisteredProvider(normalized)) return normalized;
+
+  throw new Error(
+    `Invalid ai_assistant_type '${id}'. Available providers: ${registeredNames.join(', ')}`
+  );
+}
+
+/**
  * Register built-in providers (Claude, Codex). Idempotent — skips already-registered IDs.
  * Must be called at process entrypoints (server, CLI) before any provider lookups.
  */
