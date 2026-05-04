@@ -436,22 +436,18 @@ export class PiProvider implements IAgentProvider {
     const projectSettings = fileSettings.getProjectSettings();
     const seedSettings: Record<string, unknown> = { ...globalSettings };
     for (const key of Object.keys(projectSettings)) {
-      const projectValue = (projectSettings as Record<string, unknown>)[key];
-      if (projectValue === undefined) continue;
-      const globalValue = seedSettings[key];
-      const bothArePlainObjects =
-        typeof projectValue === 'object' &&
-        projectValue !== null &&
-        !Array.isArray(projectValue) &&
-        typeof globalValue === 'object' &&
-        globalValue !== null &&
-        !Array.isArray(globalValue);
-      seedSettings[key] = bothArePlainObjects
-        ? {
-            ...(globalValue as Record<string, unknown>),
-            ...(projectValue as Record<string, unknown>),
-          }
-        : projectValue;
+      const pv = (projectSettings as Record<string, unknown>)[key];
+      if (pv === undefined) continue;
+      const gv = seedSettings[key];
+      seedSettings[key] =
+        typeof pv === 'object' &&
+        pv !== null &&
+        !Array.isArray(pv) &&
+        typeof gv === 'object' &&
+        gv !== null &&
+        !Array.isArray(gv)
+          ? { ...(gv as Record<string, unknown>), ...(pv as Record<string, unknown>) }
+          : pv;
     }
     const settingsManager = piCodingAgent.SettingsManager.inMemory(
       seedSettings as ReturnType<typeof fileSettings.getGlobalSettings>
