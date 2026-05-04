@@ -25,7 +25,7 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 
 ### `provider` (optional)
 - **Type**: `'claude'` | `'codex'` | `'pi'`
-- **Default**: falls back to `.archon/config.yaml` assistants default (Claude)
+- **Default**: falls back to the `assistants` default from `.archon/config.yaml` or environment
 
 ### `model` (optional)
 - **Type**: string — must be compatible with provider
