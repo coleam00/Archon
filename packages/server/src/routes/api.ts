@@ -1036,30 +1036,40 @@ export function registerApiRoutes(
   }
 
   /**
+   * Result of an auto-resume attempt. The `reason` discriminator on the
+   * non-resumed branch tells the caller which guard fired so the response
+   * message can name the right manual remedy (CLI command vs. send-a-message
+   * vs. dispatch retry).
+   */
+  type AutoResumeResult =
+    | { resumed: true }
+    | {
+        resumed: false;
+        reason: 'no_parent' | 'no_platform_conv' | 'non_web_parent' | 'dispatch_failed';
+      };
+
+  /**
    * Re-enter the orchestrator after a paused approval gate is resolved, so a
    * web-dispatched workflow continues (approve) or runs its on_reject prompt
-   * (reject) without the user having to re-run the workflow command. The CLI's
-   * `workflowApproveCommand` / `workflowRejectCommand` already auto-resume via
-   * `workflowRunCommand({ resume: true })`; this is the web-side equivalent.
+   * (reject) without the user having to re-run the workflow command.
    *
-   * Returns `true` when a resume dispatch was initiated, `false` otherwise (no
-   * parent conversation on the run, parent conversation deleted, parent was on
-   * a non-web platform, or dispatch threw). Failures are non-fatal: the gate
-   * decision is recorded regardless; when this returns `false` the response
-   * text instructs the user to re-run the workflow command.
+   * Returns a structured result so callers can construct an actionable
+   * response when auto-resume is skipped — historically the response text
+   * said only "send a message to continue" / "will run on resume", which is
+   * meaningless to a web-UI user whose run was started from the CLI.
    *
    * **Cross-adapter guard**: only web-sourced parents qualify.
    * `dispatchToOrchestrator` is wired to the web adapter + its lock manager,
    * so a Slack / Telegram / GitHub / Discord run being approved from the
    * dashboard must not route through it — the Slack thread would never see
-   * the resumed output. Non-web parents skip auto-resume and the originating
-   * platform's own re-run flow applies.
+   * the resumed output. Non-web parents skip auto-resume and the caller
+   * surfaces a manual resume hint instead.
    */
   async function tryAutoResumeAfterGate(
     run: WorkflowRun,
     action: 'approve' | 'reject'
-  ): Promise<boolean> {
-    if (!run.parent_conversation_id) return false;
+  ): Promise<AutoResumeResult> {
+    if (!run.parent_conversation_id) return { resumed: false, reason: 'no_parent' };
     // Literal event names per action — greppable for ops tooling. Keeping the
     // branch explicit rather than templating avoids the earlier 3-segment
     // `api.workflow_*.dispatched` shape that broke `{domain}.{action}_{state}`.
@@ -1098,7 +1108,7 @@ export function registerApiRoutes(
           },
           events.skippedNoPlatformConv
         );
-        return false;
+        return { resumed: false, reason: 'no_platform_conv' };
       }
       if (parentConv.platform_type !== 'web') {
         getLog().debug(
@@ -1109,7 +1119,7 @@ export function registerApiRoutes(
           },
           events.skippedNonWebParent
         );
-        return false;
+        return { resumed: false, reason: 'non_web_parent' };
       }
       const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
       await dispatchToOrchestrator(platformConvId, resumeMessage);
@@ -1117,10 +1127,43 @@ export function registerApiRoutes(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
         events.dispatched
       );
-      return true;
+      return { resumed: true };
     } catch (err) {
       getLog().warn({ err: err as Error, runId: run.id }, events.failed);
-      return false;
+      return { resumed: false, reason: 'dispatch_failed' };
+    }
+  }
+
+  /**
+   * Build the user-facing manual-resume hint for the cases where
+   * `tryAutoResumeAfterGate` did not dispatch. The message is shaped to the
+   * specific guard that fired so the user gets an actionable next step
+   * instead of vague text. `archon workflow resume <id>` is the universal
+   * fallback — it works regardless of how the run was started.
+   */
+  function manualResumeMessage(
+    runId: string,
+    reason: Extract<AutoResumeResult, { resumed: false }>['reason'],
+    action: 'approve' | 'reject'
+  ): string {
+    const verb = action === 'approve' ? 'continue' : 'apply the on-reject prompt';
+    const cliCommand = `\`archon workflow resume ${runId}\``;
+    switch (reason) {
+      case 'no_parent':
+        // CLI-originated run (no parent conversation linked).
+        return `Run ${cliCommand} from the working directory to ${verb}.`;
+      case 'non_web_parent':
+        // Slack / Telegram / GitHub / Discord parent — re-running on the
+        // originating platform is the natural path; the CLI is a fallback.
+        return `Send a message in the originating thread, or run ${cliCommand} from a terminal to ${verb}.`;
+      case 'no_platform_conv':
+        // Parent conversation existed but is gone (deleted) — only the CLI
+        // path remains.
+        return `Run ${cliCommand} from a terminal to ${verb} (the originating conversation is no longer available).`;
+      case 'dispatch_failed':
+        // Dispatch threw; the gate decision was recorded but the resume
+        // didn't kick off. User retries via CLI.
+        return `Auto-resume dispatch failed. Run ${cliCommand} from a terminal to ${verb}.`;
     }
   }
 
@@ -1907,11 +1950,13 @@ export function registerApiRoutes(
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
-      // Run is already failed — the next invocation on the same path auto-resumes
+      // Run is already failed — the next invocation on the same path auto-resumes.
+      // The endpoint itself does not execute the resume; that's still a CLI/orchestrator
+      // responsibility. Surface the exact command so a web-UI user isn't left guessing.
       const pathInfo = run.working_path ? ` at \`${run.working_path}\`` : '';
       return c.json({
         success: true,
-        message: `Workflow run ready to resume: ${run.workflow_name}${pathInfo}. Re-run the workflow to auto-resume from completed nodes.`,
+        message: `Workflow run ready to resume: ${run.workflow_name}${pathInfo}. Run \`archon workflow resume ${runId}\` from the working directory to continue from completed nodes.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
@@ -1990,13 +2035,13 @@ export function registerApiRoutes(
       // `parent_conversation_id` on the run (set by orchestrator-agent for any
       // web-dispatched workflow — foreground, interactive, and background via
       // the pre-created run) and a web-platform parent (guarded in the helper).
-      const autoResumed = await tryAutoResumeAfterGate(run, 'approve');
+      const auto = await tryAutoResumeAfterGate(run, 'approve');
 
       return c.json({
         success: true,
-        message: autoResumed
+        message: auto.resumed
           ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
-          : `Workflow approved: ${run.workflow_name}. Send a message to continue.`,
+          : `Workflow approved: ${run.workflow_name}. ${manualResumeMessage(runId, auto.reason, 'approve')}`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
@@ -2045,13 +2090,13 @@ export function registerApiRoutes(
         // without requiring the user to re-run the workflow command. Mirrors
         // what `workflowRejectCommand` does in the CLI. Same cross-adapter
         // guard as approve — only web parents auto-resume.
-        const autoResumed = await tryAutoResumeAfterGate(run, 'reject');
+        const auto = await tryAutoResumeAfterGate(run, 'reject');
 
         return c.json({
           success: true,
-          message: autoResumed
+          message: auto.resumed
             ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
-            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
+            : `Workflow rejected: ${run.workflow_name}. ${manualResumeMessage(runId, auto.reason, 'reject')}`,
         });
       }
 
