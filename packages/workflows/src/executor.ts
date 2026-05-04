@@ -841,7 +841,7 @@ export async function executeWorkflow(
         getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
         await deps.store
           .failWorkflowRun(runId, 'Workflow exited without finalizing — see logs')
-          .catch((err: Error) => {
+          .catch((err: unknown) => {
             getLog().error({ err, workflowRunId: runId }, 'executor.backstop_fail_failed');
           });
       }
