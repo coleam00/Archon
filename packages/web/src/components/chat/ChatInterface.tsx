@@ -458,7 +458,27 @@ export function ChatInterface({ conversationId }: ChatInterfaceProps): React.Rea
             // long conversations whose tail wasn't in the server's window.
             setMessages(prev => {
               const hydratedIds = new Set(hydrated.map(m => m.id));
-              const clientOnly = prev.filter(m => !hydratedIds.has(m.id));
+              // Without a narrower filter, every prev message that lacks a
+              // hydrated counterpart is preserved — including stale
+              // `thinking-*` placeholders and optimistic `msg-*` entries that
+              // already have canonical hydrated rows under different ids,
+              // producing duplicate bubbles and stuck `isStreaming` flags.
+              // Keep only entries that carry SSE-only state (system messages,
+              // actively-streaming content, tool-calls) or arrived after the
+              // server's snapshot window (race-window protection).
+              const newestHydratedTs = hydrated.reduce(
+                (max, m) => Math.max(max, m.timestamp),
+                Number.NEGATIVE_INFINITY
+              );
+              const clientOnly = prev.filter(m => {
+                if (hydratedIds.has(m.id)) return false;
+                const preserveSseOnly =
+                  m.role === 'system' ||
+                  (m.isStreaming && m.content.length > 0) ||
+                  (m.toolCalls?.length ?? 0) > 0;
+                const newerThanSnapshot = m.timestamp > newestHydratedTs;
+                return preserveSseOnly || newerThanSnapshot;
+              });
               const merged = [...hydrated, ...clientOnly];
               merged.sort((a, b) => a.timestamp - b.timestamp);
               return merged;

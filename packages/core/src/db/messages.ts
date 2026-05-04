@@ -63,9 +63,12 @@ export async function listMessages(
   limit = 200
 ): Promise<readonly MessageRow[]> {
   const result = await pool.query<MessageRow>(
+    // Tie-breaker on `id` keeps the LIMIT window deterministic when multiple
+    // rows share the same created_at — without it the cutoff can repeat or
+    // drop rows non-deterministically across calls.
     `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
-     ORDER BY created_at DESC
+     ORDER BY created_at DESC, id DESC
      LIMIT $2`,
     [conversationId, limit]
   );
