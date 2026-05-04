@@ -10,16 +10,28 @@ mkdir -p /.archon/workspaces /.archon/worktrees
 if [ "$(id -u)" = "0" ]; then
   # Running as root: try to fix volume permissions, then drop to appuser.
   # chown may fail on bind mounts (e.g. macOS VirtioFS) where the host controls
-  # ownership and host UIDs (e.g. 501) don't map to appuser (1001). Treat this
-  # as a warning and fall back to running as root so the container still starts
-  # rather than crash-looping. IS_SANDBOX=1 lets ClaudeProvider skip its UID-0
-  # safety check (we're still inside Docker — sandboxed in the meaningful sense).
-  if chown -Rh appuser:appuser /.archon 2>/dev/null; then
+  # ownership and host UIDs (e.g. 501) don't map to appuser (1001). On those
+  # macOS hosts there is no fix — the container has no way to alter ownership
+  # of files the host filesystem owns. Other failure causes (Linux SELinux/
+  # AppArmor denial, wrong --mount type, misconfigured volume driver) look
+  # identical from inside the container, so we cannot distinguish them.
+  #
+  # Capture the chown error so the warning is actionable, then require an
+  # explicit opt-in (ARCHON_ALLOW_ROOT_FALLBACK=1) before bypassing the UID-0
+  # safety guard in ClaudeProvider. This keeps the macOS path one-line away
+  # while preventing a silent root-execution path on misconfigured Linux hosts.
+  if chown_err=$(chown -Rh appuser:appuser /.archon 2>&1); then
     RUNNER="gosu appuser"
   else
-    echo "WARNING: Could not fix ownership of /.archon (bind mount with incompatible options?) — running as root" >&2
-    export IS_SANDBOX=1
-    RUNNER=""
+    echo "WARNING: chown /.archon failed: ${chown_err}" >&2
+    if [ "${ARCHON_ALLOW_ROOT_FALLBACK:-0}" = "1" ]; then
+      echo "WARNING: ARCHON_ALLOW_ROOT_FALLBACK=1 — continuing as root with IS_SANDBOX=1." >&2
+      export IS_SANDBOX=1
+      RUNNER=""
+    else
+      echo "ERROR: refusing to run as root. On macOS VirtioFS this is expected — set ARCHON_ALLOW_ROOT_FALLBACK=1 in your environment to opt in. On Linux, fix volume ownership instead." >&2
+      exit 1
+    fi
   fi
 else
   # Already running as non-root (e.g., --user flag or Kubernetes)
