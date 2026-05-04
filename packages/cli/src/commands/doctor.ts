@@ -1,21 +1,11 @@
 /**
  * Doctor command - Verifies the local Archon setup.
  *
- * Runs a green/red checklist that probes the things `archon setup` configures:
- * Claude binary spawn, gh CLI auth (only if GitHub is configured), database
- * connectivity, workspace dir writability, bundled defaults loadability, and
- * adapter token pings (Slack/Telegram, best-effort).
- *
- * Returns an exit code: 0 if all checks pass (or are skipped), 1 if any
- * critical check fails. Adapter token pings that fail because of network
- * issues degrade to `skip`, never `fail`, so a flaky network does not flip
- * the overall result red.
- *
- * Re-runnable at any time. Also invoked from the end of `archon setup`; the
- * setup wizard discards the return value so a doctor failure does not abort
- * setup (the env file was already written successfully).
+ * Also invoked from the end of `archon setup`; the setup wizard discards the
+ * return value so a doctor failure does not abort setup (the env file was
+ * already written successfully).
  */
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
@@ -45,9 +35,6 @@ export async function checkClaudeBinary(env: NodeJS.ProcessEnv): Promise<CheckRe
       status: 'fail',
       message: 'CLAUDE_BIN_PATH is not set. Run `archon setup` to configure.',
     };
-  }
-  if (!existsSync(path)) {
-    return { label, status: 'fail', message: `${path} does not exist` };
   }
   try {
     await execFileAsync(path, ['--version'], { timeout: 5000 });
@@ -193,9 +180,7 @@ export async function doctorCommand(): Promise<number> {
   getLog().info('doctor.run_started');
   const env = process.env;
 
-  // Promise.allSettled so one rejection (e.g. a thrown SDK error) doesn't
-  // skip the remaining checks. Each check function already catches its own
-  // errors and returns a CheckResult — allSettled is belt-and-braces.
+  // Promise.allSettled so one unexpected rejection doesn't skip remaining checks.
   const settled = await Promise.allSettled([
     checkClaudeBinary(env),
     checkGhAuth(env),
