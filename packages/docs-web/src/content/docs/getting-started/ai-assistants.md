@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, GitHub Copilot, and Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All three can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All four can be configured and mixed within workflows.
 
 ## Claude Code
 
@@ -228,6 +228,84 @@ If you want Codex to be the default AI assistant for new conversations without c
 ```ini
 DEFAULT_AI_ASSISTANT=codex
 ```
+
+## GitHub Copilot (Community Provider)
+
+**SDK-backed community provider.** Archon's Copilot adapter uses `@github/copilot-sdk`, which drives the Copilot CLI over GitHub's supported JSON-RPC bridge instead of screen-scraping the interactive TUI.
+
+Copilot is registered as `builtIn: false` — like Pi, it is a bundled community provider rather than a core built-in.
+
+### Install
+
+For source installs, `bun install` pulls in the SDK and its bundled CLI dependency automatically.
+
+For compiled Archon binaries, install the Copilot CLI yourself and point Archon at it if needed:
+
+```bash
+# Any platform
+npm install -g @github/copilot
+```
+
+Optional override paths:
+
+```ini
+COPILOT_CLI_PATH=/absolute/path/to/copilot
+```
+
+```yaml
+assistants:
+  copilot:
+    copilotCliPath: /absolute/path/to/copilot
+```
+
+### Authenticate
+
+Unlike Claude (OAuth subscription **or** independent `ANTHROPIC_API_KEY`) and Codex (OAuth **or** `OPENAI_API_KEY`), **GitHub Copilot has only one auth model: GitHub OAuth, billed through your Copilot subscription.** There is no PAT-style standalone Copilot credential — Copilot eligibility is bound to the OAuth token's user identity, not to an API key.
+
+What this means: the options below are different *delivery paths for the same OAuth token*, not separate auth schemes.
+
+| Path | When to use | Notes |
+|---|---|---|
+| `copilot login` | Local dev | Cached interactive OAuth. The SDK reads it via `useLoggedInUser: true`. |
+| `COPILOT_GITHUB_TOKEN=<token>` | CI / scripted | Explicit env. Useful when you've already obtained an OAuth token. |
+| `GH_TOKEN=<token>` | CI / scripted | Alternate env var the SDK accepts. |
+| `GITHUB_TOKEN=<token>` | CI / scripted | **GitHub Actions' workflow-scoped `${{ github.token }}` does NOT carry Copilot scope.** Use only a token with Copilot scope — typically `gh auth token` after `gh auth login --scopes copilot`. |
+
+When any of the three env vars is set, Archon passes the value to `CopilotClient({ githubToken })` and disables `useLoggedInUser`. Otherwise it leaves `useLoggedInUser: true` so the SDK reuses the cached `copilot login` credentials.
+
+Request-scoped env vars still win, so codebase env overrides work the same way they do for the other providers.
+
+### Configuration Options
+
+```yaml
+assistants:
+  copilot:
+    model: gpt-5-mini
+    # Optional: explicit Copilot CLI path
+    # copilotCliPath: /absolute/path/to/copilot
+    # Optional: override Copilot config dir
+    # configDir: /absolute/path/to/copilot-config
+    # Optional: allow Copilot to auto-discover repo MCP/skills
+    # enableConfigDiscovery: false
+```
+
+> **⚠️ Trust boundary.** `enableConfigDiscovery: true` lets the Copilot CLI/SDK load repo-level config (e.g. `.mcp.json`, `.vscode/mcp.json`, skill directories) directly, bypassing Archon's workflow validation surface. Only enable it for repositories you trust. Archon's default (`false`) keeps MCP/skills under explicit workflow control via `nodeConfig.mcp` and `nodeConfig.skills`.
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | Returns `sessionId` and reuses it on resume |
+| Reasoning control | ✅ | `effort:` / string `thinking:` map to Copilot `reasoningEffort` |
+| System prompt override | ✅ | `systemPrompt:` |
+| Codebase env vars (`envInjection`) | ✅ | merged into the spawned Copilot CLI environment |
+| Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` (SDK enforces `availableTools` precedence when both are set) |
+| MCP servers | ✅ | `mcp: path/to/servers.json` → `SessionConfig.mcpServers` (env vars `$FOO` expanded; missing vars warned) |
+| Skills | ✅ | `skills: [name]` resolved from `.agents/skills/`, `.claude/skills/` (project or home) → `SessionConfig.skillDirectories` |
+| Structured output | ✅ | best-effort: schema instruction appended to the prompt, assistant transcript parsed as JSON on completion (models that reliably follow instruction succeed; unparseable output degrades to the dag-executor's missing-output warning) |
+| Sub-agents (`agents:`) | ✅ | `name`/`description`/`prompt`/`tools` (allowlist) map 1:1 to `SessionConfig.customAgents`; Claude-specific fields (`model`, `disallowedTools`, `skills`, `maxTurns`) warn per agent and are ignored |
+| Fallback model | ❌ | not wired |
+| Sandbox | ❌ | Copilot permissions are separate from Archon's sandbox surface |
 
 ## Pi (Community Provider)
 

@@ -48,6 +48,14 @@ export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claud
 
 // Community providers
 export {
+  CopilotProvider,
+  parseCopilotConfig,
+  registerCopilotProvider,
+  resolveCopilotCliPath,
+  type CopilotProviderDefaults,
+} from './community/copilot';
+
+export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
