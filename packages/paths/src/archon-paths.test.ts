@@ -35,7 +35,9 @@ import {
   resolveProjectRootFromCwd,
   ensureProjectStructure,
   createProjectSourceSymlink,
+  findMarkdownFilesRecursive,
 } from './archon-paths';
+import { symlink as fsSymlink } from 'fs/promises';
 
 /** All env vars that path functions depend on */
 const ENV_VARS = ['WORKSPACE_PATH', 'WORKTREE_BASE', 'ARCHON_HOME', 'ARCHON_DOCKER', 'HOME'];
@@ -736,5 +738,71 @@ describe('createProjectSourceSymlink', () => {
     const linkPath = getProjectSourcePath('acme', 'widget');
     const stats = await lstat(linkPath);
     expect(stats.isSymbolicLink()).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// findMarkdownFilesRecursive — symlink handling
+//
+// Regression tests for #1501: symlinked .md files (e.g. team-shared
+// commands made available via `~/.archon/commands/foo.md` → repo path)
+// must be discovered, not silently ignored.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(isWindows)('findMarkdownFilesRecursive — symlinks', () => {
+  let tempRoot: string;
+  let realRepo: string;
+
+  beforeEach(async () => {
+    const ts = Date.now() + Math.random();
+    tempRoot = join(tmpdir(), `archon-find-md-${ts}`);
+    realRepo = join(tmpdir(), `archon-find-md-source-${ts}`);
+    await mkdir(tempRoot, { recursive: true });
+    await mkdir(realRepo, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+    await rm(realRepo, { recursive: true, force: true });
+  });
+
+  test('finds .md file reached via symlink in the search root', async () => {
+    // Real source file in a "team repo"-shaped location
+    await writeFile(join(realRepo, 'team-cmd.md'), '# team command');
+
+    // Symlink it into the search root (same shape as sync-to-archon.sh)
+    await fsSymlink(join(realRepo, 'team-cmd.md'), join(tempRoot, 'team-cmd.md'));
+
+    const found = await findMarkdownFilesRecursive(tempRoot);
+    expect(found.map(e => e.commandName)).toContain('team-cmd');
+  });
+
+  test('mixes regular files and symlinks in the same directory', async () => {
+    await writeFile(join(tempRoot, 'plain.md'), '# plain');
+    await writeFile(join(realRepo, 'linked.md'), '# linked');
+    await fsSymlink(join(realRepo, 'linked.md'), join(tempRoot, 'linked.md'));
+
+    const found = await findMarkdownFilesRecursive(tempRoot);
+    const names = found.map(e => e.commandName).sort();
+    expect(names).toEqual(['linked', 'plain']);
+  });
+
+  test('descends into a symlinked directory of .md files', async () => {
+    const realSubdir = join(realRepo, 'group');
+    await mkdir(realSubdir, { recursive: true });
+    await writeFile(join(realSubdir, 'inside.md'), '# inside');
+
+    await fsSymlink(realSubdir, join(tempRoot, 'group'));
+
+    const found = await findMarkdownFilesRecursive(tempRoot);
+    expect(found.map(e => e.commandName)).toContain('inside');
+  });
+
+  test('skips broken symlinks silently', async () => {
+    await writeFile(join(tempRoot, 'real.md'), '# real');
+    await fsSymlink(join(realRepo, 'gone.md'), join(tempRoot, 'broken.md'));
+
+    const found = await findMarkdownFilesRecursive(tempRoot);
+    expect(found.map(e => e.commandName)).toEqual(['real']);
   });
 });
