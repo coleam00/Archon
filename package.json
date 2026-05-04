@@ -54,7 +54,8 @@
     "follow-redirects": "^1.16.0",
     "path-to-regexp": "^8.4.2",
     "qs": "^6.15.1",
-    "flatted": "^3.4.2"
+    "flatted": "^3.4.2",
+    "@hono/node-server": "^1.19.13"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.121"
