@@ -1359,7 +1359,7 @@ async function handleRegisterProject(
   }
 
   // Use config default provider instead of hardcoding 'claude'
-  const config = await loadConfig();
+  const config = await loadConfig(projectPath);
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: projectPath,

@@ -15,6 +15,7 @@ import {
   toError,
   onConversationClosed,
   ConversationLockManager,
+  loadConfig,
 } from '@archon/core';
 import { getArchonWorkspacesPath, getCommandFolderSearchPaths, createLogger } from '@archon/paths';
 import {
@@ -566,10 +567,12 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
     }
 
+    const config = await loadConfig(canonicalPath);
     const codebase = await codebaseDb.createCodebase({
       name: projectPath,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
+      ai_assistant_type: config.assistant,
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'gitlab.codebase_created');
