@@ -15,6 +15,7 @@ export const safeConfigSchema = z
       telegram: z.enum(['stream', 'batch']),
       discord: z.enum(['stream', 'batch']),
       slack: z.enum(['stream', 'batch']),
+      mattermost: z.enum(['stream', 'batch']),
       // github removed — never implemented; hardcoded 'batch' in GitHubAdapter
     }),
     concurrency: z.object({ maxConversations: z.number() }),

@@ -283,6 +283,7 @@ function getDefaults(): MergedConfig {
       telegram: 'stream',
       discord: 'batch',
       slack: 'batch',
+      mattermost: 'batch',
     },
     paths: {
       workspaces: getArchonWorkspacesPath(),
@@ -343,6 +344,11 @@ function applyEnvOverrides(config: MergedConfig): MergedConfig {
     config.streaming.slack = slackMode as 'stream' | 'batch';
   }
 
+  const mattermostMode = process.env.MATTERMOST_STREAMING_MODE;
+  if (mattermostMode && streamingModes.includes(mattermostMode as 'stream' | 'batch')) {
+    config.streaming.mattermost = mattermostMode as 'stream' | 'batch';
+  }
+
   // Path overrides (these come from archon-paths.ts which already checks env vars)
   // No need to re-apply here since getDefaults() uses those functions
 
@@ -391,6 +397,7 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
     if (global.streaming.telegram) result.streaming.telegram = global.streaming.telegram;
     if (global.streaming.discord) result.streaming.discord = global.streaming.discord;
     if (global.streaming.slack) result.streaming.slack = global.streaming.slack;
+    if (global.streaming.mattermost) result.streaming.mattermost = global.streaming.mattermost;
   }
 
   // Path preferences
@@ -590,6 +597,7 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
       telegram: config.streaming.telegram,
       discord: config.streaming.discord,
       slack: config.streaming.slack,
+      mattermost: config.streaming.mattermost,
     },
     concurrency: { maxConversations: config.concurrency.maxConversations },
     defaults: {

@@ -2348,6 +2348,7 @@ export interface components {
       worktree?: {
         enabled?: boolean;
       };
+      mutates_checkout?: boolean;
       tags?: string[];
       nodes: components['schemas']['DagNode'][];
     };
@@ -2500,6 +2501,8 @@ export interface components {
         discord: 'stream' | 'batch';
         /** @enum {string} */
         slack: 'stream' | 'batch';
+        /** @enum {string} */
+        mattermost: 'stream' | 'batch';
       };
       concurrency: {
         maxConversations: number;

@@ -1,0 +1,1 @@
+export { MattermostAdapter } from './adapter';

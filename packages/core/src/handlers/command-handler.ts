@@ -199,6 +199,44 @@ export function parseCommand(text: string): { command: string; args: string[] } 
   return { command, args };
 }
 
+function extractProjectFlag(args: string[]): {
+  projectName?: string;
+  remainingArgs: string[];
+  error?: string;
+} {
+  const remainingArgs: string[] = [];
+  let projectName: string | undefined;
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+
+    if (arg === '--project') {
+      const value = args[index + 1];
+      if (!value) {
+        return { remainingArgs, error: 'Usage: --project <project-name>' };
+      }
+      projectName = value;
+      index++;
+      continue;
+    }
+
+    if (arg?.startsWith('--project=')) {
+      const value = arg.slice('--project='.length).trim();
+      if (!value) {
+        return { remainingArgs, error: 'Usage: --project=<project-name>' };
+      }
+      projectName = value;
+      continue;
+    }
+
+    if (arg) {
+      remainingArgs.push(arg);
+    }
+  }
+
+  return { projectName, remainingArgs };
+}
+
 /**
  * Safely deactivate a session with TOCTOU race handling.
  * Between getActiveSession() and deactivateSession(), another process
@@ -785,7 +823,36 @@ async function handleWorkflowCommand(
     case 'run': {
       // Directly invoke a workflow by name (bypasses AI router)
       const workflowName = args[1];
-      const workflowArgs = args.slice(2).join(' ');
+      const projectSelection = extractProjectFlag(args.slice(2));
+      if (projectSelection.error) {
+        return {
+          success: false,
+          message: projectSelection.error,
+        };
+      }
+
+      let selectedCodebase = codebase;
+      if (projectSelection.projectName) {
+        selectedCodebase = await codebaseDb.findCodebaseByName(projectSelection.projectName);
+        if (!selectedCodebase) {
+          return {
+            success: false,
+            message: `Project \`${projectSelection.projectName}\` not found. Use /register-project to create it.`,
+          };
+        }
+
+        await db.updateConversation(conversation.id, {
+          codebase_id: selectedCodebase.id,
+          cwd: selectedCodebase.default_cwd,
+        });
+        conversation.codebase_id = selectedCodebase.id;
+        conversation.cwd = selectedCodebase.default_cwd;
+      }
+
+      const workflowArgs = projectSelection.remainingArgs.join(' ');
+      const runWorkflowCwd = selectedCodebase
+        ? (conversation.cwd ?? selectedCodebase.default_cwd)
+        : workflowCwd;
 
       if (!workflowName) {
         return {
@@ -796,7 +863,7 @@ async function handleWorkflowCommand(
       }
 
       getLog().debug(
-        { workflowName, args: workflowArgs, cwd: workflowCwd },
+        { workflowName, args: workflowArgs, cwd: runWorkflowCwd },
         'cmd.workflow_run_invoked'
       );
 
@@ -804,12 +871,12 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let loadErrors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(runWorkflowCwd, loadConfig);
         workflowEntries = result.workflows;
         loadErrors = result.errors;
       } catch (error) {
         const err = error as Error;
-        getLog().error({ err, cwd: workflowCwd }, 'cmd.workflow_discovery_failed');
+        getLog().error({ err, cwd: runWorkflowCwd }, 'cmd.workflow_discovery_failed');
         return {
           success: false,
           message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,

@@ -90,6 +90,7 @@ export interface SafeConfigResponse {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';
     slack: 'stream' | 'batch';
+    mattermost: 'stream' | 'batch';
   };
   concurrency: {
     maxConversations: number;

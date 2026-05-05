@@ -84,6 +84,7 @@ export interface GlobalConfig {
     telegram?: 'stream' | 'batch';
     discord?: 'stream' | 'batch';
     slack?: 'stream' | 'batch';
+    mattermost?: 'stream' | 'batch';
   };
 
   /**
@@ -259,6 +260,7 @@ export interface MergedConfig {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';
     slack: 'stream' | 'batch';
+    mattermost: 'stream' | 'batch';
   };
   paths: {
     workspaces: string;
@@ -312,6 +314,7 @@ export interface SafeConfig {
     telegram: 'stream' | 'batch';
     discord: 'stream' | 'batch';
     slack: 'stream' | 'batch';
+    mattermost: 'stream' | 'batch';
   };
   concurrency: {
     maxConversations: number;

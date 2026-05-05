@@ -22,6 +22,7 @@ import * as workflowDiscovery from '@archon/workflows/workflow-discovery';
 const mockUpdateConversation = mock(() => Promise.resolve());
 const mockGetCodebase = mock(() => Promise.resolve(null));
 const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
+const mockFindCodebaseByName = mock(() => Promise.resolve(null));
 const mockCreateCodebase = mock(() => Promise.resolve(null));
 const mockGetCodebaseCommands = mock(() => Promise.resolve({}));
 const mockUpdateCodebaseCommands = mock(() => Promise.resolve());
@@ -69,6 +70,7 @@ mock.module('../db/conversations', () => ({
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
+  findCodebaseByName: mockFindCodebaseByName,
   createCodebase: mockCreateCodebase,
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
@@ -214,6 +216,7 @@ function clearAllMocks(): void {
   mockUpdateConversation.mockClear();
   mockGetCodebase.mockClear();
   mockFindCodebaseByDefaultCwd.mockClear();
+  mockFindCodebaseByName.mockClear();
   mockCreateCodebase.mockClear();
   mockGetCodebaseCommands.mockClear();
   mockUpdateCodebaseCommands.mockClear();
@@ -1598,6 +1601,46 @@ describe('CommandHandler', () => {
         expect(result.workflow).toBeDefined();
         expect(result.workflow?.definition.name).toBe('fix-issue');
         expect(result.workflow?.args).toBe('#42 add dark mode');
+      });
+
+      test('should select explicit project with --project when no codebase is attached', async () => {
+        mockFindCodebaseByName.mockResolvedValueOnce({
+          id: 'backend-id',
+          name: 'workers-backend',
+          repository_url: null,
+          default_cwd: '/workspace/workers/backend',
+          commands: {},
+          created_at: new Date(),
+          updated_at: new Date(),
+        });
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [
+            makeTestWorkflowWithSource({
+              name: 'workers-backend-fix',
+              description: 'Backend fix',
+            }),
+          ],
+          errors: [],
+        });
+
+        const conversationWithoutCodebase: Conversation = {
+          ...baseConversation,
+          codebase_id: null,
+          cwd: null,
+        };
+        const result = await handleCommand(
+          conversationWithoutCodebase,
+          '/workflow run workers-backend-fix --project workers-backend "Fix issue"'
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.workflow?.definition.name).toBe('workers-backend-fix');
+        expect(result.workflow?.args).toBe('Fix issue');
+        expect(mockUpdateConversation).toHaveBeenCalledWith(baseConversation.id, {
+          codebase_id: 'backend-id',
+          cwd: '/workspace/workers/backend',
+        });
+        expect(spyDiscoverWorkflows.mock.calls[0]?.[0]).toBe('/workspace/workers/backend');
       });
 
       test('should return not-found when no codebase is configured', async () => {

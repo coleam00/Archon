@@ -1,6 +1,6 @@
 /**
  * Remote Coding Agent - Main Entry Point
- * Multi-platform AI coding assistant (Telegram, Discord, Slack, GitHub, Gitea)
+ * Multi-platform AI coding assistant (Telegram, Mattermost, Jira, Discord, Slack, GitHub, Gitea)
  */
 
 // Strip CWD .env keys FIRST — before any application imports read process.env.
@@ -55,7 +55,14 @@ registerCommunityProviders();
 
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';
-import { TelegramAdapter, GitHubAdapter, DiscordAdapter, SlackAdapter } from '@archon/adapters';
+import {
+  TelegramAdapter,
+  GitHubAdapter,
+  DiscordAdapter,
+  SlackAdapter,
+  MattermostAdapter,
+  JiraAdapter,
+} from '@archon/adapters';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { WebAdapter } from './adapters/web';
@@ -263,18 +270,34 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   let gitlab: GitLabAdapter | null = null;
   let discord: DiscordAdapter | null = null;
   let slack: SlackAdapter | null = null;
+  let mattermost: MattermostAdapter | null = null;
+  let jira: JiraAdapter | null = null;
 
   if (!opts.skipPlatformAdapters) {
     // Check that at least one platform is configured
     const hasTelegram = Boolean(process.env.TELEGRAM_BOT_TOKEN);
     const hasDiscord = Boolean(process.env.DISCORD_BOT_TOKEN);
+    const hasSlack = Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN);
+    const hasMattermost = Boolean(process.env.MATTERMOST_URL && process.env.MATTERMOST_BOT_TOKEN);
+    const hasJira = Boolean(
+      process.env.JIRA_URL && process.env.JIRA_TOKEN && process.env.JIRA_WEBHOOK_SECRET
+    );
     const hasGitHub = Boolean(process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET);
     const hasGitea = Boolean(
       process.env.GITEA_URL && process.env.GITEA_TOKEN && process.env.GITEA_WEBHOOK_SECRET
     );
     const hasGitLab = Boolean(process.env.GITLAB_TOKEN && process.env.GITLAB_WEBHOOK_SECRET);
 
-    if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab) {
+    if (
+      !hasTelegram &&
+      !hasDiscord &&
+      !hasSlack &&
+      !hasMattermost &&
+      !hasJira &&
+      !hasGitHub &&
+      !hasGitea &&
+      !hasGitLab
+    ) {
       getLog().warn('no_platform_adapters_configured');
     }
 
@@ -326,6 +349,27 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       activePlatforms.push('GitLab');
     } else {
       getLog().info('gitlab_adapter_skipped');
+    }
+
+    // Initialize Jira adapter (conditional)
+    if (process.env.JIRA_URL && process.env.JIRA_TOKEN && process.env.JIRA_WEBHOOK_SECRET) {
+      const jiraBotMention =
+        process.env.JIRA_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
+      jira = new JiraAdapter(
+        process.env.JIRA_URL,
+        process.env.JIRA_TOKEN,
+        process.env.JIRA_WEBHOOK_SECRET,
+        lockManager,
+        {
+          email: process.env.JIRA_EMAIL || undefined,
+          apiVersion: process.env.JIRA_API_VERSION || undefined,
+          botMention: jiraBotMention,
+        }
+      );
+      await jira.start();
+      activePlatforms.push('Jira');
+    } else {
+      getLog().info('jira_adapter_skipped');
     }
 
     // Initialize Discord adapter (conditional)
@@ -462,6 +506,45 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     } else {
       getLog().info('slack_adapter_skipped');
     }
+
+    if (process.env.MATTERMOST_URL && process.env.MATTERMOST_BOT_TOKEN) {
+      const mattermostStreamingMode = (process.env.MATTERMOST_STREAMING_MODE ?? 'batch') as
+        | 'stream'
+        | 'batch';
+      mattermost = new MattermostAdapter(
+        process.env.MATTERMOST_URL,
+        process.env.MATTERMOST_BOT_TOKEN,
+        mattermostStreamingMode
+      );
+      const mattermostAdapter = mattermost;
+
+      mattermostAdapter.onMessage(async event => {
+        const conversationId = mattermostAdapter.getConversationId(event);
+        if (!event.text) return;
+
+        let threadContext: string | undefined;
+        if (mattermostAdapter.isThread(event)) {
+          const history = await mattermostAdapter.fetchThreadHistory(event);
+          if (history.length > 1) {
+            threadContext = history.slice(0, -1).join('\n');
+          }
+        }
+
+        lockManager
+          .acquireLock(conversationId, async () => {
+            await handleMessage(mattermostAdapter, conversationId, event.text, {
+              threadContext,
+              isolationHints: { workflowType: 'thread', workflowId: conversationId },
+            });
+          })
+          .catch(createMessageErrorHandler('Mattermost', mattermostAdapter, conversationId));
+      });
+
+      await mattermost.start();
+      activePlatforms.push('Mattermost');
+    } else {
+      getLog().info('mattermost_adapter_skipped');
+    }
   } else {
     getLog().info('platform_adapters_skipped');
   }
@@ -564,6 +647,36 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('gitlab_webhook_registered');
   }
 
+  // Jira webhook endpoint
+  if (jira) {
+    app.post('/webhooks/jira', async c => {
+      const eventType = c.req.header('x-atlassian-webhook-identifier') ?? 'jira';
+
+      try {
+        const token =
+          c.req.query('token') ??
+          c.req.header('x-archon-webhook-secret') ??
+          c.req.header('x-jira-webhook-secret') ??
+          c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
+        if (!token) {
+          return c.json({ error: 'Missing webhook token' }, 400);
+        }
+
+        const payload = await c.req.text();
+
+        jira.handleWebhook(payload, token).catch((error: unknown) => {
+          getLog().error({ err: error, eventType }, 'jira.webhook_processing_error');
+        });
+
+        return c.text('OK', 200);
+      } catch (error) {
+        getLog().error({ err: error, eventType }, 'jira.webhook_endpoint_error');
+        return c.json({ error: 'Internal server error' }, 500);
+      }
+    });
+    getLog().info('jira_webhook_registered');
+  }
+
   // Health check endpoints
   app.get('/health', c => {
     return c.json({ status: 'ok' });
@@ -661,6 +774,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           telegram?.stop();
           discord?.stop();
           slack?.stop();
+          mattermost?.stop();
+          jira?.stop();
           gitea?.stop();
           gitlab?.stop();
           await webAdapter.stop();

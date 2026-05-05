@@ -43,6 +43,7 @@ describe('config-loader', () => {
     'TELEGRAM_STREAMING_MODE',
     'DISCORD_STREAMING_MODE',
     'SLACK_STREAMING_MODE',
+    'MATTERMOST_STREAMING_MODE',
     'MAX_CONCURRENT_CONVERSATIONS',
     'WORKSPACE_PATH',
     'WORKTREE_BASE',
@@ -230,6 +231,7 @@ concurrency:
       expect(config.assistants.claude).toEqual({});
       expect(config.assistants.codex).toEqual({});
       expect(config.streaming.telegram).toBe('stream');
+      expect(config.streaming.mattermost).toBe('batch');
       expect(config.concurrency.maxConversations).toBe(10);
     });
 
@@ -242,11 +244,13 @@ streaming:
 
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
       process.env.TELEGRAM_STREAMING_MODE = 'batch';
+      process.env.MATTERMOST_STREAMING_MODE = 'stream';
 
       const config = await loadConfig();
 
       expect(config.assistant).toBe('codex');
       expect(config.streaming.telegram).toBe('batch');
+      expect(config.streaming.mattermost).toBe('stream');
     });
 
     test('throws on unknown DEFAULT_AI_ASSISTANT env var', async () => {

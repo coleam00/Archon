@@ -261,6 +261,9 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
 | Platform | Setup time | Guide |
 |----------|-----------|-------|
 | **Telegram** | 5 min | [Telegram Guide](https://archon.diy/adapters/telegram/) |
+| **Mattermost** | 5 min | Configure `MATTERMOST_URL` + `MATTERMOST_BOT_TOKEN` |
+| **Jira** | 10 min | Configure `JIRA_URL` + webhook at `/webhooks/jira?token=<secret>` |
+| **GitLab** | 15 min | [GitLab Guide](https://archon.diy/adapters/community/gitlab/) |
 | **Slack** | 15 min | [Slack Guide](https://archon.diy/adapters/slack/) |
 | **GitHub Webhooks** | 15 min | [GitHub Guide](https://archon.diy/adapters/github/) |
 | **Discord** | 5 min | [Discord Guide](https://archon.diy/adapters/community/discord/) |
@@ -269,8 +272,8 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Platform Adapters (Web UI, CLI, Telegram, Slack,       │
-│                    Discord, GitHub)                     │
+│  Platform Adapters (Web UI, CLI, Telegram, Mattermost,  │
+│                    Jira, GitLab, Slack, Discord, GitHub)│
 └──────────────────────────┬──────────────────────────────┘
                            │
                            ▼
