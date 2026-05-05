@@ -18,6 +18,7 @@ export async function createCodebase(data: {
   default_cwd: string;
   ai_assistant_type: string;
 }): Promise<Codebase> {
+  // `?.` handles runtime-undefined (tests cast omitted field via `as`); trim normalizes whitespace.
   const aiAssistantType = data.ai_assistant_type?.trim();
   if (!aiAssistantType) {
     throw new Error('createCodebase: ai_assistant_type is required');
