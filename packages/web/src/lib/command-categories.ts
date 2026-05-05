@@ -66,6 +66,7 @@ function findCategory(name: string): string {
  */
 export function categorizeCommands(commands: CommandEntry[]): CommandCategory[] {
   const projectCommands = commands.filter(c => c.source === 'project');
+  const globalCommands = commands.filter(c => c.source === 'global');
   const bundledCommands = commands.filter(c => c.source === 'bundled');
 
   // Group bundled commands by category
@@ -85,6 +86,10 @@ export function categorizeCommands(commands: CommandEntry[]): CommandCategory[] 
   // Project commands first
   if (projectCommands.length > 0) {
     result.push({ name: 'Project', commands: projectCommands });
+  }
+
+  if (globalCommands.length > 0) {
+    result.push({ name: 'Global', commands: globalCommands });
   }
 
   // Named categories in definition order, then Utilities last

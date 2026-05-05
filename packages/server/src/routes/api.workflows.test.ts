@@ -2,7 +2,7 @@ import { describe, test, expect, mock } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { validationErrorHook } from './openapi-defaults';
@@ -253,6 +253,37 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('returns global workflow with source:global when file exists in ARCHON_HOME', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-get-global-${Date.now()}`);
+    const workflowDir = join(testArchonHome, 'workflows');
+    process.env.ARCHON_HOME = testArchonHome;
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'global-workflow.yaml'),
+      'name: global-workflow\ndescription: Global workflow\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => []);
+      const response = await app.request('/api/workflows/global-workflow');
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        source: string;
+        filename: string;
+        workflow: { name: string };
+      };
+      expect(body.source).toBe('global');
+      expect(body.filename).toBe('global-workflow.yaml');
+      expect(body.workflow).toBeDefined();
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
   test('returns WorkflowDefinition shape with expected top-level fields', async () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
@@ -403,6 +434,47 @@ describe('PUT /api/workflows/:name', () => {
       expect(body.source).toBe('project');
     } finally {
       await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test('saves valid workflow to ARCHON_HOME workflows when source=global', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-put-global-${Date.now()}`);
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      const response = await app.request('/api/workflows/global-workflow?source=global', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          definition: {
+            name: 'global-workflow',
+            description: 'Global workflow',
+            nodes: [{ id: 'plan', command: 'plan' }],
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        workflow: { name: string };
+        filename: string;
+        source: string;
+      };
+      expect(body.workflow).toBeDefined();
+      expect(body.filename).toBe('global-workflow.yaml');
+      expect(body.source).toBe('global');
+
+      const saved = await readFile(
+        join(testArchonHome, 'workflows', 'global-workflow.yaml'),
+        'utf-8'
+      );
+      expect(saved).toContain('name: global-workflow');
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
     }
   });
 });
