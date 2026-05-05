@@ -53,3 +53,4 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+export { OpenCodeProvider, registerOpenCodeProvider } from './community/opencode';
