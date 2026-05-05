@@ -47,12 +47,25 @@ function getArchonHome(): string {
   return process.env.ARCHON_HOME ?? join(homedir(), '.archon');
 }
 
+/** Mirror of @archon/paths parseOwnerRepo (must stay aligned with SAFE_NAME). */
+const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
+function parseOwnerRepo(name: string): { owner: string; repo: string } | null {
+  const parts = name.split('/');
+  if (parts.length !== 2) return null;
+  const [owner, repo] = parts;
+  if (!owner || !repo) return null;
+  if (owner === '.' || owner === '..' || repo === '.' || repo === '..') return null;
+  if (!SAFE_NAME.test(owner) || !SAFE_NAME.test(repo)) return null;
+  return { owner, repo };
+}
+
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorktreesPath: () => join(getArchonHome(), 'worktrees'),
   getArchonWorkspacesPath: () => join(getArchonHome(), 'workspaces'),
   getProjectWorktreesPath: (owner: string, repo: string) =>
     join(getArchonHome(), 'workspaces', owner, repo, 'worktrees'),
+  parseOwnerRepo,
 }));
 
 // ---------------------------------------------------------------------------
@@ -292,6 +305,29 @@ describe('git utilities', () => {
         base: join(homedir(), '.archon', 'workspaces', 'local', 'repo', 'worktrees'),
         layout: 'workspace-scoped',
       });
+    });
+
+    test('ignores SSH-URL-shaped codebaseName (contains ":" / "@") and falls back to path', () => {
+      // Regression: a codebase registered with name = "git@host.example:org/repo"
+      // used to be split naively at the last slash, yielding
+      // owner = "git@host.example:org" — that colon broke docker-compose volume
+      // parsing in worktrees (short-form `HOST:CONTAINER:OPT` mounts inside
+      // devcontainers). The strict owner/repo validator must reject names that
+      // contain characters outside `[A-Za-z0-9._-]` and fall back to the
+      // path-derived workspace-scoped layout.
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const result = git.getWorktreeBase(
+        '/srv/projects/widget-app',
+        'git@git.example.net:acme/widget-app'
+      );
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', 'projects', 'widget-app', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
+      expect(result.base).not.toContain(':');
+      expect(result.base).not.toContain('@');
     });
 
     test('repoLocal override wins over workspace-scoped default', () => {
