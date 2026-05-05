@@ -18,7 +18,7 @@
     "./registry": "./src/registry.ts"
   },
   "scripts": {
-    "test": "bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts && bun test src/claude/binary-resolver.test.ts && bun test src/claude/binary-resolver-dev.test.ts && bun test src/community/pi/model-ref.test.ts && bun test src/community/pi/config.test.ts && bun test src/community/pi/event-bridge.test.ts && bun test src/community/pi/options-translator.test.ts && bun test src/community/pi/session-resolver.test.ts && bun test src/community/pi/provider.test.ts && bun test src/community/pi/provider-lazy-load.test.ts",
+    "test": "bun test src/claude/model-registry.test.ts && bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts && bun test src/claude/binary-resolver.test.ts && bun test src/claude/binary-resolver-dev.test.ts && bun test src/community/pi/model-ref.test.ts && bun test src/community/pi/config.test.ts && bun test src/community/pi/event-bridge.test.ts && bun test src/community/pi/options-translator.test.ts && bun test src/community/pi/session-resolver.test.ts && bun test src/community/pi/provider.test.ts && bun test src/community/pi/provider-lazy-load.test.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {

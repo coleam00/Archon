@@ -96,6 +96,53 @@ concurrency:
 
 ```
 
+### Claude Custom Models
+
+For Claude-compatible gateways or local providers, create `~/.archon/claude-models.json`. This file is separate from `config.yaml` so provider credentials and model catalogs can be managed without editing workflow YAML.
+
+```json
+{
+  "providers": {
+    "gateway": {
+      "baseUrl": "https://llm-gateway.example.com",
+      "apiKey": "CLAUDE_GATEWAY_API_KEY",
+      "headers": {
+        "X-Team": "platform",
+        "X-Workspace-Token": "CLAUDE_GATEWAY_WORKSPACE_TOKEN"
+      },
+      "models": [
+        {
+          "id": "openai/gpt-5.4",
+          "name": "gpt",
+          "reasoning": true
+        }
+      ]
+    }
+  }
+}
+```
+
+Use the alias in config or workflow nodes:
+
+```yaml
+assistants:
+  claude:
+    model: gateway/gpt
+```
+
+Field mapping:
+
+| Field | Claude Code env |
+|---|---|
+| `baseUrl` | `ANTHROPIC_BASE_URL` |
+| `apiKey` | `ANTHROPIC_API_KEY` |
+| `authToken` | `ANTHROPIC_AUTH_TOKEN` |
+| `headers` | `ANTHROPIC_CUSTOM_HEADERS` |
+
+For `baseUrl`, `apiKey`, `authToken`, and header values, Archon first checks whether the configured value is an environment variable name. If it exists, Archon uses the environment value; otherwise it uses the configured value literally. For example, `"apiKey": "CLAUDE_GATEWAY_API_KEY"` reads `process.env.CLAUDE_GATEWAY_API_KEY` when it is set.
+
+An example file is available at `packages/providers/src/claude/claude-models.json.example`. It contains placeholders only; do not commit real gateway URLs, API keys, or tokens.
+
 ## Repository Configuration
 
 Create `.archon/config.yaml` in any repository for project-specific settings:
