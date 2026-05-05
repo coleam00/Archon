@@ -1890,20 +1890,17 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
   });
 
   test('stream mode — pre-command text is streamed, post-command chunks are suppressed', async () => {
-    // REGISTER_PROJECT_FULL_RE requires a \n terminator for unquoted paths (to avoid
-    // prematurely declaring "/home/user/my" complete when the path is "/home/user/my project").
-    // Chunk 2 has no \n, so commandFullyParsed stays false and chunk 3 IS accumulated —
-    // parseOrchestratorCommands receives "/path extra trailing" as the projectPath.
-    // handleRegisterProject then calls parseCommand with the reconstructed string; mock it
-    // to return clean args so createCodebase is actually invoked and we can assert dispatch.
-    // In production, existsSync('/path extra trailing') would fail with an explicit error.
+    // The command chunk includes a trailing \n so REGISTER_PROJECT_FULL_RE fires on
+    // that chunk alone (unquoted path + line terminator = fully parsed). commandFullyParsed
+    // becomes true before the third chunk arrives, so " extra trailing" is never
+    // accumulated and cannot corrupt the parsed path.
     mockParseCommand.mockReturnValueOnce({
       command: 'register-project',
       args: ['Foo', '/path'],
     });
     mockSendQuery.mockImplementationOnce(async function* () {
       yield { type: 'assistant', content: 'Registering now:\n' };
-      yield { type: 'assistant', content: '/register-project Foo /path' };
+      yield { type: 'assistant', content: '/register-project Foo /path\n' };
       yield { type: 'assistant', content: ' extra trailing' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
@@ -1920,11 +1917,10 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     // Pre-command text was streamed
     expect(sentTexts).toContain('Registering now:\n');
     // Command trigger chunk was NOT streamed
-    expect(sentTexts).not.toContain('/register-project Foo /path');
-    // Post-command chunk was NOT streamed
+    expect(sentTexts).not.toContain('/register-project Foo /path\n');
+    // Post-command chunk was NOT streamed (suppressed because commandFullyParsed=true)
     expect(sentTexts).not.toContain(' extra trailing');
-    // createCodebase was called — command was dispatched (path correctness here
-    // depends on the mock; real-path corruption would be caught by existsSync)
+    // createCodebase was called with the clean parsed path
     expect(mockCreateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Foo', default_cwd: '/path' })
     );
