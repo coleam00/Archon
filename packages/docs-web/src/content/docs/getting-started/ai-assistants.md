@@ -129,6 +129,48 @@ assistants:
 
 The `settingSources` option controls which `CLAUDE.md`, skill, command, and agent files the Claude Code SDK loads. The default is `['project', 'user']`, which loads both the project-level `<cwd>/.claude/` and your personal `~/.claude/`. Set it to `['project']` if you want to scope a workflow to project-only resources.
 
+### Custom Claude-Compatible Providers
+
+Claude workflows can reference custom provider models by friendly aliases. Define them in `~/.archon/claude-models.json`, then use `provider/name` in `.archon/config.yaml` or workflow node `model` fields.
+
+```json
+{
+  "providers": {
+    "gateway": {
+      "baseUrl": "https://llm-gateway.example.com",
+      "apiKey": "CLAUDE_GATEWAY_API_KEY",
+      "headers": {
+        "X-Team": "platform",
+        "X-Workspace-Token": "CLAUDE_GATEWAY_WORKSPACE_TOKEN"
+      },
+      "models": [
+        {
+          "id": "openai/gpt-5.4",
+          "name": "gpt",
+          "reasoning": true
+        },
+        {
+          "id": "zai-org/glm-5",
+          "name": "glm"
+        }
+      ]
+    }
+  }
+}
+```
+
+Then configure Claude to use the alias:
+
+```yaml
+assistants:
+  claude:
+    model: gateway/gpt
+```
+
+Use `apiKey` for providers that expect `ANTHROPIC_API_KEY`, or `authToken` for providers that expect a bearer token via `ANTHROPIC_AUTH_TOKEN`. `baseUrl` maps to `ANTHROPIC_BASE_URL`, and `headers` are sent through `ANTHROPIC_CUSTOM_HEADERS`.
+
+For `baseUrl`, `apiKey`, `authToken`, and header values, Archon first checks whether the configured value is an environment variable name. If it exists, Archon uses the environment value; otherwise it uses the configured value literally. For example, `"apiKey": "CLAUDE_GATEWAY_API_KEY"` reads `process.env.CLAUDE_GATEWAY_API_KEY` when it is set.
+
 ### Set as Default (Optional)
 
 If you want Claude to be the default AI assistant for new conversations without codebase context, set this environment variable:
