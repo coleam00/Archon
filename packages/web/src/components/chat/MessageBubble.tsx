@@ -136,15 +136,6 @@ interface MessageBubbleProps {
   message: ChatMessage;
 }
 
-/**
- * Renders a single chat message bubble with copy functionality.
- * Handles both user and assistant messages with markdown rendering,
- * artifact detection, and clipboard copy with error feedback.
- *
- * @param props.message - The chat message to display
- * @returns A React element containing the message bubble
- */
-
 function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
   const isUser = message.role === 'user';
   const isThinking = message.isStreaming && !message.content;
@@ -162,11 +153,6 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
     []
   );
 
-  /**
-   * Copies the message content to clipboard.
-   * Shows success checkmark on success, error X icon on failure.
-   * Resets visual feedback after timeout.
-   */
   const copyMessage = (): void => {
     void navigator.clipboard
       .writeText(message.content)
@@ -177,7 +163,8 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
           setCopied(false);
         }, 1500);
       })
-      .catch(() => {
+      .catch(error => {
+        console.debug('Clipboard write failed:', error);
         setCopyError(true);
         setTimeout(() => {
           setCopyError(false);
