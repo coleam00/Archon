@@ -18,7 +18,7 @@ export async function createCodebase(data: {
   default_cwd: string;
   ai_assistant_type: string;
 }): Promise<Codebase> {
-  if (!data.ai_assistant_type) {
+  if (!data.ai_assistant_type?.trim()) {
     throw new Error('createCodebase: ai_assistant_type is required');
   }
   const result = await pool.query<Codebase>(

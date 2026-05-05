@@ -91,6 +91,18 @@ describe('codebases', () => {
       expect(mockQuery).not.toHaveBeenCalled();
     });
 
+    test('throws when ai_assistant_type is whitespace-only', async () => {
+      await expect(
+        createCodebase({
+          name: 'test-project',
+          default_cwd: '/workspace/test-project',
+          ai_assistant_type: '   ',
+        })
+      ).rejects.toThrow('createCodebase: ai_assistant_type is required');
+
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
     test('persists non-default ai_assistant_type value', async () => {
       const piCodebase: Codebase = { ...mockCodebase, ai_assistant_type: 'pi' };
       mockQuery.mockResolvedValueOnce(createQueryResult([piCodebase]));

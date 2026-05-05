@@ -110,6 +110,7 @@ function clearMocks(): void {
   mockFindCodebaseByName.mockReset();
   mockUpdateCodebase.mockReset();
   mockFindMarkdownFilesRecursive.mockReset();
+  mockLoadConfig.mockReset();
   mockLogger.info.mockClear();
   mockLogger.debug.mockClear();
   mockLogger.warn.mockClear();
@@ -123,6 +124,7 @@ function clearMocks(): void {
   mockFindCodebaseByName.mockResolvedValue(null);
   mockUpdateCodebase.mockResolvedValue(undefined);
   mockFindMarkdownFilesRecursive.mockResolvedValue([]);
+  mockLoadConfig.mockResolvedValue({ assistant: 'pi' });
 }
 
 afterAll(() => {
@@ -759,11 +761,11 @@ describe('registerRepository', () => {
 
     const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { ai_assistant_type: string };
     expect(createArg.ai_assistant_type).toBe('pi');
+    expect(mockLoadConfig).toHaveBeenCalledTimes(1);
   });
 
   test('detects .pi/ folder and sets ai_assistant_type to pi', async () => {
-    // config default is 'pi', but this test verifies the folder-detection path directly
-    mockLoadConfig.mockResolvedValueOnce({ assistant: 'claude' });
+    // loadConfig must NOT be called when a known SDK folder is detected (deferred I/O)
     spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
@@ -783,6 +785,7 @@ describe('registerRepository', () => {
 
     const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { ai_assistant_type: string };
     expect(createArg.ai_assistant_type).toBe('pi');
+    expect(mockLoadConfig).not.toHaveBeenCalled();
   });
 });
 

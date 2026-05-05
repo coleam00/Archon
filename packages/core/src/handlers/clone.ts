@@ -45,9 +45,8 @@ async function registerRepoAtPath(
 ): Promise<RegisterResult> {
   // Auto-detect assistant type based on SDK folder conventions.
   // Known SDK folders: .codex/ (Codex), .claude/ (Claude), .pi/ (Pi).
-  // Falls back to the configured default provider if no SDK folder detected.
-  const config = await loadConfig(targetPath);
-  let suggestedAssistant = config.assistant;
+  // loadConfig is deferred: only called when no SDK folder is detected.
+  let suggestedAssistant: string;
   const codexFolder = join(targetPath, '.codex');
   const claudeFolder = join(targetPath, '.claude');
   const piFolder = join(targetPath, '.pi');
@@ -67,6 +66,8 @@ async function registerRepoAtPath(
         suggestedAssistant = 'pi';
         getLog().debug({ path: piFolder }, 'assistant_detected_pi');
       } catch {
+        const config = await loadConfig(targetPath);
+        suggestedAssistant = config.assistant;
         getLog().debug({ provider: config.assistant }, 'assistant_default_from_config');
       }
     }
