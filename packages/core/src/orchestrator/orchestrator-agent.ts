@@ -90,6 +90,16 @@ export interface OrchestratorCommands {
 
 // ─── Command Parsing ────────────────────────────────────────────────────────
 
+// Prefix patterns: fire as soon as the command keyword is seen.
+const INVOKE_WORKFLOW_PREFIX_RE = /^\/invoke-workflow\s/m;
+const REGISTER_PROJECT_PREFIX_RE = /^\/register-project\s/m;
+
+// Full-command patterns: fire once all required tokens are present.
+// These determine when accumulation can stop — further chunks cannot add
+// required parse tokens and could corrupt already-captured ones.
+const INVOKE_WORKFLOW_FULL_RE = /^\/invoke-workflow\s+\S+\s+--project[\s=]+\S+/m;
+const REGISTER_PROJECT_FULL_RE = /^\/register-project\s+\S+\s+\S+/m;
+
 /**
  * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
  * Case-insensitive. Used in both the parse phase and the dispatch phase.
@@ -941,6 +951,7 @@ async function handleStreamMode(
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let commandFullyParsed = false;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -949,19 +960,42 @@ async function handleStreamMode(
     requestOptions
   )) {
     if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
+      // Accumulate only while the command is not yet fully captured; post-command
+      // trailing chunks would corrupt the project-name token if joined without a
+      // whitespace boundary, causing the parse regex to overshoot.
+      if (!commandFullyParsed) {
         allMessages.push(msg.content);
-        const accumulated = allMessages.join('');
+      }
+      if (!commandDetected) {
         // Check for orchestrator commands BEFORE streaming to frontend.
         // If detected, suppress this chunk and all future chunks — the full
         // response will be parsed post-loop and the command dispatched there.
+        const accumulated = allMessages.join('');
         if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
+          INVOKE_WORKFLOW_PREFIX_RE.test(accumulated) ||
+          REGISTER_PROJECT_PREFIX_RE.test(accumulated)
         ) {
           commandDetected = true;
+          // If the complete command pattern is already present, stop accumulating —
+          // no more chunks needed. This prevents trailing chunks from corrupting
+          // the project-name token when the command was fully emitted in one chunk.
+          if (
+            INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
+            REGISTER_PROJECT_FULL_RE.test(accumulated)
+          ) {
+            commandFullyParsed = true;
+          }
         } else {
           await platform.sendMessage(conversationId, msg.content);
+        }
+      } else if (!commandFullyParsed) {
+        // Post-prefix: keep accumulating until the full command pattern is present.
+        const accumulated = allMessages.join('');
+        if (
+          INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
+          REGISTER_PROJECT_FULL_RE.test(accumulated)
+        ) {
+          commandFullyParsed = true;
         }
       }
     } else if (msg.type === 'tool' && msg.toolName) {
@@ -1092,6 +1126,7 @@ async function handleBatchMode(
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let commandFullyParsed = false;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -1100,20 +1135,39 @@ async function handleBatchMode(
     requestOptions
   )) {
     if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
+      // Always record in allChunks for debug logging; accumulate assistantMessages
+      // only while the command is not yet fully captured (same reason as stream mode).
+      allChunks.push({ type: 'assistant', content: msg.content });
+      if (!commandFullyParsed) {
         assistantMessages.push(msg.content);
-        allChunks.push({ type: 'assistant', content: msg.content });
+      }
 
-        if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
-          assistantMessages.shift();
-          assistantChunksTruncated = true;
-        }
+      if (!commandFullyParsed && assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
+        assistantMessages.shift();
+        assistantChunksTruncated = true;
+      }
+
+      if (!commandDetected) {
         const accumulated = assistantMessages.join('');
         if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
+          INVOKE_WORKFLOW_PREFIX_RE.test(accumulated) ||
+          REGISTER_PROJECT_PREFIX_RE.test(accumulated)
         ) {
           commandDetected = true;
+          if (
+            INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
+            REGISTER_PROJECT_FULL_RE.test(accumulated)
+          ) {
+            commandFullyParsed = true;
+          }
+        }
+      } else if (!commandFullyParsed) {
+        const accumulated = assistantMessages.join('');
+        if (
+          INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
+          REGISTER_PROJECT_FULL_RE.test(accumulated)
+        ) {
+          commandFullyParsed = true;
         }
       }
     } else if (msg.type === 'tool' && msg.toolName) {
@@ -1193,8 +1247,12 @@ async function handleBatchMode(
     return;
   }
 
-  // Parse orchestrator commands from filtered response
-  const commands = parseOrchestratorCommands(finalMessage, codebases, workflows);
+  // Parse commands from raw joined text — filterToolIndicators inserts '\n\n---\n\n'
+  // separators between array elements and then splits/rejoins with '\n\n', creating
+  // separator lines that break multi-chunk command text (name and path appear on
+  // separate lines from '/register-project'). Raw join preserves the command as a
+  // contiguous string. User-visible output still comes from filterToolIndicators.
+  const commands = parseOrchestratorCommands(assistantMessages.join(''), codebases, workflows);
 
   if (commands.workflowInvocation) {
     if (platform.emitRetract) {
