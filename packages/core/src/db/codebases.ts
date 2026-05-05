@@ -18,12 +18,13 @@ export async function createCodebase(data: {
   default_cwd: string;
   ai_assistant_type: string;
 }): Promise<Codebase> {
-  if (!data.ai_assistant_type?.trim()) {
+  const aiAssistantType = data.ai_assistant_type?.trim();
+  if (!aiAssistantType) {
     throw new Error('createCodebase: ai_assistant_type is required');
   }
   const result = await pool.query<Codebase>(
     'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-    [data.name, data.repository_url ?? null, data.default_cwd, data.ai_assistant_type]
+    [data.name, data.repository_url ?? null, data.default_cwd, aiAssistantType]
   );
   if (!result.rows[0]) {
     throw new Error('Failed to create codebase: INSERT succeeded but no row returned');
