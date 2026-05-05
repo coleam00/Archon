@@ -75,6 +75,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     updateWorkflowRun: mock(async () => {}),
     failWorkflowRun: mock(async () => {}),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
+    getWorkflowRunStatus: mock(async () => 'completed' as const),
     createWorkflowEvent: mock(async () => {}),
     findResumableRun: mock(async () => null),
     getCompletedDagNodeOutputs: mock(async () => new Map()),
@@ -950,5 +951,55 @@ describe('executeWorkflow', () => {
       expect(msg).toContain('running 1m');
       expect(msg).toContain('Wait for it to finish');
     });
+  });
+});
+
+describe('finally backstop', () => {
+  it('calls failWorkflowRun when run is still running at finally', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      failWorkflowRun: failSpy,
+    });
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test',
+      'db-conv-1'
+    );
+
+    const call = (failSpy.mock.calls as unknown[][]).find(
+      c => typeof c[1] === 'string' && (c[1] as string).includes('exited without finalizing')
+    );
+    expect(call).toBeDefined();
+  });
+
+  it('does not call failWorkflowRun when run already completed', async () => {
+    const failSpy = mock(async () => {});
+    const store = makeStore({
+      getWorkflowRunStatus: mock(async () => 'completed' as const),
+      failWorkflowRun: failSpy,
+    });
+    const deps = makeDeps(store);
+
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'test',
+      'db-conv-1'
+    );
+
+    const backstopCall = (failSpy.mock.calls as unknown[][]).find(
+      c => typeof c[1] === 'string' && (c[1] as string).includes('exited without finalizing')
+    );
+    expect(backstopCall).toBeUndefined();
   });
 });

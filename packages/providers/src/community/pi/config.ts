@@ -51,5 +51,13 @@ export function parsePiConfig(raw: Record<string, unknown>): PiProviderDefaults 
     }
   }
 
+  if (
+    typeof raw.maxConcurrent === 'number' &&
+    Number.isInteger(raw.maxConcurrent) &&
+    raw.maxConcurrent > 0
+  ) {
+    result.maxConcurrent = raw.maxConcurrent;
+  }
+
   return result;
 }
