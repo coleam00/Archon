@@ -26,7 +26,7 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
-import { getArchonWorkspacesPath } from '@archon/paths';
+import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
@@ -828,7 +828,7 @@ export async function handleMessage(
       attachedFiles,
       workflowContext
     );
-    const cwd = getArchonWorkspacesPath();
+    const cwd = await ensureArchonWorkspacesPath();
 
     // 4. Update activity and get/create session
     await db.touchConversation(conversation.id);

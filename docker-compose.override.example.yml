@@ -14,3 +14,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.user
+
+# /home/appuser (Claude/Codex/Pi config, gitconfig, shell history) is already
+# persisted by default via the archon_user_home named volume in the base compose.
+# To bind-mount a host path instead, set ARCHON_USER_HOME=/your/host/path in .env
+# (the host path must be writable by UID 1001). No override-file edit needed.

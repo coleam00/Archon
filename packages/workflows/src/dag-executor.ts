@@ -139,7 +139,7 @@ export async function loadConfiguredMcpServerNames(
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       return new Set();
     }
-    return new Set(Object.keys(parsed as Record<string, unknown>));
+    return new Set(Object.keys(parsed));
   } catch (err) {
     getLog().debug({ err, nodeMcpPath, fullPath }, 'dag.mcp_filter_config_read_failed');
     return new Set();
@@ -307,7 +307,12 @@ export function substituteNodeOutputRefs(
         // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
         // String(boolean) is 'true' or 'false' — no shell metacharacters.
         if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        return escapedForBash ? "''" : ''; // objects, null, undefined, symbol, bigint → empty
+        // arrays and objects: JSON-stringify. Bash passes substitution as a single
+        // argument, so downstream tools (jq, etc.) receive a JSON literal they can parse.
+        if (Array.isArray(value) || typeof value === 'object') {
+          return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
+        }
+        return escapedForBash ? "''" : ''; // null, undefined, symbol, bigint → empty
       } catch (jsonErr) {
         getLog().warn(
           { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100), err: jsonErr as Error },
@@ -481,12 +486,11 @@ export function checkTriggerRule(
 
   const upstreams = nodeDeps.map(
     id =>
-      nodeOutputs.get(id) ??
-      ({
+      nodeOutputs.get(id) ?? {
         state: 'failed',
         output: '',
         error: `upstream '${id}' missing from outputs`,
-      } as NodeOutput)
+      }
   );
   const rule: TriggerRule = node.trigger_rule ?? 'all_success';
 
@@ -819,7 +823,7 @@ async function executeNodeInternal(
           const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
           await safeSendMessage(platform, conversationId, toolMsg, nodeContext, {
             category: 'tool_call_formatted',
-          } as WorkflowMessageMetadata);
+          });
 
           // Send structured event to adapters that support it (Web UI)
           if (platform.sendStructuredEvent) {
@@ -1977,7 +1981,7 @@ async function executeLoopNode(
             if (toolMsg) {
               await safeSendMessage(platform, conversationId, toolMsg, msgContext, {
                 category: 'tool_call_formatted',
-              } as WorkflowMessageMetadata);
+              });
             }
             if (platform.sendStructuredEvent) {
               await platform.sendStructuredEvent(conversationId, msg);

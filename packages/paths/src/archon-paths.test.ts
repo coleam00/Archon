@@ -10,6 +10,7 @@ import {
   isDocker,
   getArchonHome,
   getArchonWorkspacesPath,
+  ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
   getHomeWorkflowsPath,
@@ -628,6 +629,43 @@ describe('ensureProjectStructure', () => {
 
     const sourcePath = getProjectSourcePath('acme', 'widget');
     expect((await lstat(sourcePath)).isDirectory()).toBe(true);
+  });
+});
+
+describe('ensureArchonWorkspacesPath', () => {
+  let tempArchonHome: string;
+  useEnvSnapshot();
+
+  beforeEach(async () => {
+    delete process.env.WORKSPACE_PATH;
+    delete process.env.ARCHON_DOCKER;
+    tempArchonHome = join(
+      tmpdir(),
+      `archon-paths-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    process.env.ARCHON_HOME = tempArchonHome;
+  });
+
+  afterEach(async () => {
+    await rm(tempArchonHome, { recursive: true, force: true });
+  });
+
+  test('creates the workspaces directory when missing', async () => {
+    const expected = getArchonWorkspacesPath();
+    expect(existsSync(expected)).toBe(false);
+
+    const returned = await ensureArchonWorkspacesPath();
+
+    expect(returned).toBe(expected);
+    expect((await lstat(expected)).isDirectory()).toBe(true);
+  });
+
+  test('is idempotent - safe to call twice', async () => {
+    await ensureArchonWorkspacesPath();
+    await ensureArchonWorkspacesPath();
+
+    const expected = getArchonWorkspacesPath();
+    expect((await lstat(expected)).isDirectory()).toBe(true);
   });
 });
 

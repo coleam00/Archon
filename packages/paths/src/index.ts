@@ -4,6 +4,7 @@ export {
   isDocker,
   getArchonHome,
   getArchonWorkspacesPath,
+  ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonConfigPath,
   getArchonEnvPath,
