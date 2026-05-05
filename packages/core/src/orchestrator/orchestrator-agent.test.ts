@@ -1185,6 +1185,66 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(prompt).toContain('--force');
   });
 
+  test('failed_resume_user_prompted: prompt includes a preview of the failed run user_message so users can recognize stale runs', async () => {
+    // Without a preview, Option 1 ("Resume that run") looks like it continues
+    // the user's CURRENT request — but it actually re-runs the failed run's
+    // ORIGINAL stored args, which can be a totally different topic if the
+    // failed run is hours/days old. The preview makes the mismatch visible.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-99',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: 'Edit foo.py: restore editable input fields in `api_key_and_analyse_button`',
+      })
+    );
+
+    const platform = makePlatform();
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow do the new thing');
+
+    const allSends = sendMessage.mock.calls.map(c => (c as unknown[])[1] as string);
+    const prompt = allSends.find(s => s.includes('/workflow resume failed-run-99'));
+    expect(prompt).toBeDefined();
+    // Preview rendered as Markdown blockquote with the failed run's stored message
+    expect(prompt).toContain('> Edit foo.py: restore editable input fields');
+    // Option 1 wording disambiguates resume vs current message
+    expect(prompt).toContain('not your current message');
+  });
+
+  test('failed_resume_user_prompted: long user_message is truncated with ellipsis in the preview', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    const longMsg = 'x'.repeat(500);
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-long',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: longMsg,
+      })
+    );
+
+    const platform = makePlatform();
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow do the thing');
+
+    const allSends = sendMessage.mock.calls.map(c => (c as unknown[])[1] as string);
+    const prompt = allSends.find(s => s.includes('/workflow resume failed-run-long'));
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain('…'); // ellipsis present
+    // Truncated preview must not contain the full string
+    expect(prompt).not.toContain(longMsg);
+  });
+
   test('resumeRunId option: failed run DOES auto-resume when CommandResult.workflow.resumeRunId matches', async () => {
     // Regression for the `/workflow resume <id>` path (and the natural-language
     // approval flow that transitions a paused run to 'failed' before

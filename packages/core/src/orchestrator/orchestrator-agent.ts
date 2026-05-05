@@ -321,17 +321,37 @@ async function dispatchOrchestratorWorkflow(
         // consecutive backticks would close our Markdown code-fence early.
         const escapedMsg = userMessage.replace(/[\\"`]/g, '\\$&');
         const baseCmd = `/workflow run ${workflow.name}`;
+        // Show a preview of the failed run's stored user_message so the user
+        // can tell whether Option 1 (resume) actually matches their current
+        // intent. Without this, Option 1 silently re-runs whatever the prior
+        // run was about — which can be a totally different topic if the
+        // failed run is hours/days old.
+        const PREVIEW_MAX = 160;
+        const priorMessage = (resumableRun.user_message ?? '').replace(/\s+/g, ' ').trim();
+        const priorPreview = priorMessage
+          ? priorMessage.length > PREVIEW_MAX
+            ? `${priorMessage.slice(0, PREVIEW_MAX)}…`
+            : priorMessage
+          : '(no message stored)';
         const promptText = [
+          '---',
+          '',
           `Found a prior failed run of **${workflow.name}** (run \`${resumableRun.id}\`).`,
           '',
-          'Choose how to proceed:',
+          '**Run prompt was:**',
           '',
-          '**1. Resume from where it failed:**',
+          `> ${priorPreview}`,
+          '',
+          '---',
+          '',
+          '**Choose how to proceed:**',
+          '',
+          '**1. Resume that run** (re-runs the prompt shown above, not your current message):',
           '```',
           `/workflow resume ${resumableRun.id}`,
           '```',
           '',
-          '**2. Discard the failed run, then start fresh:**',
+          '**2. Discard the failed run, then start fresh with your current message:**',
           '```',
           `/workflow abandon ${resumableRun.id}`,
           '```',
@@ -340,7 +360,7 @@ async function dispatchOrchestratorWorkflow(
           `${baseCmd} "${escapedMsg}"`,
           '```',
           '',
-          '**3. Start fresh, leave the failed run as-is** (skips the resume check):',
+          '**3. Start fresh with your current message, leave the failed run as-is** (skips the resume check):',
           '```',
           `${baseCmd} --force "${escapedMsg}"`,
           '```',
