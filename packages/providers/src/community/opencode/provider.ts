@@ -8,7 +8,11 @@ import type {
   SendQueryOptions,
 } from '../../types';
 
+import { createLogger } from '@archon/paths';
+
 import { OPENCODE_CAPABILITIES } from './capabilities';
+
+const log = createLogger('opencode');
 
 export class OpenCodeProvider implements IAgentProvider {
   async *sendQuery(
@@ -20,6 +24,8 @@ export class OpenCodeProvider implements IAgentProvider {
     const binaryPath = this.resolveBinaryPath(requestOptions);
     const args = ['run', '--format', 'json', '--dir', cwd, prompt];
 
+    log.info({ binaryPath, cwd, promptLength: prompt.length }, 'opencode.send_query_started');
+
     let childProcess: ChildProcess;
     try {
       childProcess = spawn(binaryPath, args, {
@@ -30,18 +36,32 @@ export class OpenCodeProvider implements IAgentProvider {
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === 'ENOENT') {
+        log.error({ binaryPath, err: e }, 'opencode.binary_not_found');
         yield {
           type: 'system',
           content: `OpenCode binary not found: ${binaryPath}. Install opencode or set OPENCODE_BIN_PATH.`,
         };
-      } else {
+      } else if (e.code === 'EACCES') {
+        log.error({ binaryPath, err: e }, 'opencode.binary_permission_denied');
         yield {
           type: 'system',
-          content: `Failed to start OpenCode: ${e.message}`,
+          content: `Permission denied executing OpenCode: ${binaryPath}. Check file permissions.`,
+        };
+      } else {
+        const message = e.message ?? String(e);
+        log.error({ binaryPath, err: e }, 'opencode.spawn_failed');
+        yield {
+          type: 'system',
+          content: `Failed to start OpenCode: ${message}`,
         };
       }
       return;
     }
+
+    let processError = null as Error | null;
+    childProcess.on('error', err => {
+      processError = err;
+    });
 
     const stdErrStream = childProcess.stderr;
     let stderr = '';
@@ -53,6 +73,8 @@ export class OpenCodeProvider implements IAgentProvider {
 
     const stdoutStream = childProcess.stdout;
     if (!stdoutStream) {
+      log.error({ binaryPath, cwd }, 'opencode.stdout_null');
+      childProcess.kill();
       yield { type: 'system', content: 'Failed to read OpenCode output.' };
       return;
     }
@@ -68,8 +90,12 @@ export class OpenCodeProvider implements IAgentProvider {
         const event = JSON.parse(line) as Record<string, unknown>;
         const chunk = this.mapEventToChunk(event);
         if (chunk) yield chunk;
-      } catch {
-        // Skip non-JSON lines (e.g. stderr interleaved with stdout)
+      } catch (err) {
+        if (err instanceof SyntaxError) {
+          log.debug({ line: line.slice(0, 200) }, 'opencode.non_json_line');
+        } else {
+          log.warn({ err, line: line.slice(0, 200) }, 'opencode.line_processing_error');
+        }
       }
     }
 
@@ -82,10 +108,26 @@ export class OpenCodeProvider implements IAgentProvider {
       });
     }
 
-    if (lineCount === 0 && childProcess.exitCode !== 0) {
+    if (childProcess.exitCode !== 0) {
+      log.warn(
+        { lineCount, exitCode: childProcess.exitCode, stderr: stderr.slice(0, 500) },
+        'opencode.non_zero_exit'
+      );
       yield {
         type: 'system',
-        content: stderr || `OpenCode exited with code ${childProcess.exitCode}.`,
+        content: stderr
+          ? `OpenCode error (exit ${childProcess.exitCode}): ${stderr.slice(0, 1000)}`
+          : `OpenCode exited with code ${childProcess.exitCode}.`,
+      };
+    } else {
+      log.info({ lineCount, exitCode: childProcess.exitCode }, 'opencode.send_query_completed');
+    }
+
+    if (processError) {
+      log.warn({ err: processError }, 'opencode.process_error_event');
+      yield {
+        type: 'system',
+        content: `OpenCode process error: ${processError.message}`,
       };
     }
   }
@@ -108,7 +150,7 @@ export class OpenCodeProvider implements IAgentProvider {
 
   private mapEventToChunk(event: Record<string, unknown>): MessageChunk | null {
     // Map known OpenCode JSON event fields to MessageChunk.
-    // The actual event schema is validated at runtime; this is a best-effort mapping.
+    // The actual event schema is NOT validated; this is a best-effort mapping.
     const content = event.content ?? event.text ?? event.data ?? event.message;
     if (typeof content === 'string' && content.length > 0) {
       return { type: 'assistant', content };

@@ -252,9 +252,8 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
       expect(isRegisteredProvider('pi')).toBe(true);
+      expect(isRegisteredProvider('opencode')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -262,6 +261,8 @@ describe('registry', () => {
       expect(() => registerCommunityProviders()).not.toThrow();
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       expect(piCount).toBe(1);
+      const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
+      expect(opencodeCount).toBe(1);
     });
   });
 
