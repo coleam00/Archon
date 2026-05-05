@@ -90,6 +90,88 @@ export interface OrchestratorCommands {
 
 // ─── Command Parsing ────────────────────────────────────────────────────────
 
+// Prefix patterns: fire as soon as the command keyword is seen.
+const INVOKE_WORKFLOW_PREFIX_RE = /^\/invoke-workflow\s/m;
+const REGISTER_PROJECT_PREFIX_RE = /^\/register-project\s/m;
+
+// Full-command patterns: fire once all required tokens are present.
+// These determine when accumulation can stop — further chunks cannot add
+// required parse tokens and could corrupt already-captured ones.
+//
+// INVOKE_WORKFLOW_FULL_RE uses a test() object because the stop condition must account
+// for the optional --prompt parameter:
+//   - If --prompt "..." is present with a closing quote → fully parsed.
+//   - If --prompt is started but not closed → keep accumulating for the closing quote.
+//   - If no --prompt and the line is terminated (\n) → fully parsed (no more params).
+//   - If no --prompt and EOS (no \n yet) → keep accumulating in case --prompt follows.
+// A plain regex would fire as soon as --project <token> matched, dropping a --prompt
+// that arrives in a later chunk and causing synthesizedPrompt to be lost.
+const INVOKE_WORKFLOW_FULL_RE = {
+  test(text: string): boolean {
+    // Match the invoke-workflow line up to and including its terminator (\n) or end of string.
+    const lineMatch = /^\/invoke-workflow[^\r\n]*(\r?\n|$)/m.exec(text);
+    if (!lineMatch) return false;
+    const line = lineMatch[0].replace(/(\r?\n)?$/, '');
+    // Must have workflow name and --project token before we consider stopping.
+    if (!/--project[\s=]+\S+/.test(line)) return false;
+    const isEos = !lineMatch[0].endsWith('\n');
+    // Check for optional --prompt parameter (system prompt specifies it follows --project).
+    const promptKeywordMatch = /--prompt\s+/.exec(line);
+    if (promptKeywordMatch) {
+      const afterPrompt = line.slice(promptKeywordMatch.index + promptKeywordMatch[0].length);
+      if (afterPrompt.startsWith('"')) {
+        return /^"(?:[^"\\]|\\.)*"/.test(afterPrompt);
+      }
+      if (afterPrompt.startsWith("'")) {
+        return /^'(?:[^'\\]|\\.)*'/.test(afterPrompt);
+      }
+      // Unquoted --prompt value: require line terminator.
+      return !isEos;
+    }
+    // No --prompt yet: require line terminator so a --prompt in a later chunk is not missed.
+    return !isEos;
+  },
+};
+// REGISTER_PROJECT_FULL_RE uses a test() object instead of a plain regex because the
+// stop condition must be conservative:
+//   - Unquoted paths: require the line to be terminated (\n or end of stream preceded
+//     by a non-whitespace char) so a space-containing path like "/home/user/my project"
+//     is not declared complete after "my" arrives.
+//   - Quoted paths: require the closing quote so we don't stop mid-path.
+// This mirrors parseOrchestratorCommands' /^..\s+(.+)$/m pattern for the path capture.
+const REGISTER_PROJECT_FULL_RE = {
+  test(text: string): boolean {
+    // Match the register-project line up to and including its terminator (\n) or end of string.
+    const lineMatch = /^\/register-project[^\r\n]*(\r?\n|$)/m.exec(text);
+    if (!lineMatch) return false;
+    // Only treat end-of-string as a line terminator when at least one non-whitespace
+    // character follows the project name — avoids matching a partial "/register-project "
+    // line that was cut mid-word.
+    const isEos = !lineMatch[0].endsWith('\n');
+    const line = lineMatch[0].replace(/(\r?\n)?$/, '');
+    const rest = line.replace(/^\/register-project\s+/, '');
+    if (rest === line) return false; // no whitespace after command keyword
+    const nameEnd = rest.search(/\s/);
+    if (nameEnd === -1) return false; // no path token yet
+    const projectPath = rest.slice(nameEnd).trimStart();
+    if (!projectPath) return false;
+    if (projectPath.startsWith('"')) {
+      // Quoted path: require closing quote
+      return /^"(?:[^"\\]|\\.)*"/.test(projectPath);
+    }
+    if (projectPath.startsWith("'")) {
+      return /^'(?:[^'\\]|\\.)*'/.test(projectPath);
+    }
+    // Unquoted path: require line terminator so we don't freeze on a partial path with spaces
+    return !isEos;
+  },
+};
+
+/** Returns true once accumulated text contains a complete orchestrator command. */
+function isCommandFullyParsed(accumulated: string): boolean {
+  return INVOKE_WORKFLOW_FULL_RE.test(accumulated) || REGISTER_PROJECT_FULL_RE.test(accumulated);
+}
+
 /**
  * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
  * Case-insensitive. Used in both the parse phase and the dispatch phase.
@@ -941,6 +1023,7 @@ async function handleStreamMode(
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let commandFullyParsed = false;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -949,19 +1032,36 @@ async function handleStreamMode(
     requestOptions
   )) {
     if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
+      // Accumulate only while the command is not yet fully captured; post-command
+      // trailing chunks would corrupt the project-name token if joined without a
+      // whitespace boundary, causing the parse regex to overshoot.
+      if (!commandFullyParsed) {
         allMessages.push(msg.content);
-        const accumulated = allMessages.join('');
+      }
+      if (!commandDetected) {
         // Check for orchestrator commands BEFORE streaming to frontend.
         // If detected, suppress this chunk and all future chunks — the full
         // response will be parsed post-loop and the command dispatched there.
+        const accumulated = allMessages.join('');
         if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
+          INVOKE_WORKFLOW_PREFIX_RE.test(accumulated) ||
+          REGISTER_PROJECT_PREFIX_RE.test(accumulated)
         ) {
           commandDetected = true;
+          // If the complete command pattern is already present, stop accumulating —
+          // no more chunks needed. This prevents trailing chunks from corrupting
+          // the project-name token when the command was fully emitted in one chunk.
+          if (isCommandFullyParsed(accumulated)) {
+            commandFullyParsed = true;
+          }
         } else {
           await platform.sendMessage(conversationId, msg.content);
+        }
+      } else if (!commandFullyParsed) {
+        // Post-prefix: keep accumulating until the full command pattern is present.
+        const accumulated = allMessages.join('');
+        if (isCommandFullyParsed(accumulated)) {
+          commandFullyParsed = true;
         }
       }
     } else if (msg.type === 'tool' && msg.toolName) {
@@ -1092,6 +1192,7 @@ async function handleBatchMode(
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let commandFullyParsed = false;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -1100,20 +1201,39 @@ async function handleBatchMode(
     requestOptions
   )) {
     if (msg.type === 'assistant' && msg.content) {
-      if (!commandDetected) {
+      // Always record in allChunks for debug logging; accumulate assistantMessages
+      // only while the command is not yet fully captured (same reason as stream mode).
+      allChunks.push({ type: 'assistant', content: msg.content });
+      if (!commandFullyParsed) {
         assistantMessages.push(msg.content);
-        allChunks.push({ type: 'assistant', content: msg.content });
+      }
 
-        if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
-          assistantMessages.shift();
-          assistantChunksTruncated = true;
-        }
+      // Do not truncate while a command is being accumulated — shifting away the prefix
+      // chunk would prevent commandFullyParsed from ever firing and lose parse tokens.
+      if (
+        !commandDetected &&
+        !commandFullyParsed &&
+        assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS
+      ) {
+        assistantMessages.shift();
+        assistantChunksTruncated = true;
+      }
+
+      if (!commandDetected) {
         const accumulated = assistantMessages.join('');
         if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
+          INVOKE_WORKFLOW_PREFIX_RE.test(accumulated) ||
+          REGISTER_PROJECT_PREFIX_RE.test(accumulated)
         ) {
           commandDetected = true;
+          if (isCommandFullyParsed(accumulated)) {
+            commandFullyParsed = true;
+          }
+        }
+      } else if (!commandFullyParsed) {
+        const accumulated = assistantMessages.join('');
+        if (isCommandFullyParsed(accumulated)) {
+          commandFullyParsed = true;
         }
       }
     } else if (msg.type === 'tool' && msg.toolName) {
@@ -1158,7 +1278,9 @@ async function handleBatchMode(
       }
     }
 
-    if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
+    // Always enforce the total-chunk cap regardless of commandDetected — allChunks grows
+    // unconditionally now (for debug logging), so without this guard it would be unbounded.
+    if (allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
       allChunks.shift();
       totalChunksTruncated = true;
     }
@@ -1193,8 +1315,12 @@ async function handleBatchMode(
     return;
   }
 
-  // Parse orchestrator commands from filtered response
-  const commands = parseOrchestratorCommands(finalMessage, codebases, workflows);
+  // Parse commands from raw joined text — filterToolIndicators inserts '\n\n---\n\n'
+  // separators between array elements and then splits/rejoins with '\n\n', creating
+  // separator lines that break multi-chunk command text (name and path appear on
+  // separate lines from '/register-project'). Raw join preserves the command as a
+  // contiguous string. User-visible output still comes from filterToolIndicators.
+  const commands = parseOrchestratorCommands(assistantMessages.join(''), codebases, workflows);
 
   if (commands.workflowInvocation) {
     if (platform.emitRetract) {
