@@ -25,7 +25,6 @@ export {
   getRegisteredProviders,
   getProviderInfoList,
   isRegisteredProvider,
-  resolveAssistantType,
   registerBuiltinProviders,
   registerCommunityProviders,
   clearRegistry,

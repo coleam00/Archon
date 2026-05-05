@@ -14,7 +14,6 @@ mock.module('./connection', () => ({
 import {
   getOrCreateConversation,
   updateConversation,
-  updateConversationTitle,
   findConversationByPlatformId,
 } from './conversations';
 import type { Conversation } from '../types';
@@ -371,29 +370,6 @@ describe('conversations', () => {
       try {
         mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
         await updateConversation('test-conv-id', { cwd: '/workspace' });
-      } catch (error) {
-        expect(error).toBeInstanceOf(ConversationNotFoundError);
-        expect((error as ConversationNotFoundError).conversationId).toBe('test-conv-id');
-        expect((error as ConversationNotFoundError).message).toBe(
-          'Conversation not found: test-conv-id'
-        );
-      }
-    });
-  });
-
-  describe('updateConversationTitle', () => {
-    test('throws ConversationNotFoundError when conversation not found (rowCount === 0)', async () => {
-      // Simulate UPDATE returning 0 rows affected
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
-
-      await expect(updateConversationTitle('non-existent-id', 'New Title')).rejects.toThrow(
-        ConversationNotFoundError
-      );
-
-      // Verify the error contains the conversation ID
-      try {
-        mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
-        await updateConversationTitle('test-conv-id', 'Updated Title');
       } catch (error) {
         expect(error).toBeInstanceOf(ConversationNotFoundError);
         expect((error as ConversationNotFoundError).conversationId).toBe('test-conv-id');

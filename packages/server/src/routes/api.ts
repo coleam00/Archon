@@ -1415,10 +1415,7 @@ export function registerApiRoutes(
     try {
       conv = await conversationDb.findConversationByPlatformId(conversationId);
     } catch (e: unknown) {
-      // findConversationByPlatformId throws on DB errors; bubble as 500.
-      const err = e as Error;
-      getLog().error({ err, conversationId }, 'conversation_lookup_failed');
-      return c.json({ error: 'Failed to look up conversation: ' + err.message }, 500);
+      getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
     }
     // Auto-create conversation if not found (web chat creates ID but never persists it)
     if (!conv) {
@@ -1427,20 +1424,6 @@ export function registerApiRoutes(
       } catch (e: unknown) {
         const err = e as Error;
         getLog().error({ err, conversationId }, 'conversation_auto_create_failed');
-        // Attempt a single retry of findConversationByPlatformId to handle a racing insert.
-        try {
-          conv = await conversationDb.findConversationByPlatformId(conversationId);
-        } catch (retryErr: unknown) {
-          const retry = retryErr as Error;
-          getLog().error({ err: retry, conversationId }, 'conversation_lookup_retry_failed');
-          return c.json({ error: 'Failed to persist conversation: ' + err.message }, 500);
-        }
-        // If retry still yields no conversation (unique constraint violation race survived
-        // but row is still missing), error out.
-        if (!conv) {
-          getLog().error({ conversationId }, 'conversation_race_retry_empty');
-          return c.json({ error: 'Failed to persist conversation' }, 500);
-        }
       }
     }
 
@@ -2279,7 +2262,7 @@ export function registerApiRoutes(
           return c.json({
             workflow: result.workflow,
             filename,
-            source: 'project' as WorkflowSource,
+            source: 'project',
           });
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -2296,7 +2279,7 @@ export function registerApiRoutes(
         if (result.error) {
           return apiError(c, 500, `Bundled workflow is invalid: ${result.error.error}`);
         }
-        return c.json({ workflow: result.workflow, filename, source: 'bundled' as WorkflowSource });
+        return c.json({ workflow: result.workflow, filename, source: 'bundled' });
       }
 
       if (!isBinaryBuild()) {
@@ -2310,7 +2293,7 @@ export function registerApiRoutes(
           return c.json({
             workflow: result.workflow,
             filename,
-            source: 'bundled' as WorkflowSource,
+            source: 'bundled',
           });
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -2375,7 +2358,7 @@ export function registerApiRoutes(
       return c.json({
         workflow: parsed.workflow,
         filename: `${name}.yaml`,
-        source: 'project' as WorkflowSource,
+        source: 'project',
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));

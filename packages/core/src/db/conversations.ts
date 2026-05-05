@@ -101,14 +101,12 @@ export async function getOrCreateConversation(
       [codebaseId]
     );
     if (codebase.rows[0]) {
-      // Treat NULL as unset so loadConfig() can supply the assistant.
-      const raw = codebase.rows[0].ai_assistant_type;
-      assistantType = raw != null ? raw : undefined;
+      assistantType = codebase.rows[0].ai_assistant_type;
     }
   }
 
   // Fall back to config.assistant (single source of truth: merged config)
-  if (!assistantType) {
+  if (assistantType === undefined) {
     const config = await loadConfig();
     assistantType = config.assistant;
   }
@@ -242,7 +240,8 @@ export async function touchConversation(id: string): Promise<void> {
 /**
  * Update conversation title.
  *
- * Throws ConversationNotFoundError when the conversation does not exist.
+ * Fire-and-forget safe — does not throw when the conversation does not exist.
+ * The caller (title-generator) already wraps this in a try-catch.
  */
 export async function updateConversationTitle(id: string, title: string): Promise<void> {
   const dialect = getDialect();
@@ -252,8 +251,7 @@ export async function updateConversationTitle(id: string, title: string): Promis
     [title, id]
   );
   if (result.rowCount === 0) {
-    log.error({ conversationId: id }, 'update_conversation_title_not_found');
-    throw new ConversationNotFoundError(id);
+    log.warn({ conversationId: id }, 'update_conversation_title_not_found');
   }
 }
 

@@ -819,12 +819,6 @@ After upgrading, run 'archon setup' again.`,
     }
   }
 
-  const enabledProviders = [
-    ...(hasClaude ? ['claude'] : []),
-    ...(hasCodex ? ['codex'] : []),
-    ...(hasPi ? ['pi'] : []),
-  ];
-
   if (!hasClaude && !hasCodex && !hasPi) {
     log.warning('No AI assistant selected. You can add one later by running `archon setup` again.');
     return {
@@ -832,14 +826,9 @@ After upgrading, run 'archon setup' again.`,
       codex: false,
       pi: false,
       defaultAssistant:
-        process.env.DEFAULT_AI_ASSISTANT &&
-        enabledProviders.includes(process.env.DEFAULT_AI_ASSISTANT)
-          ? process.env.DEFAULT_AI_ASSISTANT
-          : (enabledProviders[0] ??
-            (process.env.DEFAULT_AI_ASSISTANT &&
-            getRegisteredProviders().some(p => p.id === process.env.DEFAULT_AI_ASSISTANT)
-              ? process.env.DEFAULT_AI_ASSISTANT
-              : (getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude'))),
+        getRegisteredProviders().find(p => p.builtIn)?.id ??
+        process.env.DEFAULT_AI_ASSISTANT ??
+        'claude',
     };
   }
 
@@ -864,16 +853,12 @@ After upgrading, run 'archon setup' again.`,
     codexTokens = tokens ?? undefined;
   }
 
-  // Determine default assistant — prefer env var if it matches an enabled provider,
-  // otherwise use the first enabled provider, with registry order as fallback.
+  // Determine default assistant — use the registry, but keep setup/auth flows built-in only.
+  // Default to first registered built-in provider rather than hardcoding 'claude'.
   let defaultAssistant =
-    process.env.DEFAULT_AI_ASSISTANT && enabledProviders.includes(process.env.DEFAULT_AI_ASSISTANT)
-      ? process.env.DEFAULT_AI_ASSISTANT
-      : (enabledProviders[0] ??
-        (process.env.DEFAULT_AI_ASSISTANT &&
-        getRegisteredProviders().some(p => p.id === process.env.DEFAULT_AI_ASSISTANT)
-          ? process.env.DEFAULT_AI_ASSISTANT
-          : (getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude')));
+    getRegisteredProviders().find(p => p.builtIn)?.id ??
+    process.env.DEFAULT_AI_ASSISTANT ??
+    'claude';
 
   if (hasClaude && hasCodex) {
     const providerChoices = getRegisteredProviders()
@@ -1706,7 +1691,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       process.exit(0);
     }
 
-    mode = modeChoice as SetupMode;
+    mode = modeChoice;
   }
 
   // Collect configuration based on mode
