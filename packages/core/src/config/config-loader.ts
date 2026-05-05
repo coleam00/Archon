@@ -15,6 +15,7 @@ import {
   getArchonWorkspacesPath,
   getArchonWorktreesPath,
 } from '@archon/paths';
+import jsYaml from 'js-yaml';
 
 // Wrapper functions for file I/O - allows mocking without polluting fs/promises globally
 export async function readConfigFile(path: string): Promise<string> {
@@ -130,10 +131,10 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Parse YAML using Bun's native YAML parser
+ * Parse YAML using js-yaml (Bun.YAML is not available in all Bun versions)
  */
 function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+  return jsYaml.load(content);
 }
 
 // Cache for loaded configs
@@ -148,7 +149,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Bot display name (shown in messages)
 # botName: Archon
 
-# Default AI assistant (must match a registered provider, e.g. claude, codex)
+# Default AI assistant (must match a registered provider, e.g. claude, codex, pi)
 # defaultAssistant: claude
 
 # Assistant defaults
@@ -161,6 +162,9 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #     webSearchMode: disabled
 #     additionalDirectories:
 #       - /absolute/path/to/other/repo
+#   pi:
+#     model: google/gemini-2.0-flash  # Format: '<pi-provider-id>/<model-id>'
+#     enableExtensions: false
 
 # Streaming mode per platform (stream or batch)
 # streaming:
@@ -267,8 +271,13 @@ function getDefaults(): MergedConfig {
   // registrations run at process bootstrap (see `packages/providers/src/
   // registry.ts#registerCommunityProviders`), so by the time this runs the
   // registry is populated.
+  // Pi gets a sensible default model so it works out of the box.
   const providers = getRegisteredProviders();
-  const registeredAssistants: AssistantDefaults = { claude: {}, codex: {} };
+  const registeredAssistants: AssistantDefaults = {
+    claude: {},
+    codex: {},
+    pi: {},
+  };
   for (const provider of providers) {
     if (!(provider.id in registeredAssistants)) {
       registeredAssistants[provider.id] = {};
@@ -277,7 +286,7 @@ function getDefaults(): MergedConfig {
 
   return {
     botName: 'Archon',
-    assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
+    assistant: providers.find(p => p.builtIn)?.id ?? process.env.DEFAULT_AI_ASSISTANT ?? 'claude',
     assistants: registeredAssistants,
     streaming: {
       telegram: 'stream',
@@ -556,7 +565,7 @@ export async function updateGlobalConfig(updates: Partial<GlobalConfig>): Promis
     }
 
     // Serialize to YAML and write
-    const yaml = Bun.YAML.stringify(merged);
+    const yaml = jsYaml.dump(merged);
     await mkdir(dirname(configPath), { recursive: true });
     await writeConfigFile(configPath, yaml);
 

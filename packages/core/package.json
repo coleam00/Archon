@@ -32,6 +32,7 @@
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
+    "js-yaml": "^4.1.0",
     "pg": "^8.11.0",
     "zod": "^3"
   },

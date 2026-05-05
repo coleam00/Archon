@@ -11,6 +11,7 @@ import { readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
+import jsYaml from 'js-yaml';
 import type {
   ConversationLockManager,
   AttachedFile,
@@ -1407,12 +1408,23 @@ export function registerApiRoutes(
       message = body.message;
     }
 
-    // Look up conversation for message persistence
+    // Look up conversation for message persistence. If no conversation exists yet,
+    // automatically create one so the message can be persisted and processed.
+    // Web conversations use a simple string ID (no platform_type needed).
     let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
     try {
       conv = await conversationDb.findConversationByPlatformId(conversationId);
     } catch (e: unknown) {
       getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+    }
+    // Auto-create conversation if not found (web chat creates ID but never persists it)
+    if (!conv) {
+      try {
+        conv = await conversationDb.getOrCreateConversation('web', conversationId);
+      } catch (e: unknown) {
+        const err = e as Error;
+        getLog().error({ err, conversationId }, 'conversation_auto_create_failed');
+      }
     }
 
     // Persist user message and pass DB ID to adapter for assistant message persistence
@@ -2195,7 +2207,7 @@ export function registerApiRoutes(
 
     let yamlContent: string;
     try {
-      yamlContent = Bun.YAML.stringify(definition);
+      yamlContent = jsYaml.dump(definition);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err }, 'workflow.serialize_failed');
@@ -2250,7 +2262,7 @@ export function registerApiRoutes(
           return c.json({
             workflow: result.workflow,
             filename,
-            source: 'project' as WorkflowSource,
+            source: 'project',
           });
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -2267,7 +2279,7 @@ export function registerApiRoutes(
         if (result.error) {
           return apiError(c, 500, `Bundled workflow is invalid: ${result.error.error}`);
         }
-        return c.json({ workflow: result.workflow, filename, source: 'bundled' as WorkflowSource });
+        return c.json({ workflow: result.workflow, filename, source: 'bundled' });
       }
 
       if (!isBinaryBuild()) {
@@ -2281,7 +2293,7 @@ export function registerApiRoutes(
           return c.json({
             workflow: result.workflow,
             filename,
-            source: 'bundled' as WorkflowSource,
+            source: 'bundled',
           });
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -2325,7 +2337,7 @@ export function registerApiRoutes(
     // Serialize and validate before writing
     let yamlContent: string;
     try {
-      yamlContent = Bun.YAML.stringify(definition);
+      yamlContent = jsYaml.dump(definition);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err, name }, 'workflow.serialize_failed');
@@ -2346,7 +2358,7 @@ export function registerApiRoutes(
       return c.json({
         workflow: parsed.workflow,
         filename: `${name}.yaml`,
-        source: 'project' as WorkflowSource,
+        source: 'project',
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
