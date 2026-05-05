@@ -816,7 +816,9 @@ describe('orchestrator-agent handleMessage', () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
           type: 'assistant',
-          content: '/invoke-workflow fix-bug --project test-project',
+          // Trailing \n terminates the line so INVOKE_WORKFLOW_FULL_RE fires immediately,
+          // setting commandFullyParsed=true before the second chunk is processed.
+          content: '/invoke-workflow fix-bug --project test-project\n',
         };
         // These are silenced (not sent to platform) but loop continues to capture result
         yield { type: 'assistant', content: 'This should not appear' };

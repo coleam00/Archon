@@ -97,7 +97,41 @@ const REGISTER_PROJECT_PREFIX_RE = /^\/register-project\s/m;
 // Full-command patterns: fire once all required tokens are present.
 // These determine when accumulation can stop — further chunks cannot add
 // required parse tokens and could corrupt already-captured ones.
-const INVOKE_WORKFLOW_FULL_RE = /^\/invoke-workflow\s+\S+\s+--project[\s=]+\S+/m;
+//
+// INVOKE_WORKFLOW_FULL_RE uses a test() object because the stop condition must account
+// for the optional --prompt parameter:
+//   - If --prompt "..." is present with a closing quote → fully parsed.
+//   - If --prompt is started but not closed → keep accumulating for the closing quote.
+//   - If no --prompt and the line is terminated (\n) → fully parsed (no more params).
+//   - If no --prompt and EOS (no \n yet) → keep accumulating in case --prompt follows.
+// A plain regex would fire as soon as --project <token> matched, dropping a --prompt
+// that arrives in a later chunk and causing synthesizedPrompt to be lost.
+const INVOKE_WORKFLOW_FULL_RE = {
+  test(text: string): boolean {
+    // Match the invoke-workflow line up to and including its terminator (\n) or end of string.
+    const lineMatch = /^\/invoke-workflow[^\r\n]*(\r?\n|$)/m.exec(text);
+    if (!lineMatch) return false;
+    const line = lineMatch[0].replace(/(\r?\n)?$/, '');
+    // Must have workflow name and --project token before we consider stopping.
+    if (!/--project[\s=]+\S+/.test(line)) return false;
+    const isEos = !lineMatch[0].endsWith('\n');
+    // Check for optional --prompt parameter (system prompt specifies it follows --project).
+    const promptKeywordMatch = /--prompt\s+/.exec(line);
+    if (promptKeywordMatch) {
+      const afterPrompt = line.slice(promptKeywordMatch.index + promptKeywordMatch[0].length);
+      if (afterPrompt.startsWith('"')) {
+        return /^"(?:[^"\\]|\\.)*"/.test(afterPrompt);
+      }
+      if (afterPrompt.startsWith("'")) {
+        return /^'(?:[^'\\]|\\.)*'/.test(afterPrompt);
+      }
+      // Unquoted --prompt value: require line terminator.
+      return !isEos;
+    }
+    // No --prompt yet: require line terminator so a --prompt in a later chunk is not missed.
+    return !isEos;
+  },
+};
 // REGISTER_PROJECT_FULL_RE uses a test() object instead of a plain regex because the
 // stop condition must be conservative:
 //   - Unquoted paths: require the line to be terminated (\n or end of stream preceded

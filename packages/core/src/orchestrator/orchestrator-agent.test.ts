@@ -1815,6 +1815,59 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  test('stream mode — invoke-workflow with --prompt split into a later chunk', async () => {
+    // Regression: INVOKE_WORKFLOW_FULL_RE must not declare the command complete when
+    // --project <token> arrives without a line terminator, because --prompt may follow
+    // in the next chunk. Without this fix, commandFullyParsed fires early and the
+    // --prompt chunk is never accumulated, causing synthesizedPrompt to be lost.
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+      };
+      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'original user message');
+
+    // Workflow was dispatched with the synthesized prompt, not the original user message.
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ originalMessage: 'synthesized task description' }),
+      expect.anything()
+    );
+  });
+
+  test('batch mode — invoke-workflow with --prompt split into a later chunk', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+      };
+      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'original user message');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ originalMessage: 'synthesized task description' }),
+      expect.anything()
+    );
+  });
+
   test('stream mode — command in single chunk still works (non-regression)', async () => {
     mockParseCommand.mockReturnValueOnce({
       command: 'register-project',
