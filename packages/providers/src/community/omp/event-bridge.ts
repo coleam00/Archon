@@ -39,7 +39,7 @@ function readUsage(usage: unknown): TokenUsage | undefined {
 
 function isAssistantMessage(
   message: unknown
-): message is { role: 'assistant'; usage?: unknown; stopReason?: string } {
+): message is { role: 'assistant'; usage?: unknown; stopReason?: string; errorMessage?: unknown } {
   return (
     !!message && typeof message === 'object' && (message as { role?: unknown }).role === 'assistant'
   );
@@ -59,7 +59,15 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     ...(tokens ? { tokens } : {}),
     ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
-    ...(isError ? { isError: true, errorSubtype: last.stopReason } : {}),
+    ...(isError
+      ? {
+          isError: true,
+          errorSubtype: last.stopReason,
+          ...(typeof last.errorMessage === 'string' && last.errorMessage.length > 0
+            ? { errors: [last.errorMessage] }
+            : {}),
+        }
+      : {}),
   };
 }
 
@@ -78,9 +86,13 @@ export function tryParseStructuredOutput(text: string): unknown {
   }
 
   const firstBrace = cleaned.indexOf('{');
-  if (firstBrace > 0) {
+  const firstBracket = cleaned.indexOf('[');
+  const firstJsonRoot = [firstBrace, firstBracket]
+    .filter(index => index > 0)
+    .sort((a, b) => a - b)[0];
+  if (firstJsonRoot !== undefined) {
     try {
-      return JSON.parse(cleaned.slice(firstBrace));
+      return JSON.parse(cleaned.slice(firstJsonRoot));
     } catch {
       // fall through
     }
