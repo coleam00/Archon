@@ -1,9 +1,15 @@
-import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createMockLogger } from '../test/mocks/logger';
 
 const mockLogger = createMockLogger();
+let mockArchonHome = mkdtempSync(join(tmpdir(), 'archon-claude-provider-test-'));
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
+  getArchonHome: () => mockArchonHome,
+  BUNDLED_IS_BINARY: false,
 }));
 
 // Create mock query function
@@ -15,6 +21,10 @@ const mockQuery = mock(async function* () {
 mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
+
+function writeClaudeModelsConfig(config: unknown): void {
+  writeFileSync(join(mockArchonHome, 'claude-models.json'), JSON.stringify(config));
+}
 
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
@@ -72,12 +82,18 @@ describe('ClaudeProvider', () => {
   let client: ClaudeProvider;
 
   beforeEach(() => {
+    rmSync(mockArchonHome, { recursive: true, force: true });
+    mockArchonHome = mkdtempSync(join(tmpdir(), 'archon-claude-provider-test-'));
     client = new ClaudeProvider({ retryBaseDelayMs: 1 });
     mockQuery.mockClear();
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.debug.mockClear();
+  });
+
+  afterEach(() => {
+    rmSync(mockArchonHome, { recursive: true, force: true });
   });
 
   describe('constructor', () => {
@@ -387,6 +403,80 @@ describe('ClaudeProvider', () => {
           permissionMode: 'bypassPermissions',
         }),
       });
+    });
+
+    test('resolves custom model alias and injects provider env into SDK options', async () => {
+      writeClaudeModelsConfig({
+        providers: {
+          v3e: {
+            baseUrl: 'https://gateway.example.com',
+            apiKey: 'sk-v3e-test',
+            headers: { 'X-Workspace': 'eee' },
+            models: [{ id: 'openai/gpt-5.4', name: 'gpt' }],
+          },
+        },
+      });
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        model: 'v3e/gpt',
+      })) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.model).toBe('openai/gpt-5.4');
+      const env = callArgs.options.env as Record<string, string>;
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://gateway.example.com');
+      expect(env.ANTHROPIC_API_KEY).toBe('sk-v3e-test');
+      expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe('X-Workspace: eee');
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { authMode: 'explicit' },
+        'using_explicit_tokens'
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        {
+          requestedModel: 'v3e/gpt',
+          resolvedId: 'openai/gpt-5.4',
+          matchedBy: 'name',
+          provider: 'v3e',
+        },
+        'claude.model_resolved_from_registry'
+      );
+    });
+
+    test('request env overrides custom provider registry env', async () => {
+      writeClaudeModelsConfig({
+        providers: {
+          v3e: {
+            baseUrl: 'https://gateway.example.com',
+            apiKey: 'sk-v3e-test',
+            models: [{ id: 'openai/gpt-5.4', name: 'gpt' }],
+          },
+        },
+      });
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        model: 'v3e/gpt',
+        env: {
+          ANTHROPIC_BASE_URL: 'https://override.example.com',
+          ANTHROPIC_API_KEY: 'sk-override',
+        },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      const env = callArgs.options.env as Record<string, string>;
+      expect(callArgs.options.model).toBe('openai/gpt-5.4');
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://override.example.com');
+      expect(env.ANTHROPIC_API_KEY).toBe('sk-override');
     });
 
     test('omits persistSession from SDK options by default', async () => {

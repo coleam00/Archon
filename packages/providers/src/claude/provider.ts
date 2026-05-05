@@ -39,6 +39,7 @@ import type {
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { resolveClaudeBinaryPath } from './binary-resolver';
+import { ClaudeModelRegistry } from './model-registry';
 import { createLogger } from '@archon/paths';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
@@ -85,17 +86,23 @@ function normalizeClaudeUsage(usage?: {
  * - stripCwdEnv() at entry point removed CWD .env keys + CLAUDECODE markers
  * - ~/.archon/.env loaded with override:true as the trusted source
  */
-function buildSubprocessEnv(): NodeJS.ProcessEnv {
-  // Using || intentionally: empty string should be treated as missing credential
+function buildSubprocessEnv(envOverrides?: Record<string, string>): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...(envOverrides ?? {}) };
+  // Using || intentionally: empty string should be treated as missing credential.
+  // Claude Code's documented SDK/CLI env names use ANTHROPIC_*; keep the
+  // historical CLAUDE_* names here for existing Archon deployments.
   const hasExplicitTokens = Boolean(
-    process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_API_KEY
+    env.CLAUDE_CODE_OAUTH_TOKEN ||
+    env.CLAUDE_API_KEY ||
+    env.ANTHROPIC_API_KEY ||
+    env.ANTHROPIC_AUTH_TOKEN
   );
   const authMode = hasExplicitTokens ? 'explicit' : 'global';
   getLog().info(
     { authMode },
     authMode === 'global' ? 'using_global_auth' : 'using_explicit_tokens'
   );
-  return { ...process.env };
+  return env;
 }
 
 /** Max retries for transient subprocess failures */
@@ -931,14 +938,51 @@ export class ClaudeProvider implements IAgentProvider {
     let lastError: Error | undefined;
     const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
+    // Resolve custom model aliases before anything else. The registry reads
+    // ~/.archon/claude-models.json and maps friendly names to real model IDs,
+    // plus injects provider-specific Claude Code env vars (base URL,
+    // credentials, and custom headers).
+    let registryEnv: Record<string, string> | undefined;
+    const rawModel = requestOptions?.model ?? assistantDefaults.model;
+    if (rawModel) {
+      const registry = new ClaudeModelRegistry();
+      const registryError = registry.getError();
+      if (registryError) {
+        getLog().warn({ error: registryError }, 'claude.model_registry_load_error');
+      }
+      const resolved = registry.resolve(rawModel);
+      if (resolved.matchedBy !== 'passthrough') {
+        getLog().info(
+          {
+            requestedModel: rawModel,
+            resolvedId: resolved.resolvedId,
+            matchedBy: resolved.matchedBy,
+            provider: resolved.providerName,
+          },
+          'claude.model_resolved_from_registry'
+        );
+        registryEnv = resolved.env;
+      }
+      if (requestOptions) {
+        requestOptions = { ...requestOptions, model: resolved.resolvedId };
+      } else {
+        requestOptions = { model: resolved.resolvedId };
+      }
+    }
+
     // Resolve Claude CLI path once before the retry loop. In binary mode this
     // throws immediately if neither env nor config supplies a valid path, so
     // the user gets a clean error rather than N retries of "Module not found".
     const resolvedCliPath = await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
 
-    // Build subprocess env once (avoids re-logging auth mode per retry)
-    const subprocessEnv = buildSubprocessEnv();
-    const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+    // Build subprocess env once (avoids re-logging auth mode per retry).
+    // Registry env (custom provider baseUrl/credentials) is layered on top so
+    // custom providers override default Anthropic credentials. Request env is
+    // last because workflow/codebase env is the most specific override.
+    const env = buildSubprocessEnv({
+      ...(registryEnv ?? {}),
+      ...(requestOptions?.env ?? {}),
+    });
 
     // Apply nodeConfig translation once (deterministic, not retry-dependent)
     // We need a throwaway Options to extract warnings from applyNodeConfig,
