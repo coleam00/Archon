@@ -285,6 +285,7 @@ packages/
 │       ├── claude/           # ClaudeProvider + parseClaudeConfig + MCP/hooks/skills translation
 │       ├── codex/            # CodexProvider + parseCodexConfig + binary-resolver
 │       ├── community/pi/     # PiProvider (builtIn: false) — @mariozechner/pi-coding-agent, ~20 LLM backends
+│       ├── community/omp/    # OmpProvider (builtIn: false) — @oh-my-pi/pi-coding-agent, provider id `omp`
 │       └── index.ts          # Package exports
 ├── core/                     # @archon/core - Shared business logic
 │   └── src/
@@ -420,7 +421,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 **Package Split:**
 - **@archon/paths**: Path resolution utilities, Pino logger factory, web dist cache path (`getWebDistDir`), CWD env stripper (`stripCwdEnv`, `strip-cwd-env-boot`) (no @archon/* deps; `pino` and `dotenv` are allowed external deps)
 - **@archon/git**: Git operations - worktrees, branches, repos, exec wrappers (depends only on @archon/paths)
-- **@archon/providers**: AI agent providers (Claude, Codex, Pi community) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally. Core providers live under `claude/` and `codex/`; community providers live under `community/` (currently `community/pi/`, registered with `builtIn: false`).
+- **@archon/providers**: AI agent providers (Claude, Codex, Pi community, OMP community) — owns SDK deps, `IAgentProvider` interface, `sendQuery()` contract, and provider-specific option translation. `@archon/providers/types` is the contract subpath (zero SDK deps, zero runtime side effects) that `@archon/workflows` imports from. Providers receive raw `nodeConfig` + `assistantConfig` and translate to SDK-specific options internally. Core providers live under `claude/` and `codex/`; community providers live under `community/` (currently `community/pi/` and `community/omp/`, both registered with `builtIn: false`).
 - **@archon/isolation**: Worktree isolation types, providers, resolver, error classifiers (depends only on @archon/git + @archon/paths)
 - **@archon/workflows**: Workflow engine - loader, router, executor, DAG, logger, bundled defaults (depends only on @archon/git + @archon/paths + @archon/providers/types + @hono/zod-openapi + zod; DB/AI/config injected via `WorkflowDeps`)
 - **@archon/cli**: Command-line interface for running workflows and starting the web UI server (depends on @archon/server + @archon/adapters for the serve command)
@@ -465,6 +466,7 @@ import type { DagNode, WorkflowDefinition } from '@/lib/api';
 - **ClaudeProvider**: `@anthropic-ai/claude-agent-sdk`
 - **CodexProvider**: `@openai/codex-sdk`
 - **PiProvider** (community, `builtIn: false`): `@mariozechner/pi-coding-agent` — one harness for ~20 LLM backends via `<provider>/<model>` refs (e.g. `anthropic/claude-haiku-4-5`, `openrouter/qwen/qwen3-coder`); supports extensions, skills, tool restrictions, thinking level, best-effort structured output. See `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` for setup, capability matrix, and extension config.
+- **OmpProvider** (community, `builtIn: false`): `@oh-my-pi/pi-coding-agent` — native OMP provider registered as `provider: omp`; supports typed assistant defaults, runtime auth handoff, best-effort structured output, and workflow-scoped Archon `mcp:` translation without enabling broad OMP-native MCP discovery. See `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` for setup and capability boundaries.
 - Streaming: `for await (const event of events) { await platform.send(event) }`
 
 ### Configuration
@@ -508,7 +510,7 @@ assistants:
 3. SDK defaults
 
 **Model Validation:**
-- Workflows are validated at load time for provider _identity_ only — `provider:` (workflow-level and per-node) must be a registered provider id, otherwise the YAML is rejected with `Unknown provider '<id>'. Registered: claude, codex, pi`.
+- Workflows are validated at load time for provider _identity_ only — `provider:` (workflow-level and per-node) must be a registered provider id, otherwise the YAML is rejected with `Unknown provider '<id>'. Registered: claude, codex, pi, omp`.
 - Model strings are NOT validated by Archon. Whatever the user writes in `model:` is forwarded verbatim to the resolved SDK. Vendor SDKs ship new models faster than Archon can update; the SDK and the upstream API are the source of truth for what names exist.
 - Provider is resolved via an explicit chain: `node.provider ?? workflow.provider ?? config.assistant`. Model never influences provider selection.
 

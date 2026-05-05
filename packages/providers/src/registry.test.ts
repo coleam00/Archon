@@ -12,6 +12,7 @@ import {
   clearRegistry,
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
+import { registerOmpProvider } from './community/omp/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -252,16 +253,17 @@ describe('registry', () => {
   describe('registerCommunityProviders (aggregator)', () => {
     test('registers all bundled community providers', () => {
       registerCommunityProviders();
-      // Pi is currently the only community provider bundled. When more are
-      // added, they should appear here automatically.
       expect(isRegisteredProvider('pi')).toBe(true);
+      expect(isRegisteredProvider('omp')).toBe(true);
     });
 
     test('is idempotent', () => {
       registerCommunityProviders();
       expect(() => registerCommunityProviders()).not.toThrow();
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
+      const ompCount = getRegisteredProviders().filter(p => p.id === 'omp').length;
       expect(piCount).toBe(1);
+      expect(ompCount).toBe(1);
     });
   });
 
@@ -316,6 +318,50 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'pi']);
+    });
+  });
+
+  describe('registerOmpProvider (community provider)', () => {
+    test('registers omp with builtIn: false', () => {
+      registerOmpProvider();
+      const reg = getRegistration('omp');
+      expect(reg.id).toBe('omp');
+      expect(reg.displayName).toBe('Oh My Pi (community)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerOmpProvider();
+      expect(() => registerOmpProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'omp');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares honest v1 capabilities', () => {
+      registerOmpProvider();
+      const caps = getProviderCapabilities('omp');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.skills).toBe(true);
+      expect(caps.toolRestrictions).toBe(true);
+      expect(caps.structuredOutput).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.thinkingControl).toBe(true);
+      expect(caps.envInjection).toBe(false);
+      expect(caps.mcp).toBe(true);
+      expect(caps.hooks).toBe(false);
+      expect(caps.agents).toBe(false);
+      expect(caps.costControl).toBe(false);
+      expect(caps.fallbackModel).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('does not collide with built-ins or pi', () => {
+      registerPiProvider();
+      registerOmpProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'omp', 'pi']);
     });
   });
 });

@@ -17,7 +17,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * Design:
  *  - producers call `push(item)` from any synchronous context
  *  - the consumer awaits `for await (const item of queue)` ONCE
- *  - sentinel items (in this bridge: `__done` / `__error`) are pushed by the
+ *  - sentinel items (in this bridge: `done` / `error`) are pushed by the
  *    caller; the queue itself does not know about them
  *
  * Single-consumer is a hard invariant — a second iterator would race with
@@ -91,7 +91,8 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
 export function serializeToolResult(result: unknown): string {
   if (typeof result === 'string') return result;
   try {
-    return JSON.stringify(result);
+    const json = JSON.stringify(result);
+    return json === undefined ? String(result) : json;
   } catch (err) {
     getLog().warn({ err }, 'pi.event-bridge.tool_result_serialize_failed');
     return String(result);
