@@ -11,5 +11,8 @@
     "astro": "^6.1.0",
     "@astrojs/starlight": "^0.38.0",
     "sharp": "^0.33.0"
+  },
+  "devDependencies": {
+    "starlight-llms-txt": "^0.8.1"
   }
 }

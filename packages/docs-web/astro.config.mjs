@@ -1,10 +1,12 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightLlmsTxt from 'starlight-llms-txt';
 
 export default defineConfig({
   site: 'https://archon.diy',
   integrations: [
     starlight({
+      plugins: [starlightLlmsTxt()],
       title: 'Archon',
       favicon: '/favicon.png',
       logo: {
