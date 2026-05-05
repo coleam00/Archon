@@ -114,6 +114,26 @@ describe('buildResultChunk', () => {
       stopReason: 'end_turn',
     });
   });
+
+  test('surfaces SDK error messages for error result chunks', () => {
+    expect(
+      buildResultChunk([
+        {
+          role: 'assistant',
+          usage: { input: 1, output: 2 },
+          stopReason: 'error',
+          errorMessage: 'rate limit exceeded',
+        },
+      ])
+    ).toEqual({
+      type: 'result',
+      tokens: { input: 1, output: 2 },
+      stopReason: 'error',
+      isError: true,
+      errorSubtype: 'error',
+      errors: ['rate limit exceeded'],
+    });
+  });
 });
 
 describe('tryParseStructuredOutput', () => {
@@ -121,6 +141,10 @@ describe('tryParseStructuredOutput', () => {
     expect(tryParseStructuredOutput('{"ok":true}')).toEqual({ ok: true });
     expect(tryParseStructuredOutput('```json\n{"ok":true}\n```')).toEqual({ ok: true });
     expect(tryParseStructuredOutput('done\n{"ok":true}')).toEqual({ ok: true });
+  });
+
+  test('parses preamble-prefixed JSON arrays', () => {
+    expect(tryParseStructuredOutput('done\n[\"a\",\"b\"]')).toEqual(['a', 'b']);
   });
 });
 
