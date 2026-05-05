@@ -98,7 +98,45 @@ const REGISTER_PROJECT_PREFIX_RE = /^\/register-project\s/m;
 // These determine when accumulation can stop — further chunks cannot add
 // required parse tokens and could corrupt already-captured ones.
 const INVOKE_WORKFLOW_FULL_RE = /^\/invoke-workflow\s+\S+\s+--project[\s=]+\S+/m;
-const REGISTER_PROJECT_FULL_RE = /^\/register-project\s+\S+\s+\S+/m;
+// REGISTER_PROJECT_FULL_RE uses a test() object instead of a plain regex because the
+// stop condition must be conservative:
+//   - Unquoted paths: require the line to be terminated (\n or end of stream preceded
+//     by a non-whitespace char) so a space-containing path like "/home/user/my project"
+//     is not declared complete after "my" arrives.
+//   - Quoted paths: require the closing quote so we don't stop mid-path.
+// This mirrors parseOrchestratorCommands' /^..\s+(.+)$/m pattern for the path capture.
+const REGISTER_PROJECT_FULL_RE = {
+  test(text: string): boolean {
+    // Match the register-project line up to and including its terminator (\n) or end of string.
+    const lineMatch = /^\/register-project[^\r\n]*(\r?\n|$)/m.exec(text);
+    if (!lineMatch) return false;
+    // Only treat end-of-string as a line terminator when at least one non-whitespace
+    // character follows the project name — avoids matching a partial "/register-project "
+    // line that was cut mid-word.
+    const isEos = !lineMatch[0].endsWith('\n');
+    const line = lineMatch[0].replace(/(\r?\n)?$/, '');
+    const rest = line.replace(/^\/register-project\s+/, '');
+    if (rest === line) return false; // no whitespace after command keyword
+    const nameEnd = rest.search(/\s/);
+    if (nameEnd === -1) return false; // no path token yet
+    const projectPath = rest.slice(nameEnd).trimStart();
+    if (!projectPath) return false;
+    if (projectPath.startsWith('"')) {
+      // Quoted path: require closing quote
+      return /^"(?:[^"\\]|\\.)*"/.test(projectPath);
+    }
+    if (projectPath.startsWith("'")) {
+      return /^'(?:[^'\\]|\\.)*'/.test(projectPath);
+    }
+    // Unquoted path: require line terminator so we don't freeze on a partial path with spaces
+    return !isEos;
+  },
+};
+
+/** Returns true once accumulated text contains a complete orchestrator command. */
+function isCommandFullyParsed(accumulated: string): boolean {
+  return INVOKE_WORKFLOW_FULL_RE.test(accumulated) || REGISTER_PROJECT_FULL_RE.test(accumulated);
+}
 
 /**
  * Find a codebase by exact name or by last path segment (e.g., "repo" matches "owner/repo").
@@ -979,10 +1017,7 @@ async function handleStreamMode(
           // If the complete command pattern is already present, stop accumulating —
           // no more chunks needed. This prevents trailing chunks from corrupting
           // the project-name token when the command was fully emitted in one chunk.
-          if (
-            INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
-            REGISTER_PROJECT_FULL_RE.test(accumulated)
-          ) {
+          if (isCommandFullyParsed(accumulated)) {
             commandFullyParsed = true;
           }
         } else {
@@ -991,10 +1026,7 @@ async function handleStreamMode(
       } else if (!commandFullyParsed) {
         // Post-prefix: keep accumulating until the full command pattern is present.
         const accumulated = allMessages.join('');
-        if (
-          INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
-          REGISTER_PROJECT_FULL_RE.test(accumulated)
-        ) {
+        if (isCommandFullyParsed(accumulated)) {
           commandFullyParsed = true;
         }
       }
@@ -1142,7 +1174,13 @@ async function handleBatchMode(
         assistantMessages.push(msg.content);
       }
 
-      if (!commandFullyParsed && assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
+      // Do not truncate while a command is being accumulated — shifting away the prefix
+      // chunk would prevent commandFullyParsed from ever firing and lose parse tokens.
+      if (
+        !commandDetected &&
+        !commandFullyParsed &&
+        assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS
+      ) {
         assistantMessages.shift();
         assistantChunksTruncated = true;
       }
@@ -1154,19 +1192,13 @@ async function handleBatchMode(
           REGISTER_PROJECT_PREFIX_RE.test(accumulated)
         ) {
           commandDetected = true;
-          if (
-            INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
-            REGISTER_PROJECT_FULL_RE.test(accumulated)
-          ) {
+          if (isCommandFullyParsed(accumulated)) {
             commandFullyParsed = true;
           }
         }
       } else if (!commandFullyParsed) {
         const accumulated = assistantMessages.join('');
-        if (
-          INVOKE_WORKFLOW_FULL_RE.test(accumulated) ||
-          REGISTER_PROJECT_FULL_RE.test(accumulated)
-        ) {
+        if (isCommandFullyParsed(accumulated)) {
           commandFullyParsed = true;
         }
       }
@@ -1212,7 +1244,9 @@ async function handleBatchMode(
       }
     }
 
-    if (!commandDetected && allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
+    // Always enforce the total-chunk cap regardless of commandDetected — allChunks grows
+    // unconditionally now (for debug logging), so without this guard it would be unbounded.
+    if (allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
       allChunks.shift();
       totalChunksTruncated = true;
     }
