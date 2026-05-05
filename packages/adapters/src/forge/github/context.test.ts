@@ -63,6 +63,7 @@ mock.module('@archon/core', () => ({
   onConversationClosed: mock(async () => {}),
   getArchonWorkspacesPath: () => '/workspace',
   getCommandFolderSearchPaths: () => [],
+  loadConfig: mock(async () => ({ assistant: 'claude' })),
   ConversationLockManager: class {
     async acquireLock(_id: string, handler: () => Promise<void>): Promise<void> {
       await handler();

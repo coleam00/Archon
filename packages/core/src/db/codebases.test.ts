@@ -69,6 +69,7 @@ describe('codebases', () => {
       const result = await createCodebase({
         name: 'test-project',
         default_cwd: '/workspace/test-project',
+        ai_assistant_type: 'claude',
       });
 
       expect(result).toEqual(codebaseWithoutOptional);
@@ -78,17 +79,33 @@ describe('codebases', () => {
       );
     });
 
-    test('defaults ai_assistant_type to claude', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
+    test('throws when ai_assistant_type is omitted', async () => {
+      await expect(
+        createCodebase({
+          name: 'test-project',
+          default_cwd: '/workspace/test-project',
+        } as Parameters<typeof createCodebase>[0])
+      ).rejects.toThrow('createCodebase: ai_assistant_type is required');
 
-      await createCodebase({
+      // DB must NOT be called when validation fails
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('persists non-default ai_assistant_type value', async () => {
+      const piCodebase: Codebase = { ...mockCodebase, ai_assistant_type: 'pi' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([piCodebase]));
+
+      const result = await createCodebase({
         name: 'test-project',
+        repository_url: 'https://github.com/user/repo',
         default_cwd: '/workspace/test-project',
+        ai_assistant_type: 'pi',
       });
 
+      expect(result.ai_assistant_type).toBe('pi');
       expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(['claude'])
+        'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
+        ['test-project', 'https://github.com/user/repo', '/workspace/test-project', 'pi']
       );
     });
   });

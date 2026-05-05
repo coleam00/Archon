@@ -17,6 +17,7 @@ import {
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
+import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -43,13 +44,13 @@ async function registerRepoAtPath(
   repositoryUrl: string | null
 ): Promise<RegisterResult> {
   // Auto-detect assistant type based on SDK folder conventions.
-  // Built-in providers use well-known folders (.claude/, .codex/).
-  // Falls back to first registered built-in provider if no folder detected.
-  const { getRegisteredProviders } = await import('@archon/providers');
-  const defaultProvider = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
-  let suggestedAssistant = defaultProvider;
+  // Known SDK folders: .codex/ (Codex), .claude/ (Claude), .pi/ (Pi).
+  // Falls back to the configured default provider if no SDK folder detected.
+  const config = await loadConfig(targetPath);
+  let suggestedAssistant = config.assistant;
   const codexFolder = join(targetPath, '.codex');
   const claudeFolder = join(targetPath, '.claude');
+  const piFolder = join(targetPath, '.pi');
 
   try {
     await access(codexFolder);
@@ -61,7 +62,13 @@ async function registerRepoAtPath(
       suggestedAssistant = 'claude';
       getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
     } catch {
-      getLog().debug({ provider: defaultProvider }, 'assistant_default_from_registry');
+      try {
+        await access(piFolder);
+        suggestedAssistant = 'pi';
+        getLog().debug({ path: piFolder }, 'assistant_detected_pi');
+      } catch {
+        getLog().debug({ provider: config.assistant }, 'assistant_default_from_config');
+      }
     }
   }
 

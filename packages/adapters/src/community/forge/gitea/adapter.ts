@@ -16,6 +16,7 @@ import {
   toError,
   onConversationClosed,
   ConversationLockManager,
+  loadConfig,
 } from '@archon/core';
 import { getArchonWorkspacesPath, getCommandFolderSearchPaths, createLogger } from '@archon/paths';
 import {
@@ -627,10 +628,12 @@ export class GiteaAdapter implements IPlatformAdapter {
     }
 
     // Include owner in name to distinguish repos with same name from different owners
+    const config = await loadConfig(canonicalPath);
     const codebase = await codebaseDb.createCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
+      ai_assistant_type: config.assistant,
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'codebase_created');

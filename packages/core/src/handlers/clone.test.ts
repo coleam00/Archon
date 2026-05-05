@@ -66,6 +66,13 @@ mock.module('../utils/commands', () => ({
   findMarkdownFilesRecursive: mockFindMarkdownFilesRecursive,
 }));
 
+// ── config-loader mock ───────────────────────────────────────────────────────
+// Must be registered before importing clone.ts so loadConfig() is intercepted.
+const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'pi' }));
+mock.module('../config/config-loader', () => ({
+  loadConfig: mockLoadConfig,
+}));
+
 // ── Import module under test AFTER mocks are registered ────────────────────
 import { cloneRepository, registerRepository } from './clone';
 
@@ -529,16 +536,16 @@ describe('cloneRepository', () => {
       expect(createCall[0].ai_assistant_type).toBe('codex');
     });
 
-    test('defaults to claude when neither .codex nor .claude folder exists', async () => {
+    test('uses config.assistant as default when neither .codex nor .claude nor .pi folder exists', async () => {
       spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
+        makeCodebase({ ai_assistant_type: 'pi' }) as ReturnType<typeof makeCodebase>
       );
 
       await cloneRepository('https://github.com/owner/repo');
 
       const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
-      expect(createCall[0].ai_assistant_type).toBe('claude');
+      expect(createCall[0].ai_assistant_type).toBe('pi');
     });
 
     test('detects claude assistant when .claude folder exists but .codex does not', async () => {
@@ -732,6 +739,50 @@ describe('registerRepository', () => {
 
     expect(result.commandCount).toBe(1);
     expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(1);
+  });
+
+  // ── Provider auto-detection ───────────────────────────────────────────
+  test('uses config.assistant as ai_assistant_type when no SDK folder detected', async () => {
+    // mockLoadConfig returns { assistant: 'pi' } by default
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    // All access() calls fail — no .codex, .claude, or .pi folder
+    spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+    await registerRepository('/home/user/myrepo');
+
+    const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { ai_assistant_type: string };
+    expect(createArg.ai_assistant_type).toBe('pi');
+  });
+
+  test('detects .pi/ folder and sets ai_assistant_type to pi', async () => {
+    // config default is 'pi', but this test verifies the folder-detection path directly
+    mockLoadConfig.mockResolvedValueOnce({ assistant: 'claude' });
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    // Only .pi/ folder exists (not .codex or .claude)
+    spyFsAccess.mockImplementation((path: string) => {
+      const normalized = typeof path === 'string' ? path.replace(/\\/g, '/') : '';
+      if (normalized.endsWith('/.pi')) return Promise.resolve(undefined);
+      return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    });
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+    await registerRepository('/home/user/myrepo');
+
+    const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { ai_assistant_type: string };
+    expect(createArg.ai_assistant_type).toBe('pi');
   });
 });
 

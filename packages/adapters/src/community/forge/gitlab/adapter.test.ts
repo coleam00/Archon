@@ -57,6 +57,7 @@ mock.module('@archon/core', () => ({
   toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
   onConversationClosed: mockOnConversationClosed,
   ConversationNotFoundError: class extends Error {},
+  loadConfig: mock(async () => ({ assistant: 'claude' })),
   ConversationLockManager: class {
     async acquireLock(_id: string, fn: () => Promise<void>): Promise<void> {
       await fn();
