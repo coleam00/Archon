@@ -7,7 +7,6 @@
 import { createLogger } from '@archon/paths';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
-  TERMINAL_WORKFLOW_STATUSES,
   isApprovalContext,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
@@ -101,11 +100,18 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
 }
 
 /**
- * Abandon a non-terminal workflow run (marks it as cancelled).
+ * Abandon a workflow run that the user no longer wants in the resume pool.
+ * Marks the run as `cancelled` (still terminal — the audit-trail row stays).
+ *
+ * Accepts running, paused, AND failed runs. Failed runs are deliberately
+ * abandonable: they're terminal in the "no further automated execution"
+ * sense, but a user discarding a failed run is a legitimate operation that
+ * the system would otherwise have no way to express. Already-completed and
+ * already-cancelled runs are rejected — there is nothing to abandon.
  */
 export async function abandonWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
-  if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+  if (run.status === 'completed' || run.status === 'cancelled') {
     throw new Error(`Cannot abandon run with status '${run.status}'. Run is already terminal.`);
   }
   try {
