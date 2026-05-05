@@ -301,6 +301,102 @@ describe('cloneRepository', () => {
     });
   });
 
+  // ── GITLAB_TOKEN authentication ────────────────────────────────────────
+  describe('GITLAB_TOKEN authentication', () => {
+    beforeEach(() => {
+      process.env.GITLAB_TOKEN = 'glpat-test123';
+      delete process.env.GITLAB_URL;
+    });
+
+    afterAll(() => {
+      delete process.env.GITLAB_TOKEN;
+      delete process.env.GITLAB_URL;
+    });
+
+    test('injects GITLAB_TOKEN with oauth2 username on gitlab.com URL', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.com/owner/repo.git');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.includes('clone')
+      );
+      expect(cloneCall).toBeDefined();
+      // URL includes oauth2:<token>@host
+      const argsArr = cloneCall?.[1] as string[];
+      const urlArg = argsArr.find(a => typeof a === 'string' && a.startsWith('https://'));
+      expect(urlArg).toContain('oauth2:glpat-test123@gitlab.com');
+      // credential.helper is disabled via -c flag preceding 'clone'
+      expect(argsArr[0]).toBe('-c');
+      expect(argsArr[1]).toBe('credential.helper=');
+      expect(argsArr[2]).toBe('clone');
+    });
+
+    test('injects GITLAB_TOKEN for self-hosted when GITLAB_URL matches', async () => {
+      process.env.GITLAB_URL = 'https://gitlab.example.com';
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.example.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.example.com/owner/repo.git');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.includes('clone')
+      );
+      const argsArr = cloneCall?.[1] as string[];
+      const urlArg = argsArr.find(a => typeof a === 'string' && a.startsWith('https://'));
+      expect(urlArg).toContain('oauth2:glpat-test123@gitlab.example.com');
+    });
+
+    test('does NOT inject GITLAB_TOKEN when host does not match GITLAB_URL', async () => {
+      // GITLAB_URL points at a self-hosted instance, but the URL is gitlab.com
+      process.env.GITLAB_URL = 'https://gitlab.example.com';
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.com/owner/repo.git');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.includes('clone')
+      );
+      const argsArr = cloneCall?.[1] as string[];
+      // No token embedded, no -c credential.helper flag
+      expect(argsArr.join(' ')).not.toContain('glpat-test123');
+      expect(argsArr[0]).toBe('clone');
+    });
+  });
+
+  // ── GIT_TERMINAL_PROMPT fail-fast ──────────────────────────────────────
+  describe('fail-fast env', () => {
+    test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const cloneCall = spyExecFileAsync.mock.calls.find(
+        (args: unknown[]) =>
+          args[0] === 'git' &&
+          Array.isArray(args[1]) &&
+          (args[1] as string[]).includes('clone')
+      );
+      expect(cloneCall).toBeDefined();
+      const opts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(opts?.env?.GIT_TERMINAL_PROMPT).toBe('0');
+    });
+  });
+
   // ── Already-cloned directory ───────────────────────────────────────────
   describe('pre-existing clone', () => {
     beforeEach(() => {

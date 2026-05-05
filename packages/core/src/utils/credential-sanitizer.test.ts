@@ -30,6 +30,23 @@ describe('credential-sanitizer', () => {
       const input = 'https://unknown_token@github.com/user/repo';
       expect(sanitizeCredentials(input)).toBe('https://[REDACTED]@github.com/user/repo');
     });
+
+    it('should replace GITLAB_TOKEN value in string', () => {
+      process.env.GITLAB_TOKEN = 'glpat-abc123';
+      const input = 'fatal: auth failed using token glpat-abc123';
+      const result = sanitizeCredentials(input);
+      expect(result).not.toContain('glpat-abc123');
+      expect(result).toContain('[REDACTED]');
+    });
+
+    it('should sanitize oauth2-style URL credentials on any host', () => {
+      process.env.GITLAB_TOKEN = ''; // Clear env token so only URL regex matches
+      const input =
+        'fatal: clone failed for https://oauth2:glpat-secret@gitlab.example.com/owner/repo.git';
+      const result = sanitizeCredentials(input);
+      expect(result).not.toContain('glpat-secret');
+      expect(result).toContain('https://oauth2:[REDACTED]@[host]');
+    });
   });
 
   describe('sanitizeError', () => {
