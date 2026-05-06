@@ -266,6 +266,12 @@ function attachResultMetadata(
   return terminal;
 }
 
+function missingTerminalResultChunk(): ResultChunk {
+  return { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' };
+}
+
+const MISSING_TERMINAL_RESULT_GRACE_MS = 250;
+
 export async function* bridgeSession(
   session: OmpSession,
   prompt: string,
@@ -278,9 +284,17 @@ export async function* bridgeSession(
   let assistantBuffer = '';
   let promptSettled = false;
   let sawTerminalResult = false;
+  let missingTerminalResultTimer: ReturnType<typeof setTimeout> | undefined;
 
+  const clearMissingTerminalResultTimer = (): void => {
+    if (missingTerminalResultTimer === undefined) return;
+    clearTimeout(missingTerminalResultTimer);
+    missingTerminalResultTimer = undefined;
+  };
   const maybeFinish = (): void => {
-    if (promptSettled && sawTerminalResult) queue.push({ kind: 'done' });
+    if (!promptSettled || !sawTerminalResult) return;
+    clearMissingTerminalResultTimer();
+    queue.push({ kind: 'done' });
   };
 
   const onAbort = (): void => {
@@ -317,6 +331,18 @@ export async function* bridgeSession(
     promptPromise = session.prompt(prompt).then(
       () => {
         promptSettled = true;
+        if (!sawTerminalResult) {
+          missingTerminalResultTimer = setTimeout(() => {
+            missingTerminalResultTimer = undefined;
+            if (sawTerminalResult) {
+              maybeFinish();
+              return;
+            }
+            sawTerminalResult = true;
+            queue.push({ kind: 'chunk', chunk: missingTerminalResultChunk() });
+            maybeFinish();
+          }, MISSING_TERMINAL_RESULT_GRACE_MS);
+        }
         maybeFinish();
       },
       (err: unknown) => {
@@ -334,6 +360,7 @@ export async function* bridgeSession(
       }
     }
   } finally {
+    clearMissingTerminalResultTimer();
     queue.close();
     uiBridge?.setEmitter(undefined);
     unsubscribe?.();
