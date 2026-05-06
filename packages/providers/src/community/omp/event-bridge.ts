@@ -269,6 +269,8 @@ function missingTerminalResultChunk(): ResultChunk {
   return { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' };
 }
 
+const MISSING_TERMINAL_RESULT_GRACE_MS = 100;
+
 export async function* bridgeSession(
   session: OmpSession,
   prompt: string,
@@ -281,9 +283,17 @@ export async function* bridgeSession(
   let assistantBuffer = '';
   let promptSettled = false;
   let sawTerminalResult = false;
+  let missingTerminalResultTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearMissingTerminalResultTimer = (): void => {
+    if (missingTerminalResultTimer === undefined) return;
+    clearTimeout(missingTerminalResultTimer);
+    missingTerminalResultTimer = undefined;
+  };
 
   const maybeFinish = (): void => {
     if (promptSettled && sawTerminalResult) {
+      clearMissingTerminalResultTimer();
       queue.push({ kind: 'done' });
     }
   };
@@ -326,7 +336,8 @@ export async function* bridgeSession(
           maybeFinish();
           return;
         }
-        queueMicrotask(() => {
+        missingTerminalResultTimer = setTimeout(() => {
+          missingTerminalResultTimer = undefined;
           if (sawTerminalResult) {
             maybeFinish();
             return;
@@ -334,7 +345,7 @@ export async function* bridgeSession(
           sawTerminalResult = true;
           queue.push({ kind: 'chunk', chunk: missingTerminalResultChunk() });
           maybeFinish();
-        });
+        }, MISSING_TERMINAL_RESULT_GRACE_MS);
       },
       (err: unknown) => {
         queue.push({ kind: 'error', error: err as Error });
@@ -351,6 +362,7 @@ export async function* bridgeSession(
       }
     }
   } finally {
+    clearMissingTerminalResultTimer();
     queue.close();
     uiBridge?.setEmitter(undefined);
     unsubscribe?.();

@@ -201,6 +201,52 @@ describe('bridgeSession', () => {
     });
   });
 
+  test('waits for terminal result delivered on a later macrotask', async () => {
+    let listener: ((event: unknown) => void) | undefined;
+    const session: OmpSession = {
+      sessionId: 'sess-macrotask',
+      subscribe(fn) {
+        listener = fn;
+        return () => {
+          listener = undefined;
+        };
+      },
+      async prompt() {
+        listener?.({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: 'done' },
+        });
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        setTimeout(() => {
+          listener?.({
+            type: 'agent_end',
+            messages: [
+              { role: 'assistant', usage: { input: 2, output: 3 }, stopReason: 'end_turn' },
+            ],
+          });
+        }, 0);
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        return undefined;
+      },
+    };
+
+    const chunks: unknown[] = [];
+    for await (const chunk of bridgeSession(session, 'hi')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.at(-1)).toEqual({
+      type: 'result',
+      tokens: { input: 2, output: 3 },
+      stopReason: 'end_turn',
+      sessionId: 'sess-macrotask',
+    });
+  });
+
   test('emits an error result when prompt resolves without a terminal event', async () => {
     const session: OmpSession = {
       subscribe() {

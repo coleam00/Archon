@@ -292,14 +292,6 @@ export class OmpProvider implements IAgentProvider {
     const sdk = await this.sdkLoader();
     const authStorage = await discoverAuthStorageOrThrow(sdk, ompConfig.agentDir, parsed.provider);
 
-    const runtimeOverride =
-      getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
-      getRuntimeAuthOverride(parsed.provider, ompConfig.env);
-    if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
-
-    const { modelRegistry, model } = resolveSessionModel(sdk, authStorage, parsed);
-    await ensureProviderCredentials(authStorage, parsed);
-
     const nodeConfig = requestOptions?.nodeConfig;
     const { level: thinkingLevel, warning: thinkingWarning } = resolveOmpThinkingLevel(nodeConfig);
     if (thinkingWarning) yield { type: 'system', content: `⚠️ ${thinkingWarning}` };
@@ -359,6 +351,14 @@ export class OmpProvider implements IAgentProvider {
     let sendQueryError: unknown;
     let disconnectError: Error | undefined;
     try {
+      const runtimeOverride =
+        getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
+        getRuntimeAuthOverride(parsed.provider, ompConfig.env);
+      if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
+
+      const { modelRegistry, model } = resolveSessionModel(sdk, authStorage, parsed);
+      await ensureProviderCredentials(authStorage, parsed);
+
       if (nodeConfig?.mcp) {
         resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp, authStorage);
         getLog().info(

@@ -23,6 +23,7 @@ interface FakeSdkOptions {
   onSettingsIsolated?: (overrides: Record<string, unknown>) => void;
   onSetToolUIContext?: (uiContext: unknown, hasUI: boolean) => void;
   onSetRuntimeApiKey?: (provider: string, apiKey: string) => void;
+  onGetApiKey?: (provider: string) => string | undefined | Promise<string | undefined>;
   onPrompt?: () => void | Promise<void>;
   mcpTools?: unknown[];
   mcpErrors?: Map<string, string>;
@@ -99,8 +100,8 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
     setRuntimeApiKey(provider, apiKey) {
       options.onSetRuntimeApiKey?.(provider, apiKey);
     },
-    async getApiKey() {
-      return options.apiKey ?? 'sk-test';
+    async getApiKey(provider) {
+      return (await options.onGetApiKey?.(provider)) ?? options.apiKey ?? 'sk-test';
     },
   };
 
@@ -306,6 +307,34 @@ describe('OmpProvider', () => {
     });
 
     expect(runtimeOverride).toEqual(['anthropic', 'config-key']);
+  });
+
+  test('validates credentials after applying assistant config env', async () => {
+    const originalCustomKey = process.env.CUSTOM_OMP_PROVIDER_API_KEY;
+    delete process.env.CUSTOM_OMP_PROVIDER_API_KEY;
+    const observedCredentialValues: Array<string | undefined> = [];
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onGetApiKey(providerName) {
+          if (providerName !== 'custom') return 'sk-test';
+          observedCredentialValues.push(process.env.CUSTOM_OMP_PROVIDER_API_KEY);
+          return process.env.CUSTOM_OMP_PROVIDER_API_KEY;
+        },
+      })
+    );
+
+    try {
+      await collectChunks(provider, {
+        model: 'custom/model-one',
+        assistantConfig: { env: { CUSTOM_OMP_PROVIDER_API_KEY: 'config-key' } },
+      });
+
+      expect(observedCredentialValues).toEqual(['config-key']);
+      expect(process.env.CUSTOM_OMP_PROVIDER_API_KEY).toBeUndefined();
+    } finally {
+      if (originalCustomKey === undefined) delete process.env.CUSTOM_OMP_PROVIDER_API_KEY;
+      else process.env.CUSTOM_OMP_PROVIDER_API_KEY = originalCustomKey;
+    }
   });
 
   test('prefers shell auth env over assistant config env', async () => {
