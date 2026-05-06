@@ -3,12 +3,12 @@
  * Read $ARTIFACTS_DIR/groomed-bug.json, render a markdown summary of the
  * grooming verdict, and post it as a Jira comment on the Bug ticket.
  *
- * The comment also embeds the full groomed-bug.json blob inside an
- * ARCHON-GROOMING-BLOB code fence so the bug-test-strategy workflow
- * can later extract it back out via bug-load-grooming.ts.
+ * Idempotent: before posting, deletes any prior comment that contains
+ * the ARCHON-GROOMING-BLOB marker so re-runs replace the comment
+ * rather than stack new ones.
  *
  * Reads:
- *   $ARTIFACTS_DIR/trigger-payload.json — for issue_key
+ *   $ARTIFACTS_DIR/trigger-payload.json — issue_key
  *   $ARTIFACTS_DIR/groomed-bug.json     — written by archon-groom-bug
  *
  * Env:
@@ -39,6 +39,9 @@ const verdict = groomed.verdict ?? 'unknown';
 const confidence = groomed.confidence ?? 'unknown';
 const severity = groomed.severity ?? 'unknown';
 const reasoning = groomed.reasoning ?? '';
+const missing: string[] = Array.isArray(groomed.missing_information)
+  ? groomed.missing_information
+  : [];
 
 let body = '';
 
@@ -75,50 +78,106 @@ if (verdict === 'genuine_bug') {
       body += `- ${ac}\n`;
     }
     body += '\n';
-    body += `_These ACs will be appended to the ticket description and used by the test-strategy and dev workflows downstream. Edit them now if they don't match your intent._\n\n`;
+    body += `_These ACs will be appended to the ticket description and used by the rest of the pipeline. Edit them now if they don't match your intent._\n\n`;
   }
-
+} else if (verdict === 'insufficient_information') {
+  body += `## ❓ Need more information before I can groom this bug\n\n`;
+  body += `**Grooming confidence:** ${confidence}\n\n`;
+  body += `${reasoning}\n\n`;
+  if (missing.length > 0) {
+    body += `### What's missing\n\n`;
+    for (const m of missing) {
+      body += `- ${m}\n`;
+    }
+    body += '\n';
+  }
   body += `### Next step\n\n`;
-  body += `Promote this ticket to **Selected for Development** to start the bug fix pipeline.\n\n`;
+  body += `Edit the ticket description to fill in the items above, then transition this ticket to **Selected for Development** to retry. The ticket has been moved back to **Backlog** so it's clear the pipeline paused.\n\n`;
 } else {
-  const verdictTitle = {
+  const verdictTitle: Record<string, string> = {
     working_as_designed: '✅ Working as designed',
     feature_request_disguised_as_bug: '💡 Feature request, not a bug',
     environment_or_user_error: '🌐 Environment / user error',
     cannot_reproduce: '❓ Cannot reproduce',
-  }[verdict as string] ?? `❓ ${verdict}`;
-
-  body += `## ${verdictTitle}\n\n`;
+  };
+  body += `## ${verdictTitle[verdict] ?? `❓ ${verdict}`}\n\n`;
   body += `**Grooming confidence:** ${confidence}\n\n`;
   body += `${reasoning}\n\n`;
-  body += `_The bug pipeline halted at the grooming phase. If you disagree with this verdict, override the workflow manually and re-trigger; otherwise close the ticket or convert it to a Story._\n\n`;
+  body += `### Next step\n\n`;
+  body += `The ticket has been moved back to **Backlog**. If you disagree with this verdict, edit the description to clarify and transition to Selected for Development again. Otherwise, close this ticket or convert it to a Story.\n\n`;
 }
 
-// Embed the raw JSON blob so bug-load-grooming.ts can extract it later.
+// Embed the raw JSON blob so re-grooming can find and replace this comment.
 body += `<!-- ARCHON-GROOMING-BLOB:START -->\n`;
 body += '```json\n';
 body += JSON.stringify(groomed, null, 2);
 body += '\n```\n';
 body += `<!-- ARCHON-GROOMING-BLOB:END -->\n`;
 
-// Post via Jira REST API
 const baseUrl = process.env.JIRA_BASE_URL!;
 const email = process.env.JIRA_USER_EMAIL!;
 const token = process.env.JIRA_API_TOKEN!;
 const auth = Buffer.from(`${email}:${token}`).toString('base64');
 
-const res = await fetch(`${baseUrl}/rest/api/3/issue/${issueKey}/comment`, {
+interface AdfNode {
+  type: string;
+  text?: string;
+  content?: AdfNode[];
+}
+function flattenAdf(node: AdfNode | null | undefined): string {
+  if (!node) return '';
+  if (node.type === 'text' && typeof node.text === 'string') return node.text;
+  if (Array.isArray(node.content)) {
+    const sep =
+      node.type === 'paragraph' || node.type === 'listItem' ? '\n' : '';
+    return node.content.map(flattenAdf).join(sep);
+  }
+  return '';
+}
+
+// Step 1: idempotency — find and delete any prior ARCHON-GROOMING-BLOB
+// comments. Doing this before posting prevents stacking on re-runs.
+const listRes = await fetch(
+  `${baseUrl}/rest/api/3/issue/${issueKey}/comment?maxResults=100`,
+  {
+    headers: { Authorization: `Basic ${auth}`, Accept: 'application/json' },
+  },
+);
+if (listRes.ok) {
+  const data = (await listRes.json()) as {
+    comments?: Array<{ id: string; body: AdfNode }>;
+  };
+  const priorIds = (data.comments ?? [])
+    .filter((c) => flattenAdf(c.body).includes('ARCHON-GROOMING-BLOB:START'))
+    .map((c) => c.id);
+  for (const id of priorIds) {
+    const delRes = await fetch(
+      `${baseUrl}/rest/api/3/issue/${issueKey}/comment/${id}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Basic ${auth}` },
+      },
+    );
+    if (!delRes.ok) {
+      console.warn(`Failed to delete prior grooming comment ${id}: HTTP ${delRes.status}`);
+      // continue anyway; worst case is duplicate comments
+    }
+  }
+  if (priorIds.length > 0) {
+    console.log(`Deleted ${priorIds.length} prior grooming comment(s).`);
+  }
+} else {
+  console.warn(`Failed to list comments for idempotency check: HTTP ${listRes.status}`);
+}
+
+// Step 2: post the new comment
+const postRes = await fetch(`${baseUrl}/rest/api/3/issue/${issueKey}/comment`, {
   method: 'POST',
   headers: {
     Authorization: `Basic ${auth}`,
     Accept: 'application/json',
     'Content-Type': 'application/json',
   },
-  // Jira Cloud accepts ADF; for plain markdown-style content we wrap as a
-  // single text block. The renderer in Jira Cloud will honor markdown in a
-  // text-paragraph node when the user has enabled markdown rendering, but
-  // most installations show it as plain text. That's acceptable — the
-  // grooming comment is for engineers, not end users.
   body: JSON.stringify({
     body: {
       type: 'doc',
@@ -133,9 +192,9 @@ const res = await fetch(`${baseUrl}/rest/api/3/issue/${issueKey}/comment`, {
   }),
 });
 
-if (!res.ok) {
-  const text = await res.text();
-  console.error(`Failed to post grooming comment: HTTP ${res.status}: ${text}`);
+if (!postRes.ok) {
+  const text = await postRes.text();
+  console.error(`Failed to post grooming comment: HTTP ${postRes.status}: ${text}`);
   process.exit(1);
 }
 

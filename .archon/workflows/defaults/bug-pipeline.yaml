@@ -1,5 +1,5 @@
-name: bug-test-strategy
-description: For a Bug ticket transitioning into Selected for Development, generate the contract, analyze why the bug escaped existing tests, repair/add tests so they catch the bug (RED), and commit. Then transition to In Progress to fire task-implement which writes the fix (GREEN).
+name: bug-pipeline
+description: End-to-end bug ticket pipeline. Triggered when a Bug ticket transitions Backlog → Selected for Development (the user's signal that the description is complete). Grooms, validates, contracts, analyzes the test gap, repairs tests so they catch the bug, commits, and transitions to In Progress so task-implement writes the fix. If grooming fails for any reason, transitions the ticket back to Backlog with an explanatory comment so it's visually clear the pipeline paused.
 
 worktree:
   enabled: true
@@ -48,11 +48,16 @@ nodes:
   - id: fetch-epic-tech-context
     depends_on: [ fetch-task-context ]
     bash: |
+      # Best-effort: bugs may or may not have a parent Epic. If they do,
+      # the Epic's TechSpec gives the grooming agent ground truth for
+      # "what was this feature supposed to do?" — distinguishing bug
+      # from working-as-designed.
       set -euo pipefail
       export ARTIFACTS_DIR="$ARTIFACTS_DIR"
       parent_key="$(cat "$ARTIFACTS_DIR/parent-epic-key.txt" 2>/dev/null || echo "")"
       if [ -z "$parent_key" ]; then
-        printf '\n{"skipped":"true"}'
+        echo "No parent Epic — bug stands on its own." >&2
+        printf '\n{"skipped":"true","reason":"no parent epic"}'
         exit 0
       fi
       mkdir -p "$ARTIFACTS_DIR/parent-epic"
@@ -71,31 +76,83 @@ nodes:
       export ARTIFACTS_DIR="$ARTIFACTS_DIR"
       bun /home/user/Archon/.archon/scripts/task-prepare-branch.ts
 
-  # The bug-groom phase posted the verdict + ACs to Jira; fetch-task-context
-  # above re-pulls the description (which now contains the appended ACs)
-  # plus the original description. We also re-fetch the groomed-bug.json
-  # from the bug's prior comments so we have the full structured context.
-  - id: load-grooming-from-jira
+  # ─── Phase 1: GROOM ──────────────────────────────────────────────────
+  # Validate the ticket is a real bug, extrapolate ACs, identify likely
+  # affected files. Halts (with a backlog transition) on any verdict
+  # other than genuine_bug.
+  # ─────────────────────────────────────────────────────────────────────
+
+  - id: groom-bug
     depends_on: [ prepare-branch ]
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string }
+        confidence: { type: string }
+        severity: { type: string }
+      required: [ verdict, confidence, severity ]
+    command: archon-groom-bug
+
+  - id: post-grooming-to-jira
+    depends_on: [ groom-bug ]
     bash: |
-      # Pull the groomed-bug.json that the bug-groom workflow posted as
-      # a Jira attachment or comment back into this run's $ARTIFACTS_DIR.
-      # The script looks for the most recent comment with the
-      # ARCHON-GROOMING-BLOB marker and extracts the embedded JSON.
+      # Post the grooming verdict to Jira as a comment. Always runs —
+      # both for genuine bugs (the human PM sees the proposed ACs) and
+      # for not-a-bug verdicts (they see why the pipeline is halting).
+      # Idempotent: deletes any prior ARCHON-GROOMING-BLOB comment so
+      # re-runs don't stack comments.
       set -euo pipefail
       export ARTIFACTS_DIR="$ARTIFACTS_DIR"
-      bun /home/user/Archon/.archon/scripts/bug-load-grooming.ts
+      bun /home/user/Archon/.archon/scripts/bug-post-grooming-comment.ts
+
+  - id: halt-if-not-genuine-bug
+    depends_on: [ post-grooming-to-jira ]
+    when: "$groom-bug.output.verdict != 'genuine_bug'"
+    bash: |
+      # Verdict is one of: working_as_designed, feature_request_disguised_as_bug,
+      # environment_or_user_error, cannot_reproduce, insufficient_information.
+      # Move ticket back to Backlog so it's visually clear the pipeline
+      # paused. The user can edit the ticket and transition forward
+      # again to retry.
+      set -euo pipefail
+      export ARTIFACTS_DIR="$ARTIFACTS_DIR"
+      verdict="$groom-bug.output.verdict"
+      export REASON="Bug grooming verdict: \`$verdict\`. See the most recent grooming comment above for the agent's reasoning and (if applicable) what additional information is needed."
+      bun /home/user/Archon/.archon/scripts/jira-transition-task-to-backlog.ts
+      exit 1
+
+  - id: append-acs-to-jira
+    depends_on: [ halt-if-not-genuine-bug ]
+    trigger_rule: all_done
+    when: "$groom-bug.output.verdict == 'genuine_bug'"
+    bash: |
+      # Append the extrapolated ACs to the Jira ticket description so
+      # downstream phases (and task-implement, when this ticket reaches
+      # In Progress) read them via fetch-task-context.
+      set -euo pipefail
+      export ARTIFACTS_DIR="$ARTIFACTS_DIR"
+      bun /home/user/Archon/.archon/scripts/bug-append-acs-to-description.ts
+
+  # ─── Phase 2: TEST STRATEGY ──────────────────────────────────────────
+  # Generate the contract, analyze WHY the bug escaped tests, repair
+  # tests so they catch it (red bar before green bar). Halts (with
+  # backlog transition) if the contract is inadequate or the new tests
+  # don't actually fail against current production code.
+  # ─────────────────────────────────────────────────────────────────────
 
   - id: create-bug-contract
-    depends_on: [ load-grooming-from-jira ]
+    depends_on: [ append-acs-to-jira ]
     context: fresh
     command: archon-contract-author
 
   - id: verify-contract-exists
     depends_on: [ create-bug-contract ]
     bash: |
-      # Contract author writes docs/contracts/<lowercase-key>.md. Halt if missing.
+      # Contract author writes docs/contracts/<lowercase-key>.md. Halt
+      # back to Backlog if missing.
       set -euo pipefail
+      export ARTIFACTS_DIR="$ARTIFACTS_DIR"
       issue_key="$(bun -e '
         import { readFileSync } from "node:fs";
         const p = JSON.parse(readFileSync(process.argv[1], "utf8"));
@@ -103,7 +160,8 @@ nodes:
       ' -- "$ARTIFACTS_DIR/trigger-payload.json")"
       contract_path="docs/contracts/${issue_key}.md"
       if [ ! -s "$contract_path" ]; then
-        echo "Contract author produced no $contract_path. Halting." >&2
+        export REASON="Contract author produced no \`$contract_path\`. The grooming output may have been too vague to derive a contract; refine the ACs and retry."
+        bun /home/user/Archon/.archon/scripts/jira-transition-task-to-backlog.ts
         exit 1
       fi
       cp "$contract_path" "$ARTIFACTS_DIR/contract.md"
@@ -124,20 +182,15 @@ nodes:
     depends_on: [ analyze-test-gap ]
     when: "$analyze-test-gap.output.contract_inadequate == 'true'"
     bash: |
-      # The test-gap analyzer determined the contract is too vague to
-      # write a defect-catching test. Halt and surface to a human; the
-      # contract author should be re-run with more specific guidance.
       set -euo pipefail
-      echo "Test-gap analysis flagged contract as inadequate. See test-gap-analysis.json." >&2
-      echo "A human should regenerate or refine the contract before retrying." >&2
+      export ARTIFACTS_DIR="$ARTIFACTS_DIR"
+      export REASON="Test-gap analysis flagged the contract as inadequate. The contract is too vague to derive a defect-catching test; refine the ACs or the contract and retry."
+      bun /home/user/Archon/.archon/scripts/jira-transition-task-to-backlog.ts
       exit 1
 
-  # Reuses the existing test-repair command. The command reads
-  # $ARTIFACTS_DIR/test-review-latest.json — we use a small adapter
-  # bash node first to convert test-gap-analysis.json into the
-  # review-shape the existing repair command knows how to consume.
   - id: synthesize-test-review-from-gap
-    depends_on: [ analyze-test-gap ]
+    depends_on: [ halt-if-contract-inadequate ]
+    trigger_rule: all_done
     when: "$analyze-test-gap.output.contract_inadequate == 'false'"
     bash: |
       # Map test-gap-analysis.json → test-review-latest.json shape so we
@@ -150,7 +203,7 @@ nodes:
         const repairs = (gap.repair_specs || []).map((s) => ({
           file: s.target_file,
           issue: `${s.gap_classification}: ${s.acceptance_criterion}`,
-          required_change: s.required_assertions.join(" / "),
+          required_change: (s.required_assertions || []).join(" / "),
           acceptance_criterion: s.acceptance_criterion,
           red_state_expectation: s.red_state_expectation,
         }));
@@ -179,32 +232,33 @@ nodes:
     bash: |
       # Run the test suite. Assert that at least one test FAILS — that's
       # the proof the new/repaired tests actually catch the bug. If
-      # everything passes, the test layer is still not catching the
-      # defect; halt for human intervention.
-      #
-      # Uses the same task-run-validation.sh that test-* nodes in
-      # task-implement use. Always exits 0 and writes feedback.json;
-      # we parse the gates here.
+      # everything passes, the test layer still doesn't catch the
+      # defect; halt for human intervention by transitioning back to
+      # Backlog.
       set -euo pipefail
+      export ARTIFACTS_DIR="$ARTIFACTS_DIR"
       bash /home/user/Archon/.archon/scripts/task-run-validation.sh
-      bun -e '
+      red_bar="$(bun -e '
         import { readFileSync } from "node:fs";
         const r = JSON.parse(readFileSync(process.argv[1], "utf8"));
         const gates = Array.isArray(r.gates) ? r.gates : [];
         const blockingFailed = gates
           .filter((g) => g.blocking)
           .some((g) => g.status === "failed");
-        if (!blockingFailed) {
-          process.stderr.write(
-            "Tests are GREEN against current production code. " +
-            "That means the new tests do NOT catch the bug. Halting; " +
-            "the test-gap analysis or the test-repair pass needs to be " +
-            "redone with a stronger assertion shape.\n"
-          );
-          process.exit(1);
-        }
-        process.stdout.write(JSON.stringify({ red_bar: true, gates: gates.length }));
-      ' -- "$ARTIFACTS_DIR/feedback.json"
+        process.stdout.write(blockingFailed ? "true" : "false");
+      ' -- "$ARTIFACTS_DIR/feedback.json")"
+      if [ "$red_bar" != "true" ]; then
+        export REASON="The new/repaired tests are GREEN against current production code, which means they do NOT catch the bug. The test-gap analysis or test-repair pass needs to be redone with stronger assertions. Refine the ACs and retry."
+        bun /home/user/Archon/.archon/scripts/jira-transition-task-to-backlog.ts
+        exit 1
+      fi
+      printf '{"red_bar":true}'
+
+  # ─── Phase 3: COMMIT + HANDOFF ───────────────────────────────────────
+  # Commit the failing tests, push, transition the ticket to In Progress.
+  # The transition fires task-implement (via jira-router), which runs
+  # the standard dev-loop + reviewer cascade + PR flow to write the fix.
+  # ─────────────────────────────────────────────────────────────────────
 
   - id: commit-and-push
     depends_on: [ validate-tests-fail-on-bug ]
@@ -231,5 +285,5 @@ nodes:
     bash: |
       set -euo pipefail
       export ARTIFACTS_DIR="$ARTIFACTS_DIR"
-      export WORKFLOW_NAME="bug-test-strategy"
+      export WORKFLOW_NAME="bug-pipeline"
       bun /home/user/Archon/.archon/scripts/jira-log-elapsed.ts

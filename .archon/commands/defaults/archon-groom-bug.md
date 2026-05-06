@@ -38,6 +38,14 @@ Classify the ticket into exactly one of:
 
 - `genuine_bug` — the described behavior contradicts the spec or
   the obvious user expectation. The codebase has a defect.
+- `insufficient_information` — the report is missing specific
+  facts you would need to even *attempt* a verdict. Examples:
+  no description at all, only a one-line summary; no
+  reproduction steps; an error message with no context about
+  what the user was doing; a screenshot referenced but not
+  attached. **Use this rather than guessing.** When you choose
+  this verdict, populate `missing_information` with a specific
+  list of items the user should add to the description.
 - `working_as_designed` — the described behavior matches the spec,
   even if the user finds it surprising. (Example: "the form clears
   when I navigate away" but the spec says drafts are session-only.)
@@ -46,17 +54,22 @@ Classify the ticket into exactly one of:
   Autosave was never in scope.)
 - `environment_or_user_error` — the symptom is caused by user
   setup, network, browser extension, etc. — not the application.
-- `cannot_reproduce` — the description is too vague or contradicted
-  by the current codebase, and you cannot identify a defect.
+- `cannot_reproduce` — the description is detailed enough to
+  attempt reproduction, but the described behavior contradicts
+  the current codebase and you cannot identify a defect. Distinct
+  from `insufficient_information`: there's enough info to look,
+  the look just didn't find anything wrong.
 
-Each classification except `genuine_bug` halts the pipeline. The
-human triager promoted the ticket; if you say it's not a bug, the
-workflow comments on Jira with your reasoning and stops.
+Each classification except `genuine_bug` halts the pipeline and
+moves the ticket back to Backlog. The Jira comment explains why.
+For `insufficient_information`, the user can edit the description
+and re-transition to Selected for Development; the pipeline reruns.
 
-If you are uncertain, mark it `genuine_bug` with a low
-`confidence` (see schema). The downstream test-strategy phase will
-catch a misclassification when it tries and fails to write a
-failing test.
+If you are uncertain between `genuine_bug` and another classification,
+prefer `genuine_bug` with a low `confidence` (the downstream phases
+will catch a misclassification when they try and fail). But if the
+report is genuinely too thin to even attempt a verdict, choose
+`insufficient_information` — that's what the verdict exists for.
 
 ## Phase 2: REPRODUCE — Describe the failure precisely
 
@@ -127,9 +140,10 @@ exact shape:
 
 ```json
 {
-  "verdict": "genuine_bug | working_as_designed | feature_request_disguised_as_bug | environment_or_user_error | cannot_reproduce",
+  "verdict": "genuine_bug | insufficient_information | working_as_designed | feature_request_disguised_as_bug | environment_or_user_error | cannot_reproduce",
   "confidence": "high | medium | low",
   "reasoning": "one paragraph explaining the verdict",
+  "missing_information": ["specific item the description needs to add — only populated when verdict is insufficient_information"],
   "reproduction": {
     "steps": ["step 1", "step 2"],
     "expected": "one sentence",
@@ -150,6 +164,16 @@ exact shape:
   "severity_reasoning": "one sentence explaining the severity assessment"
 }
 ```
+
+When `verdict` is `insufficient_information`:
+- `missing_information` must be populated with specific, actionable
+  items the user should add. Bad: "more details." Good: "exact
+  steps to reproduce starting from a logged-in dashboard"; "the
+  error message text or stack trace, not just 'it crashed'"; "which
+  browser and OS"; "whether this happens for all users or just
+  some."
+- `reproduction`, `affected_files`, `acceptance_criteria` may be
+  empty arrays. The downstream pipeline halts before they're used.
 
 ## Success criteria
 
