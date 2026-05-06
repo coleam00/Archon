@@ -77,7 +77,14 @@ const ALLOWED_PATTERNS = [
   /^bun\.lockb$/,
 ];
 
-const statusOut = (await git('status', '--porcelain')).split('\n').filter(Boolean);
+// -uall expands untracked directories into their individual files.
+// Without it, an untracked `docs/contracts/wor-N/` dir would show as a
+// single line `?? docs/contracts/wor-N/` and never match the per-file
+// regex below, then get swept into `skipped` and silently rm'd by the
+// cleanup loop. This was the root cause of contracts vanishing between
+// create-contract and the test-gen commit. (Same fix the
+// task-verify-tests-exist.ts script already had.)
+const statusOut = (await git('status', '--porcelain', '-uall')).split('\n').filter(Boolean);
 const changed = statusOut.map(line => ({ status: line.slice(0, 2), path: line.slice(3).trim() }));
 
 console.log(`${changed.length} changed files in working tree.`);
