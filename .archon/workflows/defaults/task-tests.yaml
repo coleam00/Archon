@@ -118,20 +118,73 @@ nodes:
       export ARTIFACTS_DIR="$ARTIFACTS_DIR"
       bun /home/user/Archon/.archon/scripts/task-prepare-branch.ts
 
-  - id: generate-tests
+  # ---------------------------------------------------------------------------
+  # create-contract — author the technical contract that test-gen and dev-gen
+  # both read as canonical for every interface decision (file paths, exports,
+  # signatures, queries, invariants).
+  #
+  # Runs upstream of test generation and downstream of branch preparation, so
+  # the contract artifact is written into the per-run artifacts dir on the
+  # correct branch. Eliminates the test-author / implementation-author
+  # coordination failures that drove WOR-54 and WOR-55 to multiple dev-loop
+  # attempts each.
+  # ---------------------------------------------------------------------------
+  - id: create-contract
     depends_on: [ prepare-branch ]
+    context: fresh
+    command: archon-contract-author
+
+  - id: verify-contract-exists
+    depends_on: [ create-contract ]
+    bash: |
+      # Halt the workflow if the contract author produced no contract.
+      # The contract lives in the project repo (under docs/contracts/),
+      # not in $ARTIFACTS_DIR, because task-implement runs with a
+      # different ARTIFACTS_DIR and needs to read the contract from
+      # the shared git branch.
+      set -euo pipefail
+      issue_key="$(bun -e '
+        import { readFileSync } from "node:fs";
+        const p = JSON.parse(readFileSync(process.argv[1], "utf8"));
+        process.stdout.write((p.issue_key ?? "").toLowerCase());
+      ' -- "$ARTIFACTS_DIR/trigger-payload.json")"
+      if [ -z "$issue_key" ]; then
+        echo "Could not derive issue_key from trigger-payload.json. Halting." >&2
+        exit 1
+      fi
+      contract_path="docs/contracts/${issue_key}.md"
+      if [ ! -s "$contract_path" ]; then
+        echo "Contract author produced no $contract_path (or empty file). Halting." >&2
+        exit 1
+      fi
+      lines=$(wc -l < "$contract_path")
+      echo "Contract written: $contract_path ($lines lines)"
+      # Mirror the contract into ARTIFACTS_DIR for the test reviewers,
+      # which run within this same task-tests run and find it more
+      # convenient to read alongside the other artifacts.
+      cp "$contract_path" "$ARTIFACTS_DIR/contract.md"
+      printf '\n{"contract_path":"%s","lines":%d}' "$contract_path" "$lines"
+
+  - id: generate-tests
+    depends_on: [ verify-contract-exists ]
     context: fresh
     prompt: |
       # Generate Task Tests
 
-      **Input**: `$ARTIFACTS_DIR/task-context.md`
+      **Inputs**:
+      - `$ARTIFACTS_DIR/contract.md` — **canonical**. The technical
+        contract names every file, export, signature, query, and
+        invariant your tests must align with.
+      - `$ARTIFACTS_DIR/task-context.md` — the original ticket: title,
+        description, acceptance criteria.
 
       ---
 
       ## Your Mission
 
       Write high-signal tests that cover every acceptance criterion in
-      `$ARTIFACTS_DIR/task-context.md`.
+      `$ARTIFACTS_DIR/task-context.md`, **agreeing with the contract** at
+      `$ARTIFACTS_DIR/contract.md` on every interface decision.
 
       Every acceptance criterion must be covered by at least one test that
       would fail before the implementation exists and pass once the criterion
@@ -139,17 +192,31 @@ nodes:
       test. If a criterion cannot be tested with the available project shape,
       report it explicitly in the final status.
 
+      The contract is canonical. If the contract names a file path
+      (e.g. `src/pages/ClosedCasePage.tsx`), import from that path —
+      not from a stub, not from a placeholder. The test runner will
+      report "module not found" for paths the implementation hasn't
+      written yet; that is the correct red state and is more
+      informative than a stub that silently passes against a placeholder
+      return value. **Do not create stub files like `__stubs__/X.ts` to
+      satisfy missing imports.**
+
       The tests you write must be clean TypeScript and clean ESLint. A test
       that fails because the product behavior is missing is good. A test that
       fails because of a TypeScript error, ESLint error, unused variable,
-      missing import, invalid fixture type, or malformed Playwright/Vitest API
-      usage is invalid.
+      missing import (when the contract specifies the path the
+      implementation will create), invalid fixture type, or malformed
+      Playwright/Vitest API usage is invalid.
 
       ## Phase 1: LOAD - Gather Context
 
-      Read:
+      Read in this order:
+      - `$ARTIFACTS_DIR/contract.md` — **first and most important**. This
+        is the canonical interface definition. Note every file path,
+        export, signature, query, and invariant. Your tests must align
+        with these.
       - `$ARTIFACTS_DIR/task-context.md` — task summary, description, and
-        acceptance criteria. This is the test specification.
+        acceptance criteria. This is the behavioral specification.
       - `$ARTIFACTS_DIR/parent-epic-context.md` if present — parent Epic
         framing, PRD highlights, and architectural assumptions.
       - `$ARTIFACTS_DIR/parent-attachments.md` if present — TechSpec,
@@ -160,6 +227,12 @@ nodes:
 
       **PHASE_1_CHECKPOINT:**
       - [ ] Every acceptance criterion is listed in your notes
+      - [ ] Every contract `files:` entry is in your notes — you know
+            which paths to import from
+      - [ ] Every contract `signatures:` entry is in your notes — you
+            know what shape your tests must instantiate / invoke
+      - [ ] Every contract `queries_used:` entry is in your notes — you
+            know which Convex queries to mock and what shape they return
       - [ ] Existing test framework and file conventions are identified
       - [ ] TypeScript, ESLint, Vitest, and Playwright conventions are known
 
@@ -321,22 +394,49 @@ nodes:
     prompt: |
       # Review Generated Tests
 
-      **Input**: `$ARTIFACTS_DIR/task-context.md`
+      **Inputs**:
+      - `$ARTIFACTS_DIR/contract.md` — canonical interface contract
+      - `$ARTIFACTS_DIR/task-context.md` — ticket spec + AC
+      - Generated test files under `tests/` and `e2e/`
 
       ---
 
       ## Your Mission
 
-      Review the tests generated for this task against the acceptance criteria.
-      Do not edit files. Produce a durable artifact for downstream repair and
-      validation nodes.
+      Review the tests generated for this task. Your job is to verify
+      three things at once:
+
+      1. **Tests cover the acceptance criteria.** Every AC in
+         `task-context.md` is exercised by at least one test that would
+         fail before the implementation exists.
+      2. **Tests align with the contract.** Imports come from the file
+         paths the contract names; signatures match what the contract
+         specifies; mocks for Convex queries match the contract's
+         `queries_used` list and shapes.
+      3. **The contract itself is sufficient.** Does the contract provide
+         enough detail for the tests to be meaningful? If the contract
+         is vague, ambiguous, or missing fields the tests need, flag it
+         as `state: contract_inadequate` and the workflow will regenerate
+         the contract before continuing.
+
+      Expected red state: tests will fail with "module not found" or
+      similar errors when the implementation hasn't been written yet.
+      That is correct. Do NOT flag those as test bugs. Flag stub files
+      (e.g. `__stubs__/X.ts` placeholder shims) as a smell — the contract
+      replaced the need for them.
+
+      Do not edit files. Produce a durable artifact for downstream repair
+      and validation nodes.
 
       The artifact you write is the specification for the next step. Be
       precise enough that a repair agent can act without hidden context.
 
       ## Phase 1: LOAD - Gather Review Inputs
 
-      Read:
+      Read in this order:
+      - `$ARTIFACTS_DIR/contract.md` — first and canonical. Internalize
+        every `files:`, `exports:`, `signatures:`, `queries_used:`,
+        `invariants:`, and `tested_by:` entry.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/parent-epic-context.md` if present
       - `$ARTIFACTS_DIR/parent-attachments.md` if present
@@ -344,6 +444,8 @@ nodes:
       - Test configuration and package scripts changed by this workflow
 
       **PHASE_1_CHECKPOINT:**
+      - [ ] Contract entries are loaded — you know what interfaces tests
+            must align with
       - [ ] Acceptance criteria are loaded
       - [ ] Generated test files are identified
       - [ ] Relevant test config changes are identified
@@ -441,11 +543,16 @@ nodes:
       ## Phase 1: LOAD - Read Repair Spec
 
       Read:
+      - `$ARTIFACTS_DIR/contract.md` — canonical. The interfaces named
+        here are the source of truth; any repair that pulls a test
+        away from the contract is wrong.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/test-review-1.json`
       - Generated tests and test config files named in the review
 
       **PHASE_1_CHECKPOINT:**
+      - [ ] Contract is loaded — you know which file paths, exports, and
+            signatures are canonical
       - [ ] Every required repair is understood
       - [ ] Each repair is mapped to a generated test or test config file
       - [ ] No production source file is in scope
@@ -496,6 +603,7 @@ nodes:
       final review artifact for the deterministic gate.
 
       Read:
+      - `$ARTIFACTS_DIR/contract.md` — canonical interface contract
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/test-review-1.json`
       - Generated tests under `tests/` and `e2e/`
@@ -505,6 +613,11 @@ nodes:
       test-gaming risk from the first review. Treat raw `TS2307` missing-module
       failures for future implementation imports as blocking lint/typecheck
       risks unless the import has a narrow task-labeled `@ts-expect-error`.
+
+      Verify that tests align with the contract: imports come from the file
+      paths the contract specifies, signatures match, and Convex query mocks
+      use the shapes named in `queries_used:`. A test that disagrees with
+      the contract is a repair item even if it passes.
 
       Write `$ARTIFACTS_DIR/test-review-2.json` as valid JSON with this shape:
 
@@ -633,6 +746,9 @@ nodes:
       ## Phase 1: LOAD - Inspect Quality Failures
 
       Read:
+      - `$ARTIFACTS_DIR/contract.md` — canonical. Any repair must keep
+        imports pointing at the contract's file paths and tests
+        instantiating the contract's signatures.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/test-gen-quality-report.json`
       - `$ARTIFACTS_DIR/test-gen-lint.log` if lint failed
@@ -640,6 +756,7 @@ nodes:
       - The generated test files and test configuration files
 
       **PHASE_1_CHECKPOINT:**
+      - [ ] Contract is loaded
       - [ ] Lint and typecheck failures are identified
       - [ ] Each failure is mapped to a generated test or test config file
       - [ ] No production implementation source is in scope

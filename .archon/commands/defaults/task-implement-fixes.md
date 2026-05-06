@@ -31,6 +31,12 @@ report and post the GitHub comment.
 
 ## Inputs
 
+- `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+  the path: lowercase the `issue_key` from
+  `$ARTIFACTS_DIR/trigger-payload.json`. The contract names every
+  file, export, signature, query, and invariant the work must align
+  with. Fixes that pull the implementation away from the contract
+  are wrong; fixes that bring it closer to the contract are right.
 - `$ARTIFACTS_DIR/.pr-number` — the PR number to fix and post on.
 - `$ARTIFACTS_DIR/review/consolidated-review.md` — the synthesizer's
   consolidated finding list with severities and locations.
