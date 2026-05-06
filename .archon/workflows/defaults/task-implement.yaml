@@ -2444,17 +2444,164 @@ nodes:
         printf '{"passed":false,"reason":"missing implementation review artifact","required_repairs":[]}\n' > "$final"
       fi
       cp "$final" "$ARTIFACTS_DIR/dev-review-latest.json"
+      # Classify failure_scope from required_repairs[].file paths so we can
+      # decide whether to route to a test-repair node before failing.
+      #   "production" — no required_repairs touch test paths
+      #   "tests"      — every required_repair touches test paths
+      #   "mixed"      — some test, some production
+      #   "none"       — review passed OR no required_repairs at all
       bun -e '
         import { readFileSync } from "node:fs";
         const review = JSON.parse(readFileSync(process.argv[1], "utf8"));
+        const repairs = Array.isArray(review.required_repairs) ? review.required_repairs : [];
+        const TEST_PATH_RE =
+          /(^|\/)(tests?|e2e|__tests__)(\/|$)|\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs)$|(^|\/)(vitest|playwright|jest|cypress)\.config\./;
+        const isTestPath = (p) => typeof p === "string" && TEST_PATH_RE.test(p);
+        let scope = "none";
+        if (review.passed !== true && repairs.length > 0) {
+          const testCount = repairs.filter((r) => isTestPath(r?.file)).length;
+          if (testCount === repairs.length) scope = "tests";
+          else if (testCount === 0) scope = "production";
+          else scope = "mixed";
+        } else if (review.passed !== true) {
+          // Reviewer said failed but listed no specific repairs — treat as
+          // production scope so we do not route to test-repair on a vague
+          // verdict.
+          scope = "production";
+        }
         process.stdout.write(JSON.stringify({
           passed: review.passed === true,
-          required_repairs: Array.isArray(review.required_repairs) ? review.required_repairs.length : 0
+          required_repairs: repairs.length,
+          failure_scope: scope
         }));
       ' -- "$final"
 
+  # ---------------------------------------------------------------------------
+  # Test-side salvage path
+  #
+  # When the dev-loop converged on production code that fully satisfies the
+  # ACs but the final reviewer flagged test-file defects only (e.g. wrong
+  # selector regex, stale import, type-cast missing intermediate `unknown`),
+  # bring the test-gen agent back to apply the reviewer's required repairs.
+  # The dev agent cannot do this because its cage forbids editing tests
+  # (correctly — coordination drift between test-author and code-author is
+  # exactly the failure class the contract feature was built to prevent).
+  # The test-repair agent gets the inverse cage: it may read anything but
+  # write only to test paths.
+  # ---------------------------------------------------------------------------
+
+  - id: repair-tests-from-final-review
+    depends_on: [ implementation-quality-final ]
+    when: "$implementation-quality-final.output.failure_scope == 'tests'"
+    context: fresh
+    hooks:
+      PreToolUse:
+        - script: /home/user/Archon/.archon/scripts/archie-pretooluse-tests-only.ts
+          timeout: 30
+    prompt: |
+      # Repair Tests From Final Implementation Review
+
+      The dev-loop produced production code that the final reviewer judged
+      correct on the ACs, but the reviewer flagged remaining test-file
+      defects. Apply each `required_repairs` item from the review verdict,
+      preserving acceptance-criterion coverage.
+
+      ## Phase 1: LOAD
+
+      Read in this order:
+      - `$ARTIFACTS_DIR/dev-review-final.json` — the verdict. Every entry
+        in `required_repairs[]` has `file`, `issue`, `exact_solution`,
+        `acceptance_criterion`, and often `example_code`. These are
+        instructions, not suggestions.
+      - `docs/contracts/<lowercase-issue-key>.md` — the contract that
+        defines canonical file paths, exports, signatures, selectors,
+        and accessible names. If a repair contradicts the contract, the
+        contract wins; halt and report.
+      - `$ARTIFACTS_DIR/task-context.md` — the ticket and ACs.
+      - The test files named in `required_repairs[].file`.
+      - For each repair, read the production source the test targets so
+        you understand what selector/export/signature is correct.
+
+      **PHASE_1_CHECKPOINT:**
+      - [ ] Verdict loaded; every `required_repairs[].file` is under a
+            test path (tests/, e2e/, *.test.*, *.spec.*, __tests__/)
+      - [ ] Contract is loaded
+      - [ ] For every repair, you know the exact production behavior the
+            test should be asserting against
+      - [ ] If any `required_repairs[].file` is NOT a test path, halt
+            with an explicit message — your scope is test-only
+
+      ## Phase 2: REPAIR
+
+      Apply each `exact_solution` verbatim. Common repair shapes:
+
+      - Selector mismatch: replace `getByRole("button", { name: /X/i })`
+        with the production button's actual accessible name (often the
+        button's visible text). The contract names visible text and
+        aria-labels; use those as the source of truth.
+      - Type-cast: insert `unknown as` for structurally-disjoint cast
+        pairs (TS2352). Mirror the same pattern adjacent lines already
+        use.
+      - Stub-file removal: delete `__stubs__/X.ts` files; switch the
+        test's import to the contracted path.
+      - Test-only fixture changes that do not affect production behavior.
+
+      Forbidden:
+      - Editing any production source file (`src/`, `convex/`, `app/`,
+        `pages/`, `components/`, etc.). The cage will deny these writes.
+        If a repair seems to require a production change, halt and
+        report — that means the verdict was misclassified and the
+        dev-loop should run again.
+      - Removing AC coverage or weakening assertions.
+      - Adding tests that the contract does not justify.
+
+      **PHASE_2_CHECKPOINT:**
+      - [ ] Every `required_repairs[]` entry was addressed
+      - [ ] No production source file was edited (cage will enforce)
+      - [ ] Test contract coverage preserved
+
+      ## Phase 3: REPORT
+
+      List the files you edited and which repair each edit addressed.
+
+      ## Success Criteria
+
+      - **REPAIRS_APPLIED**: Every `required_repairs[]` from
+        `dev-review-final.json` is implemented.
+      - **NO_PRODUCTION_EDITS**: Only test paths were modified.
+      - **AC_COVERAGE_PRESERVED**: All ACs are still tested.
+
+  - id: validate-after-test-repair
+    depends_on: [ repair-tests-from-final-review ]
+    when: "$implementation-quality-final.output.failure_scope == 'tests'"
+    bash: |
+      # Re-run the same validation gate test-1..test-5 used. Reuses the
+      # bundled validation script so behavior matches earlier attempts.
+      # Always exits 0; the next node parses the report.
+      set -euo pipefail
+      bash /home/user/Archon/.archon/scripts/task-run-validation.sh
+      # The script writes its raw report to $ARTIFACTS_DIR/test-after-repair.json
+      # via the same path it uses for the standard test-N nodes. We pin it
+      # here to a stable name so implementation-ready can read it.
+      latest_report="$ARTIFACTS_DIR/feedback.json"
+      cp "$latest_report" "$ARTIFACTS_DIR/feedback.after-test-repair.json"
+      bun -e '
+        import { readFileSync } from "node:fs";
+        const r = JSON.parse(readFileSync(process.argv[1], "utf8"));
+        const passed = r.overall === "passed" || (Array.isArray(r.gates)
+          ? r.gates.filter((g) => g.blocking).every((g) => g.status === "passed")
+          : false);
+        process.stdout.write(JSON.stringify({ passed, report: process.argv[1] }));
+      ' -- "$ARTIFACTS_DIR/feedback.after-test-repair.json"
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        report: { type: string }
+      required: [ passed, report ]
+
   - id: implementation-ready
-    depends_on: [ validate-1, validate-2, validate-3, validate-4, validate-5, implementation-quality-final ]
+    depends_on: [ validate-1, validate-2, validate-3, validate-4, validate-5, implementation-quality-final, validate-after-test-repair ]
     trigger_rule: all_done
     bash: |
       set -euo pipefail
@@ -2463,13 +2610,21 @@ nodes:
         validation_passed=true
       fi
       quality_passed="$implementation-quality-final.output.passed"
+      failure_scope="$implementation-quality-final.output.failure_scope"
+      # Test-side salvage: if reviewer flagged test-only failures and the
+      # post-repair validation is green, treat the implementation as ready.
+      # The production code already passed reviewer-quality gates; only the
+      # tests were blocking, and they are now repaired.
+      test_repair_passed="${validate-after-test-repair.output.passed:-false}"
       if [ "$validation_passed" = "true" ] && [ "$quality_passed" = "true" ]; then
+        ready=true
+      elif [ "$failure_scope" = "tests" ] && [ "$test_repair_passed" = "true" ]; then
         ready=true
       else
         ready=false
       fi
-      printf '{"ready":%s,"validation_passed":%s,"implementation_review_passed":%s,"review":"%s"}\n' \
-        "$ready" "$validation_passed" "$quality_passed" "$ARTIFACTS_DIR/dev-review-final.json"
+      printf '{"ready":%s,"validation_passed":%s,"implementation_review_passed":%s,"failure_scope":"%s","test_repair_passed":%s,"review":"%s"}\n' \
+        "$ready" "$validation_passed" "$quality_passed" "$failure_scope" "$test_repair_passed" "$ARTIFACTS_DIR/dev-review-final.json"
 
   - id: fail-implementation-not-ready
     depends_on: [ implementation-ready ]

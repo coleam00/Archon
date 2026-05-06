@@ -9,8 +9,7 @@
  *
  * Only registered on implementation nodes in task-implement.yaml — no env role gate.
  */
-import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isTestPath, TEST_PATH_RE } from './archie-test-paths';
 
 const DEV_AGENT_REASON = `This action touches tests or runs a test command. That is not your job on this node.
 
@@ -37,20 +36,6 @@ function deny(reason: string): never {
 
 function allow(): never {
   process.exit(0);
-}
-
-const TEST_PATH_RE =
-  /(^|\/)(tests?|e2e|__tests__)(\/|$)|\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs)$|(^|\/)(vitest|playwright|jest|cypress)\.config\./;
-
-function isTestPath(p: string, hookCwd: string): boolean {
-  if (!p) return false;
-  let resolved: string;
-  try {
-    resolved = realpathSync(resolve(hookCwd, p));
-  } catch {
-    resolved = resolve(hookCwd, p);
-  }
-  return TEST_PATH_RE.test(resolved);
 }
 
 const TEST_RUNNER_RE =
