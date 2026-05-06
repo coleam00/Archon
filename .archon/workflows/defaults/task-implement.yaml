@@ -526,7 +526,14 @@ nodes:
       # post-repair validation is green, treat the implementation as ready.
       # The production code already passed reviewer-quality gates; only the
       # tests were blocking, and they are now repaired.
-      test_repair_passed="${validate-after-test-repair.output.passed:-false}"
+      #
+      # Use the bare `$node-name.output.field` form (the Archon engine
+      # substitutes this before bash sees it). The `${var:-default}` brace
+      # form does NOT work here because bash treats hyphens as operator
+      # characters — `${validate-after-test-repair.output.passed:-false}`
+      # parses as `${validate}` + the literal text `-after-test-repair...`,
+      # producing garbage.
+      test_repair_passed="$validate-after-test-repair.output.passed"
       if [ "$validation_passed" = "true" ] && [ "$quality_passed" = "true" ]; then
         ready=true
       elif [ "$failure_scope" = "tests" ] && [ "$test_repair_passed" = "true" ]; then
