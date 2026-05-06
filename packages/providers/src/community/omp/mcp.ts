@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'path';
 
-import { loadMcpConfig } from '../../mcp-config';
+import { loadMcpConfig } from './mcp-config';
 import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,

@@ -10,7 +10,7 @@ export interface LoadedMcpConfig {
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('provider.mcp-config');
+  if (!cachedLog) cachedLog = createLogger('provider.omp.mcp-config');
   return cachedLog;
 }
 
@@ -28,7 +28,7 @@ function expandEnvVarsInRecord(
   const result: Record<string, string> = {};
   for (const [key, val] of Object.entries(record)) {
     if (typeof val !== 'string') {
-      getLog().warn({ key, valueType: typeof val }, 'mcp.env_value_coerced_to_string');
+      getLog().warn({ key, valueType: typeof val }, 'omp.mcp.env_value_coerced_to_string');
       result[key] = String(val);
       continue;
     }

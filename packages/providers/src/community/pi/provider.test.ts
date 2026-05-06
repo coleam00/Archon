@@ -105,15 +105,7 @@ const mockSessionList = mock(
   async (_cwd: string) => [] as { id: string; path: string; cwd: string }[]
 );
 
-const mockSettingsManagerDrainErrors = mock(() => []);
-const mockSettingsManagerGetGlobalSettings = mock(() => ({}));
-const mockSettingsManagerGetProjectSettings = mock(() => ({}));
-const mockSettingsManagerCreate = mock(() => ({
-  drainErrors: mockSettingsManagerDrainErrors,
-  getGlobalSettings: mockSettingsManagerGetGlobalSettings,
-  getProjectSettings: mockSettingsManagerGetProjectSettings,
-}));
-const mockSettingsManagerInMemory = mock((_settings?: unknown) => ({}));
+const mockSettingsManagerInMemory = mock(() => ({}));
 const mockResourceLoaderReload = mock(async () => undefined);
 // Return-style constructor: bun's mock() wraps the function such that the
 // `this`-binding doesn't reliably propagate to `new` call sites. Returning a
@@ -142,10 +134,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
     open: mockSessionOpen,
     list: mockSessionList,
   },
-  SettingsManager: {
-    create: mockSettingsManagerCreate,
-    inMemory: mockSettingsManagerInMemory,
-  },
+  SettingsManager: { inMemory: mockSettingsManagerInMemory },
   DefaultResourceLoader: MockDefaultResourceLoader,
   // Stub for the value import added when resource-loader.ts started passing
   // an explicit `agentDir` to DefaultResourceLoader (required since
@@ -229,14 +218,6 @@ describe('PiProvider', () => {
     mockSessionOpen.mockClear();
     mockSessionList.mockClear();
     mockSessionList.mockImplementation(async () => []);
-    mockSettingsManagerInMemory.mockClear();
-    mockSettingsManagerCreate.mockClear();
-    mockSettingsManagerDrainErrors.mockReset();
-    mockSettingsManagerDrainErrors.mockImplementation(() => []);
-    mockSettingsManagerGetGlobalSettings.mockReset();
-    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({}));
-    mockSettingsManagerGetProjectSettings.mockReset();
-    mockSettingsManagerGetProjectSettings.mockImplementation(() => ({}));
     capturedListener = undefined;
     scriptedEvents.length = 0;
     fileCreds = {};

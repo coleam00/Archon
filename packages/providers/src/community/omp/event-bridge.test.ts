@@ -336,4 +336,94 @@ describe('bridgeSession', () => {
     expect(unsubscribed).toBe(true);
     expect(disposed).toBe(true);
   });
+
+  test('cleanup does not block when session.prompt() hangs forever after dispose()', async () => {
+    const neverSettles = new Promise<void>(() => undefined);
+    let listener: ((event: unknown) => void) | undefined;
+    let disposed = false;
+
+    const session: OmpSession = {
+      sessionId: 'sess-hanging',
+      subscribe(fn) {
+        listener = fn;
+        return () => {
+          listener = undefined;
+        };
+      },
+      prompt() {
+        return neverSettles;
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        disposed = true;
+      },
+    };
+
+    const gen = bridgeSession(session, 'hi');
+    queueMicrotask(() => {
+      listener?.({ type: 'tool_execution_start', toolName: 'echo', args: {}, toolCallId: 'tc1' });
+    });
+
+    const start = Date.now();
+    let receivedChunk = false;
+    let caught: Error | undefined;
+    try {
+      for await (const _chunk of gen) {
+        receivedChunk = true;
+        throw new Error('simulated consumer abort');
+      }
+    } catch (err) {
+      caught = err as Error;
+    }
+    const elapsed = Date.now() - start;
+
+    expect(receivedChunk).toBe(true);
+    expect(caught?.message).toBe('simulated consumer abort');
+    expect(disposed).toBe(true);
+    expect(elapsed).toBeLessThan(200);
+  }, 5_000);
+
+  test('a late prompt() rejection after cleanup does not escape as unhandled rejection', async () => {
+    let rejectPrompt!: (err: Error) => void;
+    let listener: ((event: unknown) => void) | undefined;
+
+    const session: OmpSession = {
+      sessionId: 'sess-late-reject',
+      subscribe(fn) {
+        listener = fn;
+        return () => {
+          listener = undefined;
+        };
+      },
+      prompt() {
+        return new Promise<void>((_, reject) => {
+          rejectPrompt = reject;
+        });
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        return undefined;
+      },
+    };
+
+    const gen = bridgeSession(session, 'hi');
+    queueMicrotask(() => {
+      listener?.({ type: 'tool_execution_start', toolName: 'echo', args: {}, toolCallId: 'tc1' });
+    });
+
+    try {
+      for await (const _chunk of gen) {
+        throw new Error('simulated consumer abort');
+      }
+    } catch {
+      // Expected consumer-side abort.
+    }
+
+    rejectPrompt(new Error('late OMP error'));
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }, 5_000);
 });

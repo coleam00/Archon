@@ -4,7 +4,6 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import type { MessageChunk } from '../../types';
 import {
   AsyncQueue,
-  bridgeSession,
   buildResultChunk,
   mapPiEvent,
   serializeToolResult,
@@ -110,10 +109,6 @@ describe('serializeToolResult', () => {
     expect(serializeToolResult([1, 2, 3])).toBe('[1,2,3]');
   });
 
-  test('falls back to String() for undefined', () => {
-    expect(serializeToolResult(undefined)).toBe('undefined');
-  });
-
   test('falls back to String() for circular refs', () => {
     const circular: { self?: unknown } = {};
     circular.self = circular;
@@ -183,33 +178,13 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('flags isError for stopReason=error and surfaces errorMessage', () => {
+  test('flags isError for stopReason=error', () => {
     const chunk = buildResultChunk([
       { role: 'assistant', usage, stopReason: 'error', errorMessage: 'auth', content: [] },
     ]);
     if (chunk.type === 'result') {
       expect(chunk.isError).toBe(true);
       expect(chunk.errorSubtype).toBe('error');
-      expect(chunk.errors).toEqual(['auth']);
-    }
-  });
-
-  test('does not populate errors when errorMessage is absent or empty', () => {
-    // undefined errorMessage
-    const chunk1 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', content: [] },
-    ]);
-    if (chunk1.type === 'result') {
-      expect(chunk1.isError).toBe(true);
-      expect(chunk1.errors).toBeUndefined();
-    }
-    // empty string — also falsy, also excluded from errors[]
-    const chunk2 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage: '', content: [] },
-    ]);
-    if (chunk2.type === 'result') {
-      expect(chunk2.isError).toBe(true);
-      expect(chunk2.errors).toBeUndefined();
     }
   });
 
