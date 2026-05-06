@@ -201,7 +201,7 @@ describe('bridgeSession', () => {
     });
   });
 
-  test('waits for terminal result delivered on a later macrotask', async () => {
+  test('uses terminal result delivered before prompt settles on a later macrotask', async () => {
     let listener: ((event: unknown) => void) | undefined;
     const session: OmpSession = {
       sessionId: 'sess-macrotask',
@@ -216,15 +216,17 @@ describe('bridgeSession', () => {
           type: 'message_update',
           assistantMessageEvent: { type: 'text_delta', delta: 'done' },
         });
-        await new Promise<void>(resolve => setTimeout(resolve, 0));
-        setTimeout(() => {
-          listener?.({
-            type: 'agent_end',
-            messages: [
-              { role: 'assistant', usage: { input: 2, output: 3 }, stopReason: 'end_turn' },
-            ],
-          });
-        }, 0);
+        await new Promise<void>(resolve => {
+          setTimeout(() => {
+            listener?.({
+              type: 'agent_end',
+              messages: [
+                { role: 'assistant', usage: { input: 2, output: 3 }, stopReason: 'end_turn' },
+              ],
+            });
+            resolve();
+          }, 0);
+        });
       },
       async abort() {
         return undefined;
@@ -247,7 +249,7 @@ describe('bridgeSession', () => {
     });
   });
 
-  test('waits for terminal result after prompt resolves before a delayed agent_end', async () => {
+  test('does not fail when prompt resolves before a delayed terminal event', async () => {
     let listener: ((event: unknown) => void) | undefined;
     const session: OmpSession = {
       sessionId: 'sess-delayed-agent-end',
@@ -280,17 +282,10 @@ describe('bridgeSession', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual([
-      {
-        type: 'result',
-        tokens: { input: 5, output: 8 },
-        stopReason: 'end_turn',
-        sessionId: 'sess-delayed-agent-end',
-      },
-    ]);
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'sess-delayed-agent-end' }]);
   }, 5_000);
 
-  test('emits missing terminal result when prompt settles without agent_end', async () => {
+  test('emits successful result when prompt settles without agent_end', async () => {
     const session: OmpSession = {
       subscribe() {
         return () => undefined;
@@ -312,9 +307,7 @@ describe('bridgeSession', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual([
-      { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' },
-    ]);
+    expect(chunks).toEqual([{ type: 'result' }]);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   }, 5_000);
   test('cleans up session state when subscribe throws during setup', async () => {
@@ -429,6 +422,43 @@ describe('bridgeSession', () => {
     expect(disposed).toBe(true);
     expect(elapsed).toBeLessThan(200);
   }, 5_000);
+
+  test('dispose errors do not mask a successful terminal result', async () => {
+    let listener: ((event: unknown) => void) | undefined;
+    const session: OmpSession = {
+      sessionId: 'sess-dispose-fails',
+      subscribe(fn) {
+        listener = fn;
+        return () => undefined;
+      },
+      async prompt() {
+        listener?.({
+          type: 'agent_end',
+          messages: [{ role: 'assistant', usage: { input: 3, output: 5 }, stopReason: 'end_turn' }],
+        });
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        throw new Error('dispose failed');
+      },
+    };
+
+    const chunks: unknown[] = [];
+    for await (const chunk of bridgeSession(session, 'hi')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        tokens: { input: 3, output: 5 },
+        stopReason: 'end_turn',
+        sessionId: 'sess-dispose-fails',
+      },
+    ]);
+  });
 
   test('a late prompt() rejection after cleanup does not escape as unhandled rejection', async () => {
     let rejectPrompt!: (err: Error) => void;
