@@ -106,9 +106,19 @@ export const evidencePolicySchema = z.object({
   /**
    * Path to the evidence JSON file, relative to `$ARTIFACTS_DIR`.
    * Absolute paths and `..` segments are rejected by the validator before
-   * any read occurs (path-traversal defense).
+   * any read occurs (path-traversal defense). Empty / directory-like values
+   * are rejected at parse time so author errors fail fast instead of
+   * surfacing as cryptic ENOENT/EISDIR runtime errors.
    */
-  path: z.string().default('evidence.json'),
+  path: z
+    .string()
+    .trim()
+    .min(1, 'evidence_policy.path cannot be empty')
+    .refine(
+      p => p !== '.' && !p.endsWith('/'),
+      'evidence_policy.path must be a file, not a directory'
+    )
+    .default('evidence.json'),
 });
 
 export type EvidencePolicy = z.infer<typeof evidencePolicySchema>;
@@ -118,7 +128,11 @@ export type EvidencePolicy = z.infer<typeof evidencePolicySchema>;
 // ---------------------------------------------------------------------------
 
 export const evidenceValidationIssueSchema = z.object({
-  level: z.enum(['error', 'warning']),
+  // Only 'error' is currently emitted. Add 'warning' here when a producer
+  // exists alongside an explicit gate-semantics decision (today the gate
+  // would treat warnings as failures because validateEvidence returns
+  // valid: false on any issue).
+  level: z.enum(['error']),
   field: z.string(),
   message: z.string(),
   hint: z.string().optional(),

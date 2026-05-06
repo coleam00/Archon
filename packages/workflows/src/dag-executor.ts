@@ -3149,7 +3149,7 @@ export async function executeDagWorkflow(
     if (!evidenceResult.valid) {
       getLog().error(
         { workflowRunId: workflowRun.id, issues: evidenceResult.issues },
-        'evidence_validation_failed'
+        'workflow.evidence_validation_failed'
       );
       const issueLines = evidenceResult.issues
         .map(i => `  - ${i.field} — ${i.message}${i.hint ? ` (hint: ${i.hint})` : ''}`)
@@ -3166,7 +3166,7 @@ export async function executeDagWorkflow(
         .catch((dbErr: Error) => {
           getLog().error(
             { err: dbErr, workflowRunId: workflowRun.id },
-            'evidence_validation_metadata_persist_failed'
+            'workflow.evidence_metadata_persist_failed'
           );
         });
       await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
@@ -3191,20 +3191,17 @@ export async function executeDagWorkflow(
       });
       return;
     }
-    // Evidence valid — persist the success marker alongside completion.
-    await deps.store
-      .updateWorkflowRun(workflowRun.id, {
-        metadata: {
-          ...workflowRun.metadata,
-          evidence_validation: { ok: true },
-        },
-      })
-      .catch((dbErr: Error) => {
-        getLog().error(
-          { err: dbErr, workflowRunId: workflowRun.id },
-          'evidence_validation_metadata_persist_failed'
-        );
-      });
+    // Evidence valid — persist the success marker BEFORE marking complete.
+    // We do NOT swallow this DB error: the marker is the durable proof that
+    // the gate ran. Logging-and-continuing would mark a run `completed`
+    // without provable validation, broadening the implied P3-A guarantee.
+    // Let the outer executor catch handle propagation.
+    await deps.store.updateWorkflowRun(workflowRun.id, {
+      metadata: {
+        ...workflowRun.metadata,
+        evidence_validation: { ok: true },
+      },
+    });
   }
 
   // Update DB and emit completion

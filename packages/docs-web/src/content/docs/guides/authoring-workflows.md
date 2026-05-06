@@ -130,6 +130,14 @@ tags: [GitLab, Review]           # Optional: explicit Web UI filter tags. Overri
                                  #   keyword-based tag inference. An empty list (`tags: []`)
                                  #   suppresses inference and shows no tags. Omit to fall
                                  #   back to inferred tags (the default).
+evidence_policy:                 # Optional: gate terminal `completed` on real-execution proof.
+  required: true                 #   When true, the run fails unless $ARTIFACTS_DIR/<path>
+                                 #   parses as ExecutionEvidence and (when verify: reality)
+                                 #   the commit SHA / pushed branch / PR URL are reachable.
+  verify: shape                  #   'shape' (default) = Zod + cross-field integrity, no I/O.
+                                 #   'reality'         = also check commit/branch/PR via git/gh.
+  path: evidence.json            #   Default. Relative to $ARTIFACTS_DIR. Absolute paths
+                                 #   and `..` segments are rejected.
 
 # Required for DAG-based
 nodes:
@@ -729,6 +737,92 @@ nodes:
 ```
 
 The workflow uses `opus` instead of the config default `haiku`, but other settings inherit from config.
+
+---
+
+## Evidence-Gated Workflows
+
+A workflow may require **real-execution proof** before it is allowed to reach terminal `completed` status. This is opt-in per workflow.
+
+### Why
+
+Without this gate, a workflow that only ran a planning prompt and never committed code can still report `completed`. Setting `evidence_policy.required: true` forces the workflow author (or a final node) to write a structured proof artifact at `$ARTIFACTS_DIR/evidence.json`. If the artifact is missing or invalid, the run is marked `failed` with structured issues at `metadata.evidence_validation`.
+
+### Schema
+
+```yaml
+evidence_policy:
+  required: true                 # default: false (omit to disable)
+  verify: shape                  # 'shape' | 'reality' (default: 'shape')
+  path: evidence.json            # relative to $ARTIFACTS_DIR (default: evidence.json)
+```
+
+### The `evidence.json` contract
+
+The file MUST be a JSON object matching one of the two `kind` shapes:
+
+**`kind: 'execution'`** (the only shape that passes the gate):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `kind` | `'execution'` | discriminator |
+| `workflow_run_id` | string | non-empty |
+| `provider` | string | non-empty (`claude`, `codex`, `pi`, …) |
+| `provider_run_ids` | string[] | non-empty array of session IDs |
+| `changed_files` | string[] | non-empty list of paths |
+| `diff_command` | string | the command used to produce the diff |
+| `test_commands` | string[] | may be empty (doc-only PRs); MUST be present |
+| `test_output_summary` | string | may be empty; MUST be present |
+| `commit_sha` | string | exactly 40 lowercase hex chars |
+| `pushed_branch` | string | non-empty; protected names (`main`, `master`, `dev`, `develop`) are rejected |
+| `pr_url` | string | `https://github.com/<owner>/<repo>/pull/<number>` only |
+| `pr_number` | number | positive integer; must match `pr_url` when `verify: reality` |
+
+**`kind: 'planning'`** is parsed but explicitly rejected by the integrity layer with the hint to set `kind: 'execution'`. Authors MAY emit it to mark a run as planning-only when they do not want the gate to pass.
+
+### `verify` modes
+
+- `'shape'` (default) — Zod parse + cross-field integrity. No subprocess calls. Suitable for hermetic CI environments.
+- `'reality'` — additionally runs `git cat-file -e <sha>` (commit reachable), `git ls-remote origin <branch>` (branch pushed and tip SHA matches `commit_sha`), and `gh pr view <url> --json headRefName,number,headRefOid` (PR URL matches branch, number, AND `commit_sha === headRefOid`). Requires `gh` on PATH and authenticated. Failures produce structured issues, not exceptions.
+
+The `commit_sha` is bound to BOTH the branch tip on origin AND the PR `headRefOid` — fabricating evidence that pairs an arbitrary local SHA with an unrelated real PR will not pass.
+
+### Example: writing evidence.json from a final node
+
+```yaml
+nodes:
+  # … earlier nodes that commit, push, and open the PR …
+
+  - id: write-evidence
+    bash: |
+      cat > "$ARTIFACTS_DIR/evidence.json" <<EOF
+      {
+        "kind": "execution",
+        "workflow_run_id": "$WORKFLOW_ID",
+        "provider": "claude",
+        "provider_run_ids": ["${SESSION_ID}"],
+        "changed_files": $(git diff --name-only origin/dev...HEAD | jq -R -s -c 'split("\n") | map(select(. != ""))'),
+        "diff_command": "git diff --stat origin/dev...HEAD",
+        "test_commands": ["bun test"],
+        "test_output_summary": "all tests passed",
+        "commit_sha": "$(git rev-parse HEAD)",
+        "pushed_branch": "$(git rev-parse --abbrev-ref HEAD)",
+        "pr_url": "${PR_URL}",
+        "pr_number": ${PR_NUMBER}
+      }
+      EOF
+    depends_on: [open-pr]
+```
+
+### Failure shape
+
+When validation fails, `metadata.evidence_validation` is persisted with this shape:
+
+```json
+{ "ok": false, "issues": [{ "level": "error", "field": "commit_sha", "message": "...", "hint": "..." }] }
+```
+
+Operators can read it from the run record (CLI: `archon workflow status <id>`; SQL: `SELECT metadata->'evidence_validation' FROM remote_agent_workflow_runs WHERE id = ?`).
 
 ---
 

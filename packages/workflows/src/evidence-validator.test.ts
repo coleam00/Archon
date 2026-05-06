@@ -325,7 +325,11 @@ describe('verifyEvidenceReality', () => {
       }
       if (cmd === 'gh') {
         return Promise.resolve({
-          stdout: JSON.stringify({ headRefName: 'feature/foo', number: 42 }),
+          stdout: JSON.stringify({
+            headRefName: 'feature/foo',
+            number: 42,
+            headRefOid: 'a'.repeat(40),
+          }),
           stderr: '',
         });
       }
@@ -333,6 +337,68 @@ describe('verifyEvidenceReality', () => {
     };
     const issues = await verifyEvidenceReality(REAL_EVIDENCE, '/repo');
     expect(issues).toEqual([]);
+  });
+
+  it('negative: ls-remote tip SHA mismatches commit_sha → commit_sha error', async () => {
+    execFileImpl = (cmd, args) => {
+      if (cmd === 'git' && args[0] === 'cat-file') {
+        return Promise.resolve({ stdout: '', stderr: '' });
+      }
+      if (cmd === 'git' && args[0] === 'ls-remote') {
+        // Branch exists, but tip is a DIFFERENT commit than evidence claims.
+        return Promise.resolve({
+          stdout: `${'b'.repeat(40)}\trefs/heads/feature/foo\n`,
+          stderr: '',
+        });
+      }
+      if (cmd === 'gh') {
+        return Promise.resolve({
+          stdout: JSON.stringify({
+            headRefName: 'feature/foo',
+            number: 42,
+            headRefOid: 'a'.repeat(40),
+          }),
+          stderr: '',
+        });
+      }
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const issues = await verifyEvidenceReality(REAL_EVIDENCE, '/repo');
+    expect(
+      issues.some(
+        i => i.field === 'commit_sha' && i.message.includes('does not match origin/feature/foo tip')
+      )
+    ).toBe(true);
+  });
+
+  it('negative: gh headRefOid mismatches commit_sha → commit_sha error', async () => {
+    execFileImpl = (cmd, args) => {
+      if (cmd === 'git' && args[0] === 'cat-file') {
+        return Promise.resolve({ stdout: '', stderr: '' });
+      }
+      if (cmd === 'git' && args[0] === 'ls-remote') {
+        return Promise.resolve({
+          stdout: `${'a'.repeat(40)}\trefs/heads/feature/foo\n`,
+          stderr: '',
+        });
+      }
+      if (cmd === 'gh') {
+        // PR HEAD is a DIFFERENT commit than evidence claims.
+        return Promise.resolve({
+          stdout: JSON.stringify({
+            headRefName: 'feature/foo',
+            number: 42,
+            headRefOid: 'c'.repeat(40),
+          }),
+          stderr: '',
+        });
+      }
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const issues = await verifyEvidenceReality(REAL_EVIDENCE, '/repo');
+    expect(issues.some(i => i.field === 'commit_sha' && i.message.includes('headRefOid'))).toBe(
+      true
+    );
   });
 
   it('negative: git cat-file exits non-zero → commit_sha error', async () => {
@@ -349,7 +415,11 @@ describe('verifyEvidenceReality', () => {
       }
       if (cmd === 'gh') {
         return Promise.resolve({
-          stdout: JSON.stringify({ headRefName: 'feature/foo', number: 42 }),
+          stdout: JSON.stringify({
+            headRefName: 'feature/foo',
+            number: 42,
+            headRefOid: 'a'.repeat(40),
+          }),
           stderr: '',
         });
       }
@@ -369,7 +439,11 @@ describe('verifyEvidenceReality', () => {
       }
       if (cmd === 'gh') {
         return Promise.resolve({
-          stdout: JSON.stringify({ headRefName: 'feature/foo', number: 42 }),
+          stdout: JSON.stringify({
+            headRefName: 'feature/foo',
+            number: 42,
+            headRefOid: 'a'.repeat(40),
+          }),
           stderr: '',
         });
       }
@@ -392,7 +466,11 @@ describe('verifyEvidenceReality', () => {
       }
       if (cmd === 'gh') {
         return Promise.resolve({
-          stdout: JSON.stringify({ headRefName: 'other-branch', number: 42 }),
+          stdout: JSON.stringify({
+            headRefName: 'other-branch',
+            number: 42,
+            headRefOid: 'a'.repeat(40),
+          }),
           stderr: '',
         });
       }
@@ -415,7 +493,11 @@ describe('verifyEvidenceReality', () => {
       }
       if (cmd === 'gh') {
         return Promise.resolve({
-          stdout: JSON.stringify({ headRefName: 'feature/foo', number: 99 }),
+          stdout: JSON.stringify({
+            headRefName: 'feature/foo',
+            number: 99,
+            headRefOid: 'a'.repeat(40),
+          }),
           stderr: '',
         });
       }
@@ -657,7 +739,11 @@ describe('validateEvidence (orchestrator)', () => {
       }
       if (cmd === 'gh') {
         return Promise.resolve({
-          stdout: JSON.stringify({ headRefName: 'feature/foo', number: 42 }),
+          stdout: JSON.stringify({
+            headRefName: 'feature/foo',
+            number: 42,
+            headRefOid: 'a'.repeat(40),
+          }),
           stderr: '',
         });
       }

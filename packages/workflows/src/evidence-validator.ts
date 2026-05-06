@@ -161,20 +161,33 @@ export async function verifyEvidenceReality(
     });
   }
 
-  // 2. pushed_branch present on origin
+  // 2. pushed_branch present on origin AND its tip SHA matches commit_sha
   try {
     const { stdout } = await execFileAsync(
       'git',
       ['ls-remote', '--heads', 'origin', evidence.pushed_branch],
       { cwd }
     );
-    if (stdout.trim().length === 0) {
+    const trimmed = stdout.trim();
+    if (trimmed.length === 0) {
       issues.push({
         level: 'error',
         field: 'pushed_branch',
         message: `git ls-remote --heads origin ${evidence.pushed_branch} returned empty; branch is not on origin`,
         hint: 'Did the workflow run `git push -u origin <branch>` after committing?',
       });
+    } else {
+      // Bind commit_sha to the branch tip on origin. Without this check, any
+      // locally-reachable SHA can be paired with any real branch and pass.
+      const remoteSha = trimmed.split(/\s+/)[0];
+      if (remoteSha !== evidence.commit_sha) {
+        issues.push({
+          level: 'error',
+          field: 'commit_sha',
+          message: `commit_sha=${evidence.commit_sha} does not match origin/${evidence.pushed_branch} tip=${remoteSha}`,
+          hint: 'evidence.json claims a commit that is not the tip of pushed_branch on origin',
+        });
+      }
     }
   } catch (err) {
     const e = err as Error & { stderr?: string };
@@ -185,21 +198,28 @@ export async function verifyEvidenceReality(
     });
   }
 
-  // 3. gh pr view confirms PR url maps to pushed_branch and pr_number
+  // 3. gh pr view confirms PR url maps to pushed_branch, pr_number, and commit_sha
   try {
     const { stdout } = await execFileAsync(
       'gh',
-      ['pr', 'view', evidence.pr_url, '--json', 'headRefName,number'],
+      ['pr', 'view', evidence.pr_url, '--json', 'headRefName,number,headRefOid'],
       { cwd }
     );
-    let parsed: { headRefName?: unknown; number?: unknown } | undefined;
+    let parsed: { headRefName?: unknown; number?: unknown; headRefOid?: unknown } | undefined;
     try {
-      parsed = JSON.parse(stdout) as { headRefName?: unknown; number?: unknown };
-    } catch {
+      parsed = JSON.parse(stdout) as {
+        headRefName?: unknown;
+        number?: unknown;
+        headRefOid?: unknown;
+      };
+    } catch (parseErr) {
+      const pe = parseErr instanceof Error ? parseErr : new Error(String(parseErr));
+      const stdoutPreview = stdout.length > 200 ? stdout.slice(0, 200) + '…' : stdout;
       issues.push({
         level: 'error',
         field: 'pr_url',
-        message: `gh pr view returned non-JSON output for ${evidence.pr_url}`,
+        message: `gh pr view returned non-JSON output for ${evidence.pr_url}: ${pe.message}`,
+        hint: `gh stdout (first 200 chars): ${JSON.stringify(stdoutPreview)}`,
       });
       return issues;
     }
@@ -216,6 +236,15 @@ export async function verifyEvidenceReality(
         level: 'error',
         field: 'pr_number',
         message: `gh pr view number=${String(parsed.number)} does not match pr_number=${evidence.pr_number}`,
+      });
+    }
+    // Bind commit_sha to the PR head — the strongest "real-execution proof" check.
+    if (parsed.headRefOid !== evidence.commit_sha) {
+      issues.push({
+        level: 'error',
+        field: 'commit_sha',
+        message: `gh pr view headRefOid='${String(parsed.headRefOid)}' does not match commit_sha='${evidence.commit_sha}'`,
+        hint: 'pr_url points to a PR whose HEAD is a different commit',
       });
     }
   } catch (err) {
@@ -303,7 +332,7 @@ export async function validateEvidence(
   const { artifactsDir, cwd, policy } = args;
   getLog().info(
     { artifactsDir, path: policy.path, verify: policy.verify },
-    'evidence_validation_started'
+    'workflow.evidence_validation_started'
   );
 
   // Path-traversal defense: reject absolute paths and any '..' segment before
@@ -316,7 +345,7 @@ export async function validateEvidence(
         message: `evidence_policy.path '${policy.path}' must be relative to $ARTIFACTS_DIR`,
       },
     ];
-    getLog().error({ issues }, 'evidence_validation_failed');
+    getLog().error({ issues }, 'workflow.evidence_validation_failed');
     return { valid: false, issues };
   }
   if (policy.path.split(/[\\/]/).some(seg => seg === '..')) {
@@ -327,7 +356,7 @@ export async function validateEvidence(
         message: `evidence_policy.path '${policy.path}' must not contain '..' segments`,
       },
     ];
-    getLog().error({ issues }, 'evidence_validation_failed');
+    getLog().error({ issues }, 'workflow.evidence_validation_failed');
     return { valid: false, issues };
   }
 
@@ -344,7 +373,7 @@ export async function validateEvidence(
         message: `failed to read evidence file '${policy.path}': ${e.message}`,
       },
     ];
-    getLog().error({ err, issues }, 'evidence_validation_failed');
+    getLog().error({ err, issues }, 'workflow.evidence_validation_failed');
     return { valid: false, issues };
   }
   if (!load.found) {
@@ -356,21 +385,21 @@ export async function validateEvidence(
         hint: 'PR-producing workflows must write evidence.json before completion',
       },
     ];
-    getLog().error({ issues }, 'evidence_validation_failed');
+    getLog().error({ issues }, 'workflow.evidence_validation_failed');
     return { valid: false, issues };
   }
 
   // 1. SHAPE
   const shapeResult = validateEvidenceShape(load.raw);
   if (!shapeResult.valid) {
-    getLog().error({ issues: shapeResult.issues }, 'evidence_validation_failed');
+    getLog().error({ issues: shapeResult.issues }, 'workflow.evidence_validation_failed');
     return shapeResult;
   }
 
   // 2. INTEGRITY
   const integrityIssues = validateEvidenceIntegrity(shapeResult.evidence);
   if (integrityIssues.length > 0) {
-    getLog().error({ issues: integrityIssues }, 'evidence_validation_failed');
+    getLog().error({ issues: integrityIssues }, 'workflow.evidence_validation_failed');
     return { valid: false, issues: integrityIssues };
   }
 
@@ -378,11 +407,11 @@ export async function validateEvidence(
   if (policy.verify === 'reality') {
     const realityIssues = await verifyEvidenceReality(shapeResult.evidence, cwd);
     if (realityIssues.length > 0) {
-      getLog().error({ issues: realityIssues }, 'evidence_validation_failed');
+      getLog().error({ issues: realityIssues }, 'workflow.evidence_validation_failed');
       return { valid: false, issues: realityIssues };
     }
   }
 
-  getLog().info({ kind: shapeResult.evidence.kind }, 'evidence_validation_completed');
+  getLog().info({ kind: shapeResult.evidence.kind }, 'workflow.evidence_validation_completed');
   return shapeResult;
 }
