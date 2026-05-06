@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 
+import type { MessageChunk } from '../../types';
 import {
   AsyncQueue,
   bridgeSession,
@@ -617,4 +618,187 @@ describe('bridgeSession cleanup', () => {
     // Yield to let the microtask queue drain so the .catch() runs.
     await new Promise(resolve => setTimeout(resolve, 10));
   }, 5_000);
+});
+
+// ─── streaming tail completion ────────────────────────────────────────────────────────────────────
+
+describe('streaming tail completion', () => {
+  const usage = { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } };
+
+  function makeTextDeltaEvent(delta: string): AgentSessionEvent {
+    return {
+      type: 'message_update',
+      message: { role: 'assistant' },
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta,
+        partial: { role: 'assistant' },
+      },
+    } as unknown as AgentSessionEvent;
+  }
+
+  function makeAgentEndEvent(fullText: string): AgentSessionEvent {
+    return {
+      type: 'agent_end',
+      messages: [
+        {
+          role: 'assistant',
+          usage,
+          stopReason: 'stop',
+          content: [{ type: 'text', text: fullText }],
+        },
+      ],
+    } as unknown as AgentSessionEvent;
+  }
+
+  test('emits corrective assistant chunk when streaming truncated', async () => {
+    const streamed = 'The repo is cloned. Let me register it.\n\n/register-project';
+    const full =
+      'The repo is cloned. Let me register it.\n\n/register-project SaberEngine "/path/to/repo"';
+    const tail = full.slice(streamed.length);
+
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent(streamed));
+        listener?.(makeAgentEndEvent(full));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(2);
+    expect(assistantChunks[0].content).toBe(streamed);
+    expect(assistantChunks[1].content).toBe(tail);
+    expect(chunks[chunks.length - 1].type).toBe('result');
+  });
+
+  test('does not emit corrective chunk when streaming is complete', async () => {
+    const full = 'complete text no truncation';
+
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent(full));
+        listener?.(makeAgentEndEvent(full));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(1);
+    expect(assistantChunks[0].content).toBe(full);
+  });
+
+  test('does not emit corrective chunk when assembled text does not start with streamed (mismatch)', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('different content'));
+        listener?.(makeAgentEndEvent('assembled is completely different'));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(1);
+    expect(assistantChunks[0].content).toBe('different content');
+  });
+
+  test('resets per-turn text on turn_start so only final turn is checked', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('turn one text'));
+        listener?.({ type: 'turn_start' } as AgentSessionEvent); // second turn resets counter
+        listener?.(makeTextDeltaEvent('turn two'));
+        listener?.(makeAgentEndEvent('turn two')); // last assistant msg matches turn 2
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(2);
+    expect(assistantChunks[0].content).toBe('turn one text');
+    expect(assistantChunks[1].content).toBe('turn two');
+  });
+
+  test('corrective chunk is added to assistantBuffer when wantsStructured', async () => {
+    const streamed = '{"partial":';
+    const full = '{"partial":true}';
+
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent(streamed));
+        listener?.(makeAgentEndEvent(full));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    const schema = { type: 'object' };
+    for await (const chunk of bridgeSession(mockSession, 'prompt', undefined, schema)) {
+      chunks.push(chunk);
+    }
+
+    const resultChunk = chunks.find(c => c.type === 'result');
+    expect((resultChunk as Record<string, unknown>)?.structuredOutput).toEqual({ partial: true });
+  });
 });

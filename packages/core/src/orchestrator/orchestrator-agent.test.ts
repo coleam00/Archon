@@ -290,6 +290,13 @@ describe('parseOrchestratorCommands', () => {
       expect(result.workflowInvocation).not.toBeNull();
       expect(result.workflowInvocation?.projectName).toBe('my-project');
     });
+
+    test('strips markdown bold from /invoke-workflow and parses correctly', () => {
+      const response = '**/invoke-workflow assist --project my-project**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.workflowInvocation?.workflowName).toBe('assist');
+      expect(result.workflowInvocation?.projectName).toBe('my-project');
+    });
   });
 
   // ─── --prompt parameter ──────────────────────────────────────────────────────
@@ -504,6 +511,43 @@ describe('parseOrchestratorCommands', () => {
       // The regex \S+ for name means no spaces in name anyway
       // Path is trimmed via .trim()
       expect(result.projectRegistration?.projectPath).toBe('/path/to/repo');
+    });
+
+    test('strips markdown bold from /register-project and parses correctly', () => {
+      const response = '**/register-project myapp /home/user/projects/myapp**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('myapp');
+      expect(result.projectRegistration?.projectPath).toBe('/home/user/projects/myapp');
+    });
+
+    test('strips markdown bold from /register-project with quoted path', () => {
+      const response =
+        '**/register-project SaberEngine "/.archon/workspaces/b1skit/SaberEngine/source"**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('SaberEngine');
+      // parseOrchestratorCommands captures the path via (.+)$ which preserves the
+      // surrounding double-quotes. Downstream, handleRegisterProject reconstructs
+      // the command string and calls parseCommand(), which strips the quotes before
+      // calling existsSync(). So the path stored here intentionally includes quotes.
+      expect(result.projectRegistration?.projectPath).toBe(
+        '"/.archon/workspaces/b1skit/SaberEngine/source"'
+      );
+    });
+
+    test('strips markdown bold from /register-project in multiline response', () => {
+      const response =
+        'The project has been set up.\n\n**/register-project SaberEngine "/path/to/repo"**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('SaberEngine');
+      // Surrounding quotes are preserved by (.+)$ — see quoted-path test above.
+      expect(result.projectRegistration?.projectPath).toBe('"/path/to/repo"');
+    });
+
+    test('strips single-asterisk italic from /register-project', () => {
+      const response = '*/register-project myapp /path/to/app*';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('myapp');
+      expect(result.projectRegistration?.projectPath).toBe('/path/to/app');
     });
   });
 

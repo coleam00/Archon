@@ -167,9 +167,21 @@ const REGISTER_PROJECT_FULL_RE = {
   },
 };
 
+/**
+ * Strip markdown bold/italic decorators from slash-command lines.
+ * Pi and other models occasionally emit **\/register-project ...** or
+ * *\/invoke-workflow ...* instead of a bare slash command. The leading
+ * asterisks cause both prefix and full-command regexes to miss the line.
+ * Only lines whose first non-asterisk character is '/' are affected.
+ */
+function normalizeCommandText(text: string): string {
+  return text.replace(/^\*+(\/[^\n]*?)\**$/gm, '$1');
+}
+
 /** Returns true once accumulated text contains a complete orchestrator command. */
 function isCommandFullyParsed(accumulated: string): boolean {
-  return INVOKE_WORKFLOW_FULL_RE.test(accumulated) || REGISTER_PROJECT_FULL_RE.test(accumulated);
+  const normalized = normalizeCommandText(accumulated);
+  return INVOKE_WORKFLOW_FULL_RE.test(normalized) || REGISTER_PROJECT_FULL_RE.test(normalized);
 }
 
 /**
@@ -201,13 +213,17 @@ export function parseOrchestratorCommands(
     projectRegistration: null,
   };
 
+  // Strip markdown bold/italic decorators from slash command lines before matching.
+  // Pi models occasionally emit **\/register-project ...** or **\/invoke-workflow ...**.
+  const normalizedResponse = normalizeCommandText(response);
+
   // Parse /invoke-workflow {name} --project {project-name}
   // Use (\S+) for project name to avoid capturing trailing text on the same line
   // (e.g., when AI appends tool call indicators or continues text after the command).
   // --project MUST appear before --prompt; this order is specified in the system prompt
   // template. Commands with --prompt before --project will not match.
   const invokePattern = /^\/invoke-workflow\s+(\S+)\s+--project[\s=]+(\S+)/m;
-  const invokeMatch = invokePattern.exec(response);
+  const invokeMatch = invokePattern.exec(normalizedResponse);
   if (invokeMatch) {
     const workflowName = invokeMatch[1].trim();
     const projectName = invokeMatch[2].trim();
@@ -220,11 +236,11 @@ export function parseOrchestratorCommands(
       const matchedCodebase = findCodebaseByName(codebases, projectName);
       if (matchedCodebase) {
         // Extract message before the command
-        const commandIndex = response.indexOf(invokeMatch[0]);
-        const remainingMessage = response.slice(0, commandIndex).trim();
+        const commandIndex = normalizedResponse.indexOf(invokeMatch[0]);
+        const remainingMessage = normalizedResponse.slice(0, commandIndex).trim();
 
         // Extract optional --prompt "..." parameter (double or single quotes)
-        const commandText = response.slice(commandIndex);
+        const commandText = normalizedResponse.slice(commandIndex);
         const promptPattern = /--prompt\s+(?:"([^"]+)"|'([^']+)')/;
         const promptMatch = promptPattern.exec(commandText);
         const rawPrompt = (promptMatch?.[1] ?? promptMatch?.[2])?.trim();
@@ -246,7 +262,7 @@ export function parseOrchestratorCommands(
 
   // Parse /register-project {name} {path}
   const registerPattern = /^\/register-project\s+(\S+)\s+(.+)$/m;
-  const registerMatch = registerPattern.exec(response);
+  const registerMatch = registerPattern.exec(normalizedResponse);
   if (registerMatch) {
     result.projectRegistration = {
       projectName: registerMatch[1].trim(),
@@ -1043,9 +1059,10 @@ async function handleStreamMode(
         // If detected, suppress this chunk and all future chunks — the full
         // response will be parsed post-loop and the command dispatched there.
         const accumulated = allMessages.join('');
+        const normalizedAccumulated = normalizeCommandText(accumulated);
         if (
-          INVOKE_WORKFLOW_PREFIX_RE.test(accumulated) ||
-          REGISTER_PROJECT_PREFIX_RE.test(accumulated)
+          INVOKE_WORKFLOW_PREFIX_RE.test(normalizedAccumulated) ||
+          REGISTER_PROJECT_PREFIX_RE.test(normalizedAccumulated)
         ) {
           commandDetected = true;
           // If the complete command pattern is already present, stop accumulating —
@@ -1221,9 +1238,10 @@ async function handleBatchMode(
 
       if (!commandDetected) {
         const accumulated = assistantMessages.join('');
+        const normalizedAccumulated = normalizeCommandText(accumulated);
         if (
-          INVOKE_WORKFLOW_PREFIX_RE.test(accumulated) ||
-          REGISTER_PROJECT_PREFIX_RE.test(accumulated)
+          INVOKE_WORKFLOW_PREFIX_RE.test(normalizedAccumulated) ||
+          REGISTER_PROJECT_PREFIX_RE.test(normalizedAccumulated)
         ) {
           commandDetected = true;
           if (isCommandFullyParsed(accumulated)) {
@@ -1436,9 +1454,12 @@ async function handleProjectRegistrationResult(
 ): Promise<void> {
   const { projectName, projectPath } = registration;
 
-  // Send the AI text before the command
-  const regIndex = fullResponse.indexOf('/register-project');
-  const textBeforeReg = fullResponse.slice(0, regIndex).trim();
+  // Normalize before extraction so that Mode A's bold markers ('**') are
+  // stripped from the command line; otherwise textBeforeReg would include a
+  // trailing '**' when the model wrapped the command in markdown bold.
+  const normalizedForExtraction = normalizeCommandText(fullResponse);
+  const regIndex = normalizedForExtraction.indexOf('/register-project');
+  const textBeforeReg = normalizedForExtraction.slice(0, regIndex).trim();
   if (textBeforeReg) {
     await platform.sendMessage(conversationId, textBeforeReg);
   }
