@@ -7,6 +7,12 @@
  *   *.test.{ts,tsx,js,jsx,mjs,cjs}
  *   *.spec.{ts,tsx,js,jsx,mjs,cjs}
  *   *.config.ts/js for test runners (playwright, vitest, jest)
+ *   docs/contracts/<issue-key>.md — the technical contract authored
+ *     upstream of test generation. Lives in the project repo as normal
+ *     documentation (it describes the project's interface contract for
+ *     a given ticket). Committing it here means task-implement (running
+ *     in a different ARTIFACTS_DIR) reads it directly off disk in the
+ *     same per-ticket branch.
  *   package.json — for adding test devDependencies (allowed; dev workflow may add more)
  *   pnpm-lock.yaml / package-lock.json / bun.lockb — lockfile updates accompanying deps
  *
@@ -64,6 +70,7 @@ const ALLOWED_PATTERNS = [
   /(^|\/)__tests__\//,
   /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/,
   /(^|\/)(playwright|vitest|jest)\.config\.(ts|js|mjs|cjs)$/,
+  /^docs\/contracts\/.+\.md$/,
   /^package\.json$/,
   /^package-lock\.json$/,
   /^pnpm-lock\.yaml$/,

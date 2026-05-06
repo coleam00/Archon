@@ -146,19 +146,30 @@ nodes:
       ## Your Mission
 
       Implement the product behavior required by every acceptance criterion in
-      `$ARTIFACTS_DIR/task-context.md`. The ticket context and parent
-      attachments are the contract; validation feedback is only an external
-      symptom report.
+      `$ARTIFACTS_DIR/task-context.md`, **agreeing with the contract** at
+      `docs/contracts/<lowercase-issue-key>.md` on every interface decision
+      (file paths, exports, signatures, queries used, invariants). The
+      ticket context, parent attachments, and contract are the spec;
+      validation feedback is only an external symptom report.
 
       Passing validation is not the direct objective. The objective is to
-      implement the requested product behavior within scope. Use validation
-      only to infer which requirement may still be incomplete.
+      implement the requested product behavior within scope, satisfying the
+      contract. Use validation only to infer which requirement may still be
+      incomplete.
 
       ## Phase 1: LOAD - Gather Context
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        the path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json` and read that file. The
+        contract names every file, export, signature, query, and
+        invariant your work must align with. If a signature appears in
+        the contract, do not deviate from it. If you believe the contract
+        is wrong, write your work the way the contract says and surface
+        your concern in your final report.
       - `$ARTIFACTS_DIR/task-context.md` — task summary, description, and
-        acceptance criteria. This is the implementation spec.
+        acceptance criteria. This is the behavioral spec.
       - `$ARTIFACTS_DIR/parent-attachments.md` — project tech stack,
         architecture, conventions, TechSpec, DesignDoc, STYLE_GUIDE, etc.
       - `$ARTIFACTS_DIR/feedback.json` — raw baseline quality gate output.
@@ -466,6 +477,13 @@ nodes:
       ## Phase 1: LOAD - Gather Review Inputs
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        the path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json`. The contract names every
+        file, export, signature, query, and invariant the dev work
+        must align with. Implementation that disagrees with the
+        contract is a required repair, even if the test runner doesn't
+        catch the disagreement.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/parent-attachments.md`
       - `$ARTIFACTS_DIR/feedback.json`
@@ -476,6 +494,7 @@ nodes:
       error-context files.
 
       **PHASE_1_CHECKPOINT:**
+      - [ ] Contract is loaded; signatures/files/invariants are in your notes
       - [ ] Acceptance criteria are loaded
       - [ ] Changed production files are identified
       - [ ] Validation feedback is interpreted as product symptoms only
@@ -573,19 +592,30 @@ nodes:
       ## Your Mission
 
       Implement the product behavior required by every acceptance criterion in
-      `$ARTIFACTS_DIR/task-context.md`. The ticket context and parent
-      attachments are the contract; validation feedback is only an external
-      symptom report.
+      `$ARTIFACTS_DIR/task-context.md`, **agreeing with the contract** at
+      `docs/contracts/<lowercase-issue-key>.md` on every interface decision
+      (file paths, exports, signatures, queries used, invariants). The
+      ticket context, parent attachments, and contract are the spec;
+      validation feedback is only an external symptom report.
 
       Passing validation is not the direct objective. The objective is to
-      implement the requested product behavior within scope. Use validation
-      only to infer which requirement may still be incomplete.
+      implement the requested product behavior within scope, satisfying the
+      contract. Use validation only to infer which requirement may still be
+      incomplete.
 
       ## Phase 1: LOAD - Gather Context
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        the path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json` and read that file. The
+        contract names every file, export, signature, query, and
+        invariant your work must align with. If a signature appears in
+        the contract, do not deviate from it. If you believe the contract
+        is wrong, write your work the way the contract says and surface
+        your concern in your final report.
       - `$ARTIFACTS_DIR/task-context.md` — task summary, description, and
-        acceptance criteria. This is the implementation spec.
+        acceptance criteria. This is the behavioral spec.
       - `$ARTIFACTS_DIR/parent-attachments.md` — project tech stack,
         architecture, conventions, TechSpec, DesignDoc, STYLE_GUIDE, etc.
       - `$ARTIFACTS_DIR/feedback.json` — raw baseline quality gate output.
@@ -895,6 +925,13 @@ nodes:
       artifact.
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json`. The contract names every
+        file, export, signature, query, and invariant the dev work
+        must align with. Implementation that disagrees with the
+        contract is a required repair, even if the test runner does
+        not catch it.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/parent-attachments.md`
       - `$ARTIFACTS_DIR/feedback.json` — raw deterministic test output
@@ -907,7 +944,9 @@ nodes:
       error-context files.
 
       Check every acceptance criterion, prior required repair, scope
-      discipline, architecture risk, and test-gaming risk.
+      discipline, architecture risk, and test-gaming risk. Verify the
+      diff aligns with every file path and signature in the contract;
+      flag deviations as required repairs.
 
       Write `$ARTIFACTS_DIR/dev-review-2.json` as valid JSON with this shape:
 
@@ -972,19 +1011,30 @@ nodes:
       ## Your Mission
 
       Implement the product behavior required by every acceptance criterion in
-      `$ARTIFACTS_DIR/task-context.md`. The ticket context and parent
-      attachments are the contract; validation feedback is only an external
-      symptom report.
+      `$ARTIFACTS_DIR/task-context.md`, **agreeing with the contract** at
+      `docs/contracts/<lowercase-issue-key>.md` on every interface decision
+      (file paths, exports, signatures, queries used, invariants). The
+      ticket context, parent attachments, and contract are the spec;
+      validation feedback is only an external symptom report.
 
       Passing validation is not the direct objective. The objective is to
-      implement the requested product behavior within scope. Use validation
-      only to infer which requirement may still be incomplete.
+      implement the requested product behavior within scope, satisfying the
+      contract. Use validation only to infer which requirement may still be
+      incomplete.
 
       ## Phase 1: LOAD - Gather Context
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        the path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json` and read that file. The
+        contract names every file, export, signature, query, and
+        invariant your work must align with. If a signature appears in
+        the contract, do not deviate from it. If you believe the contract
+        is wrong, write your work the way the contract says and surface
+        your concern in your final report.
       - `$ARTIFACTS_DIR/task-context.md` — task summary, description, and
-        acceptance criteria. This is the implementation spec.
+        acceptance criteria. This is the behavioral spec.
       - `$ARTIFACTS_DIR/parent-attachments.md` — project tech stack,
         architecture, conventions, TechSpec, DesignDoc, STYLE_GUIDE, etc.
       - `$ARTIFACTS_DIR/feedback.json` — raw baseline quality gate output.
@@ -1302,6 +1352,14 @@ nodes:
       ## Inputs To Read
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json`. The contract is the
+        single source of truth for files, exports, signatures, queries
+        used, and invariants. Implementation that disagrees with the
+        contract is a required repair, and a frequent root cause of
+        late-round failures is a quiet contract violation that earlier
+        reviewers missed.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/parent-attachments.md`
       - `$ARTIFACTS_DIR/feedback.json` — raw deterministic test output
@@ -1429,19 +1487,30 @@ nodes:
       ## Your Mission
 
       Implement the product behavior required by every acceptance criterion in
-      `$ARTIFACTS_DIR/task-context.md`. The ticket context and parent
-      attachments are the contract; validation feedback is only an external
-      symptom report.
+      `$ARTIFACTS_DIR/task-context.md`, **agreeing with the contract** at
+      `docs/contracts/<lowercase-issue-key>.md` on every interface decision
+      (file paths, exports, signatures, queries used, invariants). The
+      ticket context, parent attachments, and contract are the spec;
+      validation feedback is only an external symptom report.
 
       Passing validation is not the direct objective. The objective is to
-      implement the requested product behavior within scope. Use validation
-      only to infer which requirement may still be incomplete.
+      implement the requested product behavior within scope, satisfying the
+      contract. Use validation only to infer which requirement may still be
+      incomplete.
 
       ## Phase 1: LOAD - Gather Context
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        the path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json` and read that file. The
+        contract names every file, export, signature, query, and
+        invariant your work must align with. If a signature appears in
+        the contract, do not deviate from it. If you believe the contract
+        is wrong, write your work the way the contract says and surface
+        your concern in your final report.
       - `$ARTIFACTS_DIR/task-context.md` — task summary, description, and
-        acceptance criteria. This is the implementation spec.
+        acceptance criteria. This is the behavioral spec.
       - `$ARTIFACTS_DIR/parent-attachments.md` — project tech stack,
         architecture, conventions, TechSpec, DesignDoc, STYLE_GUIDE, etc.
       - `$ARTIFACTS_DIR/feedback.json` — raw baseline quality gate output.
@@ -1760,6 +1829,14 @@ nodes:
       ## Inputs To Read
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json`. The contract is the
+        single source of truth for files, exports, signatures, queries
+        used, and invariants. Implementation that disagrees with the
+        contract is a required repair, and a frequent root cause of
+        late-round failures is a quiet contract violation that earlier
+        reviewers missed.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/parent-attachments.md`
       - `$ARTIFACTS_DIR/feedback.json` — raw deterministic test output
@@ -1887,19 +1964,30 @@ nodes:
       ## Your Mission
 
       Implement the product behavior required by every acceptance criterion in
-      `$ARTIFACTS_DIR/task-context.md`. The ticket context and parent
-      attachments are the contract; validation feedback is only an external
-      symptom report.
+      `$ARTIFACTS_DIR/task-context.md`, **agreeing with the contract** at
+      `docs/contracts/<lowercase-issue-key>.md` on every interface decision
+      (file paths, exports, signatures, queries used, invariants). The
+      ticket context, parent attachments, and contract are the spec;
+      validation feedback is only an external symptom report.
 
       Passing validation is not the direct objective. The objective is to
-      implement the requested product behavior within scope. Use validation
-      only to infer which requirement may still be incomplete.
+      implement the requested product behavior within scope, satisfying the
+      contract. Use validation only to infer which requirement may still be
+      incomplete.
 
       ## Phase 1: LOAD - Gather Context
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        the path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json` and read that file. The
+        contract names every file, export, signature, query, and
+        invariant your work must align with. If a signature appears in
+        the contract, do not deviate from it. If you believe the contract
+        is wrong, write your work the way the contract says and surface
+        your concern in your final report.
       - `$ARTIFACTS_DIR/task-context.md` — task summary, description, and
-        acceptance criteria. This is the implementation spec.
+        acceptance criteria. This is the behavioral spec.
       - `$ARTIFACTS_DIR/parent-attachments.md` — project tech stack,
         architecture, conventions, TechSpec, DesignDoc, STYLE_GUIDE, etc.
       - `$ARTIFACTS_DIR/feedback.json` — raw baseline quality gate output.
@@ -2219,6 +2307,14 @@ nodes:
       ## Inputs To Read
 
       Read:
+      - `docs/contracts/<lowercase-issue-key>.md` — **canonical**. Derive
+        path: lowercase the `issue_key` from
+        `$ARTIFACTS_DIR/trigger-payload.json`. The contract is the
+        single source of truth for files, exports, signatures, queries
+        used, and invariants. Implementation that disagrees with the
+        contract is a required repair, and a frequent root cause of
+        late-round failures is a quiet contract violation that earlier
+        reviewers missed.
       - `$ARTIFACTS_DIR/task-context.md`
       - `$ARTIFACTS_DIR/parent-attachments.md`
       - `$ARTIFACTS_DIR/feedback.json` — raw deterministic test output
