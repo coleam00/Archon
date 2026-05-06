@@ -40,7 +40,9 @@ import type {
   EffortLevel,
   ThinkingConfig,
   SandboxSettings,
+  EvidencePolicy,
 } from './schemas';
+import { validateEvidence } from './evidence-validator';
 import {
   isBashNode,
   isLoopNode,
@@ -2488,7 +2490,11 @@ export async function executeDagWorkflow(
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
-  workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
+  workflow: {
+    name: string;
+    nodes: readonly DagNode[];
+    evidence_policy?: EvidencePolicy;
+  } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -3128,6 +3134,78 @@ export async function executeDagWorkflow(
 
   // Check if status was changed externally (e.g. cancelled) before marking complete.
   if (await skipIfStatusChanged('dag.skip_complete_status_changed')) return;
+
+  // Real-execution proof gate (ROADMAP P3-A). When the workflow declares
+  // `evidence_policy.required: true`, refuse terminal `completed` unless
+  // $ARTIFACTS_DIR/<path> parses as ExecutionEvidence and (when verify ===
+  // 'reality') the claimed SHA/branch/PR are reachable. On failure, downgrade
+  // to `failed` with structured issues persisted at metadata.evidence_validation.
+  if (workflow.evidence_policy?.required === true) {
+    const evidenceResult = await validateEvidence({
+      artifactsDir,
+      cwd,
+      policy: workflow.evidence_policy,
+    });
+    if (!evidenceResult.valid) {
+      getLog().error(
+        { workflowRunId: workflowRun.id, issues: evidenceResult.issues },
+        'evidence_validation_failed'
+      );
+      const issueLines = evidenceResult.issues
+        .map(i => `  - ${i.field} — ${i.message}${i.hint ? ` (hint: ${i.hint})` : ''}`)
+        .join('\n');
+      const failMsg = `Real-execution evidence validation failed.\n${issueLines}`;
+      // Persist the structured issues at metadata.evidence_validation, then mark failed.
+      await deps.store
+        .updateWorkflowRun(workflowRun.id, {
+          metadata: {
+            ...workflowRun.metadata,
+            evidence_validation: { ok: false, issues: evidenceResult.issues },
+          },
+        })
+        .catch((dbErr: Error) => {
+          getLog().error(
+            { err: dbErr, workflowRunId: workflowRun.id },
+            'evidence_validation_metadata_persist_failed'
+          );
+        });
+      await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
+        getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
+      });
+      await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
+        getLog().error(
+          { err: logErr, workflowRunId: workflowRun.id },
+          'dag.workflow_error_log_write_failed'
+        );
+      });
+      const emitterForFail = getWorkflowEventEmitter();
+      emitterForFail.emit({
+        type: 'workflow_failed',
+        runId: workflowRun.id,
+        workflowName: workflow.name,
+        error: failMsg,
+      });
+      emitterForFail.unregisterRun(workflowRun.id);
+      await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
+        workflowId: workflowRun.id,
+      });
+      return;
+    }
+    // Evidence valid — persist the success marker alongside completion.
+    await deps.store
+      .updateWorkflowRun(workflowRun.id, {
+        metadata: {
+          ...workflowRun.metadata,
+          evidence_validation: { ok: true },
+        },
+      })
+      .catch((dbErr: Error) => {
+        getLog().error(
+          { err: dbErr, workflowRunId: workflowRun.id },
+          'evidence_validation_metadata_persist_failed'
+        );
+      });
+  }
 
   // Update DB and emit completion
   try {

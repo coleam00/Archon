@@ -217,4 +217,3 @@ Use Archon to upgrade Archon, with bounded parallelism.
    workflows.
 4. P4-A: design the coordinator/run/task/claim database model and API surface.
 5. P5-A: audit Emdash for GUI/worktree/conversation features worth porting.
-

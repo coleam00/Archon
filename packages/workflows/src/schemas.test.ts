@@ -9,6 +9,9 @@ import {
   LOOP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  executionEvidenceSchema,
+  evidencePolicySchema,
+  workflowBaseSchema,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -693,5 +696,68 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     for (const field of expectedFields) {
       expect(LOOP_NODE_AI_FIELDS).toContain(field);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// executionEvidenceSchema + evidencePolicySchema (P3-A)
+// ---------------------------------------------------------------------------
+
+describe('executionEvidenceSchema', () => {
+  const fullExecution = {
+    kind: 'execution',
+    workflow_run_id: 'run-1',
+    provider: 'claude',
+    provider_run_ids: ['session-abc'],
+    changed_files: ['src/foo.ts'],
+    diff_command: 'git diff --stat origin/dev...HEAD',
+    test_commands: ['bun test'],
+    test_output_summary: '15 passed',
+    commit_sha: 'a'.repeat(40),
+    pushed_branch: 'feature/foo',
+    pr_url: 'https://github.com/owner/repo/pull/42',
+    pr_number: 42,
+  };
+
+  const fullPlanning = {
+    kind: 'planning',
+    workflow_run_id: 'run-1',
+    provider: 'claude',
+    summary: 'wrote plan.md',
+  };
+
+  test('full execution fixture parses', () => {
+    expect(executionEvidenceSchema.safeParse(fullExecution).success).toBe(true);
+  });
+
+  test('full planning fixture parses', () => {
+    expect(executionEvidenceSchema.safeParse(fullPlanning).success).toBe(true);
+  });
+});
+
+describe('evidencePolicySchema', () => {
+  test('parse({ required: true }) applies defaults for verify and path', () => {
+    const parsed = evidencePolicySchema.parse({ required: true });
+    expect(parsed.required).toBe(true);
+    expect(parsed.verify).toBe('shape');
+    expect(parsed.path).toBe('evidence.json');
+  });
+
+  test('parse({}) leaves required undefined and applies defaults', () => {
+    const parsed = evidencePolicySchema.parse({});
+    expect(parsed.required).toBeUndefined();
+    expect(parsed.verify).toBe('shape');
+    expect(parsed.path).toBe('evidence.json');
+  });
+});
+
+describe('workflowBaseSchema accepts evidence_policy', () => {
+  test('parses workflow with evidence_policy.required: true', () => {
+    const result = workflowBaseSchema.safeParse({
+      name: 'x',
+      description: 'y',
+      evidence_policy: { required: true },
+    });
+    expect(result.success).toBe(true);
   });
 });

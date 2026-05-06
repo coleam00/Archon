@@ -9,6 +9,7 @@ import {
   thinkingConfigSchema,
   sandboxSettingsSchema,
 } from './dag-node';
+import { evidencePolicySchema } from './evidence';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -68,6 +69,16 @@ export const workflowBaseSchema = z.object({
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
+  /**
+   * Real-execution proof policy. When `required: true`, the engine refuses to
+   * mark this workflow `completed` unless `$ARTIFACTS_DIR/<path>` (default
+   * `evidence.json`) parses against `executionEvidenceSchema` and (when
+   * `verify === 'reality'`) the claimed commit/branch/PR are reachable in
+   * git/origin/GitHub. Failed validation downgrades the run to `failed` with
+   * structured issues stored at `metadata.evidence_validation`. When omitted,
+   * behavior is unchanged from before this PR.
+   */
+  evidence_policy: evidencePolicySchema.optional(),
   /**
    * When `false`, the engine skips the path-exclusive lock for this workflow,
    * allowing N concurrent runs on the same live checkout. The author asserts
