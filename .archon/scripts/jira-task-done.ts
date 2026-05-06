@@ -132,7 +132,12 @@ for (const link of outwardBlocks) {
 
 // 2. Sweep the project: find Backlog non-Epic tickets and promote any with
 //    zero inward Blocks links to Selected for Development.
-log(`Sweeping ${project} for Backlog tickets with no remaining blockers.`);
+//
+// TEMPORARY WIP CAP: promote at most ONE ticket per Done event. Lifts
+// concurrency pressure while we debug stuck tickets. Remove the
+// `break` below to restore the unbounded promote-all behavior.
+const PROMOTE_CAP = 1;
+log(`Sweeping ${project} for Backlog tickets with no remaining blockers (cap=${PROMOTE_CAP}).`);
 
 interface SearchResponse {
   issues: Issue[];
@@ -147,8 +152,12 @@ interface SearchResponse {
 // X", which silently EXCLUDES tickets with no labels at all. The correct
 // "doesn't have this specific label" form is `(labels is EMPTY OR labels
 // not in (X))` — accepts both unlabeled and differently-labeled rows.
+// ORDER BY key ASC so the lowest-numbered Backlog ticket gets picked
+// first. With WIP=1 this means we work tickets in the order they were
+// decomposed (typically follows dependency order from the Epic plan),
+// instead of whatever default sort Jira would otherwise apply.
 const jql = encodeURIComponent(
-  `project = ${project} AND status = "Backlog" AND issuetype != Epic AND (labels is EMPTY OR labels not in ("archon-blocked-pending"))`,
+  `project = ${project} AND status = "Backlog" AND issuetype != Epic AND (labels is EMPTY OR labels not in ("archon-blocked-pending")) ORDER BY key ASC`,
 );
 const searchPath = `/rest/api/3/search/jql?jql=${jql}&fields=issuelinks,issuetype,status,labels&maxResults=200`;
 const searchResult = await jiraGet<SearchResponse>(searchPath);
@@ -179,6 +188,10 @@ for (const candidate of searchResult.issues) {
         issueKey: candidate.key,
         text: `Promoted automatically: no remaining blockers (triggered by ${thisKey} → Done).`,
       }).catch(() => undefined);
+      if (promoted.length >= PROMOTE_CAP) {
+        log(`  WIP cap reached (${PROMOTE_CAP}); deferring further promotions to subsequent Done events.`);
+        break;
+      }
     } else {
       log(`    ✗ transition failed: ${res.error}`);
     }

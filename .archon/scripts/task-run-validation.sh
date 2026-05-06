@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Deterministic validation runner — invoked between dev-loop iterations as
-# the loop's until_bash. Runs lint, typecheck, scoped Vitest, scoped Playwright.
-# Always writes $ARTIFACTS_DIR/test-report.json so the next dev iteration can
-# read it and know what to fix.
+# Deterministic test runner — invoked between implementation attempts. Runs
+# lint, typecheck, scoped Vitest, and scoped Playwright. Always writes the raw
+# per-attempt report; the workflow's validate-* node turns that evidence into
+# product-level feedback for the next dev/fix attempt.
 #
-# Exit code: 0 if all applicable gates pass (loop ends), 1 otherwise (loop
-# continues with the dev agent reading the fresh report).
+# Exit code: always 0. The bash node emits a JSON `passed` field and the
+# workflow routes based on that output.
 #
 # Required env (set by the workflow's prepared environment):
 #   ARTIFACTS_DIR  — workflow's artifacts directory
@@ -340,13 +340,17 @@ fi
 echo
 
 # 4. Playwright scoped to this ticket's specs.
-# This script runs the gates the project defines. Setup (npm install,
-# playwright install, etc.) is the dev agent's job — if a Playwright-using
-# project hasn't run `playwright install`, the gate will fail with the
-# missing-binary error, which is correct: the dev agent shipped a broken
-# setup and the failure is real signal it must address on the next attempt.
+#
+# DISABLED: Playwright runs in CI (deploy-preview.yml / ci.yml) against a
+# real Convex deployment with proper env. Running it from this validator
+# spawns a dev server, eats the bash node's 120s budget on slow E2E runs,
+# and has cascaded into `fail-implementation-not-ready` even when
+# lint/typecheck/vitest were green. CI is the right place; local
+# validation gates only the deterministic-fast units. Re-enable here when
+# the bash node has a longer timeout AND the dev server can be brought
+# up reliably without flaky hooks.
 if [ -d "$PLAYWRIGHT_DIR" ]; then
-  run_gate "playwright" "npx playwright test $PLAYWRIGHT_DIR --reporter=line" "true" "true" || OVERALL=1
+  skip_gate "playwright" "DISABLED in local validator — runs in CI instead"
 else
   skip_gate "playwright" "$PLAYWRIGHT_DIR/ does not exist"
 fi

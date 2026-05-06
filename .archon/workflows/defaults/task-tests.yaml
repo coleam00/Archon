@@ -211,9 +211,24 @@ nodes:
       The generated tests must not introduce TypeScript or ESLint failures.
       Avoid unused imports, unused variables, implicit `any`, incorrect async
       handling, unreachable code, floating promises, invalid Playwright
-      locators, and imports from modules that cannot be resolved by TypeScript
-      unless the missing module is the intentional red condition for the
-      future implementation.
+      locators, and raw imports from modules that cannot be resolved by
+      TypeScript.
+
+      If a test must import future implementation code that does not exist yet,
+      keep the test suite typecheck-clean by placing a narrow `@ts-expect-error`
+      directly above that import only. The comment must name the task and explain
+      that the import is the intentional red-state implementation seam, for
+      example:
+
+      ```ts
+      // @ts-expect-error WOR-123 red-state import: implementation is created by task-implement.
+      import { futureFunction } from "../../src/future-module";
+      ```
+
+      Do not use `@ts-ignore`, broad file-level suppressions, or suppressions for
+      anything other than a future implementation import. Raw `TS2307` missing
+      module errors are invalid generated tests and must be repaired before
+      handoff.
 
       **PHASE_3_CHECKPOINT:**
       - [ ] Tests and config changes are limited to test-shaped files
@@ -246,8 +261,8 @@ nodes:
 
       **PHASE_4_CHECKPOINT:**
       - [ ] Generated tests have no ESLint errors
-      - [ ] Generated tests have no TypeScript errors except intentional
-        missing implementation imports required for red-state coverage
+      - [ ] Generated tests have no TypeScript errors. Future implementation
+        imports, if required, use a narrow task-labeled `@ts-expect-error`.
       - [ ] Behavior failures are due to missing implementation, not broken
         test code
       - [ ] Any unrelated pre-existing failures are identified separately
@@ -293,8 +308,8 @@ nodes:
       - **RED_FOR_RIGHT_REASON**: Tests fail only because product behavior is
         missing, not because the tests are broken.
       - **TYPECHECK_CLEAN**: Generated tests do not introduce TypeScript
-        errors, except intentional missing implementation imports required for
-        a red-state test.
+        errors. Future implementation imports, if required for a red-state test,
+        use a narrow task-labeled `@ts-expect-error` so `tsc --noEmit` passes.
       - **LINT_CLEAN**: Generated tests do not introduce ESLint errors.
       - **NO_IMPLEMENTATION_EDITS**: Production source files are untouched.
       - **COMMITTED_READY**: The generated test suite is ready for the
@@ -344,6 +359,9 @@ nodes:
       - Are mocks limited to external services?
       - Are assertions strong enough to guide implementation?
       - Are there obvious TypeScript or ESLint problems in the generated tests?
+      - Do future implementation imports use narrow task-labeled
+        `@ts-expect-error` comments so raw `TS2307` errors cannot reach
+        validation?
       - Are any tests likely to push the implementation agent toward
         test-harness gaming, fake IDs, selectors, or fixture-specific behavior?
 
@@ -484,7 +502,9 @@ nodes:
       - Test configuration and package scripts changed by this workflow
 
       Check every acceptance criterion, weak test, lint/typecheck risk, and
-      test-gaming risk from the first review.
+      test-gaming risk from the first review. Treat raw `TS2307` missing-module
+      failures for future implementation imports as blocking lint/typecheck
+      risks unless the import has a narrow task-labeled `@ts-expect-error`.
 
       Write `$ARTIFACTS_DIR/test-review-2.json` as valid JSON with this shape:
 
@@ -646,6 +666,21 @@ nodes:
       - suppressing lint or type errors with broad disables, `any`, or
         `@ts-ignore` unless narrowly justified by an external library type gap
 
+      Special case for TDD future imports:
+      - Raw `TS2307: Cannot find module` errors for future implementation files
+        are not acceptable. They must be repaired.
+      - If the missing import is the intended red-state implementation seam, add
+        a narrow `@ts-expect-error` directly above that import only, with the task
+        key and reason. Example:
+
+        ```ts
+        // @ts-expect-error WOR-123 red-state import: implementation is created by task-implement.
+        import { futureFunction } from "../../src/future-module";
+        ```
+
+      - Do not use `@ts-ignore`, broad file-level suppressions, or suppressions
+        for fixture/type mistakes. Those must be fixed normally.
+
       **PHASE_2_CHECKPOINT:**
       - [ ] The plan fixes test quality without reducing coverage
       - [ ] No production source edit is planned
@@ -673,8 +708,8 @@ nodes:
 
       **PHASE_4_CHECKPOINT:**
       - [ ] Generated tests have no ESLint errors
-      - [ ] Generated tests have no TypeScript errors except intentional
-        missing implementation imports required for red-state coverage
+      - [ ] Generated tests have no TypeScript errors. Future implementation
+        imports, if required, use a narrow task-labeled `@ts-expect-error`.
       - [ ] Any unrelated pre-existing failures are separated from generated
         test failures
 
@@ -690,7 +725,8 @@ nodes:
 
       - **LINT_CLEAN**: Generated tests do not introduce ESLint errors.
       - **TYPECHECK_CLEAN**: Generated tests do not introduce TypeScript
-        errors except intentional red-state missing implementation imports.
+        errors. Future implementation imports, if required for red-state
+        coverage, use a narrow task-labeled `@ts-expect-error`.
       - **AC_COVERAGE_PRESERVED**: Repairs did not remove meaningful
         acceptance-criterion coverage.
       - **NO_IMPLEMENTATION_EDITS**: Production source files are untouched.

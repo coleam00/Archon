@@ -34,12 +34,27 @@ async function git(...args: string[]): Promise<string> {
 
 console.log('Diffing working tree against origin/main to find test files...');
 
+// Refresh origin/main first so the diff compares against the actual current
+// main, not whatever stale ref this worktree last fetched. Sibling tickets
+// that landed on main while this worktree was idle would otherwise show up
+// as "added by this PR" and inflate the test-file count, or — in the
+// reverse case — newly-committed tests in this branch could appear
+// unchanged because the local origin/main already contains them.
+try {
+  await git('fetch', 'origin', 'main', '--quiet');
+} catch (e) {
+  console.log(`Warning: could not refresh origin/main: ${(e as Error).message}`);
+}
+
 // Include both committed and uncommitted changes — depending on agent ordering
 // the tests might be staged-but-not-committed when this runs.
 // `git diff origin/main --name-only` covers committed changes;
-// `git status --porcelain` covers uncommitted ones.
+// `git status --porcelain -uall` covers uncommitted ones. -uall expands
+// untracked directories into their individual files; without it, an
+// untracked `tests/wor-N/` directory shows as a single line with a trailing
+// slash and never matches the test-file regex below.
 const committedFiles = (await git('diff', 'origin/main', '--name-only')).split('\n').filter(Boolean);
-const statusOut = (await git('status', '--porcelain')).split('\n').filter(Boolean);
+const statusOut = (await git('status', '--porcelain', '-uall')).split('\n').filter(Boolean);
 // status format: "XY filename" — strip the 2 status chars + space
 const uncommittedFiles = statusOut.map(line => line.slice(3).trim()).filter(Boolean);
 

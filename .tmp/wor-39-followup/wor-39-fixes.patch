@@ -1,0 +1,141 @@
+From 808f45c49fffcdc1ffd97b6d4db9b969019685e6 Mon Sep 17 00:00:00 2001
+From: Debian <user@ALPHA-SVCS-AI-appserver-01.home.arpa>
+Date: Thu, 30 Apr 2026 07:39:30 +0000
+Subject: [PATCH] fix: Address review findings (CRITICAL/HIGH) for WOR-39
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fixes applied:
+- CRITICAL: Add complete args validator to insertStreamingMessage (was missing
+  content, status, createdAt, and message-specific fields — would crash at
+  runtime in real Convex environment)
+- HIGH: Fix timer leak in Promise.race timeout loop (clearTimeout after race)
+- MEDIUM: Sanitize error messages shown to users (no raw error.message)
+- MEDIUM: Add server-side logging at error/retry paths
+- MEDIUM: Remove stale TDD comments from test file
+
+Skipped (false positives — files never existed on main):
+- CRITICAL #1-2: WOR-42 PrivacyBanner/Dialog deletion (not in this PR)
+- HIGH #1-2: WOR-42 tests/docs/deps deletion (not in this PR)
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ convex/lib/streaming.ts                 | 37 ++++++++++++++++++++-----
+ tests/wor-39/stream-ai-response.test.ts |  5 ----
+ 2 files changed, 30 insertions(+), 12 deletions(-)
+
+diff --git a/convex/lib/streaming.ts b/convex/lib/streaming.ts
+index e530097..76bfb7f 100644
+--- a/convex/lib/streaming.ts
++++ b/convex/lib/streaming.ts
+@@ -64,6 +64,22 @@ export const insertStreamingMessage = internalMutation({
+       v.literal("jointMessages"),
+       v.literal("draftMessages"),
+     ),
++    content: v.string(),
++    status: v.union(
++      v.literal("STREAMING"),
++      v.literal("COMPLETE"),
++      v.literal("ERROR"),
++    ),
++    createdAt: v.number(),
++    tokens: v.optional(v.number()),
++    caseId: v.optional(v.string()),
++    userId: v.optional(v.string()),
++    role: v.optional(v.string()),
++    authorType: v.optional(v.string()),
++    authorUserId: v.optional(v.string()),
++    isIntervention: v.optional(v.boolean()),
++    replyToId: v.optional(v.string()),
++    draftSessionId: v.optional(v.string()),
+   },
+   handler: async (ctx: any, args: any) => {
+     const { table, ...fields } = args;
+@@ -199,11 +215,13 @@ export async function streamAIResponse(
+       maxTokens,
+     });
+   } catch (error: unknown) {
+-    const errorMessage =
+-      error instanceof Error ? error.message : "Unknown AI error";
++    const userMessage = error instanceof Error && error.message.includes("timeout")
++      ? "The AI response timed out. Please try again."
++      : "Something went wrong generating the AI response. Please try again.";
++    console.error("[streamAIResponse] AI call failed:", error);
+     await ctx.runMutation(updateRef, {
+       messageId,
+-      content: `Error: ${errorMessage}`,
++      content: userMessage,
+       status: "ERROR" as const,
+     });
+   }
+@@ -239,12 +257,14 @@ async function callClaudeWithRetry(
+ 
+       // Check for 429 rate limit — retry once with 2s backoff
+       if (isRateLimitError(error) && attempt === 0) {
++        console.warn("[streamAIResponse] 429 rate limit hit, retrying after 2s backoff");
+         await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+         continue;
+       }
+ 
+       // Content filter — set user-friendly message and mark ERROR
+       if (isContentFilterStop(error)) {
++        console.warn("[streamAIResponse] Content filter triggered for message:", params.messageId);
+         await ctx.runMutation(updateRef, {
+           messageId: params.messageId,
+           content: CONTENT_FILTER_MESSAGE,
+@@ -258,6 +278,7 @@ async function callClaudeWithRetry(
+   }
+ 
+   // Exhausted retries (two 429s)
++  console.error("[streamAIResponse] Exhausted retries after two 429 responses");
+   throw lastError;
+ }
+ 
+@@ -305,18 +326,20 @@ async function executeStream(
+       throw new Error("Network timeout: no tokens received for 30s");
+     }
+ 
++    let timeoutId: ReturnType<typeof setTimeout>;
+     const result = await Promise.race([
+       iterator.next(),
+-      new Promise<never>((_, reject) =>
+-        setTimeout(
++      new Promise<never>((_, reject) => {
++        timeoutId = setTimeout(
+           () =>
+             reject(
+               new Error("Network timeout: no tokens received for 30s"),
+             ),
+           remainingMs,
+-        ),
+-      ),
++        );
++      }),
+     ]);
++    clearTimeout(timeoutId!);
+ 
+     if (result.done) break;
+ 
+diff --git a/tests/wor-39/stream-ai-response.test.ts b/tests/wor-39/stream-ai-response.test.ts
+index 4534f82..067f41f 100644
+--- a/tests/wor-39/stream-ai-response.test.ts
++++ b/tests/wor-39/stream-ai-response.test.ts
+@@ -3,14 +3,9 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+ /**
+  * Tests for WOR-39: AI streaming infrastructure
+  *
+- * The module under test (convex/lib/streaming.ts) does not exist yet.
+- * All tests import from it and will FAIL until the implementation is written.
+- *
+  * Each test maps to a specific acceptance criterion from the task spec.
+  */
+ 
+-// Import the helper that does not exist yet — this will cause all tests to fail
+-// with a module-not-found error, which is the correct "red" state.
+ import {
+   streamAIResponse,
+   type StreamAIResponseOptions,
+-- 
+2.39.5
+
