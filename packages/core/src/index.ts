@@ -139,6 +139,9 @@ export { sanitizeCredentials, sanitizeError } from './utils/credential-sanitizer
 // GitHub GraphQL
 export { getLinkedIssueNumbers } from './utils/github-graphql';
 
+// GitHub host configuration (GitHub.com / GitHub Enterprise Server)
+export { getGitHubHost, getGitHubApiUrl, isPublicGitHub } from './utils/github-host';
+
 // Path validation
 export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';
 

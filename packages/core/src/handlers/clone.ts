@@ -16,6 +16,7 @@ import {
   parseOwnerRepo,
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
+import { getGitHubHost } from '../utils/github-host';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -164,19 +165,26 @@ async function registerRepoAtPath(
 }
 
 /**
- * Normalize a repo URL: strip trailing slashes and convert SSH to HTTPS.
+ * Normalize a repo URL: strip trailing slashes and convert SSH to HTTPS for
+ * the configured GitHub host (default `github.com`). Other hosts are left
+ * untouched so they can be cloned over SSH if the operator has configured it.
+ *
+ * Exported so that host-aware parsing can be unit-tested without invoking the
+ * full `cloneRepository` filesystem path.
  */
-function normalizeRepoUrl(rawUrl: string): {
+export function normalizeRepoUrl(rawUrl: string): {
   workingUrl: string;
   ownerName: string;
   repoName: string;
   targetPath: string;
 } {
   const normalizedUrl = rawUrl.replace(/\/+$/, '');
+  const host = getGitHubHost();
+  const sshPrefix = `git@${host}:`;
 
   let workingUrl = normalizedUrl;
-  if (normalizedUrl.startsWith('git@github.com:')) {
-    workingUrl = normalizedUrl.replace('git@github.com:', 'https://github.com/');
+  if (normalizedUrl.startsWith(sshPrefix)) {
+    workingUrl = `https://${host}/${normalizedUrl.slice(sshPrefix.length)}`;
   }
 
   const urlParts = workingUrl.replace(/\.git$/, '').split('/');
@@ -243,15 +251,17 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication if GitHub token is available
+  // Build clone command with authentication if GitHub token is available.
+  // Token is injected for the configured GITHUB_HOST (defaults to github.com).
   let cloneUrl = workingUrl;
   const ghToken = process.env.GH_TOKEN;
+  const host = getGitHubHost();
 
-  if (ghToken && workingUrl.includes('github.com')) {
-    if (workingUrl.startsWith('https://github.com')) {
-      cloneUrl = workingUrl.replace('https://github.com', `https://${ghToken}@github.com`);
-    } else if (workingUrl.startsWith('http://github.com')) {
-      cloneUrl = workingUrl.replace('http://github.com', `https://${ghToken}@github.com`);
+  if (ghToken && workingUrl.toLowerCase().includes(host)) {
+    if (workingUrl.startsWith(`https://${host}`)) {
+      cloneUrl = workingUrl.replace(`https://${host}`, `https://${ghToken}@${host}`);
+    } else if (workingUrl.startsWith(`http://${host}`)) {
+      cloneUrl = workingUrl.replace(`http://${host}`, `https://${ghToken}@${host}`);
     } else if (!workingUrl.startsWith('http')) {
       cloneUrl = `https://${ghToken}@${workingUrl}`;
     }
@@ -328,9 +338,11 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   let ownerName = '_local';
   if (remoteUrl) {
     const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
+    const host = getGitHubHost();
+    const sshPrefix = `git@${host}:`;
     let workingRemote = cleaned;
-    if (cleaned.startsWith('git@github.com:')) {
-      workingRemote = cleaned.replace('git@github.com:', 'https://github.com/');
+    if (cleaned.startsWith(sshPrefix)) {
+      workingRemote = `https://${host}/${cleaned.slice(sshPrefix.length)}`;
     }
     const parts = workingRemote.split('/');
     const r = parts.pop();

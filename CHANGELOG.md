@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Optional `GITHUB_HOST` and `GITHUB_API_URL` environment variables for running Archon against a self-hosted GitHub Enterprise Server. `GITHUB_HOST` (default `github.com`) is used when injecting `GH_TOKEN` into clone URLs, when rewriting SSH URLs to HTTPS, and by the docker entrypoint when registering the git credential helper. `GITHUB_API_URL` (no default) is forwarded to Octokit as `baseUrl` for the GitHub adapter — leave it unset on public github.com to keep Octokit's existing default. Operator setup (App registration on the GHE host, webhook reachability) lives outside Archon (#1593).
 - Docker: `/home/appuser` is now persisted by default via the `archon_user_home` named volume, so user-installed Claude Code skills/commands/agents/hooks, Codex/Pi auth, `~/.gitconfig`, and shell history survive container rebuilds. Set `ARCHON_USER_HOME=/host/path` in `.env` to bind-mount a host path instead (#1517, #1518).
 
 ### Changed
