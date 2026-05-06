@@ -181,10 +181,7 @@ async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
  */
 function isVersionRequest(args: string[]): boolean {
   if (args.length === 1 && args[0] === '-v') return true;
-  for (const arg of args) {
-    if (arg === '--version' || arg === '-V' || arg === '-version') return true;
-  }
-  return false;
+  return args.some(arg => arg === '--version' || arg === '-V' || arg === '-version');
 }
 
 async function main(): Promise<number> {
