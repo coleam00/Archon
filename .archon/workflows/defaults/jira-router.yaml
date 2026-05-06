@@ -46,16 +46,69 @@ nodes:
         >"$dispatch_log" 2>&1 < /dev/null &
       printf '{"dispatched":"true","workflow":"epic-decompose","log":"%s","pid":"%s"}' "$dispatch_log" "$!"
 
+  # ─── Bug pipeline routing ─────────────────────────────────────────────
+  # Bug tickets follow a different flow:
+  #   1. Bug created       → no workflow runs yet. The user composes the
+  #                          description in Backlog at their own pace.
+  #   2. → Selected        → bug-pipeline (groom + contract + test gap
+  #                          analysis + failing-test commit, then
+  #                          transition to In Progress). The transition
+  #                          to Selected for Development is the user's
+  #                          signal that the description is complete and
+  #                          the ticket is ready to be worked on.
+  #                          If grooming fails for any reason, the
+  #                          pipeline transitions the ticket back to
+  #                          Backlog with an explanatory comment so it's
+  #                          visually clear the work paused.
+  #   3. → In Progress     → task-implement (reused — same dev-loop + PR
+  #                          flow as Stories; the existing
+  #                          route-task-implement handles this without
+  #                          modification)
+  # ──────────────────────────────────────────────────────────────────────
+
+  - id: route-bug-pipeline
+    depends_on: [ decode ]
+    timeout: 900000
+    when: "$decode.output.event == 'transition' && $decode.output.issue_type == 'Bug' &&
+      $decode.output.from_status == 'Backlog' &&
+      $decode.output.to_status == 'Selected for Development'"
+    bash: |
+      # Dispatch bug-pipeline when a Bug ticket is promoted to Selected.
+      # The workflow grooms the bug, generates the contract, analyzes
+      # why existing tests didn't catch it, writes/repairs tests so
+      # they DO catch it (red bar), commits, and transitions to In
+      # Progress — which fires task-implement to write the fix.
+      # If grooming fails, the pipeline transitions back to Backlog.
+      set -euo pipefail
+      target_cwd=$decode.output.codebase_cwd
+      if [ -z "$target_cwd" ] || [ "$target_cwd" = "null" ]; then
+        target_cwd="$PWD"
+      fi
+      encoded_payload="$(printf '%s' $decode.output | base64 -w0)"
+      mkdir -p "$ARTIFACTS_DIR/router-dispatch-logs"
+      dispatch_log="$ARTIFACTS_DIR/router-dispatch-logs/bug-pipeline.log"
+      issue_key=$decode.output.issue_key
+      nohup archon workflow run bug-pipeline \
+        --cwd "$target_cwd" \
+        --branch "$issue_key" \
+        "$encoded_payload" \
+        >"$dispatch_log" 2>&1 < /dev/null &
+      printf '{"dispatched":"true","workflow":"bug-pipeline","branch":"%s","log":"%s","pid":"%s"}' "$issue_key" "$dispatch_log" "$!"
+
   - id: route-task-tests
     depends_on: [ decode ]
     timeout: 900000
     when: "$decode.output.event == 'transition' && $decode.output.issue_type !=
-      'Epic' && $decode.output.from_status == 'Backlog' &&
+      'Epic' && $decode.output.issue_type != 'Bug' &&
+      $decode.output.from_status == 'Backlog' &&
       $decode.output.to_status == 'Selected for Development'"
     bash: |
-      # Dispatch task-tests workflow when a non-Epic ticket transitions into
-      # Selected for Development. The workflow generates failing tests and
-      # transitions the ticket to In Progress (which then fires task-implement).
+      # Dispatch task-tests workflow when a non-Epic, non-Bug ticket
+      # transitions into Selected for Development. (Bugs go through
+      # bug-test-strategy instead, which writes tests targeted at the
+      # specific defect rather than fresh coverage from a Story spec.)
+      # The workflow generates failing tests and transitions the ticket
+      # to In Progress (which then fires task-implement).
       set -euo pipefail
       target_cwd=$decode.output.codebase_cwd
       if [ -z "$target_cwd" ] || [ "$target_cwd" = "null" ]; then
