@@ -28,6 +28,8 @@ A command is a **markdown file** that serves as a detailed instruction set for a
 
 Commands live in `.archon/commands/` relative to the working directory and are loaded at runtime.
 
+> **`defaults/` is maintainer-territory:** `.archon/commands/defaults/` is reserved for commands shipped with Archon itself (embedded into the binary at build time). For your own commands use `.archon/commands/` (project-scoped) or `~/.archon/commands/` (home-scoped). Every file under `defaults/` must be committed in git — `bun run validate` will error if untracked files are found there.
+
 > **CLI vs Server:** The CLI reads commands from wherever you run it (sees uncommitted changes). The server reads from `~/.archon/workspaces/owner/repo/`, which only syncs from the remote before worktree creation — so changes must be committed and pushed for the server to pick them up.
 
 Commands use this structure:
