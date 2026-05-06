@@ -27,7 +27,9 @@ const CHECK_ONLY = process.argv.includes('--check');
 function listSkillFiles(dir: string, base: string = dir): string[] {
   return readdirSync(dir).flatMap(entry => {
     const full = join(dir, entry);
-    return statSync(full).isDirectory() ? listSkillFiles(full, base) : [relative(base, full)];
+    return statSync(full).isDirectory()
+      ? listSkillFiles(full, base)
+      : [relative(base, full).replaceAll('\\', '/')];
   });
 }
 
