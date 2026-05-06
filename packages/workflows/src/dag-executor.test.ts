@@ -7034,7 +7034,7 @@ describe('executeDagWorkflow -- evidence_policy gate', () => {
       join(artifactsDir, 'evidence.json'),
       JSON.stringify({
         kind: 'execution',
-        workflow_run_id: 'run-1',
+        workflow_run_id: 'dag-evidence-run-2',
         provider: 'claude',
         provider_run_ids: ['session-abc'],
         changed_files: ['src/foo.ts'],
@@ -7089,6 +7089,56 @@ describe('executeDagWorkflow -- evidence_policy gate', () => {
       };
       expect(updates.metadata.evidence_validation.ok).toBe(true);
     }
+  });
+
+  it('evidence_policy.required + stale workflow_run_id -> failWorkflowRun', async () => {
+    await writeFile(
+      join(artifactsDir, 'evidence.json'),
+      JSON.stringify({
+        kind: 'execution',
+        workflow_run_id: 'other-run',
+        provider: 'claude',
+        provider_run_ids: ['session-abc'],
+        changed_files: ['src/foo.ts'],
+        diff_command: 'git diff --stat origin/dev...HEAD',
+        test_commands: ['bun test'],
+        test_output_summary: '15 passed',
+        commit_sha: 'a'.repeat(40),
+        pushed_branch: 'feature/foo',
+        pr_url: 'https://github.com/owner/repo/pull/42',
+        pr_number: 42,
+      })
+    );
+
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-evidence-run-mismatch');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-evidence',
+      testDir,
+      {
+        name: 'evidence-required-stale-run-id',
+        nodes: [{ id: 'work', bash: 'echo done' } as BashNode],
+        evidence_policy: { required: true, verify: 'shape', path: 'evidence.json' },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    const failCall = (mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
+    expect(failCall[1]).toContain('workflow_run_id');
   });
 
   it('regression guard: workflow without evidence_policy completes unchanged', async () => {

@@ -3144,6 +3144,7 @@ export async function executeDagWorkflow(
     const evidenceResult = await validateEvidence({
       artifactsDir,
       cwd,
+      workflowRunId: workflowRun.id,
       policy: workflow.evidence_policy,
     });
     if (!evidenceResult.valid) {

@@ -317,6 +317,8 @@ export interface ValidateEvidenceArgs {
   artifactsDir: string;
   /** Working directory for git/gh reality checks (typically the run cwd). */
   cwd: string;
+  /** Active workflow run id. Evidence from any other run is stale and rejected. */
+  workflowRunId: string;
   /** Workflow-level evidence policy. */
   policy: EvidencePolicy;
 }
@@ -329,9 +331,9 @@ export interface ValidateEvidenceArgs {
 export async function validateEvidence(
   args: ValidateEvidenceArgs
 ): Promise<EvidenceValidationResult> {
-  const { artifactsDir, cwd, policy } = args;
+  const { artifactsDir, cwd, policy, workflowRunId } = args;
   getLog().info(
-    { artifactsDir, path: policy.path, verify: policy.verify },
+    { artifactsDir, path: policy.path, verify: policy.verify, workflowRunId },
     'workflow.evidence_validation_started'
   );
 
@@ -394,6 +396,19 @@ export async function validateEvidence(
   if (!shapeResult.valid) {
     getLog().error({ issues: shapeResult.issues }, 'workflow.evidence_validation_failed');
     return shapeResult;
+  }
+
+  if (shapeResult.evidence.workflow_run_id !== workflowRunId) {
+    const issues: EvidenceValidationIssue[] = [
+      {
+        level: 'error',
+        field: 'workflow_run_id',
+        message: `workflow_run_id '${shapeResult.evidence.workflow_run_id}' does not match active workflow run '${workflowRunId}'`,
+        hint: 'evidence.json appears to be stale or copied from another run',
+      },
+    ];
+    getLog().error({ issues }, 'workflow.evidence_validation_failed');
+    return { valid: false, issues };
   }
 
   // 2. INTEGRITY

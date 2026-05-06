@@ -610,6 +610,7 @@ describe('loadEvidenceFromArtifacts', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'shape', path: '/etc/passwd' },
     });
     expect(result.valid).toBe(false);
@@ -622,6 +623,7 @@ describe('loadEvidenceFromArtifacts', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'shape', path: '../escape.json' },
     });
     expect(result.valid).toBe(false);
@@ -660,6 +662,7 @@ describe('validateEvidence (orchestrator)', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'shape', path: 'evidence.json' },
     });
     expect(result.valid).toBe(false);
@@ -681,9 +684,33 @@ describe('validateEvidence (orchestrator)', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'reality', path: 'evidence.json' },
     });
     expect(result.valid).toBe(false);
+    expect(realityCalls).toBe(0);
+  });
+
+  it('stale workflow_run_id returns workflow_run_id issue; reality stub never called', async () => {
+    await writeFile(
+      join(testDir, 'evidence.json'),
+      JSON.stringify(makeRealExecutionEvidence({ workflow_run_id: 'other-run' }))
+    );
+    let realityCalls = 0;
+    execFileImpl = () => {
+      realityCalls++;
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const result = await validateEvidence({
+      artifactsDir: testDir,
+      cwd: '/repo',
+      workflowRunId: 'run-1',
+      policy: { required: true, verify: 'reality', path: 'evidence.json' },
+    });
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.issues.some(i => i.field === 'workflow_run_id')).toBe(true);
+    }
     expect(realityCalls).toBe(0);
   });
 
@@ -700,6 +727,7 @@ describe('validateEvidence (orchestrator)', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'reality', path: 'evidence.json' },
     });
     expect(result.valid).toBe(false);
@@ -719,6 +747,7 @@ describe('validateEvidence (orchestrator)', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'shape', path: 'evidence.json' },
     });
     expect(result.valid).toBe(true);
@@ -752,6 +781,7 @@ describe('validateEvidence (orchestrator)', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'reality', path: 'evidence.json' },
     });
     expect(result.valid).toBe(true);
@@ -762,6 +792,7 @@ describe('validateEvidence (orchestrator)', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'shape', path: 'evidence.json' },
     });
     expect(result.valid).toBe(false);
@@ -780,6 +811,7 @@ describe('validateEvidence (orchestrator)', () => {
     const result = await validateEvidence({
       artifactsDir: testDir,
       cwd: '/repo',
+      workflowRunId: 'run-1',
       policy: { required: true, verify: 'shape', path: 'sub/proof.json' },
     });
     expect(result.valid).toBe(true);
