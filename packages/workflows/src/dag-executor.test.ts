@@ -6511,9 +6511,15 @@ describe('executeDagWorkflow -- script nodes', () => {
       { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
     );
 
+    // The first arg suppresses Bun's cwd .env auto-load. `--no-env-file`
+    // doesn't actually do that — it only disables explicit `--env-file=…`
+    // args. The portable null-env-file value is `/dev/null` on POSIX and
+    // `NUL` on Windows; we accept either so the test runs on both.
+    const expectedNullEnvArg =
+      process.platform === 'win32' ? '--env-file=NUL' : '--env-file=/dev/null';
     expect(execSpy).toHaveBeenCalledWith(
       'bun',
-      ['--no-env-file', '-e', 'console.log("ok")'],
+      [expectedNullEnvArg, '-e', 'console.log("ok")'],
       expect.objectContaining({
         env: expect.objectContaining({ MY_SECRET: 'abc123' }),
       })

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Docker: `git config --global --add safe.directory` in the entrypoint now de-duplicates entries before adding, preventing unbounded growth of `~/.gitconfig` now that `/home/appuser` is persisted (#1518).
 - Docker: `setup-auth` now warns at startup when `CODEX_*` env vars are absent but a persisted `~/.codex/auth.json` from a previous run still exists, so operators don't accidentally use stale or revoked credentials (#1518).
+- `script:` nodes (`runtime: bun`) now actually suppress Bun's cwd `.env` auto-load. The previous `--no-env-file` flag turns out to only disable explicit `--env-file=…` args — Bun still auto-loads `.env` from the script's execution directory regardless. Switched to `--env-file=/dev/null` (POSIX) / `--env-file=NUL` (Windows), which is the only argument form that actually short-circuits the auto-load. Verified empirically against bun 1.3.x. Resolves the previously-tolerated `bun script node does not leak repo .env from execution cwd` test under #1135 — the registration-time gate from #1169 was the primary protection; this is the defense-in-depth layer that is now also honest.
 
 ## [0.3.10] - 2026-04-29
 
