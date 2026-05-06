@@ -98,6 +98,19 @@ export interface PiProviderDefaults {
   maxConcurrent?: number;
 }
 
+/**
+ * Community provider defaults for GitHub Copilot (@github/copilot).
+ */
+export interface CopilotProviderDefaults {
+  [key: string]: unknown;
+  /** Model name forwarded to SessionConfig.model (e.g. 'gpt-4.1'). */
+  model?: string;
+  /** Absolute path to the Copilot CLI binary. Overrides auto-detection in compiled Archon builds. */
+  cliPath?: string;
+  /** GitHub token for authentication. Falls back to COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env vars. */
+  githubToken?: string;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 

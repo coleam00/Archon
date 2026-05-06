@@ -3,6 +3,7 @@
   "compilerOptions": {
     "noEmit": true,
     "paths": {
+      "@github/copilot/copilot-sdk": ["../providers/node_modules/@github/copilot/copilot-sdk"],
       "@archon/adapters": ["../adapters/src"],
       "@archon/adapters/*": ["../adapters/src/*"],
       "@archon/core": ["../core/src"],

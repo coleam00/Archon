@@ -16,7 +16,12 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["bun-types"]
+    "types": ["bun-types"],
+    "paths": {
+      "@github/copilot/copilot-sdk": [
+        "./packages/providers/node_modules/@github/copilot/copilot-sdk"
+      ]
+    }
   },
   "include": ["global.d.ts"]
 }
