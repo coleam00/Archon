@@ -289,6 +289,34 @@ describe('bridgeSession', () => {
       },
     ]);
   }, 5_000);
+
+  test('emits missing terminal result when prompt settles without agent_end', async () => {
+    const session: OmpSession = {
+      subscribe() {
+        return () => undefined;
+      },
+      async prompt() {
+        return undefined;
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        return undefined;
+      },
+    };
+
+    const chunks: unknown[] = [];
+    const startedAt = Date.now();
+    for await (const chunk of bridgeSession(session, 'hi')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([
+      { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' },
+    ]);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  }, 5_000);
   test('cleans up session state when subscribe throws during setup', async () => {
     let disposed = false;
     const emitterStates: Array<unknown> = [];
