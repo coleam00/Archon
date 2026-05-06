@@ -185,18 +185,6 @@ async function resolveSessionModel(
   return { modelRegistry, model };
 }
 
-async function ensureProviderCredentials(
-  authStorage: OmpAuthStorage,
-  parsed: ParsedModelRef
-): Promise<void> {
-  const resolvedKey = await authStorage.getApiKey(parsed.provider);
-  if (resolvedKey) return;
-
-  throw new Error(
-    `Oh My Pi auth: no credentials for provider '${parsed.provider}'. Run \`omp\` locally to authenticate or set the provider API key in the environment/codebase env vars.`
-  );
-}
-
 function logSessionStart(args: {
   provider: string;
   modelId: string;
@@ -357,7 +345,6 @@ export class OmpProvider implements IAgentProvider {
       if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
 
       const { modelRegistry, model } = await resolveSessionModel(sdk, authStorage, parsed);
-      await ensureProviderCredentials(authStorage, parsed);
 
       if (nodeConfig?.mcp) {
         resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp, authStorage);
