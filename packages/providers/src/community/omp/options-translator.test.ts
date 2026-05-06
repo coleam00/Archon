@@ -28,6 +28,13 @@ describe('resolveOmpToolNames', () => {
     expect(resolveOmpToolNames().toolNames).toEqual([...DEFAULT_OMP_TOOL_NAMES]);
   });
 
+  test('uses latest OMP tool names and rejects removed python tool', () => {
+    expect(resolveOmpToolNames({ allowed_tools: ['eval', 'recipe', 'python'] })).toEqual({
+      toolNames: ['eval', 'recipe'],
+      unknownTools: ['python'],
+    });
+  });
+
   test('honors allowed and denied tools in OMP namespace', () => {
     expect(
       resolveOmpToolNames({ allowed_tools: ['read', 'ssh', 'grep'], denied_tools: ['search'] })
