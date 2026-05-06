@@ -483,6 +483,25 @@ describe('OmpProvider', () => {
     expect(boundHasUi).toBe(true);
   });
 
+  test('passes custom system prompt as ordered block array', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      systemPrompt: 'request-level wins',
+      nodeConfig: { systemPrompt: 'node-level prompt' },
+    });
+
+    expect(sessionOptions?.systemPrompt).toEqual(['request-level wins']);
+  });
+
   test('preserves OMP SDK discovery default when config omits disableExtensionDiscovery', async () => {
     let sessionOptions: OmpCreateAgentSessionOptions | undefined;
     const provider = new OmpProvider(async () =>

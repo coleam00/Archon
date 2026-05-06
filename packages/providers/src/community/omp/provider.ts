@@ -411,7 +411,7 @@ export class OmpProvider implements IAgentProvider {
           ? { additionalExtensionPaths: ompConfig.additionalExtensionPaths }
           : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+        ...(systemPrompt !== undefined ? { systemPrompt: [systemPrompt] } : {}),
         ...(resolvedMcp ? { mcpManager: resolvedMcp.manager } : {}),
         ...(effectiveMcpTools ? { customTools: effectiveMcpTools.customTools } : {}),
         toolNames: effectiveToolNames,

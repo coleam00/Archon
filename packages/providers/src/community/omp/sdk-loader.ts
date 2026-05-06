@@ -80,7 +80,7 @@ export interface OmpCreateAgentSessionOptions {
   disableExtensionDiscovery?: boolean;
   additionalExtensionPaths?: string[];
   thinkingLevel?: string;
-  systemPrompt?: string;
+  systemPrompt?: string[] | ((defaultPrompt: string[]) => string[]);
   mcpManager?: OmpMcpManager;
   customTools?: unknown[];
   toolNames: string[];
