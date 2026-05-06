@@ -6936,3 +6936,246 @@ describe('executeDagWorkflow -- final status derivation', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// executeDagWorkflow -- evidence_policy gate (P3-A)
+// ---------------------------------------------------------------------------
+//
+// These tests use `verify: 'shape'` so the validator never shells out to git
+// or gh — no execFileAsync mocking required. The third (no-policy) test is a
+// regression guard: workflows without `evidence_policy` MUST behave exactly
+// as before this change.
+
+describe('executeDagWorkflow -- evidence_policy gate', () => {
+  let testDir: string;
+  let artifactsDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-evidence-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    artifactsDir = join(testDir, 'artifacts');
+    await mkdir(testDir, { recursive: true });
+    await mkdir(artifactsDir, { recursive: true });
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'DAG AI response' };
+      yield { type: 'result', sessionId: 'dag-session-id' };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('evidence_policy.required + missing evidence.json -> failWorkflowRun (not completeWorkflowRun)', async () => {
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-evidence-run-1');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-evidence',
+      testDir,
+      {
+        name: 'evidence-required-missing',
+        nodes: [{ id: 'work', bash: 'echo done' } as BashNode],
+        evidence_policy: { required: true, verify: 'shape', path: 'evidence.json' },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Must have failed, not completed.
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+
+    const failCall = (mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
+    expect(failCall[1]).toContain('evidence');
+
+    // Metadata write must include the structured issues.
+    const updateCalls = (mockStore.updateWorkflowRun as ReturnType<typeof mock>).mock.calls;
+    const evidenceUpdate = updateCalls.find((c: unknown[]) => {
+      const updates = c[1] as { metadata?: { evidence_validation?: { ok?: boolean } } };
+      return updates.metadata?.evidence_validation !== undefined;
+    });
+    expect(evidenceUpdate).toBeDefined();
+    if (evidenceUpdate) {
+      const updates = evidenceUpdate[1] as {
+        metadata: { evidence_validation: { ok: boolean; issues?: unknown[] } };
+      };
+      expect(updates.metadata.evidence_validation.ok).toBe(false);
+      expect(Array.isArray(updates.metadata.evidence_validation.issues)).toBe(true);
+    }
+  });
+
+  it('evidence_policy.required + valid evidence.json -> completeWorkflowRun', async () => {
+    await writeFile(
+      join(artifactsDir, 'evidence.json'),
+      JSON.stringify({
+        kind: 'execution',
+        workflow_run_id: 'dag-evidence-run-2',
+        provider: 'claude',
+        provider_run_ids: ['session-abc'],
+        changed_files: ['src/foo.ts'],
+        diff_command: 'git diff --stat origin/dev...HEAD',
+        test_commands: ['bun test'],
+        test_output_summary: '15 passed',
+        commit_sha: 'a'.repeat(40),
+        pushed_branch: 'feature/foo',
+        pr_url: 'https://github.com/owner/repo/pull/42',
+        pr_number: 42,
+      })
+    );
+
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-evidence-run-2');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-evidence',
+      testDir,
+      {
+        name: 'evidence-required-valid',
+        nodes: [{ id: 'work', bash: 'echo done' } as BashNode],
+        evidence_policy: { required: true, verify: 'shape', path: 'evidence.json' },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+
+    // Metadata write must include the success marker.
+    const updateCalls = (mockStore.updateWorkflowRun as ReturnType<typeof mock>).mock.calls;
+    const evidenceUpdate = updateCalls.find((c: unknown[]) => {
+      const updates = c[1] as { metadata?: { evidence_validation?: { ok?: boolean } } };
+      return updates.metadata?.evidence_validation !== undefined;
+    });
+    expect(evidenceUpdate).toBeDefined();
+    if (evidenceUpdate) {
+      const updates = evidenceUpdate[1] as {
+        metadata: { evidence_validation: { ok: boolean } };
+      };
+      expect(updates.metadata.evidence_validation.ok).toBe(true);
+    }
+  });
+
+  it('evidence_policy.required + stale workflow_run_id -> failWorkflowRun', async () => {
+    await writeFile(
+      join(artifactsDir, 'evidence.json'),
+      JSON.stringify({
+        kind: 'execution',
+        workflow_run_id: 'other-run',
+        provider: 'claude',
+        provider_run_ids: ['session-abc'],
+        changed_files: ['src/foo.ts'],
+        diff_command: 'git diff --stat origin/dev...HEAD',
+        test_commands: ['bun test'],
+        test_output_summary: '15 passed',
+        commit_sha: 'a'.repeat(40),
+        pushed_branch: 'feature/foo',
+        pr_url: 'https://github.com/owner/repo/pull/42',
+        pr_number: 42,
+      })
+    );
+
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-evidence-run-mismatch');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-evidence',
+      testDir,
+      {
+        name: 'evidence-required-stale-run-id',
+        nodes: [{ id: 'work', bash: 'echo done' } as BashNode],
+        evidence_policy: { required: true, verify: 'shape', path: 'evidence.json' },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    const failCall = (mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
+    expect(failCall[1]).toContain('workflow_run_id');
+  });
+
+  it('regression guard: workflow without evidence_policy completes unchanged', async () => {
+    const mockStore = createMockStore();
+    const mockDeps = createMockDeps(mockStore);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('dag-evidence-run-3');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-evidence',
+      testDir,
+      {
+        name: 'evidence-no-policy',
+        nodes: [{ id: 'work', bash: 'echo done' } as BashNode],
+        // no evidence_policy field
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      artifactsDir,
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect((mockStore.failWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    expect((mockStore.completeWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+
+    // No evidence-related metadata write should have occurred.
+    const updateCalls = (mockStore.updateWorkflowRun as ReturnType<typeof mock>).mock.calls;
+    const evidenceUpdate = updateCalls.find((c: unknown[]) => {
+      const updates = c[1] as { metadata?: { evidence_validation?: unknown } };
+      return updates.metadata?.evidence_validation !== undefined;
+    });
+    expect(evidenceUpdate).toBeUndefined();
+  });
+});

@@ -107,6 +107,21 @@ export type {
   ApprovalContext,
 } from './workflow-run';
 
+// Evidence contract (P3-A real-execution proof)
+export {
+  executionEvidenceSchema,
+  evidencePolicySchema,
+  evidenceValidationIssueSchema,
+  evidenceValidationResultSchema,
+  EXECUTION_EVIDENCE_REQUIRED_FIELDS,
+} from './evidence';
+export type {
+  ExecutionEvidence,
+  EvidencePolicy,
+  EvidenceValidationIssue,
+  EvidenceValidationResult,
+} from './evidence';
+
 // Result types (non-schema hand-written types)
 export type {
   LoadCommandResult,

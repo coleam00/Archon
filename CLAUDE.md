@@ -713,6 +713,7 @@ async function createSession(conversationId: string, codebaseId: string) {
    - Provider inherited from `.archon/config.yaml` unless explicitly set; per-node `provider` and `model` overrides supported
    - Model and options can be set per workflow or inherited from config defaults
    - `interactive: true` at the workflow level forces foreground execution on web (required for approval-gate workflows in the web UI)
+   - `evidence_policy` (optional, workflow level) blocks terminal `completed` status unless `$ARTIFACTS_DIR/evidence.json` (path configurable) parses against the execution-evidence contract. `verify: 'shape'` (default) is hermetic; `verify: 'reality'` additionally checks commit SHA / pushed branch / PR URL via `git`/`gh`. On failure the run is marked `failed` and structured issues are persisted at `metadata.evidence_validation`. Defaults to absent (no gate) to preserve existing workflow behavior.
    - Model validation ensures provider/model compatibility at load time
    - Commands: `/workflow list`, `/workflow reload`, `/workflow status`, `/workflow cancel`, `/workflow resume <id>` (re-runs failed workflow, skipping completed nodes), `/workflow abandon <id>`, `/workflow cleanup [days]` (CLI only — deletes old run records)
    - Resilient loading: One broken YAML doesn't abort discovery; errors shown in `/workflow list`
