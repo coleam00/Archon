@@ -62,9 +62,13 @@ async function assertNoUntrackedFiles(dir: string, label: string): Promise<void>
     ({ stdout } = await execFile('git', ['ls-files', '--others', '--exclude-standard', dir], {
       cwd: REPO_ROOT,
     }));
-  } catch {
-    // If git is unavailable (unlikely for a dev script), skip the check.
-    return;
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      // git binary not found — skip the check (unlikely for a dev environment).
+      return;
+    }
+    throw err;
   }
   const untracked = stdout.trim().split('\n').filter(Boolean);
   if (untracked.length > 0) {
