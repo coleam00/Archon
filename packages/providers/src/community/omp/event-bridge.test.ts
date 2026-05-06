@@ -247,13 +247,25 @@ describe('bridgeSession', () => {
     });
   });
 
-  test('emits an error result when prompt resolves without a terminal event', async () => {
+  test('waits for terminal result after prompt resolves before a delayed agent_end', async () => {
+    let listener: ((event: unknown) => void) | undefined;
     const session: OmpSession = {
-      subscribe() {
-        return () => undefined;
+      sessionId: 'sess-delayed-agent-end',
+      subscribe(fn) {
+        listener = fn;
+        return () => {
+          listener = undefined;
+        };
       },
       async prompt() {
-        return undefined;
+        setTimeout(() => {
+          listener?.({
+            type: 'agent_end',
+            messages: [
+              { role: 'assistant', usage: { input: 5, output: 8 }, stopReason: 'end_turn' },
+            ],
+          });
+        }, 150);
       },
       async abort() {
         return undefined;
@@ -269,9 +281,14 @@ describe('bridgeSession', () => {
     }
 
     expect(chunks).toEqual([
-      { type: 'result', isError: true, errorSubtype: 'missing_terminal_result' },
+      {
+        type: 'result',
+        tokens: { input: 5, output: 8 },
+        stopReason: 'end_turn',
+        sessionId: 'sess-delayed-agent-end',
+      },
     ]);
-  });
+  }, 5_000);
   test('cleans up session state when subscribe throws during setup', async () => {
     let disposed = false;
     const emitterStates: Array<unknown> = [];

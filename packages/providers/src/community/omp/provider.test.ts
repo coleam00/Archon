@@ -24,6 +24,8 @@ interface FakeSdkOptions {
   onSetToolUIContext?: (uiContext: unknown, hasUI: boolean) => void;
   onSetRuntimeApiKey?: (provider: string, apiKey: string) => void;
   onGetApiKey?: (provider: string) => string | undefined | Promise<string | undefined>;
+  onModelRegistryRefresh?: () => void | Promise<void>;
+  onFindModel?: (provider: string, modelId: string) => unknown;
   onPrompt?: () => void | Promise<void>;
   mcpTools?: unknown[];
   mcpErrors?: Map<string, string>;
@@ -148,10 +150,14 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
       return authStorage;
     },
     ModelRegistry: class {
+      async refresh(): Promise<void> {
+        await options.onModelRegistryRefresh?.();
+      }
       refreshInBackground(): void {
         return undefined;
       }
-      find(): unknown {
+      find(provider: string, modelId: string): unknown {
+        if (options.onFindModel) return options.onFindModel(provider, modelId);
         return options.model ?? { provider: 'anthropic', id: 'claude-sonnet-4-5' };
       }
     },
@@ -195,6 +201,24 @@ describe('OmpProvider', () => {
         // consume
       }
     }).toThrow('requires a model');
+  });
+
+  test('awaits model registry refresh before finding requested model', async () => {
+    let refreshCompleted = false;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        async onModelRegistryRefresh() {
+          await new Promise(resolve => setTimeout(resolve, 0));
+          refreshCompleted = true;
+        },
+        onFindModel(providerName, modelId) {
+          expect(refreshCompleted).toBe(true);
+          return { provider: providerName, id: modelId };
+        },
+      })
+    );
+
+    await collectChunks(provider, { model: 'custom/model-one' });
   });
 
   test('streams assistant and result chunks', async () => {
