@@ -15,7 +15,8 @@ function serializeToolResult(result: unknown): string {
   try {
     const json = JSON.stringify(result);
     return json === undefined ? String(result) : json;
-  } catch {
+  } catch (err) {
+    getLog().warn({ err }, 'omp.event-bridge.tool_result_serialize_failed');
     return String(result);
   }
 }
@@ -368,6 +369,8 @@ export async function* bridgeSession(
     unsubscribe?.();
     if (abortSignal) abortSignal.removeEventListener('abort', onAbort);
     session.dispose();
-    await promptPromise?.catch(() => undefined);
+    promptPromise?.catch((err: unknown) => {
+      getLog().debug({ err }, 'omp.event-bridge.prompt_rejected_after_close');
+    });
   }
 }

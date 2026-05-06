@@ -9,10 +9,7 @@ describe('loadMcpConfig', () => {
   let testDir: string;
 
   beforeEach(async () => {
-    testDir = join(
-      tmpdir(),
-      `providers-mcp-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    );
+    testDir = join(tmpdir(), `omp-mcp-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await mkdir(testDir, { recursive: true });
   });
 
@@ -44,8 +41,8 @@ describe('loadMcpConfig', () => {
   });
 
   test('expands $VAR_NAME in env values from process.env', async () => {
-    process.env.TEST_MCP_TOKEN_PROVIDERS = 'secret123';
-    const config = { github: { command: 'npx', env: { TOKEN: '$TEST_MCP_TOKEN_PROVIDERS' } } };
+    process.env.TEST_OMP_MCP_TOKEN = 'secret123';
+    const config = { github: { command: 'npx', env: { TOKEN: '$TEST_OMP_MCP_TOKEN' } } };
     await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
 
     try {
@@ -54,17 +51,17 @@ describe('loadMcpConfig', () => {
 
       expect(server.env).toEqual({ TOKEN: 'secret123' });
     } finally {
-      delete process.env.TEST_MCP_TOKEN_PROVIDERS;
+      delete process.env.TEST_OMP_MCP_TOKEN;
     }
   });
 
   test('expands $VAR_NAME in headers values', async () => {
-    process.env.TEST_API_KEY_PROVIDERS = 'key456';
+    process.env.TEST_OMP_API_KEY = 'key456';
     const config = {
       api: {
         type: 'http',
         url: 'https://example.com',
-        headers: { Authorization: 'Bearer $TEST_API_KEY_PROVIDERS' },
+        headers: { Authorization: 'Bearer $TEST_OMP_API_KEY' },
       },
     };
     await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
@@ -75,35 +72,35 @@ describe('loadMcpConfig', () => {
 
       expect(server.headers).toEqual({ Authorization: 'Bearer key456' });
     } finally {
-      delete process.env.TEST_API_KEY_PROVIDERS;
+      delete process.env.TEST_OMP_API_KEY;
     }
   });
 
   test('replaces undefined env vars with empty string and reports them', async () => {
-    delete process.env.NONEXISTENT_VAR_PROVIDERS;
-    const config = { svc: { command: 'npx', env: { KEY: '$NONEXISTENT_VAR_PROVIDERS' } } };
+    delete process.env.NONEXISTENT_OMP_VAR;
+    const config = { svc: { command: 'npx', env: { KEY: '$NONEXISTENT_OMP_VAR' } } };
     await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
 
     const result = await loadMcpConfig('mcp.json', testDir);
     const server = result.servers.svc as Record<string, unknown>;
 
     expect(server.env).toEqual({ KEY: '' });
-    expect(result.missingVars).toContain('NONEXISTENT_VAR_PROVIDERS');
+    expect(result.missingVars).toContain('NONEXISTENT_OMP_VAR');
   });
 
   test('does not expand vars in command or args fields', async () => {
-    process.env.TEST_CMD_PROVIDERS = 'should-not-expand';
-    const config = { svc: { command: '$TEST_CMD_PROVIDERS', args: ['$TEST_CMD_PROVIDERS'] } };
+    process.env.TEST_OMP_CMD = 'should-not-expand';
+    const config = { svc: { command: '$TEST_OMP_CMD', args: ['$TEST_OMP_CMD'] } };
     await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
 
     try {
       const result = await loadMcpConfig('mcp.json', testDir);
       const server = result.servers.svc as Record<string, unknown>;
 
-      expect(server.command).toBe('$TEST_CMD_PROVIDERS');
-      expect(server.args).toEqual(['$TEST_CMD_PROVIDERS']);
+      expect(server.command).toBe('$TEST_OMP_CMD');
+      expect(server.args).toEqual(['$TEST_OMP_CMD']);
     } finally {
-      delete process.env.TEST_CMD_PROVIDERS;
+      delete process.env.TEST_OMP_CMD;
     }
   });
 
