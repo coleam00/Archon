@@ -13,7 +13,8 @@ export interface OmpAuthStorage {
 
 export interface OmpModelRegistry {
   find(provider: string, modelId: string): unknown;
-  refreshInBackground(): void;
+  refresh(strategy?: string): Promise<void>;
+  refreshInBackground(strategy?: string): void;
 }
 
 export type OmpSessionManager = object;

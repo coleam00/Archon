@@ -163,13 +163,13 @@ async function discoverAuthStorageOrThrow(
   }
 }
 
-function resolveSessionModel(
+async function resolveSessionModel(
   sdk: OmpCodingAgentSdk,
   authStorage: OmpAuthStorage,
   parsed: ParsedModelRef
-): { modelRegistry: OmpModelRegistry; model: unknown } {
+): Promise<{ modelRegistry: OmpModelRegistry; model: unknown }> {
   const modelRegistry = new sdk.ModelRegistry(authStorage);
-  modelRegistry.refreshInBackground();
+  await modelRegistry.refresh();
 
   const model = modelRegistry.find(parsed.provider, parsed.modelId);
   if (!model) {
@@ -356,7 +356,7 @@ export class OmpProvider implements IAgentProvider {
         getRuntimeAuthOverride(parsed.provider, ompConfig.env);
       if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
 
-      const { modelRegistry, model } = resolveSessionModel(sdk, authStorage, parsed);
+      const { modelRegistry, model } = await resolveSessionModel(sdk, authStorage, parsed);
       await ensureProviderCredentials(authStorage, parsed);
 
       if (nodeConfig?.mcp) {
