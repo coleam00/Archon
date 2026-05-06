@@ -45,7 +45,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Imports (after all mock.module calls) ---
-import { executeDagWorkflow } from './dag-executor';
+import { executeDagWorkflow, BUN_NULL_ENV_FILE } from './dag-executor';
 import type { ScriptNode, WorkflowRun } from './schemas';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
@@ -319,9 +319,7 @@ describe('script node deps field — command construction', () => {
     // --env-file=<null> prevents Bun's cwd .env auto-load (--no-env-file
     // only suppresses explicit --env-file=… args, not the auto-load).
     // No dep flags — bun auto-installs.
-    const expectedNullEnvArg =
-      process.platform === 'win32' ? '--env-file=NUL' : '--env-file=/dev/null';
-    expect(args).toEqual([expectedNullEnvArg, '-e', node.script]);
+    expect(args).toEqual([`--env-file=${BUN_NULL_ENV_FILE}`, '-e', node.script]);
     expect(args).not.toContain('--packages');
     expect(args).not.toContain('--with');
   });
@@ -354,9 +352,7 @@ describe('script node deps field — command construction', () => {
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('bun');
-    const expectedNullEnvArg2 =
-      process.platform === 'win32' ? '--env-file=NUL' : '--env-file=/dev/null';
-    expect(args).toEqual([expectedNullEnvArg2, '-e', 'console.log("hello")']);
+    expect(args).toEqual([`--env-file=${BUN_NULL_ENV_FILE}`, '-e', 'console.log("hello")']);
   });
 
   it('uv named script with deps uses uv run --with flags', async () => {

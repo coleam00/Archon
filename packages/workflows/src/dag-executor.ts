@@ -1264,7 +1264,7 @@ const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
  * `NUL` on Windows. (Verified empirically against bun 1.3.x — see
  * the regression test in `dag-executor.test.ts` for #1135.)
  */
-const BUN_NULL_ENV_FILE = process.platform === 'win32' ? 'NUL' : '/dev/null';
+export const BUN_NULL_ENV_FILE = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
 /**
  * Execute a bash (shell script) DAG node.
