@@ -43,7 +43,7 @@ function displayPath(p: string): string {
 }
 
 // Verbosity is signaled via env vars because this runs before parseArgs() and Pino.
-function isVerboseBoot(): boolean {
+export function isVerboseBoot(): boolean {
   if (process.env.ARCHON_VERBOSE_BOOT === '1') return true;
   const level = process.env.LOG_LEVEL?.toLowerCase();
   return level === 'debug' || level === 'trace';
