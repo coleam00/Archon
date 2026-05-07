@@ -53,3 +53,10 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+export {
+  CopilotSdkProvider,
+  parseCopilotConfig,
+  registerCopilotProvider,
+  type CopilotProviderDefaults,
+} from './community/copilot';

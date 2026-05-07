@@ -11,6 +11,11 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
+// Mock config-loader so tests are not affected by the real ~/.archon/config.yaml
+mock.module('../config/config-loader', () => ({
+  loadGlobalConfig: () => Promise.resolve({}),
+}));
+
 import {
   getOrCreateConversation,
   updateConversation,
