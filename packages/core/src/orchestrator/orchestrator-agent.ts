@@ -175,7 +175,7 @@ const REGISTER_PROJECT_FULL_RE = {
  * Only lines whose first non-asterisk character is '/' are affected.
  */
 function normalizeCommandText(text: string): string {
-  return text.replace(/^\*+(\/[^\n]*?)\**$/gm, '$1');
+  return text.replace(/^\s*\*+(\/[^\n]*?)\**\s*$/gm, '$1');
 }
 
 /** Returns true once accumulated text contains a complete orchestrator command. */
