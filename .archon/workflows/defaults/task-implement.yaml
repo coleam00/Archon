@@ -62,8 +62,13 @@ nodes:
       fi
       echo "Fetching parent Epic $parent_key..."
       mkdir -p "$ARTIFACTS_DIR/parent-epic"
+      # NOTE: $decode.output.project is bare (no surrounding "..."): the
+      # Archon engine wraps string outputs in single quotes for shell
+      # safety. Wrapping in double quotes would preserve the inner
+      # single quotes literally, producing 'WOR' instead of WOR in the
+      # resulting JSON.
       printf '{"event":"transition","issue_key":"%s","project":"%s"}\n' \
-        "$parent_key" "$decode.output.project" > "$ARTIFACTS_DIR/parent-epic/trigger-payload.json"
+        "$parent_key" $decode.output.project > "$ARTIFACTS_DIR/parent-epic/trigger-payload.json"
       ARTIFACTS_DIR="$ARTIFACTS_DIR/parent-epic" bun /home/user/Archon/.archon/scripts/jira-fetch-epic.ts > /dev/null
       ARTIFACTS_DIR="$ARTIFACTS_DIR/parent-epic" bun /home/user/Archon/.archon/scripts/jira-fetch-attachments.ts > /dev/null
       cp "$ARTIFACTS_DIR/parent-epic/epic-context.md" "$ARTIFACTS_DIR/parent-epic-context.md"
@@ -515,42 +520,49 @@ nodes:
     depends_on: [ validate-1, validate-2, validate-3, validate-4, validate-5, implementation-quality-final, validate-after-test-repair ]
     trigger_rule: all_done
     bash: |
-      # Drop -u from `set -euo pipefail`: when the dev-loop converges
-      # early (attempt 1, 2, or 3), validate-4/validate-5 are skipped
-      # nodes whose `$validate-N.output.passed` substitution leaves the
-      # literal string in the script. With -u, `$validate-N` is treated
-      # as an unset variable and the script exits before producing any
-      # output, leaving `ready` empty and both downstream when: branches
-      # skipping. Without -u, missing substitutions are empty strings,
-      # which the [ "" = "true" ] comparisons handle correctly.
+      # Substitution rules in this script:
+      #
+      # 1. `$node.output.field` is replaced by the Archon engine before
+      #    bash sees the script. STRING values are wrapped in single
+      #    quotes for shell safety (see shellQuote in dag-executor.ts);
+      #    booleans and numbers are emitted bare. Therefore
+      #    $node.output.field MUST appear bare in this script (no
+      #    surrounding `"..."`); otherwise the outer double quotes
+      #    preserve the engine's single quotes inside the string and
+      #    bash assigns the literal `'tests'` rather than `tests`,
+      #    causing every later [ "$x" = "y" ] check to silently
+      #    mismatch. This was the root cause of WOR-87 stalling after
+      #    the test-side salvage path ran successfully but
+      #    failure_scope compared as `'tests'` ≠ `tests`.
+      #
+      # 2. -u is dropped from `set -euo pipefail`. When the dev-loop
+      #    converges early (attempt 1, 2, or 3), validate-4/validate-5
+      #    are skipped DAG nodes whose substitutions resolve to empty.
+      #    With -u, bash treats them as unset and exits before any
+      #    output. Without -u, missing substitutions become empty
+      #    strings, which the [ "" = "true" ] comparisons handle
+      #    correctly.
       set -eo pipefail
       validation_passed=false
-      if [ "$validate-1.output.passed" = "true" ] || [ "$validate-2.output.passed" = "true" ] || [ "$validate-3.output.passed" = "true" ] || [ "$validate-4.output.passed" = "true" ] || [ "$validate-5.output.passed" = "true" ]; then
+      if [ $validate-1.output.passed = true ] || [ $validate-2.output.passed = true ] || [ $validate-3.output.passed = true ] || [ $validate-4.output.passed = true ] || [ $validate-5.output.passed = true ]; then
         validation_passed=true
       fi
-      quality_passed="$implementation-quality-final.output.passed"
-      failure_scope="$implementation-quality-final.output.failure_scope"
+      quality_passed=$implementation-quality-final.output.passed
+      failure_scope=$implementation-quality-final.output.failure_scope
       # Test-side salvage: if reviewer flagged test-only failures and the
       # post-repair validation is green, treat the implementation as ready.
-      # The production code already passed reviewer-quality gates; only the
-      # tests were blocking, and they are now repaired.
-      #
-      # Use the bare `$node-name.output.field` form (the Archon engine
-      # substitutes this before bash sees it). The `${var:-default}` brace
-      # form does NOT work here because bash treats hyphens as operator
-      # characters — `${validate-after-test-repair.output.passed:-false}`
-      # parses as `${validate}` + the literal text `-after-test-repair...`,
-      # producing garbage.
-      test_repair_passed="$validate-after-test-repair.output.passed"
-      if [ "$validation_passed" = "true" ] && [ "$quality_passed" = "true" ]; then
+      # The production code already passed reviewer-quality gates; only
+      # the tests were blocking, and they are now repaired.
+      test_repair_passed=$validate-after-test-repair.output.passed
+      if [ "$validation_passed" = true ] && [ "$quality_passed" = true ]; then
         ready=true
-      elif [ "$failure_scope" = "tests" ] && [ "$test_repair_passed" = "true" ]; then
+      elif [ "$failure_scope" = tests ] && [ "$test_repair_passed" = true ]; then
         ready=true
       else
         ready=false
       fi
       printf '{"ready":%s,"validation_passed":%s,"implementation_review_passed":%s,"failure_scope":"%s","test_repair_passed":%s,"review":"%s"}\n' \
-        "$ready" "$validation_passed" "$quality_passed" "$failure_scope" "$test_repair_passed" "$ARTIFACTS_DIR/dev-review-final.json"
+        "${ready:-false}" "${validation_passed:-false}" "${quality_passed:-false}" "${failure_scope:-none}" "${test_repair_passed:-false}" "$ARTIFACTS_DIR/dev-review-final.json"
 
   - id: fail-implementation-not-ready
     depends_on: [ implementation-ready ]
