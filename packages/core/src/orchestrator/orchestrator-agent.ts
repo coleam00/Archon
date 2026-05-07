@@ -1467,13 +1467,14 @@ async function handleProjectRegistrationResult(
   // Match line-anchored to avoid landing on a prose mention of "/register-project".
   const regLineMatch = /^\/register-project\b/m.exec(normalizedForExtraction);
   if (!regLineMatch) {
-    // parseOrchestratorCommands already confirmed a line-anchored match on the same
-    // normalized text, so this branch should be unreachable.  Log and bail out
-    // rather than falling back to indexOf, which could match prose.
+    // Parsing already succeeded upstream from raw concatenated assistant chunks.
+    // If extraction on filtered text fails, skip preamble extraction but still
+    // execute registration to avoid silently dropping a valid command.
     getLog().warn({ conversationId }, 'orchestrator.extract_no_line_match');
-    return;
   }
-  const textBeforeReg = normalizedForExtraction.slice(0, regLineMatch.index).trim();
+  const textBeforeReg = regLineMatch
+    ? normalizedForExtraction.slice(0, regLineMatch.index).trim()
+    : '';
   if (textBeforeReg) {
     await platform.sendMessage(conversationId, textBeforeReg);
   }
