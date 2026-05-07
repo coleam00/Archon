@@ -2,7 +2,7 @@
  * Tests for setup command utility functions
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -15,6 +15,7 @@ import {
   writeScopedEnv,
   serializeEnv,
   resolveScopedEnvPath,
+  writeHomePiModelConfig,
 } from './setup';
 import * as setupModule from './setup';
 import { copyArchonSkill } from './skill';
@@ -390,6 +391,7 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=true');
       expect(content).toContain('OPENROUTER_API_KEY=or-key');
       expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
+      expect(content).toContain('# Pi Authentication');
     });
   });
 
@@ -800,5 +802,73 @@ describe('writeScopedEnv (#1303)', () => {
     expect(merged.NORMAL).toBe('keep-me');
     expect(result.preservedKeys).toContain('NORMAL');
     expect(result.preservedKeys).not.toContain('API_KEY');
+  });
+});
+
+describe('writeHomePiModelConfig', () => {
+  let tmpDir: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'archon-pi-config-'));
+    originalHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpDir;
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    if (originalHome !== undefined) {
+      process.env.ARCHON_HOME = originalHome;
+    } else {
+      delete process.env.ARCHON_HOME;
+    }
+  });
+
+  it('writes fresh assistants.pi.model block when config is empty', () => {
+    writeHomePiModelConfig('anthropic/claude-haiku-4-5');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('assistants:');
+    expect(content).toContain('pi:');
+    expect(content).toContain('model: "anthropic/claude-haiku-4-5"');
+  });
+
+  it('writes fresh block when config does not exist yet', () => {
+    // No config.yaml pre-created — function must create it.
+    writeHomePiModelConfig('openai/gpt-4o');
+    expect(existsSync(join(tmpDir, 'config.yaml'))).toBe(true);
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('pi:');
+    expect(content).toContain('model: "openai/gpt-4o"');
+  });
+
+  it('skips write when existing config already contains pi: (idempotent)', () => {
+    writeFileSync(join(tmpDir, 'config.yaml'), 'assistants:\n  pi:\n    model: "old"\n');
+    writeHomePiModelConfig('anthropic/claude-haiku-4-5');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('model: "old"');
+    expect(content).not.toContain('claude-haiku-4-5');
+  });
+
+  it('does not write pi: block when config has assistants: but no pi: (shows note instead)', () => {
+    writeFileSync(join(tmpDir, 'config.yaml'), 'assistants:\n  claude:\n    model: sonnet\n');
+    writeHomePiModelConfig('openai/gpt-4o');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    // Should NOT have injected a pi: key — only a note() was shown.
+    expect(content).not.toContain('pi:');
+  });
+
+  it('escapes double quotes in the model name', () => {
+    writeHomePiModelConfig('vendor/"weird-model"');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('\\"weird-model\\"');
+  });
+
+  it('does not false-positive on api: substring (regex guard for includes bug)', () => {
+    // A config with `api:` but no `pi:` should fall through to the append branch,
+    // not the idempotent-skip branch.
+    writeFileSync(join(tmpDir, 'config.yaml'), '# config\napi:\n  key: abc\n');
+    writeHomePiModelConfig('openai/gpt-4o');
+    const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
+    expect(content).toContain('pi:');
   });
 });

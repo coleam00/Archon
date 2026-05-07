@@ -46,6 +46,7 @@ import { getRegisteredProviders } from '@archon/providers';
 import {
   getArchonEnvPath as pathsGetArchonEnvPath,
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
+  getArchonHome as pathsGetArchonHome,
 } from '@archon/paths';
 
 // =============================================================================
@@ -512,8 +513,8 @@ async function collectPiConfig(): Promise<{
 
 /**
  * Verify the Pi npm module is loadable. Pi is bundled as a transitive dep of
- * `@archon/providers` so this should always pass, but it mirrors the Claude
- * binary check pattern and catches broken compiled builds.
+ * `@archon/providers` so this should always pass, but it serves the same
+ * doctor-step role as `checkClaudeBinary` and catches broken compiled builds.
  *
  * The `loader` parameter is injected in tests so we don't need
  * `mock.module()` on `@archon/providers` (which would pollute other tests).
@@ -1574,18 +1575,22 @@ export function bootstrapProjectConfig(projectPath: string): BootstrapProjectCon
 /**
  * Write the Pi model ref to `~/.archon/config.yaml` so Pi knows which backend
  * to use by default. Three branches:
- *   1. File already contains `pi:` — skip (user-edited; don't overwrite).
+ *   1. File already contains `pi:` — skip (idempotent; avoids duplicate blocks
+ *      on re-runs or when the user has already configured this manually).
  *   2. File contains `assistants:` but no `pi:` — show a manual `note()`
  *      because we can't safely splice into existing YAML indentation.
  *   3. Otherwise — append a fresh `assistants: pi: model:` block.
  */
 export function writeHomePiModelConfig(model: string): void {
-  const home = getArchonHome();
+  // Use the paths-package version of getArchonHome so Docker (/.archon) is
+  // handled correctly — the local getArchonHome() always returns ~/.archon.
+  const home = pathsGetArchonHome();
   mkdirSync(home, { recursive: true });
   const configPath = join(home, 'config.yaml');
   const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
 
-  if (existing.includes('pi:')) {
+  // Use a regex to avoid false positives from substrings like `api:`.
+  if (/^\s*pi\s*:/m.test(existing)) {
     log.info(
       `Pi model already present in ${configPath} — edit assistants.pi.model manually to change.`
     );
@@ -2050,7 +2055,9 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
     } catch (err) {
       // Non-fatal: env write already succeeded, so the user can hand-edit
       // ~/.archon/config.yaml later. Surface the error so it's not silent.
-      log.warn(`Could not write Pi model config: ${(err as NodeJS.ErrnoException).message}`);
+      const e = err as NodeJS.ErrnoException;
+      const code = e.code ? ` (${e.code})` : '';
+      log.warning(`Could not write Pi model config: ${e.message}${code}`);
     }
   }
 

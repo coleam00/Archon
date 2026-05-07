@@ -11,7 +11,6 @@ import { describe, it, expect, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdirSync, rmSync } from 'fs';
-import * as fsModule from 'fs';
 import * as git from '@archon/git';
 import {
   checkClaudeBinary,
@@ -25,6 +24,7 @@ import {
   doctorCommand,
   type DatabaseDeps,
 } from './doctor';
+import * as doctorModule from './doctor';
 import { checkPiModule } from './setup';
 
 describe('checkClaudeBinary', () => {
@@ -110,14 +110,18 @@ describe('checkGhAuth', () => {
 });
 
 describe('checkPi', () => {
-  let existsSpy: ReturnType<typeof spyOn<typeof fsModule, 'existsSync'>>;
+  // Spy on the exported `probeAuthJsonExists` wrapper rather than `fsModule.existsSync`.
+  // Named imports from 'fs' cannot be intercepted by spying on the namespace object
+  // due to ESM rebinding — the wrapper pattern (same as `probeFileExists` in setup.ts)
+  // is the correct way to make this testable.
+  let authJsonSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probeAuthJsonExists'>>;
 
   beforeEach(() => {
-    existsSpy = spyOn(fsModule, 'existsSync');
+    authJsonSpy = spyOn(doctorModule, 'probeAuthJsonExists');
   });
 
   afterEach(() => {
-    existsSpy.mockRestore();
+    authJsonSpy.mockRestore();
   });
 
   it('returns skip when Pi is not configured', async () => {
@@ -128,14 +132,14 @@ describe('checkPi', () => {
   });
 
   it('returns pass when ~/.pi/agent/auth.json exists', async () => {
-    existsSpy.mockReturnValue(true);
+    authJsonSpy.mockReturnValue(true);
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('pass');
     expect(result.message).toContain('auth.json');
   });
 
   it('returns pass when a Pi API key env var is set', async () => {
-    existsSpy.mockReturnValue(false);
+    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({
       DEFAULT_AI_ASSISTANT: 'pi',
       ANTHROPIC_API_KEY: 'sk-ant-test',
@@ -145,17 +149,26 @@ describe('checkPi', () => {
   });
 
   it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
-    existsSpy.mockReturnValue(false);
+    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('pi /login');
   });
 
-  it('returns pass when a Pi API key is set even when Pi is not the default', async () => {
-    existsSpy.mockReturnValue(false);
+  it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
+    // Regression guard for M2: shared keys like ANTHROPIC_API_KEY must not be treated
+    // as Pi evidence unless DEFAULT_AI_ASSISTANT=pi.
+    authJsonSpy.mockReturnValue(false);
+    const result = await checkPi({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('not configured');
+  });
+
+  it('returns skip for users with OPENROUTER_API_KEY set but Pi not configured as default', async () => {
+    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('OPENROUTER_API_KEY');
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('not configured');
   });
 });
 

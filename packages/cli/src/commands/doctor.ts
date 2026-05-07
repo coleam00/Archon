@@ -86,10 +86,22 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
   }
 }
 
+/**
+ * Thin wrapper around `existsSync` so tests can spy on it by name without
+ * fighting ESM named-import rebinding limitations.  Matches the `probeFileExists`
+ * pattern in `setup.ts`.
+ */
+export function probeAuthJsonExists(path: string): boolean {
+  return existsSync(path);
+}
+
 export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   const label = 'Pi provider';
   const isDefault = env.DEFAULT_AI_ASSISTANT === 'pi';
-  const hasApiKey = PI_API_KEY_VARS.some(v => (env[v] ?? '').trim().length > 0);
+  // Only treat a shared key (e.g. ANTHROPIC_API_KEY) as Pi evidence when Pi is
+  // actually configured as the default — otherwise Claude-only users who happen
+  // to have ANTHROPIC_API_KEY set would get a false-positive "pass" here.
+  const hasApiKey = isDefault && PI_API_KEY_VARS.some(v => (env[v] ?? '').trim().length > 0);
 
   // Skip for users without Pi configured — same pattern as checkGhAuth.
   if (!isDefault && !hasApiKey) {
@@ -99,7 +111,7 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
   // or API key env vars; either path is sufficient.
   const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  if (existsSync(authJsonPath)) {
+  if (probeAuthJsonExists(authJsonPath)) {
     return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
   }
 
