@@ -1225,8 +1225,14 @@ async function handleBatchMode(
         assistantMessages.push(msg.content);
       }
 
-      // Do not truncate while a command is being accumulated — shifting away the prefix
-      // chunk would prevent commandFullyParsed from ever firing and lose parse tokens.
+      // Cap assistant-only chunks while no command has been detected.  Once
+      // commandDetected flips to true we stop shifting so that all tokens of
+      // the in-flight command are preserved — shifting the prefix away would
+      // break both the prefix and full-command regexes.  As a consequence, if
+      // the AI starts a command prefix but never completes it, assistantMessages
+      // can grow unbounded from the per-assistant perspective; the outer
+      // MAX_BATCH_TOTAL_CHUNKS guard on allChunks (below) is the true hard cap
+      // for that edge case.
       if (
         !commandDetected &&
         !commandFullyParsed &&
@@ -1460,8 +1466,14 @@ async function handleProjectRegistrationResult(
   const normalizedForExtraction = normalizeCommandText(fullResponse);
   // Match line-anchored to avoid landing on a prose mention of "/register-project".
   const regLineMatch = /^\/register-project\b/m.exec(normalizedForExtraction);
-  const regIndex = regLineMatch?.index ?? normalizedForExtraction.indexOf('/register-project');
-  const textBeforeReg = normalizedForExtraction.slice(0, regIndex).trim();
+  if (!regLineMatch) {
+    // parseOrchestratorCommands already confirmed a line-anchored match on the same
+    // normalized text, so this branch should be unreachable.  Log and bail out
+    // rather than falling back to indexOf, which could match prose.
+    getLog().warn({ conversationId }, 'orchestrator.extract_no_line_match');
+    return;
+  }
+  const textBeforeReg = normalizedForExtraction.slice(0, regLineMatch.index).trim();
   if (textBeforeReg) {
     await platform.sendMessage(conversationId, textBeforeReg);
   }
