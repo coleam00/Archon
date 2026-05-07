@@ -50,7 +50,7 @@ packages/cli/
 │   1. ~/.archon/.env        (home scope)                         │
 │   2. <cwd>/.archon/.env    (repo scope, wins over home)         │
 │   Emits one [archon] loaded N keys from <path> line per file    │
-│   when N > 0.                                                   │
+│   when N > 0 and ARCHON_VERBOSE_BOOT=1 or LOG_LEVEL=debug/trace.│
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
                                   ▼

@@ -42,11 +42,7 @@ function displayPath(p: string): string {
   return p;
 }
 
-/**
- * Returns true when the operator has opted into verbose boot output.
- * Boot-time stderr lines run before parseArgs() and Pino are initialized,
- * so verbosity is signaled via env vars rather than CLI flags.
- */
+// Verbosity is signaled via env vars because this runs before parseArgs() and Pino.
 function isVerboseBoot(): boolean {
   if (process.env.ARCHON_VERBOSE_BOOT === '1') return true;
   const level = process.env.LOG_LEVEL?.toLowerCase();
