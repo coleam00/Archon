@@ -31,7 +31,9 @@ function listSkillFiles(dir: string, base: string = dir): string[] {
   });
 }
 
-const skillFiles = listSkillFiles(SKILL_ROOT).sort();
+const skillFiles = listSkillFiles(SKILL_ROOT)
+  .map(f => f.replaceAll('\\', '/')) // normalize Windows backslashes to POSIX
+  .sort();
 const bundledSrc = readFileSync(BUNDLED_SKILL_PATH, 'utf-8');
 // NOTE: This is a substring check — a filename that appears in a comment or
 // stale string literal will also pass. It's a safety net against missing imports,
