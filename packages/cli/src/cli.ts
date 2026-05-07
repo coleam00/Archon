@@ -282,8 +282,13 @@ async function main(): Promise<number> {
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // Set log level from flags (quiet > verbose > default)
-    if (values.quiet) {
+    // Set log level from flags (quiet > verbose > default).
+    // Interactive commands (setup, doctor) default to warn so their human-readable
+    // ○/✓ checklist output isn't interleaved with Pino info JSON; --verbose opts
+    // back into structured logs. Lazy logger initialization in those commands
+    // means setLogLevel here takes effect before any logger is first created.
+    const isInteractiveCommand = command === 'setup' || command === 'doctor';
+    if (values.quiet || (isInteractiveCommand && !values.verbose)) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');

@@ -14,7 +14,10 @@
  * Directory ownership (`.archon/`) is the security boundary, not the filename.
  *
  * Logging rules:
- *   - Each `[archon] loaded N keys from …` line prints only when N > 0.
+ *   - Each `[archon] loaded N keys from …` line prints only when N > 0 AND
+ *     the operator has opted into verbose boot output via `ARCHON_VERBOSE_BOOT=1`
+ *     or `LOG_LEVEL=debug`/`trace`. Silent by default — these run before
+ *     parseArgs() so they would otherwise leak into interactive command output.
  *   - Silent in the common case (no archon-owned env files present).
  *   - Emits to stderr (operator signal) — Pino logger is not yet initialized
  *     at this point in boot.
@@ -40,6 +43,17 @@ function displayPath(p: string): string {
 }
 
 /**
+ * Returns true when the operator has opted into verbose boot output.
+ * Boot-time stderr lines run before parseArgs() and Pino are initialized,
+ * so verbosity is signaled via env vars rather than CLI flags.
+ */
+function isVerboseBoot(): boolean {
+  if (process.env.ARCHON_VERBOSE_BOOT === '1') return true;
+  const level = process.env.LOG_LEVEL?.toLowerCase();
+  return level === 'debug' || level === 'trace';
+}
+
+/**
  * Load archon-owned env files. Call once, immediately after
  * `@archon/paths/strip-cwd-env-boot` at each entry point.
  *
@@ -60,7 +74,7 @@ export function loadArchonEnv(cwd: string = process.cwd()): void {
       process.exit(1);
     }
     const count = Object.keys(result.parsed ?? {}).length;
-    if (count > 0) {
+    if (count > 0 && isVerboseBoot()) {
       process.stderr.write(`[archon] loaded ${count} keys from ${displayPath(homePath)}\n`);
     }
   }
@@ -74,7 +88,7 @@ export function loadArchonEnv(cwd: string = process.cwd()): void {
       process.exit(1);
     }
     const count = Object.keys(result.parsed ?? {}).length;
-    if (count > 0) {
+    if (count > 0 && isVerboseBoot()) {
       process.stderr.write(
         `[archon] loaded ${count} keys from ${displayPath(repoPath)} (repo scope, overrides user scope)\n`
       );
