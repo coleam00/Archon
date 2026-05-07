@@ -515,7 +515,15 @@ nodes:
     depends_on: [ validate-1, validate-2, validate-3, validate-4, validate-5, implementation-quality-final, validate-after-test-repair ]
     trigger_rule: all_done
     bash: |
-      set -euo pipefail
+      # Drop -u from `set -euo pipefail`: when the dev-loop converges
+      # early (attempt 1, 2, or 3), validate-4/validate-5 are skipped
+      # nodes whose `$validate-N.output.passed` substitution leaves the
+      # literal string in the script. With -u, `$validate-N` is treated
+      # as an unset variable and the script exits before producing any
+      # output, leaving `ready` empty and both downstream when: branches
+      # skipping. Without -u, missing substitutions are empty strings,
+      # which the [ "" = "true" ] comparisons handle correctly.
+      set -eo pipefail
       validation_passed=false
       if [ "$validate-1.output.passed" = "true" ] || [ "$validate-2.output.passed" = "true" ] || [ "$validate-3.output.passed" = "true" ] || [ "$validate-4.output.passed" = "true" ] || [ "$validate-5.output.passed" = "true" ]; then
         validation_passed=true
