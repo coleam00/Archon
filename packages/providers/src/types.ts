@@ -36,6 +36,19 @@ export interface CodexProviderDefaults {
 }
 
 /**
+ * Community provider defaults for GitHub Copilot (@github/copilot-sdk).
+ */
+export interface CopilotProviderDefaults {
+  [key: string]: unknown;
+  /** Default model forwarded to SessionConfig.model. */
+  model?: string;
+  /** Path to the Copilot CLI binary. Required in compiled Archon builds when COPILOT_BIN_PATH is not set. */
+  cliPath?: string;
+  /** GitHub personal access token with Copilot scope. Falls back to GH_TOKEN / GITHUB_TOKEN env vars. */
+  githubToken?: string;
+}
+
+/**
  * Community provider defaults for Pi (@mariozechner/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */
