@@ -1458,7 +1458,9 @@ async function handleProjectRegistrationResult(
   // stripped from the command line; otherwise textBeforeReg would include a
   // trailing '**' when the model wrapped the command in markdown bold.
   const normalizedForExtraction = normalizeCommandText(fullResponse);
-  const regIndex = normalizedForExtraction.indexOf('/register-project');
+  // Match line-anchored to avoid landing on a prose mention of "/register-project".
+  const regLineMatch = /^\/register-project\b/m.exec(normalizedForExtraction);
+  const regIndex = regLineMatch?.index ?? normalizedForExtraction.indexOf('/register-project');
   const textBeforeReg = normalizedForExtraction.slice(0, regIndex).trim();
   if (textBeforeReg) {
     await platform.sendMessage(conversationId, textBeforeReg);
