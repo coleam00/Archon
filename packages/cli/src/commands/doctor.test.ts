@@ -11,11 +11,13 @@ import { describe, it, expect, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdirSync, rmSync } from 'fs';
+import * as fsModule from 'fs';
 import * as git from '@archon/git';
 import {
   checkClaudeBinary,
   checkDatabase,
   checkGhAuth,
+  checkPi,
   checkWorkspaceWritable,
   checkBundledDefaults,
   checkSlack,
@@ -23,6 +25,7 @@ import {
   doctorCommand,
   type DatabaseDeps,
 } from './doctor';
+import { checkPiModule } from './setup';
 
 describe('checkClaudeBinary', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
@@ -103,6 +106,71 @@ describe('checkGhAuth', () => {
     const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('not logged in');
+  });
+});
+
+describe('checkPi', () => {
+  let existsSpy: ReturnType<typeof spyOn<typeof fsModule, 'existsSync'>>;
+
+  beforeEach(() => {
+    existsSpy = spyOn(fsModule, 'existsSync');
+  });
+
+  afterEach(() => {
+    existsSpy.mockRestore();
+  });
+
+  it('returns skip when Pi is not configured', async () => {
+    const result = await checkPi({});
+    expect(result.status).toBe('skip');
+    expect(result.label).toBe('Pi provider');
+    expect(result.message).toContain('not configured');
+  });
+
+  it('returns pass when ~/.pi/agent/auth.json exists', async () => {
+    existsSpy.mockReturnValue(true);
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('auth.json');
+  });
+
+  it('returns pass when a Pi API key env var is set', async () => {
+    existsSpy.mockReturnValue(false);
+    const result = await checkPi({
+      DEFAULT_AI_ASSISTANT: 'pi',
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+    });
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
+    existsSpy.mockReturnValue(false);
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('pi /login');
+  });
+
+  it('returns pass when a Pi API key is set even when Pi is not the default', async () => {
+    existsSpy.mockReturnValue(false);
+    const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('OPENROUTER_API_KEY');
+  });
+});
+
+describe('checkPiModule', () => {
+  it('returns ok:true when loader resolves', async () => {
+    const result = await checkPiModule(async () => ({}));
+    expect(result.ok).toBe(true);
+  });
+
+  it('returns ok:false when loader throws (Pi binary missing)', async () => {
+    const result = await checkPiModule(async () => {
+      throw new Error('Cannot find module @mariozechner/pi-coding-agent');
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('pi-coding-agent');
   });
 });
 

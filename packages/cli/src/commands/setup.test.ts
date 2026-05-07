@@ -107,6 +107,21 @@ CODEX_ACCOUNT_ID=account1
         process.env.ARCHON_HOME = originalHome;
       }
     });
+
+    it('detects existing Pi configuration from a Pi API key env var', () => {
+      const envDir = join(TEST_DIR, '.archon-pi');
+      mkdirSync(envDir, { recursive: true });
+      const envPath = join(envDir, '.env');
+
+      writeFileSync(envPath, 'ANTHROPIC_API_KEY=sk-ant-test\nDEFAULT_AI_ASSISTANT=pi\n');
+
+      const result = checkExistingConfig(envPath);
+
+      expect(result).not.toBeNull();
+      expect(result?.hasPi).toBe(true);
+      expect(result?.hasClaude).toBe(false);
+      expect(result?.hasCodex).toBe(false);
+    });
   });
 
   describe('generateEnvContent', () => {
@@ -116,6 +131,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          pi: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -144,6 +160,7 @@ CODEX_ACCOUNT_ID=account1
           claudeAuthType: 'global',
           claudeBinaryPath: '/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js',
           codex: false,
+          pi: false,
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false },
@@ -161,6 +178,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          pi: false,
           defaultAssistant: 'claude',
         },
         platforms: { github: false, telegram: false, slack: false },
@@ -176,6 +194,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          pi: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -211,6 +230,7 @@ CODEX_ACCOUNT_ID=account1
         ai: {
           claude: false,
           codex: true,
+          pi: false,
           codexTokens: {
             idToken: 'id-token',
             accessToken: 'access-token',
@@ -240,6 +260,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          pi: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -259,6 +280,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          pi: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -278,6 +300,7 @@ CODEX_ACCOUNT_ID=account1
           claude: true,
           claudeAuthType: 'global',
           codex: false,
+          pi: false,
           defaultAssistant: 'claude',
         },
         platforms: {
@@ -297,6 +320,76 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('SLACK_APP_TOKEN=xapp-test');
       expect(content).toContain('SLACK_ALLOWED_USER_IDS=U123');
       expect(content).toContain('SLACK_STREAMING_MODE=batch');
+    });
+
+    it('emits Pi API key when Pi is configured with API key', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: false,
+          codex: false,
+          pi: true,
+          piApiKey: 'sk-ant-test',
+          piApiKeyEnvVar: 'ANTHROPIC_API_KEY',
+          defaultAssistant: 'pi',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('ANTHROPIC_API_KEY=sk-ant-test');
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=pi');
+      expect(content).not.toContain('# Pi not configured');
+    });
+
+    it('emits Pi placeholder comment when Pi is configured without API key', () => {
+      const content = generateEnvContent({
+        ai: { claude: false, codex: false, pi: true, defaultAssistant: 'pi' },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('# Pi configured');
+      // No active ANTHROPIC_API_KEY assignment — the example appears only in a
+      // commented-out hint.
+      expect(content).not.toMatch(/^ANTHROPIC_API_KEY=/m);
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=pi');
+    });
+
+    it('emits "Pi not configured" comment when Pi is false', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: false,
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('# Pi not configured');
+      expect(content).not.toMatch(/^ANTHROPIC_API_KEY=/m);
+    });
+
+    it('generates valid content for mixed Claude+Pi setup', () => {
+      const content = generateEnvContent({
+        ai: {
+          claude: true,
+          claudeAuthType: 'global',
+          codex: false,
+          pi: true,
+          piApiKey: 'or-key',
+          piApiKeyEnvVar: 'OPENROUTER_API_KEY',
+          defaultAssistant: 'claude',
+        },
+        platforms: { github: false, telegram: false, slack: false },
+        botDisplayName: 'Archon',
+      });
+
+      expect(content).toContain('CLAUDE_USE_GLOBAL_AUTH=true');
+      expect(content).toContain('OPENROUTER_API_KEY=or-key');
+      expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
     });
   });
 
