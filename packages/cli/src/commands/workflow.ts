@@ -570,6 +570,7 @@ export async function workflowRunCommand(
           ? git.toBranchName(options.fromBranch.trim())
           : undefined,
         codebaseId: codebase.id,
+        codebaseName: codebase.name,
         canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
         description: `CLI workflow: ${workflowName}`,
       });
