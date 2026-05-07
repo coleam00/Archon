@@ -98,13 +98,10 @@ export function probeAuthJsonExists(path: string): boolean {
 export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   const label = 'Pi provider';
   const isDefault = env.DEFAULT_AI_ASSISTANT === 'pi';
-  // Only treat a shared key (e.g. ANTHROPIC_API_KEY) as Pi evidence when Pi is
-  // actually configured as the default — otherwise Claude-only users who happen
-  // to have ANTHROPIC_API_KEY set would get a false-positive "pass" here.
-  const hasApiKey = isDefault && PI_API_KEY_VARS.some(v => (env[v] ?? '').trim().length > 0);
 
-  // Skip for users without Pi configured — same pattern as checkGhAuth.
-  if (!isDefault && !hasApiKey) {
+  // Skip when Pi isn't the default — shared keys like ANTHROPIC_API_KEY shouldn't
+  // trigger a pass for Claude-only users who happen to have them set.
+  if (!isDefault) {
     return { label, status: 'skip', message: 'Pi not configured' };
   }
 
