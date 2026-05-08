@@ -16,6 +16,7 @@ export {
   ConversationNotFoundError,
   type Conversation,
   type HandleMessageContext,
+  type RuntimeOverride,
   type AttachedFile,
   type Codebase,
   type Session,

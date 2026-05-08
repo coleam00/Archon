@@ -364,6 +364,103 @@ describe('POST /api/workflows/:name/run', () => {
     );
   });
 
+  test('passes runtimeOverride context when provider/model are in body', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'go',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'go',
+        provider: 'claude',
+        model: 'opus',
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run deploy go',
+      expect.objectContaining({
+        runtimeOverride: { provider: 'claude', model: 'opus' },
+      })
+    );
+  });
+
+  test('omits runtimeOverride from context when neither provider nor model is provided', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'go',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'go' }),
+    });
+
+    // dispatchToOrchestrator always passes a context object (with isolationHints).
+    // The override should simply be absent — preserves the existing dispatch path
+    // for CLI/Slack/Telegram/etc. so they continue to behave unchanged.
+    expect(mockHandleMessage).toHaveBeenCalled();
+    const callArgs = mockHandleMessage.mock.calls[0];
+    const ctx = callArgs?.[3] as Record<string, unknown> | undefined;
+    expect(ctx).toBeDefined();
+    expect(ctx).not.toHaveProperty('runtimeOverride');
+  });
+
+  test('passes runtimeOverride with only provider (model omitted)', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: 'msg-1',
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'go',
+      metadata: '{}',
+      created_at: NOW,
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: 'web-test-abc',
+        message: 'go',
+        provider: 'codex',
+      }),
+    });
+
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '/workflow run deploy go',
+      expect.objectContaining({
+        runtimeOverride: { provider: 'codex' },
+      })
+    );
+  });
+
   test('persists user message to DB when conversation found', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
     mockAddMessage.mockImplementationOnce(async () => ({

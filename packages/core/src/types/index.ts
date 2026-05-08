@@ -45,12 +45,29 @@ export interface AttachedFile {
   size: number;
 }
 
+/** Per-request runtime override for workflow dispatch.
+ *
+ * When set, takes precedence over `workflow.provider` / `workflow.model`
+ * and the global assistant defaults. Threaded from the route handler
+ * through dispatchToOrchestrator → orchestrator-agent so an external
+ * caller (e.g. an orchestration platform like OperationsCenter) can bind
+ * a specific runtime per dispatch without registering new workflow YAML.
+ *
+ * Both fields are optional; supplying only one (e.g. just `model`) keeps
+ * the other resolution chain intact.
+ */
+export interface RuntimeOverride {
+  readonly provider?: string;
+  readonly model?: string;
+}
+
 export interface HandleMessageContext {
   readonly issueContext?: string;
   readonly threadContext?: string;
   readonly parentConversationId?: string;
   readonly isolationHints?: IsolationHints;
   readonly attachedFiles?: AttachedFile[];
+  readonly runtimeOverride?: RuntimeOverride;
 }
 
 export interface Codebase {

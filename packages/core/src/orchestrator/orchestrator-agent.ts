@@ -221,8 +221,31 @@ async function dispatchOrchestratorWorkflow(
   codebase: Codebase,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  runtimeOverride?: HandleMessageContext['runtimeOverride']
 ): Promise<void> {
+  // Apply per-request runtime override (from POST /api/workflows/:name/run).
+  // Mutates the in-memory workflow object — safe because the workflow is
+  // freshly loaded per-run and discarded after dispatch (does not persist
+  // back to the YAML on disk). When set, takes precedence over
+  // workflow.provider / workflow.model in executor.ts resolution.
+  if (runtimeOverride) {
+    if (runtimeOverride.provider) {
+      workflow.provider = runtimeOverride.provider;
+    }
+    if (runtimeOverride.model) {
+      workflow.model = runtimeOverride.model;
+    }
+    getLog().info(
+      {
+        workflowName: workflow.name,
+        provider: runtimeOverride.provider,
+        model: runtimeOverride.model,
+      },
+      'workflow.runtime_override_applied'
+    );
+  }
+
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
     codebase_id: codebase.id,
@@ -542,8 +565,14 @@ export async function handleMessage(
   message: string,
   context?: HandleMessageContext
 ): Promise<void> {
-  const { issueContext, threadContext, parentConversationId, isolationHints, attachedFiles } =
-    context ?? {};
+  const {
+    issueContext,
+    threadContext,
+    parentConversationId,
+    isolationHints,
+    attachedFiles,
+    runtimeOverride,
+  } = context ?? {};
   try {
     getLog().debug({ conversationId }, 'orchestrator_message_received');
 
@@ -665,7 +694,8 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            runtimeOverride
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -735,7 +765,8 @@ export async function handleMessage(
             conversation,
             result.workflow.definition,
             result.workflow.args ?? message,
-            isolationHints
+            isolationHints,
+            runtimeOverride
           );
         }
         return;
@@ -1278,7 +1309,8 @@ async function handleWorkflowInvocationResult(
       codebase,
       workflow,
       workflowPrompt,
-      isolationHints
+      isolationHints,
+      runtimeOverride
     );
     return;
   }
@@ -1446,7 +1478,8 @@ async function handleWorkflowRunCommand(
   conversation: Conversation,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  runtimeOverride?: HandleMessageContext['runtimeOverride']
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -1466,7 +1499,8 @@ async function handleWorkflowRunCommand(
       codebase,
       workflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      runtimeOverride
     );
     return;
   }
@@ -1543,7 +1577,8 @@ async function handleWorkflowRunCommand(
       codebase,
       resolvedWorkflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      runtimeOverride
     );
     return;
   }

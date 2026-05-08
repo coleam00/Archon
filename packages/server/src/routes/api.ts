@@ -1798,7 +1798,12 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
     try {
-      const { conversationId, message } = getValidatedBody(c, runWorkflowBodySchema);
+      const {
+        conversationId,
+        message,
+        provider: providerOverride,
+        model: modelOverride,
+      } = getValidatedBody(c, runWorkflowBodySchema);
       // Persist user message and register DB ID (same as message endpoint)
       let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
       try {
@@ -1826,7 +1831,18 @@ export function registerApiRoutes(
       }
 
       const fullMessage = `/workflow run ${workflowName} ${message}`;
-      const result = await dispatchToOrchestrator(conversationId, fullMessage);
+      // Build extraContext only when an override is present so existing
+      // dispatch paths (CLI, Slack, Telegram, GitHub, Discord) stay unchanged.
+      const extraContext =
+        providerOverride || modelOverride
+          ? {
+              runtimeOverride: {
+                ...(providerOverride ? { provider: providerOverride } : {}),
+                ...(modelOverride ? { model: modelOverride } : {}),
+              },
+            }
+          : undefined;
+      const result = await dispatchToOrchestrator(conversationId, fullMessage, extraContext);
       return c.json(result);
     } catch (error) {
       getLog().error({ err: error }, 'run_workflow_failed');

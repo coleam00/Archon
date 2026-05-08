@@ -200,11 +200,20 @@ export const dashboardRunsResponseSchema = z
   })
   .openapi('DashboardRunsResponse');
 
-/** POST /api/workflows/:name/run request body. */
+/** POST /api/workflows/:name/run request body.
+ *
+ * `provider` / `model` are optional per-request runtime overrides. When
+ * present they take precedence over the workflow YAML's top-level
+ * `provider` / `model` and the global assistant config. Used by external
+ * orchestrators (e.g. Velascat/OperationsCenter) to bind a specific
+ * runtime per dispatch without registering a new workflow YAML.
+ */
 export const runWorkflowBodySchema = z
   .object({
     conversationId: z.string(),
     message: z.string(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
   })
   .openapi('RunWorkflowBody');
 
