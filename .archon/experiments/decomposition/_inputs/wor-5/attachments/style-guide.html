@@ -1,0 +1,1402 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Conflict Coach · Style Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<style>
+/* ─── Tweakable tokens (defaults match design doc) ─── */
+:root {
+  --bg-canvas:#FAF8F5; --bg-surface:#FFFFFF; --bg-surface-subtle:#F3EFE9;
+  --text-primary:#1F1D1A; --text-secondary:#5C5952; --text-tertiary:#8A8680;
+  --border-default:#E5E0D8; --border-strong:#CBC4B8;
+  --accent:#6B8E7F; --accent-hover:#5A7A6C; --accent-subtle:#DCE7E0; --accent-on:#FFFFFF;
+  --coach-accent:#8B7AB5; --coach-subtle:#EAE4F2;
+  --party-initiator:#6B85A8; --party-initiator-subtle:#DFE5EF;
+  --party-invitee:#B07A8F; --party-invitee-subtle:#EFE0E4;
+  --danger:#B5594D; --danger-subtle:#F2DCD8;
+  --warning:#B58B4D; --warning-subtle:#F2E5D4;
+  --private-tint:#F0E9E0;
+  --radius-sm:6px; --radius-md:10px; --radius-lg:14px; --radius-xl:20px; --radius-full:9999px;
+  --shadow-0:none; --shadow-1:0 1px 2px rgba(0,0,0,.04); --shadow-2:0 4px 12px rgba(0,0,0,.06); --shadow-3:0 12px 32px rgba(0,0,0,.10);
+  --ease-out:cubic-bezier(.2,.7,.3,1); --dur-fast:150ms; --dur-medium:200ms;
+  --font-sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+[data-theme="dark"] {
+  --bg-canvas:#1A1816; --bg-surface:#242220; --bg-surface-subtle:#2E2B28;
+  --text-primary:#F2EFE9; --text-secondary:#A8A39A; --text-tertiary:#7A766E;
+  --border-default:#3A3632; --border-strong:#4A4640;
+  --accent:#89A99B; --accent-hover:#9ABAAC; --accent-subtle:#2E3A35; --accent-on:#1A1816;
+  --coach-accent:#A797CC; --coach-subtle:#342E42;
+  --party-initiator:#8BA3C2; --party-initiator-subtle:#2C3542;
+  --party-invitee:#CC96A9; --party-invitee-subtle:#3E2E34;
+  --danger:#CC786D; --danger-subtle:#3E2A27;
+  --warning:#CC9F6D; --warning-subtle:#3E3228;
+  --private-tint:#2D2924;
+  --shadow-1:0 1px 2px rgba(0,0,0,.20); --shadow-2:0 4px 12px rgba(0,0,0,.28); --shadow-3:0 12px 32px rgba(0,0,0,.40);
+}
+
+/* Variation: "Slate Neutral" — cooler grays, teal accent */
+[data-variant="slate"] {
+  --bg-canvas:#F7F7F5; --bg-surface:#FFFFFF; --bg-surface-subtle:#EEEEEA;
+  --text-primary:#1C1E1F; --text-secondary:#55595C; --text-tertiary:#898D8F;
+  --border-default:#E2E3E0; --border-strong:#C7C9C6;
+  --accent:#5A8F8A; --accent-hover:#4A7F7A; --accent-subtle:#D9E7E5; --accent-on:#FFFFFF;
+  --coach-accent:#7A78B5; --coach-subtle:#E4E3F2;
+  --private-tint:#ECECE8;
+}
+[data-theme="dark"][data-variant="slate"] {
+  --bg-canvas:#17191A; --bg-surface:#202223; --bg-surface-subtle:#2B2D2E;
+  --text-primary:#EEEFEE; --text-secondary:#A5A8A9; --text-tertiary:#77797A;
+  --border-default:#363839; --border-strong:#464849;
+  --accent:#7AABA6; --accent-hover:#8BBCB7; --accent-subtle:#2A3A38;
+  --coach-accent:#9997CC; --coach-subtle:#302E42;
+  --private-tint:#2A2B2C;
+}
+
+/* Variation: "Deeper Earth" — richer warmth, terracotta accent */
+[data-variant="earth"] {
+  --bg-canvas:#F6F1E9; --bg-surface:#FFFBF3; --bg-surface-subtle:#ECE4D3;
+  --text-primary:#231D15; --text-secondary:#665A48; --text-tertiary:#928771;
+  --border-default:#E0D5BD; --border-strong:#BFB193;
+  --accent:#A8624A; --accent-hover:#92533E; --accent-subtle:#F0D9CF; --accent-on:#FFFBF3;
+  --coach-accent:#7A6A9E; --coach-subtle:#E8E1F0;
+  --private-tint:#F0E4D0;
+}
+[data-theme="dark"][data-variant="earth"] {
+  --bg-canvas:#1E1812; --bg-surface:#28211A; --bg-surface-subtle:#322A22;
+  --text-primary:#F0E8D8; --text-secondary:#AFA38C; --text-tertiary:#7E7563;
+  --border-default:#403728; --border-strong:#554832;
+  --accent:#CC8671; --accent-hover:#D79A87; --accent-subtle:#40291F; --accent-on:#1E1812;
+  --coach-accent:#B09EC2; --coach-subtle:#352E42;
+  --private-tint:#2E251D;
+}
+
+/* ─── Base ─── */
+* { box-sizing: border-box; }
+html, body { margin:0; padding:0; }
+body {
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 15px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color var(--dur-medium) var(--ease-out), color var(--dur-medium) var(--ease-out);
+}
+h1,h2,h3,h4 { font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+code, .mono { font-family: var(--font-mono); }
+a { color: var(--accent); text-underline-offset: 2px; }
+hr { border: 0; border-top: 1px solid var(--border-default); margin: 0; }
+
+/* layout */
+.page { max-width: 1200px; margin: 0 auto; padding: 64px 32px 120px; }
+.masthead {
+  display:flex; align-items:flex-end; justify-content:space-between; gap:24px;
+  padding-bottom: 32px; border-bottom: 1px solid var(--border-default); margin-bottom: 56px;
+}
+.masthead h1 { font-size: 40px; line-height: 48px; letter-spacing: -0.02em; }
+.masthead .subtitle { color: var(--text-secondary); margin-top: 8px; font-size: 15px; }
+.masthead .mono-tag { font-family: var(--font-mono); font-size: 12px; color: var(--text-tertiary); margin-top: 12px; }
+
+section { margin-bottom: 72px; }
+section > .section-head { margin-bottom: 24px; }
+section > .section-head .kicker {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 8px;
+}
+section > .section-head h2 { font-size: 28px; line-height: 36px; letter-spacing: -0.015em; }
+section > .section-head p { color: var(--text-secondary); margin: 8px 0 0; max-width: 640px; }
+
+.grid { display: grid; gap: 16px; }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+.grid-auto { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+
+/* swatch */
+.swatch {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.swatch-chip { height: 88px; border-bottom: 1px solid var(--border-default); }
+.swatch-body { padding: 12px 14px; }
+.swatch-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.swatch-token { font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.swatch-hex { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+/* type spec */
+.type-row {
+  display: grid; grid-template-columns: 180px 1fr 240px; gap: 24px;
+  padding: 20px 0; border-bottom: 1px solid var(--border-default); align-items: baseline;
+}
+.type-row:last-child { border-bottom: 0; }
+.type-label { font-family: var(--font-mono); font-size: 12px; color: var(--text-tertiary); }
+.type-spec { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); }
+
+/* scale demos */
+.scale-row {
+  display: grid; grid-template-columns: 60px 1fr; gap: 16px; align-items: center; padding: 10px 0;
+}
+.scale-row .mono { font-size: 11px; color: var(--text-tertiary); }
+.scale-block { background: var(--accent-subtle); border-radius: var(--radius-sm); height: 40px; }
+.radius-block {
+  background: var(--accent-subtle); border: 1px solid var(--accent); width: 120px; height: 80px;
+}
+
+.shadow-block {
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  width: 100%; height: 120px; border-radius: var(--radius-lg); display:flex; align-items:center; justify-content:center;
+  color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px;
+}
+
+/* buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 16px; border-radius: var(--radius-md);
+  font-family: var(--font-sans); font-size: 14px; font-weight: 500; line-height: 20px;
+  border: 1px solid transparent; cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.btn-primary { background: var(--accent); color: var(--accent-on); border-color: var(--accent); }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-secondary { background: var(--bg-surface); color: var(--text-primary); border-color: var(--border-strong); }
+.btn-secondary:hover { background: var(--bg-surface-subtle); }
+.btn-ghost { background: transparent; color: var(--text-primary); border-color: transparent; }
+.btn-ghost:hover { background: var(--bg-surface-subtle); }
+.btn-danger { background: var(--danger); color:#fff; border-color: var(--danger); }
+.btn-sm { padding: 6px 12px; font-size: 13px; border-radius: var(--radius-sm); }
+.btn-lg { padding: 14px 24px; font-size: 15px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.btn-icon { padding: 8px; width: 36px; height: 36px; }
+
+/* forms */
+.input, .textarea {
+  width: 100%; padding: 10px 14px;
+  background: var(--bg-surface); color: var(--text-primary);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  font-family: var(--font-sans); font-size: 15px; line-height: 1.5;
+}
+.input::placeholder, .textarea::placeholder { color: var(--text-tertiary); }
+.input:focus, .textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-subtle); }
+.textarea { min-height: 88px; resize: vertical; }
+.label { display:block; font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+.helper { display:block; font-size: 13px; color: var(--text-secondary); margin-top: 6px; line-height: 1.5; }
+.error { display:block; font-size: 13px; color: var(--danger); margin-top: 6px; }
+
+.radio-card {
+  display:flex; align-items:flex-start; gap: 12px;
+  padding: 16px; background: var(--bg-surface);
+  border: 1px solid var(--border-default); border-radius: var(--radius-md); cursor: pointer;
+}
+.radio-card[data-selected="true"] {
+  border: 2px solid var(--accent); background: var(--accent-subtle); padding: 15px;
+}
+.radio-card .icon { color: var(--text-secondary); }
+.radio-card[data-selected="true"] .icon { color: var(--accent); }
+.radio-card .title { font-weight: 500; }
+.radio-card .desc { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+
+.select {
+  appearance: none; width: 100%; padding: 10px 14px;
+  background: var(--bg-surface) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238A8680' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>") no-repeat right 14px center;
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  font-family: var(--font-sans); font-size: 15px;
+}
+
+/* chat */
+.chat-frame {
+  background: var(--bg-canvas); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); overflow: hidden;
+}
+.chat-body { padding: 20px 24px; }
+.chat-row { display: flex; gap: 12px; margin-bottom: 16px; }
+.chat-row-right { flex-direction: row-reverse; }
+.chat-stack { display: flex; flex-direction: column; gap: 4px; max-width: 70%; }
+.chat-row-right .chat-stack { align-items: flex-end; }
+.chat-author { font-size: 12px; font-weight: 500; color: var(--text-secondary); padding: 0 4px; }
+.chat-timestamp { font-size: 11px; color: var(--text-tertiary); padding: 0 4px; }
+
+.bubble {
+  display: inline-block; padding: 12px 16px;
+  border-radius: var(--radius-lg); font-size: 16px; line-height: 1.55;
+  color: var(--text-primary); background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+}
+.bubble-coach { background: var(--accent-subtle); border-color: transparent; }
+.bubble-coach-joint { background: var(--coach-subtle); border: 0; border-left: 3px solid var(--coach-accent); border-top-left-radius: 4px; }
+.bubble-coach-intervention { background: var(--coach-subtle); border: 0; border-left: 4px solid var(--coach-accent); border-top-left-radius: 4px; padding-left: 14px; }
+.bubble-party-initiator { background: var(--party-initiator-subtle); border-color: transparent; }
+.bubble-party-invitee { background: var(--party-invitee-subtle); border-color: transparent; }
+.bubble-error { background: var(--danger-subtle); border: 1px solid var(--danger); color: var(--text-primary); display:flex; align-items:center; gap: 10px; }
+
+.cursor {
+  display: inline-block; width: 2px; height: 1em; vertical-align: text-bottom;
+  background: currentColor; margin-left: 2px;
+  animation: blink 1s steps(2,start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
+
+/* avatar */
+.avatar {
+  flex-shrink: 0; width: 32px; height: 32px; border-radius: var(--radius-full);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 500; color: #fff; background: var(--text-secondary);
+}
+.avatar-initiator { background: var(--party-initiator); }
+.avatar-invitee { background: var(--party-invitee); }
+.avatar-coach { background: var(--coach-accent); }
+.avatar-you { background: var(--accent); color: var(--accent-on); }
+
+/* banner */
+.banner-privacy {
+  display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px;
+  background: var(--private-tint); border-bottom: 1px solid var(--border-default);
+  color: var(--text-secondary); font-size: 13px; line-height: 1.5;
+}
+.banner-privacy strong { color: var(--text-primary); font-weight: 500; }
+.banner-privacy .icon { flex-shrink: 0; margin-top: 1px; color: var(--text-secondary); }
+
+/* pills */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: var(--radius-full);
+  font-size: 12px; font-weight: 500;
+  background: var(--bg-surface-subtle); color: var(--text-secondary);
+}
+.pill-dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: currentColor; }
+.pill-turn { color: var(--accent); background: var(--accent-subtle); }
+.pill-waiting .pill-dot { background: transparent; border: 1.5px solid currentColor; }
+.pill-ready { color: var(--warning); background: var(--warning-subtle); }
+.pill-closed { color: var(--text-tertiary); }
+.pill-closed .pill-dot { border-radius: 2px; }
+
+/* case row */
+.case-row {
+  display: grid; grid-template-columns: auto 1fr auto;
+  gap: 16px; align-items: center;
+  padding: 20px 24px; background: var(--bg-surface);
+  border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+  cursor: pointer; transition: background var(--dur-fast) var(--ease-out);
+}
+.case-row:hover { background: var(--bg-surface-subtle); }
+.case-row .title { font-weight: 500; font-size: 16px; }
+.case-row .meta { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.case-row .status { font-size: 13px; color: var(--text-secondary); margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; }
+.case-row .last { font-size: 12px; color: var(--text-tertiary); margin-top: 8px; }
+
+/* synthesis card */
+.synthesis {
+  background: var(--private-tint); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); padding: 32px;
+}
+.synthesis h3 { font-size: 15px; font-weight: 500; margin: 0 0 8px; color: var(--text-primary); }
+.synthesis h3:not(:first-of-type) { margin-top: 24px; }
+.synthesis p { margin: 0; line-height: 1.7; }
+
+/* drawer */
+.drawer {
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl); box-shadow: var(--shadow-3);
+  width: 420px; display: flex; flex-direction: column; overflow: hidden;
+}
+.drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border-default);
+}
+.drawer-header-title { display:flex; align-items:center; gap: 8px; font-weight: 500; }
+.drawer-body { padding: 20px; background: var(--bg-canvas); }
+.drawer-footer { padding: 16px 20px; border-top: 1px solid var(--border-default); background: var(--bg-surface); }
+.draft-ready {
+  background: var(--bg-surface-subtle); border: 1px solid var(--border-default);
+  border-radius: var(--radius-md); padding: 16px; font-size: 15px; line-height: 1.6; margin-bottom: 16px;
+}
+
+/* party toggle */
+.party-toggle {
+  display: inline-flex; align-items: center; padding: 3px;
+  background: var(--coach-subtle); border: 1px solid var(--coach-accent); border-radius: var(--radius-md);
+}
+.party-toggle-label {
+  font-size: 11px; font-weight: 500; color: var(--coach-accent);
+  padding: 0 8px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.party-toggle-btn {
+  padding: 6px 12px; font-size: 13px; font-weight: 500;
+  color: var(--text-secondary); background: transparent; border: 0;
+  border-radius: var(--radius-sm); cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+.party-toggle-btn[data-active="true"] {
+  background: var(--bg-surface); color: var(--text-primary); box-shadow: var(--shadow-1);
+}
+
+/* phase header */
+.phase-header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 24px; background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-default);
+}
+.phase-header-back { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; text-decoration: none; }
+.phase-header-title { font-size: 15px; font-weight: 500; display: flex; align-items: center; gap: 10px; }
+.phase-header-sep { color: var(--text-tertiary); }
+.phase-header-phase { color: var(--text-secondary); font-weight: 400; }
+
+/* misc layout helpers */
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
+.muted { color: var(--text-secondary); }
+.tertiary { color: var(--text-tertiary); }
+
+/* tweaks panel */
+.tweaks {
+  position: fixed; bottom: 16px; right: 16px; z-index: 50;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-3);
+  width: 280px; padding: 16px; display: none;
+  font-family: var(--font-sans);
+}
+.tweaks.open { display: block; }
+.tweaks h3 { font-size: 13px; margin-bottom: 12px; font-family: var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary); }
+.tweaks-field { margin-bottom: 14px; }
+.tweaks label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 6px; color: var(--text-secondary); }
+.tweaks .segmented {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  background: var(--bg-surface-subtle); border-radius: var(--radius-sm); padding: 2px;
+}
+.tweaks .segmented button {
+  padding: 6px 8px; font-size: 12px; font-weight: 500;
+  background: transparent; border: 0; color: var(--text-secondary);
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.tweaks .segmented button[data-active="true"] {
+  background: var(--bg-surface); color: var(--text-primary); box-shadow: var(--shadow-1);
+}
+
+/* dual-mode frame — render a component in both light and dark */
+.dual {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.dual-pane {
+  border-radius: var(--radius-lg); overflow: hidden;
+  border: 1px solid var(--border-default);
+}
+.dual-pane > .pane-body { padding: 24px; }
+.dual-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.08em; padding: 8px 16px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+/* Inline light/dark isolated scopes for the dual demo */
+.scope-light { color-scheme: light; background: #FAF8F5; color: #1F1D1A; }
+.scope-dark  { color-scheme: dark;  background: #1A1816; color: #F2EFE9; }
+
+.scope-light {
+  --bg-canvas:#FAF8F5; --bg-surface:#FFFFFF; --bg-surface-subtle:#F3EFE9;
+  --text-primary:#1F1D1A; --text-secondary:#5C5952; --text-tertiary:#8A8680;
+  --border-default:#E5E0D8; --border-strong:#CBC4B8;
+  --accent:#6B8E7F; --accent-hover:#5A7A6C; --accent-subtle:#DCE7E0; --accent-on:#FFFFFF;
+  --coach-accent:#8B7AB5; --coach-subtle:#EAE4F2;
+  --party-initiator:#6B85A8; --party-initiator-subtle:#DFE5EF;
+  --party-invitee:#B07A8F; --party-invitee-subtle:#EFE0E4;
+  --danger:#B5594D; --danger-subtle:#F2DCD8;
+  --warning:#B58B4D; --warning-subtle:#F2E5D4;
+  --private-tint:#F0E9E0;
+}
+.scope-dark {
+  --bg-canvas:#1A1816; --bg-surface:#242220; --bg-surface-subtle:#2E2B28;
+  --text-primary:#F2EFE9; --text-secondary:#A8A39A; --text-tertiary:#7A766E;
+  --border-default:#3A3632; --border-strong:#4A4640;
+  --accent:#89A99B; --accent-hover:#9ABAAC; --accent-subtle:#2E3A35; --accent-on:#1A1816;
+  --coach-accent:#A797CC; --coach-subtle:#342E42;
+  --party-initiator:#8BA3C2; --party-initiator-subtle:#2C3542;
+  --party-invitee:#CC96A9; --party-invitee-subtle:#3E2E34;
+  --danger:#CC786D; --danger-subtle:#3E2A27;
+  --warning:#CC9F6D; --warning-subtle:#3E3228;
+  --private-tint:#2D2924;
+}
+
+[data-variant="slate"] .scope-light {
+  --bg-canvas:#F7F7F5; --bg-surface:#FFFFFF; --bg-surface-subtle:#EEEEEA;
+  --text-primary:#1C1E1F; --text-secondary:#55595C; --text-tertiary:#898D8F;
+  --border-default:#E2E3E0; --border-strong:#C7C9C6;
+  --accent:#5A8F8A; --accent-hover:#4A7F7A; --accent-subtle:#D9E7E5;
+  --coach-accent:#7A78B5; --coach-subtle:#E4E3F2; --private-tint:#ECECE8;
+  background:#F7F7F5; color:#1C1E1F;
+}
+[data-variant="slate"] .scope-dark {
+  --bg-canvas:#17191A; --bg-surface:#202223; --bg-surface-subtle:#2B2D2E;
+  --text-primary:#EEEFEE; --text-secondary:#A5A8A9; --text-tertiary:#77797A;
+  --border-default:#363839; --border-strong:#464849;
+  --accent:#7AABA6; --accent-hover:#8BBCB7; --accent-subtle:#2A3A38;
+  --coach-accent:#9997CC; --coach-subtle:#302E42; --private-tint:#2A2B2C;
+  background:#17191A; color:#EEEFEE;
+}
+[data-variant="earth"] .scope-light {
+  --bg-canvas:#F6F1E9; --bg-surface:#FFFBF3; --bg-surface-subtle:#ECE4D3;
+  --text-primary:#231D15; --text-secondary:#665A48; --text-tertiary:#928771;
+  --border-default:#E0D5BD; --border-strong:#BFB193;
+  --accent:#A8624A; --accent-hover:#92533E; --accent-subtle:#F0D9CF; --accent-on:#FFFBF3;
+  --coach-accent:#7A6A9E; --coach-subtle:#E8E1F0; --private-tint:#F0E4D0;
+  background:#F6F1E9; color:#231D15;
+}
+[data-variant="earth"] .scope-dark {
+  --bg-canvas:#1E1812; --bg-surface:#28211A; --bg-surface-subtle:#322A22;
+  --text-primary:#F0E8D8; --text-secondary:#AFA38C; --text-tertiary:#7E7563;
+  --border-default:#403728; --border-strong:#554832;
+  --accent:#CC8671; --accent-hover:#D79A87; --accent-subtle:#40291F; --accent-on:#1E1812;
+  --coach-accent:#B09EC2; --coach-subtle:#352E42; --private-tint:#2E251D;
+  background:#1E1812; color:#F0E8D8;
+}
+
+/* Toolbar */
+.toolbar {
+  position: sticky; top: 0; z-index: 40;
+  background: color-mix(in oklch, var(--bg-canvas) 92%, transparent);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-default);
+}
+.toolbar-inner {
+  max-width: 1200px; margin: 0 auto; padding: 12px 32px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.toolbar-brand { display: flex; align-items: center; gap: 10px; font-weight: 500; }
+.toolbar-brand .logo-dot { width: 14px; height: 14px; border-radius: 4px; background: var(--accent); }
+.toolbar-actions { display: flex; gap: 8px; align-items: center; }
+
+/* anchors / TOC */
+.toc {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  padding: 16px 20px; background: var(--bg-surface);
+  border: 1px solid var(--border-default); border-radius: var(--radius-lg);
+  font-size: 13px; color: var(--text-secondary);
+  margin-bottom: 56px;
+}
+.toc a { color: var(--text-secondary); text-decoration: none; padding: 4px 8px; border-radius: var(--radius-sm); }
+.toc a:hover { background: var(--bg-surface-subtle); color: var(--text-primary); }
+
+[data-tweaks-on="false"] .tweaks { display: none; }
+</style>
+</head>
+<body>
+
+<!-- ─── Toolbar ─────────────────────────────────────────────── -->
+<div class="toolbar">
+  <div class="toolbar-inner">
+    <div class="toolbar-brand">
+      <span class="logo-dot"></span>
+      <span>Conflict Coach · Style Guide</span>
+      <span class="mono" style="font-size:11px;color:var(--text-tertiary);margin-left:8px;">v1.0</span>
+    </div>
+    <div class="toolbar-actions">
+      <button class="btn btn-ghost btn-sm" id="toggle-theme" title="Toggle theme">
+        <i data-lucide="sun-moon" style="width:16px;height:16px;"></i>
+        <span>Theme</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="page">
+
+<!-- ─── Masthead ────────────────────────────────────────────── -->
+<div class="masthead">
+  <div>
+    <div class="mono-tag">Applied Labs · aplab.ai · April 2026</div>
+    <h1>A calm visual language for a stressful conversation.</h1>
+    <p class="subtitle" style="max-width:680px;">
+      The tokens and components below are the full vocabulary for Conflict Coach v1.
+      Review, tweak, and hand off to the implementing agent with <span class="mono">STYLE_GUIDE.md</span> + <span class="mono">globals.css</span>.
+    </p>
+  </div>
+  <div class="stack" style="align-items:flex-end;">
+    <div class="pill pill-turn"><span class="pill-dot"></span>On-spec · light+dark</div>
+  </div>
+</div>
+
+<nav class="toc">
+  <strong style="color:var(--text-primary);font-weight:500;">Contents</strong>
+  <a href="#principles">Principles</a>
+  <a href="#color">Color</a>
+  <a href="#type">Type</a>
+  <a href="#scale">Spacing · Radius · Shadow</a>
+  <a href="#buttons">Buttons</a>
+  <a href="#forms">Forms</a>
+  <a href="#chat">Chat bubbles</a>
+  <a href="#privacy">Privacy banner</a>
+  <a href="#pills">Status pills · Dashboard</a>
+  <a href="#synthesis">Synthesis card</a>
+  <a href="#draft">Draft Coach panel</a>
+  <a href="#solo">Solo mode toggle</a>
+  <a href="#dark">Dark mode</a>
+  <a href="#rules">Copy rules</a>
+</nav>
+
+<!-- ─── Principles ──────────────────────────────────────────── -->
+<section id="principles">
+  <div class="section-head">
+    <div class="kicker">01 · Principles</div>
+    <h2>Five rules, in order of priority.</h2>
+    <p>When two principles conflict, the earlier one wins. This is how we resolve design disagreements without another meeting.</p>
+  </div>
+  <div class="grid grid-auto">
+    <div class="swatch" style="padding:20px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:8px;">01</div>
+      <h3 style="margin-bottom:6px;">Calm over clever</h3>
+      <p class="muted" style="margin:0;font-size:13px;line-height:1.55;">No saturated colors, no gamification, no celebration motion. The user is stressed — the UI should feel like a breath.</p>
+    </div>
+    <div class="swatch" style="padding:20px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:8px;">02</div>
+      <h3 style="margin-bottom:6px;">The human decides</h3>
+      <p class="muted" style="margin:0;font-size:13px;line-height:1.55;">Every AI output is a suggestion. The Send button is always a human action — never automatic.</p>
+    </div>
+    <div class="swatch" style="padding:20px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:8px;">03</div>
+      <h3 style="margin-bottom:6px;">Privacy is visible</h3>
+      <p class="muted" style="margin:0;font-size:13px;line-height:1.55;">If data is private, the screen says so. Trust is earned by showing the seams, not hiding them.</p>
+    </div>
+    <div class="swatch" style="padding:20px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:8px;">04</div>
+      <h3 style="margin-bottom:6px;">One primary action</h3>
+      <p class="muted" style="margin:0;font-size:13px;line-height:1.55;">Exactly one sage-filled button per screen. Secondary actions are visually subordinated.</p>
+    </div>
+    <div class="swatch" style="padding:20px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:8px;">05</div>
+      <h3 style="margin-bottom:6px;">Presence over polish</h3>
+      <p class="muted" style="margin:0;font-size:13px;line-height:1.55;">Streaming cursors, live updates, quiet activity. Invest motion in real interaction.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Color ───────────────────────────────────────────────── -->
+<section id="color">
+  <div class="section-head">
+    <div class="kicker">02 · Color</div>
+    <h2>Warm neutrals, sage accent, lavender for the AI.</h2>
+    <p>Every token is declared as a CSS custom property. Dark mode swaps values; components never reference hex directly.</p>
+  </div>
+
+  <h3 style="margin:24px 0 12px;">Neutrals &amp; surfaces</h3>
+  <div class="grid grid-4" id="swatches-neutral"></div>
+
+  <h3 style="margin:32px 0 12px;">Accent · Sage (primary action)</h3>
+  <div class="grid grid-4" id="swatches-accent"></div>
+
+  <h3 style="margin:32px 0 12px;">Coach · Dusty Lavender (AI identity)</h3>
+  <div class="grid grid-4" id="swatches-coach"></div>
+
+  <h3 style="margin:32px 0 12px;">Party colors (joint chat)</h3>
+  <div class="grid grid-4" id="swatches-party"></div>
+
+  <h3 style="margin:32px 0 12px;">Feedback</h3>
+  <div class="grid grid-4" id="swatches-feedback"></div>
+
+  <h3 style="margin:32px 0 12px;">Tints</h3>
+  <div class="grid grid-4" id="swatches-tints"></div>
+</section>
+
+<!-- ─── Type ────────────────────────────────────────────────── -->
+<section id="type">
+  <div class="section-head">
+    <div class="kicker">03 · Typography</div>
+    <h2>Inter for everything. JetBrains Mono for tokens and IDs.</h2>
+    <p>Headings are weight 500, never 700. Bold headings feel shouty in a mediation context.</p>
+  </div>
+
+  <div class="swatch" style="padding: 8px 24px;">
+    <div class="type-row">
+      <div class="type-label">display</div>
+      <div style="font-size:32px; line-height: 40px; font-weight: 500; letter-spacing: -0.02em;">A calm place to work through a difficult conversation.</div>
+      <div class="type-spec">32 / 40 · 500</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">h1</div>
+      <div style="font-size:24px; line-height: 32px; font-weight: 500; letter-spacing:-0.015em;">Case with Jordan</div>
+      <div class="type-spec">24 / 32 · 500</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">h2</div>
+      <div style="font-size:20px; line-height: 28px; font-weight: 500;">Ready for Joint Session</div>
+      <div class="type-spec">20 / 28 · 500</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">h3</div>
+      <div style="font-size:17px; line-height: 24px; font-weight: 500;">Areas of likely agreement</div>
+      <div class="type-spec">17 / 24 · 500</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">body</div>
+      <div style="font-size:15px; line-height: 1.6;">Coach AI has access to both parties' context and synthesizes themes in its own words. It never quotes the other party's raw private input.</div>
+      <div class="type-spec">15 / 1.6 · 400</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">chat</div>
+      <div style="font-size:16px; line-height: 1.55;">Honestly, I'm frustrated. I feel like Jordan doesn't respect my time.</div>
+      <div class="type-spec">16 / 1.55 · 400</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">label</div>
+      <div style="font-size:14px; line-height: 20px; font-weight: 500;">What would a good resolution look like?</div>
+      <div class="type-spec">14 / 20 · 500</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">meta</div>
+      <div style="font-size:13px; color: var(--text-secondary);">Workplace · Created Apr 15</div>
+      <div class="type-spec">13 / 18 · 400 secondary</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">timestamp</div>
+      <div style="font-size:12px; color: var(--text-tertiary);">2 hours ago</div>
+      <div class="type-spec">12 / 16 · 400 tertiary</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">mono</div>
+      <div class="mono" style="font-size:14px;">conflictcoach.app/invite/fr8k2q9mz0x1</div>
+      <div class="type-spec">JetBrains Mono · 14 / 20</div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Spacing / Radius / Shadow ───────────────────────────── -->
+<section id="scale">
+  <div class="section-head">
+    <div class="kicker">04 · Spacing · Radius · Shadow</div>
+    <h2>8-point grid. Four shadow levels.</h2>
+  </div>
+
+  <div class="grid grid-3">
+    <div>
+      <h3 style="margin-bottom:12px;">Spacing</h3>
+      <div class="swatch" style="padding: 12px 20px;" id="spacing-scale"></div>
+    </div>
+    <div>
+      <h3 style="margin-bottom:12px;">Radius</h3>
+      <div class="swatch" style="padding: 20px; display:flex; flex-direction:column; gap:16px;" id="radius-scale"></div>
+    </div>
+    <div>
+      <h3 style="margin-bottom:12px;">Shadow</h3>
+      <div class="stack">
+        <div class="shadow-block" style="box-shadow: var(--shadow-0);">shadow-0 · flat</div>
+        <div class="shadow-block" style="box-shadow: var(--shadow-1);">shadow-1 · cards</div>
+        <div class="shadow-block" style="box-shadow: var(--shadow-2);">shadow-2 · popovers</div>
+        <div class="shadow-block" style="box-shadow: var(--shadow-3);">shadow-3 · modals</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Buttons ─────────────────────────────────────────────── -->
+<section id="buttons">
+  <div class="section-head">
+    <div class="kicker">05 · Buttons</div>
+    <h2>One sage-filled primary per screen. Everything else subordinated.</h2>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="swatch" style="padding:28px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:16px;">VARIANTS</div>
+      <div class="row">
+        <button class="btn btn-primary"><i data-lucide="send" style="width:16px;height:16px;"></i>Send message</button>
+        <button class="btn btn-secondary">Cancel</button>
+        <button class="btn btn-ghost">Learn more</button>
+        <button class="btn btn-danger"><i data-lucide="x" style="width:16px;height:16px;"></i>Close case</button>
+      </div>
+      <div class="mono tertiary" style="font-size:11px;margin:24px 0 16px;">LINK</div>
+      <div class="row">
+        <a href="#" style="font-size:14px;">How does privacy work?</a>
+      </div>
+    </div>
+
+    <div class="swatch" style="padding:28px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:16px;">SIZES</div>
+      <div class="row">
+        <button class="btn btn-primary btn-sm">Small</button>
+        <button class="btn btn-primary">Medium</button>
+        <button class="btn btn-primary btn-lg">Large</button>
+      </div>
+      <div class="mono tertiary" style="font-size:11px;margin:24px 0 16px;">STATES</div>
+      <div class="row">
+        <button class="btn btn-primary">Default</button>
+        <button class="btn btn-primary" style="background:var(--accent-hover);border-color:var(--accent-hover);">Hover</button>
+        <button class="btn btn-primary" disabled>Disabled</button>
+      </div>
+      <div class="mono tertiary" style="font-size:11px;margin:24px 0 16px;">ICON</div>
+      <div class="row">
+        <button class="btn btn-secondary btn-icon" aria-label="Copy"><i data-lucide="copy" style="width:16px;height:16px;"></i></button>
+        <button class="btn btn-secondary btn-icon" aria-label="Close"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+        <button class="btn btn-secondary btn-icon" aria-label="Sparkles"><i data-lucide="sparkles" style="width:16px;height:16px;"></i></button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Forms ───────────────────────────────────────────────── -->
+<section id="forms">
+  <div class="section-head">
+    <div class="kicker">06 · Forms</div>
+    <h2>Structured intake that doesn't feel like a tax form.</h2>
+  </div>
+
+  <div class="grid grid-2">
+    <div class="swatch" style="padding: 28px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:16px;">INPUT · TEXTAREA · SELECT</div>
+      <div class="stack">
+        <div>
+          <label class="label">Their name</label>
+          <input class="input" placeholder="Jordan" />
+          <span class="helper">Just a first name or nickname is fine.</span>
+        </div>
+        <div>
+          <label class="label">In one sentence, what's this about?</label>
+          <textarea class="textarea" rows="2">We disagree on the project deadline and the scope that fits inside it.</textarea>
+          <span class="helper">Visible to the other person when they accept the invitation. Keep it factual, not emotional.</span>
+        </div>
+        <div>
+          <label class="label">Category</label>
+          <select class="select">
+            <option>Workplace</option>
+            <option>Family</option>
+            <option>Personal</option>
+            <option>Contractual / business</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div>
+          <label class="label">Your email</label>
+          <input class="input" aria-invalid="true" value="alex@example" />
+          <span class="error">That doesn't look like a valid email.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="swatch" style="padding: 28px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:16px;">RADIO CARDS (CATEGORY PICKER)</div>
+      <div class="stack">
+        <div class="radio-card" data-selected="true">
+          <i data-lucide="briefcase" style="width:20px;height:20px;" class="icon"></i>
+          <div>
+            <div class="title">Workplace</div>
+            <div class="desc">Coworker, manager, cofounder, or teammate friction.</div>
+          </div>
+        </div>
+        <div class="radio-card">
+          <i data-lucide="home" style="width:20px;height:20px;" class="icon"></i>
+          <div>
+            <div class="title">Family</div>
+            <div class="desc">Partner, parent, sibling, or in-law disagreement.</div>
+          </div>
+        </div>
+        <div class="radio-card">
+          <i data-lucide="users" style="width:20px;height:20px;" class="icon"></i>
+          <div>
+            <div class="title">Personal relationship</div>
+            <div class="desc">Friend, roommate, or community dispute.</div>
+          </div>
+        </div>
+        <div class="radio-card">
+          <i data-lucide="file-text" style="width:20px;height:20px;" class="icon"></i>
+          <div>
+            <div class="title">Contractual / business</div>
+            <div class="desc">Freelance, vendor, or agreement dispute.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Chat bubbles ────────────────────────────────────────── -->
+<section id="chat">
+  <div class="section-head">
+    <div class="kicker">07 · Chat bubbles</div>
+    <h2>Every voice has its own color.</h2>
+    <p>User = surface white · Private Coach = sage · Joint Coach = lavender (left-border) · Alex = soft blue · Jordan = soft rose · Error = muted terracotta.</p>
+  </div>
+
+  <div class="chat-frame">
+    <div class="phase-header">
+      <a class="phase-header-back" href="#"><i data-lucide="arrow-left" style="width:14px;height:14px;"></i>Dashboard</a>
+      <div class="phase-header-title">
+        <span>Case with Jordan</span>
+        <span class="phase-header-sep">·</span>
+        <span class="phase-header-phase">Private Coaching</span>
+      </div>
+    </div>
+    <div class="banner-privacy">
+      <i data-lucide="lock" style="width:16px;height:16px;" class="icon"></i>
+      <div><strong>This conversation is private to you.</strong> Jordan will never see any of it. <a href="#">Learn more</a></div>
+    </div>
+    <div class="chat-body">
+
+      <div class="chat-row">
+        <div class="avatar avatar-coach">C</div>
+        <div class="chat-stack">
+          <span class="chat-author">Coach</span>
+          <div class="bubble bubble-coach">
+            Hi Alex. I'm here to help you think through what's going on. Before we get into specifics, I'd like to understand how you're feeling right now. Can you describe that?
+          </div>
+          <span class="chat-timestamp">10:24 AM</span>
+        </div>
+      </div>
+
+      <div class="chat-row chat-row-right">
+        <div class="avatar avatar-you">A</div>
+        <div class="chat-stack">
+          <div class="bubble">
+            Honestly, I'm frustrated. I feel like Jordan doesn't respect my time.
+          </div>
+          <span class="chat-timestamp">10:26 AM</span>
+        </div>
+      </div>
+
+      <div class="chat-row">
+        <div class="avatar avatar-coach">C</div>
+        <div class="chat-stack">
+          <span class="chat-author">Coach</span>
+          <div class="bubble bubble-coach">
+            That's helpful context. Can you tell me about a recent moment when you felt that way<span class="cursor"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-row">
+        <div class="avatar avatar-coach">C</div>
+        <div class="chat-stack">
+          <span class="chat-author">Coach</span>
+          <div class="bubble bubble-error">
+            <i data-lucide="alert-triangle" style="width:16px;height:16px;color:var(--danger);"></i>
+            <span>Coach is unavailable right now.</span>
+            <button class="btn btn-sm btn-secondary" style="margin-left:auto;">Retry</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <h3 style="margin:40px 0 16px;">Joint chat — Coach intervention</h3>
+  <div class="chat-frame">
+    <div class="phase-header">
+      <a class="phase-header-back" href="#"><i data-lucide="arrow-left" style="width:14px;height:14px;"></i>Dashboard</a>
+      <div class="phase-header-title">
+        <span>Case with Jordan</span>
+        <span class="phase-header-sep">·</span>
+        <span class="phase-header-phase">Joint Session</span>
+      </div>
+      <div style="margin-left:auto;" class="row">
+        <button class="btn btn-ghost btn-sm"><i data-lucide="book-open" style="width:14px;height:14px;"></i>My guidance</button>
+        <button class="btn btn-secondary btn-sm">Close</button>
+      </div>
+    </div>
+    <div class="chat-body">
+      <div class="chat-row">
+        <div class="avatar avatar-invitee">J</div>
+        <div class="chat-stack">
+          <span class="chat-author">Jordan</span>
+          <div class="bubble bubble-party-invitee">
+            Hey Alex. I want to start by saying I hear you on the timing thing. I've been sitting with that since we last talked.
+          </div>
+        </div>
+      </div>
+      <div class="chat-row chat-row-right">
+        <div class="avatar avatar-initiator">A</div>
+        <div class="chat-stack">
+          <div class="bubble bubble-party-initiator">
+            Thanks, Jordan. I appreciate that. Here's where I'm at — the deadline itself isn't flexible on my side, but I know scope might be.
+          </div>
+        </div>
+      </div>
+      <div class="chat-row">
+        <div class="avatar avatar-coach">⟡</div>
+        <div class="chat-stack">
+          <span class="chat-author">Coach</span>
+          <div class="bubble bubble-coach-intervention">
+            A point of agreement is starting to emerge — you both want this to succeed and you're both flexible on at least one variable. Want to name the specific constraint next?
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Privacy banner / iconography ────────────────────────── -->
+<section id="privacy">
+  <div class="section-head">
+    <div class="kicker">08 · Privacy banner &amp; lock iconography</div>
+    <h2>Privacy is never implied. It is labeled.</h2>
+  </div>
+  <div class="stack">
+    <div class="swatch" style="padding: 0; overflow:hidden;">
+      <div class="banner-privacy">
+        <i data-lucide="lock" style="width:16px;height:16px;" class="icon"></i>
+        <div><strong>Private to you.</strong> Only you and the AI coach will see this. <a href="#">Learn more about privacy</a></div>
+      </div>
+    </div>
+    <div class="swatch" style="padding: 0; overflow:hidden;">
+      <div class="banner-privacy" style="background:var(--warning-subtle);border-bottom-color:var(--warning);">
+        <i data-lucide="shield-alert" style="width:16px;height:16px;color:var(--warning);" class="icon"></i>
+        <div><strong style="color:var(--text-primary);">Heads up —</strong> the Coach flagged this message as potentially inflammatory. You can take a moment, or send it as-is.</div>
+      </div>
+    </div>
+    <div class="row" style="gap:16px;">
+      <div class="row" style="gap:8px;"><i data-lucide="lock" style="width:16px;height:16px;color:var(--text-secondary);"></i><span class="muted">Private to you</span></div>
+      <div class="row" style="gap:8px;"><i data-lucide="shield-check" style="width:16px;height:16px;color:var(--accent);"></i><span class="muted">Coach-verified</span></div>
+      <div class="row" style="gap:8px;"><i data-lucide="users" style="width:16px;height:16px;color:var(--text-secondary);"></i><span class="muted">Shared with Jordan</span></div>
+      <div class="row" style="gap:8px;"><i data-lucide="sparkles" style="width:16px;height:16px;color:var(--coach-accent);"></i><span class="muted">Coach message</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Status pills / Dashboard ────────────────────────────── -->
+<section id="pills">
+  <div class="section-head">
+    <div class="kicker">09 · Status pills · Dashboard row</div>
+    <h2>One glyph per state, works at any size.</h2>
+  </div>
+
+  <div class="row" style="margin-bottom: 24px;">
+    <span class="pill pill-turn"><span class="pill-dot"></span>Your turn</span>
+    <span class="pill pill-waiting"><span class="pill-dot"></span>Waiting on Jordan</span>
+    <span class="pill pill-ready"><span class="pill-dot"></span>Ready for joint session</span>
+    <span class="pill pill-closed"><span class="pill-dot"></span>Resolved</span>
+  </div>
+
+  <div class="stack">
+    <div class="case-row">
+      <div class="avatar avatar-invitee" style="width:40px;height:40px;font-size:15px;">J</div>
+      <div>
+        <div class="title">Case with Jordan</div>
+        <div class="meta">Workplace · Created Apr 15</div>
+        <div class="status"><span class="pill pill-turn"><span class="pill-dot"></span>Your turn — continue private coaching</span></div>
+        <div class="last">Last activity: 2 hours ago</div>
+      </div>
+      <button class="btn btn-secondary btn-sm">Enter <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>
+    </div>
+    <div class="case-row">
+      <div class="avatar avatar-invitee" style="width:40px;height:40px;font-size:15px;">S</div>
+      <div>
+        <div class="title">Case with Sam</div>
+        <div class="meta">Family · Created Apr 10</div>
+        <div class="status"><span class="pill pill-waiting"><span class="pill-dot"></span>Waiting on Sam to finish private coaching</span></div>
+        <div class="last">Last activity: yesterday</div>
+      </div>
+      <button class="btn btn-ghost btn-sm">View</button>
+    </div>
+    <div class="case-row">
+      <div class="avatar avatar-invitee" style="width:40px;height:40px;font-size:15px;">R</div>
+      <div>
+        <div class="title">Case with Riley</div>
+        <div class="meta">Personal · Created Apr 3</div>
+        <div class="status"><span class="pill pill-ready"><span class="pill-dot"></span>Ready to enter joint session</span></div>
+        <div class="last">Last activity: 4 days ago</div>
+      </div>
+      <button class="btn btn-primary btn-sm">Enter <i data-lucide="arrow-right" style="width:14px;height:14px;"></i></button>
+    </div>
+    <div class="case-row" style="opacity: .75;">
+      <div class="avatar" style="width:40px;height:40px;font-size:15px;background:var(--text-tertiary);">T</div>
+      <div>
+        <div class="title">Case with Taylor</div>
+        <div class="meta">Contractual · Closed Mar 28</div>
+        <div class="status"><span class="pill pill-closed"><span class="pill-dot"></span>Resolved</span></div>
+        <div class="last">Last activity: 3 weeks ago</div>
+      </div>
+      <button class="btn btn-ghost btn-sm">View archive</button>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Synthesis card ──────────────────────────────────────── -->
+<section id="synthesis">
+  <div class="section-head">
+    <div class="kicker">10 · Synthesis card</div>
+    <h2>The moment of pause before the joint session.</h2>
+    <p>Displayed on the "Ready for Joint" screen. Generated per-party, never containing raw quotes from the other party.</p>
+  </div>
+
+  <div style="max-width:720px;">
+    <div class="banner-privacy" style="border-bottom-left-radius:0;border-bottom-right-radius:0;border:1px solid var(--border-default);border-bottom:0;border-radius:var(--radius-lg) var(--radius-lg) 0 0;">
+      <i data-lucide="lock" style="width:16px;height:16px;" class="icon"></i>
+      <div><strong>Private to you</strong> — Jordan has their own version.</div>
+    </div>
+    <div class="synthesis" style="border-top-left-radius:0;border-top-right-radius:0;border-top:0;">
+      <h3>Areas of likely agreement</h3>
+      <p>Both of you value the project's success, and both recognize the current timing tension is solvable. There's more common ground here than either of you may feel in the moment.</p>
+      <h3>Points that will need real discussion</h3>
+      <p>There's a genuine difference in how each of you prioritizes scope versus deadline. Expect to spend time on the trade-off, not just the calendar.</p>
+      <h3>Suggested approach</h3>
+      <p>Start by acknowledging what's working before raising the constraint question. Be specific about your hard dates; keep scope open as the shared variable.</p>
+      <div style="margin-top:32px; display:flex; justify-content:center;">
+        <button class="btn btn-primary btn-lg">Enter joint session<i data-lucide="arrow-right" style="width:16px;height:16px;"></i></button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Draft Coach ─────────────────────────────────────────── -->
+<section id="draft">
+  <div class="section-head">
+    <div class="kicker">11 · Draft Coach panel</div>
+    <h2>The human is always the one who clicks Send.</h2>
+    <p>Draft Coach never auto-posts. It helps, reviews, and hands off — the user sends.</p>
+  </div>
+
+  <div class="grid grid-2" style="align-items:flex-start;">
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-header-title">
+          <i data-lucide="sparkles" style="width:16px;height:16px;color:var(--coach-accent);"></i>
+          Draft Coach
+          <i data-lucide="lock" style="width:14px;height:14px;color:var(--text-tertiary);margin-left:4px;"></i>
+        </div>
+        <button class="btn btn-ghost btn-icon" aria-label="Close"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="banner-privacy">
+        <i data-lucide="lock" style="width:16px;height:16px;" class="icon"></i>
+        <div>Jordan can't see what you discuss here. Only the final message you send goes to the joint chat.</div>
+      </div>
+      <div class="drawer-body">
+        <div class="chat-row">
+          <div class="avatar avatar-sm avatar-coach" style="width:24px;height:24px;font-size:11px;">C</div>
+          <div class="chat-stack">
+            <div class="bubble bubble-coach" style="font-size:14px;">What are you trying to say next?</div>
+          </div>
+        </div>
+        <div class="chat-row chat-row-right">
+          <div class="avatar avatar-sm avatar-you" style="width:24px;height:24px;font-size:11px;">A</div>
+          <div class="chat-stack">
+            <div class="bubble" style="font-size:14px;">I want to push back on the deadline but without sounding like I'm blaming them.</div>
+          </div>
+        </div>
+        <div class="chat-row">
+          <div class="avatar avatar-sm avatar-coach" style="width:24px;height:24px;font-size:11px;">C</div>
+          <div class="chat-stack">
+            <div class="bubble bubble-coach" style="font-size:14px;">Good instinct. What's the actual constraint you need them to hear<span class="cursor"></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="drawer-footer">
+        <textarea class="textarea" rows="2" placeholder="Keep the coaching conversation going…" style="min-height:44px;font-size:14px;"></textarea>
+        <div class="row" style="margin-top:8px;justify-content:space-between;">
+          <button class="btn btn-ghost btn-sm">Keep refining</button>
+          <button class="btn btn-primary btn-sm"><i data-lucide="sparkles" style="width:14px;height:14px;"></i>Draft it for me</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-header-title">
+          <i data-lucide="sparkles" style="width:16px;height:16px;color:var(--coach-accent);"></i>
+          Draft Coach
+          <i data-lucide="lock" style="width:14px;height:14px;color:var(--text-tertiary);margin-left:4px;"></i>
+        </div>
+        <button class="btn btn-ghost btn-icon" aria-label="Close"><i data-lucide="x" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="drawer-body">
+        <p class="muted" style="margin:0 0 12px;font-size:13px;">Here's a draft based on what we talked about:</p>
+        <div class="draft-ready">
+          "Hey Jordan — I want to be straight with you about the deadline. The constraint isn't ambition, it's that I have a hard commitment on April 30 that I can't move. Can we work backwards from there together?"
+        </div>
+        <div class="stack">
+          <button class="btn btn-primary" style="width:100%;justify-content:center;"><i data-lucide="send" style="width:16px;height:16px;"></i>Send this message</button>
+          <button class="btn btn-secondary" style="width:100%;justify-content:center;"><i data-lucide="pencil" style="width:16px;height:16px;"></i>Edit before sending</button>
+          <button class="btn btn-ghost" style="width:100%;justify-content:center;"><i data-lucide="refresh-cw" style="width:16px;height:16px;"></i>Keep refining with Coach</button>
+          <button class="btn btn-ghost" style="width:100%;justify-content:center;color:var(--danger);"><i data-lucide="trash-2" style="width:16px;height:16px;"></i>Discard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Solo mode ───────────────────────────────────────────── -->
+<section id="solo">
+  <div class="section-head">
+    <div class="kicker">12 · Solo mode party toggle</div>
+    <h2>Distinctive by design — no tester confuses solo with real.</h2>
+  </div>
+  <div class="phase-header" style="border:1px solid var(--border-default);border-radius:var(--radius-lg);">
+    <a class="phase-header-back" href="#"><i data-lucide="arrow-left" style="width:14px;height:14px;"></i>Dashboard</a>
+    <div class="phase-header-title">
+      <span>Solo Test Case</span>
+      <span class="phase-header-sep">·</span>
+      <span class="phase-header-phase">Private Coaching</span>
+    </div>
+    <div class="party-toggle" style="margin-left:auto;">
+      <span class="party-toggle-label">Viewing as</span>
+      <button class="party-toggle-btn" data-active="true">Alex</button>
+      <button class="party-toggle-btn">Jordan</button>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Dark mode — dual pane ───────────────────────────────── -->
+<section id="dark">
+  <div class="section-head">
+    <div class="kicker">13 · Dark mode parity</div>
+    <h2>Same palette, inverted luminance, same warmth.</h2>
+    <p>Every surface, bubble, and pill has a tested dark counterpart. Shadows scale up in alpha to stay visible.</p>
+  </div>
+
+  <div class="dual">
+    <div class="dual-pane scope-light">
+      <div class="dual-label">LIGHT</div>
+      <div class="pane-body">
+        <div class="banner-privacy" style="border-radius:var(--radius-md);margin-bottom:16px;">
+          <i data-lucide="lock" style="width:16px;height:16px;" class="icon"></i>
+          <div><strong>Private to you.</strong> Jordan can't see this.</div>
+        </div>
+        <div class="chat-row">
+          <div class="avatar avatar-coach">C</div>
+          <div class="chat-stack">
+            <div class="bubble bubble-coach">Can you tell me about a recent moment?</div>
+          </div>
+        </div>
+        <div class="chat-row chat-row-right">
+          <div class="avatar avatar-you">A</div>
+          <div class="chat-stack">
+            <div class="bubble">It was in Monday's standup — I felt dismissed.</div>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 16px; gap:8px;">
+          <button class="btn btn-primary btn-sm">Send</button>
+          <button class="btn btn-secondary btn-sm">Cancel</button>
+          <span class="pill pill-turn"><span class="pill-dot"></span>Your turn</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="dual-pane scope-dark">
+      <div class="dual-label" style="color:var(--text-tertiary);">DARK</div>
+      <div class="pane-body">
+        <div class="banner-privacy" style="border-radius:var(--radius-md);margin-bottom:16px;">
+          <i data-lucide="lock" style="width:16px;height:16px;" class="icon"></i>
+          <div><strong>Private to you.</strong> Jordan can't see this.</div>
+        </div>
+        <div class="chat-row">
+          <div class="avatar avatar-coach">C</div>
+          <div class="chat-stack">
+            <div class="bubble bubble-coach">Can you tell me about a recent moment?</div>
+          </div>
+        </div>
+        <div class="chat-row chat-row-right">
+          <div class="avatar avatar-you">A</div>
+          <div class="chat-stack">
+            <div class="bubble">It was in Monday's standup — I felt dismissed.</div>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 16px; gap:8px;">
+          <button class="btn btn-primary btn-sm">Send</button>
+          <button class="btn btn-secondary btn-sm">Cancel</button>
+          <span class="pill pill-turn"><span class="pill-dot"></span>Your turn</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── Copy rules ──────────────────────────────────────────── -->
+<section id="rules">
+  <div class="section-head">
+    <div class="kicker">14 · Copy rules</div>
+    <h2>Content is design.</h2>
+  </div>
+  <div class="grid grid-2">
+    <div class="swatch" style="padding: 24px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:12px;">NEVER USE</div>
+      <ul class="stack" style="gap:6px;padding:0;margin:0;list-style:none;font-size:14px;color:var(--danger);">
+        <li>— "arbiter", "verdict", "judgment"</li>
+        <li>— "the parties" (use names instead)</li>
+        <li>— 🎉 or exclamation marks from the AI</li>
+        <li>— "Get started free", pricing language</li>
+        <li>— "Congratulations on resolving your conflict!"</li>
+      </ul>
+    </div>
+    <div class="swatch" style="padding: 24px;">
+      <div class="mono tertiary" style="font-size:11px;margin-bottom:12px;">USE INSTEAD</div>
+      <ul class="stack" style="gap:6px;padding:0;margin:0;list-style:none;font-size:14px;color:var(--accent);">
+        <li>— "coach", "guidance", "synthesis", "resolution"</li>
+        <li>— "You and Jordan"</li>
+        <li>— Steady, curious tone. The AI offers, suggests, wonders.</li>
+        <li>— Plain description of what the product does.</li>
+        <li>— "Case closed."</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="muted" style="text-align:center;padding-top:48px;border-top:1px solid var(--border-default);">
+  <div class="mono" style="font-size:11px;color:var(--text-tertiary);">Conflict Coach · Style Guide v1.0 · Applied Labs · April 2026</div>
+</div>
+
+</div><!-- /.page -->
+
+<!-- ─── Tweaks panel ────────────────────────────────────────── -->
+<div class="tweaks" id="tweaks">
+  <h3>Tweaks</h3>
+  <div class="tweaks-field">
+    <label>Theme</label>
+    <div class="segmented" data-key="theme">
+      <button data-v="light" data-active="true">Light</button>
+      <button data-v="dark">Dark</button>
+    </div>
+  </div>
+  <div class="tweaks-field">
+    <label>Palette variant</label>
+    <div class="segmented" data-key="variant">
+      <button data-v="default" data-active="true">Warm Sage</button>
+      <button data-v="slate">Slate Neutral</button>
+      <button data-v="earth">Deeper Earth</button>
+    </div>
+  </div>
+  <p class="muted" style="font-size:11px;margin:0;line-height:1.5;">
+    "Warm Sage" is the spec default. The two alternates are tasteful explorations — same structural tokens, shifted hues and contrast.
+  </p>
+</div>
+
+<script>
+/* Init lucide icons */
+lucide.createIcons();
+
+/* ─── Swatch data ─────────────────────────────────────────── */
+const swatches = {
+  neutral: [
+    ["Canvas", "--bg-canvas", "#FAF8F5"],
+    ["Surface", "--bg-surface", "#FFFFFF"],
+    ["Surface subtle", "--bg-surface-subtle", "#F3EFE9"],
+    ["Text primary", "--text-primary", "#1F1D1A"],
+    ["Text secondary", "--text-secondary", "#5C5952"],
+    ["Text tertiary", "--text-tertiary", "#8A8680"],
+    ["Border default", "--border-default", "#E5E0D8"],
+    ["Border strong", "--border-strong", "#CBC4B8"],
+  ],
+  accent: [
+    ["Accent", "--accent", "#6B8E7F"],
+    ["Accent hover", "--accent-hover", "#5A7A6C"],
+    ["Accent subtle", "--accent-subtle", "#DCE7E0"],
+    ["Accent on", "--accent-on", "#FFFFFF"],
+  ],
+  coach: [
+    ["Coach accent", "--coach-accent", "#8B7AB5"],
+    ["Coach subtle", "--coach-subtle", "#EAE4F2"],
+  ],
+  party: [
+    ["Initiator", "--party-initiator", "#6B85A8"],
+    ["Initiator subtle", "--party-initiator-subtle", "#DFE5EF"],
+    ["Invitee", "--party-invitee", "#B07A8F"],
+    ["Invitee subtle", "--party-invitee-subtle", "#EFE0E4"],
+  ],
+  feedback: [
+    ["Danger", "--danger", "#B5594D"],
+    ["Danger subtle", "--danger-subtle", "#F2DCD8"],
+    ["Warning", "--warning", "#B58B4D"],
+    ["Warning subtle", "--warning-subtle", "#F2E5D4"],
+  ],
+  tints: [
+    ["Private tint", "--private-tint", "#F0E9E0"],
+  ],
+};
+
+function mountSwatches(id, rows) {
+  const host = document.getElementById(id);
+  if (!host) return;
+  host.innerHTML = rows.map(([name, token, hex]) => `
+    <div class="swatch">
+      <div class="swatch-chip" style="background: var(${token});"></div>
+      <div class="swatch-body">
+        <div class="swatch-name">${name}</div>
+        <div class="swatch-token">${token}</div>
+        <div class="swatch-hex">${hex}</div>
+      </div>
+    </div>
+  `).join("");
+}
+mountSwatches("swatches-neutral", swatches.neutral);
+mountSwatches("swatches-accent", swatches.accent);
+mountSwatches("swatches-coach", swatches.coach);
+mountSwatches("swatches-party", swatches.party);
+mountSwatches("swatches-feedback", swatches.feedback);
+mountSwatches("swatches-tints", swatches.tints);
+
+/* ─── Spacing scale ───────────────────────────────────────── */
+const spacingHost = document.getElementById("spacing-scale");
+[4,8,12,16,20,24,32,40,48,64].forEach(px => {
+  const row = document.createElement("div");
+  row.className = "scale-row";
+  row.innerHTML = `<span class="mono">${px}px</span><div class="scale-block" style="width:${px*2}px;"></div>`;
+  spacingHost.appendChild(row);
+});
+
+/* ─── Radius scale ────────────────────────────────────────── */
+const radiusHost = document.getElementById("radius-scale");
+[["sm","6px"],["md","10px"],["lg","14px"],["xl","20px"]].forEach(([name, v]) => {
+  const row = document.createElement("div");
+  row.className = "row";
+  row.style.gap = "16px";
+  row.innerHTML = `
+    <div class="radius-block" style="border-radius:${v};"></div>
+    <div>
+      <div style="font-weight:500;font-size:14px;">--radius-${name}</div>
+      <div class="mono tertiary" style="font-size:12px;">${v}</div>
+    </div>
+  `;
+  radiusHost.appendChild(row);
+});
+
+/* ─── Theme toggle ────────────────────────────────────────── */
+const root = document.documentElement;
+function setTheme(t){
+  root.setAttribute("data-theme", t);
+  try { localStorage.setItem("cc-sg-theme", t); } catch {}
+  document.querySelectorAll('[data-key="theme"] button').forEach(b => {
+    b.setAttribute("data-active", b.dataset.v === t ? "true" : "false");
+  });
+}
+function setVariant(v){
+  root.setAttribute("data-variant", v);
+  try { localStorage.setItem("cc-sg-variant", v); } catch {}
+  document.querySelectorAll('[data-key="variant"] button').forEach(b => {
+    b.setAttribute("data-active", b.dataset.v === v ? "true" : "false");
+  });
+}
+
+try {
+  const t = localStorage.getItem("cc-sg-theme");
+  if (t) setTheme(t);
+  const v = localStorage.getItem("cc-sg-variant");
+  if (v) setVariant(v);
+} catch {}
+
+document.getElementById("toggle-theme").addEventListener("click", () => {
+  setTheme(root.getAttribute("data-theme") === "dark" ? "light" : "dark");
+});
+
+document.querySelectorAll(".tweaks .segmented").forEach(group => {
+  group.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const key = group.dataset.key;
+    if (key === "theme") setTheme(btn.dataset.v);
+    if (key === "variant") setVariant(btn.dataset.v);
+  });
+});
+
+/* ─── Tweaks host protocol ────────────────────────────────── */
+const tweaksEl = document.getElementById("tweaks");
+window.addEventListener("message", (e) => {
+  const d = e.data || {};
+  if (d.type === "__activate_edit_mode") tweaksEl.classList.add("open");
+  if (d.type === "__deactivate_edit_mode") tweaksEl.classList.remove("open");
+});
+try { window.parent.postMessage({type:"__edit_mode_available"}, "*"); } catch {}
+</script>
+</body>
+</html>

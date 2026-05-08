@@ -1,0 +1,567 @@
+name: v2-epic-decomposition-mark1
+description: |
+  Experimental v2 decomposition workflow — operates on filesystem inputs/outputs,
+  no Jira. Reads an epic + attachments from a directory; produces an adversarially
+  refined and expert-enriched plan; renders tickets as markdown files; runs a
+  second loop that polishes each ticket against the plan. Used to iterate on
+  decomposition quality without touching Jira.
+
+  Run with: archon workflow run v2-epic-decomposition-mark1 _inputs/wor-5
+  (path is resolved relative to the experiments/decomposition/ directory)
+
+worktree:
+  enabled: false
+mutates_checkout: false
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ─── Stage 1: Resolve inputs ──────────────────────────────────────────
+  - id: resolve-input
+    bash: |
+      # Resolve $ARGUMENTS (relative path under experiments/decomposition/) into an
+      # absolute input directory. Validate it has epic.md and attachments/.
+      # The Archon engine substitutes $ARGUMENTS verbatim into this script; we
+      # use it as a bare token so quoting is exactly one layer (engine wraps in
+      # single quotes for shell safety; bash assignment strips them).
+      set -eo pipefail
+      experiments_root="/home/user/Archon/.archon/experiments/decomposition"
+      input_arg=$ARGUMENTS
+      if [ -z "$input_arg" ]; then
+        echo "Usage: archon workflow run v2-epic-decomposition-mark1 <input-dir-relative-to-experiments/decomposition/>" >&2
+        echo "Example: archon workflow run v2-epic-decomposition-mark1 _inputs/wor-5" >&2
+        exit 1
+      fi
+      input_dir="$experiments_root/$input_arg"
+      if [ ! -d "$input_dir" ]; then
+        echo "Input directory not found: $input_dir" >&2
+        exit 1
+      fi
+      if [ ! -f "$input_dir/epic.md" ]; then
+        echo "Missing $input_dir/epic.md" >&2
+        exit 1
+      fi
+      if [ ! -d "$input_dir/attachments" ]; then
+        echo "Missing $input_dir/attachments/" >&2
+        exit 1
+      fi
+      run_name="$(basename "$input_arg")-$(date +%Y%m%d-%H%M%S)"
+      printf '{"input_dir":"%s","experiments_root":"%s","run_name":"%s"}\n' \
+        "$input_dir" "$experiments_root" "$run_name"
+
+  # ─── Stage 2: Stage inputs into $ARTIFACTS_DIR ────────────────────────
+  - id: stage-inputs
+    depends_on: [ resolve-input ]
+    bash: |
+      # Copy epic.md into ARTIFACTS_DIR; concat all .md attachments (excluding
+      # any decomposition-plan.md from prior runs) into attachments.md.
+      set -euo pipefail
+      input_dir=$resolve-input.output.input_dir
+      cp "$input_dir/epic.md" "$ARTIFACTS_DIR/epic.md"
+
+      mkdir -p "$ARTIFACTS_DIR/attachments"
+      attachments_md="$ARTIFACTS_DIR/attachments.md"
+      : > "$attachments_md"
+      count=0
+      for f in "$input_dir/attachments/"*; do
+        name=$(basename "$f")
+        # Skip prior-run artifacts so v2 doesn't read v1's decomposition as input
+        if [ "$name" = "decomposition-plan.md" ]; then continue; fi
+        case "$name" in
+          *.md|*.txt|*.html)
+            printf '\n\n## %s\n\n' "$name" >> "$attachments_md"
+            cat "$f" >> "$attachments_md"
+            cp "$f" "$ARTIFACTS_DIR/attachments/$name"
+            count=$((count+1))
+            ;;
+        esac
+      done
+      bytes=$(wc -c < "$attachments_md")
+      printf '{"attachments_md":"%s","attachment_count":%d,"bytes":%d}\n' \
+        "$attachments_md" "$count" "$bytes"
+
+  # ─── Stage 3: Initialize adversarial state ────────────────────────────
+  - id: init-adversarial-state
+    depends_on: [ stage-inputs ]
+    bash: |
+      # State machine for the plan-creation adversarial loop. Mirrors the
+      # archon-adversarial-dev pattern: phases drive role dispatch.
+      set -euo pipefail
+      cat > "$ARTIFACTS_DIR/plan-state.json" <<'JSON'
+      {
+        "phase": "generating",
+        "round": 1,
+        "maxRounds": 4,
+        "passThreshold": 8,
+        "lastEvaluation": null,
+        "status": "running"
+      }
+      JSON
+      mkdir -p "$ARTIFACTS_DIR/plan-evaluations"
+      printf '{"state":"%s"}\n' "$ARTIFACTS_DIR/plan-state.json"
+
+  # ─── Stage 4: Adversarial plan creation ───────────────────────────────
+  - id: adversarial-plan
+    depends_on: [ init-adversarial-state ]
+    idle_timeout: 600000
+    loop:
+      max_iterations: 12
+      fresh_context: true
+      until: PLAN_CONVERGED
+      until_bash: |
+        grep -qE '"status"\s*:\s*"(converged|maxed-out)"' "$ARTIFACTS_DIR/plan-state.json"
+      prompt: |
+        # Adversarial Plan Creation
+
+        You are part of a generator/evaluator pair iterating on a decomposition plan
+        until it survives adversarial review. Each iteration you play ONE role.
+
+        ## FIRST: read state
+        Read `$ARTIFACTS_DIR/plan-state.json` to get `phase`, `round`, `maxRounds`,
+        `passThreshold`. Then read `$ARTIFACTS_DIR/epic.md` and `$ARTIFACTS_DIR/attachments.md`
+        for the source material.
+
+        ---
+
+        ## ROLE: GENERATOR (phase = "generating")
+
+        Author a decomposition plan as JSON. Cover every implementation domain in the
+        Epic, TechSpec, DesignDoc, and StyleGuide. Decompose into the smallest tasks
+        that are independently executable.
+
+        Plan shape (write to `$ARTIFACTS_DIR/plan-current.json`):
+        ```json
+        {
+          "epic_title": "string",
+          "planning_assumptions": ["string"],
+          "dependency_graph_notes": "string",
+          "tasks": [
+            {
+              "task_id": "T1",
+              "title": "string",
+              "summary": "string",
+              "acceptance_criteria": ["string"],
+              "depends_on": ["T#"],
+              "suggested_jira_type": "Task",
+              "original_estimate_minutes": 60
+            }
+          ]
+        }
+        ```
+
+        Rules:
+        - `depends_on` MUST form a valid DAG. T1 should be scaffolding/setup (empty
+          depends_on). Most other tasks should have at least one blocker.
+        - Task IDs are stable: T1, T2, T3, ... in plan order.
+        - `acceptance_criteria` must be testable, concrete, traceable to source.
+        - `original_estimate_minutes` is a good-faith estimate of autonomous-agent
+          end-to-end time. Calibration:
+            - Trivial scaffolding/config: 15-30
+            - Small CRUD endpoint or simple component: 30-60
+            - AC-rich feature with non-trivial logic: 60-120
+            - Cross-cutting concerns (privacy filter, accessibility): 120-240
+            - Heavy E2E suite: 60-120
+
+        If `round > 1`: read `$ARTIFACTS_DIR/plan-evaluations/round-<round-1>.json`
+        for the prior evaluator's objections. Address EVERY objection.
+
+        After writing, update state.json: set `"phase": "evaluating"`. Keep other
+        fields unchanged. Output a one-line status: `Generated plan v<round> with N tasks.`
+
+        ---
+
+        ## ROLE: EVALUATOR (phase = "evaluating")
+
+        You are an adversarial reviewer. Your job is to BREAK the plan. You are not
+        helpful. Be precise and specific.
+
+        Read `$ARTIFACTS_DIR/plan-current.json`. Score it on these dimensions (each 1-10):
+
+        1. **coverage** — Does it cover EVERY feature in the PRD, every NFR in the
+           spec, every constraint in the TechSpec/DesignDoc? List specific things
+           you find missing.
+        2. **sizing** — Is any task too large (will the dev pipeline struggle)? Any
+           too small (mostly overhead)? Any mixed-domain tickets that should be split?
+        3. **dependencies** — Is the DAG complete? Any hidden dependencies? Any
+           cycles? Any tickets that could parallelize but don't because of phantom
+           deps?
+        4. **testability** — Are ACs concrete enough that a test can be written?
+           Any vague ACs that could pass with sloppy implementation?
+        5. **scope_fences** — Does the plan include things that are out-of-scope per
+           the PRD's non-goals? Does it MISS things the PRD explicitly requires?
+
+        Score each criterion honestly. Do not grade on a curve. A 7 means
+        "genuinely meets the bar."
+
+        Write evaluation to `$ARTIFACTS_DIR/plan-evaluations/round-<round>.json`:
+        ```json
+        {
+          "round": N,
+          "scores": { "coverage": 7, "sizing": 8, "dependencies": 6, "testability": 7, "scope_fences": 9 },
+          "passed": false,
+          "objections": [
+            {
+              "dimension": "dependencies",
+              "task_ids": ["T17"],
+              "issue": "Specific finding with copy-pasteable detail.",
+              "fix": "What the generator should change."
+            }
+          ],
+          "summary": "One paragraph: what's good, what must change."
+        }
+        ```
+
+        `passed` is `true` ONLY if EVERY score >= passThreshold AND objections is empty.
+
+        Update state.json based on result:
+        - If passed: set `"phase": "converged"`, `"status": "converged"`, copy
+          `plan-current.json` to `plan-final.json`.
+        - If failed and round < maxRounds: set `"phase": "generating"`, increment
+          round.
+        - If failed and round >= maxRounds: set `"phase": "maxed-out"`, `"status": "maxed-out"`,
+          copy `plan-current.json` to `plan-final.json` (best effort).
+
+        Output: `Round <round> evaluation complete. Passed: <bool>.`
+
+        ---
+
+        ## COMPLETION
+
+        After updating state, check `status`:
+        - `"converged"` or `"maxed-out"` → output `<promise>PLAN_CONVERGED</promise>`
+        - `"running"` → do NOT emit any completion signal
+
+  # ─── Stage 5: Stack-expert enrichment ─────────────────────────────────
+  - id: stack-expert-pass
+    depends_on: [ adversarial-plan ]
+    context: fresh
+    prompt: |
+      You are a senior engineer with deep expertise in the tech stack named in the
+      Epic. Your job is to read the converged plan and embellish each task with
+      stack-specific guidance that the downstream test-generator and code-generator
+      will need.
+
+      Read:
+      - `$ARTIFACTS_DIR/plan-final.json` (the converged plan)
+      - `$ARTIFACTS_DIR/epic.md` (PRD)
+      - `$ARTIFACTS_DIR/attachments.md` (TechSpec, DesignDoc, StyleGuide)
+
+      Identify the tech stack (Convex, React, Vite, TypeScript, Tailwind, shadcn,
+      Playwright, Vitest, etc — whatever the spec specifies). For each task in the
+      plan, append a `stack_practices` field that names the canonical practices
+      that apply to THAT task:
+
+      - Test harness specifics. (Example for Convex: "use convex-test, not mocked
+        convex/react. Tests run against the real Convex runtime in-process.")
+      - Naming conventions for files, exports, types.
+      - Common pitfalls / anti-patterns to avoid.
+      - Recommended libraries or APIs for the work this task does.
+      - Performance / accessibility / security patterns specific to the stack.
+
+      Be specific. "Use convex-test" is specific. "Follow best practices" is not.
+
+      If a task touches surfaces that don't have stack-specific guidance (pure
+      bash scripts, plain markdown), `stack_practices` may be an empty array.
+
+      Write the enriched plan to `$ARTIFACTS_DIR/plan-stack-enriched.json`.
+      Keep the same overall shape as plan-final.json; just add the `stack_practices`
+      field to each task object.
+
+      Verify it on disk with `ls -la` before finishing. Return JSON pointer:
+      `{ "plan_stack_enriched": "$ARTIFACTS_DIR/plan-stack-enriched.json" }`
+
+  # ─── Stage 6: Design-expert enrichment ────────────────────────────────
+  - id: design-expert-pass
+    depends_on: [ stack-expert-pass ]
+    context: fresh
+    prompt: |
+      You are a senior product designer with deep expertise in the design language
+      named in the Epic. Your job is to read the stack-enriched plan and add
+      design-specific guidance to every task that touches user-facing UI.
+
+      Read:
+      - `$ARTIFACTS_DIR/plan-stack-enriched.json` (the stack-enriched plan)
+      - `$ARTIFACTS_DIR/attachments.md` (DesignDoc, StyleGuide)
+
+      For each task that has UI surface, append a `design_practices` field that
+      names design-language specifics:
+
+      - Style-guide tokens that apply (colors, spacing, typography by name).
+      - Component patterns from the design system.
+      - Accessibility requirements specific to this surface (WCAG 2.1 AA,
+        keyboard, screen reader, focus).
+      - Motion / animation language if the design specifies it.
+      - Layout conventions (responsive breakpoints, grid system, spacing scale).
+      - Specific design-doc sections the implementer should consult.
+
+      Tasks with no UI surface (backend, schema, scripts) get `design_practices: []`.
+
+      Write the enriched plan to `$ARTIFACTS_DIR/plan-design-enriched.json`.
+      Keep the same shape as the input; just add the `design_practices` field.
+
+      Verify on disk before finishing. Return:
+      `{ "plan_design_enriched": "$ARTIFACTS_DIR/plan-design-enriched.json" }`
+
+  # ─── Stage 7: Initialize ticket keymap ────────────────────────────────
+  - id: init-keymap
+    depends_on: [ design-expert-pass ]
+    bash: |
+      # Keymap maps task_id → output filename. Empty {} on first run; populated
+      # by the compose-tickets loop. The same idempotency / resumability mechanism
+      # as the production epic-decompose workflow.
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/tickets"
+      keymap="$ARTIFACTS_DIR/ticket-keymap.json"
+      if [ ! -f "$keymap" ]; then
+        echo '{}' > "$keymap"
+      fi
+      printf '{"keymap":"%s","tickets_dir":"%s"}\n' \
+        "$keymap" "$ARTIFACTS_DIR/tickets"
+
+  # ─── Stage 8: Compose tickets (Ralph loop) ────────────────────────────
+  - id: compose-tickets
+    depends_on: [ init-keymap ]
+    idle_timeout: 1800000
+    loop:
+      max_iterations: 100
+      fresh_context: true
+      until: COMPLETE
+      prompt: |
+        # Compose a single ticket
+
+        Each iteration creates ONE ticket as a markdown file under
+        `$ARTIFACTS_DIR/tickets/`. Fresh context per iteration.
+
+        ## Inputs (read every iteration)
+        - `$ARTIFACTS_DIR/plan-design-enriched.json` — the enriched plan; tasks[]
+          carries `task_id`, `title`, `summary`, `acceptance_criteria`,
+          `depends_on`, `suggested_jira_type`, `original_estimate_minutes`,
+          `stack_practices`, `design_practices`.
+        - `$ARTIFACTS_DIR/ticket-keymap.json` — map of task_id → output filename.
+          Empty `{}` first iteration.
+        - `$ARTIFACTS_DIR/attachments.md` — source material; consult selectively
+          for context relevant to this specific task.
+        - `$ARTIFACTS_DIR/epic.md` — full PRD for grounding.
+
+        ## Steps for THIS iteration
+
+        1. Read the keymap. Read the plan. Find the FIRST task in plan order whose
+           `task_id` is NOT in the keymap. Call it T.
+
+        2. If every task already has a keymap entry, output
+           `<promise>COMPLETE</promise>` and stop.
+
+        3. Compose the ticket markdown for T using EXACTLY this section structure:
+
+           - **Opening paragraph (no heading)** — 2-4 sentences restating T's
+             purpose in plain language, grounded in the Epic context. Explain
+             why this task exists in the broader project. Not a verbatim copy of
+             T.summary.
+
+           - `## Acceptance Criteria` — bulleted list of T.acceptance_criteria.
+             Verbatim from the plan.
+
+           - `## Implementation Notes` — prose context for the implementer.
+             What surrounding code, architecture conventions, or design intent
+             apply. Pull from `attachments.md` selectively. This is human-readable
+             narrative, not a strict spec.
+
+           - `## Test-Gen Brief` — strict spec for the test writer AND the code
+             writer. Both consume this. It MUST be specific enough that there
+             is no ambiguity about what symbols exist and what tests will check.
+             Include these subsections:
+
+             - **Files** — full paths where exports live; full paths where tests
+               live.
+             - **Exports** — every public symbol the implementation must expose,
+               by name, with shape (named/default, value/type).
+             - **Signatures** — exact type for each export, copyable.
+             - **Queries used** — names of API references the implementation
+               calls (e.g. `api.x.y`, `internal.x.y`). Empty if N/A.
+             - **Invariants** — properties that must hold regardless of input.
+             - **Non-goals** — explicit scope fence; what this ticket does NOT
+               change.
+             - **Tested by** — per AC: which test layer (unit / integration / e2e),
+               what to assert, what fixtures or mocks are needed. Reference the
+               named symbols from Exports/Signatures.
+
+             If any field cannot be filled from the plan + attachments, write
+             `TBD — <reason>` rather than inventing. Honest TBD is better than
+             fabricated detail.
+
+           - `## Stack Practices` — bulleted list lifted from
+             T.stack_practices. Verbatim. Empty bullet list if none.
+
+           - `## Design Practices` — bulleted list lifted from T.design_practices.
+             Verbatim. Empty bullet list if none.
+
+           - `## Traceability` —
+             - `task_id`: T's task_id
+             - `title`: T's title
+             - `suggested_jira_type`: T's suggested_jira_type
+             - `original_estimate_minutes`: T's original_estimate_minutes
+             - `depends_on`: comma-separated task_ids from T.depends_on, or
+               "(none)" if empty.
+
+        4. Write the ticket markdown to
+           `$ARTIFACTS_DIR/tickets/<task_id>.md`. Pure markdown, no
+           frontmatter, no JSON wrapping.
+
+        5. Update the keymap: read `ticket-keymap.json`, parse it, add
+           `{"<task_id>": "tickets/<task_id>.md"}`, write it back as pretty
+           JSON (2-space indent). Read-modify-write atomically.
+
+           After writing, verify with `cat $ARTIFACTS_DIR/ticket-keymap.json`.
+
+        6. Output one-line status: `Composed <task_id> at tickets/<task_id>.md`.
+           Do NOT emit `<promise>COMPLETE</promise>` on this iteration —
+           you have only created one ticket.
+
+        ## Hard rules
+        - Create exactly ONE ticket per iteration.
+        - Never invent task_ids that aren't in the plan.
+        - Never modify the plan files.
+        - Use the exact section names listed above.
+
+        Narrate as you go: which task_id you picked, the new filename, keymap
+        confirmation. End with the one-line status from step 6 (or COMPLETE
+        from step 2).
+
+        Previous iteration output (empty on first):
+        $LOOP_PREV_OUTPUT
+
+  # ─── Stage 9: Initialize review keymap ────────────────────────────────
+  - id: init-review-keymap
+    depends_on: [ compose-tickets ]
+    bash: |
+      # Second-loop keymap: tracks which tickets have been reviewed-and-improved.
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/tickets-reviewed"
+      review_keymap="$ARTIFACTS_DIR/review-keymap.json"
+      if [ ! -f "$review_keymap" ]; then
+        echo '{}' > "$review_keymap"
+      fi
+      printf '{"review_keymap":"%s","reviewed_dir":"%s"}\n' \
+        "$review_keymap" "$ARTIFACTS_DIR/tickets-reviewed"
+
+  # ─── Stage 10: Review-and-improve loop ────────────────────────────────
+  - id: review-and-improve
+    depends_on: [ init-review-keymap ]
+    idle_timeout: 1800000
+    loop:
+      max_iterations: 100
+      fresh_context: true
+      until: REVIEW_COMPLETE
+      prompt: |
+        # Review and improve a single ticket
+
+        Each iteration reviews one ticket against the plan and outputs an improved
+        version. Fresh context per iteration. This is improvement, not gating —
+        every ticket gets a polished version, even if it's mostly identical to
+        the input.
+
+        ## Inputs
+        - `$ARTIFACTS_DIR/plan-design-enriched.json` — the enriched plan (truth).
+        - `$ARTIFACTS_DIR/ticket-keymap.json` — map of task_id → original ticket
+          path under tickets/.
+        - `$ARTIFACTS_DIR/review-keymap.json` — map of task_id → reviewed ticket
+          path under tickets-reviewed/. Empty `{}` first iteration.
+        - `$ARTIFACTS_DIR/tickets/` — original tickets directory.
+        - `$ARTIFACTS_DIR/attachments.md` — source material.
+
+        ## Steps for THIS iteration
+
+        1. Read both keymaps. Find the FIRST task_id present in `ticket-keymap.json`
+           but NOT in `review-keymap.json`. Call it T.
+
+        2. If every task in `ticket-keymap.json` is already in `review-keymap.json`,
+           output `<promise>REVIEW_COMPLETE</promise>` and stop.
+
+        3. Read T's original ticket from `$ARTIFACTS_DIR/tickets/<task_id>.md`.
+           Read T's plan entry from `plan-design-enriched.json`.
+
+        4. Review the ticket against:
+           - The plan's intent for T (does the ticket match T.summary, T.title,
+             T.acceptance_criteria?)
+           - The Test-Gen Brief's specificity (every Exports / Signatures field
+             named, no prose where strict spec was required, every AC mapped in
+             Tested by).
+           - Cross-ticket coherence: any symbol named here, are sibling tickets
+             that depend on T using the same name? Read those tickets if needed.
+           - Stack and Design Practices propagated from the plan.
+
+        5. Write an improved version to
+           `$ARTIFACTS_DIR/tickets-reviewed/<task_id>.md`. The improved
+           version uses the SAME section structure as the original. Improvements
+           you can make:
+           - Tighten vague Test-Gen Brief fields with specific names from the plan.
+           - Add fixtures / mock shapes the test writer will need.
+           - Resolve cross-ticket name mismatches.
+           - Inline relevant NFRs from the Epic that this ticket touches.
+           - Tighten Implementation Notes to be specific rather than generic.
+           - Fill TBDs from the original where the plan + attachments support it.
+
+           If the original is already strong, the improved version may be very
+           close to identical — that's fine. Don't change what doesn't need
+           changing. Don't introduce contradictions with the plan.
+
+        6. Update review-keymap: add `{"<task_id>": "tickets-reviewed/<task_id>.md"}`,
+           pretty JSON, 2-space indent.
+
+        7. Output: `Reviewed <task_id>. Notable improvements: <one-line>.`
+           Do NOT emit REVIEW_COMPLETE on this iteration.
+
+        ## Hard rules
+        - Create exactly ONE reviewed ticket per iteration.
+        - Use the same section structure as the original ticket.
+        - Don't invent symbols not derivable from the plan + attachments.
+        - This is improvement, not gating: every ticket gets a reviewed version.
+
+        Narrate as you go. End with the one-line status from step 7 or
+        REVIEW_COMPLETE from step 2.
+
+        Previous iteration output (empty on first):
+        $LOOP_PREV_OUTPUT
+
+  # ─── Stage 11: Final summary + copy to stable location ────────────────
+  - id: final-summary
+    depends_on: [ review-and-improve ]
+    bash: |
+      # Write a run summary AND copy the interesting outputs to the stable
+      # experiments/ directory so they're easy to compare across runs without
+      # spelunking through workspace/runs/<id>/.
+      set -euo pipefail
+      run_name=$resolve-input.output.run_name
+      out="/home/user/Archon/.archon/experiments/decomposition/$run_name"
+      mkdir -p "$out/tickets-reviewed"
+      cp "$ARTIFACTS_DIR/plan-final.json" "$out/plan-final.json" 2>/dev/null || true
+      cp "$ARTIFACTS_DIR/plan-stack-enriched.json" "$out/plan-stack-enriched.json" 2>/dev/null || true
+      cp "$ARTIFACTS_DIR/plan-design-enriched.json" "$out/plan-design-enriched.json" 2>/dev/null || true
+      cp -r "$ARTIFACTS_DIR/tickets-reviewed/." "$out/tickets-reviewed/" 2>/dev/null || true
+
+      # Copy raw (un-reviewed) tickets too for diffing
+      mkdir -p "$out/tickets-raw"
+      cp -r "$ARTIFACTS_DIR/tickets/." "$out/tickets-raw/" 2>/dev/null || true
+
+      ticket_count=$(ls -1 "$out/tickets-reviewed" 2>/dev/null | wc -l)
+
+      summary="$out/summary.md"
+      cat > "$summary" <<EOF
+      # v2 Mark1 — Run $run_name
+
+      Workflow: v2-epic-decomposition-mark1
+      Started: $(date -Iseconds)
+      Tickets produced: $ticket_count
+      Source artifacts: $ARTIFACTS_DIR
+
+      ## Outputs in this directory
+      - plan-final.json — converged adversarial plan
+      - plan-stack-enriched.json — after stack-expert pass
+      - plan-design-enriched.json — after design-expert pass (input to ralph loop)
+      - tickets-raw/ — output of compose-tickets loop
+      - tickets-reviewed/ — output of review-and-improve loop (FINAL)
+      EOF
+
+      printf '{"run_name":"%s","output_dir":"%s","tickets":%d}\n' \
+        "$run_name" "$out" "$ticket_count"
