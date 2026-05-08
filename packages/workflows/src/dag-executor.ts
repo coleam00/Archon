@@ -581,7 +581,8 @@ async function executeNodeInternal(
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  forgeProvider?: 'github' | 'gitlab'
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -660,7 +661,8 @@ async function executeNodeInternal(
       baseBranch,
       docsDir,
       issueContext,
-      `dag node '${node.id}' prompt`
+      `dag node '${node.id}' prompt`,
+      forgeProvider
     );
   } catch (error) {
     const err = error as Error;
@@ -1856,7 +1858,8 @@ async function executeLoopNode(
         issueContext,
         i === startIteration ? loopUserInput : '',
         undefined, // rejectionReason
-        i === startIteration ? '' : lastIterationOutput
+        i === startIteration ? '' : lastIterationOutput,
+        config.forgeProvider
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -2122,14 +2125,24 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined,
+          undefined,
+          undefined,
+          config.forgeProvider
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
           nodeOutputs,
           true // escapedForBash
         );
-        await execFileAsync('bash', ['-c', substitutedBash], { cwd });
+        const loopBashEnv: NodeJS.ProcessEnv = {
+          ...process.env,
+          FORGE_PROVIDER: config.forgeProvider ?? 'github',
+          FORGE_CLI: config.forgeProvider === 'gitlab' ? 'glab' : 'gh',
+          ...(config.envVars ?? {}),
+        };
+        await execFileAsync('bash', ['-c', substitutedBash], { cwd, env: loopBashEnv });
         bashComplete = true; // exit 0 = complete
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
@@ -2425,7 +2438,8 @@ async function executeApprovalNode(
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
-      issueContext
+      issueContext,
+      config.forgeProvider
     );
 
     if (output.state === 'failed') {
@@ -2707,6 +2721,10 @@ export async function executeDagWorkflow(
 
           // 3. Bash node dispatch — no AI, no session
           if (isBashNode(node)) {
+            const forgeEnvVars = {
+              FORGE_PROVIDER: config.forgeProvider ?? 'github',
+              FORGE_CLI: config.forgeProvider === 'gitlab' ? 'glab' : 'gh',
+            };
             const output = await executeBashNode(
               deps,
               platform,
@@ -2720,7 +2738,7 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               issueContext,
-              config.envVars
+              { ...forgeEnvVars, ...config.envVars }
             );
             return { nodeId: node.id, output };
           }
@@ -2826,6 +2844,10 @@ export async function executeDagWorkflow(
 
           // 3e. Script node dispatch — runs via bun or uv
           if (isScriptNode(node)) {
+            const scriptForgeEnvVars = {
+              FORGE_PROVIDER: config.forgeProvider ?? 'github',
+              FORGE_CLI: config.forgeProvider === 'gitlab' ? 'glab' : 'gh',
+            };
             const output = await executeScriptNode(
               deps,
               platform,
@@ -2839,7 +2861,7 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               issueContext,
-              config.envVars
+              { ...scriptForgeEnvVars, ...config.envVars }
             );
             return { nodeId: node.id, output };
           }
@@ -2890,7 +2912,8 @@ export async function executeDagWorkflow(
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              config.forgeProvider
             );
 
             if (output.state !== 'failed') break;

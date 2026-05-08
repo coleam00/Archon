@@ -71,6 +71,28 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
   }
 }
 
+export async function checkGlabAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'glab CLI';
+  // Skip when GitLab is not configured — glab auth is irrelevant otherwise.
+  if (!env.GITLAB_TOKEN && !env.GITLAB_WEBHOOK_SECRET) {
+    return { label, status: 'skip', message: 'GitLab not configured (no GITLAB_TOKEN)' };
+  }
+  try {
+    await execFileAsync('glab', ['auth', 'status'], { timeout: 10_000 });
+    return { label, status: 'pass', message: 'authenticated' };
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    const isNotInstalled = e.code === 'ENOENT' || e.message?.includes('command not found');
+    return {
+      label,
+      status: 'fail',
+      message: isNotInstalled
+        ? 'glab not found in PATH — install it from https://gitlab.com/gitlab-org/cli'
+        : `glab auth status failed: ${e.message}. Run \`glab auth login\`.`,
+    };
+  }
+}
+
 export interface DatabaseDeps {
   pool: { query: (sql: string) => Promise<unknown> };
   getDatabaseType: () => string;
@@ -224,6 +246,7 @@ export async function doctorCommand(
     : [
         checkClaudeBinary(env),
         checkGhAuth(env),
+        checkGlabAuth(env),
         checkDatabase(),
         checkWorkspaceWritable(),
         checkBundledDefaults(),

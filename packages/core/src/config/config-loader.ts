@@ -465,6 +465,11 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     }
   }
 
+  // Propagate forge provider for $FORGE_PROVIDER / $FORGE_CLI substitution in workflow commands
+  if (repo.forge?.provider) {
+    result.forgeProvider = repo.forge.provider;
+  }
+
   // Propagate per-project env vars from repo config
   if (repo.env) {
     result.envVars = { ...result.envVars, ...repo.env };

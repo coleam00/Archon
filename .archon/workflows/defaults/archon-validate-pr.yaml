@@ -27,19 +27,28 @@ nodes:
         PR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '[0-9]+' | head -1)
       fi
       if [ -z "$PR_NUMBER" ]; then
-        # Try getting PR from current branch
-        PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+        # Try getting PR/MR from current branch
+        if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+          BRANCH=$(git branch --show-current)
+          PR_NUMBER=$(glab mr list --source-branch "$BRANCH" --output json 2>/dev/null | jq -r '.[0].iid // empty')
+        else
+          PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+        fi
       fi
 
       if [ -z "$PR_NUMBER" ]; then
-        echo "ERROR: No PR number found in arguments: $ARGUMENTS"
+        echo "ERROR: No PR/MR number found in arguments: $ARGUMENTS"
         exit 1
       fi
 
       echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
 
-      # Fetch full PR details
-      gh pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+      # Fetch full PR/MR details
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        glab mr view "$PR_NUMBER" --output json
+      else
+        gh pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+      fi
 
   - id: find-ports
     bash: |
@@ -60,10 +69,16 @@ nodes:
       WORKTREE_PATH=$(pwd)
       FEATURE_BRANCH=$(git branch --show-current)
 
-      # Get PR branch info
+      # Get PR/MR branch info
       PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
-      PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
-      PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        MR_JSON=$(glab mr view "$PR_NUMBER" --output json)
+        PR_HEAD=$(echo "$MR_JSON" | jq -r '.source_branch')
+        PR_BASE=$(echo "$MR_JSON" | jq -r '.target_branch')
+      else
+        PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
+        PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+      fi
 
       echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
       echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"

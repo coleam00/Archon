@@ -8,11 +8,13 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import type { WorkflowDeps } from './deps';
+import type { WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import { execFileAsync } from '@archon/git';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -343,6 +345,30 @@ export const CONTEXT_VAR_PATTERN_STR =
   '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
 
 /**
+ * Resolve the forge provider for $FORGE_PROVIDER / $FORGE_CLI substitution.
+ *
+ * Resolution order:
+ * 1. `config.forgeProvider` (from .archon/config.yaml `forge.provider`)
+ * 2. Auto-detect from git remote URL (contains 'gitlab' → gitlab, else github)
+ * 3. Hard default: 'github'
+ */
+export async function resolveForgeProvider(
+  config: WorkflowConfig,
+  cwd: string
+): Promise<'github' | 'gitlab'> {
+  if (config.forgeProvider) return config.forgeProvider;
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+      timeout: 5000,
+    });
+    if (stdout.toLowerCase().includes('gitlab')) return 'gitlab';
+  } catch {
+    // Auto-detection failure is non-fatal — default to github
+  }
+  return 'github';
+}
+
+/**
  * Substitute workflow variables in a prompt.
  *
  * Supported variables:
@@ -352,6 +378,8 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
+ * - $FORGE_PROVIDER - Git forge provider: 'github' or 'gitlab'
+ * - $FORGE_CLI - Forge CLI binary: 'gh' (GitHub) or 'glab' (GitLab)
  * - $LOOP_USER_INPUT - User feedback from interactive loop approval. Only populated on the
  *   first iteration of a resumed interactive loop; empty string on all other iterations.
  * - $REJECTION_REASON - Reviewer feedback from approval node rejection (on_reject prompts only).
@@ -372,7 +400,8 @@ export function substituteWorkflowVariables(
   issueContext?: string,
   loopUserInput?: string,
   rejectionReason?: string,
-  loopPrevOutput?: string
+  loopPrevOutput?: string,
+  forgeProvider?: 'github' | 'gitlab'
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -385,6 +414,9 @@ export function substituteWorkflowVariables(
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
 
+  const resolvedForgeProvider = forgeProvider ?? 'github';
+  const resolvedForgeCli = resolvedForgeProvider === 'gitlab' ? 'glab' : 'gh';
+
   // Substitute basic variables
   let result = prompt
     .replace(/\$WORKFLOW_ID/g, workflowId)
@@ -393,6 +425,8 @@ export function substituteWorkflowVariables(
     .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
     .replace(/\$BASE_BRANCH/g, baseBranch)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir)
+    .replace(/\$FORGE_PROVIDER/g, resolvedForgeProvider)
+    .replace(/\$FORGE_CLI/g, resolvedForgeCli)
     .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
     .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
     .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
@@ -441,7 +475,8 @@ export function buildPromptWithContext(
   baseBranch: string,
   docsDir: string,
   issueContext: string | undefined,
-  logLabel: string
+  logLabel: string,
+  forgeProvider?: 'github' | 'gitlab'
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -450,7 +485,11 @@ export function buildPromptWithContext(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    forgeProvider
   );
 
   if (issueContext && !contextSubstituted) {

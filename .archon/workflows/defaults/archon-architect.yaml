@@ -311,12 +311,15 @@ nodes:
 
       1. Stage all changes and create a single commit (or verify existing commits)
       2. Push the branch: `git push -u origin HEAD`
-      3. Check if a PR already exists: `gh pr list --head $(git branch --show-current)`
-      4. Create the PR targeting `$BASE_BRANCH` as the base branch:
-         `gh pr create --base $BASE_BRANCH --title "..." --body "..."`
+      3. Check if a PR/MR already exists:
+         - GitHub: `gh pr list --head $(git branch --show-current)`
+         - GitLab: `glab mr list --source-branch $(git branch --show-current)`
+      4. Create the PR/MR targeting `$BASE_BRANCH` as the base branch:
+         - GitHub: `gh pr create --base $BASE_BRANCH --title "..." --body "..."`
+         - GitLab: `glab mr create --target-branch $BASE_BRANCH --title "..." --description "..."`
          - Title: concise description of what was simplified (under 70 chars)
-         - Body: use the format below
-      5. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
+         - Body/description: use the format below
+      5. Save the PR/MR URL to `$ARTIFACTS_DIR/.pr-url`
 
       ## PR Body Format
 
@@ -349,26 +352,39 @@ nodes:
             hookSpecificOutput:
               hookEventName: PreToolUse
               permissionDecision: deny
-              permissionDecisionReason: "PR creation node — do not modify source files. Use only git and gh commands."
+              permissionDecisionReason: "PR/MR creation node — do not modify source files. Use only git and forge CLI commands (gh or glab)."
       PostToolUse:
         - matcher: "Bash"
           response:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                Verify this command succeeded. If git push or gh pr create failed,
+                Verify this command succeeded. If git push or gh/glab pr/mr create failed,
                 read the error message carefully before retrying.
 
   - id: verify-pr-base
     bash: |
       set -euo pipefail
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
-      if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
-        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      BRANCH=$(git branch --show-current)
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        MR_DATA=$(glab mr list --source-branch "$BRANCH" --output json --limit 1 2>/dev/null || echo "[]")
+        ACTUAL=$(echo "$MR_DATA" | jq -r '.[0].target_branch // empty')
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          MR_IID=$(echo "$MR_DATA" | jq -r '.[0].iid')
+          echo "Base mismatch on MR !$MR_IID: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          glab mr update "$MR_IID" --target-branch "$EXPECTED"
+        else
+          echo "MR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
       else
-        echo "PR base verified: $EXPECTED"
+        ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName' 2>/dev/null || echo "")
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          PR_NUMBER=$(gh pr view --json number -q '.number')
+          echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+        else
+          echo "PR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
       fi
     depends_on: [create-pr]

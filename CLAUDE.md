@@ -695,6 +695,8 @@ async function createSession(conversationId: string, codebaseId: string) {
 - `$WORKFLOW_ID` - The workflow run ID
 - `$BASE_BRANCH` - Base branch; auto-detected from git when `worktree.baseBranch` is not set; fails only if referenced in a prompt and auto-detection also fails
 - `$DOCS_DIR` - Documentation directory path; configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/`. Never throws.
+- `$FORGE_PROVIDER` - Git forge provider: `github` or `gitlab`. Resolved from `forge.provider` in `.archon/config.yaml`, then auto-detected from the git remote URL (`gitlab` if the URL contains "gitlab", else `github`). Available in both prompt text and bash/script subprocess environments.
+- `$FORGE_CLI` - Forge CLI binary name derived from `$FORGE_PROVIDER`: `gh` for GitHub, `glab` for GitLab. Use in bash nodes to dispatch the right forge CLI.
 - `$LOOP_USER_INPUT` - User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations.
 - `$REJECTION_REASON` - Reviewer feedback provided via `/workflow reject <id> <reason>` at an approval gate. Only populated in `on_reject` prompts; empty string elsewhere.
 - `$LOOP_PREV_OUTPUT` - Cleaned output of the previous loop iteration (loop nodes only). Empty string on the first iteration (no prior output exists). Useful for `fresh_context: true` loops that need to reference what the previous pass produced or why it failed without carrying full session history.

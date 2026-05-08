@@ -134,10 +134,18 @@ nodes:
       echo "=== Searching for duplicates: $KEYWORDS ==="
 
       echo "--- Open Issues ---"
-      gh issue list --search "$KEYWORDS" --state open --limit 5 --json number,title,url,labels 2>/dev/null || echo "No open matches"
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        glab issue list --search "$KEYWORDS" --state opened --output json 2>/dev/null | jq '.[:5] | map({number:.iid,title,url:".web_url",labels:([.labels[]?.name])})' || echo "No open matches"
+      else
+        gh issue list --search "$KEYWORDS" --state open --limit 5 --json number,title,url,labels 2>/dev/null || echo "No open matches"
+      fi
 
       echo "--- Recently Closed ---"
-      gh issue list --search "$KEYWORDS" --state closed --limit 3 --json number,title,url,labels 2>/dev/null || echo "No closed matches"
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        glab issue list --search "$KEYWORDS" --state closed --output json 2>/dev/null | jq '.[:3] | map({number:.iid,title,url:".web_url"})' || echo "No closed matches"
+      else
+        gh issue list --search "$KEYWORDS" --state closed --limit 3 --json number,title,url,labels 2>/dev/null || echo "No closed matches"
+      fi
     depends_on: [classify]
 
   # ═══════════════════════════════════════════════════════════════
@@ -568,21 +576,34 @@ nodes:
 
       4. Check which labels actually exist in the repo:
          ```bash
+         # GitHub
          gh label list --json name -q '.[].name' | head -50
+         # GitLab
+         glab label list --output json | jq -r '.[].name' | head -50
          ```
          Only use labels that exist. Skip any suggested label that doesn't match.
 
       5. Create the issue:
          ```bash
+         # GitHub
          gh issue create \
            --title "$(cat "$ARTIFACTS_DIR/.issue-title")" \
            --body-file "$ARTIFACTS_DIR/issue-draft.md" \
+           --label "label1,label2"
+         # GitLab
+         glab issue create \
+           --title "$(cat "$ARTIFACTS_DIR/.issue-title")" \
+           --description "$(cat "$ARTIFACTS_DIR/issue-draft.md")" \
            --label "label1,label2"
          ```
 
       6. Capture the result:
          ```bash
+         # GitHub
          ISSUE_URL=$(gh issue list --limit 1 --json url -q '.[0].url')
+         echo "$ISSUE_URL" > "$ARTIFACTS_DIR/.issue-url"
+         # GitLab
+         ISSUE_URL=$(glab issue list --output json | jq -r '.[0].web_url')
          echo "$ISSUE_URL" > "$ARTIFACTS_DIR/.issue-url"
          ```
 

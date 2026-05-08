@@ -80,13 +80,26 @@ nodes:
     bash: |
       set -euo pipefail
       EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
-      if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
-        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      BRANCH=$(git branch --show-current)
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        MR_DATA=$(glab mr list --source-branch "$BRANCH" --output json --limit 1 2>/dev/null || echo "[]")
+        ACTUAL=$(echo "$MR_DATA" | jq -r '.[0].target_branch // empty')
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          MR_IID=$(echo "$MR_DATA" | jq -r '.[0].iid')
+          echo "Base mismatch on MR !$MR_IID: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          glab mr update "$MR_IID" --target-branch "$EXPECTED"
+        else
+          echo "MR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
       else
-        echo "PR base verified: $EXPECTED"
+        ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName' 2>/dev/null || echo "")
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          PR_NUMBER=$(gh pr view --json number -q '.number')
+          echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+          gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+        else
+          echo "PR base verified: ${ACTUAL:-$EXPECTED}"
+        fi
       fi
     depends_on: [finalize-pr]
 

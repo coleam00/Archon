@@ -1,9 +1,9 @@
 /**
- * PR state lookup via the `gh` CLI.
+ * PR / MR state lookup via forge CLI (`gh` for GitHub, `glab` for GitLab).
  *
- * Used by cleanup to detect squash-merged or closed PRs that git ancestry
- * checks miss. The `gh` CLI is a soft dependency — if it's missing or fails,
- * we return 'NONE' and let callers fall back to git-only signals.
+ * Used by cleanup to detect squash-merged or closed PRs/MRs that git ancestry
+ * checks miss. Both CLIs are soft dependencies — if missing or failing, we
+ * return 'NONE' and let callers fall back to git-only signals.
  */
 import { execFileAsync } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
@@ -19,11 +19,11 @@ function getLog(): ReturnType<typeof createLogger> {
 export type PrState = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
 
 /**
- * Look up the PR state for a branch in the GitHub remote.
+ * Look up the PR/MR state for a branch in the remote forge.
  *
- * Returns:
- *   - 'MERGED' / 'CLOSED' / 'OPEN' if a PR exists with that head branch
- *   - 'NONE' if no PR exists, gh is unavailable, or the remote is not GitHub
+ * Detects GitHub vs GitLab from the remote URL and dispatches to the
+ * appropriate CLI (gh / glab). Returns 'NONE' for unrecognized remotes,
+ * missing CLI tools, or network/auth failures.
  *
  * The optional `cache` map dedupes lookups within a single cleanup invocation.
  */
@@ -37,13 +37,12 @@ export async function getPrState(
     return cached;
   }
 
-  // Check whether the remote is on GitHub. Non-GitHub remotes are out of scope.
   let remoteUrl = '';
   try {
     const { stdout } = await execFileAsync('git', ['-C', repoPath, 'remote', 'get-url', 'origin'], {
       timeout: 10000,
     });
-    remoteUrl = stdout.trim();
+    remoteUrl = stdout.trim().toLowerCase();
   } catch (error) {
     getLog().debug(
       { err: error as Error, repoPath, branch },
@@ -53,13 +52,24 @@ export async function getPrState(
     return 'NONE';
   }
 
-  if (!remoteUrl.toLowerCase().includes('github.com')) {
-    getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_github_only');
+  const isGitHub = remoteUrl.includes('github.com');
+  const isGitLab = remoteUrl.includes('gitlab');
+
+  if (!isGitHub && !isGitLab) {
+    getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_forge_not_supported');
     cache?.set(branch, 'NONE');
     return 'NONE';
   }
 
-  let result: PrState = 'NONE';
+  const result = isGitHub
+    ? await queryGhPrState(branch, repoPath)
+    : await queryGlabMrState(branch, repoPath);
+
+  cache?.set(branch, result);
+  return result;
+}
+
+async function queryGhPrState(branch: BranchName, repoPath: RepoPath): Promise<PrState> {
   let ghStdout = '';
   try {
     const { stdout } = await execFileAsync(
@@ -71,7 +81,7 @@ export async function getPrState(
     const parsed = JSON.parse(stdout) as { state?: string }[];
     const state = parsed[0]?.state;
     if (state === 'MERGED' || state === 'CLOSED' || state === 'OPEN') {
-      result = state;
+      return state;
     }
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
@@ -85,7 +95,46 @@ export async function getPrState(
       );
     }
   }
+  return 'NONE';
+}
 
-  cache?.set(branch, result);
-  return result;
+async function queryGlabMrState(branch: BranchName, repoPath: RepoPath): Promise<PrState> {
+  let glabStdout = '';
+  try {
+    const { stdout } = await execFileAsync(
+      'glab',
+      [
+        'mr',
+        'list',
+        '--source-branch',
+        branch,
+        '--state',
+        'all',
+        '--output',
+        'json',
+        '--limit',
+        '1',
+      ],
+      { timeout: 15000, cwd: repoPath }
+    );
+    glabStdout = stdout;
+    const parsed = JSON.parse(stdout) as { state?: string }[];
+    const state = parsed[0]?.state;
+    // glab uses lowercase state names: opened, merged, closed
+    if (state === 'merged') return 'MERGED';
+    if (state === 'closed') return 'CLOSED';
+    if (state === 'opened') return 'OPEN';
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    const isNotInstalled = err.code === 'ENOENT' || err.message.includes('command not found');
+    if (isNotInstalled) {
+      getLog().debug({ branch, repoPath }, 'isolation.pr_state_glab_not_installed');
+    } else {
+      getLog().warn(
+        { err, branch, repoPath, glabStdout: glabStdout || undefined },
+        'isolation.mr_state_lookup_failed'
+      );
+    }
+  }
+  return 'NONE';
 }

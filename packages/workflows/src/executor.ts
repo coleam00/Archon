@@ -14,7 +14,7 @@ import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import { classifyError } from './executor-shared';
+import { classifyError, resolveForgeProvider } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -275,6 +275,11 @@ export async function executeWorkflow(
   }
 
   const docsDir = config.docsPath ?? 'docs/';
+
+  // Resolve forge provider for $FORGE_PROVIDER / $FORGE_CLI substitution.
+  // Reads config.forgeProvider first, then auto-detects from git remote URL.
+  const forgeProvider = await resolveForgeProvider(config, cwd);
+  const configWithForge: WorkflowConfig = { ...config, forgeProvider };
 
   // Resolve provider and model once (used by all nodes).
   // Provider is explicit: node.provider ?? workflow.provider ?? config.assistant.
@@ -744,7 +749,7 @@ export async function executeWorkflow(
       logDir,
       baseBranch,
       docsDir,
-      config,
+      configWithForge,
       configuredCommandFolder,
       issueContext,
       dagPriorCompletedNodes
