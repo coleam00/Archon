@@ -1,0 +1,844 @@
+name: v2-epic-decomposition-mark2
+description: |
+  Mark 2 of the experimental v2 decomposition workflow. Same scope as mark1
+  (filesystem inputs/outputs, no Jira) with these changes vs mark1:
+   - Plan is THE canonical artifact: phases + tasks + stack_rules + design_rules.
+     Advisers mutate the plan in place; nothing is sidecar.
+   - Adversarial generator authors a phased plan (phases: [{ phase_id, goal,
+     tasks: [...] }]).
+   - Adversarial evaluator scores per-phase + cross-phase coherence.
+   - Stack adviser and design adviser are extracted to command files
+     (archon-v2-stack-adviser, archon-v2-design-adviser).
+   - Compose-tickets enforces verbatim AC preservation (count match) and
+     restructured Test-Gen Brief (Contract subsection + per-AC Test Plan
+     table).
+   - Review-and-improve enforces AC-count and Test-Plan-row fidelity.
+   - Plan-builder explicitly forbidden from authoring standalone test
+     tasks; testing is part of every feature ticket.
+   - All prompts (inline and command) follow LOAD → PROCESS → GENERATE
+     → COMMIT → REPORT with real verification checkpoints.
+
+  Run with: archon workflow run v2-epic-decomposition-mark2 _inputs/wor-5
+
+worktree:
+  enabled: false
+mutates_checkout: false
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ─── Stage 1: Resolve inputs ──────────────────────────────────────────
+  - id: resolve-input
+    bash: |
+      # Resolve $ARGUMENTS (relative path under experiments/decomposition/)
+      # into an absolute input directory. Validate it has epic.md and
+      # attachments/.
+      set -eo pipefail
+      experiments_root="/home/user/Archon/.archon/experiments/decomposition"
+      input_arg=$ARGUMENTS
+      if [ -z "$input_arg" ]; then
+        echo "Usage: archon workflow run v2-epic-decomposition-mark2 <input-dir-relative-to-experiments/decomposition/>" >&2
+        exit 1
+      fi
+      input_dir="$experiments_root/$input_arg"
+      if [ ! -d "$input_dir" ]; then
+        echo "Input directory not found: $input_dir" >&2
+        exit 1
+      fi
+      if [ ! -f "$input_dir/epic.md" ]; then
+        echo "Missing $input_dir/epic.md" >&2
+        exit 1
+      fi
+      if [ ! -d "$input_dir/attachments" ]; then
+        echo "Missing $input_dir/attachments/" >&2
+        exit 1
+      fi
+      run_name="mark2-$(basename "$input_arg")-$(date +%Y%m%d-%H%M%S)"
+      printf '{"input_dir":"%s","experiments_root":"%s","run_name":"%s"}\n' \
+        "$input_dir" "$experiments_root" "$run_name"
+
+  # ─── Stage 2: Stage inputs into $ARTIFACTS_DIR ────────────────────────
+  - id: stage-inputs
+    depends_on: [ resolve-input ]
+    bash: |
+      # Copy epic.md into ARTIFACTS_DIR; concat all .md/.txt/.html attachments
+      # (excluding any decomposition-plan.md from prior runs) into attachments.md.
+      set -eo pipefail
+      input_dir=$resolve-input.output.input_dir
+      cp "$input_dir/epic.md" "$ARTIFACTS_DIR/epic.md"
+
+      mkdir -p "$ARTIFACTS_DIR/attachments"
+      attachments_md="$ARTIFACTS_DIR/attachments.md"
+      : > "$attachments_md"
+      count=0
+      for f in "$input_dir/attachments/"*; do
+        name=$(basename "$f")
+        if [ "$name" = "decomposition-plan.md" ]; then continue; fi
+        case "$name" in
+          *.md|*.txt|*.html)
+            printf '\n\n## %s\n\n' "$name" >> "$attachments_md"
+            cat "$f" >> "$attachments_md"
+            cp "$f" "$ARTIFACTS_DIR/attachments/$name"
+            count=$((count+1))
+            ;;
+        esac
+      done
+      bytes=$(wc -c < "$attachments_md")
+      printf '{"attachments_md":"%s","attachment_count":%d,"bytes":%d}\n' \
+        "$attachments_md" "$count" "$bytes"
+
+  # ─── Stage 3: Initialize adversarial state ────────────────────────────
+  - id: init-adversarial-state
+    depends_on: [ stage-inputs ]
+    bash: |
+      # State machine for the plan-creation adversarial loop. Phases drive
+      # role dispatch on each iteration: generating | evaluating |
+      # converged | maxed-out.
+      set -eo pipefail
+      cat > "$ARTIFACTS_DIR/plan-state.json" <<'JSON'
+      {
+        "phase": "generating",
+        "round": 1,
+        "maxRounds": 4,
+        "passThreshold": 8,
+        "lastEvaluation": null,
+        "status": "running"
+      }
+      JSON
+      mkdir -p "$ARTIFACTS_DIR/plan-evaluations"
+      printf '{"state":"%s"}\n' "$ARTIFACTS_DIR/plan-state.json"
+
+  # ─── Stage 4: Adversarial plan creation ───────────────────────────────
+  # Generator and evaluator alternate. Generator authors a phased plan;
+  # evaluator scores per-phase + cross-phase. Converges when all scores >=
+  # threshold and no objections, or hits maxRounds.
+  - id: adversarial-plan
+    depends_on: [ init-adversarial-state ]
+    idle_timeout: 600000
+    loop:
+      max_iterations: 12
+      fresh_context: true
+      until: PLAN_CONVERGED
+      until_bash: |
+        grep -qE '"status"\s*:\s*"(converged|maxed-out)"' "$ARTIFACTS_DIR/plan-state.json"
+      prompt: |
+        # Adversarial Plan Creation (mark2)
+
+        Each iteration is a fresh agent. You play ONE role this iteration,
+        determined by the `phase` field in `$ARTIFACTS_DIR/plan-state.json`.
+        The two roles are GENERATOR and EVALUATOR. They alternate by round.
+
+        ---
+
+        ## Phase 1 — LOAD
+
+        Read these inputs:
+        - `$ARTIFACTS_DIR/plan-state.json` — has `phase`, `round`, `maxRounds`,
+          `passThreshold`, `status`. Determines which role you play.
+        - `$ARTIFACTS_DIR/epic.md` — the PRD.
+        - `$ARTIFACTS_DIR/attachments.md` — TechSpec, DesignDoc, StyleGuide.
+        - If `round > 1`, also read `$ARTIFACTS_DIR/plan-evaluations/round-<round-1>.json`
+          (the prior evaluator's verdict) and `$ARTIFACTS_DIR/plan-current.json`
+          (the prior generator's plan, which the evaluator scored).
+
+        **Phase 1 checkpoint:**
+        - [ ] You read `plan-state.json` and identified your role from `phase`.
+        - [ ] You read `epic.md` and `attachments.md`.
+        - [ ] If round > 1, you read the prior evaluation and the prior plan.
+
+        Now jump to whichever role section your phase says.
+
+        ---
+
+        ## ROLE: GENERATOR (phase = "generating")
+
+        ### Phase 2 — PROCESS (generator)
+
+        **Central question:** *Decompose this PRD into phased tasks. What are
+        the phases of work, and within each phase, what are the smallest
+        cohesive cuts?*
+
+        #### 2.1 Identify phases
+
+        Read the PRD's release plan (PRD §9 in WOR-5; equivalent section in
+        any project's spec). The phases follow it. Typical shape:
+
+        - Phase 0 / Foundation: scaffolding, schema, auth setup, design
+          tokens, error normalization, CI baseline.
+        - Phase 1 / Core flow: the load-bearing user-facing happy path.
+        - Phase 2 / Secondary flows: features that build on the core.
+        - Phase 3 / Polish: accessibility, error states, admin tools.
+
+        Use the spec's actual phase names where it has them; otherwise infer.
+        Each phase has a clear goal (one sentence) and a clear "complete"
+        meaning (gate condition).
+
+        #### 2.2 Decompose each phase into tasks
+
+        Within each phase, cut into the smallest cohesive units of work. A
+        cohesive unit = one primary code surface (one component, one
+        mutation, one schema migration, one helper module). Many ACs on one
+        cohesive surface is GOOD; few ACs across mixed surfaces is BAD.
+
+        **Hard rule: do NOT author standalone "test" tasks.** Tests are
+        produced by test-gen as part of each feature ticket's pipeline.
+        Every feature task carries its testing requirements in its
+        `acceptance_criteria`. The only test-related tasks allowed are
+        initial test infrastructure (test runner config, CI test runner
+        integration), which lives in the foundation phase.
+
+        #### 2.3 Wire dependencies
+
+        Within a phase: declare `depends_on` for in-phase ordering.
+        Across phases: implicit — phase N+1 cannot start until phase N is
+        complete. Don't repeat cross-phase deps as `depends_on` edges.
+
+        #### 2.4 Author per-task fields
+
+        Each task has:
+        - `task_id` — stable label T1..TN in plan order
+        - `title` — short, specific, names the primary code surface
+        - `summary` — 2-4 sentence prose
+        - `acceptance_criteria` — array of testable, concrete, specific
+          assertions. Each AC stands alone; the dev pipeline measures
+          "done" against this list. Be exhaustive — list every assertion
+          a reasonable reviewer would want to verify.
+        - `depends_on` — array of in-phase task_ids (see 2.3)
+        - `suggested_jira_type` — `Task` or `Story` (no `Bug` in greenfield)
+        - `original_estimate_minutes` — autonomous-agent end-to-end estimate
+          (calibration: trivial config 15-30; small CRUD endpoint 30-60;
+          AC-rich feature 60-120; cross-cutting concern 120-240).
+
+        #### 2.5 If round > 1, address every prior objection
+
+        Read `plan-evaluations/round-<round-1>.json`. For each objection in
+        the prior evaluation, identify the change you're making to address
+        it. Apply the changes. The evaluator will check.
+
+        **Phase 2 checkpoint (generator):**
+        - [ ] Every PRD user story (US-XX) maps to at least one task.
+        - [ ] Every named NFR from the PRD that requires implementation
+              (privacy enforcement, performance, accessibility, etc.) is
+              carried as an AC on at least one relevant task.
+        - [ ] No standalone "test" tasks exist (testing lives in feature
+              tasks' ACs).
+        - [ ] Phases are coherent: each phase has a clear goal and a clear
+              completion condition.
+        - [ ] Tasks are at one-cohesive-surface granularity.
+        - [ ] If round > 1: every objection from the prior evaluation has a
+              specific change addressing it.
+
+        ### Phase 3 — GENERATE (generator)
+
+        Author `$ARTIFACTS_DIR/plan-current.json` in this exact shape:
+
+        ```json
+        {
+          "epic_title": "string",
+          "planning_assumptions": ["string"],
+          "phases": [
+            {
+              "phase_id": "P1",
+              "goal": "one-sentence statement",
+              "completion_condition": "what's true at end of phase",
+              "tasks": [
+                {
+                  "task_id": "T1",
+                  "title": "...",
+                  "summary": "...",
+                  "acceptance_criteria": ["...", "..."],
+                  "depends_on": [],
+                  "suggested_jira_type": "Task",
+                  "original_estimate_minutes": 30
+                }
+              ]
+            }
+          ]
+        }
+        ```
+
+        Tasks within a phase are listed in plan order. Task IDs are unique
+        across the whole plan (T1..TN).
+
+        ### Phase 4 — COMMIT (generator)
+
+        Write the JSON to `$ARTIFACTS_DIR/plan-current.json` (pretty JSON,
+        2-space indent). Verify on disk:
+        - File size > 0 bytes
+        - Parses as valid JSON
+        - Top-level has `epic_title`, `planning_assumptions`, `phases`
+        - Every phase has `tasks` (non-empty array)
+        - Every task has all required fields
+
+        Update `$ARTIFACTS_DIR/plan-state.json`: set `"phase": "evaluating"`.
+        Other fields unchanged.
+
+        **Phase 4 checkpoint (generator):**
+        - [ ] `plan-current.json` is valid JSON with all required fields.
+        - [ ] `plan-state.json` has `phase: evaluating`.
+
+        ### Phase 5 — REPORT (generator)
+
+        Output one line summary: `Generated plan v<round> with <N> phases
+        and <M> tasks.` Do NOT emit `<promise>PLAN_CONVERGED</promise>`.
+
+        ---
+
+        ## ROLE: EVALUATOR (phase = "evaluating")
+
+        ### Phase 2 — PROCESS (evaluator)
+
+        **Central question:** *What are the substantive flaws in this plan
+        that would cause downstream defects? Be specific. Be adversarial.*
+
+        Read `$ARTIFACTS_DIR/plan-current.json`. Score it on these
+        dimensions, both per-phase and cross-phase:
+
+        **Per-phase scoring** (each phase scored 1-10 on each dimension):
+        - **coverage** — does this phase deliver every commitment its goal
+          promises? Any user story / NFR that should land in this phase but
+          doesn't have a task carrying it?
+        - **sizing** — any task in this phase too large (will the dev
+          pipeline struggle)? Any too small (mostly overhead)? Any
+          mixed-domain tickets that should be split?
+        - **dependencies** — within-phase DAG complete? Any hidden
+          dependencies? Any cycles? Any tickets that could parallelize but
+          don't because of phantom deps?
+        - **testability** — are ACs concrete enough that a test can be
+          written? Any vague AC that could pass with sloppy implementation?
+
+        **Cross-phase scoring** (1-10 on each):
+        - **ordering** — phases ordered correctly? Any phase whose work
+          depends on a later phase's deliverable?
+        - **boundary_clarity** — does each phase have a clear "complete"
+          meaning? Could a stakeholder verify "phase N is done"?
+        - **transition_gates** — does phase N+1 actually have everything it
+          needs from phase N?
+
+        **No standalone test tasks check:** if you find any task that is
+        purely "tests for X" or "test suite for Y", flag it as an objection.
+        Tests are a feature of every feature ticket, not a separate ticket.
+
+        Score honestly. Do NOT grade on a curve. 8 = "genuinely meets the
+        bar." Below that is a real problem.
+
+        ### Phase 3 — GENERATE (evaluator)
+
+        Write `$ARTIFACTS_DIR/plan-evaluations/round-<round>.json`:
+
+        ```json
+        {
+          "round": <N>,
+          "phase_scores": [
+            {
+              "phase_id": "P1",
+              "scores": {
+                "coverage": 8,
+                "sizing": 9,
+                "dependencies": 8,
+                "testability": 7
+              }
+            }
+          ],
+          "cross_phase_scores": {
+            "ordering": 9,
+            "boundary_clarity": 8,
+            "transition_gates": 7
+          },
+          "passed": false,
+          "objections": [
+            {
+              "scope": "phase|cross_phase",
+              "phase_id": "P1",
+              "dimension": "testability",
+              "task_ids": ["T7"],
+              "issue": "Specific finding with copy-pasteable detail.",
+              "fix": "What the generator should change."
+            }
+          ],
+          "summary": "One paragraph: what's good, what must change."
+        }
+        ```
+
+        `passed` is `true` ONLY if every per-phase score >= passThreshold
+        AND every cross-phase score >= passThreshold AND objections is
+        empty.
+
+        ### Phase 4 — COMMIT (evaluator)
+
+        Write the evaluation JSON. Verify on disk: parses, has all required
+        fields.
+
+        Update `$ARTIFACTS_DIR/plan-state.json` based on result:
+        - If `passed`: set `phase: "converged"`, `status: "converged"`.
+          Copy `plan-current.json` to `plan-final.json`.
+        - If failed and round < maxRounds: set `phase: "generating"`,
+          increment `round`.
+        - If failed and round >= maxRounds: set `phase: "maxed-out"`,
+          `status: "maxed-out"`. Copy `plan-current.json` to
+          `plan-final.json` (best effort).
+
+        **Phase 4 checkpoint (evaluator):**
+        - [ ] Evaluation JSON written and valid.
+        - [ ] `plan-state.json` updated to next phase or terminal status.
+        - [ ] If converged or maxed-out, `plan-final.json` exists.
+
+        ### Phase 5 — REPORT (evaluator)
+
+        If `status` is `converged` or `maxed-out`, output
+        `<promise>PLAN_CONVERGED</promise>` as the very last line. Otherwise
+        output a one-line status (`Round <N> evaluation: passed=<bool>,
+        <K> objections.`) and do NOT emit the completion signal.
+
+  # ─── Stage 5: Stack adviser pass (mutates plan-current.json in place) ─
+  - id: stack-adviser-pass
+    depends_on: [ adversarial-plan ]
+    context: fresh
+    bash: |
+      # The adversarial loop wrote plan-final.json. The stack adviser
+      # mutates it; alias plan-current.json -> plan-final.json so the
+      # adviser's prompt (which references plan-current) operates on the
+      # right file.
+      set -eo pipefail
+      cp "$ARTIFACTS_DIR/plan-final.json" "$ARTIFACTS_DIR/plan-current.json"
+      printf '{"plan_current":"%s"}\n' "$ARTIFACTS_DIR/plan-current.json"
+
+  - id: stack-adviser-call
+    depends_on: [ stack-adviser-pass ]
+    context: fresh
+    command: archon-v2-stack-adviser
+
+  # ─── Stage 6: Design adviser pass (mutates plan-current.json in place) ─
+  - id: design-adviser-call
+    depends_on: [ stack-adviser-call ]
+    context: fresh
+    command: archon-v2-design-adviser
+
+  # ─── Stage 7: Snapshot the enriched plan ──────────────────────────────
+  - id: snapshot-enriched-plan
+    depends_on: [ design-adviser-call ]
+    bash: |
+      # Final enriched plan is what compose-tickets will read. Copy
+      # plan-current.json (which both advisers mutated in place) to
+      # plan-enriched.json. Compose-tickets reads only plan-enriched.json.
+      set -eo pipefail
+      cp "$ARTIFACTS_DIR/plan-current.json" "$ARTIFACTS_DIR/plan-enriched.json"
+      bytes=$(wc -c < "$ARTIFACTS_DIR/plan-enriched.json")
+      printf '{"plan_enriched":"%s","bytes":%d}\n' \
+        "$ARTIFACTS_DIR/plan-enriched.json" "$bytes"
+
+  # ─── Stage 8: Initialize ticket keymap ────────────────────────────────
+  - id: init-keymap
+    depends_on: [ snapshot-enriched-plan ]
+    bash: |
+      set -eo pipefail
+      mkdir -p "$ARTIFACTS_DIR/tickets"
+      keymap="$ARTIFACTS_DIR/ticket-keymap.json"
+      if [ ! -f "$keymap" ]; then
+        echo '{}' > "$keymap"
+      fi
+      printf '{"keymap":"%s","tickets_dir":"%s"}\n' \
+        "$keymap" "$ARTIFACTS_DIR/tickets"
+
+  # ─── Stage 9: Compose tickets (Ralph loop) ────────────────────────────
+  - id: compose-tickets
+    depends_on: [ init-keymap ]
+    idle_timeout: 1800000
+    loop:
+      max_iterations: 100
+      fresh_context: true
+      until: COMPLETE
+      prompt: |
+        # Compose a single ticket (mark2)
+
+        Each iteration creates ONE ticket as a markdown file under
+        `$ARTIFACTS_DIR/tickets/`. Fresh context per iteration.
+
+        ---
+
+        ## Phase 1 — LOAD
+
+        Read these inputs every iteration:
+
+        - `$ARTIFACTS_DIR/plan-enriched.json` — THE plan. Has `phases[]`,
+          `phases[].tasks[]`, `stack_rules` (object: technology → markdown),
+          `design_rules` (object: concern → markdown).
+        - `$ARTIFACTS_DIR/ticket-keymap.json` — map of `task_id` → output
+          filename. Empty `{}` first iteration.
+        - `$ARTIFACTS_DIR/attachments.md` — source material; consult
+          selectively.
+        - `$ARTIFACTS_DIR/epic.md` — full PRD for grounding.
+
+        **Phase 1 checkpoint:**
+        - [ ] `plan-enriched.json` exists, parses, has `phases[]` and
+              non-empty `stack_rules` and `design_rules`.
+        - [ ] `ticket-keymap.json` exists and parses.
+
+        ---
+
+        ## Phase 2 — PROCESS
+
+        **Central question:** *Given this single task and the project's
+        rules, write a ticket that contains every AC verbatim plus a
+        contract and per-AC test plan that nails down the shared
+        vocabulary.*
+
+        ### 2.1 Pick the next task
+
+        Walk `phases[]` in order; within each phase walk `tasks[]` in order.
+        Find the FIRST task whose `task_id` is NOT in the keymap. Call it T,
+        and remember its phase as P.
+
+        If every task in every phase has a keymap entry, output
+        `<promise>COMPLETE</promise>` and stop.
+
+        ### 2.2 Identify the relevant rules
+
+        From `plan.stack_rules`, identify which technology sections apply to
+        T. (A backend mutation task → the backend technology section
+        (e.g. `convex`) plus the test runner section. A UI component task →
+        the framework + styling sections.) From `plan.design_rules`,
+        identify which concerns apply to T. (UI tasks pull `tokens`,
+        `typography`, `accessibility`, etc; backend tasks pull none.)
+
+        Pull only the parts you need. Don't paste whole sections — extract
+        the rules that apply to this task's primary surface.
+
+        ### 2.3 Author the ticket sections
+
+        The ticket has these sections in this exact order. Follow the
+        instructions for each. Skipping a section or reordering is forbidden.
+
+        **Opening paragraph (no heading)** — 2-4 sentences restating T's
+        purpose in plain language, grounded in the Epic context. Explain
+        why this task exists in the broader project (and within phase P).
+        Not a verbatim copy of T.summary.
+
+        **`## Acceptance Criteria`** — bulleted list of T.acceptance_criteria.
+        **Render every AC verbatim. Do not consolidate, summarize,
+        rephrase, or relocate any AC into other sections.** The Test Plan
+        in the next section expands on these ACs by mapping each one to
+        test plan; it does not replace them.
+
+        **`## Implementation Notes`** — prose context for the implementer.
+        What surrounding code, architecture conventions, or design intent
+        apply. Pull selectively from the relevant `stack_rules`,
+        `design_rules`, and attachments. Keep it readable — this is human
+        narrative, not a strict spec.
+
+        **`## Test-Gen Brief`** — strict spec for the test writer AND the
+        code writer. Both consume this. Two subsections, both required:
+
+        ### Contract
+
+        The shared vocabulary the test writer and code writer both consume.
+        Author from the plan + the relevant rules + attachments.
+        - **Files** — full paths where exports live; full paths where
+          tests live.
+        - **Exports** — every public symbol the implementation must
+          expose, named, with shape (named/default, value/type).
+        - **Signatures** — exact TypeScript declarations for each export,
+          copyable.
+        - **Queries used** — API references called by the implementation
+          (e.g. `api.x.y`, `internal.x.y`). Empty if N/A.
+        - **Invariants** — properties that must hold regardless of input.
+        - **Non-goals** — explicit scope fence; what this ticket does NOT
+          change.
+
+        ### Test Plan
+
+        One row per AC from the Acceptance Criteria section above. **Every
+        AC must appear here.** The table format:
+
+        | AC | Layer | What to assert | Fixtures / mocks |
+        |----|-------|----------------|------------------|
+        | AC1 (verbatim AC text or first 60 chars) | unit / integration / e2e | specific assertion shape, referencing Contract symbols by name | what fixtures or mocks are needed |
+        | AC2 ... |  |  |  |
+
+        For each row:
+        - **AC** column: quote the AC verbatim or its first 60 characters
+          (enough to identify which AC this row is testing).
+        - **Layer**: the test layer that gates this AC. Use the layer
+          guidance from `stack_rules` for the relevant technology.
+        - **What to assert**: name the symbols from Contract.Exports /
+          Contract.Signatures that the test calls, and the specific
+          observable behavior.
+        - **Fixtures/mocks**: what the test needs. If the relevant stack
+          rule says "use convex-test for runtime tests, no mocking", the
+          fixture cell names the convex-test setup.
+
+        If a Contract field cannot be filled from the plan + rules +
+        attachments, write `TBD — <reason>` rather than fabricating.
+        Honest TBD is preferred over invented detail.
+
+        **`## Traceability`**
+        - `task_id`: T's task_id
+        - `phase`: T's phase_id (P)
+        - `title`: T's title
+        - `suggested_jira_type`: T's suggested_jira_type
+        - `original_estimate_minutes`: T's original_estimate_minutes
+        - `depends_on`: comma-separated task_ids from T.depends_on, or
+          "(none)" if empty.
+
+        **Phase 2 checkpoint:**
+        - [ ] AC bullet count equals `T.acceptance_criteria.length`. Count
+              and verify. If not equal, you have consolidated, dropped, or
+              relocated ACs. Restore them.
+        - [ ] Test Plan table has the same number of rows as the AC bullet
+              count. Each row's AC column references a unique AC bullet.
+              No AC is missing a Test Plan row; no Test Plan row exists
+              without a corresponding AC.
+        - [ ] Contract subsection has all required fields (Files, Exports,
+              Signatures, Queries used, Invariants, Non-goals).
+        - [ ] Implementation Notes is prose narrative; Test-Gen Brief is
+              strict spec. Do not blur the line.
+
+        ---
+
+        ## Phase 3 — GENERATE
+
+        Render the ticket markdown using the section structure from Phase
+        2.3. Pure markdown, no frontmatter, no JSON wrapping. Section
+        headings exactly as written above (case-sensitive).
+
+        ---
+
+        ## Phase 4 — COMMIT
+
+        1. Write the ticket markdown to
+           `$ARTIFACTS_DIR/tickets/<task_id>.md`.
+        2. Verify the file is on disk and non-empty:
+           `ls -la $ARTIFACTS_DIR/tickets/<task_id>.md`.
+        3. Update the keymap: read `ticket-keymap.json`, parse it, add
+           `{"<task_id>": "tickets/<task_id>.md"}`, write back as pretty
+           JSON (2-space indent).
+        4. Verify the keymap update:
+           `cat $ARTIFACTS_DIR/ticket-keymap.json` shows the new entry.
+
+        **Phase 4 checkpoint:**
+        - [ ] Ticket file exists, non-empty.
+        - [ ] All required sections present (Opening, Acceptance Criteria,
+              Implementation Notes, Test-Gen Brief with Contract + Test
+              Plan subsections, Traceability).
+        - [ ] AC bullet count matches plan AC count for this task.
+        - [ ] Test Plan row count matches AC bullet count.
+        - [ ] Keymap has new entry; file persisted.
+
+        ---
+
+        ## Phase 5 — REPORT
+
+        Output one-line status: `Composed <task_id> at tickets/<task_id>.md
+        (P=<phase>, ACs=<n>, Test Plan rows=<n>).` Do NOT emit
+        `<promise>COMPLETE</promise>` on this iteration.
+
+        ---
+
+        ## Hard rules
+
+        - Create exactly ONE ticket per iteration.
+        - Never invent task_ids that aren't in the plan.
+        - Never modify the plan files.
+        - Use the exact section names listed in Phase 2.3.
+        - AC verbatim preservation is non-negotiable. The plan's AC list is
+          the source of truth.
+
+        Previous iteration output (empty on first):
+        $LOOP_PREV_OUTPUT
+
+  # ─── Stage 10: Initialize review keymap ───────────────────────────────
+  - id: init-review-keymap
+    depends_on: [ compose-tickets ]
+    bash: |
+      set -eo pipefail
+      mkdir -p "$ARTIFACTS_DIR/tickets-reviewed"
+      review_keymap="$ARTIFACTS_DIR/review-keymap.json"
+      if [ ! -f "$review_keymap" ]; then
+        echo '{}' > "$review_keymap"
+      fi
+      printf '{"review_keymap":"%s","reviewed_dir":"%s"}\n' \
+        "$review_keymap" "$ARTIFACTS_DIR/tickets-reviewed"
+
+  # ─── Stage 11: Review-and-improve loop ────────────────────────────────
+  - id: review-and-improve
+    depends_on: [ init-review-keymap ]
+    idle_timeout: 1800000
+    loop:
+      max_iterations: 100
+      fresh_context: true
+      until: REVIEW_COMPLETE
+      prompt: |
+        # Review and improve a single ticket (mark2)
+
+        Each iteration polishes one ticket against the plan + rules. Fresh
+        context per iteration. This is improvement, not gating — every
+        ticket gets a polished version.
+
+        ---
+
+        ## Phase 1 — LOAD
+
+        Read these inputs every iteration:
+        - `$ARTIFACTS_DIR/plan-enriched.json` — THE plan, with phases,
+          tasks, stack_rules, design_rules.
+        - `$ARTIFACTS_DIR/ticket-keymap.json` — map of task_id → original
+          ticket path under tickets/.
+        - `$ARTIFACTS_DIR/review-keymap.json` — map of task_id → reviewed
+          ticket path under tickets-reviewed/. Empty `{}` first iteration.
+
+        **Phase 1 checkpoint:**
+        - [ ] All three files exist and parse.
+        - [ ] `ticket-keymap.json` is non-empty (compose-tickets ran).
+
+        ---
+
+        ## Phase 2 — PROCESS
+
+        **Central question:** *Read this ticket against the plan and the
+        rules. What concrete improvements would tighten symbol naming,
+        fill TBDs, fix AC drift, or strengthen the per-AC Test Plan?
+        Apply them.*
+
+        ### 2.1 Pick the next ticket
+
+        Find the FIRST task_id present in `ticket-keymap.json` but NOT in
+        `review-keymap.json`. Call it T.
+
+        If every task_id in `ticket-keymap.json` is already in
+        `review-keymap.json`, output
+        `<promise>REVIEW_COMPLETE</promise>` and stop.
+
+        Read T's original ticket from
+        `$ARTIFACTS_DIR/tickets/<task_id>.md`. Read T's plan entry by
+        looking through `plan.phases[].tasks[]`.
+
+        ### 2.2 Audit the ticket against the plan
+
+        Check these specific things — they are the failure modes mark1 hit
+        most often:
+
+        - **AC fidelity.** Count bullets in the ticket's `## Acceptance
+          Criteria` section. It MUST equal `T.acceptance_criteria.length`
+          from the plan. If not, the lowering pass dropped or
+          consolidated ACs. Restore them by replacing the AC section with
+          the plan's `acceptance_criteria` rendered verbatim.
+        - **Test Plan row count.** The Test-Gen Brief's Test Plan table
+          MUST have one row per AC. Count rows; if fewer than the AC
+          count, add rows for the missing ACs. If more, the agent
+          duplicated rows.
+        - **Contract specificity.** Every export named in the Contract
+          should have a signature in the Signatures subsection. Every
+          symbol referenced in the Test Plan's "What to assert" column
+          should appear in Contract.Exports. Cross-reference and fix
+          mismatches.
+        - **Stack rule application.** Look at `plan.stack_rules` for the
+          technologies T touches. Are the relevant rules applied in
+          Implementation Notes or Test-Gen Brief? If a rule explicitly
+          governs T's surface (e.g., "Convex backend tests use
+          convex-test"), it should appear in T's ticket.
+        - **TBD resolution.** If the ticket has `TBD — ...` entries that
+          the plan + rules + attachments now actually answer, fill them in.
+        - **Cross-ticket coherence.** If T depends on another ticket T'
+          and T's Contract references symbols from T', the names must
+          match what T' exports. If you spot a mismatch, fix T to use T's
+          declared name.
+
+        ### 2.3 Apply improvements
+
+        Write the improved ticket. Use the same section structure as the
+        original (Opening, Acceptance Criteria, Implementation Notes,
+        Test-Gen Brief with Contract + Test Plan, Traceability).
+
+        Do not change what doesn't need changing. If the original is
+        already strong on a section, leave it. The goal is improvement,
+        not rewriting.
+
+        **Phase 2 checkpoint:**
+        - [ ] AC bullet count in your improved version equals
+              `T.acceptance_criteria.length` from the plan.
+        - [ ] Test Plan row count equals AC bullet count.
+        - [ ] Every TBD in the original is either resolved or kept (with
+              reason) — no silent drops.
+        - [ ] Stack and design rules from the plan that govern T's surface
+              are applied in the improved ticket.
+        - [ ] Cross-ticket symbol references are consistent (or you noted
+              a mismatch in Implementation Notes).
+
+        ---
+
+        ## Phase 3 — GENERATE
+
+        Render the improved ticket markdown.
+
+        ---
+
+        ## Phase 4 — COMMIT
+
+        1. Write to
+           `$ARTIFACTS_DIR/tickets-reviewed/<task_id>.md`.
+        2. Verify on disk: file exists, non-empty.
+        3. Update the review keymap with `{"<task_id>":
+           "tickets-reviewed/<task_id>.md"}`.
+        4. Verify the keymap update.
+
+        **Phase 4 checkpoint:**
+        - [ ] Reviewed ticket file exists, non-empty.
+        - [ ] AC bullet count matches plan.
+        - [ ] Test Plan row count matches AC bullet count.
+        - [ ] Review keymap has new entry.
+
+        ---
+
+        ## Phase 5 — REPORT
+
+        Output one-line status: `Reviewed <task_id> (ACs=<n>, Test Plan
+        rows=<n>, notable=<one-line>).` Do NOT emit
+        `<promise>REVIEW_COMPLETE</promise>` on this iteration.
+
+        ---
+
+        ## Hard rules
+
+        - Create exactly ONE reviewed ticket per iteration.
+        - Use the same section structure as the original.
+        - AC verbatim preservation is non-negotiable. If the original
+          dropped ACs, restore them from the plan.
+        - Don't invent symbols not derivable from the plan + rules +
+          attachments.
+
+        Previous iteration output (empty on first):
+        $LOOP_PREV_OUTPUT
+
+  # ─── Stage 12: Final summary + copy to stable location ────────────────
+  - id: final-summary
+    depends_on: [ review-and-improve ]
+    bash: |
+      set -eo pipefail
+      run_name=$resolve-input.output.run_name
+      out="/home/user/Archon/.archon/experiments/decomposition/$run_name"
+      mkdir -p "$out/tickets-reviewed" "$out/tickets-raw"
+      cp "$ARTIFACTS_DIR/plan-final.json" "$out/plan-final.json" 2>/dev/null || true
+      cp "$ARTIFACTS_DIR/plan-enriched.json" "$out/plan-enriched.json" 2>/dev/null || true
+      cp -r "$ARTIFACTS_DIR/tickets-reviewed/." "$out/tickets-reviewed/" 2>/dev/null || true
+      cp -r "$ARTIFACTS_DIR/tickets/." "$out/tickets-raw/" 2>/dev/null || true
+
+      ticket_count=$(ls -1 "$out/tickets-reviewed" 2>/dev/null | wc -l)
+
+      cat > "$out/summary.md" <<EOF
+      # v2 Mark2 — Run $run_name
+
+      Workflow: v2-epic-decomposition-mark2
+      Started: $(date -Iseconds)
+      Tickets produced: $ticket_count
+      Source artifacts: $ARTIFACTS_DIR
+
+      ## Outputs in this directory
+      - plan-final.json — converged adversarial plan (phased, before adviser enrichment)
+      - plan-enriched.json — plan after stack + design adviser enrichment (input to compose-tickets)
+      - tickets-raw/ — output of compose-tickets loop
+      - tickets-reviewed/ — output of review-and-improve loop (FINAL)
+      EOF
+
+      printf '{"run_name":"%s","output_dir":"%s","tickets":%d}\n' \
+        "$run_name" "$out" "$ticket_count"

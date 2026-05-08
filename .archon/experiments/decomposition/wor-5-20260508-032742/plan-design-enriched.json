@@ -1,0 +1,1019 @@
+{
+  "epic_title": "Conflict Coach v1 — Full-Stack AI Mediation Web App",
+  "planning_assumptions": [
+    "The invitee's pre-join display name (typed by initiator at case creation as 'What's their name?') is not in the spec's cases/create mutation input. We add inviteeName: v.optional(v.string()) to the cases table and pass it through cases/create.",
+    "Solo mode isSolo=true pre-binds the same userId to both initiator and invitee slots; partyStates has two rows for the same userId with different roles. The party toggle filters by role, not userId.",
+    "The spec's COST_LIMITED status is not defined in the schema's case status union. It is added to cases.status in T2.",
+    "cases.tokenCount: v.optional(v.number()) is added to the cases table in T2 for AI cost tracking.",
+    "Convex Auth is the chosen auth provider (TQ1). The Clerk swap path is documented in README but not implemented.",
+    "Admin role promotion is a manual Convex Dashboard action in v1; no self-serve admin claim UI is built.",
+    "Typing indicators ('Jordan is typing...') reserve visual space per the design doc but Convex Presence logic is deferred to v1.1 per tech spec §8.3.",
+    "The decline-invite path sets the case to CLOSED_ABANDONED per design doc §4.3; added to state machine in T8.",
+    "The /cases/:id/invite post-create screen is a distinct route; invitee display name comes from inviteeName.",
+    "P2 user stories (US-16 email notifications, US-17 voluntary sharing, US-18 PDF export, US-19 inline rephrase) are explicitly out of scope.",
+    "ToS and privacy policy are static placeholder /terms and /privacy routes, not full tasks; linked from auth screens and case creation.",
+    "Cost tracking: tokenCount is accumulated per AI action call. Soft cap $2 ≈ 600k Sonnet tokens (hardcoded pricing constant); hard cap $10. Pricing constant is isolated in a single config file for easy update.",
+    "T17 budget enforcement logic and error-handling hardening is designed to run after T12-T15 as a cross-cutting enhancement. Token accumulation ACs are embedded in T12-T15 themselves; T17 adds the cap enforcement, degradation behavior, and Anthropic error handling."
+  ],
+  "dependency_graph_notes": "Four strata: (1) Infrastructure [T1-T2], (2) Core modules [T3-T11]: auth, authorization, privacy filter, prompts, compression, state machine are parallel after T2+T4; templates backend (T11) unblocks case creation (T9); (3) Feature backends [T12-T17]: private coaching → synthesis → joint chat entry mutation (T14a) → joint chat coach (T14b) → draft coach; closure parallel after T14a; cost tracking (T17) is a cross-cutting hardening pass after T12-T15; (4) Frontend [T18-T32]: design tokens + shared components (T19a, T19b) → all views. T33 (accessibility) and T34 (E2E) both depend on T30+T32 (all feature UI complete) but NOT on each other — they can run in parallel. T35 (unit tests) depends only on T5+T6+T7+T8 and can run very early. T36 (CI) waits for T33+T34+T35.",
+  "tasks": [
+    {
+      "task_id": "T1",
+      "title": "Project scaffolding and cold-start setup",
+      "summary": "Initialize the project with Vite + React 18 + TypeScript, Tailwind v3, shadcn/ui, React Router v6, Convex client, ESLint + Prettier. Create .env.example, .gitignore, and README with the exact cold-start sequence from tech spec §11.3. Verify `git clone && npm install && npx convex dev && npm run dev` produces a running empty React app.",
+      "acceptance_criteria": [
+        "`npm install` completes without errors on a clean checkout",
+        "`npx convex dev` starts without errors (Convex project configured)",
+        "`npm run dev` serves a React app at localhost:5173 with no console errors",
+        "ESLint and Prettier configs present; `npm run lint` and `npm run format:check` pass on the empty project",
+        "`tsc --noEmit` passes with strict mode enabled",
+        "README contains verbatim the cold-start sequence from tech spec §11.3",
+        ".env.example includes all env vars from §11.2: ANTHROPIC_API_KEY, CLAUDE_MOCK, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, SITE_URL, MAGIC_LINK_EMAIL_FROM, VITE_CONVEX_URL, VITE_SITE_URL"
+      ],
+      "depends_on": [],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Bootstrap with `npm create vite@latest -- --template react-ts`; do NOT use CRA.",
+        "Install Convex client: `npm install convex`; init project: `npx convex dev` (first run prompts project creation). The generated `convex/_generated/` directory must be gitignored — it is recreated on every `npx convex dev` run.",
+        "Tailwind v3 setup: `npm install -D tailwindcss postcss autoprefixer && npx tailwindcss init -p`. Content glob must include `./src/**/*.{ts,tsx}` and `./convex/**/*.ts`.",
+        "shadcn/ui init: `npx shadcn-ui@latest init`. Choose 'New York' style, CSS variables color strategy. This writes `src/components/ui/` and modifies `tailwind.config.js` — commit both.",
+        "React Router v6: `npm install react-router-dom`. Wrap app in `<BrowserRouter>` in main.tsx. Never use React Router v5 patterns (`<Switch>`, `component=` prop).",
+        "Wire Convex in main.tsx: `<ConvexProvider client={convex}><App /></ConvexProvider>` — Convex Auth adds `<ConvexAuthProvider>` wrapping `<ConvexProvider>`.",
+        "tsconfig.json: enable `strict: true`, `noUncheckedIndexedAccess: true`. These are locked — do not soften.",
+        "ESLint: use `eslint-plugin-react-hooks` and `eslint-plugin-react-refresh`. Prettier: use `prettier-plugin-tailwindcss` for class sorting.",
+        "Anti-pattern: do NOT call `npx convex deploy` during dev scaffolding — `npx convex dev` is the development command; deploy is for production."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T2",
+      "title": "Convex schema definition (all tables, all fields)",
+      "summary": "Implement convex/schema.ts exactly as specified in tech spec §3.1 plus planning-assumption additions.",
+      "acceptance_criteria": [
+        "All 10 tables match tech spec §3.1 field names, types, and union literals exactly",
+        "cases.status union includes COST_LIMITED in addition to the 7 spec values",
+        "cases table includes: inviteeName: v.optional(v.string()), tokenCount: v.optional(v.number())",
+        "partyStates table includes: closureProposalSummary: v.optional(v.string())",
+        "All indexes present",
+        "`npx convex dev` applies the schema without errors",
+        "All 6 key invariants from §3.2 documented as inline comments",
+        "`tsc --noEmit` passes"
+      ],
+      "depends_on": ["T1"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Use `defineSchema` and `defineTable` from `convex/server`; use `v` from `convex/values` for all field validators.",
+        "ID references use `v.id('tableName')` not `v.string()`.",
+        "Union literals use `v.union(v.literal('A'), v.literal('B'))`.",
+        "Anti-pattern: do NOT add `v.any()` fields except where explicitly needed (auditLog.metadata).",
+        "After editing schema.ts, `npx convex dev` must be running to push the schema.",
+        "The `schemaVersion: v.literal(1)` pattern on `cases` is intentional."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T3",
+      "title": "Authentication — Convex Auth with magic link and Google OAuth",
+      "summary": "Configure Convex Auth with email magic link and Google OAuth. On first login, upsert a users row.",
+      "acceptance_criteria": [
+        "User registers and logs in via magic link",
+        "User logs in via Google OAuth",
+        "First login creates a users row with role='USER'",
+        "Subsequent logins upsert the users row",
+        "Session persists across browser reload",
+        "Session expires after 30 days of inactivity",
+        "ctx.auth.getUserIdentity() returns the identity in any Convex function after login"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Install: `npm install @convex-dev/auth @auth/core`.",
+        "Auth config file is `convex/auth.config.ts`.",
+        "Magic link provider: use `Resend` email provider.",
+        "Google OAuth: requires `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in Convex environment variables.",
+        "Client side: import `useAuthActions` from `@convex-dev/auth/react`.",
+        "Anti-pattern: do NOT store auth tokens in localStorage manually.",
+        "ConvexAuthProvider must wrap ConvexProvider in main.tsx."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T4",
+      "title": "Authorization helper module and ConvexError codes",
+      "summary": "Create convex/lib/auth.ts with requireAuth(ctx) helper, assertPartyToCase, assertAdmin. Define all 9 ConvexError codes. Create convex/lib/pricing.ts.",
+      "acceptance_criteria": [
+        "requireAuth(ctx) returns { identity, user } or throws ConvexError UNAUTHENTICATED",
+        "All 9 error codes typed as constants",
+        "ConvexError shape: { code, message, httpStatus }",
+        "assertPartyToCase throws FORBIDDEN if caller not party",
+        "assertAdmin throws FORBIDDEN if user.role !== 'ADMIN'",
+        "convex/lib/pricing.ts exports soft/hard caps and per-token pricing"
+      ],
+      "depends_on": ["T3"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Import `ConvexError` from `convex/values`.",
+        "Helper function signature: `async function requireAuth(ctx): Promise<{ identity; user }>`.",
+        "File location: `convex/lib/auth.ts` and `convex/lib/pricing.ts`.",
+        "Anti-pattern: do NOT put authorization logic inline in each function."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T5",
+      "title": "Privacy response filter module",
+      "summary": "Implement convex/lib/privacyFilter.ts: detect ≥8 consecutive whitespace-token substring matches.",
+      "acceptance_criteria": [
+        "filterResponse(response, otherPartyMessages): { passed, matchedSubstring? }",
+        "passed=false on 8+ consecutive token window match",
+        "Unit tests covering boundary cases and performance"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Pure TypeScript module — no Convex runtime imports.",
+        "Tokenize by whitespace: `text.toLowerCase().split(/\\s+/).filter(Boolean)`.",
+        "Pre-compute N-gram windows into a Set<string> for O(1) lookup.",
+        "Function must be synchronous."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T6",
+      "title": "Prompt assembly module for all four AI roles",
+      "summary": "Implement convex/lib/prompts.ts with assemblePrompt(opts) for PRIVATE_COACH, SYNTHESIS, COACH, DRAFT_COACH.",
+      "acceptance_criteria": [
+        "assemblePrompt({ role }) returns { system, messages }",
+        "All four prompts contain the no-quote rule",
+        "SYNTHESIS produces strict JSON instruction",
+        "Pure TypeScript, testable in Vitest"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Pure TypeScript module — no Convex imports, no SDK imports.",
+        "Use multi-line template literals for readability.",
+        "SYNTHESIS output format: instruct model to respond with ONLY the JSON object."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T7",
+      "title": "Transcript compression module",
+      "summary": "Implement convex/lib/transcriptCompression.ts with content-hash caching and Haiku compression.",
+      "acceptance_criteria": [
+        "compressIfNeeded returns original array when under budget without API call",
+        "Over-budget: oldest 50% replaced by SUMMARY message",
+        "Content hash caching: same input = one Haiku API call",
+        "Token counting uses word-count approximation"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Accepts Anthropic client as dependency-injection parameter.",
+        "Cache via module-level Map<string, string>.",
+        "Use TextEncoder + manual hash loop (no Node crypto module).",
+        "Anti-pattern: do NOT call with budgetTokens=0."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T8",
+      "title": "Case state machine module (all transitions including decline-invite)",
+      "summary": "Implement convex/lib/stateMachine.ts with pure transition functions for all case states.",
+      "acceptance_criteria": [
+        "Each transition is pure: takes state, returns new status or throws CONFLICT",
+        "DRAFT_PRIVATE_COACHING→CLOSED_ABANDONED: invitee decline, explicitly tested",
+        "All 9 valid transitions and 8+ illegal transitions tested"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45,
+      "stack_practices": [
+        "Pure TypeScript — zero Convex runtime or SDK imports.",
+        "Export one named function per transition.",
+        "Anti-pattern: do NOT read from ctx.db inside state machine functions."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T9",
+      "title": "Case CRUD backend (create, get, list, partyStates, updateMyForm)",
+      "summary": "Implement Convex queries and mutations for case management.",
+      "acceptance_criteria": [
+        "cases/create: creates rows, returns caseId + invite URL",
+        "cases/list: returns only caller's cases",
+        "cases/get: returns NOT_FOUND if caller not a party",
+        "cases/partyStates: returns self (full) and other (phase-only)"
+      ],
+      "depends_on": ["T4", "T8", "T11"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "File: `convex/cases.ts` exporting query/mutation wrappers.",
+        "cases/partyStates privacy: NEVER return synthesisText for the 'other' party.",
+        "Anti-pattern: do NOT use `ctx.db.query().collect()` without an index."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T10",
+      "title": "Invite flow backend (redeem mutation, preview query, token validation)",
+      "summary": "Implement invites/redeem mutation and invites/preview query.",
+      "acceptance_criteria": [
+        "invites/redeem: validates token, atomically binds invitee, marks token CONSUMED",
+        "invites/redeem on CONSUMED token: throws TOKEN_INVALID",
+        "invites/preview: returns non-private fields only"
+      ],
+      "depends_on": ["T4", "T9"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45,
+      "stack_practices": [
+        "Atomicity: Convex mutations are fully transactional.",
+        "invites/preview is a Convex query — no auth required for preview.",
+        "Anti-pattern: do NOT check token validity in invites/preview."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T11",
+      "title": "Templates backend and seed data",
+      "summary": "Implement template management queries and mutations. Create convex/seed.ts.",
+      "acceptance_criteria": [
+        "templates/list: returns non-archived templates",
+        "admin mutations throw FORBIDDEN for non-ADMIN users",
+        "convex/seed.ts: creates admin user and three templates"
+      ],
+      "depends_on": ["T4"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "File structure: `convex/templates.ts` and `convex/admin/templates.ts`.",
+        "Immutability of templateVersions: enforced by absence of an update mutation.",
+        "Anti-pattern: do NOT version templates by mutating the existing row."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T12",
+      "title": "Private coaching backend (send message, AI response, mark complete, crisis detection, token tracking)",
+      "summary": "Implement private coaching queries, mutations, and AI action.",
+      "acceptance_criteria": [
+        "privateCoaching/myMessages: returns only caller's messages",
+        "generateAIResponse: streams into privateMessages row",
+        "generateAIResponse: increments cases.tokenCount",
+        "privateCoaching/markComplete: idempotent"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T7", "T8"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "Streaming pattern: mutation inserts STREAMING row → action streams → flush via internal mutation every ~50ms.",
+        "generateAIResponse must be an internalAction.",
+        "CLAUDE_MOCK=true: check process.env.CLAUDE_MOCK and return canned response."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T13",
+      "title": "AI synthesis backend (generate action, privacy filter, state transition)",
+      "summary": "Implement synthesis/generate action: reads both parties' private messages, assembles SYNTHESIS prompt, validates JSON output, runs privacy filter.",
+      "acceptance_criteria": [
+        "Calls claude-sonnet-4-5; validates { forInitiator, forInvitee } JSON",
+        "Runs filterResponse on each half; retries up to 2x on failure",
+        "On success: writes synthesisText to both partyStates; sets case READY_FOR_JOINT",
+        "Idempotent: if synthesisText already populated, returns without re-generating"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T12"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "synthesis/generate is an internalAction only.",
+        "Retry loop: for loop 0..2, never use recursion.",
+        "Anti-pattern: do NOT call the Anthropic API inside a Convex mutation."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T14",
+      "title": "Joint chat entry mutation and Coach facilitation backend",
+      "summary": "Implement jointChat/enter, jointChat/messages, jointChat/mySynthesis, jointChat/sendUserMessage, and generateCoachResponse action.",
+      "acceptance_criteria": [
+        "jointChat/enter: READY_FOR_JOINT→JOINT_ACTIVE, idempotent",
+        "generateCoachResponse: Haiku classifies; Sonnet only for non-NORMAL_EXCHANGE",
+        "T5 filter on Coach Sonnet response; fallback on failure",
+        "Increments tokenCount; enforces HARD_CAP"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T7", "T13"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 105,
+      "stack_practices": [
+        "Haiku classification: single non-streaming call, max_tokens 50.",
+        "Anti-pattern: do NOT hardcode @-mention as a client-side feature — detection happens inside the mutation body.",
+        "CLAUDE_MOCK guard: same process.env.CLAUDE_MOCK check as T12."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T15",
+      "title": "Draft Coach backend (session lifecycle, AI conversation, readiness detection, send gate)",
+      "summary": "Implement draftCoach/session, startSession, sendMessage, generateResponse, sendFinalDraft, discardSession.",
+      "acceptance_criteria": [
+        "draftCoach/startSession: creates draftSessions row; throws CONFLICT if case not JOINT_ACTIVE",
+        "Readiness detection: produces { 'draft': '...' } JSON; writes to draftSessions.finalDraft",
+        "draftCoach/sendFinalDraft: reads finalDraft; calls jointChat/sendUserMessage internally",
+        "Draft Coach conversation invisible to other party"
+      ],
+      "depends_on": ["T4", "T6", "T14"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "draftCoach/sendFinalDraft calling jointChat/sendUserMessage via ctx.runMutation.",
+        "Privacy enforcement: action must NOT read synthesisText for the other party.",
+        "Anti-pattern: do NOT use ctx.db.query().collect() to build context — use index with limit."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T16",
+      "title": "Case closure backend (propose, confirm, reject, unilateral close, abandoned cron)",
+      "summary": "Implement closure mutations and convex/crons.ts daily job for CLOSED_ABANDONED detection.",
+      "acceptance_criteria": [
+        "jointChat/proposeClosure: sets closureProposed; writes to auditLog",
+        "jointChat/confirmClosure: atomically closes case as CLOSED_RESOLVED",
+        "Cron: daily scan for JOINT_ACTIVE cases with 30d inactivity"
+      ],
+      "depends_on": ["T4", "T8", "T14"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Cron setup: `convex/crons.ts` using cronJobs() from convex/server.",
+        "Anti-pattern: do NOT use setInterval or external cron services."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T17",
+      "title": "AI cost tracking hardening: budget enforcement, soft-cap degradation, Anthropic error handling",
+      "summary": "Cross-cutting hardening pass: soft-cap degradation, hard-cap enforcement, Anthropic error handling across all AI actions.",
+      "acceptance_criteria": [
+        "Soft cap: generateCoachResponse posts boilerplate at $2 threshold",
+        "Hard cap: all four AI actions return early at $10; set COST_LIMITED",
+        "429: retry once after 2000ms; second 429 → RATE_LIMITED",
+        "Network timeout >30s: message status=ERROR; throw AI_ERROR"
+      ],
+      "depends_on": ["T12", "T13", "T14", "T15"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Cap check at the top of each AI action using values from convex/lib/pricing.ts.",
+        "Retry: fixed 2s delay, not exponential.",
+        "Anti-pattern: do NOT let AI errors bubble up as unhandled Convex action failures."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T18",
+      "title": "Design tokens and global styles",
+      "summary": "Implement all CSS custom properties from design doc §2.1, Tailwind config mapping, Inter + JetBrains Mono fonts, dark mode via prefers-color-scheme, shadow levels, and motion tokens.",
+      "acceptance_criteria": [
+        "All 16 color tokens defined as CSS custom properties in src/index.css",
+        "Dark mode via @media (prefers-color-scheme: dark)",
+        "Tailwind config maps each token to a semantic utility class",
+        "Inter variable font loaded (400/500/600); JetBrains Mono loaded",
+        "Four shadow utilities matching design doc values",
+        "@media (prefers-reduced-motion: reduce): all transitions 0ms, animations paused"
+      ],
+      "depends_on": ["T1"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "CSS custom properties go in `src/index.css` under `:root` and `@media (prefers-color-scheme: dark)`.",
+        "Tailwind config extension maps tokens: `canvas: 'var(--bg-canvas)'` etc.",
+        "shadcn/ui CSS variable names must match the shadcn convention.",
+        "Tailwind v3 dark mode: set `darkMode: 'media'` in tailwind.config.js.",
+        "Anti-pattern: do NOT define color values in both tailwind.config.js and src/index.css separately."
+      ],
+      "design_practices": [
+        "Implement all 16 color tokens verbatim from design doc §2.1: --bg-canvas (#FAF8F5), --bg-surface (#FFFFFF), --bg-surface-subtle (#F3EFE9), --text-primary (#1F1D1A), --text-secondary (#5C5952), --text-tertiary (#8A8680), --accent (#6B8E7F), --accent-hover (#5A7A6C), --accent-subtle (#DCE7E0), --danger (#B5594D), --danger-subtle (#F2DCD8), --warning (#B58B4D), --border-default (#E5E0D8), --border-strong (#CBC4B8), --coach-accent (#8B7AB5), --private-tint (#F0E9E0).",
+        "Typography (design doc §2.2): Inter variable font at 400/500/600 weights; body text 15px / 1.6 line-height (chat bubbles 16px for readability); chat timestamps 12px in --text-tertiary; headings at 500 weight — NOT 700 (this is not a marketing page); JetBrains Mono for invite links and audit log IDs.",
+        "Spacing & Layout (design doc §2.3): 8px base grid with paddings at 8, 16, 24, 32, 48px. Content max-width 720px for reading-heavy screens (forms, synthesis); 1080px for joint chat. Mobile breakpoint: < 768px.",
+        "Elevation (design doc §2.4): shadow-0 = flat/borders only; shadow-1 = '0 1px 2px rgba(0,0,0,0.04)' for cards at rest; shadow-2 = '0 4px 12px rgba(0,0,0,0.06)' for popovers/dropdowns; shadow-3 = '0 12px 32px rgba(0,0,0,0.10)' for modals and Draft Coach panel.",
+        "Motion (design doc §2.6): all transitions 150–200ms ease-out; new message arrival = fade-in + 8px upward translate (150ms); route crossfade 100ms; NO slide animations; NO celebration animation on case closure. Under prefers-reduced-motion: reduce → set all transition durations to 0ms and pause all CSS animations.",
+        "Dark mode: invert luminance of all 16 tokens while preserving warm, low-saturation character — no stark white-on-black. Reference design doc §2.1 dark mode note.",
+        "Accessibility: ensure every --text-* / --bg-* combination meets WCAG 2.1 AA 4.5:1 contrast ratio in both light and dark modes. Use the are-you-ok CLI or browser DevTools to verify before T33."
+      ]
+    },
+    {
+      "task_id": "T19a",
+      "title": "Core chat UI components (ChatWindow, MessageBubble, StreamingIndicator, MessageInput)",
+      "summary": "Build foundational chat primitives used by all three chat UIs.",
+      "acceptance_criteria": [
+        "ChatWindow auto-scrolls to latest unless user has scrolled up >100px",
+        "MessageBubble USER: right-aligned, bg-surface; COACH/AI: left-aligned, accent-subtle, Sparkles icon",
+        "MessageBubble STREAMING: content + blinking cursor; no copy button",
+        "MessageBubble COMPLETE: copy button + timestamp on hover",
+        "MessageBubble ERROR: warning-tint + Retry button",
+        "StreamingIndicator: 500ms blink; aria-hidden",
+        "MessageInput: Enter sends; Shift+Enter newline; disabled while STREAMING",
+        "No accessibility defects: textarea has visible label or aria-label"
+      ],
+      "depends_on": ["T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "Component files: src/components/chat/ChatWindow.tsx, MessageBubble.tsx, MessageInput.tsx, StreamingIndicator.tsx. Use named exports.",
+        "Auto-scroll: useRef<HTMLDivElement> + useEffect calling scrollTo when messages change, conditional on scroll position check.",
+        "shadcn/ui primitives: Button from @/components/ui/button; Lucide icons (Sparkles, Copy, AlertTriangle) from lucide-react.",
+        "StreamingIndicator animation: @keyframes blink wrapped in @media (prefers-reduced-motion: no-preference).",
+        "MessageInput keyboard: onKeyDown checks e.key === 'Enter' && !e.shiftKey.",
+        "Anti-pattern: do NOT use dangerouslySetInnerHTML — use react-markdown with rehype-sanitize."
+      ],
+      "design_practices": [
+        "MessageBubble — USER variant: right-aligned, background --bg-surface, no icon. Spacing: 16px horizontal padding, 12px vertical. Max-width ~70% of ChatWindow. Border-radius 12px. Use shadow-0 (flat + border-default).",
+        "MessageBubble — COACH/AI variant: left-aligned, background --accent-subtle (#DCE7E0), Sparkles icon (Lucide, 1.5px stroke, 16px) at top-left. Coach messages from joint chat additionally get a 2px left border in --coach-accent (#8B7AB5). Same border-radius and padding as USER variant.",
+        "MessageBubble — STREAMING: render blinking cursor (thin 1px vertical bar) at end of streaming text. Blink @keyframe: 0%,100% opacity:1; 50% opacity:0 at 500ms step-end. Wrap in @media (prefers-reduced-motion: no-preference). StreamingIndicator must be aria-hidden='true' so screen readers do not repeat it.",
+        "MessageBubble — COMPLETE: copy button appears on hover (opacity transition 150ms ease-out). Timestamp rendered below bubble in 12px --text-tertiary. Copy button uses Lucide Copy icon at 14px.",
+        "MessageBubble — ERROR: background --danger-subtle (#F2DCD8), Lucide AlertTriangle icon in --danger (#B5594D). Retry button uses shadcn/ui Button variant='ghost' in danger color.",
+        "MessageInput textarea: Inter 15px, --text-primary, border --border-strong, focus-visible ring 2px --accent. Send button: --accent fill, disabled state opacity-50. Reserve visual space below input for 'Jordan is typing…' (design doc §4.9, deferred v1.1) — a 20px empty row prevents layout jump.",
+        "ChatWindow container: role='log' aria-live='polite' aria-relevant='additions' per design doc §9.5 and T33. New message arrival animation: fade-in + translateY(-8px → 0) at 150ms ease-out, under prefers-reduced-motion guard.",
+        "Accessibility: textarea must have a visible label or aria-label. All icon-only buttons need aria-label (e.g., aria-label='Copy message'). Retry button: role='button' with descriptive aria-label."
+      ]
+    },
+    {
+      "task_id": "T19b",
+      "title": "Secondary UI components (PrivacyBanner, PartyAvatar, CoachIntervention, PhaseHeader, StatusPill, CrisisCard, skeletons)",
+      "summary": "Build remaining shared components.",
+      "acceptance_criteria": [
+        "PrivacyBanner: lock icon + Dialog explaining privacy; screen reader text",
+        "PartyAvatar: role-colored circles; shows first initial",
+        "CoachIntervention: coach-accent border, ⟡ glyph, accent-subtle background",
+        "PhaseHeader: current phase label + Back to Dashboard link",
+        "StatusPill: ●○◐◼ with correct color mapping",
+        "CrisisCard: appears on crisis keywords; dismissable; links to crisis resources",
+        "Dashboard skeleton: 3 case row skeletons",
+        "Case detail skeleton: phase-appropriate layout"
+      ],
+      "depends_on": ["T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "shadcn/ui Dialog for PrivacyBanner modal; Sheet for My Guidance panel and mobile Draft Coach.",
+        "Skeleton components: use shadcn/ui Skeleton primitive with 300ms delay before showing.",
+        "CrisisCard: standalone component with isVisible and onDismiss props, local useState for dismissed.",
+        "Anti-pattern: do NOT use raw <dialog> HTML elements — use shadcn/ui Dialog (Radix UI).",
+        "Screen reader text: use sr-only Tailwind class."
+      ],
+      "design_practices": [
+        "PrivacyBanner: persistent strip at top of private-scoped views. Background --private-tint (#F0E9E0). Lucide Lock icon (1.5px stroke, 16px) in --text-secondary. Text: --text-secondary, 14px. Clicking the banner opens a shadcn/ui Dialog (shadow-3 elevation) explaining exactly what is private. Include <span className='sr-only'> with full explanation for screen readers.",
+        "PartyAvatar: 32×32px circle (rounded-full). Colors per design doc §4.9: Alex/Initiator = soft blue (#BFDBFE), Jordan/Invitee = soft rose (#FECDD3), Coach = --coach-accent (#8B7AB5) at 30% opacity background with --coach-accent text. First initial, 14px Inter 500 weight, centered. Apply aria-label='[Name] avatar'.",
+        "CoachIntervention message (design doc §4.9): left border 2px solid --coach-accent. Background --accent-subtle. ⟡ glyph rendered before coach message text (Unicode U+27C1 or SVG). isIntervention flag adds --warning (#B58B4D) background tint instead of --accent-subtle to signal inflammatory-content response.",
+        "PhaseHeader (design doc §3.2): full-width top bar, bg-surface, border-bottom --border-default. Left: '← Back to Dashboard' (ghost link, --text-secondary). Center: 'Case with [Name] • [Phase Label]' in 500 weight, --text-primary. Solo cases: append 'Solo' badge — text-xs, bg-coach-accent/20, text-coach-accent, px-1.5 py-0.5 rounded.",
+        "StatusPill (design doc §4.4): ● green (--accent #6B8E7F) = Your Turn; ○ gray (--text-secondary) = Waiting; ◐ amber (--warning #B58B4D) = Ready for Joint; ◼ neutral (--text-tertiary) = Closed. Render glyph + short label. 12px --text-secondary typography.",
+        "CrisisCard: bg-danger-subtle (#F2DCD8) border border-danger-subtle, 8px radius, 16px padding. Lucide AlertTriangle in --danger. Heading 'Need immediate help?' in --danger 500 weight. Dismissable via ✕ icon button with aria-label='Dismiss crisis card'. Links styled as --accent underline.",
+        "Skeleton components: use shadcn/ui Skeleton (animated bg-surface-subtle shimmer). Dashboard row skeletons: 3 rows at ~72px height each. Show after 300ms delay (useEffect + setTimeout) to avoid skeleton flash on fast loads.",
+        "Accessibility (all T19b components): shadcn/ui Dialog and Sheet handle focus trapping via Radix UI — do NOT reimplement. All interactive elements need visible focus ring: 2px solid --accent, offset 2px. PrivacyBanner lock icon button: aria-label='Learn more about your privacy'."
+      ]
+    },
+    {
+      "task_id": "T20",
+      "title": "Landing page and login/register page",
+      "summary": "Implement / (hero, explainer, footer) and /login (magic link, Google OAuth, states). Wire Convex Auth signIn methods.",
+      "acceptance_criteria": [
+        "/ displays tagline, 3-step explainer, privacy section, footer with links",
+        "/ has 'Start a case' CTA routing to /login or /dashboard",
+        "/login: centered ~400px card; email + magic link button; Google OAuth button",
+        "Submitting email triggers magic link; form replaced by confirmation state",
+        "Error state inline (not a toast)",
+        "Fine print links to /terms and /privacy",
+        "After auth: redirect to /dashboard"
+      ],
+      "depends_on": ["T3", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Magic link submit: `const { signIn } = useAuthActions(); await signIn('resend', { email })`.",
+        "Google OAuth: `await signIn('google')`.",
+        "Error display: catch errors in try/catch; render inline with role='alert'.",
+        "Anti-pattern: do NOT use <form action=...> — handle via onSubmit + e.preventDefault()."
+      ],
+      "design_practices": [
+        "Landing page tone (design doc §1.1 Calm over Clever): one-sentence tagline ('A calm place to work through a difficult conversation.'), short subhead. No testimonials, no aggressive repeated CTAs, no gamification. Colors --bg-canvas background, --text-primary body. Primary CTA 'Start a case' uses --accent (#6B8E7F) filled button — the sole primary action on the page (design doc §1.4).",
+        "Landing 3-step explainer: minimal iconographic layout using Lucide icons (MessageCircle, Users, ShieldCheck at 1.5px stroke). Max-width 720px centered. Section padding 48px vertical. No decorative illustrations — presence over polish (design doc §1.5).",
+        "Landing footer: --text-tertiary, 12px, border-top --border-default. Links to /terms and /privacy. Per design doc §4.1, no pricing section.",
+        "Login page (design doc §4.2): single centered card ~400px wide, bg-surface, shadow-2 ('0 4px 12px rgba(0,0,0,0.06)'). Background --bg-canvas. Heading 'Sign in to Conflict Coach' at 500 weight, --text-primary. Email Input: border --border-strong, 15px Inter. 'Send magic link' = primary --accent filled button (full width). Divider 'or' in --text-tertiary. 'Continue with Google' = secondary outlined button (full width).",
+        "Login error state: inline below triggering input, 14px --danger (#B5594D), role='alert' for screen reader announcement. NOT a toast — per design doc §6.2.",
+        "Login magic-link-sent state: replace form with confirmation message in --text-secondary. 'Check your email…' — no animation celebrating it.",
+        "Fine print: 12px --text-tertiary below both buttons. Links to /terms and /privacy underlined in --accent.",
+        "Accessibility: single <main> landmark on both pages. Login card inputs must have <label> elements. Focus visible ring 2px --accent. Tab order: email → send button → divider → Google button → fine print links. Route change announces h1 to screen readers (tabIndex={-1} on h1, per T33 pattern)."
+      ]
+    },
+    {
+      "task_id": "T21",
+      "title": "Invite acceptance page (/invite/:token)",
+      "summary": "Implement invite acceptance per design doc §4.3. Handles logged-out, logged-in unredeemed, consumed, and non-existent token states.",
+      "acceptance_criteria": [
+        "Logged-out: explanation card + 'Sign in to continue'; token preserved through auth",
+        "Logged-in unredeemed: shows initiator name, mainTopic (labeled), category; no private content",
+        "Accept calls invites/redeem; routes to /cases/:id/private",
+        "Decline → CLOSED_ABANDONED → redirect with toast",
+        "CONSUMED token: 'This invite has already been used.'",
+        "Non-existent token: NOT_FOUND error message"
+      ],
+      "depends_on": ["T9", "T10", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Route param: `const { token } = useParams<{ token: string }>()`.",
+        "Token persistence through auth: store in sessionStorage before redirecting to /login.",
+        "Preview query: `const preview = useQuery(api.invites.preview, { token: token! })`.",
+        "Toast: use shadcn/ui toast. Anti-pattern: do NOT call invites/redeem on page load."
+      ],
+      "design_practices": [
+        "Page layout (design doc §4.3): centered card on --bg-canvas, max-width ~480px, bg-surface shadow-1. All states use this same card container.",
+        "Logged-out state: heading 'Alex has invited you to work through something together.' (500 weight, --text-primary). Body text in --text-secondary 15px per the design doc's exact copy. Single primary button 'Sign in to continue' (--accent). No decorative imagery.",
+        "Logged-in unredeemed state: show initiator's mainTopic labeled 'Alex wrote this in the shared summary.' Helper text: 'You'll have your own private space to share your perspective.' in --text-secondary 14px. Category pill: --bg-surface-subtle, --text-secondary, 12px. Lock icon (Lucide) adjacent to the privacy callout — privacy must be visible, not implied (design doc §1.3).",
+        "Accept button: primary --accent, full width within the card. Decline: ghost or text-only link in --text-secondary to visually subordinate it — 'One primary action per screen' (design doc §1.4).",
+        "CONSUMED / NOT_FOUND states: --text-secondary body text, no alarming colors. Offer 'Go to dashboard' secondary link.",
+        "Privacy label styling: use --private-tint (#F0E9E0) background on the section that shows the main topic, reinforcing that this is the only non-private data shared. ShieldCheck Lucide icon adjacent.",
+        "Accessibility: single <main>. Heading hierarchy h1 → h2. Accept/Decline buttons have clear accessible text. Error states use role='alert'. Toast (decline confirmation) announced by screen reader via shadcn/ui toast's built-in aria-live."
+      ]
+    },
+    {
+      "task_id": "T22",
+      "title": "Dashboard page (/dashboard) with unilateral-close notification indicator",
+      "summary": "Implement /dashboard: Active/Closed sections, case rows with status glyphs, Nudge button, empty state, [+ New Case] button, and notification indicator for unilateral closes.",
+      "acceptance_criteria": [
+        "Fetches cases/list; renders skeleton while loading",
+        "Active/Closed sections with correct status glyph mapping",
+        "Unilateral close indicator: ◼ with red dot + message for CLOSED_UNRESOLVED non-actor",
+        "Nudge button on DRAFT_PRIVATE_COACHING cases >7 days old without invitee",
+        "Empty state with link to /cases/new",
+        "Case rows keyboard-navigable; Enter activates"
+      ],
+      "depends_on": ["T9", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Data fetching: `const cases = useQuery(api.cases.list)` — reactive, no polling needed.",
+        "Closed section default collapsed; auto-expand when case transitions to CLOSED_*.",
+        "React Router: case row click → navigate('/cases/${caseId}'). Keyboard: role='button' tabIndex={0} onKeyDown Enter.",
+        "Anti-pattern: do NOT derive status glyph logic in JSX directly — extract a getStatusGlyph() helper."
+      ],
+      "design_practices": [
+        "Page layout: --bg-canvas background. Top-right: '+ New Case' primary --accent button (design doc §4.4). Max-width content wrapper with 32px horizontal padding at desktop, 16px on mobile.",
+        "Section headings 'Active Cases' / 'Closed Cases': 500 weight, --text-primary, 16px. 'Closed Cases' collapsed by default with a ChevronDown icon (Lucide 1.5px stroke).",
+        "Case row (design doc §4.4): bg-surface, shadow-1 on hover (transition 150ms ease-out), border-bottom --border-default between rows. Padding 16px. Layout: icon column left → case title + metadata stack → status glyph + 'Enter →' right.",
+        "Case title: 15px 500 weight --text-primary. Sub-metadata (category · date): 12px --text-secondary. Status line: 13px --text-secondary with glyph. Last activity: 12px --text-tertiary.",
+        "Status glyphs (design doc §4.4): ● --accent green = Your Turn; ○ --text-secondary gray = Waiting; ◐ --warning amber = Ready for Joint; ◼ --text-tertiary neutral = Closed. Unilateral close: ◼ with a 6px --danger dot overlay + 'Jordan closed this case.' in 13px --danger.",
+        "Nudge button: shadcn/ui Button variant='outline', 13px, --text-secondary. Appears on stale DRAFT_PRIVATE_COACHING rows without invitee, >7 days old.",
+        "Empty state: centered in content area, --text-secondary 15px, friendly non-cutesy copy per design doc §4.4. Link to /cases/new in --accent underline.",
+        "Skeletons: 3 case row skeletons at 72px height with 300ms delay. Use shadcn/ui Skeleton with --bg-surface-subtle shimmer.",
+        "Accessibility: case rows use role='button' tabIndex={0}. Enter key activates. 'Enter →' link has aria-label='Open case with [name]' to differentiate rows for screen readers. section elements with aria-labelledby for Active/Closed headings."
+      ]
+    },
+    {
+      "task_id": "T23",
+      "title": "Case creation form and post-create invite sharing screen",
+      "summary": "Implement /cases/new (5-step progressive form) and /cases/:id/invite (share screen).",
+      "acceptance_criteria": [
+        "Five steps with Back/Next navigation; Submit on step 5",
+        "Step 1: category radio cards for all 5 categories",
+        "Step 2: mainTopic with 140-char counter, labeled 'visible to other person'",
+        "Steps 3+4: lock icon + tooltip on private fields",
+        "Step 5: other party name; Advanced disclosure with solo mode",
+        "Crisis language prominently displayed",
+        "Submit calls cases/create; routes to /cases/:id/invite",
+        "/cases/:id/invite: copyable invite URL; email mailto pre-fill; 'Start coaching now' link"
+      ],
+      "depends_on": ["T9", "T11", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Multi-step form state: single FormData object with setFormData(prev => ({ ...prev, field: value })).",
+        "Character counter: {mainTopic.length}/140; text-danger when >140. Do NOT use maxLength HTML attr.",
+        "Radio cards for category: shadcn/ui RadioGroup + RadioGroupItem. NOT a <select> dropdown.",
+        "shadcn/ui Tooltip for private field explainer; Collapsible for 'Advanced' section.",
+        "Clipboard API: navigator.clipboard.writeText(inviteUrl)."
+      ],
+      "design_practices": [
+        "Form container: single-column, max-width 720px, bg-canvas, centered. Form card uses bg-surface, shadow-1, 32px padding. Step indicator at top: small pills or numbered steps in --text-secondary with current step in --accent.",
+        "Step 1 — Category radio cards (design doc §4.5): each category is a full-width card with border --border-default, bg-surface, 16px padding. Selected state: border 2px --accent, bg-accent-subtle. Hover: bg-surface-subtle, transition 150ms ease-out. Labels in 15px --text-primary 500 weight. Do NOT use a dropdown — tactile card choice is intentional.",
+        "Step 2 — Main Topic: Textarea label 'In one sentence, what's this about?' in 500 weight --text-primary. Helper text 'This will be visible to the other person…' in 14px --text-secondary. Character counter right-aligned 12px --text-tertiary; switches to --danger when >140 chars. No maxLength attribute — allow over-limit with visual warning per spec.",
+        "Steps 3+4 — Private fields (design doc §4.5): Lucide Lock icon (16px, 1.5px stroke) adjacent to label, in --text-secondary. Tooltip (shadcn/ui) on hover: 'Only you and the AI coach will see this.' Private field sections have --private-tint (#F0E9E0) left-border accent (4px) to visually reinforce privacy (design doc §1.3 Privacy is Visible).",
+        "Step 5 — Invitee name: plain Input, no privacy indicator (name is shared). 'Advanced' Collapsible section below in --text-tertiary 13px; solo mode checkbox inside styled subtly.",
+        "Crisis language: prominent banner (not inline) above the submit button. --danger-subtle background (#F2DCD8), --danger text, Lucide AlertTriangle. 'Not for crisis or emergency situations.' with link to crisis resources. Must be on every step or at minimum step 5.",
+        "Navigation buttons: Back = shadcn/ui Button variant='ghost'; Next/Submit = primary --accent filled. Single primary action per step (design doc §1.4).",
+        "Post-create invite screen (design doc §4.6): bg-canvas page, centered card bg-surface shadow-1. Invite URL in a read-only Input with 'Copy link' primary --accent button adjacent. Email/text share options as secondary ghost buttons. 'Start coaching now →' secondary link in --accent — visually subordinate to 'Copy link'.",
+        "Accessibility: fieldset + legend for radio card groups. Each Input/Textarea has an associated <label>. Step indicator uses aria-current='step' on active step. Form errors inline below inputs with role='alert'. Tooltip trigger is focusable with keyboard."
+      ]
+    },
+    {
+      "task_id": "T24",
+      "title": "Case detail router and phase-appropriate view scaffold",
+      "summary": "Implement CaseDetail.tsx at /cases/:caseId routing to phase-appropriate sub-routes by case.status.",
+      "acceptance_criteria": [
+        "GET /cases/:caseId redirects to correct sub-route by case.status",
+        "Phase-skip redirects with toasts",
+        "PhaseHeader on all sub-routes",
+        "Loading: skeleton while cases/get in flight",
+        "caseId not found / not party: friendly error page"
+      ],
+      "depends_on": ["T9", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "React Router v6 nested routes: CaseDetail.tsx is a layout route that renders <Outlet />.",
+        "Phase routing: useEffect + navigate with replace: true after cases/get resolves.",
+        "useQuery loading: undefined = loading → CaseDetailSkeleton; null = not found.",
+        "Anti-pattern: do NOT re-fetch cases/get in each sub-route — use useOutletContext."
+      ],
+      "design_practices": [
+        "CaseDetail layout: PhaseHeader rendered above <Outlet /> in the layout — all sub-routes inherit it. Full-height layout with PhaseHeader fixed or sticky at top using bg-surface, border-bottom --border-default.",
+        "Loading skeleton: phase-appropriate placeholder (full-height column for chat views, centered card for ready-for-joint). Use shadcn/ui Skeleton with 300ms delay. --bg-surface-subtle shimmer.",
+        "Error page (not found / not party): centered on --bg-canvas. Friendly --text-secondary message, no technical jargon. Single 'Back to Dashboard' secondary link. No alarming colors.",
+        "Route transition: crossfade 100ms between sub-routes (design doc §2.6). No slide animations.",
+        "Accessibility: route change must move focus to the h1 of the new sub-route (useLocation subscription in App.tsx + h1 tabIndex={-1}). PhaseHeader <nav> landmark wraps the back link and phase title. Toast announcements use shadcn/ui toast's aria-live."
+      ]
+    },
+    {
+      "task_id": "T25",
+      "title": "Private coaching view (/cases/:id/private) with crisis card integration",
+      "summary": "Implement PrivateCoachingView.tsx: full-height chat, PrivacyBanner, mark-complete footer CTA + confirmation modal, CrisisCard integration.",
+      "acceptance_criteria": [
+        "Loads privateCoaching/myMessages reactively",
+        "PrivacyBanner always visible",
+        "Streaming/Complete/Error message states",
+        "Send disabled while STREAMING",
+        "Mark-complete footer CTA + confirmation modal",
+        "Routes to /ready if case advances to READY_FOR_JOINT",
+        "CrisisCard appears on crisis keywords; dismissable; re-appears on new crisis message"
+      ],
+      "depends_on": ["T12", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Reactive streaming: useQuery(api.privateCoaching.myMessages) — no manual polling.",
+        "isStreaming: messages?.some(m => m.status === 'STREAMING'). Pass to MessageInput.",
+        "Route transition on case advance: watch caseData.case.status in useEffect.",
+        "CrisisCard key prop: reset dismissed state by changing key when new user message sent.",
+        "Mark-complete: shadcn/ui AlertDialog for confirmation."
+      ],
+      "design_practices": [
+        "Full-height layout (design doc §4.7): PhaseHeader (sticky top), PrivacyBanner (persistent below header), ChatWindow (flex-grow, overflow-y-auto), MessageInput (fixed bottom), Footer CTA below input.",
+        "PrivacyBanner: full-width strip, --private-tint (#F0E9E0) background, Lucide Lock icon, 14px --text-secondary, always visible — not collapsible. Clicking opens shadcn/ui Dialog (shadow-3) with full privacy explanation.",
+        "Coach messages: --accent-subtle (#DCE7E0) background, left-aligned, Sparkles icon (Lucide 16px 1.5px stroke) at top-left. User messages: --bg-surface, right-aligned. Chat bubbles at 16px Inter for readability (design doc §2.2).",
+        "Streaming bubble: same --accent-subtle background with blinking cursor at end (500ms, step-end). No copy button while STREAMING. aria-label 'Coach is replying' on the STREAMING bubble's wrapper (role='status'). Remove role='status' when COMPLETE.",
+        "Mark-complete footer CTA (design doc §4.7): subtle treatment — text-based link or very small secondary button in --text-secondary, not a large prominent button. Design intent: don't rush users through private coaching. Footer area: bg-surface, border-top --border-default, 16px padding.",
+        "Mark-complete AlertDialog: shadcn/ui AlertDialog. Title: 'Ready to move on?' Body shows message count. Two actions: 'Continue Coaching' (cancel, ghost) and 'Mark Complete' (primary --accent). No celebration styling on confirmation.",
+        "CrisisCard: slides in below PrivacyBanner (150ms ease-out), --danger-subtle background, Lucide AlertTriangle in --danger. Dismissable ✕ button. Re-appears (via key prop reset) on new crisis message.",
+        "Accessibility: ChatWindow has role='log' aria-live='polite'. CrisisCard uses role='alert' so it's announced immediately. Mark-complete AlertDialog uses shadcn/ui's built-in focus trap and Esc close. Footer CTA keyboard-accessible."
+      ]
+    },
+    {
+      "task_id": "T26",
+      "title": "Ready-for-joint view (/cases/:id/ready, synthesis display, enter CTA)",
+      "summary": "Implement ReadyForJointView.tsx: synthesis card, 'Enter Joint Session' CTA calling jointChat/enter.",
+      "acceptance_criteria": [
+        "Fetches jointChat/mySynthesis; skeleton while loading",
+        "Synthesis card with privacy label",
+        "Synthesis rendered as markdown",
+        "'Enter Joint Session →' primary button",
+        "Calls jointChat/enter; routes to /joint on success",
+        "Handles case already JOINT_ACTIVE"
+      ],
+      "depends_on": ["T13", "T14", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45,
+      "stack_practices": [
+        "Markdown rendering: react-markdown with @tailwindcss/typography plugin for prose classes.",
+        "Idempotent enter: navigate('../joint') on any success from jointChat/enter.",
+        "Skeleton: synthesis === undefined → skeleton; synthesis === null → pending state.",
+        "Anti-pattern: do NOT render markdown via dangerouslySetInnerHTML — use react-markdown + rehype-sanitize."
+      ],
+      "design_practices": [
+        "Page layout (design doc §4.8): centered column, max-width 720px, bg-canvas. Heading 'You've both completed private coaching.' in 500 weight --text-primary. Helper text in --text-secondary 15px. This screen is a moment of pause — ample vertical whitespace (48px between sections).",
+        "Synthesis card: bg-surface, shadow-1, border --border-default, 24px padding, border-radius 12px. Header strip: --private-tint background, Lock icon + 'Private to you — Jordan has their own version' in 13px --text-secondary.",
+        "Synthesis markdown rendering (design doc §4.8): use react-markdown with className='prose prose-sm max-w-none'. Typography plugin renders headings (**Areas of likely agreement**, **Points that will need real discussion**, **Suggested approach**) in 500 weight --text-primary. Body prose in --text-secondary 15px / 1.6 line-height.",
+        "'Enter Joint Session →' button (design doc §4.8): large primary --accent, centered, min-width 240px. This IS the main action — make it visually prominent. Helper text below: 'Jordan will see you've entered when they enter too.' in 13px --text-tertiary.",
+        "Synthesis loading/pending states: skeleton (300ms delay) while undefined. When null: 'Synthesis is being generated…' with a subtle shimmer or Pause icon — no spinner (too mechanical for the calm tone).",
+        "Accessibility: synthesis card content has aria-label='Your private guidance'. 'Enter Joint Session' button — after clicking, announce 'Entering joint session…' via a live region or button disabled state with loading text. Route change moves focus to /joint h1."
+      ]
+    },
+    {
+      "task_id": "T27",
+      "title": "Joint chat view (/cases/:id/joint) with COST_LIMITED state handling",
+      "summary": "Implement JointChatView.tsx: real-time reactive messages, party avatars, Coach messages, @-mention, closure banner, 'My guidance' Sheet, COST_LIMITED and read-only states.",
+      "acceptance_criteria": [
+        "Reactive messages auto-update both clients",
+        "Party avatar colors correct; ⟡ glyph + coach-accent on Coach messages",
+        "isIntervention messages: warning-tint background",
+        "'Coach is thinking...' indicator for STREAMING Coach row",
+        "Closure proposal banner with Confirm/Reject buttons",
+        "'My guidance' Sheet with synthesisText",
+        "COST_LIMITED: banner + hidden Draft Coach + manual messages still work",
+        "CLOSED_*: input and Draft Coach hidden; 'case is closed' banner"
+      ],
+      "depends_on": ["T14", "T17", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "Real-time: useQuery(api.jointChat.messages, { caseId }) — both clients share reactive subscription.",
+        "Party identification: msg.authorUserId === currentUserId.",
+        "Mobile sheet for Draft Coach: useMediaQuery('(max-width: 768px)') hook.",
+        "COST_LIMITED: caseData.case.status === 'COST_LIMITED' → show banner, hide DraftCoachPanel, keep MessageInput enabled.",
+        "Anti-pattern: do NOT have the client detect @mentions — mutation body handles it."
+      ],
+      "design_practices": [
+        "Layout (design doc §4.9): max-width 1080px for joint chat (more breathing room). Desktop: single column message list, Draft Coach as 420px right panel (not part of the message list). Mobile <768px: Draft Coach as bottom Sheet full-screen.",
+        "Top nav (design doc §3.2): '← Back', case name, phase label, 'My guidance' button (ghost, Sparkles icon), 'Close' button (ghost, --text-secondary). No hamburger on desktop.",
+        "Party avatars (design doc §4.9): Alex/Initiator = #BFDBFE soft blue circle with initial; Jordan/Invitee = #FECDD3 soft rose; Coach = --coach-accent (#8B7AB5) at 20% opacity with --coach-accent initial/glyph. 32px circles. Consistent per party throughout the session.",
+        "Coach messages (design doc §4.9): left border 2px --coach-accent, bg --accent-subtle, ⟡ glyph prefix, --coach-accent text. isIntervention messages: swap --accent-subtle for a --warning (#B58B4D) tinted background to visually signal inflammatory-content response.",
+        "'Coach is thinking...' STREAMING state: inline indicator below last message, --text-secondary 13px italic. STREAMING Coach bubble has blinking cursor, role='status' aria-label='Coach is replying'.",
+        "Closure proposal banner (design doc §4.11): bg-surface, border --border-default, 16px padding, positioned above MessageInput. Icon: 📬 emoji or Lucide Mail. Two shadcn/ui buttons: 'Confirm' (primary --accent) and 'Reject and keep talking' (secondary). Banner must not block the message list — insert it between list and input.",
+        "'My guidance' Sheet: shadcn/ui Sheet side='right', width 480px on desktop. Header: 'My Guidance' 500 weight + Lock icon. Content: react-markdown synthesis text with prose classes. shadow-3 elevation.",
+        "COST_LIMITED banner: bg-warning (#B58B4D) at 10% opacity, border --warning, --warning text. 'AI Coach is temporarily unavailable. You can still message each other.' Hides DraftCoachPanel component entirely.",
+        "CLOSED_* state: 'case is closed' banner above the message list (not a modal). --bg-surface-subtle background. MessageInput hidden. Draft Coach hidden.",
+        "Accessibility: message list container role='log' aria-live='polite' aria-relevant='additions'. Each message authored by 'Coach' announced as 'Coach: [content]' via aria-label on the bubble. Closure banner uses role='alert' so both parties receive the notification announcement. 'My guidance' Sheet focus-trapped, Esc closes."
+      ]
+    },
+    {
+      "task_id": "T28",
+      "title": "Draft Coach panel (side panel/bottom sheet, draft ready card, send gate)",
+      "summary": "Implement DraftCoachPanel.tsx: 420px right panel on desktop, full-screen Sheet on mobile. Draft conversation, 'Draft it for me' button, DraftReadyCard with Send/Edit/Refine/Discard actions.",
+      "acceptance_criteria": [
+        "Opens on '✨ Draft with Coach' click, calls draftCoach/startSession",
+        "Private label in panel",
+        "ChatWindow connected to draftCoach/sendMessage",
+        "'Draft it for me' posts canonical message",
+        "DraftReadyCard when finalDraft populated: Send/Edit/Refine/Discard",
+        "'Send this message': calls sendFinalDraft; panel closes; message in joint chat",
+        "'Edit before sending': transfers to main input; does NOT auto-send",
+        "Esc closes panel; focus returns to joint-chat input",
+        "Focus moves to draft textarea when panel opens"
+      ],
+      "depends_on": ["T15", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Panel layout: absolute/fixed 420px right panel on desktop; shadcn/ui Sheet side='bottom' className='h-screen' on mobile.",
+        "Focus management: useEffect → textarea focus when isOpen. useRef<HTMLTextAreaElement>.",
+        "Esc close + focus return: onKeyDown on panel container. Pass jointChatInputRef as prop.",
+        "'Edit before sending': onTransferDraft(finalDraft) state setter prop from JointChatView.",
+        "Anti-pattern: do NOT auto-send when AI produces finalDraft — DraftReadyCard is a gate."
+      ],
+      "design_practices": [
+        "Panel appearance (design doc §4.10): desktop — slides in from right (translateX 100% → 0, 200ms ease-out). 420px width, full viewport height, bg-surface, shadow-3 ('0 12px 32px rgba(0,0,0,0.10)'). z-index above message list, below Dialog modals.",
+        "Panel header (design doc §4.10): 'Draft Coach' title (500 weight --text-primary), Sparkles icon (Lucide 18px --coach-accent), Lock icon (Lucide 16px --text-secondary) persistent, ✕ close button (ghost, aria-label='Close Draft Coach').",
+        "Privacy label inside panel: small strip below header, --private-tint background, 13px --text-secondary: 'This is private to you. Jordan can't see what you're discussing here.' Hover on lock icon: tooltip 'Only the final message you send goes to the joint chat.'",
+        "Draft conversation: reuses ChatWindow component with COACH bubbles in --coach-accent tint and USER bubbles in --bg-surface. 16px bubble text for readability.",
+        "'Draft it for me' button: shadcn/ui Button variant='outline' full-width at bottom of conversation, Sparkles icon prefix. --text-primary, border --border-default. NOT primary — it is an option, not the mandate.",
+        "DraftReadyCard (design doc §4.10): bg-surface border --border-default shadow-1, 16px padding, 8px radius. 'Here's a draft based on what we talked about:' in 14px --text-secondary above the draft text block. Draft text block: bg-surface-subtle, 14px --text-primary, 16px padding, border-radius 8px, border --border-default.",
+        "DraftReadyCard action hierarchy (design doc §4.10): 'Send this message' = primary --accent filled, full-width. 'Edit before sending' = secondary outlined. 'Keep refining with Coach' = ghost. 'Discard' = ghost text-danger. Stack vertically. One primary action (design doc §1.4).",
+        "Mobile Sheet: shadcn/ui Sheet side='bottom' h-screen. Same header/content layout. Slides up from bottom (translateY, 200ms ease-out).",
+        "Accessibility: panel is not a Dialog — it does NOT trap focus globally (user can still interact with joint chat behind it). Draft textarea has aria-label='Message to Draft Coach'. DraftReadyCard 'Send this message' has aria-describedby pointing to the draft text block. Esc key closes and returns focus to joint-chat MessageInput."
+      ]
+    },
+    {
+      "task_id": "T29",
+      "title": "Closure flow UI and closed case view (/cases/:id/closed)",
+      "summary": "Implement closure modal (Resolved/Not resolved/Take a break), rejection flow, and /cases/:id/closed read-only archive view with tabs.",
+      "acceptance_criteria": [
+        "Closure modal: three options with correct mutations",
+        "Resolved: summary textarea required (min 10 chars); calls proposeClosure",
+        "Not resolved: warning styling; calls unilateralClose",
+        "Take a break: closes modal, no state change",
+        "Rejection: rejectClosure; clears banner",
+        "Confirmation: confirmClosure; both parties route to /closed (reactive)",
+        "/cases/:id/closed: outcome label, closure summary, read-only tabs",
+        "Input and Draft Coach absent in closed view"
+      ],
+      "depends_on": ["T16", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Closure modal: shadcn/ui Dialog with custom content and three option buttons.",
+        "Tab component: shadcn/ui Tabs, TabsList, TabsTrigger, TabsContent. Default tab: 'Joint Chat'.",
+        "Reactive route update to /closed: watch caseData.case.status in JointChatView useEffect.",
+        "Summary textarea validation: isValid = closureSummary.trim().length >= 10.",
+        "Anti-pattern: do NOT render the other party's private coaching tab in closed view."
+      ],
+      "design_practices": [
+        "Closure modal (design doc §4.11): shadcn/ui Dialog, shadow-3 elevation. Title: 'How would you like to close this case?' Header in 500 weight --text-primary. Three option blocks styled as cards with border --border-default, 16px padding. Hover: bg-surface-subtle, 150ms ease-out.",
+        "'Resolved' option: --accent accent-left-border (4px) on selected card. Textarea 'Briefly describe what you agreed to.' (5 rows, border --border-strong). Character count: right-aligned 12px --text-tertiary. 'Propose Resolution' = primary --accent, disabled until textarea.length >= 10.",
+        "'Not resolved' option: warning treatment — border-left 4px --danger, card bg subtle danger tint on select. 'Close without resolution' button = shadcn/ui Button variant='destructive' styled with --danger. 'This closes the case immediately for both of you.' in --text-secondary.",
+        "'Take a break' option: ghost/neutral card. 'Close' button = secondary outlined --text-secondary. No state change.",
+        "Closed case view (design doc §4.12): bg-canvas page. Header: case name, category pill, closure date in --text-secondary, outcome badge (Resolved = --accent, Not Resolved = --danger, Abandoned = --text-tertiary). Outcome badge: 12px text, bg-surface-subtle, rounded-full, px-2 py-1.",
+        "Closure summary (when Resolved): bg-accent-subtle (#DCE7E0), 16px padding, border-radius 8px, ShieldCheck icon, --text-primary 15px prose. Prominent placement below header.",
+        "Closed case tabs: shadcn/ui Tabs. TabsList with three triggers: 'Joint Chat' | 'My Private Coaching' | 'My Guidance'. Active trigger: --accent border-bottom. ChatWindow in readOnly mode (no MessageInput, no Draft Coach button).",
+        "'This case is closed' banner: bg-surface-subtle, border-bottom --border-default, 12px --text-secondary, centered. Full-width between PhaseHeader and tab content. NO input, NO Draft Coach.",
+        "Accessibility: closure Dialog focus-trapped, Esc closes (shadcn/ui handles). Tabs use correct ARIA tab pattern (role='tablist', role='tab', role='tabpanel') via shadcn/ui. Closed state read-only ChatWindow: message list still has role='log' but aria-live removed (no new messages expected)."
+      ]
+    },
+    {
+      "task_id": "T30",
+      "title": "Solo mode UI (PartyToggle, useSoloActingParty hook, all views integrated)",
+      "summary": "Implement PartyToggle and useSoloActingParty hook with URL param state. Integrate into all data queries.",
+      "acceptance_criteria": [
+        "PartyToggle: segmented control; only rendered when case.isSolo=true",
+        "Toggle state in ?as=initiator|invitee URL param; preserved on refresh",
+        "useSoloActingParty(): returns role for selected party",
+        "All queries respect toggle for solo mode",
+        "Both synthesisTexts differ in solo mode",
+        "PartyToggle absent when case.isSolo=false",
+        "Solo cases show 'Solo test' badge on dashboard and PhaseHeader"
+      ],
+      "depends_on": ["T9", "T22", "T25", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "URL search param: useSearchParams from React Router v6. actingAs defaults to 'initiator'.",
+        "useSoloActingParty: reads URL param, returns 'INITIATOR' | 'INVITEE'.",
+        "PartyToggle: two buttons as segmented control, coach-accent for active state.",
+        "Anti-pattern: do NOT store solo party selection in localStorage — use URL param."
+      ],
+      "design_practices": [
+        "PartyToggle (design doc §3.2): segmented control in PhaseHeader, right-aligned. Two segments: 'Viewing as: [Initiator Name]' and '[Invitee Name]'. Active segment: bg-coach-accent (#8B7AB5) at 100% opacity, white text, border-radius 6px. Inactive: --bg-surface-subtle, --text-secondary. Container: bg-surface, border --border-default, border-radius 8px, 4px padding. Only rendered when case.isSolo === true — absent otherwise (design doc §9.3).",
+        "PartyToggle transition: switching parties = 150ms bg crossfade ease-out. The toggle is 'prominent' (design doc §3.2) to make solo context unmistakable.",
+        "'Solo test' badge (design doc): text-xs Inter, bg-coach-accent at 20% opacity, text-coach-accent, px-1.5 py-0.5 rounded-full. Appears in dashboard case rows and PhaseHeader when case.isSolo. Short text: 'Solo'.",
+        "Visual differentiation: in solo mode, the PhaseHeader should visually signal the active party — consider a subtle left border or background tint in the party's avatar color to reinforce which perspective is active.",
+        "Accessibility: PartyToggle buttons use role='radio' / aria-checked pattern, or role='tab', aria-selected. Group has aria-label='Viewing as party'. Toggle state changes announce via aria-live='polite' region: 'Now viewing as Initiator.' URL param update does not itself announce — use the live region."
+      ]
+    },
+    {
+      "task_id": "T31",
+      "title": "Profile page and logout",
+      "summary": "Implement /profile: display name edit, sign-out.",
+      "acceptance_criteria": [
+        "/profile: read-only email, editable displayName",
+        "Saving calls users/updateDisplayName; success toast",
+        "'Sign out' calls Convex Auth signOut; redirects to /",
+        "Logged-out access to /profile redirects to /login",
+        "Profile accessible from top nav"
+      ],
+      "depends_on": ["T3", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Sign out: `const { signOut } = useAuthActions(); await signOut()` then navigate('/').",
+        "Display name mutation: useMutation with optimistic UI.",
+        "Current user: useQuery(api.users.getCurrentUser).",
+        "Anti-pattern: do NOT expose non-editable fields (email, role, createdAt) as form fields."
+      ],
+      "design_practices": [
+        "Page layout: centered card, max-width ~480px, bg-surface shadow-1, 32px padding. Background --bg-canvas. Simple single-column form — not a settings panel with sidebar.",
+        "Email field: read-only Input, --text-secondary text, bg-surface-subtle background to signal non-editable. Label 'Email address' in 14px 500 weight.",
+        "Display name Input: border --border-strong, 15px Inter, --text-primary. Save button: primary --accent, 'Save changes'. Disabled until name has changed from current value.",
+        "Success toast: shadcn/ui toast, neutral (not green celebration), 'Display name updated.' --text-primary. Auto-dismisses in 3s.",
+        "'Sign out' button: shadcn/ui Button variant='ghost' or outline, --text-secondary, at bottom of card with top border divider --border-default. NOT a danger button — signing out is routine.",
+        "Top nav link to /profile: user avatar circle (32px, initials, --accent bg) in top-right corner of the global nav. Clicking opens profile route.",
+        "Accessibility: form has accessible <label> for each field. Read-only email uses aria-readonly='true'. Save button disabled state: aria-disabled='true'. Success toast announced via shadcn/ui's built-in aria-live."
+      ]
+    },
+    {
+      "task_id": "T32",
+      "title": "Admin template UI (list, edit with version history, audit log)",
+      "summary": "Implement admin-only routes: /admin/templates, /admin/templates/:id, /admin/audit.",
+      "acceptance_criteria": [
+        "Non-admins get 403 page (server-side role check)",
+        "TemplatesListPage: table with relevant columns; [+ New Template] button",
+        "Pinned Cases Count computed via query",
+        "TemplateEditPage: two-pane form + version history; 'Publish New Version' button",
+        "Version comparison modal: side-by-side text view",
+        "'Archive Template': confirmation with pinned case count warning",
+        "AuditLogPage: filterable table; row click opens Drawer with metadata JSON",
+        "Audit log read-only"
+      ],
+      "depends_on": ["T11", "T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "Admin route guard: RequireAdmin wrapper reads currentUser.role === 'ADMIN'.",
+        "Table: shadcn/ui Table, TableHeader, TableRow, TableHead, TableBody, TableCell.",
+        "Version comparison modal: shadcn/ui Dialog with two side-by-side <pre> blocks.",
+        "Drawer for audit log: shadcn/ui Sheet side='right'.",
+        "Anti-pattern: do NOT bypass server-side assertAdmin check."
+      ],
+      "design_practices": [
+        "403 page: centered on --bg-canvas. '403 — Access Restricted' heading 500 weight --text-primary. Body in --text-secondary. 'Back to Dashboard' secondary link. Calm, not alarming — no red banners.",
+        "Templates list table (design doc §4.13): shadcn/ui Table. bg-canvas page, bg-surface table container with shadow-1. Column headers in 13px 500 weight --text-secondary uppercase. Rows in 14px --text-primary. Hover row: bg-surface-subtle, 150ms ease-out. Status badge (Active / Archived): Active = --accent text + bg-accent-subtle; Archived = --text-tertiary + bg-surface-subtle. Pinned Cases Count column: 14px --text-secondary.",
+        "'+ New Template' button: primary --accent, top-right of page. Single primary action (design doc §1.4).",
+        "Template edit page (design doc §4.13): two-pane layout. Left pane (~60% width): form with shadcn/ui Textarea for Global Guidance, Coach Instructions, Draft Coach Instructions (all markdown, 8+ rows). Labels in 14px 500 weight. Right pane (~40%): version history timeline — vertical list of published versions with date, admin name, notes in 13px --text-secondary. Each version has a 'View' ghost button.",
+        "Version history timeline: vertical connector line in --border-default. Each version node: 8px circle --accent, date label --text-tertiary 12px, 'View' ghost button.",
+        "'Publish New Version' button: primary --accent, full-width at bottom of left pane. 'Archive Template' button: shadcn/ui Button variant with --danger color, at bottom, below a border divider. Archive confirmation Dialog shows pinned case count in --warning color.",
+        "Version comparison modal: shadcn/ui Dialog, wide (max-width 800px), shadow-3. Two columns: 'Version N-1' and 'Version N' headings in 500 weight. Content in <pre> or monospace textarea, JetBrains Mono 13px, --text-secondary. bg-surface-subtle background.",
+        "Audit log page (design doc §4.13): shadcn/ui Table. Filter input (shadcn/ui Input) for actor email above table. Actor | Action | Target | Timestamp columns. Timestamp in JetBrains Mono 13px --text-tertiary. Row click → shadcn/ui Sheet side='right' with JSON metadata in <pre className='text-xs overflow-auto font-mono'>.",
+        "Accessibility: admin tables use proper <th scope='col'> headers. Filter input has <label> or aria-label='Filter by actor email'. Audit log Sheet focus-trapped, Esc closes. All icon-only buttons in version history have aria-label."
+      ]
+    },
+    {
+      "task_id": "T33",
+      "title": "Accessibility pass (WCAG 2.1 AA, keyboard navigation, screen reader, reduced motion)",
+      "summary": "Systematic accessibility audit and remediation across all 12+ routes.",
+      "acceptance_criteria": [
+        "Exactly one <main> per page; <nav> and <aside> landmarks",
+        "Chat regions: role='log', aria-live='polite'",
+        "Streaming messages announce 'Coach is replying' once per response",
+        "All modals trap focus; Esc closes; focus returns to trigger",
+        "Route change moves focus to h1",
+        "Draft Coach panel: focus moves to textarea on open",
+        "prefers-reduced-motion: all animations disabled",
+        "All text ≥ 4.5:1 contrast in light and dark mode",
+        "Keyboard-only critical path test passable",
+        "All buttons have visible text or aria-label"
+      ],
+      "depends_on": ["T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30", "T31", "T32"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 240,
+      "stack_practices": [
+        "axe-core audit: run @axe-core/react in development mode via main.tsx (dev-only).",
+        "Focus trap: shadcn/ui Dialog and Sheet via @radix-ui/react-focus-scope — do NOT reimplement.",
+        "Route change focus: useLocation subscription in App.tsx; document.querySelector('h1')?.focus().",
+        "aria-live for chat: role='log' aria-live='polite' aria-relevant='additions' on message list.",
+        "Focus ring: :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; } globally.",
+        "Contrast check: use are-you-ok CLI or browser DevTools.",
+        "Anti-pattern: do NOT use outline: none without a :focus-visible replacement."
+      ],
+      "design_practices": [
+        "Color contrast audit: check every --text-* on every --bg-* combination using design doc §2.1 tokens. All must meet WCAG 2.1 AA 4.5:1 for normal text, 3:1 for large text (18px+ or 14px+ bold). Check both light and dark mode. Critical pairs to verify: --text-secondary on --bg-canvas, --text-tertiary on --bg-surface, --accent on --bg-surface, --danger on --bg-canvas.",
+        "Focus ring: global :focus-visible rule using var(--accent) (#6B8E7F) 2px solid, 2px offset. Apply outline-none ONLY to elements that provide a custom :focus-visible replacement (e.g., custom active state styling). Never remove outline entirely.",
+        "prefers-reduced-motion: T18 sets all transition durations to 0ms and pauses CSS animations. T33 verifies this is consistently applied: message arrival animation, streaming cursor blink, panel slide-in, route crossfade, skeleton shimmer — ALL must cease. Use @media (prefers-reduced-motion: reduce) guards.",
+        "Landmark structure (design doc §9.5): exactly one <main> per page (not per route component). <nav> for PhaseHeader navigation. <aside> for Draft Coach panel (it is complementary content). Verify with @axe-core/react violations list.",
+        "Chat accessibility (design doc §9.5): role='log' aria-live='polite' aria-relevant='additions' on ChatWindow container. STREAMING Coach bubble: role='status' aria-label='Coach is replying' — announced once. COMPLETE: remove role='status'. New user messages are NOT announced (they are authored by the user, not new arrivals).",
+        "Modal / Sheet accessibility: shadcn/ui Dialog and Sheet use Radix UI FocusScope and aria-modal='true'. Esc must close. Focus must return to the trigger element (button that opened it) on close. Verify this for: PrivacyBanner dialog, MarkComplete AlertDialog, CrisisCard (not a modal — no focus trap), DraftCoachPanel (Sheet), closure modal, version comparison modal, audit log drawer.",
+        "Route change focus: after each React Router navigation, programmatically focus the page's h1 (tabIndex={-1} on h1). This is critical for screen reader users who would otherwise be lost at the previous scroll position.",
+        "Keyboard critical path (design doc §9.5): Tab through landing → login → dashboard → new case (all 5 steps) → invite page → private coaching (send message, mark complete) → ready for joint (enter) → joint chat (send message, open Draft Coach, send draft, propose closure). All actions completable without mouse."
+      ]
+    },
+    {
+      "task_id": "T34",
+      "title": "Playwright E2E test suite (all 7 spec files, multi-browser)",
+      "summary": "Implement the full Playwright test suite: 7 spec files, multi-browser projects, CLAUDE_MOCK=true stub.",
+      "acceptance_criteria": [
+        "CLAUDE_MOCK=true: deterministic stub with configurable delays; no live Anthropic calls",
+        "All 7 spec files pass 100% with CLAUDE_MOCK=true",
+        "Three browser projects; axe-core scan in solo-full-flow"
+      ],
+      "depends_on": ["T30", "T32"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 180,
+      "stack_practices": [
+        "Playwright config: three projects (chromium, firefox, webkit).",
+        "CLAUDE_MOCK stub: check process.env.CLAUDE_MOCK === 'true' at top of each AI action.",
+        "Two-context invite test: browser.newContext() per user.",
+        "axe-core in Playwright: @axe-core/playwright after each major navigation.",
+        "Anti-pattern: do NOT use page.waitForTimeout — use page.waitForSelector or expect(locator).toBeVisible()."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T35",
+      "title": "Vitest unit tests for core utility modules",
+      "summary": "Vitest unit tests covering privacy filter, prompt assembly, transcript compression, invite token generation, state machine transitions.",
+      "acceptance_criteria": [
+        "privacyFilter: ≥5 adversarial, ≥3 benign, boundary cases",
+        "All 4 assemblePrompt roles tested",
+        "All 9 valid state transitions and ≥8 illegal transitions tested",
+        "All tests pass with `npx vitest run`"
+      ],
+      "depends_on": ["T5", "T6", "T7", "T8"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Test files co-located in convex/lib/__tests__/.",
+        "Vitest config: environment: 'node'.",
+        "Mock for transcriptCompression: vi.fn() for Anthropic client.",
+        "Anti-pattern: do NOT import convex/_generated/server in Vitest tests."
+      ],
+      "design_practices": []
+    },
+    {
+      "task_id": "T36",
+      "title": "CI pipeline (GitHub Actions: lint, typecheck, unit, E2E)",
+      "summary": "Configure .github/workflows/ci.yml with four jobs: lint, typecheck, unit, e2e.",
+      "acceptance_criteria": [
+        "Four jobs on push to PR branches targeting main",
+        "lint, typecheck, unit pass independently",
+        "e2e: deploy to Convex dev; seed; Playwright with CLAUDE_MOCK=true; multi-browser",
+        "node_modules cached"
+      ],
+      "depends_on": ["T33", "T34", "T35"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "GitHub Actions cache: actions/cache@v4 with npm ci (not npm install).",
+        "Convex deploy in CI: npx convex deploy using CONVEX_DEPLOY_KEY secret.",
+        "Playwright in CI: npx playwright install --with-deps.",
+        "Anti-pattern: do NOT run npx convex dev in CI — use npx convex deploy."
+      ],
+      "design_practices": []
+    }
+  ]
+}

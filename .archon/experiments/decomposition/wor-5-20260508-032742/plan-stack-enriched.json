@@ -1,0 +1,982 @@
+{
+  "epic_title": "Conflict Coach v1 — Full-Stack AI Mediation Web App",
+  "planning_assumptions": [
+    "The invitee's pre-join display name (typed by initiator at case creation as 'What's their name?') is not in the spec's cases/create mutation input. We add inviteeName: v.optional(v.string()) to the cases table and pass it through cases/create.",
+    "Solo mode isSolo=true pre-binds the same userId to both initiator and invitee slots; partyStates has two rows for the same userId with different roles. The party toggle filters by role, not userId.",
+    "The spec's COST_LIMITED status is not defined in the schema's case status union. It is added to cases.status in T2.",
+    "cases.tokenCount: v.optional(v.number()) is added to the cases table in T2 for AI cost tracking.",
+    "Convex Auth is the chosen auth provider (TQ1). The Clerk swap path is documented in README but not implemented.",
+    "Admin role promotion is a manual Convex Dashboard action in v1; no self-serve admin claim UI is built.",
+    "Typing indicators ('Jordan is typing...') reserve visual space per the design doc but Convex Presence logic is deferred to v1.1 per tech spec §8.3.",
+    "The decline-invite path sets the case to CLOSED_ABANDONED per design doc §4.3; added to state machine in T8.",
+    "The /cases/:id/invite post-create screen is a distinct route; invitee display name comes from inviteeName.",
+    "P2 user stories (US-16 email notifications, US-17 voluntary sharing, US-18 PDF export, US-19 inline rephrase) are explicitly out of scope.",
+    "ToS and privacy policy are static placeholder /terms and /privacy routes, not full tasks; linked from auth screens and case creation.",
+    "Cost tracking: tokenCount is accumulated per AI action call. Soft cap $2 ≈ 600k Sonnet tokens (hardcoded pricing constant); hard cap $10. Pricing constant is isolated in a single config file for easy update.",
+    "T17 budget enforcement logic and error-handling hardening is designed to run after T12-T15 as a cross-cutting enhancement. Token accumulation ACs are embedded in T12-T15 themselves; T17 adds the cap enforcement, degradation behavior, and Anthropic error handling."
+  ],
+  "dependency_graph_notes": "Four strata: (1) Infrastructure [T1-T2], (2) Core modules [T3-T11]: auth, authorization, privacy filter, prompts, compression, state machine are parallel after T2+T4; templates backend (T11) unblocks case creation (T9); (3) Feature backends [T12-T17]: private coaching → synthesis → joint chat entry mutation (T14a) → joint chat coach (T14b) → draft coach; closure parallel after T14a; cost tracking (T17) is a cross-cutting hardening pass after T12-T15; (4) Frontend [T18-T32]: design tokens + shared components (T19a, T19b) → all views. T33 (accessibility) and T34 (E2E) both depend on T30+T32 (all feature UI complete) but NOT on each other — they can run in parallel. T35 (unit tests) depends only on T5+T6+T7+T8 and can run very early. T36 (CI) waits for T33+T34+T35.",
+  "tasks": [
+    {
+      "task_id": "T1",
+      "title": "Project scaffolding and cold-start setup",
+      "summary": "Initialize the project with Vite + React 18 + TypeScript, Tailwind v3, shadcn/ui, React Router v6, Convex client, ESLint + Prettier. Create .env.example, .gitignore, and README with the exact cold-start sequence from tech spec §11.3. Verify `git clone && npm install && npx convex dev && npm run dev` produces a running empty React app.",
+      "acceptance_criteria": [
+        "`npm install` completes without errors on a clean checkout",
+        "`npx convex dev` starts without errors (Convex project configured)",
+        "`npm run dev` serves a React app at localhost:5173 with no console errors",
+        "ESLint and Prettier configs present; `npm run lint` and `npm run format:check` pass on the empty project",
+        "`tsc --noEmit` passes with strict mode enabled",
+        "README contains verbatim the cold-start sequence from tech spec §11.3",
+        ".env.example includes all env vars from §11.2: ANTHROPIC_API_KEY, CLAUDE_MOCK, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, SITE_URL, MAGIC_LINK_EMAIL_FROM, VITE_CONVEX_URL, VITE_SITE_URL"
+      ],
+      "depends_on": [],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Bootstrap with `npm create vite@latest -- --template react-ts`; do NOT use CRA.",
+        "Install Convex client: `npm install convex`; init project: `npx convex dev` (first run prompts project creation). The generated `convex/_generated/` directory must be gitignored — it is recreated on every `npx convex dev` run.",
+        "Tailwind v3 setup: `npm install -D tailwindcss postcss autoprefixer && npx tailwindcss init -p`. Content glob must include `./src/**/*.{ts,tsx}` and `./convex/**/*.ts`.",
+        "shadcn/ui init: `npx shadcn-ui@latest init`. Choose 'New York' style, CSS variables color strategy. This writes `src/components/ui/` and modifies `tailwind.config.js` — commit both.",
+        "React Router v6: `npm install react-router-dom`. Wrap app in `<BrowserRouter>` in main.tsx. Never use React Router v5 patterns (`<Switch>`, `component=` prop).",
+        "Wire Convex in main.tsx: `<ConvexProvider client={convex}><App /></ConvexProvider>` — Convex Auth adds `<ConvexAuthProvider>` wrapping `<ConvexProvider>`.",
+        "tsconfig.json: enable `strict: true`, `noUncheckedIndexedAccess: true`. These are locked — do not soften.",
+        "ESLint: use `eslint-plugin-react-hooks` and `eslint-plugin-react-refresh`. Prettier: use `prettier-plugin-tailwindcss` for class sorting.",
+        "Anti-pattern: do NOT call `npx convex deploy` during dev scaffolding — `npx convex dev` is the development command; deploy is for production."
+      ]
+    },
+    {
+      "task_id": "T2",
+      "title": "Convex schema definition (all tables, all fields)",
+      "summary": "Implement convex/schema.ts exactly as specified in tech spec §3.1 plus planning-assumption additions. All 10 tables: users, cases, partyStates, privateMessages, jointMessages, draftSessions, draftMessages, inviteTokens, templates, templateVersions, auditLog. Cases table includes: COST_LIMITED in status union, inviteeName, tokenCount. Document all 6 key invariants as comments.",
+      "acceptance_criteria": [
+        "All 10 tables match tech spec §3.1 field names, types, and union literals exactly",
+        "cases.status union includes COST_LIMITED in addition to the 7 spec values: DRAFT_PRIVATE_COACHING, BOTH_PRIVATE_COACHING, READY_FOR_JOINT, JOINT_ACTIVE, CLOSED_RESOLVED, CLOSED_UNRESOLVED, CLOSED_ABANDONED",
+        "cases table includes: inviteeName: v.optional(v.string()), tokenCount: v.optional(v.number())",
+        "partyStates table includes: closureProposalSummary: v.optional(v.string()) for the closure proposal flow",
+        "All indexes present: by_email, by_initiator, by_invitee, by_case, by_case_and_user, by_token, by_template, by_actor, by_draft_session, by_case (on jointMessages, privateMessages, draftMessages)",
+        "`npx convex dev` applies the schema without errors",
+        "All 6 key invariants from §3.2 documented as inline comments",
+        "`tsc --noEmit` passes"
+      ],
+      "depends_on": ["T1"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Use `defineSchema` and `defineTable` from `convex/server`; use `v` from `convex/values` for all field validators — never use raw TypeScript types here.",
+        "ID references use `v.id('tableName')` not `v.string()`. This gives compile-time type safety via `Id<'tableName'>` in generated types.",
+        "Union literals use `v.union(v.literal('A'), v.literal('B'))` — not `v.string()`. Convex validates at runtime; the TypeScript generated type becomes a string union.",
+        "Indexes: each `.index('name', ['field1', 'field2'])` call creates a compound index usable with `.withIndex('name', q => q.eq('field1', val))` in queries. Index names must be unique per table.",
+        "Anti-pattern: do NOT add `v.any()` fields except where explicitly needed (auditLog.metadata). Every `v.any()` sacrifices type safety end-to-end.",
+        "After editing schema.ts, `npx convex dev` must be running to push the schema; TypeScript types in `convex/_generated/dataModel.d.ts` regenerate automatically.",
+        "Convex does not support nullable without `v.optional()`. There is no `v.null()` in Convex v1 — use `v.optional(v.string())` to represent a nullable string.",
+        "The `schemaVersion: v.literal(1)` pattern on `cases` is intentional: it allows future data migrations to be detectable. Do not remove it."
+      ]
+    },
+    {
+      "task_id": "T3",
+      "title": "Authentication — Convex Auth with magic link and Google OAuth",
+      "summary": "Configure Convex Auth with email magic link and Google OAuth. On first login, upsert a users row (email, displayName from provider, role: 'USER'). Session persists across reloads until explicit logout or 30-day expiry. Wire ConvexAuthProvider and ConvexProvider into main.tsx.",
+      "acceptance_criteria": [
+        "User registers and logs in via magic link: email submission sends a link; clicking the link establishes a session",
+        "User logs in via Google OAuth: OAuth flow completes and establishes a session",
+        "First login via either provider creates a users row with role='USER' and correct email",
+        "Subsequent logins upsert (do not duplicate) the users row",
+        "Session persists across browser reload (reactive query confirms identity)",
+        "Session expires after 30 days of inactivity",
+        "ctx.auth.getUserIdentity() returns the identity in any Convex function after login"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Install: `npm install @convex-dev/auth @auth/core`. Convex Auth is a first-party library; do not use `next-auth` or Clerk here.",
+        "Auth config file is `convex/auth.config.ts` (not auth.ts). It exports a `convexAuth` default that lists providers: `Password` (for magic link) and `Google`.",
+        "Magic link provider: use `Resend` email provider from `@auth/core/providers/resend` or the Convex Auth `MagicLink` helper. Configure `MAGIC_LINK_EMAIL_FROM` env var in Convex dashboard.",
+        "Google OAuth: requires `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in Convex environment variables (not `.env` — set via `npx convex env set`).",
+        "Client side: import `useAuthActions` from `@convex-dev/auth/react` for `signIn`, `signOut`. Import `useConvexAuth` from `convex/react` for `isAuthenticated`, `isLoading`.",
+        "User upsert: create `convex/users.ts` with an internal mutation `upsertUser` called from the auth `onCreateOrUpdateUser` callback in auth.config.ts. Use `.index('by_email')` + `ctx.db.get()` pattern to detect existing rows.",
+        "Anti-pattern: do NOT store auth tokens in localStorage manually — Convex Auth manages the session cookie/token lifecycle.",
+        "Session check in Convex functions: `const identity = await ctx.auth.getUserIdentity()`. If null → throw ConvexError with code UNAUTHENTICATED. Do not use `ctx.auth.isLoggedIn()` — it doesn't exist.",
+        "ConvexAuthProvider must wrap ConvexProvider in main.tsx: `<ConvexAuthProvider client={convex}><App/></ConvexAuthProvider>`."
+      ]
+    },
+    {
+      "task_id": "T4",
+      "title": "Authorization helper module and ConvexError codes",
+      "summary": "Create convex/lib/auth.ts with requireAuth(ctx) helper, assertPartyToCase, assertAdmin. Define all 9 ConvexError codes from tech spec §7.4. Create convex/lib/pricing.ts with ANTHROPIC_PRICING constant (soft cap $2, hard cap $10) as an isolated config — one place to update when pricing changes.",
+      "acceptance_criteria": [
+        "requireAuth(ctx) returns { identity, user } or throws ConvexError({ code: 'UNAUTHENTICATED', httpStatus: 401 })",
+        "All 9 error codes typed as constants: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, INVALID_INPUT, TOKEN_INVALID, RATE_LIMITED, AI_ERROR, INTERNAL",
+        "ConvexError shape: { code: string, message: string, httpStatus: number }",
+        "assertPartyToCase throws FORBIDDEN if caller is neither initiatorUserId nor inviteeUserId",
+        "assertAdmin throws FORBIDDEN if user.role !== 'ADMIN'",
+        "convex/lib/pricing.ts exports: SOFT_CAP_USD = 2.0, HARD_CAP_USD = 10.0, SONNET_INPUT_PRICE_PER_TOKEN, SONNET_OUTPUT_PRICE_PER_TOKEN, HAIKU_INPUT_PRICE_PER_TOKEN, HAIKU_OUTPUT_PRICE_PER_TOKEN",
+        "All subsequent Convex functions import error codes from convex/lib/auth.ts consistently"
+      ],
+      "depends_on": ["T3"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Import `ConvexError` from `convex/values` — this is Convex's built-in typed error class, NOT a custom class. Thrown ConvexErrors are surfaced to the client as structured data (not opaque 500s).",
+        "Error shape: `throw new ConvexError({ code: 'FORBIDDEN', message: '...', httpStatus: 403 })`. Client catches via the `ConvexError` type guard in `convex/react`.",
+        "Helper function signature: `async function requireAuth(ctx: QueryCtx | MutationCtx | ActionCtx): Promise<{ identity: UserIdentity; user: Doc<'users'> }>`. Import `QueryCtx`, `MutationCtx`, `ActionCtx` from `convex/_generated/server`.",
+        "`Doc<'users'>` is the generated Convex document type for the users table — always use generated types, never hand-craft them.",
+        "File location: `convex/lib/auth.ts` and `convex/lib/pricing.ts`. The `convex/lib/` subdirectory is for shared utilities that are NOT exported Convex functions (no `query`/`mutation`/`action` exports).",
+        "Anti-pattern: do NOT put authorization logic inline in each function — always call `requireAuth` and the assertion helpers. This prevents accidental omissions.",
+        "Pricing constants: token prices as of May 2026: Sonnet ~$3/$15 per 1M input/output, Haiku ~$0.25/$1.25. These are hardcoded; the isolation in pricing.ts means one-file update when Anthropic changes pricing."
+      ]
+    },
+    {
+      "task_id": "T5",
+      "title": "Privacy response filter module",
+      "summary": "Implement convex/lib/privacyFilter.ts: given a candidate AI response string and a set of other-party message strings, detect any ≥8 consecutive whitespace-token substring from the other-party messages appearing verbatim (case-insensitive) in the response. Returns { passed: boolean, matchedSubstring?: string }.",
+      "acceptance_criteria": [
+        "filterResponse(response: string, otherPartyMessages: string[]): { passed: boolean, matchedSubstring?: string }",
+        "passed=false when any 8+ consecutive token window from other-party messages appears verbatim in response (case-insensitive)",
+        "passed=true when no such match exists",
+        "Handles empty otherPartyMessages → passed=true",
+        "Handles empty response → passed=true",
+        "Unit test: exact 10-word phrase from other party in response → passed=false",
+        "Unit test: response rephrases → passed=true",
+        "Unit test: 7-token substring (below threshold) → passed=true",
+        "Unit test: exact 8-token substring → passed=false (boundary case)",
+        "Performance: 10k-word message set processed without timeout in Vitest"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "This is a pure TypeScript module in `convex/lib/` — no Convex runtime imports, no DB calls, no SDK calls. It must be importable from both Convex actions and Vitest unit tests without side effects.",
+        "Tokenize by whitespace: `text.toLowerCase().split(/\\s+/).filter(Boolean)`. Sliding window of size 8 over the tokenized other-party messages, reconstructed as joined strings, then check `response.toLowerCase().includes(window)`. O(n*m) is acceptable for the expected message sizes.",
+        "Vitest test file: `src/__tests__/privacyFilter.test.ts` (or `convex/lib/__tests__/privacyFilter.test.ts`). Import directly — no Convex test harness needed for pure functions.",
+        "Anti-pattern: do NOT use embedding similarity or any ML model here — the spec explicitly requires regex/substring matching. Complexity should be minimal.",
+        "Performance note: for a 10k-word message set, pre-compute all N-gram windows into a Set<string> for O(1) lookup per window rather than re-iterating per response check.",
+        "The function must be synchronous — no async. Convex actions can call it directly within the action body."
+      ]
+    },
+    {
+      "task_id": "T6",
+      "title": "Prompt assembly module for all four AI roles",
+      "summary": "Implement convex/lib/prompts.ts with assemblePrompt(opts) for PRIVATE_COACH, SYNTHESIS, COACH, DRAFT_COACH. Each returns { system: string, messages: Message[] }. All system prompts include explicit no-quote rules and crisis safety language. PRIVATE_COACH includes keyword-level crisis detection instructions.",
+      "acceptance_criteria": [
+        "assemblePrompt({ role: 'PRIVATE_COACH' }) system prompt matches tech spec §6.3.1 verbatim plus crisis guardrail",
+        "assemblePrompt({ role: 'SYNTHESIS' }) produces a prompt requiring strict { forInitiator: string, forInvitee: string } JSON per §6.3.2",
+        "assemblePrompt({ role: 'COACH' }) incorporates templateVersion.globalGuidance + coachInstructions when provided",
+        "assemblePrompt({ role: 'DRAFT_COACH' }) incorporates draftCoachInstructions; explicitly excludes other party's synthesis",
+        "All four system prompts contain: 'NEVER quote, closely paraphrase, or otherwise surface the other party's raw words'",
+        "Function is pure TypeScript — no DB calls, no SDK calls; testable in Vitest",
+        "Unit test: SYNTHESIS system string contains verbatim critical instruction from §6.3.2",
+        "Unit test: DRAFT_COACH context assembly does not include other party's synthesis text even when provided in opts"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Pure TypeScript module — no Convex imports, no `@anthropic-ai/sdk` imports. The function signature accepts plain data (strings, arrays) and returns `{ system: string; messages: Array<{ role: 'user' | 'assistant'; content: string }> }`. This matches the Anthropic SDK `MessageParam` shape.",
+        "Message type: define a local `type Message = { role: 'user' | 'assistant'; content: string }` — do NOT import from `@anthropic-ai/sdk` here, as that would create an SDK dependency in a pure utility module.",
+        "Template string approach: use tagged template literals or plain string concatenation. Do NOT use a templating library (Handlebars, Mustache, etc.) — unnecessary dependency.",
+        "Vitest tests: run in Node without any Convex infrastructure. `import { assemblePrompt } from '../convex/lib/prompts'` and assert string contents directly.",
+        "Anti-pattern: do NOT embed multi-paragraph prompt strings as escape-heavy one-liners. Use multi-line template literals for readability.",
+        "SYNTHESIS output format: the system prompt must instruct the model to respond with ONLY the JSON object `{ \"forInitiator\": \"...\", \"forInvitee\": \"...\" }` and nothing else. Include explicit instruction: 'Respond ONLY with valid JSON. No markdown, no preamble.'"
+      ]
+    },
+    {
+      "task_id": "T7",
+      "title": "Transcript compression module",
+      "summary": "Implement convex/lib/transcriptCompression.ts: when token count exceeds budget (60k for user-facing, 10k for classification), take oldest 50% of messages, call Claude Haiku with compression prompt, replace with SUMMARY message. Cache by content hash.",
+      "acceptance_criteria": [
+        "compressIfNeeded(messages, budgetTokens, anthropic): returns original array when under budget without any API call",
+        "When over budget: oldest 50% replaced by { role: 'system', content: 'SUMMARY: ...' } from Haiku",
+        "Compression prompt calls claude-haiku-4-5-20251001",
+        "Content hash caching: same message set compressed twice makes only one Haiku API call",
+        "Token counting uses word-count approximation (4 chars ≈ 1 token)",
+        "Unit test: array exceeding 60k budget is reduced; API not called for under-budget arrays"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Function signature: `async function compressIfNeeded(messages: Message[], budgetTokens: number, anthropic: Anthropic): Promise<Message[]>`. Accepts the Anthropic client as a parameter (dependency injection) so unit tests can pass a mock.",
+        "Cache implementation: use a module-level `Map<string, string>` as the hash cache. For Convex actions, module-level state persists across calls within the same worker process — this is intentional and supported.",
+        "Content hash: use `JSON.stringify(messages)` fed into a simple non-cryptographic hash (e.g., FNV-1a or djb2 implemented in ~10 lines). Do NOT use Node's `crypto` module — Convex actions run in a V8 isolate without Node built-ins. Use `TextEncoder` + manual hash loop instead.",
+        "Haiku API call: `anthropic.messages.create({ model: 'claude-haiku-4-5-20251001', max_tokens: 600, messages: [...] })` — non-streaming, synchronous single call.",
+        "Anti-pattern: do NOT call `compressIfNeeded` with `budgetTokens=0` — guard against zero budget at the call site.",
+        "Vitest mock: `vi.fn()` or `vi.spyOn()` on the passed `anthropic` object's `messages.create` method. Verify call count to confirm caching works (second call with same messages = 1 total API call)."
+      ]
+    },
+    {
+      "task_id": "T8",
+      "title": "Case state machine module (all transitions including decline-invite)",
+      "summary": "Implement convex/lib/stateMachine.ts with pure transition functions for all case states. Covered transitions including decline-invite and COST_LIMITED.",
+      "acceptance_criteria": [
+        "Each transition function is pure: takes current case state + relevant party states, returns new status or throws ConvexError CONFLICT",
+        "DRAFT_PRIVATE_COACHING→CLOSED_ABANDONED: triggered by invitee declining; explicitly tested",
+        "BOTH_PRIVATE_COACHING→READY_FOR_JOINT: requires both partyStates.privateCoachingCompletedAt set AND both synthesisTexts populated",
+        "READY_FOR_JOINT→JOINT_ACTIVE: any party can trigger; idempotent if already JOINT_ACTIVE",
+        "JOINT_ACTIVE→CLOSED_RESOLVED: requires other party's closureProposed=true",
+        "Sending a joint message when case is not JOINT_ACTIVE throws CONFLICT",
+        "All pure TypeScript, no DB calls — fully unit-testable",
+        "Unit test: all 9 valid transitions succeed from correct precondition state",
+        "Unit test: 8+ illegal transitions each throw CONFLICT"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45,
+      "stack_practices": [
+        "Pure TypeScript module — zero imports from Convex runtime or `@anthropic-ai/sdk`. All inputs are plain values (status strings, booleans, timestamps). Throws `ConvexError` from `convex/values` (this IS an allowed import since `convex/values` is a pure type/value package).",
+        "Export one named function per transition, e.g. `transitionToJointActive`, `transitionToBothPrivateCoaching`, etc. Do NOT export a single god-function `transition(from, to, state)` — individual functions are easier to test and audit.",
+        "Status type: `type CaseStatus = 'DRAFT_PRIVATE_COACHING' | 'BOTH_PRIVATE_COACHING' | ...` derived from the schema's union. Define it once here and import it into Convex functions — do NOT redefine it.",
+        "Vitest: each transition test is a synchronous call with fabricated state objects. No Convex test harness needed. Use `expect(() => fn(...)).toThrow(ConvexError)` pattern.",
+        "Anti-pattern: do NOT read from `ctx.db` inside state machine functions — all DB reads happen in the calling mutation/action, which then passes the values to the state machine. This is the explicit contract for testability.",
+        "Idempotency: `READY_FOR_JOINT→JOINT_ACTIVE` should return the current status without throwing if already `JOINT_ACTIVE`. Pattern: `if (currentStatus === 'JOINT_ACTIVE') return currentStatus;`"
+      ]
+    },
+    {
+      "task_id": "T9",
+      "title": "Case CRUD backend (create, get, list, partyStates, updateMyForm)",
+      "summary": "Implement Convex queries and mutations for case management: cases/create, cases/get, cases/list, cases/partyStates, cases/updateMyForm. All enforce auth + party-membership rules.",
+      "acceptance_criteria": [
+        "cases/create: creates cases row, partyStates row for initiator, inviteTokens row; returns caseId + invite URL",
+        "cases/create with isSolo=true: pre-binds invitee, sets BOTH_PRIVATE_COACHING",
+        "cases/list: returns only caller's cases",
+        "cases/get: returns NOT_FOUND if caller not a party",
+        "cases/partyStates: returns self (full) and other (phase-only, no raw text)",
+        "cases/updateMyForm: updates caller's partyStates fields",
+        "Token stored as plaintext per §12 note"
+      ],
+      "depends_on": ["T4", "T8", "T11"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "File structure: `convex/cases.ts` exporting `create`, `get`, `list`, `partyStates`, `updateMyForm` using the `query`/`mutation` wrappers from `convex/_generated/server`.",
+        "Convex function export pattern: `export const create = mutation({ args: { ... }, handler: async (ctx, args) => { ... } })`. Args are validated by Convex at runtime using the `v` validators.",
+        "Crypto-random token in Convex mutations: use `crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')` sliced to 32 chars. `crypto` is available globally in Convex's V8 environment.",
+        "Index queries: `await ctx.db.query('inviteTokens').withIndex('by_token', q => q.eq('token', token)).unique()` — use `.unique()` when expecting at most one result; it throws if multiple rows match (schema bug surfaced early).",
+        "cases/list: use `.withIndex('by_initiator', q => q.eq('initiatorUserId', user._id))` + a second query for `by_invitee`, then merge and deduplicate. Or query all cases where either index matches via parallel reads.",
+        "cases/partyStates privacy: NEVER return synthesisText or privateMessages content for the 'other' party object. Return only `{ role, formCompletedAt: boolean, privateCoachingCompletedAt: boolean }` — strip all sensitive fields explicitly.",
+        "Anti-pattern: do NOT use `ctx.db.query('cases').collect()` without an index — full table scans grow linearly with data. Always use `.withIndex()`.",
+        "Site URL: read `process.env.SITE_URL` in Convex actions/mutations. For dev: set via `npx convex env set SITE_URL http://localhost:5173`."
+      ]
+    },
+    {
+      "task_id": "T10",
+      "title": "Invite flow backend (redeem mutation, preview query, token validation)",
+      "summary": "Implement invites/redeem mutation and invites/preview query.",
+      "acceptance_criteria": [
+        "invites/redeem: validates token, atomically binds invitee, creates partyStates, marks token CONSUMED, advances case to BOTH_PRIVATE_COACHING",
+        "invites/redeem: throws CONFLICT if caller is already the initiator",
+        "invites/redeem on CONSUMED token: throws TOKEN_INVALID",
+        "invites/preview: returns category, initiatorDisplayName, mainTopic, inviteeName with NO private content",
+        "invites/preview on non-existent token: returns null"
+      ],
+      "depends_on": ["T4", "T9"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45,
+      "stack_practices": [
+        "File: `convex/invites.ts`. Export `redeem` (mutation) and `preview` (query).",
+        "Atomicity: Convex mutations are fully transactional — all `ctx.db.patch`, `ctx.db.insert` calls within one mutation either all succeed or all fail. No need for manual rollback logic.",
+        "`ctx.db.patch(id, fields)` for partial updates; `ctx.db.replace(id, fullDoc)` for full replacement. Use `patch` for token status update to avoid accidentally overwriting unrelated fields.",
+        "invites/preview is a Convex `query` (not mutation) — it only reads. Even though it uses a token (public identifier), it returns only non-sensitive fields. No auth required for preview.",
+        "Anti-pattern: do NOT check token validity in invites/preview — it's intentionally public so the logged-out invite landing page can show a preview before the user authenticates.",
+        "Self-invite prevention: compare `cases.initiatorUserId` with `user._id` in the redeem handler. Throw `ConvexError({ code: 'CONFLICT', ... })` if they match (non-solo mode)."
+      ]
+    },
+    {
+      "task_id": "T11",
+      "title": "Templates backend and seed data",
+      "summary": "Implement template management queries and mutations. Create convex/seed.ts with one admin user and three default templates.",
+      "acceptance_criteria": [
+        "templates/list: returns non-archived templates",
+        "admin/templates/create: creates template + initial version; writes to auditLog",
+        "admin/templates/publishNewVersion: inserts new immutable row; updates currentVersionId",
+        "admin/templates/archive: sets archivedAt; existing cases unaffected",
+        "All admin mutations throw FORBIDDEN for non-ADMIN users",
+        "convex/seed.ts: creates admin user and three templates; throws INTERNAL if outside dev"
+      ],
+      "depends_on": ["T4"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "File structure: `convex/templates.ts` for user-facing queries; `convex/admin/templates.ts` for admin mutations. Convex supports subdirectory function files — path becomes the function name prefix (`admin/templates/create`).",
+        "Immutability of templateVersions: enforced by absence of an update mutation. There is no `ctx.db.patch` call for templateVersions anywhere in the codebase. Document this with a comment in the file.",
+        "Seed file: `convex/seed.ts` should export a mutation (not action), callable via `npx convex run seed`. Guard with `if (process.env.NODE_ENV === 'production') throw new ConvexError(...)` or check `ctx.auth` is an admin.",
+        "AuditLog writes: always use a helper `writeAuditLog(ctx, { actorUserId, action, targetType, targetId, metadata })` defined in `convex/lib/auditLog.ts` to prevent forgetting fields.",
+        "Pinned case count query: use `ctx.db.query('cases').withIndex('by_template_version', ...)` — but since there's no such index, query all cases and filter client-side, OR add an index `by_template_version_id: ['templateVersionId']` to cases in T2 (recommended). Flag this dependency.",
+        "Anti-pattern: do NOT version templates by mutating the existing row — always insert a new `templateVersions` row. The `templateVersions` table name signals immutability."
+      ]
+    },
+    {
+      "task_id": "T12",
+      "title": "Private coaching backend (send message, AI response, mark complete, crisis detection, token tracking)",
+      "summary": "Implement private coaching queries, mutations, and AI action.",
+      "acceptance_criteria": [
+        "privateCoaching/myMessages: returns only caller's messages; FORBIDDEN if not party",
+        "privateCoaching/sendUserMessage: inserts user message, checks crisis keywords, schedules generateAIResponse",
+        "generateAIResponse: assembles PRIVATE_COACH prompt, applies compression, streams into privateMessages row",
+        "generateAIResponse: increments cases.tokenCount after completion",
+        "generateAIResponse: checks HARD_CAP before calling Claude",
+        "privateCoaching/markComplete: idempotent; schedules synthesis if both complete",
+        "Security test: User B querying User A's messages returns FORBIDDEN"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T7", "T8"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "File: `convex/privateCoaching.ts`. Export `myMessages` (query), `sendUserMessage` (mutation), `generateAIResponse` (action), `markComplete` (mutation).",
+        "Streaming pattern: (1) mutation inserts STREAMING row with empty content and returns the row ID; (2) action is scheduled via `ctx.scheduler.runAfter(0, internal.privateCoaching.generateAIResponse, args)`; (3) action calls `anthropic.messages.stream(...)` and in the `onText` callback accumulates tokens, flushing to DB via internal mutation every ~50ms (use `Date.now()` delta check); (4) on stream end, final patch sets status=COMPLETE.",
+        "Internal vs public functions: `generateAIResponse` must be an `internalAction` (from `convex/_generated/server`) — not callable from the client. Only `sendUserMessage` (mutation) triggers it via `ctx.scheduler`. This is the canonical Convex security pattern for AI actions.",
+        "Streaming flush mutation: define `_updateStreamingMessage` as an `internalMutation` in the same file. Actions cannot call ctx.db directly — they must go through internal mutations.",
+        "Token accumulation: after stream completes, call an internal mutation `_incrementTokenCount(ctx, { caseId, tokens: usage.input_tokens + usage.output_tokens })`. Do NOT try to do this inside the action directly.",
+        "Anti-pattern: do NOT call `generateAIResponse` directly from the client — it must be an `internalAction`. Exposing AI actions to the public API creates a SSRF/abuse vector.",
+        "CLAUDE_MOCK=true: in the action body, check `process.env.CLAUDE_MOCK === 'true'` and return a canned response with a simulated 200ms delay instead of calling Anthropic. This is the E2E test stub."
+      ]
+    },
+    {
+      "task_id": "T13",
+      "title": "AI synthesis backend (generate action, privacy filter, state transition)",
+      "summary": "Implement synthesis/generate action: reads both parties' private messages, assembles SYNTHESIS prompt, calls Claude Sonnet (non-streaming), validates JSON output, runs privacy filter, writes synthesisText, advances case to READY_FOR_JOINT.",
+      "acceptance_criteria": [
+        "synthesis/generate reads privateMessages for BOTH parties via by_case index (server-side only)",
+        "Calls claude-sonnet-4-5; validates { forInitiator, forInvitee } JSON",
+        "Runs filterResponse on each half; retries up to 2x on privacy filter failure",
+        "Privacy filter failure fallback: writes SYNTHESIS_FILTER_FAILED to auditLog; uses generic text",
+        "On success: writes synthesisText + synthesisGeneratedAt to both partyStates; sets case READY_FOR_JOINT",
+        "Increments tokenCount",
+        "Idempotent: if synthesisText already populated, returns without re-generating"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T12"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "File: `convex/synthesis.ts`. Export `generate` as an `internalAction` only — scheduled by `privateCoaching/markComplete`, never called directly by the client.",
+        "Non-streaming call: `await anthropic.messages.create({ model: 'claude-sonnet-4-5', max_tokens: 2048, messages, system })` returns the full response. Parse with `JSON.parse(response.content[0].text)` and validate shape with a simple type guard.",
+        "JSON validation: `function isValidSynthesisOutput(v: unknown): v is { forInitiator: string; forInvitee: string }` — check `typeof v === 'object'`, field presence, and string type. Do NOT use Zod inside Convex functions (adds bundle size with little benefit at this scale).",
+        "Atomic write: after successful synthesis, update BOTH partyStates rows and the case status in a single internal mutation. Convex mutations are transactions — either all writes succeed or none do.",
+        "Retry loop: implement as a for loop `for (let attempt = 0; attempt < 3; attempt++)`. On 3rd failure, write auditLog entry and use fallback string. Never use recursion for retry in Convex actions (stack depth concerns).",
+        "Anti-pattern: do NOT call the Anthropic API inside a Convex mutation — mutations cannot make HTTP calls. Synthesis generation MUST happen in an action."
+      ]
+    },
+    {
+      "task_id": "T14",
+      "title": "Joint chat entry mutation and Coach facilitation backend",
+      "summary": "Implement jointChat/enter, jointChat/messages, jointChat/mySynthesis, jointChat/sendUserMessage, and generateCoachResponse action with Haiku classification gate.",
+      "acceptance_criteria": [
+        "jointChat/enter: READY_FOR_JOINT→JOINT_ACTIVE, idempotent, schedules OPENING Coach message",
+        "jointChat/messages: FORBIDDEN if not party; CONFLICT if case in private-only state",
+        "jointChat/sendUserMessage: detects @-mention internally; schedules generateCoachResponse",
+        "generateCoachResponse OPENING: Sonnet opening message grounded in case",
+        "generateCoachResponse USER_MESSAGE: Haiku classifies; Coach only for non-NORMAL_EXCHANGE",
+        "generateCoachResponse MENTION: always generates Sonnet response",
+        "T5 filter on Coach Sonnet response; fallback on failure",
+        "Increments tokenCount; enforces HARD_CAP"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T7", "T13"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 105,
+      "stack_practices": [
+        "File: `convex/jointChat.ts`. Queries: `messages`, `mySynthesis`. Mutations: `enter`, `sendUserMessage`, `proposeClosure`, `confirmClosure`, `rejectClosure`, `unilateralClose`. Internal actions: `generateCoachResponse`.",
+        "Haiku classification: single non-streaming call with `max_tokens: 50` and a classification system prompt. Parse response text for one of `INFLAMMATORY | PROGRESS | QUESTION_TO_COACH | NORMAL_EXCHANGE`. If response doesn't match any label (malformed), treat as `NORMAL_EXCHANGE` (safe default).",
+        "TIMER trigger: check count of user messages since the last COACH jointMessage BEFORE scheduling — do this synchronously in `sendUserMessage` mutation by querying `jointMessages` with `by_case` index and filtering client-side. Convex queries within mutations are consistent reads.",
+        "Streaming for Coach messages: same pattern as T12. Insert STREAMING jointMessage row (with `authorType: 'COACH'`, `authorUserId: null`) → stream tokens → patch to COMPLETE.",
+        "isIntervention flag: set `isIntervention: true` on the jointMessage row when triggerType was `USER_MESSAGE` AND Haiku classified the message as `INFLAMMATORY`. Do NOT set it for MENTION or TIMER triggers.",
+        "Anti-pattern: do NOT hardcode @-mention as a client-side feature that passes `triggerType` from the client. The spec explicitly says @-mention detection happens inside the mutation body (`content.toLowerCase().includes('@coach')`). Clients cannot specify triggerType.",
+        "CLAUDE_MOCK guard: same `process.env.CLAUDE_MOCK` check as T12. For the Haiku classification stub, return `NORMAL_EXCHANGE` by default (so tests don't trigger Coach responses unless explicitly testing intervention)."
+      ]
+    },
+    {
+      "task_id": "T15",
+      "title": "Draft Coach backend (session lifecycle, AI conversation, readiness detection, send gate)",
+      "summary": "Implement draftCoach/session, startSession, sendMessage, generateResponse, sendFinalDraft, discardSession.",
+      "acceptance_criteria": [
+        "draftCoach/startSession: creates draftSessions row; throws CONFLICT if case not JOINT_ACTIVE",
+        "draftCoach/sendMessage: inserts draftMessages; schedules generateResponse",
+        "generateResponse: context = drafting user's joint chat history + own synthesisText ONLY",
+        "Readiness detection: produces { 'draft': '...' } JSON; writes to draftSessions.finalDraft",
+        "Non-readiness turns: stream conversational response into draftMessages",
+        "draftCoach/sendFinalDraft: reads finalDraft; calls jointChat/sendUserMessage internally",
+        "draftCoach/discardSession: sets status=DISCARDED",
+        "Draft Coach conversation invisible to other party"
+      ],
+      "depends_on": ["T4", "T6", "T14"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "File: `convex/draftCoach.ts`. Query: `session` (returns session + messages). Mutations: `startSession`, `sendMessage`, `sendFinalDraft`, `discardSession`. Internal action: `generateResponse`.",
+        "draftCoach/sendFinalDraft calling jointChat/sendUserMessage: use `ctx.runMutation(internal.jointChat.sendUserMessage, { caseId, content: session.finalDraft })`. This is an internal cross-function call — safe within the same Convex deployment.",
+        "Readiness detection: the action checks the incoming user message text against the readiness phrase list BEFORE calling Claude for a full response. If readiness detected, call Claude once with a 'produce the draft JSON' instruction (max_tokens ~300). If not, call Claude for a conversational response (max_tokens ~400, streaming).",
+        "Draft JSON validation: parse `JSON.parse(response)` and check for `{ draft: string }` shape. If parsing fails, treat as a non-readiness conversational response and stream it as normal.",
+        "Privacy enforcement: the action must NOT read `partyStates.synthesisText` for the other party. Read ONLY the caller's partyStates row by `by_case_and_user` index. Explicitly document this constraint in a code comment.",
+        "Anti-pattern: do NOT use `ctx.db.query('jointMessages').collect()` to build context — use `.withIndex('by_case')` with a `.order('asc')` and limit to the most recent N messages (e.g., 50) to keep context manageable before compression kicks in."
+      ]
+    },
+    {
+      "task_id": "T16",
+      "title": "Case closure backend (propose, confirm, reject, unilateral close, abandoned cron)",
+      "summary": "Implement closure mutations and convex/crons.ts daily job for CLOSED_ABANDONED detection.",
+      "acceptance_criteria": [
+        "jointChat/proposeClosure: sets closureProposed; writes to auditLog",
+        "jointChat/confirmClosure: atomically closes case as CLOSED_RESOLVED; writes to auditLog",
+        "jointChat/rejectClosure: clears proposal; writes to auditLog",
+        "jointChat/unilateralClose: sets CLOSED_UNRESOLVED; writes to auditLog",
+        "Closed cases reject further mutations with CONFLICT",
+        "Cron: daily scan for JOINT_ACTIVE cases with 30d inactivity → CLOSED_ABANDONED"
+      ],
+      "depends_on": ["T4", "T8", "T14"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Cron setup: create `convex/crons.ts` exporting a `cronJobs` object using `cronJobs()` from `convex/server`. Register: `crons.daily('abandon-stale-cases', { hourUTC: 2, minuteUTC: 0 }, internal.cases.abandonStaleCases)`. This is the ONLY supported cron API in Convex — do NOT use `setInterval` or external cron services.",
+        "Cron action body: query `jointMessages` by case, grouped by caseId, find max `createdAt` per case. Cases with max `createdAt` < `Date.now() - 30 * 24 * 60 * 60 * 1000` get patched to `CLOSED_ABANDONED`. Process in batches if needed (Convex actions have a 10-minute timeout).",
+        "Closure confirmation atomicity: `jointChat/confirmClosure` must read both partyStates rows, verify `closureProposed=true` on the other party, then patch the case status + closedAt + closureSummary in a single mutation. If the other party's row is NOT found as proposed, throw CONFLICT.",
+        "System message on rejection: optionally insert a jointMessage with `authorType: 'COACH'` and content 'The closure proposal was rejected. Continue your conversation.' — this is a regular DB insert, not an AI call.",
+        "Anti-pattern: do NOT implement a polling fallback for the cron. If the cron misses a run (Convex downtime), it will run at the next scheduled time. 30-day abandonment is not time-critical."
+      ]
+    },
+    {
+      "task_id": "T17",
+      "title": "AI cost tracking hardening: budget enforcement, soft-cap degradation, Anthropic error handling",
+      "summary": "Cross-cutting hardening pass: soft-cap degradation, hard-cap enforcement, Anthropic error handling across all AI actions.",
+      "acceptance_criteria": [
+        "Soft cap: generateCoachResponse posts boilerplate instead of Sonnet at $2 threshold",
+        "Hard cap: all four AI actions return early at $10; post system message; set COST_LIMITED",
+        "429: retry once after 2000ms; second 429 → RATE_LIMITED error",
+        "Network timeout >30s: message status=ERROR; throw AI_ERROR",
+        "401/403: message status=ERROR; write API_KEY_ERROR to auditLog; throw AI_ERROR",
+        "Content filter: message status=ERROR with rephrase suggestion",
+        "Integration tests: seed cases at cap thresholds; verify enforcement"
+      ],
+      "depends_on": ["T12", "T13", "T14", "T15"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Cap check: at the top of each AI action, compute `estimatedCostUsd = (case.tokenCount ?? 0) * avgPricePerToken` using values from `convex/lib/pricing.ts`. Check against `SOFT_CAP_USD` and `HARD_CAP_USD` before ANY Anthropic call.",
+        "COST_LIMITED state transition: when hard cap is hit, call an internal mutation that sets `cases.status = 'COST_LIMITED'` and inserts a system jointMessage. This internal mutation can be shared across all four AI actions.",
+        "Anthropic SDK error handling: wrap all `anthropic.messages.create()` / `stream()` calls in try/catch. The SDK throws `APIError` with a `.status` property. Check `error.status === 429` for rate limit, `401/403` for auth errors.",
+        "Retry implementation: `await new Promise(r => setTimeout(r, 2000))` then retry once. Do NOT use exponential backoff for the first retry — the spec says a fixed 2s delay.",
+        "Timeout: wrap the Anthropic call with `Promise.race([apiCall, new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 30000))])`.",
+        "Anti-pattern: do NOT let AI errors bubble up as unhandled Convex action failures — unhandled action failures show as generic 500 errors in the client. Always catch, set message status=ERROR, and throw a typed ConvexError.",
+        "For convex-test integration tests: use `convex-test` package to run against the real Convex runtime in-process with seeded data. Do NOT mock `ctx.db` — test against real document reads/writes."
+      ]
+    },
+    {
+      "task_id": "T18",
+      "title": "Design tokens and global styles",
+      "summary": "Implement all CSS custom properties from design doc §2.1, Tailwind config mapping, Inter + JetBrains Mono fonts, dark mode via prefers-color-scheme, shadow levels, and motion tokens.",
+      "acceptance_criteria": [
+        "All 16 color tokens defined as CSS custom properties in src/index.css",
+        "Dark mode via @media (prefers-color-scheme: dark)",
+        "Tailwind config maps each token to a semantic utility class",
+        "Inter variable font loaded (400/500/600); JetBrains Mono loaded",
+        "Four shadow utilities matching design doc values",
+        "@media (prefers-reduced-motion: reduce): all transitions 0ms, animations paused"
+      ],
+      "depends_on": ["T1"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "CSS custom properties go in `src/index.css` under `:root { --canvas: ...; }` and `@media (prefers-color-scheme: dark) { :root { --canvas: ...; } }`. Do NOT put tokens in JavaScript.",
+        "Tailwind config extension: in `tailwind.config.js`, under `theme.extend.colors`, map tokens: `canvas: 'var(--canvas)'`, etc. This enables `bg-canvas` class in JSX.",
+        "Font loading: use `@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap')` in `src/index.css`. Alternatively, self-host via `@fontsource/inter` and `@fontsource/jetbrains-mono` npm packages (better performance, no CORS).",
+        "shadcn/ui uses CSS variables internally — the variable names in `src/index.css` must match the shadcn convention (`--background`, `--foreground`, `--primary`, etc.) to keep shadcn components styled correctly. Map your semantic tokens TO the shadcn variable names.",
+        "Tailwind v3 dark mode: set `darkMode: 'media'` in tailwind.config.js (NOT `'class'`). This activates dark mode based on `prefers-color-scheme: dark` media query, matching the CSS approach.",
+        "Anti-pattern: do NOT define color values in both `tailwind.config.js` and `src/index.css` separately — one source of truth. CSS custom properties are the source; Tailwind config references them via `var(--token-name)`."
+      ]
+    },
+    {
+      "task_id": "T19a",
+      "title": "Core chat UI components (ChatWindow, MessageBubble, StreamingIndicator, MessageInput)",
+      "summary": "Build foundational chat primitives used by all three chat UIs.",
+      "acceptance_criteria": [
+        "ChatWindow auto-scrolls to latest unless user has scrolled up >100px",
+        "MessageBubble USER: right-aligned, bg-surface; COACH/AI: left-aligned, accent-subtle, Sparkles icon",
+        "MessageBubble STREAMING: content + blinking cursor; no copy button",
+        "MessageBubble COMPLETE: copy button + timestamp on hover",
+        "MessageBubble ERROR: warning-tint + Retry button",
+        "StreamingIndicator: 500ms blink; aria-hidden",
+        "MessageInput: Enter sends; Shift+Enter newline; disabled while STREAMING",
+        "No accessibility defects: textarea has visible label or aria-label"
+      ],
+      "depends_on": ["T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "Component files: `src/components/chat/ChatWindow.tsx`, `MessageBubble.tsx`, `MessageInput.tsx`, `StreamingIndicator.tsx`. Use named exports (not default exports) for all components.",
+        "Auto-scroll: use `useRef<HTMLDivElement>` on the scroll container and a `useEffect` that calls `ref.current.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' })` when messages change, conditional on scroll position check (`ref.current.scrollTop + ref.current.clientHeight >= ref.current.scrollHeight - 100`).",
+        "shadcn/ui primitives to use: `Button` from `@/components/ui/button`; Lucide icons (`Sparkles`, `Copy`, `AlertTriangle`) from `lucide-react`. Do NOT install a separate icon library.",
+        "Copy to clipboard: `navigator.clipboard.writeText(text)` — the Web Clipboard API. Show a brief checkmark state (100ms delay via `useState`) on success.",
+        "StreamingIndicator animation: use `@keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: 0 } }` in CSS, applied via a Tailwind `animate-[blink_500ms_step-end_infinite]` custom animation or defined in `tailwind.config.js` under `theme.extend.animation`. Must be wrapped in `@media (prefers-reduced-motion: no-preference)` — outside that query, no animation.",
+        "MessageInput keyboard: `onKeyDown` handler checks `e.key === 'Enter' && !e.shiftKey` → call `onSend`, `e.preventDefault()`. If `e.shiftKey`, do nothing (browser default inserts newline in textarea).",
+        "Anti-pattern: do NOT use `dangerouslySetInnerHTML` for message content rendering. Use a markdown renderer (`react-markdown` with `rehype-sanitize` plugin) to prevent XSS from AI-generated content."
+      ]
+    },
+    {
+      "task_id": "T19b",
+      "title": "Secondary UI components (PrivacyBanner, PartyAvatar, CoachIntervention, PhaseHeader, StatusPill, CrisisCard, skeletons)",
+      "summary": "Build remaining shared components.",
+      "acceptance_criteria": [
+        "PrivacyBanner: lock icon + Dialog explaining privacy; screen reader text",
+        "PartyAvatar: role-colored circles; shows first initial",
+        "CoachIntervention: coach-accent border, ⟡ glyph, accent-subtle background",
+        "PhaseHeader: current phase label + Back to Dashboard link",
+        "StatusPill: ●○◐◼ with correct color mapping",
+        "CrisisCard: appears on crisis keywords; dismissable; links to crisis resources",
+        "Dashboard skeleton: 3 case row skeletons",
+        "Case detail skeleton: phase-appropriate layout"
+      ],
+      "depends_on": ["T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "shadcn/ui Dialog: `import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'`. The Dialog component handles focus trapping and Esc-close natively — do NOT reimplement these behaviors.",
+        "shadcn/ui Sheet: use for the 'My Guidance' panel and mobile Draft Coach. `import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'`.",
+        "Skeleton components: use shadcn/ui `Skeleton` primitive (`import { Skeleton } from '@/components/ui/skeleton'`). Apply a delay before showing: `const [showSkeleton, setShowSkeleton] = useState(false); useEffect(() => { const t = setTimeout(() => setShowSkeleton(true), 300); return () => clearTimeout(t); }, [])`. This prevents skeleton flash for fast loads.",
+        "PartyAvatar: render as `<div className='rounded-full w-8 h-8 bg-[#BFDBFE] flex items-center justify-center text-sm font-medium'>{initial}</div>`. Use inline style for dynamic colors if the three colors are not in the Tailwind safelist.",
+        "CrisisCard: should be a standalone component that accepts `isVisible` and `onDismiss` props. Store dismissed state in component-local `useState`. Re-appear logic (new crisis message) is handled by the parent resetting a key prop.",
+        "Anti-pattern: do NOT use raw `<dialog>` HTML elements. Use shadcn/ui Dialog which is built on Radix UI — it handles accessibility (ARIA roles, focus management, scroll locking) automatically.",
+        "Screen reader text: use the `sr-only` Tailwind class for text that should only be read by screen readers but not shown visually: `<span className='sr-only'>Private conversation. Only you and the AI coach see this.</span>`."
+      ]
+    },
+    {
+      "task_id": "T20",
+      "title": "Landing page and login/register page",
+      "summary": "Implement / (hero, explainer, footer) and /login (magic link, Google OAuth, states). Wire Convex Auth signIn methods.",
+      "acceptance_criteria": [
+        "/ displays tagline, 3-step explainer, privacy section, footer with links",
+        "/ has 'Start a case' CTA routing to /login (logged out) or /dashboard (logged in)",
+        "/login: centered ~400px card; email + magic link button; Google OAuth button",
+        "Submitting email triggers magic link; form replaced by confirmation state",
+        "Error state inline (not a toast)",
+        "Fine print links to /terms and /privacy",
+        "After auth: redirect to /dashboard"
+      ],
+      "depends_on": ["T3", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Magic link submit: `const { signIn } = useAuthActions(); await signIn('resend', { email })`. This is the Convex Auth hook — do NOT use fetch/axios to call a custom endpoint.",
+        "Google OAuth: `await signIn('google')`. This opens the OAuth popup/redirect. No manual OAuth flow needed.",
+        "Auth redirect: use React Router's `useNavigate` hook. After successful sign-in, navigate to `/dashboard`. If `useConvexAuth().isAuthenticated` is true when loading `/login`, immediately redirect.",
+        "Protected route pattern: create a `<RequireAuth>` wrapper component that reads `useConvexAuth().isAuthenticated`. If false and loading is done, redirect to `/login?from=${location.pathname}`.",
+        "Error display: catch errors from `signIn` calls in try/catch and store in `useState<string | null>`. Render inline below the triggering input: `{error && <p role='alert' className='text-danger text-sm mt-1'>{error}</p>}`.",
+        "Anti-pattern: do NOT use `<form action=...>` or `<form method='POST'>` — this is a SPA. Handle form submission via `onSubmit={e => { e.preventDefault(); ... }}` and React state.",
+        "The '/' route redirect: use `useConvexAuth` to check authentication and React Router's `<Navigate>` component — do NOT use `window.location.href`."
+      ]
+    },
+    {
+      "task_id": "T21",
+      "title": "Invite acceptance page (/invite/:token)",
+      "summary": "Implement invite acceptance per design doc §4.3. Handles logged-out, logged-in unredeemed, consumed, and non-existent token states.",
+      "acceptance_criteria": [
+        "Logged-out: explanation card + 'Sign in to continue'; token preserved through auth",
+        "Logged-in unredeemed: shows initiator name, mainTopic (labeled), category; no private content",
+        "Accept calls invites/redeem; routes to /cases/:id/private",
+        "Decline → CLOSED_ABANDONED → redirect with toast",
+        "CONSUMED token: 'This invite has already been used.'",
+        "Non-existent token: NOT_FOUND error message"
+      ],
+      "depends_on": ["T9", "T10", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Route param: `const { token } = useParams<{ token: string }>()` in React Router v6. The token is a URL segment, NOT a query param.",
+        "Token persistence through auth: store the token in `sessionStorage` (not localStorage) before redirecting to /login: `sessionStorage.setItem('pendingInviteToken', token)`. After auth, check sessionStorage and redirect back to `/invite/${token}`.",
+        "Preview query: `const preview = useQuery(api.invites.preview, { token: token! })`. `useQuery` returns `undefined` while loading, `null` if not found, or the data object. Handle all three states.",
+        "useMutation hook: `const redeem = useMutation(api.invites.redeem)`. Call `await redeem({ token })` in the Accept handler. Catch ConvexError by type: `import { ConvexError } from 'convex/values'`.",
+        "Toast: use shadcn/ui `toast` from `@/components/ui/use-toast`. Do NOT use a separate toast library.",
+        "Anti-pattern: do NOT call `invites/redeem` on page load — only call it when the user explicitly clicks Accept. The preview query is safe to call automatically; the mutation is not."
+      ]
+    },
+    {
+      "task_id": "T22",
+      "title": "Dashboard page (/dashboard) with unilateral-close notification indicator",
+      "summary": "Implement /dashboard: Active/Closed sections, case rows with status glyphs, Nudge button, empty state, [+ New Case] button, and notification indicator for unilateral closes.",
+      "acceptance_criteria": [
+        "Fetches cases/list; renders skeleton while loading",
+        "Active/Closed sections with correct status glyph mapping",
+        "Unilateral close indicator: ◼ with red dot + 'Jordan closed this case.' for CLOSED_UNRESOLVED non-actor",
+        "Nudge button on DRAFT_PRIVATE_COACHING cases >7 days old without invitee",
+        "Empty state with link to /cases/new",
+        "Case rows keyboard-navigable; Enter activates"
+      ],
+      "depends_on": ["T9", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Data fetching: `const cases = useQuery(api.cases.list)`. This is a reactive query — the dashboard automatically updates when any case changes state (e.g., other party marks PC complete).",
+        "No additional polling needed: Convex reactive queries replace `setInterval` + fetch patterns. The UI will update within ~200ms of any server-side state change.",
+        "Closed section default collapsed: use `useState<boolean>(false)` for expanded state. Auto-expand when a case transitions to CLOSED_*: compare prev `cases` (from a `useRef`) with current in a `useEffect`.",
+        "React Router navigation: case row click → `navigate('/cases/${caseId}')`. Make the entire row keyboard-clickable: add `role='button' tabIndex={0} onKeyDown={e => e.key === 'Enter' && navigate(...)} onClick={() => navigate(...)}` to the row div.",
+        "Counterparty name logic: `case.inviteeUserId ? invitee.displayName : case.inviteeName ?? 'Invited Party'`. The inviteeName field handles the pre-join state.",
+        "Anti-pattern: do NOT derive status glyph logic in JSX directly — extract a `getStatusGlyph(caseStatus, isMyTurn): { glyph: string; color: string }` helper function and unit-test it separately."
+      ]
+    },
+    {
+      "task_id": "T23",
+      "title": "Case creation form and post-create invite sharing screen",
+      "summary": "Implement /cases/new (5-step progressive form) and /cases/:id/invite (share screen).",
+      "acceptance_criteria": [
+        "Five steps with Back/Next navigation; Submit on step 5",
+        "Step 1: category radio cards for all 5 categories",
+        "Step 2: mainTopic with 140-char counter, labeled 'visible to other person'",
+        "Steps 3+4: lock icon + tooltip on private fields",
+        "Step 5: other party name; Advanced disclosure with solo mode",
+        "Crisis language prominently displayed",
+        "Submit calls cases/create; routes to /cases/:id/invite",
+        "/cases/:id/invite: copyable invite URL; email mailto pre-fill; 'Start coaching now' link"
+      ],
+      "depends_on": ["T9", "T11", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Multi-step form state: use `useState` for the current step index and a single state object for all form data. Do NOT use separate `useState` per field — one `FormData` object with `setFormData(prev => ({ ...prev, field: value }))` pattern.",
+        "Character counter: `{mainTopic.length}/140` in JSX. Apply warning styles (`text-danger`) when `mainTopic.length > 140`. Do NOT use `maxLength` HTML attribute — allow over-limit with visual warning per spec.",
+        "Radio cards for category: use Tailwind to style `<input type='radio'>` as cards. OR use shadcn/ui `RadioGroup` + `RadioGroupItem`. Do NOT use a `<select>` dropdown.",
+        "shadcn/ui Tooltip: `import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'`. Wrap the page in `<TooltipProvider>` once at the route level.",
+        "shadcn/ui Collapsible for 'Advanced': `import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'`.",
+        "Clipboard API for invite URL: same `navigator.clipboard.writeText(inviteUrl)` pattern as MessageBubble copy.",
+        "mailto link: `href={\\`mailto:?subject=...&body=...\\`}` where body is `encodeURIComponent(templateText)`. Assemble from design doc §4.6 template text.",
+        "Anti-pattern: do NOT fetch `templates/list` on every step render — fetch once on component mount and memoize with `useRef` or component state. Template list is static for the duration of the form session."
+      ]
+    },
+    {
+      "task_id": "T24",
+      "title": "Case detail router and phase-appropriate view scaffold",
+      "summary": "Implement CaseDetail.tsx at /cases/:caseId routing to phase-appropriate sub-routes by case.status. Guard against phase-skipping.",
+      "acceptance_criteria": [
+        "GET /cases/:caseId redirects to correct sub-route by case.status",
+        "Phase-skip redirects with toasts",
+        "PhaseHeader on all sub-routes",
+        "Loading: skeleton while cases/get in flight",
+        "caseId not found / not party: friendly error page"
+      ],
+      "depends_on": ["T9", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "React Router v6 nested routes: `CaseDetail.tsx` is a layout route that renders `<Outlet />`. Sub-routes (`/private`, `/joint`, `/closed`) are children in the route definition.",
+        "Phase routing logic: in `CaseDetail.tsx`, after `cases/get` resolves, use a `useEffect` (or render-time check) to call `navigate` to the appropriate sub-route. Use `replace: true` to avoid polluting browser history with redirect entries.",
+        "useQuery loading state: Convex `useQuery` returns `undefined` while loading. Pattern: `if (caseData === undefined) return <CaseDetailSkeleton />`. `null` means not found.",
+        "Error boundary: wrap CaseDetail in a React error boundary component that catches Convex errors (ConvexError thrown in query handlers) and renders a friendly error page.",
+        "PhaseHeader as a shared layout element: render it in CaseDetail layout, above `<Outlet />`, so all sub-routes inherit it without re-implementing it.",
+        "Anti-pattern: do NOT re-fetch `cases/get` in each sub-route component — use React Router's `useOutletContext` to pass the already-fetched case data from CaseDetail to child routes."
+      ]
+    },
+    {
+      "task_id": "T25",
+      "title": "Private coaching view (/cases/:id/private) with crisis card integration",
+      "summary": "Implement PrivateCoachingView.tsx: full-height chat, PrivacyBanner, mark-complete footer CTA + confirmation modal, CrisisCard integration.",
+      "acceptance_criteria": [
+        "Loads privateCoaching/myMessages reactively",
+        "PrivacyBanner always visible",
+        "Streaming/Complete/Error message states",
+        "Send disabled while STREAMING",
+        "Mark-complete footer CTA + confirmation modal",
+        "Routes to /ready if case advances to READY_FOR_JOINT",
+        "CrisisCard appears on crisis keywords; dismissable; re-appears on new crisis message"
+      ],
+      "depends_on": ["T12", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Reactive streaming: `const messages = useQuery(api.privateCoaching.myMessages, { caseId })`. As the AI action patches the streaming row, `useQuery` auto-delivers the update — no manual polling, no WebSocket code.",
+        "isStreaming detection: `const isStreaming = messages?.some(m => m.status === 'STREAMING') ?? false`. Pass to `<MessageInput isStreaming={isStreaming} />`.",
+        "Route transition on case advance: `const caseData = useOutletContext<{ case: Case }>()`. In a `useEffect`, watch `caseData.case.status` — when it becomes `READY_FOR_JOINT`, call `navigate('../ready', { replace: true })`.",
+        "Crisis keyword detection: client-side check immediately on input change (before sendUserMessage). Crisis keywords: `['abuse', 'suicidal', 'emergency', 'immediate danger', 'restraining order']`. `const hasCrisis = keywords.some(kw => inputText.toLowerCase().includes(kw))`.",
+        "CrisisCard key prop: `<CrisisCard key={lastUserMessageId} isVisible={hasCrisisKeyword} onDismiss={() => setDismissed(true)} />`. Changing the key prop when a new user message is sent resets the dismissed state.",
+        "Confirmation modal: shadcn/ui `AlertDialog` for mark-complete confirmation: `import { AlertDialog, AlertDialogAction, AlertDialogCancel, ... } from '@/components/ui/alert-dialog'`.",
+        "Anti-pattern: do NOT debounce the crisis keyword check — it should be synchronous on every input change for immediate CrisisCard display."
+      ]
+    },
+    {
+      "task_id": "T26",
+      "title": "Ready-for-joint view (/cases/:id/ready, synthesis display, enter CTA)",
+      "summary": "Implement ReadyForJointView.tsx: synthesis card, 'Enter Joint Session' CTA calling jointChat/enter.",
+      "acceptance_criteria": [
+        "Fetches jointChat/mySynthesis; skeleton while loading",
+        "Synthesis card with privacy label",
+        "Synthesis rendered as markdown",
+        "'Enter Joint Session →' primary button",
+        "Calls jointChat/enter; routes to /joint on success",
+        "Handles case already JOINT_ACTIVE (other party entered)"
+      ],
+      "depends_on": ["T13", "T14", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45,
+      "stack_practices": [
+        "Markdown rendering: use `react-markdown` package. `<ReactMarkdown className='prose prose-sm max-w-none'>{synthesisText}</ReactMarkdown>`. Install `@tailwindcss/typography` plugin for `prose` classes.",
+        "Idempotent enter: the `jointChat/enter` mutation returns successfully even if case is already `JOINT_ACTIVE`. No special client-side handling needed — `navigate('../joint')` on any success.",
+        "Skeleton: `const synthesis = useQuery(api.jointChat.mySynthesis, { caseId })`. When `synthesis === undefined`, show skeleton. When `synthesis === null`, show a loading/pending state ('Synthesis is being generated...').",
+        "Anti-pattern: do NOT render raw markdown as HTML via `dangerouslySetInnerHTML`. Always use `react-markdown` with the `rehype-sanitize` plugin to prevent XSS from server-generated content."
+      ]
+    },
+    {
+      "task_id": "T27",
+      "title": "Joint chat view (/cases/:id/joint) with COST_LIMITED state handling",
+      "summary": "Implement JointChatView.tsx: real-time reactive messages, party avatars, Coach messages, @-mention, closure banner, 'My guidance' Sheet, COST_LIMITED and read-only states.",
+      "acceptance_criteria": [
+        "Reactive messages auto-update both clients",
+        "Party avatar colors correct; ⟡ glyph + coach-accent on Coach messages",
+        "isIntervention messages: warning-tint background",
+        "'Coach is thinking...' indicator for STREAMING Coach row",
+        "@-mention: sendUserMessage triggered normally (backend detects @Coach)",
+        "Closure proposal banner with Confirm/Reject buttons",
+        "'My guidance' Sheet with synthesisText",
+        "COST_LIMITED: banner + hidden Draft Coach + manual messages still work",
+        "CLOSED_*: input and Draft Coach hidden; 'case is closed' banner"
+      ],
+      "depends_on": ["T14", "T17", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "Real-time: `const messages = useQuery(api.jointChat.messages, { caseId })`. BOTH clients share the same reactive subscription — Convex pushes updates to all subscribers when any jointMessage row changes.",
+        "Party identification: `const caseData = useOutletContext<{ case: Case; currentUserId: Id<'users'> }>()`. A message is 'mine' if `msg.authorUserId === currentUserId`.",
+        "Mobile sheet for Draft Coach: detect viewport via `useMediaQuery('(max-width: 768px)')` hook (implement with `window.matchMedia` and a `useEffect` listener, or use a CSS media query + conditional classNames).",
+        "Closure proposal banner: query `cases/partyStates` and check `other.closureProposed === true`. Render the banner above the input when true.",
+        "'My guidance' Sheet: `useQuery(api.jointChat.mySynthesis, { caseId })` — reuse the same query as ReadyForJointView. Render in a `<Sheet>` triggered by a button in the top nav area.",
+        "COST_LIMITED state: `caseData.case.status === 'COST_LIMITED'` → show banner, hide `<DraftCoachPanel>`, but keep `<MessageInput>` enabled (parties can still message each other).",
+        "Anti-pattern: do NOT have the client detect @mentions and set a special flag in `sendUserMessage` args. The mutation body handles @-mention detection. The client just calls `sendUserMessage({ caseId, content })` normally."
+      ]
+    },
+    {
+      "task_id": "T28",
+      "title": "Draft Coach panel (side panel/bottom sheet, draft ready card, send gate)",
+      "summary": "Implement DraftCoachPanel.tsx: 420px right panel on desktop, full-screen Sheet on mobile. Draft conversation, 'Draft it for me' button, DraftReadyCard with Send/Edit/Refine/Discard actions.",
+      "acceptance_criteria": [
+        "Opens on '✨ Draft with Coach' click, calls draftCoach/startSession",
+        "Private label in panel",
+        "ChatWindow connected to draftCoach/sendMessage",
+        "'Draft it for me' posts canonical message",
+        "DraftReadyCard when finalDraft populated: Send/Edit/Refine/Discard",
+        "'Send this message': calls sendFinalDraft; panel closes; message in joint chat",
+        "'Edit before sending': transfers to main input; does NOT auto-send",
+        "Esc closes panel; focus returns to joint-chat input",
+        "Focus moves to draft textarea when panel opens"
+      ],
+      "depends_on": ["T15", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Panel layout: on desktop, use absolute/fixed positioning (420px right-side panel within the JointChatView layout). On mobile (<768px), use shadcn/ui `Sheet` with `side='bottom'` and `className='h-screen'`.",
+        "Focus management: `useEffect(() => { if (isOpen) textareaRef.current?.focus(); }, [isOpen])`. Use `useRef<HTMLTextAreaElement>` for the textarea reference.",
+        "Esc close + focus return: `onKeyDown` on the panel container `if (e.key === 'Escape') { closePanel(); jointChatInputRef.current?.focus(); }`. The `jointChatInputRef` is passed as a prop from JointChatView.",
+        "'Edit before sending': set the main joint chat input value via a state setter prop passed from JointChatView: `onTransferDraft(finalDraft)`. This is a controlled component pattern — the parent holds the input state.",
+        "Reactive draft session: `const session = useQuery(api.draftCoach.session, { caseId })`. The `finalDraft` field appears on the session when the AI completes readiness detection. React to `session?.finalDraft !== null` to show `DraftReadyCard`.",
+        "Anti-pattern: do NOT auto-send when the AI produces a finalDraft. The send gate is an explicit user action. The DraftReadyCard must render with Send as a button requiring an explicit click.",
+        "Panel z-index: ensure the panel appears above the joint chat message list but below modals (z-index ordering: messages < panel < Sheet/modals < Dialog)."
+      ]
+    },
+    {
+      "task_id": "T29",
+      "title": "Closure flow UI and closed case view (/cases/:id/closed)",
+      "summary": "Implement closure modal (Resolved/Not resolved/Take a break), rejection flow, and /cases/:id/closed read-only archive view with tabs.",
+      "acceptance_criteria": [
+        "Closure modal: three options with correct mutations",
+        "Resolved: summary textarea required (min 10 chars); calls proposeClosure",
+        "Not resolved: warning styling; calls unilateralClose",
+        "Take a break: closes modal, no state change",
+        "Rejection: rejectClosure; clears banner",
+        "Confirmation: confirmClosure; both parties route to /closed (reactive)",
+        "/cases/:id/closed: outcome label, closure summary, read-only tabs",
+        "Input and Draft Coach absent in closed view"
+      ],
+      "depends_on": ["T16", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75,
+      "stack_practices": [
+        "Closure modal: shadcn/ui `Dialog` with custom content (three option buttons). Open via `useState<boolean>` triggered by the '[Close]' button in top nav.",
+        "Tab component for /closed view: shadcn/ui `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` from `@/components/ui/tabs`. Default tab: 'Joint Chat'.",
+        "Reactive route update to /closed: when `caseData.case.status` becomes any `CLOSED_*` value (detected in JointChatView's `useEffect`), call `navigate('../closed', { replace: true })`. Both parties' UIs update within ~200ms since they share the same reactive query.",
+        "Closed view read-only: render `<ChatWindow messages={messages} readOnly={true} />`. Add a `readOnly` prop to ChatWindow that hides `<MessageInput>` and the Draft Coach button.",
+        "Summary textarea validation: `const isValid = closureSummary.trim().length >= 10`. Disable the 'Propose Resolution' button when `!isValid`. Show character count: `{closureSummary.length} characters (minimum 10)`.",
+        "Anti-pattern: do NOT render the other party's private coaching tab in the closed view. The tab list is: 'Joint Chat', 'My Private Coaching', 'My Guidance'. Accessing `/cases/:id/private` from the closed view for another user's data must still return FORBIDDEN from the Convex query."
+      ]
+    },
+    {
+      "task_id": "T30",
+      "title": "Solo mode UI (PartyToggle, useSoloActingParty hook, all views integrated)",
+      "summary": "Implement PartyToggle and useSoloActingParty hook with URL param state. Integrate into all data queries.",
+      "acceptance_criteria": [
+        "PartyToggle: segmented control; only rendered when case.isSolo=true",
+        "Toggle state in ?as=initiator|invitee URL param; preserved on refresh",
+        "useSoloActingParty(): returns role for selected party",
+        "All queries respect toggle for solo mode",
+        "Both synthesisTexts differ in solo mode",
+        "PartyToggle absent when case.isSolo=false",
+        "Solo cases show 'Solo test' badge on dashboard and PhaseHeader"
+      ],
+      "depends_on": ["T9", "T22", "T25", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "URL search param: `const [searchParams, setSearchParams] = useSearchParams()` from React Router v6. `const actingAs = searchParams.get('as') ?? 'initiator'`. Toggle: `setSearchParams({ as: newParty })`. This preserves the value across browser refresh.",
+        "useSoloActingParty hook: `export function useSoloActingParty(isSolo: boolean): 'INITIATOR' | 'INVITEE'` — reads URL param, returns role string. Use across PrivateCoachingView, JointChatView, ReadyForJointView.",
+        "Query integration: Convex queries that filter by role need the acting party's role passed as an argument. For `privateCoaching/myMessages`, the backend already filters by `userId`. For solo mode, the backend must also accept an optional `role` filter to distinguish same-userId but different-role message sets. Update the query args accordingly.",
+        "PartyToggle component: render as two buttons styled as a segmented control. Use `coach-accent` color (CSS custom property) for the active state. Visible ONLY when `case.isSolo === true`.",
+        "Anti-pattern: do NOT store the solo party selection in `localStorage` or `useState` — use the URL param so the selection survives refresh and can be bookmarked/shared for debugging.",
+        "Badge: a small `<span className='text-xs bg-coach-accent/20 text-coach-accent px-1.5 py-0.5 rounded'>Solo</span>` component. Render inline in the dashboard case row and PhaseHeader when `case.isSolo`."
+      ]
+    },
+    {
+      "task_id": "T31",
+      "title": "Profile page and logout",
+      "summary": "Implement /profile: display name edit, sign-out.",
+      "acceptance_criteria": [
+        "/profile: read-only email, editable displayName",
+        "Saving calls users/updateDisplayName; success toast",
+        "'Sign out' calls Convex Auth signOut; redirects to /",
+        "Logged-out access to /profile redirects to /login",
+        "Profile accessible from top nav"
+      ],
+      "depends_on": ["T3", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "Sign out: `const { signOut } = useAuthActions(); await signOut()` — clears client session. Then `navigate('/')`. This is the Convex Auth hook — do NOT call any custom endpoint.",
+        "Display name mutation: `const updateDisplayName = useMutation(api.users.updateDisplayName)`. Optimistic UI: update local state immediately, revert on error.",
+        "Current user query: `const currentUser = useQuery(api.users.getCurrentUser)` — define a simple query that calls `requireAuth(ctx)` and returns the users row.",
+        "Profile route guard: use the `<RequireAuth>` wrapper from T20.",
+        "Anti-pattern: do NOT expose the users table fields that shouldn't be editable (email, role, createdAt) as form fields. Only render `displayName` as an editable input."
+      ]
+    },
+    {
+      "task_id": "T32",
+      "title": "Admin template UI (list, edit with version history, audit log)",
+      "summary": "Implement admin-only routes: /admin/templates, /admin/templates/:id, /admin/audit.",
+      "acceptance_criteria": [
+        "Non-admins get 403 page (server-side role check)",
+        "TemplatesListPage: table with relevant columns; [+ New Template] button",
+        "Pinned Cases Count computed via query",
+        "TemplateEditPage: two-pane form + version history; 'Publish New Version' button",
+        "Version comparison modal: side-by-side text view",
+        "'Archive Template': confirmation with pinned case count warning",
+        "AuditLogPage: filterable table; row click opens Drawer with metadata JSON",
+        "Audit log read-only"
+      ],
+      "depends_on": ["T11", "T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90,
+      "stack_practices": [
+        "Admin route guard: create `<RequireAdmin>` wrapper that reads `currentUser.role === 'ADMIN'`. Render a 403 page (`<Forbidden403Page />`) when not admin. The server-side check is in the Convex queries/mutations — the client-side check is for UX only.",
+        "Table component: shadcn/ui `Table`, `TableHeader`, `TableRow`, `TableHead`, `TableBody`, `TableCell` from `@/components/ui/table`. Do NOT use a data-grid library — the tables are simple enough for the primitives.",
+        "Version comparison modal: shadcn/ui `Dialog` with two side-by-side `<pre>` or `<textarea readOnly>` blocks showing globalGuidance for v(n-1) and v(n). Simple text comparison — no diff algorithm needed.",
+        "Drawer for audit log: shadcn/ui `Sheet` (not `Drawer` if not available) with `side='right'`. Show `<pre className='text-xs overflow-auto'>{JSON.stringify(metadata, null, 2)}</pre>`.",
+        "Filterable audit log: filter by actor email using `useState<string>` and `Array.filter()` on the client. The full audit log is loaded via `admin/auditLog/list` query. If the log grows large, add server-side filtering later — for v1, client-side is fine.",
+        "Anti-pattern: do NOT bypass the server-side `assertAdmin` check by relying only on the client-side `<RequireAdmin>` guard. The Convex function must enforce authorization independently."
+      ]
+    },
+    {
+      "task_id": "T33",
+      "title": "Accessibility pass (WCAG 2.1 AA, keyboard navigation, screen reader, reduced motion)",
+      "summary": "Systematic accessibility audit and remediation across all 12+ routes.",
+      "acceptance_criteria": [
+        "Exactly one <main> per page; <nav> and <aside> landmarks",
+        "Chat regions: role='log', aria-live='polite'",
+        "Streaming messages announce 'Coach is replying' once per response",
+        "All modals trap focus; Esc closes; focus returns to trigger",
+        "Route change moves focus to h1",
+        "Draft Coach panel: focus moves to textarea on open",
+        "prefers-reduced-motion: all animations disabled",
+        "All text ≥ 4.5:1 contrast in light and dark mode",
+        "Keyboard-only critical path test passable",
+        "All buttons have visible text or aria-label"
+      ],
+      "depends_on": ["T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30", "T31", "T32"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 240,
+      "stack_practices": [
+        "axe-core audit: run `@axe-core/react` in development mode by adding `import('@axe-core/react').then(axe => axe.default(React, ReactDOM, 1000))` in `main.tsx` (dev-only). This logs accessibility violations to the browser console during development.",
+        "Focus trap: shadcn/ui Dialog and Sheet components (built on Radix UI) handle focus trapping automatically via `@radix-ui/react-focus-scope`. Do NOT implement a custom focus trap — Radix's is WCAG-compliant.",
+        "Route change focus: add a React Router `useLocation` subscription in App.tsx: `useEffect(() => { document.querySelector('h1')?.focus(); }, [location.pathname])`. The h1 must have `tabIndex={-1}` to be programmatically focusable.",
+        "aria-live for chat: add `role='log' aria-live='polite' aria-relevant='additions'` to the message list container in ChatWindow. New messages will be announced by screen readers as they arrive.",
+        "Streaming message announcement: render a STREAMING message as `<div role='status' aria-label='Coach is replying'>` (once). Do NOT add aria-label per token — that causes repeat announcements. Remove the `role='status'` when status changes to COMPLETE.",
+        "Focus ring: in `src/index.css`, add `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }` globally. Then add `outline-none` ONLY where a custom `:focus-visible` replacement is provided.",
+        "Contrast check tool: use the `are-you-ok` CLI (`npx are-you-ok`) or browser DevTools color picker against the design tokens to verify all text/background combinations meet 4.5:1.",
+        "Anti-pattern: do NOT use `outline: none` without providing a `:focus-visible` replacement. This breaks keyboard navigation for all users, including those who don't use assistive technology."
+      ]
+    },
+    {
+      "task_id": "T34",
+      "title": "Playwright E2E test suite (all 7 spec files, multi-browser)",
+      "summary": "Implement the full Playwright test suite: 7 spec files, multi-browser projects, CLAUDE_MOCK=true stub.",
+      "acceptance_criteria": [
+        "CLAUDE_MOCK=true: deterministic stub with configurable delays; no live Anthropic calls",
+        "auth.spec.ts: register, logout, login; Google OAuth mocked",
+        "solo-full-flow.spec.ts: complete end-to-end in chromium, firefox, webkit",
+        "invite-flow.spec.ts: two browser contexts; User A creates, User B accepts",
+        "draft-coach.spec.ts: verify send gate (Generate Draft does NOT send; Send does)",
+        "privacy.spec.ts: FORBIDDEN for cross-party private message access; Coach output clean",
+        "admin-templates.spec.ts: create, publish v1, create case (pinned v1), publish v2, verify pinning, archive",
+        "state-machine.spec.ts: illegal transitions, idempotency, consumed token",
+        "Three browser projects; axe-core scan in solo-full-flow",
+        "All specs pass 100% with CLAUDE_MOCK=true"
+      ],
+      "depends_on": ["T30", "T32"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 180,
+      "stack_practices": [
+        "Playwright config: `playwright.config.ts` at root. Define three projects: `{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }`, `{ name: 'firefox', use: { ...devices['Desktop Firefox'] } }`, `{ name: 'webkit', use: { ...devices['Desktop Safari'] } }`. Set `testDir: 'e2e/'`.",
+        "CLAUDE_MOCK stub: implement as a check at the top of each AI action: `if (process.env.CLAUDE_MOCK === 'true') { return CANNED_RESPONSES[role] }`. Define canned responses in `convex/lib/mockResponses.ts`. For streaming stubs, use a loop that emits the canned text character-by-character with `await new Promise(r => setTimeout(r, 20))` delays.",
+        "Two-context invite test: `const contextA = await browser.newContext(); const contextB = await browser.newContext()`. Each context has its own cookies/session. Create pages from each context independently.",
+        "Convex test client in privacy.spec.ts: use `@convex-dev/test-utils` (if available) or the Convex HTTP API (`/api/run_query`) to directly call Convex queries as User B for User A's data. Alternatively, use Playwright's `page.evaluate` to call `window.convex.query(...)` directly.",
+        "axe-core in Playwright: `import AxeBuilder from '@axe-core/playwright'`. Call `await new AxeBuilder({ page }).analyze()` after each major page navigation in `solo-full-flow.spec.ts`. Fail on `violations` array being non-empty.",
+        "Seeding for E2E: before E2E runs, call `npx convex run seed` to create admin user and templates. This is the same `convex/seed.ts` mutation from T11.",
+        "Anti-pattern: do NOT use `page.waitForTimeout(ms)` for timing — use `page.waitForSelector`, `page.waitForResponse`, or `expect(locator).toBeVisible()` with a timeout. Hardcoded sleeps make tests flaky."
+      ]
+    },
+    {
+      "task_id": "T35",
+      "title": "Vitest unit tests for core utility modules",
+      "summary": "Vitest unit tests covering privacy filter, prompt assembly, transcript compression, invite token generation, state machine transitions.",
+      "acceptance_criteria": [
+        "privacyFilter: ≥5 adversarial, ≥3 benign, boundary cases (8 tokens → fail, 7 tokens → pass)",
+        "prompts.assemblePrompt: all 4 roles; assert required verbatim segments",
+        "prompts.assemblePrompt DRAFT_COACH: otherPartySynthesis does NOT appear in messages",
+        "transcriptCompression: over-budget reduces; under-budget unchanged; cache hit (1 API call for duplicate input)",
+        "inviteToken: 100 tokens unique, 32 chars, url-safe /^[a-zA-Z0-9_-]+$/",
+        "stateMachine: all 9 valid transitions; ≥8 illegal transitions throw CONFLICT; markComplete idempotent; decline-invite returns CLOSED_ABANDONED",
+        "All tests pass with `npx vitest run`; no live Convex or Anthropic calls"
+      ],
+      "depends_on": ["T5", "T6", "T7", "T8"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60,
+      "stack_practices": [
+        "Test files: `convex/lib/__tests__/privacyFilter.test.ts`, `prompts.test.ts`, `transcriptCompression.test.ts`, `stateMachine.test.ts`. Keep test files co-located with the modules they test.",
+        "Vitest config: `vitest.config.ts` at root: `import { defineConfig } from 'vitest/config'; export default defineConfig({ test: { environment: 'node' } })`. These are pure Node tests — no browser environment needed.",
+        "Mock for transcriptCompression: use `vi.fn()` to create a mock Anthropic client: `const mockAnthropic = { messages: { create: vi.fn().mockResolvedValue({ content: [{ text: 'SUMMARY: ...' }] }) } }`. Pass as the third argument to `compressIfNeeded`.",
+        "Spy for cache verification: `const spy = vi.spyOn(mockAnthropic.messages, 'create')`. After calling `compressIfNeeded` twice with the same messages, assert `spy.mock.calls.length === 1`.",
+        "Invite token test: `Array.from({ length: 100 }, generateInviteToken)` where `generateInviteToken` calls `crypto.randomUUID().replace(/-/g, '').slice(0, 32)`. Check Set size equals 100 for uniqueness.",
+        "Anti-pattern: do NOT import `convex/_generated/server` or any Convex runtime module in Vitest tests — these modules have Convex-specific globals that don't exist in Node. Pure utility modules in `convex/lib/` must have zero Convex runtime dependencies.",
+        "ConvexError in stateMachine tests: `import { ConvexError } from 'convex/values'` is safe — `convex/values` is a pure JS package with no runtime dependencies. Use `expect(() => transition(...)).toThrow(ConvexError)`."
+      ]
+    },
+    {
+      "task_id": "T36",
+      "title": "CI pipeline (GitHub Actions: lint, typecheck, unit, E2E)",
+      "summary": "Configure .github/workflows/ci.yml with four jobs: lint, typecheck, unit, e2e.",
+      "acceptance_criteria": [
+        "ci.yml: four jobs on push to PR branches targeting main",
+        "lint: ESLint + Prettier; fails on any warning or error",
+        "typecheck: tsc --noEmit; fails on any type error",
+        "unit: npx vitest run; all T35 tests pass",
+        "e2e: deploy to Convex dev; run seed; run Playwright with CLAUDE_MOCK=true; multi-browser",
+        "README documents local run commands",
+        "node_modules cached",
+        "T33 and T34 can run in parallel before T36 passes"
+      ],
+      "depends_on": ["T33", "T34", "T35"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30,
+      "stack_practices": [
+        "GitHub Actions cache: use `actions/cache@v4` with `path: ~/.npm` and `key: ${{ runner.os }}-npm-${{ hashFiles('**/package-lock.json') }}`. Run `npm ci` (not `npm install`) for reproducible installs.",
+        "Convex deploy in CI: `npx convex deploy --cmd 'npm run build'` using the `CONVEX_DEPLOY_KEY` secret (set in GitHub repo Settings → Secrets). Deploy to a dedicated CI/test Convex project (not production).",
+        "Playwright in CI: use `npx playwright install --with-deps chromium firefox webkit` in the e2e job setup step. GitHub Actions runners need browser binaries installed explicitly.",
+        "Parallel jobs: lint, typecheck, and unit jobs have no dependencies between them — run them with `needs: []` (default). The e2e job depends on `needs: [unit]` to avoid wasting Convex deploy credits on a failing unit suite.",
+        "CLAUDE_MOCK env var: set `env: { CLAUDE_MOCK: 'true' }` on the e2e job. This activates the stub in Convex actions without modifying source code.",
+        "Seed step: `- run: npx convex run seed` after `npx convex deploy`. This populates the admin user and templates before Playwright runs.",
+        "Anti-pattern: do NOT run `npx convex dev` in CI — `convex dev` is for local development (starts a watcher process that never exits). Use `npx convex deploy` for one-shot CI deployment.",
+        "README commands: document exactly: `npm run lint` (ESLint + Prettier check), `npm run typecheck` (tsc --noEmit), `npm run test:unit` (vitest run), `npm run test:e2e` (playwright test)."
+      ]
+    }
+  ]
+}

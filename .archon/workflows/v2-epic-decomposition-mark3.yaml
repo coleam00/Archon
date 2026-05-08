@@ -1,0 +1,840 @@
+name: v2-epic-decomposition-mark3
+description: |
+  Mark 3 of the experimental decomposition workflow. PLAN ONLY — no ticket
+  creation. The output is a plan artifact: user stories enumerated and
+  decomposed into surface-aligned tasks, with NFRs as a project library,
+  Phase 0 human-input gating, and explicit dependency wiring.
+
+  Project-agnostic: works for any Epic whose PRD has the depth of a v1
+  spec (user stories, NFRs, tech stack declared, design language declared
+  to the extent the project has a UI). The agents derive what's specific
+  to the project from the spec they read; the workflow itself contains no
+  project-specific knowledge.
+
+  Once a strong plan is produced reliably, ticket creation can be added
+  back as a downstream workflow that reads this one's output.
+
+  Run with: archon workflow run v2-epic-decomposition-mark3 _inputs/<input-dir>
+
+worktree:
+  enabled: false
+mutates_checkout: false
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ─── Stage 1: Resolve inputs ──────────────────────────────────────────
+  - id: resolve-input
+    bash: |
+      set -eo pipefail
+      experiments_root="/home/user/Archon/.archon/experiments/decomposition"
+      input_arg=$ARGUMENTS
+      if [ -z "$input_arg" ]; then
+        echo "Usage: archon workflow run v2-epic-decomposition-mark3 <input-dir-relative-to-experiments/decomposition/>" >&2
+        exit 1
+      fi
+      input_dir="$experiments_root/$input_arg"
+      if [ ! -d "$input_dir" ]; then
+        echo "Input directory not found: $input_dir" >&2
+        exit 1
+      fi
+      if [ ! -f "$input_dir/epic.md" ]; then
+        echo "Missing $input_dir/epic.md" >&2
+        exit 1
+      fi
+      if [ ! -d "$input_dir/attachments" ]; then
+        echo "Missing $input_dir/attachments/" >&2
+        exit 1
+      fi
+      run_name="mark3-$(basename "$input_arg")-$(date +%Y%m%d-%H%M%S)"
+      printf '{"input_dir":"%s","experiments_root":"%s","run_name":"%s"}\n' \
+        "$input_dir" "$experiments_root" "$run_name"
+
+  # ─── Stage 2: Stage inputs into $ARTIFACTS_DIR ────────────────────────
+  - id: stage-inputs
+    depends_on: [ resolve-input ]
+    bash: |
+      set -eo pipefail
+      input_dir=$resolve-input.output.input_dir
+      cp "$input_dir/epic.md" "$ARTIFACTS_DIR/epic.md"
+
+      mkdir -p "$ARTIFACTS_DIR/attachments"
+      attachments_md="$ARTIFACTS_DIR/attachments.md"
+      : > "$attachments_md"
+      count=0
+      for f in "$input_dir/attachments/"*; do
+        name=$(basename "$f")
+        # Skip prior-run artifacts so the workflow doesn't read its own
+        # outputs as input
+        if [ "$name" = "decomposition-plan.md" ]; then continue; fi
+        case "$name" in
+          *.md|*.txt|*.html)
+            printf '\n\n## %s\n\n' "$name" >> "$attachments_md"
+            cat "$f" >> "$attachments_md"
+            cp "$f" "$ARTIFACTS_DIR/attachments/$name"
+            count=$((count+1))
+            ;;
+        esac
+      done
+      bytes=$(wc -c < "$attachments_md")
+      printf '{"attachments_md":"%s","attachment_count":%d,"bytes":%d}\n' \
+        "$attachments_md" "$count" "$bytes"
+
+  # ─── Stage 3: Initialize adversarial state ────────────────────────────
+  - id: init-adversarial-state
+    depends_on: [ stage-inputs ]
+    bash: |
+      set -eo pipefail
+      cat > "$ARTIFACTS_DIR/plan-state.json" <<'JSON'
+      {
+        "phase": "generating",
+        "round": 1,
+        "maxRounds": 8,
+        "passThreshold": 8,
+        "lastEvaluation": null,
+        "status": "running"
+      }
+      JSON
+      mkdir -p "$ARTIFACTS_DIR/plan-evaluations"
+      printf '{"state":"%s"}\n' "$ARTIFACTS_DIR/plan-state.json"
+
+  # ─── Stage 4: Adversarial plan creation ───────────────────────────────
+  # Generator authors a flat task list. Tasks carry milestone labels for
+  # readability (no enforcement). Phase 0 is the only milestone with hard
+  # gating semantics: human-only tickets that downstream work depends on.
+  # All cross-ticket gating is via explicit depends_on edges.
+  - id: adversarial-plan
+    depends_on: [ init-adversarial-state ]
+    idle_timeout: 600000
+    loop:
+      # Each iteration plays ONE role (generator OR evaluator). One round
+      # of generate+evaluate consumes 2 iterations. 20 iterations gives
+      # ~10 rounds of headroom — mark2 converged in 4 rounds against
+      # easier criteria; mark3's stricter 13-dimension evaluator may
+      # need 5-6 rounds to satisfy.
+      max_iterations: 20
+      fresh_context: true
+      until: PLAN_CONVERGED
+      until_bash: |
+        grep -qE '"status"\s*:\s*"(converged|maxed-out)"' "$ARTIFACTS_DIR/plan-state.json"
+      prompt: |
+        # Adversarial Plan Creation
+
+        Each iteration is a fresh agent. You play ONE role this iteration,
+        determined by the `phase` field in `$ARTIFACTS_DIR/plan-state.json`.
+        The two roles are GENERATOR and EVALUATOR. They alternate by round.
+
+        ---
+
+        ## Phase 1 — LOAD
+
+        Read these inputs:
+        - `$ARTIFACTS_DIR/plan-state.json` — has `phase`, `round`,
+          `maxRounds`, `passThreshold`, `status`. Determines your role.
+        - `$ARTIFACTS_DIR/epic.md` — the PRD authored for this project.
+        - `$ARTIFACTS_DIR/attachments.md` — the spec attachments
+          (TechSpec, DesignDoc, StyleGuide, or whatever the project
+          provided).
+        - If `round > 1`, also read
+          `$ARTIFACTS_DIR/plan-evaluations/round-<round-1>.json` (prior
+          evaluator's verdict) and `$ARTIFACTS_DIR/plan-current.json`
+          (the prior generator's plan).
+
+        **Phase 1 checkpoint:**
+        - [ ] You read `plan-state.json` and identified your role from
+              `phase`.
+        - [ ] You read `epic.md` and `attachments.md`.
+        - [ ] If round > 1, you read the prior evaluation and prior plan.
+
+        Now jump to whichever role section your phase says.
+
+        ---
+
+        ## ROLE: GENERATOR (phase = "generating")
+
+        ### Phase 2 — PROCESS (generator)
+
+        **Central question:** *Given this PRD and its attachments, produce
+        a plan that translates every user story into the right
+        surface-aligned tickets, surfaces every external precondition as
+        Phase 0, captures every NFR as a project library, and wires every
+        cross-ticket dependency explicitly.*
+
+        Everything specific to the project comes from the spec you read.
+        You do not invent user stories, NFRs, surfaces, technologies,
+        cross-cutting concerns, or external dependencies — you derive
+        them from `epic.md` + `attachments.md`. If something is not in the
+        spec, do not add it.
+
+        #### 2.1 Enumerate user stories
+
+        Read the PRD. Enumerate every user story it declares. The PRD
+        defines the cuts; you respect them. A user story typically has
+        an identifier (e.g. US-XX) and acceptance criteria. Capture
+        every one.
+
+        #### 2.2 Enumerate NFRs and cross-cutting concerns
+
+        Read the PRD for non-functional requirements (privacy,
+        performance, accessibility, browser support, security,
+        observability, audit logging, internationalization — whatever
+        the spec calls out). Enumerate every NFR.
+
+        Also enumerate cross-cutting CODE concerns the spec implies —
+        modules or surfaces that many features depend on (e.g. shared
+        helpers, validators, prompt-assembly, response filters, shared
+        UI primitives, schema definitions). These will become tickets,
+        and dependent tickets will reference them.
+
+        Both kinds get authored:
+        - NFRs go in `plan.nfrs` as a library of `{id, name,
+          applies_to, ac_template}` entries. Per-ticket lowering will
+          inline them as ACs.
+        - Cross-cutting CODE concerns become foundational tickets that
+          dependents list in `depends_on`.
+
+        #### 2.3 Identify the project's tech stack
+
+        Read the spec. Enumerate every technology actively in use —
+        frontend framework, build tool, type system, backend, database,
+        auth provider, styling, component library, test runner, test
+        harness, AI/SDK dependencies, hosting, CI provider. Whatever the
+        spec declares.
+
+        Use this list to:
+        - Drive Phase 0 (every external service the spec depends on
+          becomes a Phase 0 human-input ticket).
+        - Drive surface vocabulary (a Convex backend project's
+          surfaces include Convex queries/mutations/actions; a Postgres
+          project's surfaces include Postgres tables, REST endpoints;
+          adapt to what the spec uses).
+        - Inform the advisers downstream (they'll author per-technology
+          guidelines from the same list).
+
+        #### 2.4 Author Phase 0 — human-input gate
+
+        Phase 0 is a special milestone whose tickets are HUMAN-ONLY.
+        The dev pipeline cannot complete them. Each Phase 0 ticket
+        represents an external precondition the human must satisfy
+        before downstream work can run.
+
+        For each external service, credential, or environment setup the
+        spec implies (derive from 2.3), produce one Phase 0 ticket:
+        - `task_id`: `P0.1`, `P0.2`, …
+        - `milestone`: `phase_0`
+        - `human_only`: `true`
+        - `title`: short imperative ("Provision <service>", "Configure
+          <auth provider>", "Capture <secret>")
+        - `summary`: 1-2 sentences — what's needed and why downstream
+          tickets need it
+        - `acceptance_criteria`: a checklist the human ticks off (each
+          AC is something the human verifies, not the agent)
+        - `surface`: `human`
+        - `applied_nfrs`: empty
+        - `depends_on`: empty
+        - `playwright_owned`: empty
+        - `original_estimate_minutes`: 0 (human time, not agent time)
+
+        Phase 0 covers external preconditions only. It does NOT cover
+        in-repo scaffolding (that's a foundation ticket the agent does).
+
+        #### 2.5 Decompose user stories into surface-aligned tickets
+
+        For each user story identified in 2.1, produce one or more
+        tickets. The fan-out depends on the surfaces the story needs.
+
+        A "surface" is the ONE primary kind of code change a ticket
+        delivers. Examples (not exhaustive — derive from the project's
+        stack):
+        - One backend mutation / query / action
+        - One frontend page / component
+        - One schema definition / migration
+        - One helper module / pure function library
+        - One AI prompt template
+        - One configuration change
+        - One CI/build script
+
+        Hard rule: **one surface per ticket**. If a user story spans
+        backend + frontend + AI, that's three tickets (one per surface),
+        wired with `depends_on`.
+
+        Each ticket has:
+        - `task_id`: `T1`, `T2`, … in plan order
+        - `milestone`: a milestone id you defined in 2.6 (label only,
+          not a gate)
+        - `source_user_story`: the user story id this ticket implements,
+          or `cross-cutting` for foundational/utility tickets that
+          enable many stories
+        - `human_only`: `false`
+        - `surface`: the ONE primary surface this ticket changes —
+          chosen from a vocabulary you derive from the project's stack
+        - `title`: short, specific, names the surface
+        - `summary`: 2-4 sentences
+        - `acceptance_criteria`: an array of testable, concrete
+          assertions. Each AC stands alone. Be exhaustive — list every
+          assertion a reviewer would want to verify.
+        - `applied_nfrs`: list of NFR ids (from `plan.nfrs`) that govern
+          this ticket's surface
+        - `depends_on`: explicit list of upstream `task_id`s, including
+          any Phase 0 tickets this work blocks on
+        - `playwright_owned`: array of E2E spec filenames this ticket
+          owns — feature-owned E2E. Empty for non-user-visible tickets.
+        - `decision`: optional string when the plan introduces something
+          not fully normalized in the spec ("Inferring <field> on <model>
+          — not in spec but required for <reason>"). Surface deviations;
+          don't hide them.
+        - `suggested_jira_type`: "Task" or "Story"
+        - `original_estimate_minutes`: autonomous-agent end-to-end
+          estimate
+
+        #### 2.6 Group into milestones (presentation only, not gates)
+
+        Define a small number of milestones for human readability. The
+        first is always `phase_0`. After that, name them after the
+        capability groupings the project naturally has (derive from the
+        spec — what does the PRD's release plan say? what are the
+        capability boundaries?). Tickets carry a `milestone` label.
+
+        Milestones do NOT enforce ordering. Cross-ticket gating happens
+        only via explicit `depends_on`. A ticket in milestone M3 can
+        depend on tickets in M2, M1, or P0 — that's expressed in
+        `depends_on`, not implied by milestone position.
+
+        #### 2.7 Wire dependencies explicitly
+
+        Every cross-ticket dependency that exists is an explicit
+        `depends_on` edge. This is non-negotiable. The evaluator will
+        check.
+
+        For each cross-cutting concern you identified in 2.2, find every
+        ticket whose work uses it and add the cross-cutting ticket to
+        that ticket's `depends_on`.
+
+        For each Phase 0 precondition, find every downstream ticket that
+        needs the precondition satisfied and add the P0 ticket to its
+        `depends_on`.
+
+        #### 2.8 Feature-owned Playwright
+
+        Every user-visible feature ticket has at least one entry in its
+        `playwright_owned` array — a `.spec.ts` filename naming the E2E
+        spec the ticket delivers. Feature-owned tests are part of each
+        feature's pipeline; they are NOT separate tickets.
+
+        Exception: a single Playwright-infrastructure ticket (test
+        runner config, browser matrix, fixtures, mock-mode shim, CI
+        wiring) may exist in the foundation milestone. It owns NO
+        behavior tests (its `playwright_owned` is empty); it only sets
+        up the harness feature tickets use.
+
+        Hard rule: **no standalone "tests for X" tickets.** The
+        Playwright-infrastructure ticket is the only test-shaped ticket
+        the plan may contain.
+
+        #### 2.9 If round > 1, address every prior objection
+
+        Read `plan-evaluations/round-<round-1>.json`. For each objection,
+        identify the specific change you're making to address it. Apply
+        the changes. The evaluator will check.
+
+        **Phase 2 checkpoint (generator):**
+        - [ ] Every user story enumerated in 2.1 has at least one ticket
+              whose `source_user_story` references it.
+        - [ ] Every NFR enumerated in 2.2 appears in `plan.nfrs`.
+        - [ ] Every external precondition the spec implies has a Phase 0
+              ticket.
+        - [ ] Every ticket has exactly one `surface` value.
+        - [ ] Every cross-cutting concern (from 2.2) has dependents wired
+              with explicit `depends_on` edges.
+        - [ ] Every user-visible feature ticket has `playwright_owned`
+              non-empty.
+        - [ ] No standalone "test for X" tickets exist (Playwright
+              infrastructure ticket is allowed).
+        - [ ] Every `decision` field surfaces a real spec deviation;
+              hidden inferences are surfaced not buried.
+        - [ ] If round > 1: every prior objection has a specific change.
+
+        ### Phase 3 — GENERATE (generator)
+
+        Author `$ARTIFACTS_DIR/plan-current.json` in this exact shape:
+
+        ```json
+        {
+          "epic_title": "string",
+          "planning_assumptions": ["string"],
+          "tech_stack": ["technology-name", ...],
+          "milestones": [
+            { "id": "phase_0", "label": "Human Setup & Environment Gate" },
+            { "id": "M1", "label": "<derived from project>" }
+          ],
+          "nfrs": [
+            {
+              "id": "NFR-<short-name>",
+              "name": "<human-readable name>",
+              "applies_to": "<concrete description of which surfaces this NFR governs>",
+              "ac_template": "<the AC text the lowering pass will inline on relevant tickets>"
+            }
+          ],
+          "tasks": [
+            {
+              "task_id": "P0.1",
+              "milestone": "phase_0",
+              "human_only": true,
+              "title": "...",
+              "summary": "...",
+              "acceptance_criteria": ["..."],
+              "surface": "human",
+              "applied_nfrs": [],
+              "depends_on": [],
+              "playwright_owned": [],
+              "decision": null,
+              "suggested_jira_type": "Task",
+              "original_estimate_minutes": 0
+            },
+            {
+              "task_id": "T1",
+              "milestone": "M1",
+              "human_only": false,
+              "source_user_story": "...",
+              "title": "...",
+              "summary": "...",
+              "acceptance_criteria": ["...", "..."],
+              "surface": "<derived from project's stack>",
+              "applied_nfrs": ["NFR-..."],
+              "depends_on": ["P0.1", "P0.5"],
+              "playwright_owned": [],
+              "decision": null,
+              "suggested_jira_type": "Task",
+              "original_estimate_minutes": 30
+            }
+          ]
+        }
+        ```
+
+        Tasks are listed in plan order; task IDs are unique across the
+        whole plan.
+
+        ### Phase 4 — COMMIT (generator)
+
+        Write the JSON to `$ARTIFACTS_DIR/plan-current.json` (pretty
+        JSON, 2-space indent). Verify on disk:
+        - File size > 0
+        - Parses
+        - Top-level has `epic_title`, `tech_stack`, `milestones`,
+          `nfrs`, `tasks`
+        - Every task has all required fields
+        - Every task's `milestone` references an entry in `milestones[]`
+        - Every NFR id in any task's `applied_nfrs` references an entry
+          in `nfrs[]`
+        - Every `task_id` referenced in any `depends_on` exists
+
+        Update `$ARTIFACTS_DIR/plan-state.json`: set
+        `"phase": "evaluating"`. Other fields unchanged.
+
+        **Phase 4 checkpoint (generator):**
+        - [ ] `plan-current.json` is valid JSON with all required fields.
+        - [ ] Every cross-reference (milestone IDs, NFR IDs, depends_on)
+              resolves.
+        - [ ] `plan-state.json` has `phase: evaluating`.
+
+        ### Phase 5 — REPORT (generator)
+
+        Output one line: `Generated plan v<round>: <P0_count> Phase-0
+        human tickets, <feature_count> feature tickets across <M_count>
+        milestones, <NFR_count> NFRs.` Do NOT emit
+        `<promise>PLAN_CONVERGED</promise>`.
+
+        ---
+
+        ## ROLE: EVALUATOR (phase = "evaluating")
+
+        ### Phase 2 — PROCESS (evaluator)
+
+        You are an adversarial reviewer. Your job is to BREAK the plan.
+        You are not helpful. Be precise and specific.
+
+        Read `$ARTIFACTS_DIR/plan-current.json` and the spec
+        (`epic.md` + `attachments.md`).
+
+        **Walk the plan in THREE focused passes, in order.** Each pass
+        focuses on a single category of concerns. Score the
+        category's dimensions and write objections for that pass before
+        moving on. This sequencing prevents attention from fragmenting
+        across 13 dimensions simultaneously.
+
+        Each dimension is scored 1-10, except where marked conditional.
+
+        ---
+
+        #### Pass 1 — COVERAGE (3 dimensions)
+
+        Walk the spec and the plan side-by-side. Focus only on whether
+        the plan covers what the spec asks for.
+
+        - **user_story_coverage** — enumerate every user story in the
+          PRD. For each, verify at least one ticket has a
+          `source_user_story` referencing it. Any user story with zero
+          tickets is a coverage gap.
+
+        - **user_story_fanout** — for each user story that produces
+          multiple tickets, are they cleanly split by surface (one
+          backend, one frontend, one AI action) rather than
+          mixed-domain? A user story whose tickets each carry one
+          `surface` is well-decomposed.
+
+        - **nfr_application** — for every NFR captured in `plan.nfrs`,
+          find every ticket whose `surface` is governed by the NFR's
+          `applies_to`. Each such ticket should have the NFR id in its
+          `applied_nfrs`. Missing applications are objections. (Note:
+          NFR library completeness — whether every PRD NFR was even
+          captured into `plan.nfrs` in the first place — is checked in
+          Pass 2 under `phase_0_completeness`'s sibling check below
+          for completeness; here we verify application of what's in
+          the library.)
+
+        Write objections for any gaps you find before moving to Pass 2.
+
+        ---
+
+        #### Pass 2 — STRUCTURE (4 dimensions)
+
+        Walk the plan and check structural integrity. Do not re-read
+        the spec for product behavior here; you're checking the plan's
+        internal shape.
+
+        - **nfr_completeness** — enumerate every NFR in the PRD.
+          For each, verify it has an entry in `plan.nfrs`. Any missing
+          NFR is a library gap.
+
+        - **phase_0_completeness** — for every external service /
+          credential / environment dependency the spec mentions, verify
+          a Phase 0 ticket exists, AND that ticket actually verifies
+          the setup rather than merely naming the service. A real
+          Phase 0 ticket has all three of:
+            (a) the human action specified
+            (b) the required secret/config artifact named
+            (c) a downstream verification surface that proves the setup
+                works (smoke check, dev-command-runs, test-harness
+                proven with a real test).
+          A Phase 0 ticket whose ACs only name the service without
+          verification is fake; flag it.
+
+        - **sizing** — every ticket has exactly one `surface` value.
+          Any ticket whose ACs imply work spanning multiple surfaces is
+          a sizing violation. Flag it.
+
+        - **dependency_completeness** — every cross-cutting concern
+          (a ticket whose output many other tickets need) has its
+          dependents wired correctly. Walk every ticket; for each, ask
+          whether its work requires any cross-cutting ticket's output
+          and whether that ticket is in `depends_on`. Phantom
+          dependencies (a ticket listing something it doesn't need)
+          are also objections.
+
+        Write objections for any gaps you find before moving to Pass 3.
+
+        ---
+
+        #### Pass 3 — QUALITY (5 dimensions; 2 conditional)
+
+        Walk the plan with focus on testing realism, design fidelity,
+        privacy/security, and decision surfacing. The first two
+        dimensions are conditional.
+
+        - **playwright_ownership** — every user-visible feature ticket
+          has non-empty `playwright_owned`. The Playwright-infrastructure
+          ticket has empty `playwright_owned` and exists exactly once.
+
+        - **no_standalone_test_tickets** — no ticket exists whose
+          purpose is "tests for X" or "test suite for Y." Tests are
+          owned by the feature ticket. The single Playwright-infra
+          ticket is the only test-shaped exception.
+
+        - **testing_realism** — for each runtime / database / auth /
+          server / framework / generated SDK surface, does the plan
+          require the official or stack-appropriate test harness,
+          emulator, framework test client, or provider test mode rather
+          than mocking the primary application runtime? Walk every
+          ticket whose `surface` touches a runtime; check the testing
+          ACs; flag any ticket that mocks the runtime under test when a
+          realistic harness is available. Mocks at true external-service
+          boundaries (third-party APIs, payment providers) are
+          appropriate and should not be flagged.
+
+        - **design_fidelity** — *conditional: applicable only when the
+          input docs include design / UX / style guide content.* If
+          applicable: every user-visible ticket should carry the
+          relevant visual language, tokens, accessibility, responsive
+          behavior, and loading/error/empty-state requirements as ACs.
+          If the input has no design source, score `not_applicable`.
+
+        - **privacy_security_fidelity** — *conditional: applicable only
+          when the input docs include privacy / security / permissions
+          / data isolation / compliance / auditability / safety
+          requirements.* If applicable: the plan must represent these
+          across data access, runtime, UI, and tests. If the input has
+          no such requirements, score `not_applicable`.
+
+        - **decisions_surfaced** — every concept the plan introduces
+          that the spec doesn't explicitly state has a `decision` field
+          on the relevant ticket explaining the inference. Hidden
+          inferences (added fields, statuses, behaviors not in the
+          spec) without `decision` notes are objections.
+
+        Write objections for any gaps you find.
+
+        ---
+
+        Score honestly. Do NOT grade on a curve. 8 = "genuinely meets
+        the bar." Below that is a real problem. `not_applicable` is a
+        valid score for the conditional dimensions and does NOT count
+        against the pass threshold.
+
+        **Only dimensions explicitly marked conditional may be scored
+        `not_applicable`.** All other dimensions must receive a numeric
+        score. The conditional dimensions are exactly two:
+        `design_fidelity` and `privacy_security_fidelity`. Every other
+        dimension must receive a 1-10 integer. If you find yourself
+        wanting to mark a non-conditional dimension as `not_applicable`
+        because the project surface is small or the requirement is
+        unclear, score it on what's there (a tiny set of relevant
+        tickets still has measurable coverage) — don't dodge.
+
+        ### Phase 3 — GENERATE (evaluator)
+
+        Write `$ARTIFACTS_DIR/plan-evaluations/round-<round>.json`:
+
+        ```json
+        {
+          "round": <N>,
+          "scores": {
+            "user_story_coverage": 9,
+            "user_story_fanout": 8,
+            "nfr_completeness": 9,
+            "nfr_application": 7,
+            "phase_0_completeness": 8,
+            "sizing": 8,
+            "dependency_completeness": 7,
+            "playwright_ownership": 8,
+            "no_standalone_test_tickets": 10,
+            "testing_realism": 8,
+            "design_fidelity": 8,
+            "privacy_security_fidelity": "not_applicable",
+            "decisions_surfaced": 9
+          },
+          "passed": false,
+          "objections": [
+            {
+              "dimension": "dependency_completeness",
+              "task_ids": ["..."],
+              "issue": "Specific finding with copy-pasteable detail.",
+              "fix": "What the generator should change."
+            }
+          ],
+          "summary": "One paragraph: what's good, what must change."
+        }
+        ```
+
+        `passed` is `true` ONLY if every applicable score >=
+        passThreshold AND objections is empty. `not_applicable` scores
+        on the conditional dimensions (`design_fidelity`,
+        `privacy_security_fidelity`) are not gating.
+
+        ### Phase 4 — COMMIT (evaluator)
+
+        Write the evaluation. Verify it parses.
+
+        Update `$ARTIFACTS_DIR/plan-state.json`:
+        - If passed: `phase: "converged"`, `status: "converged"`. Copy
+          `plan-current.json` to `plan-final.json`.
+        - If failed and round < maxRounds: `phase: "generating"`,
+          increment round.
+        - If failed and round >= maxRounds: `phase: "maxed-out"`,
+          `status: "maxed-out"`. Copy `plan-current.json` to
+          `plan-final.json` (best effort).
+
+        **Phase 4 checkpoint (evaluator):**
+        - [ ] Evaluation JSON written and valid.
+        - [ ] `plan-state.json` updated.
+        - [ ] If converged or maxed-out, `plan-final.json` exists.
+
+        ### Phase 5 — REPORT (evaluator)
+
+        If `status` is `converged` or `maxed-out`, output
+        `<promise>PLAN_CONVERGED</promise>` as the very last line.
+        Otherwise output a one-line status (`Round <N> evaluation:
+        passed=<bool>, <K> objections.`) and do NOT emit the completion
+        signal.
+
+  # ─── Stage 5: Stack adviser pass (mutates plan-current.json) ──────────
+  - id: stack-adviser-prep
+    depends_on: [ adversarial-plan ]
+    bash: |
+      set -eo pipefail
+      cp "$ARTIFACTS_DIR/plan-final.json" "$ARTIFACTS_DIR/plan-current.json"
+      printf '{"plan_current":"%s"}\n' "$ARTIFACTS_DIR/plan-current.json"
+
+  - id: stack-adviser-call
+    depends_on: [ stack-adviser-prep ]
+    context: fresh
+    command: archon-v2-stack-adviser
+
+  # ─── Stage 6: Design adviser pass (mutates plan-current.json) ─────────
+  - id: design-adviser-call
+    depends_on: [ stack-adviser-call ]
+    context: fresh
+    command: archon-v2-design-adviser
+
+  # ─── Stage 7: Post-adviser validation ─────────────────────────────────
+  # The advisers mutate plan-current.json in place; this node verifies
+  # they didn't introduce drift, drop tasks, or break cross-references.
+  # Compares the post-adviser plan against the converged plan-final.json
+  # and validates structural integrity. Workflow fails if integrity is
+  # broken — better to surface drift than to pass a silently-corrupted
+  # plan downstream.
+  - id: post-adviser-validation
+    depends_on: [ design-adviser-call ]
+    bash: |
+      set -eo pipefail
+
+      bun -e '
+        import { readFileSync } from "node:fs";
+
+        const ARTIFACTS_DIR = process.env.ARTIFACTS_DIR;
+        const finalPath = `${ARTIFACTS_DIR}/plan-final.json`;
+        const currentPath = `${ARTIFACTS_DIR}/plan-current.json`;
+
+        const errors = [];
+
+        // 1. Both files exist and parse.
+        let pre, post;
+        try {
+          pre = JSON.parse(readFileSync(finalPath, "utf8"));
+        } catch (e) {
+          errors.push(`plan-final.json missing or unparseable: ${e.message}`);
+        }
+        try {
+          post = JSON.parse(readFileSync(currentPath, "utf8"));
+        } catch (e) {
+          errors.push(`plan-current.json missing or unparseable: ${e.message}`);
+        }
+
+        if (errors.length > 0) {
+          for (const err of errors) console.error("FAIL:", err);
+          process.exit(1);
+        }
+
+        // 2. Top-level fields preserved.
+        for (const field of ["epic_title", "milestones", "nfrs", "tasks"]) {
+          if (!(field in post)) {
+            errors.push(`top-level field "${field}" missing from post-adviser plan`);
+          }
+        }
+
+        // 3. Adviser sections present.
+        if (!post.stack_rules || typeof post.stack_rules !== "object") {
+          errors.push(`stack_rules missing or not an object after stack adviser pass`);
+        }
+        if (!post.design_rules || typeof post.design_rules !== "object") {
+          errors.push(`design_rules missing or not an object after design adviser pass`);
+        }
+
+        // 4. Same number of tasks; every pre-adviser task_id still present.
+        const preTaskIds = new Set((pre.tasks || []).map(t => t.task_id));
+        const postTaskIds = new Set((post.tasks || []).map(t => t.task_id));
+        if (preTaskIds.size !== postTaskIds.size) {
+          errors.push(`task count drifted: pre=${preTaskIds.size} post=${postTaskIds.size}`);
+        }
+        for (const id of preTaskIds) {
+          if (!postTaskIds.has(id)) {
+            errors.push(`task ${id} present in plan-final.json but missing post-adviser`);
+          }
+        }
+        for (const id of postTaskIds) {
+          if (!preTaskIds.has(id)) {
+            errors.push(`task ${id} added post-adviser (advisers should not add tasks)`);
+          }
+        }
+
+        // 5. Per-task acceptance_criteria preserved verbatim. Advisers
+        // mutate stack_rules and design_rules at the plan level; they
+        // are not authorized to edit per-task ACs.
+        const preById = new Map((pre.tasks || []).map(t => [t.task_id, t]));
+        for (const postTask of (post.tasks || [])) {
+          const preTask = preById.get(postTask.task_id);
+          if (!preTask) continue; // already flagged as added
+          const preACs = JSON.stringify(preTask.acceptance_criteria || []);
+          const postACs = JSON.stringify(postTask.acceptance_criteria || []);
+          if (preACs !== postACs) {
+            errors.push(`task ${postTask.task_id}: acceptance_criteria mutated by advisers`);
+          }
+        }
+
+        // 6. Cross-reference integrity in the post-adviser plan.
+        const milestoneIds = new Set((post.milestones || []).map(m => m.id));
+        const nfrIds = new Set((post.nfrs || []).map(n => n.id));
+        for (const t of (post.tasks || [])) {
+          if (t.milestone && !milestoneIds.has(t.milestone)) {
+            errors.push(`task ${t.task_id}: milestone "${t.milestone}" not in milestones[]`);
+          }
+          for (const nfrId of (t.applied_nfrs || [])) {
+            if (!nfrIds.has(nfrId)) {
+              errors.push(`task ${t.task_id}: applied NFR "${nfrId}" not in nfrs[]`);
+            }
+          }
+          for (const dep of (t.depends_on || [])) {
+            if (!postTaskIds.has(dep)) {
+              errors.push(`task ${t.task_id}: depends_on "${dep}" not in tasks[]`);
+            }
+          }
+        }
+
+        if (errors.length > 0) {
+          console.error("Post-adviser validation FAILED:");
+          for (const err of errors) console.error("  -", err);
+          process.exit(1);
+        }
+
+        const summary = {
+          ok: true,
+          tasks: postTaskIds.size,
+          stack_rule_sections: Object.keys(post.stack_rules || {}).length,
+          design_rule_sections: Object.keys(post.design_rules || {}).length,
+          milestones: milestoneIds.size,
+          nfrs: nfrIds.size,
+        };
+        process.stdout.write(JSON.stringify(summary));
+      '
+
+  # ─── Stage 8: Final summary + copy to stable location ─────────────────
+  - id: final-summary
+    depends_on: [ post-adviser-validation ]
+    bash: |
+      set -eo pipefail
+      run_name=$resolve-input.output.run_name
+      out="/home/user/Archon/.archon/experiments/decomposition/$run_name"
+      mkdir -p "$out"
+
+      # Snapshot the final enriched plan (advisers mutated plan-current
+      # in place; treat the post-design-adviser version as final)
+      cp "$ARTIFACTS_DIR/plan-current.json" "$ARTIFACTS_DIR/plan-enriched.json"
+      cp "$ARTIFACTS_DIR/plan-final.json" "$out/plan-final.json" 2>/dev/null || true
+      cp "$ARTIFACTS_DIR/plan-enriched.json" "$out/plan-enriched.json" 2>/dev/null || true
+      cp -r "$ARTIFACTS_DIR/plan-evaluations" "$out/plan-evaluations" 2>/dev/null || true
+
+      cat > "$out/summary.md" <<EOF
+      # v2 Mark3 — Run $run_name
+
+      Workflow: v2-epic-decomposition-mark3
+      Started: $(date -Iseconds)
+      Source artifacts: $ARTIFACTS_DIR
+
+      Plan-only run. No tickets generated. Outputs in this directory:
+
+      - plan-final.json — converged adversarial plan (before adviser enrichment)
+      - plan-enriched.json — plan after stack + design adviser passes (final)
+      - plan-evaluations/ — round-by-round adversarial evaluator verdicts
+      EOF
+
+      printf '{"run_name":"%s","output_dir":"%s"}\n' "$run_name" "$out"

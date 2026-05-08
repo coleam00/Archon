@@ -1,0 +1,52 @@
+{
+  "round": 2,
+  "scores": {
+    "user_story_coverage": 10,
+    "user_story_fanout": 9,
+    "nfr_completeness": 10,
+    "nfr_application": 8,
+    "phase_0_completeness": 9,
+    "sizing": 6,
+    "dependency_completeness": 7,
+    "playwright_ownership": 8,
+    "no_standalone_test_tickets": 10,
+    "testing_realism": 8,
+    "design_fidelity": 8,
+    "privacy_security_fidelity": 8,
+    "decisions_surfaced": 7
+  },
+  "passed": false,
+  "objections": [
+    {
+      "dimension": "nfr_application",
+      "task_ids": ["T26", "T12"],
+      "issue": "NFR-privacy is missing from T26 (JointChatView) and T12 (cases/create). NFR-privacy's applies_to explicitly governs 'frontend components rendering private or AI-generated content' — T26 renders the per-party synthesis via the 'My guidance' link (calls jointChat/mySynthesis) and renders Coach AI-generated messages, making it a governed surface. For T12, the NFR governs 'all Convex queries/mutations/actions handling…partyStates'; T12's cases/create mutation creates the initiator's partyStates row and is directly in scope.",
+      "fix": "Add NFR-privacy to applied_nfrs on T26 and T12. For T26, add an AC: 'JointChatView never subscribes to or renders the other party's private coaching messages or their raw partyStates form fields; the My Guidance link calls only jointChat/mySynthesis (which returns the calling party's synthesis only).' For T12, the existing partyStates-isolation logic in T12's ACs is correct; tagging NFR-privacy makes the coverage explicit."
+    },
+    {
+      "dimension": "sizing",
+      "task_ids": ["T18", "T23"],
+      "issue": "Two tickets bundle multiple Convex function types under a single surface label. T18 (surface='convex-mutation') includes privateCoaching/generateAIResponse, which is unambiguously a Convex action (calls Claude Sonnet streaming via an external API; mutations cannot call external APIs per the Convex function model). The ticket also includes sendUserMessage (mutation) and markComplete (mutation), producing a mixed mutation+action ticket. T23 (surface='convex-action') bundles the synthesis/generate action together with the jointChat/mySynthesis reactive query; the query is directly listed in tech spec §7.1 and is a distinct function type with different semantics (reactive read vs. non-transactional external-API call).",
+      "fix": "Split T18 into two tickets: (a) T18 retains sendUserMessage mutation and markComplete mutation (surface='convex-mutation'); (b) a new T18b (or renumber) for the privateCoaching/generateAIResponse action (surface='convex-action') that depends on T18a for the message row it updates. Split T23 into two tickets: (a) T23 retains synthesis/generate action (surface='convex-action'); (b) a new T23b for jointChat/mySynthesis reactive query (surface='convex-query') that T24 (ReadyForJointView) and T31 (ClosedCaseView) depend on."
+    },
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T29", "T31"],
+      "issue": "One backward dependency and two missing dependencies. (1) T29 (DraftCoachPanel) lists T26 (JointChatView) in its depends_on, but the direction is reversed: T26 renders T29 ('Clicking ✨ Draft with Coach opens the DraftCoachPanel (T29)' per T26's ACs), so T26 depends on T29 — not the other way around. T29 does not import JointChatView code; DraftCoachPanel can be built and tested in isolation. (2) T31 (ClosedCaseView) lists depends_on [T26, T30, T37] but its ACs specify two additional data dependencies: 'My Private Coaching tab shows only the caller's private messages (calls privateCoaching/myMessages from T16)' — T16 is absent from T31's depends_on; and 'nav tabs… My Guidance' shows synthesis content delivered by the mySynthesis query (bundled in T23) — T23 is also absent from T31's depends_on.",
+      "fix": "(1) Remove T26 from T29's depends_on. Add T29 to T26's depends_on (T26 renders T29). (2) Add T16 to T31's depends_on (for privateCoaching/myMessages). Add T23 to T31's depends_on (for jointChat/mySynthesis). After T23 is split per the sizing objection above, T31 should depend on the new T23b convex-query ticket specifically."
+    },
+    {
+      "dimension": "decisions_surfaced",
+      "task_ids": ["T18", "T23"],
+      "issue": "The surface bundling choices in T18 and T23 are unlabeled inferences. T18 groups a Convex action (generateAIResponse) with two mutations under the label 'convex-mutation' without any decision field explaining the grouping. T23 groups a Convex query (mySynthesis) with a Convex action under the label 'convex-action' without a decision field. Both choices deviate from the plan's own one-surface-per-ticket rule and should be surfaced so a reviewer can evaluate the trade-off.",
+      "fix": "After splitting T18 and T23 per the sizing objection, the inferences disappear. If the generator chooses not to split, add a decision field to each ticket: for T18 — 'Grouping generateAIResponse action with its triggering mutations for cohesion; all three implement the private-coaching AI loop. Acknowledge: the surface label convex-mutation is inaccurate for the action; rename to convex-mutation+action if splitting is deferred.' For T23 — 'Grouping mySynthesis query with synthesis/generate action because they are produced in the same milestone step; acknowledge mixed surface; T24 and T31 both depend on the query portion.'"
+    },
+    {
+      "dimension": "playwright_ownership",
+      "task_ids": ["T34"],
+      "issue": "T34 (AuditLogPage /admin/audit) is a user-visible, interactive admin page with distinct behavior (filterable table, Drawer for row metadata, auditLog/list Convex query) but has an empty playwright_owned array with no decision note explaining why it is exempt. admin-templates.spec.ts covers template CRUD (T33) but does not cover the audit log page. The audit log is the primary transparency and admin-accountability surface for the product and warrants at least a smoke E2E.",
+      "fix": "Either (a) add 'admin-audit.spec.ts' to T34's playwright_owned with a minimal spec (admin navigates to /audit, sees at least one entry after the admin-templates flow, clicks a row, verifies Drawer opens with JSON metadata); or (b) extend admin-templates.spec.ts to cover the audit log table after template actions and add 'admin-templates.spec.ts' to T34's playwright_owned. Add a decision field if (b) is chosen: 'Reusing admin-templates.spec.ts for audit log coverage rather than creating a dedicated spec, since the audit entries are generated by the template actions already tested there.'"
+    }
+  ],
+  "summary": "Round 2 addresses all ten round-1 objections credibly: NFR-privacy is now on T13/T20/T21, NFR-security-auth on T15/T33, NFR-performance on T28, convex-test replaces mocked-db Vitest across the backend, T25/T28/T30/T32 are cleanly split by function type, phantom and missing dependency pairs (T19→T17, T26→T24, T24→T8, T17→T8, T15 missing T16, T9 missing T22) are all fixed, the T26 design token decision field is present, and the privateCoaching/myMessages query is now fully implemented in T16 with proper ACs. Coverage is complete and the plan structure is genuinely improved. Three dimensions still fall short of the pass threshold: (1) Sizing (6) — T18 bundles a mutation and an action under 'convex-mutation', and T23 bundles an action and a reactive query under 'convex-action'; these were not caught in round 1 but are the same class of violation the generator correctly fixed for T25/T28/T30/T32. (2) Dependency completeness (7) — T29→T26 is a backward phantom dependency (T26 renders T29, not the reverse), and T31 is missing T16 and T23 despite its ACs explicitly naming those functions. (3) Decisions surfaced (7) — T18 and T23's surface-bundling choices are unlabeled inferences. Fix these three areas and the plan should converge."
+}

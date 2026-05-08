@@ -1,0 +1,597 @@
+{
+  "epic_title": "Conflict Coach v1 — AI-Mediated Two-Party Conflict Resolution Web App",
+  "planning_assumptions": [
+    "Stack is locked: React 18 + Vite + TypeScript + Tailwind CSS + shadcn/ui, Convex (DB + functions + auth + realtime), Anthropic Claude via @anthropic-ai/sdk, Playwright + Vitest, GitHub Actions CI.",
+    "Auth provider is Convex Auth (magic link + Google OAuth); swap to Clerk only if blocking bugs surface in Phase 1.",
+    "Convex managed cloud is used for all environments; self-hosting is out of scope for v1.",
+    "P2 user stories (US-16 through US-19: email notifications, voluntary transcript sharing, PDF export, inline rephrase) are deferred and receive no tasks.",
+    "Admin role promotion is a manual Convex Dashboard action in v1 (no self-serve admin claim UI).",
+    "Each phase completes before the next begins; cross-phase dependencies are implicit and are not repeated as depends_on edges.",
+    "Playwright E2E tests and Vitest unit tests for each feature are acceptance criteria on the feature task itself, not standalone tasks. The sole exception is CI + test infrastructure setup in Phase 0.",
+    "The five PRD §7.1 privacy security tests (private message isolation, synthesis isolation, draft message isolation, joint chat positive-control, cross-case isolation) are distributed to the feature tasks that own each data surface: T10b (private messages), T14 (synthesis), T16 (joint chat), T18 (draft coach). All five are authored as Playwright ACs and organized under `playwright/privacy.spec.ts` for traceability to PRD §7.1 launch criterion #2.",
+    "The shared ChatWindow component (Phase 1, T9) is reused by joint chat and Draft Coach in Phase 2; Phase 2 tasks may depend on it implicitly through the phase boundary.",
+    "T10a (convex/lib/prompts.ts, Phase 1) is a cross-phase dependency: T14 (synthesis) and T19 (Draft Coach AI action) in Phase 2 rely on it implicitly through the phase boundary. No explicit depends_on edge is needed from Phase 2 tasks back to T10a.",
+    "T10d (convex/lib/costTracking.ts stub, Phase 1) is the single module all four AI actions call for cost recording and cap checking. T10b calls it directly; T14, T17b, and T19 in Phase 2 also call it. T17c (Phase 2) replaces the stub's enforcement logic with real cap checks against the accumulated totals—the module interface is unchanged. All four AI action tasks carry ACs requiring calls to checkCostLimit and recordSpend.",
+    "T10b calls compressIfNeeded (from T10c) before assembling the Claude message array, and calls checkCostLimit/recordSpend (from T10d) before/after every Claude API call. These wiring points are explicit in T10b's ACs.",
+    "T10b wires PrivateCoachingView using the shared ChatWindow component; T9 (ChatWindow) must be complete before T10b can satisfy its view-wiring ACs. T9 is therefore an explicit depends_on for T10b.",
+    "Token estimate calibration: trivial config 15-30 min; small CRUD 30-60 min; AC-rich feature 60-120 min; cross-cutting concern 120-240 min."
+  ],
+  "phases": [
+    {
+      "phase_id": "P0",
+      "goal": "Stand up the project skeleton, Convex schema, auth configuration, React app shell, CI pipeline, and seed data so all Phase 1 feature work has a stable, type-safe foundation.",
+      "completion_condition": "`git clone && npm install && npx convex dev && npm run dev` reaches a running empty app; CI lint + typecheck + Vitest placeholder + Playwright placeholder all pass; schema deployed to Convex dev environment; seed script creates admin user and 3 default templates; state-machine Vitest spec passes.",
+      "tasks": [
+        {
+          "task_id": "T1",
+          "title": "Convex schema, stateMachine helper, error normalization, and state-machine Vitest spec",
+          "summary": "Implement `convex/schema.ts` exactly matching the tech spec §3.1 (all 11 tables with indexes). The `cases` table additionally carries three cost-tracking fields used by T10d's module. Build `convex/stateMachine.ts`, the single module responsible for validating and executing all case status transitions; every mutation that changes case status must call it. Add `convex/lib/errors.ts` with the 9 normalized `ConvexError` codes from tech spec §7.4 and a shared `requireAuth` helper. Write a Vitest spec (`convex/stateMachine.test.ts`) covering all valid transitions and all guarded invalid transitions.",
+          "acceptance_criteria": [
+            "schema.ts defines all 11 tables: users, cases, partyStates, privateMessages, jointMessages, draftSessions, draftMessages, inviteTokens, templates, templateVersions, auditLog — with the exact fields and indexes specified in tech spec §3.1.",
+            "The `cases` table includes three additional optional cost fields: `costUsd: v.optional(v.number())` (accumulated USD spend), `costTokens: v.optional(v.number())` (accumulated token count), and `costLimited: v.optional(v.boolean())` (hard-cap flag set by T17c in Phase 2).",
+            "stateMachine.ts exports a `transitionCase(ctx, caseId, toStatus, options)` function that validates the preconditions for the target status and throws `CONFLICT` if they are not met; all 7 status values are handled.",
+            "errors.ts exports a `createError(code, message)` factory wrapping `ConvexError` for all 9 codes: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, INVALID_INPUT, TOKEN_INVALID, RATE_LIMITED, AI_ERROR, INTERNAL.",
+            "`requireAuth(ctx)` returns `{ identity, user }` or throws `UNAUTHENTICATED`; used in every subsequent Convex function.",
+            "`npx convex dev` deploys the schema without errors.",
+            "TypeScript strict mode (`tsc --noEmit`) passes on all Convex files.",
+            "Vitest `convex/stateMachine.test.ts`: all 7 valid transitions (DRAFT_PRIVATE_COACHING → BOTH_PRIVATE_COACHING, BOTH_PRIVATE_COACHING → READY_FOR_JOINT, READY_FOR_JOINT → JOINT_ACTIVE, JOINT_ACTIVE → CLOSED_RESOLVED, JOINT_ACTIVE → CLOSED_UNRESOLVED, JOINT_ACTIVE → CLOSED_ABANDONED, plus re-entry idempotence) pass. All guarded invalid transitions (e.g., skipping phases, transitioning a closed case) throw CONFLICT."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T2",
+          "title": "Convex Auth configuration (magic link + Google OAuth)",
+          "summary": "Configure Convex Auth per the tech spec §4.1 with two providers: email magic link and Google OAuth. Wire the `users` table upsert on first login (upsert by email, default role `USER`). Set all required environment variables in Convex deployment config and document them in `.env.example`.",
+          "acceptance_criteria": [
+            "Magic link auth provider is configured in `convex/auth.ts` and can deliver a sign-in link (tested locally with a real email or the Convex Auth test helper).",
+            "Google OAuth provider is configured; `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` env vars are required and documented.",
+            "On first login (either provider), a `users` row is upserted keyed by email with `role: 'USER'` and `createdAt` set.",
+            "Subsequent logins with the same email return the existing `users` row without creating a duplicate.",
+            "`.env.example` lists all required env vars: `ANTHROPIC_API_KEY`, `CLAUDE_MOCK`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `SITE_URL`, `MAGIC_LINK_EMAIL_FROM`, `VITE_CONVEX_URL`, `VITE_SITE_URL`.",
+            "`ctx.auth.getUserIdentity()` returns a non-null identity in a Convex function when called from an authenticated session."
+          ],
+          "depends_on": ["T1"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 60
+        },
+        {
+          "task_id": "T3",
+          "title": "React app scaffolding (Vite + Router + Tailwind + shadcn/ui shell)",
+          "summary": "Initialize the React 18 + Vite + TypeScript project. Install and configure Tailwind CSS, shadcn/ui component library, React Router v6, and the Convex React client. Create placeholder route shells for all pages listed in tech spec §9.2. Wire `ConvexProvider` and auth provider in `main.tsx`. Confirm `npm run dev` serves the app on `localhost:5173`.",
+          "acceptance_criteria": [
+            "All route shells from tech spec §9.2 exist as `.tsx` files: LandingPage, LoginPage, InviteAcceptPage, Dashboard, NewCasePage, CaseDetail, PrivateCoachingView, ReadyForJointView, JointChatView, ClosedCaseView, admin/TemplatesListPage, admin/TemplateEditPage, admin/AuditLogPage.",
+            "React Router v6 routes are wired in `App.tsx`; navigating to each route renders the shell without a blank screen or error.",
+            "Authenticated routes redirect to `/login` when there is no valid session.",
+            "shadcn/ui Button, Card, Input, Select, and Textarea primitives are importable and render correctly.",
+            "Tailwind CSS purge is configured; `npm run build` produces a bundle without Tailwind class bloat.",
+            "`ConvexProvider` wraps the app; `useQuery` and `useMutation` hooks are importable from `convex/react`.",
+            "`tsc --noEmit` passes with strict mode on."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 75
+        },
+        {
+          "task_id": "T4",
+          "title": "CI pipeline + test infrastructure (GitHub Actions, Vitest, Playwright, CLAUDE_MOCK stub, seed script)",
+          "summary": "Create the GitHub Actions workflow with four jobs: lint (ESLint + Prettier), typecheck (`tsc --noEmit`), unit (Vitest), and e2e (Playwright). Configure Playwright with a Convex dev deployment spun up per CI run. Implement the `CLAUDE_MOCK=true` stub responder in `convex/lib/aiMock.ts`. Write a `convex/seed.ts` admin-callable script that creates one admin user and 3 default templates.",
+          "acceptance_criteria": [
+            "GitHub Actions CI workflow file exists at `.github/workflows/ci.yml` with four named jobs: lint, typecheck, unit, e2e.",
+            "CI runs on every push to `main` and every pull request.",
+            "Vitest is configured; `npm run test:unit` runs and exits 0 with at least one placeholder test.",
+            "Playwright is configured; `npm run test:e2e` runs and exits 0 with at least one placeholder spec.",
+            "When `CLAUDE_MOCK=true` env var is set, all Convex actions that call Anthropic use `aiMock.ts` instead; the mock streams back a deterministic string in 50ms-incremented chunks, then sets status `COMPLETE`.",
+            "`convex/seed.ts` is callable with `npx convex run seed` and creates: one admin user (email configurable via env var), templates for 'workplace', 'family', 'personal' categories each with a minimal `globalGuidance` string and a published initial version.",
+            "Running seed twice is idempotent (no duplicates).",
+            "README documents the cold-start sequence: `git clone && npm install && cp .env.example .env.local && npx convex dev && npm run dev`."
+          ],
+          "depends_on": ["T1", "T2", "T3"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 90
+        }
+      ]
+    },
+    {
+      "phase_id": "P1",
+      "goal": "Deliver the complete core flow: a developer can create a case, invite a second party (or use solo mode), complete private coaching as both parties, and see all cases on the dashboard.",
+      "completion_condition": "The solo mode path (create case → private coaching for both parties → both mark complete) works end-to-end with no developer intervention; the two-browser invite flow works end-to-end including the invitee's form submission; dashboard shows cases with correct phase-level status.",
+      "tasks": [
+        {
+          "task_id": "T5",
+          "title": "Authentication UI — login, session persistence, logout (US-01, US-02)",
+          "summary": "Build `LoginPage.tsx` with magic link and Google OAuth sign-in flows. On successful auth, redirect to dashboard (or to the invite URL if a token was stashed). Implement logout: clear session client- and server-side, redirect to landing/login. Ensure session persists across browser reloads until explicit logout or 30-day expiry.",
+          "acceptance_criteria": [
+            "LoginPage renders a magic-link email input and a 'Continue with Google' button.",
+            "Submitting the magic-link form sends a sign-in email; clicking the link in the email authenticates the user and redirects to `/dashboard`.",
+            "Google OAuth button initiates the OAuth flow and redirects to `/dashboard` on success.",
+            "If the user navigated to `/invite/:token` before logging in, the token is preserved in `localStorage` and the user is redirected back to `/invite/:token` after authentication.",
+            "Refreshing the browser while authenticated keeps the session active (no re-login required).",
+            "Clicking 'Log out' calls `signOut()`, clears the Convex session, and redirects to `/login`.",
+            "After logout, navigating to `/dashboard` redirects back to `/login`.",
+            "Auth UI passes Playwright keyboard-only navigation (tab to each control, Enter to submit).",
+            "No password input field exists anywhere in the UI."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T6",
+          "title": "Case creation form + invite token generation (US-03)",
+          "summary": "Build `NewCasePage.tsx` with the structured form (category select, main topic text, description textarea, desired outcome text). On submit, call the `cases/create` mutation which creates the Case row, the initiator's `partyStates` row, and a 32-char crypto-random invite token. After creation, show the invite link with a copy button and guidance text.",
+          "acceptance_criteria": [
+            "NewCasePage form has: category select (workplace, family, personal, contractual, other), main topic text input (single line), description textarea (multi-paragraph), desired outcome text input.",
+            "All four fields are required; submitting with any empty field shows inline validation errors and does not call the mutation.",
+            "`cases/create` mutation creates: a `cases` row with status `DRAFT_PRIVATE_COACHING`, `isSolo: false`, `templateVersionId` set to the current version of the default template for the selected category, `initiatorUserId` set; a `partyStates` row for the initiator with the form fields populated.",
+            "Invite token is generated using `crypto.randomUUID().replace(/-/g,'')` (two UUIDs concatenated, trimmed to 32 chars) and stored as an `inviteTokens` row with status `ACTIVE`.",
+            "After creation, user sees the invite URL (`{SITE_URL}/invite/{token}`) with a one-click copy button and explanatory text.",
+            "Attempting to create a case while unauthenticated returns `UNAUTHENTICATED` error.",
+            "Playwright test: authenticated user fills the form, submits, and sees the invite link; invite URL contains a 32-character token."
+          ],
+          "depends_on": ["T5"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T7",
+          "title": "Invite acceptance flow — InviteAcceptPage + redeem mutation + invitee form (US-04)",
+          "summary": "Build `InviteAcceptPage.tsx` which loads the invite token from the URL, shows a landing page explaining Conflict Coach and the case summary (category, initiator display name, main topic — nothing from private coaching). Logged-out users can register/login with token surviving the auth redirect. On 'Accept', call `invites/redeem` which atomically binds the invitee, creates their `partyStates` row (no form fields yet), marks the token `CONSUMED`, and transitions the case to `BOTH_PRIVATE_COACHING`. After redeeming, the invitee is shown their own form to fill in main topic, description, and desired outcome via `cases/updateMyForm`.",
+          "acceptance_criteria": [
+            "Navigating to `/invite/:token` when logged out shows the landing page with a 'Sign in to accept' button; after auth, the user is returned to `/invite/:token` and sees the Accept prompt.",
+            "The landing page shows: what Conflict Coach is, the case category, the initiator's display name, and the initiator's stated main topic. It does NOT show the initiator's description or desired outcome.",
+            "Clicking 'Accept' calls `invites/redeem(token)` which: validates the token is `ACTIVE` (throws `TOKEN_INVALID` if not), sets `cases.inviteeUserId`, creates a `partyStates` row for the invitee with role `INVITEE` and no form fields yet, marks the token `CONSUMED` (atomically in one Convex mutation), and transitions the case via `stateMachine.ts` to `BOTH_PRIVATE_COACHING`.",
+            "After redeeming, the invitee is shown their own form (mainTopic, description, desiredOutcome fields) which submits via `cases/updateMyForm`; all three fields are required; after submission the invitee is redirected to PrivateCoachingView.",
+            "`cases/updateMyForm` validates the caller is the invitee of this case and the case is in `DRAFT_PRIVATE_COACHING` or `BOTH_PRIVATE_COACHING` status; otherwise throws `FORBIDDEN` or `CONFLICT`.",
+            "Reusing a consumed token shows an error message with login/dashboard options instead of an Accept button.",
+            "A user who is already a party to the case cannot re-accept.",
+            "Playwright: two browser contexts — user A creates case, copies invite link; user B opens link, registers, accepts, fills their form, and is redirected to PrivateCoachingView; both users see the case on their dashboards with correct status."
+          ],
+          "depends_on": ["T5", "T6"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T8",
+          "title": "Dashboard + case detail routing (US-05, US-15)",
+          "summary": "Build `Dashboard.tsx` using the `cases/list` reactive query to show all the logged-in user's cases grouped by Active and Closed. Each row shows: other party's display name, category, created date, current status label, and last activity timestamp. The `cases/partyStates` query returns the other party's phase-level status without exposing any content. `CaseDetail.tsx` routes internally to the phase-appropriate subview based on case status.",
+          "acceptance_criteria": [
+            "Dashboard lists all cases where the logged-in user is initiator or invitee, grouped into 'Active' and 'Closed' sections.",
+            "Each case row displays: other party name (or 'Pending' if invitee hasn't joined), category, created date, current status label, and last activity date.",
+            "The `cases/partyStates` query returns `{ self: PartyState, otherPhaseOnly: { hasCompletedPC: boolean } }` and nothing else about the other party.",
+            "Clicking a case row navigates to `/cases/:caseId` which renders the correct subview: PrivateCoachingView for private coaching statuses, ReadyForJointView for READY_FOR_JOINT, JointChatView for JOINT_ACTIVE, ClosedCaseView for closed statuses.",
+            "If a case's status requires the other party to have joined and they haven't, the case detail shows a waiting state with the invite link still accessible.",
+            "Dashboard first meaningful paint occurs in under 1 second (measured via Playwright performance API in CI).",
+            "Attempting to read another user's case detail via direct URL returns NOT_FOUND (or 404-equivalent redirect)."
+          ],
+          "depends_on": ["T5", "T6"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 75
+        },
+        {
+          "task_id": "T9",
+          "title": "Shared ChatWindow component (ChatWindow, MessageBubble, MessageInput, StreamingIndicator)",
+          "summary": "Build the reusable `ChatWindow.tsx` component and its sub-components. MessageBubble renders markdown content, distinguishes user vs AI messages visually, and handles STREAMING, COMPLETE, and ERROR states. MessageInput is a textarea with submit on Enter (Shift+Enter for newlines). This component is used by Private Coaching, Joint Chat, and Draft Coach.",
+          "acceptance_criteria": [
+            "ChatWindow accepts a `messages` array prop and renders each as a MessageBubble.",
+            "User messages are visually distinguished from AI messages (different alignment or background).",
+            "AI messages with `status: STREAMING` show content rendered so far plus a blinking cursor; copy button is hidden.",
+            "AI messages with `status: COMPLETE` show full markdown-rendered content, a copy-to-clipboard button, and a relative timestamp.",
+            "AI messages with `status: ERROR` show an error indicator and a 'Retry' button; clicking Retry calls an `onRetry(messageId)` callback.",
+            "MessageInput submits on Enter key; Shift+Enter inserts a newline; Send button triggers the same action.",
+            "ChatWindow auto-scrolls to the latest message unless the user has scrolled up (scroll position detection).",
+            "Chat message container has `role='log'` and `aria-live='polite'` for screen reader accessibility.",
+            "All interactive elements (Retry, Copy, Send) have visible labels or `aria-label`.",
+            "Component is keyboard-navigable: Tab reaches Send button, Enter activates it."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T10a",
+          "title": "Shared prompt assembly module — convex/lib/prompts.ts (all 4 AI roles)",
+          "summary": "Implement `convex/lib/prompts.ts`, the shared module that assembles system prompts and message arrays for all four AI roles: PRIVATE_COACH, COACH, DRAFT_COACH, and SYNTHESIS. Each role has explicit context injection rules per tech spec §6.3. This module has no external API calls and can be fully unit-tested in isolation. It is consumed by T10b (private coaching action), T14 (synthesis), T17b (Coach action), and T19 (Draft Coach action).",
+          "acceptance_criteria": [
+            "`prompts.ts` exports `assemblePrompt({ role, caseId, actingUserId, recentHistory, templateVersion? }): { system: string, messages: MessageParam[] }`; all four roles are handled with correct context injection rules per tech spec §6.3.",
+            "PRIVATE_COACH role: system prompt matches the verbatim text from tech spec §6.3.1; context includes only the acting party's form fields and message history — never the other party's privateMessages, partyStates form fields, or synthesisText.",
+            "SYNTHESIS role: context includes both parties' form fields and private coaching histories per tech spec §6.3.2; system prompt contains the verbatim anti-quotation critical instruction.",
+            "COACH role: context includes joint chat history + both parties' synthesisText only; does NOT include any raw privateMessages.",
+            "DRAFT_COACH role: context includes the drafting user's joint-chat history and their own synthesisText only; does NOT include the other party's synthesisText or any privateMessages.",
+            "Vitest unit test: `assemblePrompt` with role=PRIVATE_COACH and a populated partyStates does not include the string 'otherParty' or any other-party identifier in the returned context.",
+            "Vitest unit test: `assemblePrompt` with role=DRAFT_COACH does not include the other party's synthesisText in the returned context.",
+            "TypeScript strict mode: all returned message arrays are typed as `MessageParam[]` compatible with `@anthropic-ai/sdk`."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 60
+        },
+        {
+          "task_id": "T10b",
+          "title": "Private coaching AI action — convex/privateCoaching/generateAIResponse.ts (US-06, US-07, FR-04)",
+          "summary": "Implement `convex/privateCoaching/generateAIResponse.ts` (Convex action). The action first checks the cost limit via T10d's stub, then compresses the message history via T10c's `compressIfNeeded` before passing it to `assemblePrompt(role=PRIVATE_COACH)`, calls Claude Sonnet with streaming, updates the `privateMessages` row in real time, and records token spend via T10d's `recordSpend` after completion. Wire PrivateCoachingView — built on top of the shared ChatWindow component (T9), which must already exist — to display the chat and send user messages. Enforce that private messages are only readable by their owner.",
+          "acceptance_criteria": [
+            "generateAIResponse action: before calling Claude, calls `checkCostLimit(ctx, caseId)` from `convex/lib/costTracking.ts`; if `{ limited: true }` is returned, throws `RATE_LIMITED` immediately without invoking Claude or inserting a new STREAMING row.",
+            "Before constructing the message array, calls `compressIfNeeded(history, 60000)` from `convex/lib/compression.ts`; the returned (possibly compressed) array is what gets passed to `assemblePrompt` and onward to the SDK.",
+            "Inserts a `privateMessages` row with `status: STREAMING`, calls `assemblePrompt` with role=PRIVATE_COACH on the (possibly compressed) history, calls Claude Sonnet (`claude-sonnet-4-5`) with streaming, batches token updates to the row every ~50ms, sets `status: COMPLETE` with `tokens` count on completion.",
+            "After streaming completes successfully, calls `recordSpend(ctx, caseId, tokensUsed)` from `convex/lib/costTracking.ts` to accumulate token usage.",
+            "PrivateCoachingView renders the party's private chat using the shared ChatWindow component (T9); only the calling user's private messages are fetched and rendered.",
+            "On Claude API 429, the action retries once after 2 seconds; on second failure, sets message `status: ERROR`.",
+            "On network timeout (>30s) or other non-retryable error, sets message `status: ERROR` with the applicable error code.",
+            "A direct query for another user's private messages by any authenticated user returns FORBIDDEN (privacy enforcement at query layer).",
+            "Vitest unit test: the Convex query `privateCoaching/messages` called by a user who is not the owner of the requested messages returns FORBIDDEN.",
+            "Playwright (`privacy.spec.ts`, PRD §7.1 launch criterion #2, Test 1 — private message isolation): using two browser contexts, user B directly calls the `privateCoaching/messages` query for user A's caseId+userId; asserts the response is FORBIDDEN (hard access denial, not an empty array).",
+            "Playwright: in solo mode, messages sent as initiator do not appear when toggled to invitee's private coaching view."
+          ],
+          "depends_on": ["T9", "T10a", "T10c", "T10d"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 75
+        },
+        {
+          "task_id": "T10c",
+          "title": "Transcript compression utility — convex/lib/compression.ts",
+          "summary": "Implement `convex/lib/compression.ts` which compresses long private coaching transcripts to stay within Claude's context window. When total token count exceeds 60k, the utility takes the oldest 50% of messages, calls Haiku with the compression prompt from tech spec §6.4, replaces them with a single SUMMARY message, and caches compressed summaries by content hash to avoid redundant Haiku calls.",
+          "acceptance_criteria": [
+            "`compression.ts` exports `compressIfNeeded(messages: MessageParam[], tokenBudget: number): Promise<MessageParam[]>`; returns the original array if total tokens are under budget.",
+            "When token count exceeds 60k, the oldest 50% of messages are summarized using `claude-haiku-4-5-20251001` with the compression prompt from tech spec §6.4.",
+            "The summary replaces the compressed messages with a single `{ role: 'user', content: '[Summary of earlier conversation]: ...' }` entry.",
+            "Compression results are cached by a SHA-256 hash of the input messages; calling with the same messages twice makes only one Haiku API call.",
+            "Vitest unit test: given a message array with a total token count exceeding the budget, `compressIfNeeded` returns a shorter array with a leading summary message.",
+            "Vitest unit test: calling `compressIfNeeded` twice with identical input makes exactly one external API call (cache hit on second call).",
+            "Vitest unit test: given a message array within budget, the original array is returned unchanged."
+          ],
+          "depends_on": ["T10a"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 45
+        },
+        {
+          "task_id": "T10d",
+          "title": "Cost-tracking stub — convex/lib/costTracking.ts (Phase 1 interface for all AI actions)",
+          "summary": "Implement `convex/lib/costTracking.ts`, the minimal stub that provides the cost-tracking interface all four AI actions depend on. The stub records token spend to the cost fields on the `cases` table (added to schema in T1) and exports `checkCostLimit` and `recordSpend`. In Phase 1, `checkCostLimit` always returns `{ limited: false }` and `recordSpend` is a real accumulator write. T17c in Phase 2 fills in the real soft-cap and hard-cap enforcement logic against these accumulated totals; the function signatures are unchanged so no AI action callers need updating.",
+          "acceptance_criteria": [
+            "`costTracking.ts` exports `checkCostLimit(ctx: ActionCtx, caseId: Id<'cases'>): Promise<{ softCapReached?: boolean, limited: boolean }>` — in Phase 1 implementation, reads `cases.costLimited` from the DB; returns `{ limited: true }` if the flag is set, `{ limited: false }` otherwise. The `softCapReached` field is absent in the Phase 1 stub; T17c adds it without changing the callers.",
+            "`costTracking.ts` exports `recordSpend(ctx: ActionCtx, caseId: Id<'cases'>, tokensUsed: number): Promise<void>` — atomically increments `cases.costTokens` by `tokensUsed` and increments `cases.costUsd` by the corresponding USD amount (Sonnet pricing per token, defined as a constant in the module).",
+            "Both functions are callable from Convex actions; they internally run a mutation to read/update the `cases` row atomically.",
+            "TypeScript strict mode: all function signatures use the exact types from `convex/schema.ts`; no `any` casts.",
+            "Vitest unit test: calling `recordSpend` twice accumulates the sum in `cases.costTokens` and `cases.costUsd`.",
+            "Vitest unit test: `checkCostLimit` returns `{ limited: true }` when `cases.costLimited` is set to `true`, and `{ limited: false }` when the field is absent or false."
+          ],
+          "depends_on": ["T1"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 30
+        },
+        {
+          "task_id": "T11",
+          "title": "'Mark private coaching complete' flow + BOTH_PRIVATE_COACHING/READY_FOR_JOINT transitions (FR-05)",
+          "summary": "Add a 'I'm ready for the joint session' button to PrivateCoachingView that calls `privateCoaching/markComplete`. The mutation sets `partyStates.privateCoachingCompletedAt` for the calling user. If both parties have now completed, it schedules the `synthesis/generate` action. Phase-level status visibility on the dashboard and case detail shows the other party's completion state without content.",
+          "acceptance_criteria": [
+            "PrivateCoachingView shows a 'I'm ready for the joint session' button that is enabled only when the user has sent at least one message in private coaching.",
+            "Calling `markComplete` when already completed is idempotent (no error, no second timestamp set).",
+            "After one party marks complete, the other party sees a status indicator: 'Your partner has completed their private coaching' (without any content revelation).",
+            "After both parties mark complete, `synthesis/generate` is scheduled via `ctx.scheduler.runAfter(0, ...)` from within the mutation.",
+            "The case status transitions from `BOTH_PRIVATE_COACHING` to `READY_FOR_JOINT` only after synthesis is written (within the synthesis action, not the markComplete mutation).",
+            "State machine enforces that markComplete can only be called when the case is in `DRAFT_PRIVATE_COACHING` or `BOTH_PRIVATE_COACHING`; calling it in any other state throws `CONFLICT`.",
+            "Playwright: create solo case, complete private coaching as both parties (toggling between them), verify case status changes to READY_FOR_JOINT on dashboard and both parties' case detail shows awaiting-synthesis state."
+          ],
+          "depends_on": ["T10b"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 60
+        },
+        {
+          "task_id": "T12",
+          "title": "Solo mode — isSolo case creation, PartyToggle, useSoloActingParty hook (US-13, FR-09)",
+          "summary": "Add a 'New Solo Case' option on the dashboard. When creating a solo case, `cases/create` is called with `isSolo: true`; the mutation sets both `initiatorUserId` and `inviteeUserId` to the current user, creates two `partyStates` rows, and skips invite token generation. Build `PartyToggle.tsx` in the top nav for solo cases. The `useSoloActingParty` hook reads the `?as=` query param and returns the correct acting userId for all queries.",
+          "acceptance_criteria": [
+            "Dashboard has a 'New Solo Case' button distinct from 'New Case'; solo cases are visibly flagged with a 'SOLO' badge in the case list and case detail.",
+            "`cases/create` with `isSolo: true` creates both `partyStates` rows bound to the same userId in one transaction; no invite token is created.",
+            "Solo cases show `PartyToggle` in the top nav with 'Viewing as Initiator' and 'Viewing as Invitee' options.",
+            "Toggling switches `?as=` in the URL; refreshing the page preserves the toggle state.",
+            "All queries in PrivateCoachingView, ReadyForJointView, and JointChatView use `useSoloActingParty()` to resolve the acting userId; each party's private data remains isolated even in solo mode.",
+            "AI responses in private coaching are generated independently per acting party (separate message rows, separate context).",
+            "Solo cases are flagged in audit log entries where applicable.",
+            "Playwright `solo-full-flow.spec.ts`: create solo case, toggle to initiator, complete private coaching (mark complete), toggle to invitee, complete private coaching (mark complete), verify both parties' dashboard shows READY_FOR_JOINT status."
+          ],
+          "depends_on": ["T6", "T8", "T9", "T10b", "T11"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 90
+        }
+      ]
+    },
+    {
+      "phase_id": "P2",
+      "goal": "Deliver the complete joint session: AI synthesis, real-time joint chat with Coach facilitation, Draft Coach with send gate, case closure, and verified privacy guarantees.",
+      "completion_condition": "The full solo flow end-to-end (`solo-full-flow.spec.ts`) passes including synthesis display, joint chat, Draft Coach loop, and closure (`draft-coach.spec.ts` passes, T18); all five `privacy.spec.ts` security tests (distributed across T10b, T14, T16, T18) pass; cost tracking enforces both soft and hard caps (T17c).",
+      "tasks": [
+        {
+          "task_id": "T13",
+          "title": "Privacy response filter module — convex/lib/privacyFilter.ts",
+          "summary": "Implement the standalone privacy filter used by both synthesis generation and the Coach AI action. Given a set of 'other party' private message strings and a candidate AI response, the filter tokenizes on whitespace and checks for any substring of 8 or more consecutive tokens appearing in the candidate response. Returns `{ passed: boolean, matchedSubstrings: string[] }`. This module has no Convex dependencies and can be unit-tested in isolation.",
+          "acceptance_criteria": [
+            "`privacyFilter.ts` exports `checkPrivacyLeak(otherPartyMessages: string[], candidateResponse: string, minTokens?: number): { passed: boolean, matchedSubstrings: string[] }` with default `minTokens = 8`.",
+            "Returns `passed: false` when any 8-token window from the other party's messages appears verbatim in the candidate response.",
+            "Returns `passed: true` when the candidate response shares no 8-token window with the other party's messages.",
+            "Handles edge cases: empty other-party messages (always passes), single-word messages (always passes since < 8 tokens), candidate response shorter than 8 tokens (always passes).",
+            "Vitest unit tests: (1) exact substring match detects leak; (2) paraphrase with different word order passes; (3) boundary condition at exactly 7 tokens passes; (4) boundary at exactly 8 tokens fails; (5) empty other-party array passes."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 60
+        },
+        {
+          "task_id": "T14",
+          "title": "Synthesis generation action — both-party context, response filter, state transition (US-08, FR-06)",
+          "summary": "Implement `convex/synthesis/generate.ts` (Convex action). The action checks the cost limit via T10d's stub, calls `assemblePrompt(role=SYNTHESIS)`, calls Claude Sonnet in non-streaming mode, validates the JSON output (`{ forInitiator, forInvitee }`), applies `privacyFilter` to each synthesis text (up to 2 retries on leak detection, then fallback to generic text + audit log entry), writes results to both `partyStates.synthesisText` rows, records token spend via T10d's `recordSpend`, and transitions the case to `READY_FOR_JOINT` via stateMachine.",
+          "acceptance_criteria": [
+            "Synthesis action is only callable when both parties have `privateCoachingCompletedAt` set; otherwise throws `CONFLICT`.",
+            "Before calling Claude, calls `checkCostLimit(ctx, caseId)` from `convex/lib/costTracking.ts`; if `{ limited: true }`, throws `RATE_LIMITED` without calling Claude.",
+            "The Claude call uses `assemblePrompt(role=SYNTHESIS)` which includes the verbatim anti-quotation critical instruction from tech spec §6.3.2 in the system prompt.",
+            "Response is parsed as JSON `{ forInitiator: string, forInvitee: string }`; if JSON parse fails, the action logs the error and retries once; on second failure sets a generic fallback and flags in audit log.",
+            "Each synthesis text is passed through `privacyFilter.checkPrivacyLeak` against the OTHER party's raw private messages; if leak detected, regenerates up to 2 times.",
+            "If all 3 attempts fail the privacy filter, writes a generic fallback synthesis ('The system was unable to generate personalized guidance at this time.') and writes a `SYNTHESIS_PRIVACY_FALLBACK` entry to `auditLog`.",
+            "On success: both `partyStates.synthesisText` and `synthesisGeneratedAt` are set, then `stateMachine.transitionCase` is called to move to `READY_FOR_JOINT` in the same logical step.",
+            "After the Claude call completes (success or fallback), calls `recordSpend(ctx, caseId, tokensUsed)` from `convex/lib/costTracking.ts`.",
+            "A query for one party's synthesis by the other party returns FORBIDDEN.",
+            "Vitest unit test: synthesis action with mocked Claude returning a response containing 8+ token verbatim match triggers retry and eventually uses fallback.",
+            "Playwright (`privacy.spec.ts`, PRD §7.1 launch criterion #2, Test 2 — synthesis isolation): using two browser contexts, user B directly calls the synthesis query (`jointChat/mySynthesis`) for user A's partyState in this case; asserts the response is FORBIDDEN."
+          ],
+          "depends_on": ["T13", "T10d"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 120
+        },
+        {
+          "task_id": "T15",
+          "title": "ReadyForJointView — synthesis display and 'Enter Joint Chat' CTA (US-08, US-09)",
+          "summary": "Build `ReadyForJointView.tsx` which shows the logged-in party's synthesis text and an 'Enter Joint Chat' button. Clicking 'Enter Joint Chat' transitions the case to `JOINT_ACTIVE` (first party to enter) and navigates to JointChatView. Include a loading state while synthesis is still generating.",
+          "acceptance_criteria": [
+            "ReadyForJointView is rendered by CaseDetail when `case.status` is `READY_FOR_JOINT`.",
+            "Shows the calling party's `synthesisText` (rendered as markdown) once `synthesisGeneratedAt` is set.",
+            "While synthesis is not yet generated, shows a 'Generating your guidance…' loading state (spinner or skeleton).",
+            "Shows only the calling party's synthesis; does NOT render the other party's synthesis text.",
+            "'Enter Joint Chat' button is shown below synthesis.",
+            "Clicking 'Enter Joint Chat' calls a `jointChat/enterSession` mutation that transitions `case.status` from `READY_FOR_JOINT` to `JOINT_ACTIVE` (only on first entry; subsequent calls are idempotent).",
+            "After entering, both parties see the JointChatView; the Coach posts an opening message grounded in the case's main topic.",
+            "Playwright: in solo mode, after both parties complete private coaching, toggle to each party and verify their respective synthesis text appears (not each other's)."
+          ],
+          "depends_on": ["T14"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 60
+        },
+        {
+          "task_id": "T16",
+          "title": "Joint chat UI + real-time messages (US-09, FR-07)",
+          "summary": "Build `JointChatView.tsx` using the shared ChatWindow component. Wire `jointChat/messages` reactive query to show all messages as they arrive. Build `jointChat/sendUserMessage` mutation: validates caller is a party, case is `JOINT_ACTIVE`, inserts the user message with `status: COMPLETE`, and schedules the Coach evaluation action. Both parties' messages and Coach messages are visible to both parties in real time via Convex reactive updates.",
+          "acceptance_criteria": [
+            "JointChatView subscribes to `jointChat/messages` for the case; messages update reactively on both clients without a page refresh.",
+            "User messages appear immediately (optimistic UI) and are confirmed once the mutation completes.",
+            "Coach messages appear with a distinct visual treatment (e.g., 'Coach' label, different color).",
+            "Calling `sendUserMessage` when `case.status != JOINT_ACTIVE` throws `CONFLICT`.",
+            "Calling `sendUserMessage` when the caller is not a party to the case throws `FORBIDDEN`.",
+            "Joint chat first meaningful paint ≤ 500ms from navigation (Playwright performance measurement).",
+            "Message list is accessible: `role='log'`, `aria-live='polite'`, new messages announced to screen readers.",
+            "Playwright (`privacy.spec.ts`, PRD §7.1 launch criterion #2, Test 4 — joint chat positive control): user A sends a message in joint chat; user B's joint chat view receives the message reactively without a page refresh (confirms joint visibility is intentional and working).",
+            "Playwright (`privacy.spec.ts`, PRD §7.1 launch criterion #2, Test 5 — cross-case isolation): user B calls `cases/get` for a case they are not a party to (owned by user A and a third user); asserts the response is NOT_FOUND.",
+            "Playwright: in solo mode, send a message as initiator, toggle to invitee, verify the message appears."
+          ],
+          "depends_on": ["T15"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T17a",
+          "title": "Coach invocation decision — Haiku classification gate, @-mention detection, exchange timer",
+          "summary": "Implement the invocation-decision layer for the Coach AI, extracted as `convex/jointChat/coachShouldRespond.ts`. This module calls Haiku to classify each new user message and applies the @-mention regex and 5-exchange timer logic to return `{ shouldRespond: boolean, reason: ClassificationReason }`. It has no Sonnet dependency and can be unit-tested without live AI calls. The `generateCoachResponse` action in T17b consumes this module.",
+          "acceptance_criteria": [
+            "`coachShouldRespond.ts` exports `checkShouldCoachRespond({ recentMessages, latestMessage, lastCoachMessageIndex }): Promise<{ shouldRespond: boolean, classification: 'INFLAMMATORY' | 'PROGRESS' | 'QUESTION_TO_COACH' | 'NORMAL_EXCHANGE', mentionsCoach: boolean }>`.",
+            "Haiku classification (`claude-haiku-4-5-20251001`) is called with a 10k token budget on every invocation; result maps to one of the 4 classification values.",
+            "Returns `shouldRespond: true` when classification is INFLAMMATORY, PROGRESS, or QUESTION_TO_COACH.",
+            "Returns `shouldRespond: true` when the latest message contains '@coach' or '@Coach' (case-insensitive), regardless of classification.",
+            "Returns `shouldRespond: true` when 5 or more user exchanges have occurred since the last Coach message.",
+            "Returns `shouldRespond: false` only when classification is NORMAL_EXCHANGE AND no @-mention AND fewer than 5 exchanges since last Coach message.",
+            "Vitest unit test: given NORMAL_EXCHANGE classification, no @-mention, and 4 prior user exchanges, `shouldRespond` is false.",
+            "Vitest unit test: given NORMAL_EXCHANGE classification, no @-mention, and exactly 5 prior user exchanges, `shouldRespond` is true.",
+            "Vitest unit test: @-mention in message forces `shouldRespond: true` regardless of classification."
+          ],
+          "depends_on": ["T16"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 60
+        },
+        {
+          "task_id": "T17b",
+          "title": "Coach facilitation action — Sonnet streaming, soft-cap degradation, privacy filter integration (US-10, FR-07)",
+          "summary": "Implement `convex/jointChat/generateCoachResponse.ts` (Convex action). When `coachShouldRespond` returns true, checks the cost limit via T17c's enforcement. If the hard cap is reached, exits immediately. If the soft cap is reached, inserts the boilerplate degraded message without calling Sonnet. Otherwise calls `assemblePrompt(role=COACH)` and invokes Claude Sonnet with streaming. Applies `privacyFilter.checkPrivacyLeak` against both parties' raw private messages before emitting the response; retries up to 2 times on failure; falls back to generic facilitation message on third failure. Records token spend via T17c's `recordSpend`. Handles all AI error cases per tech spec §6.5.",
+          "acceptance_criteria": [
+            "generateCoachResponse action calls `coachShouldRespond` first; if `shouldRespond: false`, returns immediately without calling Sonnet.",
+            "Before calling Sonnet, calls `checkCostLimit(ctx, caseId)` from `convex/lib/costTracking.ts`; if `{ limited: true }` (hard cap), returns immediately without calling Claude.",
+            "If `checkCostLimit` returns `{ softCapReached: true, limited: false }`, the action skips calling Sonnet and instead inserts a `jointMessages` row (authorType: COACH, status: COMPLETE) with the boilerplate soft-cap text from tech spec §6.6 (e.g., 'I'll keep my facilitation brief to stay within this case's AI budget — consider summarizing where you are and whether you've reached agreement.'); subsequent invocations that still return `softCapReached: true` repeat the same boilerplate without calling Sonnet.",
+            "When generating a full Coach response, calls `assemblePrompt(role=COACH)` which includes joint chat history + both parties' synthesisText; does NOT include any raw privateMessages.",
+            "Coach response is passed through `privacyFilter.checkPrivacyLeak` against both parties' raw private messages; retries up to 2 times on failure; falls back to generic facilitation message ('Let's take a moment to reflect on what's been shared.') on third failure.",
+            "Streaming pattern: insert `jointMessages` row with `status: STREAMING`, batch token updates every ~50ms, set `status: COMPLETE` on finish.",
+            "After streaming completes, calls `recordSpend(ctx, caseId, tokensUsed)` from `convex/lib/costTracking.ts`.",
+            "All AI error cases (429, timeout, content filter, invalid key) surface an error state to the user with a Retry button; 401 errors log to audit log per tech spec §6.5.",
+            "Vitest unit test: privacy filter is applied to Coach output; adversarial input containing verbatim other-party text triggers retry flow.",
+            "Vitest unit test: given `checkCostLimit` returning `{ softCapReached: true, limited: false }`, `generateCoachResponse` does not call the Anthropic SDK and inserts a jointMessages row containing the boilerplate soft-cap text."
+          ],
+          "depends_on": ["T17a", "T13", "T17c"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 75
+        },
+        {
+          "task_id": "T17c",
+          "title": "Per-case AI cost tracking — real soft cap ($2) and hard cap ($10) enforcement (replaces T10d stub)",
+          "summary": "Implement real cap enforcement in `convex/lib/costTracking.ts`, replacing the always-false stub from T10d with actual logic. The `checkCostLimit` function now reads `cases.costUsd`, applies the $2 soft cap (returns `{ softCapReached: true }`) and $10 hard cap (sets `costLimited: true` and returns `{ limited: true }`) rules. The `recordSpend` function already accumulates real spend from Phase 1; this task adds the enforcement thresholds. Both functions' signatures are unchanged (extending the return type with the optional `softCapReached` field that callers already handle) so no AI action callers need signature updates.",
+          "acceptance_criteria": [
+            "The $2 soft cap threshold: when `cases.costUsd` crosses $2, `checkCostLimit` returns `{ softCapReached: true, limited: false }`; the threshold check is purely in `checkCostLimit` — reading and responding to this flag is the responsibility of each AI action caller (T17b for the Coach; T10b, T14, and T19 do not need to react to soft cap since degradation is Coach-specific).",
+            "The $10 hard cap threshold: when `cases.costUsd` crosses $10, a mutation sets `cases.costLimited = true`; subsequent `checkCostLimit` calls return `{ limited: true }` causing all AI actions to throw `RATE_LIMITED` without calling Anthropic.",
+            "The `costLimited` flag is persisted on the `cases` row; re-running any AI action after a service restart still reads the flag and fails immediately.",
+            "`recordSpend` signature and behavior are unchanged from T10d (accumulates tokens and USD); this task adds the threshold checks inside `checkCostLimit`.",
+            "Both functions remain callable from Convex actions via internal mutations.",
+            "Vitest unit test: given a case with accumulated `costUsd` just above $2, `checkCostLimit` returns `{ softCapReached: true, limited: false }`.",
+            "Vitest unit test: given a case with `costLimited: true`, `checkCostLimit` returns `{ limited: true }` without making any DB write.",
+            "Vitest unit test: given a case flagged COST_LIMITED, invoking the synthesis action throws `RATE_LIMITED` without making any Anthropic API call."
+          ],
+          "depends_on": ["T17a", "T10d"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 45
+        },
+        {
+          "task_id": "T18",
+          "title": "Draft Coach panel + session mutations + hard send gate (US-12, FR-08)",
+          "summary": "Build `DraftCoachPanel.tsx` — a private side panel in JointChatView opened by a 'Draft with Coach' button. Implements the session lifecycle: `draftCoach/startSession` mutation, message exchange via `draftCoach/sendMessage`, a 'Generate Draft' button, `DraftReadyCard.tsx` showing the final draft with Send / Edit / Continue / Discard buttons. Only clicking Send triggers `draftCoach/sendFinalDraft` which calls `jointChat/sendUserMessage`.",
+          "acceptance_criteria": [
+            "JointChatView has a 'Draft with Coach' button that opens DraftCoachPanel as a side panel without navigating away.",
+            "DraftCoachPanel shows its own ChatWindow for the draft conversation; messages are invisible to the other party and to the joint-chat Coach.",
+            "Sending a message in the Draft Coach panel calls `draftCoach/sendMessage` and schedules `draftCoach/generateResponse`.",
+            "A 'Generate Draft' button posts a canonical user message ('Generate a draft for me') to the draft conversation.",
+            "When `draftSessions.finalDraft` is set, `DraftReadyCard` replaces the message input, showing: the polished draft text, Send, Edit, Continue Refining, and Discard buttons.",
+            "Clicking Send calls `draftCoach/sendFinalDraft` which internally calls `jointChat/sendUserMessage`, marks the session SENT, closes the panel, and appends the message to the joint chat.",
+            "HARD RULE: No message is ever sent to the joint chat without an explicit Send click; generating a draft does not auto-send.",
+            "Clicking Discard calls `draftCoach/discardSession`, marks session DISCARDED, closes the panel; the draft never appears in joint chat.",
+            "Draft Coach panel is private: its messages are NOT returned by `jointChat/messages` and NOT visible in any query accessible to the other party.",
+            "Playwright `draft-coach.spec.ts`: open panel, iterate 2 turns, click Generate Draft, verify joint chat is NOT updated yet, click Send, verify message appears in joint chat.",
+            "Playwright `draft-coach.spec.ts`: click Discard, verify draft does not appear in joint chat.",
+            "Playwright (`privacy.spec.ts`, PRD §7.1 launch criterion #2, Test 3 — draft message isolation): user B calls `jointChat/messages` for a case where user A has an active draft session; asserts that draftMessages table content is absent from the result (only jointMessages are returned, confirming draft isolation from the joint channel)."
+          ],
+          "depends_on": ["T16"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 120
+        },
+        {
+          "task_id": "T19",
+          "title": "Draft Coach AI action — readiness detection, finalDraft production, privacy constraints (US-12)",
+          "summary": "Implement `convex/draftCoach/generateResponse.ts`. Draft Coach checks the cost limit, uses `assemblePrompt(role=DRAFT_COACH)` (T10a, cross-phase). Context includes the drafting user's joint-chat history and their own synthesis only. After each AI response, inspects the latest user message for readiness signals. When readiness is detected, produces a response with `{ draft: '...' }` JSON and persists to `draftSessions.finalDraft`. Records token spend after each call.",
+          "acceptance_criteria": [
+            "Before calling Claude, calls `checkCostLimit(ctx, caseId)` from `convex/lib/costTracking.ts`; if `{ limited: true }`, throws `RATE_LIMITED` without invoking Claude.",
+            "Draft Coach action context from `assemblePrompt(role=DRAFT_COACH)`: drafting user's joint-chat history + their own synthesisText. Does NOT include: other party's synthesisText, other party's privateMessages, other party's partyStates beyond what's in joint chat.",
+            "Template `draftCoachInstructions` is injected into the system prompt if the case's pinned templateVersion has it; otherwise falls back to a default baseline Draft Coach instruction.",
+            "Readiness detection regex covers: 'i'm ready', 'draft it', 'write the message', 'generate a draft', 'looks good, write it', or the canonical 'Generate a draft for me' string.",
+            "When readiness is detected, the action produces a structured response containing `{ draft: '...' }` JSON; the parsed draft string is written to `draftSessions.finalDraft`.",
+            "Non-readiness turns produce normal conversational responses.",
+            "Streaming pattern is the same as private coaching: STREAMING row → token batches → COMPLETE.",
+            "After streaming completes, calls `recordSpend(ctx, caseId, tokensUsed)` from `convex/lib/costTracking.ts`.",
+            "Vitest unit test: readiness detection returns true for each of the 6 signal phrases and false for unrelated messages.",
+            "Vitest unit test: context assembly for Draft Coach does not include other-party synthesisText."
+          ],
+          "depends_on": ["T18", "T17c"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T20",
+          "title": "Case closure flow — propose, confirm, unilateral close, ClosedCaseView (US-11, FR-11)",
+          "summary": "Implement the three closure mutations and the closure UI within JointChatView. Party A proposes closure via `jointChat/proposeClosure`. Party B sees a confirmation banner and calls `jointChat/confirmClosure` → CLOSED_RESOLVED. Either party can call `jointChat/unilateralClose` → CLOSED_UNRESOLVED. Build `ClosedCaseView.tsx` as a read-only view.",
+          "acceptance_criteria": [
+            "JointChatView shows a 'Propose Closure' button when case is JOINT_ACTIVE; clicking opens a modal for entering agreed-outcome summary text.",
+            "Calling `proposeClosure` sets `partyStates.closureProposed = true` and stores the summary on the case; the other party sees a closure proposal banner in JointChatView with Confirm and Reject options.",
+            "Calling `confirmClosure` when the other party has proposed transitions the case to CLOSED_RESOLVED (via stateMachine); both parties are redirected to ClosedCaseView.",
+            "Rejecting a closure proposal clears `closureProposed` and the banner disappears.",
+            "JointChatView shows a separate 'Walk Away' option; calling `unilateralClose` transitions the case to CLOSED_UNRESOLVED immediately.",
+            "The other party's dashboard shows a badge/indicator when their case has been unilaterally closed.",
+            "ClosedCaseView shows: closure status label, closure summary (if CLOSED_RESOLVED), full joint chat message history (read-only), closed-at date.",
+            "Any mutation that would modify a CLOSED case (sendUserMessage, proposeClosure, etc.) throws `CONFLICT`.",
+            "Closed cases appear in the 'Closed' section of the Dashboard and clicking them navigates to ClosedCaseView.",
+            "Playwright: solo mode — propose closure as initiator, confirm as invitee, verify both views show ClosedCaseView."
+          ],
+          "depends_on": ["T16"],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 90
+        },
+        {
+          "task_id": "T21",
+          "title": "Abandoned case cron — 30-day inactivity auto-close (FR-11)",
+          "summary": "Implement `convex/crons.ts` with a daily scheduled job that scans all cases in `JOINT_ACTIVE` status with `updatedAt` older than 30 days and transitions each to `CLOSED_ABANDONED` via stateMachine.",
+          "acceptance_criteria": [
+            "`convex/crons.ts` registers a daily cron that runs `checkAbandonedCases`.",
+            "`checkAbandonedCases` action queries for all cases with `status: JOINT_ACTIVE` and `updatedAt < now - 30 days`.",
+            "Each matching case is transitioned to `CLOSED_ABANDONED` via `stateMachine.transitionCase`; `closedAt` is set to the current timestamp.",
+            "Cases in any other status (DRAFT_PRIVATE_COACHING, BOTH_PRIVATE_COACHING, READY_FOR_JOINT, any CLOSED status) are NOT touched by this cron.",
+            "The mutation inside the cron is idempotent: running it twice on the same case does not error (already CLOSED_ABANDONED cases are skipped).",
+            "Vitest unit test: given a set of cases with various `updatedAt` values, the abandonment logic correctly identifies cases older than 30 days and skips newer ones."
+          ],
+          "depends_on": ["T20"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 45
+        }
+      ]
+    },
+    {
+      "phase_id": "P3",
+      "goal": "Deliver admin template management with versioning and audit logging, full WCAG 2.1 AA accessibility, comprehensive error/loading/empty states, and a passing Playwright suite that satisfies all PRD §7.1 launch criteria.",
+      "completion_condition": "All Playwright E2E spec files pass in CI (solo-full-flow.spec.ts, draft-coach.spec.ts, privacy.spec.ts, admin-templates.spec.ts, and accessibility keyboard specs); admin can create, version, and archive a template without breaking pinned cases; WCAG 2.1 AA audit via axe-core passes on all critical views; PRD §7.1 launch criteria 1–7 all verified.",
+      "tasks": [
+        {
+          "task_id": "T23",
+          "title": "Admin template CRUD + versioning + audit log writes (US-14, FR-10)",
+          "summary": "Build `TemplatesListPage.tsx` and `TemplateEditPage.tsx` behind an `ADMIN`-role server check. Wire the three admin mutations: `admin/templates/create`, `admin/templates/publishNewVersion` (immutable version rows), `admin/templates/archive`. Every admin mutation writes a row to `auditLog`. Enforce that cases pin to `templateVersionId` at creation and are unaffected by later edits or archival.",
+          "acceptance_criteria": [
+            "All `/admin/*` routes return FORBIDDEN to any user whose `users.role != 'ADMIN'`; the server-side check in every admin mutation is present (no client-side flag trusted).",
+            "TemplatesListPage lists all templates including archived, shows current version number, and links to TemplateEditPage.",
+            "TemplateEditPage shows: category, name, all versions with their content; has a form to publish a new version with globalGuidance, coachInstructions, draftCoachInstructions fields.",
+            "Publishing a new version creates a new `templateVersions` row with `version` incremented, `publishedAt` and `publishedByUserId` set; the previous version row is unchanged.",
+            "Archiving a template sets `archivedAt`; archived templates no longer appear in the category picker on NewCasePage.",
+            "A case that was created when a template was at v1 continues to use v1 even after v2 is published and the template is archived.",
+            "Every `create`, `publishNewVersion`, and `archive` action writes a `auditLog` row with `actorUserId`, `action` string (e.g., 'TEMPLATE_PUBLISHED'), `targetType: 'templateVersion'`, `targetId`, and `createdAt`.",
+            "Playwright `admin-templates.spec.ts`: admin creates template, publishes v2, verifies pinned case still resolves v1; archives template, verifies it disappears from category picker."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Story",
+          "original_estimate_minutes": 150
+        },
+        {
+          "task_id": "T24",
+          "title": "Audit log UI — AuditLogPage",
+          "summary": "Build `AuditLogPage.tsx` (admin-only) that queries and displays the `auditLog` table in reverse-chronological order. Each entry shows: timestamp, admin display name, action type, target type and ID. Paginated or virtually scrolled. Gated behind the same ADMIN role check.",
+          "acceptance_criteria": [
+            "AuditLogPage is accessible only to ADMIN users; non-admin navigating to `/admin/audit` is redirected.",
+            "Page lists audit log entries from the `auditLog` table in reverse-chronological order.",
+            "Each row shows: formatted timestamp, admin's display name (looked up from `users`), action string, target type, target ID.",
+            "Page handles empty audit log state with an appropriate empty state message.",
+            "Page loads and renders within 1 second for up to 200 audit log entries.",
+            "Playwright `admin-templates.spec.ts`: after admin creates and publishes a template, audit log page shows the corresponding entries."
+          ],
+          "depends_on": ["T23"],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 60
+        },
+        {
+          "task_id": "T25",
+          "title": "Accessibility pass — WCAG 2.1 AA (NFR §5.4)",
+          "summary": "Audit and fix all views to meet WCAG 2.1 AA. Key requirements: semantic landmarks on every page, chat regions with aria-live, visible button labels, color contrast ≥ 4.5:1, focus management on phase transitions, and keyboard-navigable critical paths.",
+          "acceptance_criteria": [
+            "Every route page has `<main>` landmark; navigation bar uses `<nav>`; Draft Coach panel uses `<aside>`.",
+            "All chat message lists have `role='log'` and `aria-live='polite'`; new incoming messages are announced by screen readers without interrupting in-progress reading.",
+            "Every `<button>` and interactive control has either visible text or a descriptive `aria-label`; no icon-only buttons without accessible name.",
+            "All text-on-background combinations meet ≥ 4.5:1 contrast ratio (verified via axe-core in Playwright).",
+            "When the user transitions from private coaching to the ReadyForJointView, focus moves to the ReadyForJointView's `<h1>` heading.",
+            "When the user enters JointChatView from ReadyForJointView, focus moves to the message input.",
+            "Playwright keyboard-only test: run the critical path (login → dashboard → new case → private coaching → mark complete) using only keyboard navigation (Tab, Enter, Space, Arrow keys); no step requires mouse.",
+            "Playwright axe-core integration: zero critical or serious accessibility violations on Dashboard, PrivateCoachingView, JointChatView, and NewCasePage."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 120
+        },
+        {
+          "task_id": "T26",
+          "title": "Error states, loading states, empty states, cost budget UI, and crisis safety card",
+          "summary": "Implement all missing error/loading/empty states across the app: AI error messages with Retry buttons, COST_LIMITED case state UI, loading skeletons for dashboard and case detail, empty-state illustrations for dashboard and joint chat, the crisis safety card on NewCasePage, and the synthesis privacy fallback UI.",
+          "acceptance_criteria": [
+            "AI messages with `status: ERROR` show an error description and a Retry button; clicking Retry re-schedules the AI action for that message.",
+            "When a case reaches the $2 soft cap, the Coach AI sends the boilerplate degraded message from tech spec §6.6 (implemented in T17b's soft-cap branch); subsequent Coach invocations continue sending boilerplate without calling Sonnet.",
+            "When a case reaches the $10 hard cap (`COST_LIMITED`), JointChatView shows a banner 'AI features are limited for this case' and the Coach/Draft Coach/synthesis action buttons are disabled; parties can still send manual messages.",
+            "Dashboard shows an empty state ('No active cases yet — start a new one') when the user has no cases.",
+            "Joint chat shows an empty state message ('The conversation will appear here once you begin') when no messages exist yet.",
+            "Case detail shows loading skeletons while Convex reactive queries are pending.",
+            "NewCasePage shows a crisis safety card: 'Conflict Coach is not for situations involving abuse, threats, or immediate safety concerns. If you are in danger, please contact emergency services.' This appears above the form and must be acknowledged (checkbox or dismissal) before the form is interactive.",
+            "Synthesis fallback UI: when synthesis used the generic fallback, the ReadyForJointView shows 'Personalized guidance is unavailable for this case — here is general joint-session advice' with a generic text block.",
+            "All error states are screen-reader-friendly: error messages use `role='alert'`.",
+            "Playwright: in CLAUDE_MOCK mode, configure the mock to return an error response; verify the Retry button appears and clicking it retriggers the AI action."
+          ],
+          "depends_on": [],
+          "suggested_jira_type": "Task",
+          "original_estimate_minutes": 120
+        }
+      ]
+    }
+  ]
+}

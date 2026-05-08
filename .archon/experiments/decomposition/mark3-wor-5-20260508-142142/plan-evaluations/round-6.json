@@ -1,0 +1,34 @@
+{
+  "round": 6,
+  "scores": {
+    "user_story_coverage": 10,
+    "user_story_fanout": 9,
+    "nfr_completeness": 10,
+    "nfr_application": 9,
+    "phase_0_completeness": 9,
+    "sizing": 10,
+    "dependency_completeness": 7,
+    "playwright_ownership": 9,
+    "no_standalone_test_tickets": 10,
+    "testing_realism": 9,
+    "design_fidelity": 8,
+    "privacy_security_fidelity": 9,
+    "decisions_surfaced": 7
+  },
+  "passed": false,
+  "objections": [
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T14"],
+      "issue": "T14 (Case creation form and invite share screen) includes the CaseDetail routing shell as part of its scope. T14's AC5 states: 'CaseDetail (/cases/:caseId) reads case status and redirects: DRAFT_PRIVATE_COACHING or BOTH_PRIVATE_COACHING → /private; READY_FOR_JOINT → /ready; JOINT_ACTIVE → /joint; CLOSED_* → /closed.' This redirect requires subscribing to cases/get — the reactive Convex query defined in T16. Without T16, the CaseDetail shell cannot read case status and cannot pass its own AC. T14's current depends_on is ['T11', 'T12', 'T20']; T16 is absent.",
+      "fix": "Add T16 to T14's depends_on. The resulting depends_on should be ['T11', 'T12', 'T16', 'T20']."
+    },
+    {
+      "dimension": "decisions_surfaced",
+      "task_ids": ["T15"],
+      "issue": "T15 (Invite acceptance page) introduces a 'Decline' button that does not exist anywhere in the PRD or tech spec. T15's AC3 states: 'Decline sets case status to CLOSED_ABANDONED via a mutation and shows a brief explanation to the invitee.' Two compounding problems: (1) A 'Decline' affordance is an uninferenced invention — the PRD §3.4 / tech spec §4.4 describe the invite flow but do not define a decline action; this should have a decision field explaining the inference. (2) The specified transition (DRAFT_PRIVATE_COACHING → CLOSED_ABANDONED) is explicitly illegal per T4's state machine. T4's AC states: 'Encodes all valid transitions from tech spec §5.1' and 'Rejects all other transition attempts with CONFLICT error.' The valid CLOSED_ABANDONED transition is only from JOINT_ACTIVE (30d inactivity cron). Any decline mutation calling transitionCase(DRAFT_PRIVATE_COACHING, CLOSED_ABANDONED) would throw CONFLICT at runtime. T15's decision field is null, hiding both the invention and the state machine conflict.",
+      "fix": "Add a decision field to T15 that: (1) acknowledges 'Decline' is not specified in the PRD and explains why it is included; (2) specifies a valid target state for the decline transition — either CLOSED_UNRESOLVED (which requires T4 to add a DRAFT_PRIVATE_COACHING→CLOSED_UNRESOLVED transition) or a soft-delete mechanism that does not use the state machine, or simply omit the Decline button and leave the case in DRAFT_PRIVATE_COACHING (token already CONSUMED, invitee simply does not engage). The AC must not specify CLOSED_ABANDONED as the target because T4 rejects that transition."
+    }
+  ],
+  "summary": "Round 6 correctly addresses all three round-5 objections: T21's depends_on now includes T17, T14's depends_on now includes T20, and T35's playwright_owned is set to ['auth.spec.ts']. Coverage, fanout, NFR library, NFR application, Phase 0 completeness, sizing, Playwright infrastructure, standalone test discipline, testing realism, design fidelity, and privacy/security fidelity all remain solid. Two new issues were found. First, a dependency gap: T14 includes the CaseDetail routing shell (AC5) which subscribes to cases/get from T16 to drive status-based redirects, but T16 is not in T14's depends_on — the same class of frontend-uses-query-without-declaring-dep gap found in prior rounds. Second, a decisions_surfaced issue with a state-machine conflict buried inside it: T15 introduces a 'Decline' button that is not in the PRD and specifies CLOSED_ABANDONED as the target state, but T4's state machine only permits CLOSED_ABANDONED from JOINT_ACTIVE — a decline from DRAFT_PRIVATE_COACHING would throw CONFLICT at runtime. Neither inference is acknowledged in T15's decision field. Both must be fixed before the plan can converge."
+}

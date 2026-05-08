@@ -1,0 +1,88 @@
+{
+  "round": 1,
+  "scores": {
+    "user_story_coverage": 9,
+    "user_story_fanout": 8,
+    "nfr_completeness": 9,
+    "nfr_application": 7,
+    "phase_0_completeness": 9,
+    "sizing": 6,
+    "dependency_completeness": 6,
+    "playwright_ownership": 8,
+    "no_standalone_test_tickets": 10,
+    "testing_realism": 6,
+    "design_fidelity": 7,
+    "privacy_security_fidelity": 9,
+    "decisions_surfaced": 6
+  },
+  "passed": false,
+  "objections": [
+    {
+      "dimension": "nfr_application",
+      "task_ids": ["T13", "T20", "T21"],
+      "issue": "NFR-privacy is missing from T13 (invites/redeem + cases/updateMyForm both write to partyStates — the primary private-data table; updateMyForm stores the invitee's description, desiredOutcome in partyStates which are private to that party), T20 (solo mode backend creates two partyStates rows for the same userId — the privacy isolation between the two views is a material concern), and T21 (useSoloActingParty drives which party's private coaching context is visible; misprogramming this hook leaks cross-party data). The NFR-privacy ac_template explicitly governs 'all Convex queries/mutations/actions handling privateMessages or partyStates' which covers all three.",
+      "fix": "Add NFR-privacy to applied_nfrs on T13, T20, and T21. Add ACs on T13 verifying that updateMyForm only updates the calling user's partyStates row. Add AC on T21 that useSoloActingParty always returns a userId that belongs to the acting party's partyStates row, preventing cross-party data access."
+    },
+    {
+      "dimension": "nfr_application",
+      "task_ids": ["T15", "T33"],
+      "issue": "NFR-security-auth is missing from T15 (InviteAcceptPage — its ACs cover token consumption and auth-redirect flows, which are the primary auth surfaces being implemented) and T33 (admin templates frontend — has a client-side route guard that redirects non-admins and depends on server-side requireAdmin; both are auth enforcement surfaces). The NFR-security-auth applies_to explicitly names 'admin-gated routes; invite token generation and redemption'.",
+      "fix": "Add NFR-security-auth to applied_nfrs on T15 and T33. Add an explicit AC to T15 verifying that a non-admin, non-party user who navigates to the already-consumed token URL sees the TOKEN_INVALID error and cannot access case data. Add AC to T33 verifying that navigating to /admin/templates as a non-admin user is redirected to /dashboard (client-side guard) and that all underlying Convex queries return FORBIDDEN (server-side guard)."
+    },
+    {
+      "dimension": "nfr_application",
+      "task_ids": ["T28"],
+      "issue": "NFR-performance is missing from T28 (Draft Coach Convex backend). The NFR-performance ac_template explicitly states 'AI streaming first token arrives within 2s for Private Coach and Draft Coach' — Draft Coach is one of the two named surfaces. The generateResponse action in T28 is the streaming AI call for Draft Coach, making it directly governed by this NFR.",
+      "fix": "Add NFR-performance to applied_nfrs on T28. Add an AC: 'Draft Coach generateResponse streams first token within 2s under normal Anthropic API load (verified in E2E via Playwright timing assertion with CLAUDE_MOCK=true delivering first token within 100ms).' Mirror the measurement approach used for NFR-performance on T18."
+    },
+    {
+      "dimension": "sizing",
+      "task_ids": ["T25", "T28", "T30", "T32"],
+      "issue": "Four tickets bundle multiple Convex function types under a single surface value. T25 (surface='convex-mutation') includes the `jointChat/messages` reactive query in its ACs — queries and mutations are different function types with different semantics (reactive reads vs transactional writes). T28 (surface='convex-action') bundles 5 mutations, 1 action, and 1 query. T30 (surface='convex-mutation') includes a Convex cron job (`convex/crons.ts`) — a scheduled job is a distinct concern. T32 (surface='convex-mutation') includes 3 reactive queries (`listAll`, `templateVersions/list`, `templates/list`) alongside 3 mutations. Each ticket's ACs imply work spanning multiple surfaces.",
+      "fix": "Split each ticket by function type: (1) T25: extract `jointChat/messages` query into T16 or a new convex-query ticket since T16 is already the case/partyStates query layer; (2) T28: extract the `draftCoach/session` reactive query into the query layer and the mutations (startSession, sendMessage, sendFinalDraft, discardSession) into a separate convex-mutation ticket; T28 retains only the generateResponse action. (3) T30: extract the CLOSED_ABANDONED cron into a dedicated convex-cron ticket or at minimum change the surface label to accurately reflect the mixed type. (4) T32: split read-only admin queries (listAll, templateVersions/list, templates/list) into a separate convex-query ticket."
+    },
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T19", "T26", "T24", "T17"],
+      "issue": "Four phantom dependencies appear in the plan. T19 (PrivateCoachingView) lists T17 (Dashboard) as a dependency — T19 does not import or consume any Dashboard code; this is a UX-flow assumption masquerading as a code dependency. T26 (JointChatView) lists T24 (ReadyForJointView) — T26 doesn't consume T24's code; they're separate route pages. T24 (ReadyForJointView) lists T8 (ChatWindow) — T24 shows a synthesis card and an Enter button with no chat functionality; it does not use ChatWindow. T17 (Dashboard) lists T8 (ChatWindow) — Dashboard shows a case-row list, not a chat UI; it does not use ChatWindow.",
+      "fix": "Remove T17 from T19's depends_on. Remove T24 from T26's depends_on. Remove T8 from T24's depends_on. Remove T8 from T17's depends_on. If the intent was to express build-ordering for visual polish, add a comment in summary rather than a depends_on edge."
+    },
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T15", "T9"],
+      "issue": "Two missing dependencies. T15 (InviteAcceptPage) renders the initiator's mainTopic and category before token redemption in the 'logged-in/unredeemed state' — this requires calling `cases/get` (implemented in T16). T15's depends_on does not include T16. T9 (Playwright CI infrastructure) states in its ACs 'The CI E2E Playwright job runs seed before the test suite' but T22 (seed data) is not in T9's depends_on — T9 cannot fulfill this AC without T22 existing, and T22 is a different milestone (M2 vs M1).",
+      "fix": "Add T16 to T15's depends_on. Add T22 to T9's depends_on, or revise T9's AC to say 'placeholder for seed call; actual seed invocation is wired in T22's CI step' with the AC moved to T22."
+    },
+    {
+      "dimension": "testing_realism",
+      "task_ids": ["T2", "T3", "T4", "T5", "T7", "T12", "T13", "T20", "T22", "T23", "T25", "T30", "T32"],
+      "issue": "All Convex backend unit tests are specified as 'Vitest unit tests (with mocked db).' This mocks the Convex database — the primary application runtime for this stack. Convex ships the official `convex-test` npm package (https://docs.convex.dev/testing/convex-test) that provides an in-memory Convex environment, allowing queries and mutations to be tested against the real Convex function model, schema constraints, and index semantics without mocking. Using mocked-db Vitest for Convex functions produces tests that can pass while actual Convex behavior (schema validation, index queries, transactional semantics, auth context) silently differs. The E2E tier uses a real Convex deployment, but the entire unit-test tier mocks the runtime.",
+      "fix": "Replace 'Vitest unit tests (with mocked db)' with 'Tests use convex-test to run functions against an in-memory Convex environment' on all Convex query/mutation tickets. The convex-test package wraps Vitest and requires no external process. Update the testing_approach description in T9 (CI infrastructure) to include `npm install convex-test` and a vitest.config.ts that integrates the convex-test environment. Mocked-db Vitest remains appropriate only for pure utilities (T2, T5, T6, T7) that have zero Convex ctx dependencies."
+    },
+    {
+      "dimension": "design_fidelity",
+      "task_ids": ["T26"],
+      "issue": "T26 (JointChatView) introduces CSS custom property names `--party-initiator` and `--party-invitee` in its ACs ('initiator avatar = --party-initiator color, invitee avatar = --party-invitee color'). These token names do not appear anywhere in the design doc §2.1 palette. The design doc describes the colors as 'soft blue' (initiator) and 'soft rose' (invitee) but defines no CSS variable names for them. The plan invents token names not grounded in the spec without a decision note.",
+      "fix": "Either (a) define `--party-initiator` and `--party-invitee` in T8's design token ACs (since ChatWindow is the component that would apply them and T8 already references the design doc §2.1 tokens), or (b) replace the invented token names in T26's ACs with the hex-equivalent values the design doc implies (soft blue ≈ #DBEAFE, soft rose ≈ #FFE4E6 per Tailwind's blue-100/rose-100 which fits the palette's muted warmth), and add a `decision` field to T26 noting the inference."
+    },
+    {
+      "dimension": "design_fidelity",
+      "task_ids": ["T11", "T14", "T17"],
+      "issue": "Form and list pages (LoginPage, CaseCreationForm, Dashboard) do not carry design token ACs despite the design doc providing explicit token assignments for these screens. T11 renders a centered card but doesn't specify --bg-canvas background, --border-default hairline borders, shadow-1 card elevation, or Inter font. T14's form steps lack --bg-surface-subtle for hover states and --border-strong for input borders. T17 lacks --bg-canvas background, shadow-1 for case row cards, and --text-secondary for metadata labels. T8 (ChatWindow) explicitly references design tokens per §2.1 — the same standard should apply to form and navigation pages.",
+      "fix": "Add design-token ACs to T11, T14, T17 mirroring what T8, T19, T35 do. At minimum: page background uses --bg-canvas (#FAF8F5), card/surface uses --bg-surface (#FFFFFF) with shadow-1, inputs use --border-strong for borders, metadata text uses --text-secondary, primary actions use --accent (#6B8E7F). These are all directly specified in design doc §2.1."
+    },
+    {
+      "dimension": "decisions_surfaced",
+      "task_ids": ["T18", "T19"],
+      "issue": "The `privateCoaching/myMessages` reactive query is listed in tech spec §7.1 ('Returns: PrivateMessage[] (only caller's); Auth: party to case') and is subscribed to by T19 ('PrivateCoachingView subscribes to privateCoaching/myMessages({ caseId })'), but no ticket's acceptance criteria implement it. T18's title and ACs cover only sendUserMessage, generateAIResponse, and markComplete — no query. T16 covers case-level queries (cases/list, cases/get, cases/partyStates) — not private messages. This query implements a core privacy constraint (the caller-only filter) and is load-bearing for US-07. It exists in no ticket.",
+      "fix": "Add `privateCoaching/myMessages` to T18's implementation scope: extend T18's title to include the query, add an AC 'privateCoaching/myMessages({ caseId }) is guarded by requireParty and returns only PrivateMessages where userId == callerUserId, ordered by createdAt; it never returns the other party's messages even if called with a valid caseId,' and add a corresponding Vitest test verifying the userId filter. Alternatively, add it to T16 as a fourth query in the case-query layer. Either way, ensure T19 depends on the ticket that implements it."
+    },
+    {
+      "dimension": "decisions_surfaced",
+      "task_ids": ["T26"],
+      "issue": "T26 introduces `--party-initiator` and `--party-invitee` CSS custom properties not defined in the spec, with no decision field explaining the inference. The design doc §2.1 does not define these token names (it describes the colors in prose as 'soft blue' and 'soft rose'). This is an inference that the generator should surface per the 'every concept the plan introduces that the spec doesn't explicitly state has a decision field' rule.",
+      "fix": "Add a decision field to T26: 'Inferring CSS custom property names --party-initiator and --party-invitee for the initiator/invitee avatar colors. Design doc §4.9 describes these as soft blue and soft rose respectively but defines no token names. Naming them as custom properties for consistency with the rest of the design token system; suggested values --party-initiator: #DBEAFE (Tailwind blue-100) and --party-invitee: #FFE4E6 (Tailwind rose-100), subject to design review against WCAG contrast on --bg-surface.'"
+    }
+  ],
+  "summary": "The plan is well-structured and shows genuine care: all 15 user stories are covered with clean surface splits, the six PRD NFRs are all in plan.nfrs, and the Phase 0 human-gate tickets are thorough. Several dimensions fall short of the pass threshold, however. The most impactful failures are: (1) the `privateCoaching/myMessages` query — a load-bearing privacy boundary — exists in no ticket's ACs despite being subscribed to in T19; (2) the entire Convex unit-test tier uses mocked-db Vitest rather than the official `convex-test` in-memory harness, which means schema constraints and index semantics are untested at the unit level; (3) four tickets (T25, T28, T30, T32) bundle multiple Convex function types under a single surface label, making the tickets oversized and the surface claims inaccurate; (4) a cluster of phantom dependencies (T19→T17, T26→T24, T24→T8, T17→T8) and missing dependencies (T15→T16, T9→T22) pollute the dependency graph; (5) T26 introduces undefined CSS token names (`--party-initiator`, `--party-invitee`) without a decision note. The generator should address the missing query, the testing harness, the sizing violations, the dependency corrections, and the design token surfacing before the plan is ready."
+}

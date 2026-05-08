@@ -1,8 +1,8 @@
-# V3+ candidates — friction worth redesigning
+# Archie V3+ Candidates — friction worth redesigning
 
-A running list of things that hurt while authoring or running Archie workflows on the current Archon runtime. The shape of each entry is: **what the friction is**, **why it exists**, **what the right primitive would look like**, and (where useful) **a concrete example**. Append-only — populate as you hit pain.
+**When to read this:** only when planning post-v2 architectural rewrites of the Archon runtime, or when capturing new friction worth surfacing later. Append-only — populate as you hit pain. v2 keeps the current architecture; this is the parking lot for "things I'd do differently if I were optimizing for exactly what Archie needs." For in-scope v2 work, see `ARCHIE_V2_BACKLOG.md`.
 
-This doc is for v3 / v4 / whenever you decide to rewrite the bones. v2 keeps the architecture; this is the parking lot for "things I'd do differently if I were optimizing for exactly what Archie needs."
+The shape of each entry is: **what the friction is**, **why it exists**, **what the right primitive would look like**, and (where useful) **a concrete example**.
 
 ---
 
@@ -150,6 +150,137 @@ The `inputs:` and `outputs:` are declared once. The body reads from `process.env
 - Today's substitution-everywhere model is very flexible. The cost of typed I/O is that a workflow author has to declare every input and output. That's friction to write, but it pays off the first time a typed workflow catches a substitution bug at load time instead of run time.
 - The `bash:` body convention today is "print JSON to stdout, set output_format if you want to be strict." A typed model formalizes that contract — you can no longer print JSON-ish text and hope downstream agents tolerate it. Strictness is the goal but it's also a behavior change.
 - Existing workflows would need conversion. Probably a one-time mechanical translation script ("for every node, infer inputs from the bash body's `$x.output.y` references; infer outputs from the JSON keys it prints") plus hand-fixing the ambiguous cases.
+
+---
+
+## Per-iteration prompt injection: engine selects the role, agent receives only that role's prompt
+
+Today's state-machine-in-the-prompt pattern (see below) carries every possible role inside one big prompt with branching at the top: "read state.json, see which phase, play that role." The iteration loads the full prompt — every role's description, every role's instructions — but only acts as one role. Most of the prompt is dead weight in any given iteration; the agent has to *route* before it can *do*.
+
+The cleaner shape: **the engine selects the role for each iteration; the agent receives only the prompt for the role it's actually playing.**
+
+```yaml
+- id: dev-loop
+  loop:
+    role:
+      file: $state.phase   # engine reads state.json, picks the role
+      mapping:
+        attempting: prompts/dev-attempt.md
+        validating: prompts/validate.md
+        reviewing: prompts/review.md
+    until: ALL_GREEN
+    max_iterations: 30
+```
+
+The engine reads `state.json` between iterations, picks the matching prompt template, sends only that to the next iteration. The agent wakes up cold, reads only "you are the reviewer; here is the work to review; here is what good looks like." No branching, no role-routing logic, no irrelevant role descriptions cluttering its context.
+
+**What this gets you:**
+
+- **Tighter prompts.** Each role has its own focused prompt file. The reviewer prompt isn't bloated with the generator prompt; the generator prompt isn't bloated with the validator prompt. Each is shorter, more specific, more debuggable.
+- **No misrouting.** Today an agent might misread state.json and play the wrong role. With engine-side dispatch, the agent never sees the other roles' prompts — it can't misroute.
+- **Per-role tools, models, hooks.** Once the engine is selecting which prompt to send, it can also select which model, which `allowed_tools`, which policies apply for this iteration. The reviewer might need fewer tools than the generator; today they share the loop node's settings, with engine-side dispatch each role gets its own.
+- **Composable role templates.** A "code-reviewer" role template gets reused across workflows. A "validator" template gets reused. Roles become library-shaped, like commands today.
+- **The loop becomes a coordinator, not a director.** The loop's job shrinks to "iterate, pick role, dispatch." Roles author their own thing. Closer to the dispatcher-orchestrator shape we want.
+
+**How this composes with the rest of v3:**
+
+- Pairs naturally with **lens 0 (one primitive, the node)**. A loop's per-iteration role is just a node executed in the loop's context. The loop is iterating; the node is doing.
+- Pairs with **typed I/O (lens 2)**. Each role has its declared inputs and outputs; the engine can validate that role-N's output matches role-(N+1)'s expected input.
+- Generalizes the v2 dispatcher idea to *all* node selection, not just role-within-loop. Anywhere the engine could pick what to run from state, this is the model.
+
+**Open questions worth thinking through:**
+
+- **State representation.** Does the engine read state from a JSON file (like today's state.json) or own the state directly (per-iteration role recorded in run metadata)? File-based is more debuggable; engine-owned is cleaner. Probably engine-owned with optional file mirror for inspection.
+- **Default role.** What if state.phase doesn't match any mapping entry? Fail-closed (refuse to iterate, surface error) is the right call. Don't silently pick a default role.
+- **Role-scoped context vs. shared context.** Some roles need access to the same artifacts (the contract, the work-so-far). Some roles need different context (the reviewer needs the work-on-disk; the generator needs the contract + prior critique). Probably each role declares what context it needs and the engine assembles only that.
+- **Cross-role observability.** When debugging "why did the reviewer reject," the operator wants to see: which iteration, which role, what inputs, what output, what state was at entry. Current loop_iteration events would need to grow a `role` field.
+
+This is the natural endpoint of "state-machine-in-the-prompt" once you stop tolerating the prompt doing the routing. It's a v3 candidate because it requires real engine work (loop config schema gains a role-mapping shape; executor gains role-dispatch logic; context-assembly gains per-role scoping). The v2 state-machine-in-the-prompt is the workaround until this lands.
+
+### Teams: the user-facing concept once per-iteration prompt injection works
+
+Once the engine handles per-iteration role-dispatch, the actual unit of authoring isn't "a loop with role mapping" — it's a **team**. A bundle of cooperating roles with a defined coordination pattern, packaged as one reusable thing.
+
+```yaml
+- id: code-with-review
+  team:
+    roles:
+      generator: prompts/code-attempt.md
+      reviewer: prompts/code-review.md
+    rotation: alternating
+    until: REVIEWER_APPROVED
+    max_iterations: 10
+```
+
+Teams compose as nodes. A team is a node from the calling workflow's perspective — declare inputs, declare outputs, the engine handles internal role rotation. Two-role teams can chain:
+
+```yaml
+- id: tests-team
+  team: { roles: { generator: ..., reviewer: ... }, rotation: alternating, until: TESTS_APPROVED }
+- id: code-team
+  team: { roles: { generator: ..., reviewer: ... }, rotation: alternating, until: CODE_APPROVED }
+  depends_on: [tests-team]
+```
+
+Or fold into a four-role team with phased rotation:
+
+```yaml
+- id: full-impl-team
+  team:
+    roles: { test-gen: ..., test-rev: ..., code-gen: ..., code-rev: ... }
+    rotation: phased
+    phases:
+      - { roles: [test-gen, test-rev], rotation: alternating, until: TESTS_APPROVED }
+      - { roles: [code-gen, code-rev], rotation: alternating, until: CODE_APPROVED }
+    until: ALL_PHASES_COMPLETE
+```
+
+The author chooses the coordination shape; the engine handles dispatch.
+
+**What teams unlock:**
+
+- **Per-role properties.** Each role declares its own model, allowed_tools, policies (cages), idle_timeout. Different roles in the same team can use different models — fast/cheap for the generator, thoughtful for the reviewer. Today's loop forces uniform settings; teams allow heterogeneity.
+- **Cages are role properties.** test-generator gets "no production edits"; test-reviewer gets "read-only"; code-generator gets "no test edits"; code-reviewer gets "read-only." The cage lives on the role definition, applied automatically when the engine dispatches to that role.
+- **Reusable across workflows.** A `code-with-review` team works for any contract you point it at. Workflow authors *use* teams the way they use commands today — as building blocks, not as authored-from-scratch primitives.
+- **Versioned as units.** "code-with-review v2 has tighter cage than v1" is a meaningful library-level distinction. Teams are tracked as named versions; workflows pin which version they want.
+- **Testable as units.** Integration tests against a team's contract: feed it a known input, assert outputs satisfy the contract. The team's internal rotation is implementation; the team's input/output is the contract under test.
+- **Configurable rotation grammar.** `alternating`, `phased`, `sequential`, `dispatcher-decided` (a dispatcher node decides which role runs next based on artifact state). The grammar is small but expressive.
+
+**The honest tradeoff.** Teams are easier to author than hand-rolled state machines but harder to debug when they go wrong. Per-team observability needs to be first-class — per-iteration role transitions, per-role inputs and outputs, all queryable. Without that, debugging a stuck team is opaque.
+
+**Where this fits in the v3 vision.** Teams are what nodes-with-internal-coordination look like once you have lens 0 (one primitive, the node) and per-iteration prompt injection both available. The team is just a node whose implementation is "iterate roles per the rotation grammar." Same uniform composition rules as everything else.
+
+**Caveat on syntax.** The yaml examples above are illustrative, not committed. Pushing too much composition into yaml is a known anti-pattern — you eventually reinvent programming in a config language and ergonomics suffer. The team *concept* is what's interesting; the *expression* could take several forms:
+
+- A small set of canonical patterns (`alternating-pair`, `phased-pairs`) shipped as named primitives, authors fill in just the role file paths and the stopping condition. Limited expressiveness, cleaner yaml.
+- A typed library in TS/Python that workflow authors call to construct team nodes — composition in code with autocomplete, test coverage, type checking; engine consumes the resulting structured object.
+- A higher-level authoring language that compiles down to today's dag — teams as first-class syntax but storage stays as data.
+
+Probably the first option for v3 if Archie stays single-developer-tool-shaped, since "configure your own arbitrary team" is more flexibility than the use case demands. The third option only earns its weight if a lot of teams get authored.
+
+---
+
+## State-machine-in-the-prompt: the v1/v2 workaround for missing sub-DAG primitive
+
+**Today's workaround.** When a loop's iterations need to play different roles (generator/evaluator, attempt/validate/review), the loop primitive doesn't help — it just runs the same prompt N times. The pattern that emerged in `archon-adversarial-dev` and was reused in `v2-epic-decomposition-mark1` is to write a state machine to disk (`state.json` with phase + round + threshold + status) and have the loop's single prompt branch on that state. Each iteration reads phase, plays that role, writes back the next phase, exits. Fresh-context-per-iteration gives role isolation for free.
+
+**It works because** Archon's loop happens to have the property the pattern needs: iterations are isolated agent invocations, so role separation is automatic when the prompt branches on disk state. From Archon's perspective there's one loop running one prompt; from the workflow's perspective there are N specialized agents.
+
+**Why it's worth knowing about.** Today's hand-unrolled DAGs (the 10-node dev-attempt-N + review-dev-attempt-N pattern in `task-implement`) could collapse into one state-driven loop. Adding a 6th attempt becomes a config bump, not a YAML diff in five places. Same trick for the bug-pipeline's groom→contract→test-strategy chain.
+
+**Why it's not the long-term answer.** Real costs the pattern accumulates as state machines grow:
+
+- **The agent enforces state transitions, not the engine.** A 3-phase machine with simple transitions is fine; a 7-phase machine with conditional transitions is prompt-drift territory. Engine has no notion of "this transition is invalid."
+- **Per-role observability is muddy.** Archon emits per-iteration events but doesn't know which role the iteration played. Reconstruct by parsing state.json history or agent narration; lossy.
+- **Errors strand the state file.** Agent crash mid-iteration leaves state.json in an unrecoverable middle state; next iteration walks in confused. Hand-unrolled DAGs have per-node failure semantics; state-driven loops don't.
+- **Resume is harder.** Today's resume relies on per-node completion events. State-driven loops resume by reading state.json — works, but the file's accuracy is now critical, and any reconstruct-from-disk logic lives in the prompt.
+- **One prompt, one model, one cage.** All roles share the same model, allowed_tools, hooks, context-window pressure. If one role wants a smaller model and another the largest, can't differentiate.
+
+**Heuristic for when to reach for it (in v1/v2):** ≤3 phases, simple convergence rule, all roles share similar tools/model/hooks, no need for per-stage parallelism, willing to accept muddier observability. Otherwise stick with hand-unrolled DAG.
+
+**The v3+ answer is in lens 0 and lens 4 above.** A real sub-DAG primitive — "for each iteration, run this small graph of nodes with per-node observability and engine-enforced transitions" — replaces the prompt-and-filesystem hack with first-class engine support. The state-machine-loop becomes obsolete.
+
+**Until then,** it's a power tool for the right shape of problem. Worth using deliberately, not reflexively. Best places it'd apply in current Archie: collapse the 10-node dev-loop in `task-implement`, collapse the bug-pipeline's groom/contract/test-strategy chain. Don't apply to: parallel reviewer fan-out (post-PR review chain), anywhere roles need different models or different tool cages.
 
 ---
 

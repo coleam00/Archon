@@ -1,5 +1,9 @@
 # Archie — Product Requirements Document
 
+**When to read this:** when reasoning about *what Archie is* and *why it's shaped this way* — the design intent, persona, requirements, success metrics, and known weaknesses. Pair with `ARCHIE_PIPELINE.md` (the operational reference for how it actually runs).
+
+> **Note on drift:** the PRD's task-implement DAG description (5-attempt loop with reviewer-after-each + implementation-quality-final + test-side salvage) and `ARCHIE_PIPELINE.md`'s description (dev-attempt-1, dev-attempt-2, dev-attempt-loop, parse-synthesis) are not in sync. One is stale relative to the YAML. Verify against the actual `.archon/workflows/task-implement.yaml` before relying on either for current behavior.
+
 **Status:** Draft v0.1 — written 2026-05-07 to capture the system as it exists today, not as future aspiration. Sections marked _(future)_ are explicit deltas from current behavior.
 
 **Author:** Josh Rossi + Claude (collaborative authoring during ConflictCoach run 1).

@@ -1,0 +1,721 @@
+{
+  "epic_title": "Conflict Coach v1 — Full-Stack AI Mediation Web App",
+  "planning_assumptions": [
+    "The invitee's pre-join display name (typed by initiator at case creation as 'What's their name?') is not in the spec's cases/create mutation input. We add inviteeName: v.optional(v.string()) to the cases table and pass it through cases/create.",
+    "Solo mode isSolo=true pre-binds the same userId to both initiator and invitee slots; partyStates has two rows for the same userId with different roles. The party toggle filters by role, not userId.",
+    "The spec's COST_LIMITED status is not defined in the schema's case status union. It is added to cases.status in T2.",
+    "cases.tokenCount: v.optional(v.number()) is added to the cases table in T2 for AI cost tracking.",
+    "Convex Auth is the chosen auth provider (TQ1). The Clerk swap path is documented in README but not implemented.",
+    "Admin role promotion is a manual Convex Dashboard action in v1; no self-serve admin claim UI is built.",
+    "Typing indicators ('Jordan is typing...') reserve visual space per the design doc but Convex Presence logic is deferred to v1.1 per tech spec §8.3.",
+    "The decline-invite path sets the case to CLOSED_ABANDONED per design doc §4.3; added to state machine in T8.",
+    "The /cases/:id/invite post-create screen is a distinct route; invitee display name comes from inviteeName.",
+    "P2 user stories (US-16 email notifications, US-17 voluntary sharing, US-18 PDF export, US-19 inline rephrase) are explicitly out of scope.",
+    "ToS and privacy policy are static placeholder /terms and /privacy routes, not full tasks; linked from auth screens and case creation.",
+    "Cost tracking: tokenCount is accumulated per AI action call. Soft cap $2 ≈ 600k Sonnet tokens (hardcoded pricing constant); hard cap $10. Pricing constant is isolated in a single config file for easy update.",
+    "T17 budget enforcement logic and error-handling hardening is designed to run after T12-T15 as a cross-cutting enhancement. Token accumulation ACs are embedded in T12-T15 themselves; T17 adds the cap enforcement, degradation behavior, and Anthropic error handling."
+  ],
+  "dependency_graph_notes": "Four strata: (1) Infrastructure [T1-T2], (2) Core modules [T3-T11]: auth, authorization, privacy filter, prompts, compression, state machine are parallel after T2+T4; templates backend (T11) unblocks case creation (T9); (3) Feature backends [T12-T17]: private coaching → synthesis → joint chat entry mutation (T14a) → joint chat coach (T14b) → draft coach; closure parallel after T14a; cost tracking (T17) is a cross-cutting hardening pass after T12-T15; (4) Frontend [T18-T32]: design tokens + shared components (T19a, T19b) → all views. T33 (accessibility) and T34 (E2E) both depend on T30+T32 (all feature UI complete) but NOT on each other — they can run in parallel. T35 (unit tests) depends only on T5+T6+T7+T8 and can run very early. T36 (CI) waits for T33+T34+T35.",
+  "tasks": [
+    {
+      "task_id": "T1",
+      "title": "Project scaffolding and cold-start setup",
+      "summary": "Initialize the project with Vite + React 18 + TypeScript, Tailwind v3, shadcn/ui, React Router v6, Convex client, ESLint + Prettier. Create .env.example, .gitignore, and README with the exact cold-start sequence from tech spec §11.3. Verify `git clone && npm install && npx convex dev && npm run dev` produces a running empty React app.",
+      "acceptance_criteria": [
+        "`npm install` completes without errors on a clean checkout",
+        "`npx convex dev` starts without errors (Convex project configured)",
+        "`npm run dev` serves a React app at localhost:5173 with no console errors",
+        "ESLint and Prettier configs present; `npm run lint` and `npm run format:check` pass on the empty project",
+        "`tsc --noEmit` passes with strict mode enabled",
+        "README contains verbatim the cold-start sequence from tech spec §11.3",
+        ".env.example includes all env vars from §11.2: ANTHROPIC_API_KEY, CLAUDE_MOCK, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, SITE_URL, MAGIC_LINK_EMAIL_FROM, VITE_CONVEX_URL, VITE_SITE_URL"
+      ],
+      "depends_on": [],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30
+    },
+    {
+      "task_id": "T2",
+      "title": "Convex schema definition (all tables, all fields)",
+      "summary": "Implement convex/schema.ts exactly as specified in tech spec §3.1 plus planning-assumption additions. All 10 tables: users, cases, partyStates, privateMessages, jointMessages, draftSessions, draftMessages, inviteTokens, templates, templateVersions, auditLog. Cases table includes: COST_LIMITED in status union, inviteeName, tokenCount. Document all 6 key invariants as comments.",
+      "acceptance_criteria": [
+        "All 10 tables match tech spec §3.1 field names, types, and union literals exactly",
+        "cases.status union includes COST_LIMITED in addition to the 7 spec values: DRAFT_PRIVATE_COACHING, BOTH_PRIVATE_COACHING, READY_FOR_JOINT, JOINT_ACTIVE, CLOSED_RESOLVED, CLOSED_UNRESOLVED, CLOSED_ABANDONED",
+        "cases table includes: inviteeName: v.optional(v.string()), tokenCount: v.optional(v.number())",
+        "partyStates table includes: closureProposalSummary: v.optional(v.string()) for the closure proposal flow",
+        "All indexes present: by_email, by_initiator, by_invitee, by_case, by_case_and_user, by_token, by_template, by_actor, by_draft_session, by_case (on jointMessages, privateMessages, draftMessages)",
+        "`npx convex dev` applies the schema without errors",
+        "All 6 key invariants from §3.2 documented as inline comments",
+        "`tsc --noEmit` passes"
+      ],
+      "depends_on": ["T1"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30
+    },
+    {
+      "task_id": "T3",
+      "title": "Authentication — Convex Auth with magic link and Google OAuth",
+      "summary": "Configure Convex Auth with email magic link and Google OAuth. On first login, upsert a users row (email, displayName from provider, role: 'USER'). Session persists across reloads until explicit logout or 30-day expiry. Wire ConvexAuthProvider and ConvexProvider into main.tsx.",
+      "acceptance_criteria": [
+        "User registers and logs in via magic link: email submission sends a link; clicking the link establishes a session",
+        "User logs in via Google OAuth: OAuth flow completes and establishes a session",
+        "First login via either provider creates a users row with role='USER' and correct email",
+        "Subsequent logins upsert (do not duplicate) the users row",
+        "Session persists across browser reload (reactive query confirms identity)",
+        "Session expires after 30 days of inactivity",
+        "ctx.auth.getUserIdentity() returns the identity in any Convex function after login"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T4",
+      "title": "Authorization helper module and ConvexError codes",
+      "summary": "Create convex/lib/auth.ts with requireAuth(ctx) helper, assertPartyToCase, assertAdmin. Define all 9 ConvexError codes from tech spec §7.4. Create convex/lib/pricing.ts with ANTHROPIC_PRICING constant (soft cap $2, hard cap $10) as an isolated config — one place to update when pricing changes.",
+      "acceptance_criteria": [
+        "requireAuth(ctx) returns { identity, user } or throws ConvexError({ code: 'UNAUTHENTICATED', httpStatus: 401 })",
+        "All 9 error codes typed as constants: UNAUTHENTICATED, FORBIDDEN, NOT_FOUND, CONFLICT, INVALID_INPUT, TOKEN_INVALID, RATE_LIMITED, AI_ERROR, INTERNAL",
+        "ConvexError shape: { code: string, message: string, httpStatus: number }",
+        "assertPartyToCase throws FORBIDDEN if caller is neither initiatorUserId nor inviteeUserId",
+        "assertAdmin throws FORBIDDEN if user.role !== 'ADMIN'",
+        "convex/lib/pricing.ts exports: SOFT_CAP_USD = 2.0, HARD_CAP_USD = 10.0, SONNET_INPUT_PRICE_PER_TOKEN, SONNET_OUTPUT_PRICE_PER_TOKEN, HAIKU_INPUT_PRICE_PER_TOKEN, HAIKU_OUTPUT_PRICE_PER_TOKEN",
+        "All subsequent Convex functions import error codes from convex/lib/auth.ts consistently"
+      ],
+      "depends_on": ["T3"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30
+    },
+    {
+      "task_id": "T5",
+      "title": "Privacy response filter module",
+      "summary": "Implement convex/lib/privacyFilter.ts: given a candidate AI response string and a set of other-party message strings, detect any ≥8 consecutive whitespace-token substring from the other-party messages appearing verbatim (case-insensitive) in the response. Returns { passed: boolean, matchedSubstring?: string }.",
+      "acceptance_criteria": [
+        "filterResponse(response: string, otherPartyMessages: string[]): { passed: boolean, matchedSubstring?: string }",
+        "passed=false when any 8+ consecutive token window from other-party messages appears verbatim in response (case-insensitive)",
+        "passed=true when no such match exists",
+        "Handles empty otherPartyMessages → passed=true",
+        "Handles empty response → passed=true",
+        "Unit test: exact 10-word phrase from other party in response → passed=false",
+        "Unit test: response rephrases → passed=true",
+        "Unit test: 7-token substring (below threshold) → passed=true",
+        "Unit test: exact 8-token substring → passed=false (boundary case)",
+        "Performance: 10k-word message set processed without timeout in Vitest"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T6",
+      "title": "Prompt assembly module for all four AI roles",
+      "summary": "Implement convex/lib/prompts.ts with assemblePrompt(opts) for PRIVATE_COACH, SYNTHESIS, COACH, DRAFT_COACH. Each returns { system: string, messages: Message[] }. All system prompts include explicit no-quote rules and crisis safety language. PRIVATE_COACH includes keyword-level crisis detection instructions: if user message contains crisis signals, the AI response should include a crisis resources notice.",
+      "acceptance_criteria": [
+        "assemblePrompt({ role: 'PRIVATE_COACH' }) system prompt matches tech spec §6.3.1 verbatim plus crisis guardrail: 'If the user's message contains signals of immediate danger, abuse, or suicidal ideation, provide a crisis resource statement (e.g., \"If you're in immediate danger, please contact emergency services or a crisis hotline\") before continuing.'",
+        "assemblePrompt({ role: 'SYNTHESIS' }) produces a prompt requiring strict { forInitiator: string, forInvitee: string } JSON per §6.3.2, with verbatim critical instruction from §6.3.2",
+        "assemblePrompt({ role: 'COACH' }) incorporates templateVersion.globalGuidance + coachInstructions when provided; falls back to baseline when not",
+        "assemblePrompt({ role: 'DRAFT_COACH' }) incorporates draftCoachInstructions; explicitly excludes other party's synthesis and private content from context",
+        "All four system prompts contain: 'NEVER quote, closely paraphrase, or otherwise surface the other party's raw words'",
+        "Function is pure TypeScript — no DB calls, no SDK calls; testable in Vitest",
+        "Unit test: SYNTHESIS system string contains verbatim critical instruction from §6.3.2",
+        "Unit test: DRAFT_COACH context assembly does not include other party's synthesis text even when provided in opts"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60
+    },
+    {
+      "task_id": "T7",
+      "title": "Transcript compression module",
+      "summary": "Implement convex/lib/transcriptCompression.ts: when token count exceeds budget (60k for user-facing, 10k for classification), take oldest 50% of messages, call Claude Haiku with compression prompt, replace with SUMMARY message. Cache by content hash.",
+      "acceptance_criteria": [
+        "compressIfNeeded(messages, budgetTokens, anthropic): returns original array when under budget without any API call",
+        "When over budget: oldest 50% replaced by { role: 'system', content: 'SUMMARY: ...' } from Haiku",
+        "Compression prompt calls claude-haiku-4-5-20251001: 'Summarize this conversation segment in 500 tokens or fewer, preserving facts, decisions, emotional tone, and unresolved threads.'",
+        "Content hash caching: same message set compressed twice makes only one Haiku API call",
+        "Token counting uses word-count approximation (4 chars ≈ 1 token)",
+        "Unit test: array exceeding 60k budget is reduced to a smaller set containing one SUMMARY message",
+        "Unit test: array under budget returned unchanged; API not called"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60
+    },
+    {
+      "task_id": "T8",
+      "title": "Case state machine module (all transitions including decline-invite)",
+      "summary": "Implement convex/lib/stateMachine.ts with pure transition functions for all case states. Covered transitions: DRAFT_PRIVATE_COACHING→BOTH_PRIVATE_COACHING (invitee joins), DRAFT_PRIVATE_COACHING→CLOSED_ABANDONED (invitee declines), BOTH_PRIVATE_COACHING→READY_FOR_JOINT (both complete PC + synthesis done), READY_FOR_JOINT→JOINT_ACTIVE (first party enters), JOINT_ACTIVE→CLOSED_RESOLVED, JOINT_ACTIVE→CLOSED_UNRESOLVED, JOINT_ACTIVE→CLOSED_ABANDONED (cron), any→COST_LIMITED.",
+      "acceptance_criteria": [
+        "Each transition function is pure: takes current case state + relevant party states, returns new status or throws ConvexError CONFLICT",
+        "DRAFT_PRIVATE_COACHING→CLOSED_ABANDONED: triggered by invitee declining; explicitly tested",
+        "BOTH_PRIVATE_COACHING→READY_FOR_JOINT: requires both partyStates.privateCoachingCompletedAt set AND both synthesisTexts populated",
+        "READY_FOR_JOINT→JOINT_ACTIVE: any party can trigger; idempotent if already JOINT_ACTIVE",
+        "JOINT_ACTIVE→CLOSED_RESOLVED: requires other party's closureProposed=true",
+        "Sending a joint message when case is not JOINT_ACTIVE throws CONFLICT",
+        "All pure TypeScript, no DB calls — fully unit-testable",
+        "Unit test: all 9 valid transitions succeed from correct precondition state",
+        "Unit test: 8+ illegal transitions (wrong source state) each throw CONFLICT",
+        "Unit test: marking PC complete twice is idempotent (no error, state unchanged)",
+        "Unit test: DRAFT_PRIVATE_COACHING→CLOSED_ABANDONED (decline) succeeds and returns CLOSED_ABANDONED"
+      ],
+      "depends_on": ["T2"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45
+    },
+    {
+      "task_id": "T9",
+      "title": "Case CRUD backend (create, get, list, partyStates, updateMyForm)",
+      "summary": "Implement Convex queries and mutations for case management: cases/create (generates crypto-random invite token, pins templateVersionId, creates partyStates for initiator, handles solo mode), cases/get, cases/list, cases/partyStates (self + other-party phase-only), cases/updateMyForm. All enforce auth + party-membership rules.",
+      "acceptance_criteria": [
+        "cases/create: creates cases row with status=DRAFT_PRIVATE_COACHING, isSolo, category, templateVersionId (current version of selected template), initiatorUserId, inviteeName, tokenCount=0, createdAt, updatedAt",
+        "cases/create: creates partyStates row for initiator with role=INITIATOR",
+        "cases/create: inserts inviteTokens row with 32-char crypto-random url-safe token, status=ACTIVE; returns caseId + invite URL as SITE_URL + /invite/ + token",
+        "cases/create with isSolo=true: pre-binds invitee to same userId with role=INVITEE; creates second partyStates row (role=INVITEE); sets case.status=BOTH_PRIVATE_COACHING",
+        "cases/list: returns only cases where caller is initiatorUserId or inviteeUserId",
+        "cases/get: returns NOT_FOUND if caller is not a party",
+        "cases/partyStates: returns { self: full PartyState, other: { role, formCompletedAt: boolean, privateCoachingCompletedAt: boolean } } — no raw text from other party",
+        "cases/updateMyForm: updates caller's partyStates form fields; throws FORBIDDEN if not the party",
+        "Token stored as plaintext per §12 note"
+      ],
+      "depends_on": ["T4", "T8", "T11"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T10",
+      "title": "Invite flow backend (redeem mutation, preview query, token validation)",
+      "summary": "Implement invites/redeem mutation (atomic: validate token, bind invitee, create partyStates, mark token CONSUMED, advance case to BOTH_PRIVATE_COACHING) and invites/preview query (returns category + initiatorDisplayName + mainTopic + inviteeName without private content).",
+      "acceptance_criteria": [
+        "invites/redeem: reads inviteTokens by token field; throws TOKEN_INVALID if status != ACTIVE",
+        "invites/redeem: atomically — sets cases.inviteeUserId, creates partyStates row for invitee (role=INVITEE), sets inviteTokens.status=CONSUMED + consumedAt + consumedByUserId, advances case to BOTH_PRIVATE_COACHING",
+        "invites/redeem: throws CONFLICT if caller is already the initiator (self-invite prevention in non-solo mode)",
+        "invites/redeem on a CONSUMED token: throws TOKEN_INVALID",
+        "invites/preview: returns { category, initiatorDisplayName, mainTopic, inviteeName } with NO private coaching content (no description, no desiredOutcome, no synthesisText)",
+        "invites/preview on non-existent token: returns null (not NOT_FOUND — allow UI to render appropriate state)",
+        "End-to-end test: create case → get token → redeem as different user → case.inviteeUserId is set, token.status=CONSUMED"
+      ],
+      "depends_on": ["T4", "T9"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45
+    },
+    {
+      "task_id": "T11",
+      "title": "Templates backend and seed data",
+      "summary": "Implement template management queries and mutations: templates/list, admin/templates/listAll, admin/templateVersions/list, admin/templates/create, admin/templates/publishNewVersion, admin/templates/archive. All admin mutations write to auditLog and call assertAdmin. Create convex/seed.ts with one admin user and three default templates.",
+      "acceptance_criteria": [
+        "templates/list: returns only non-archived templates; optionally filtered by category",
+        "admin/templates/create: creates templates + initial templateVersions row; sets currentVersionId; writes TEMPLATE_CREATED to auditLog",
+        "admin/templates/publishNewVersion: inserts new (immutable) templateVersions row; updates currentVersionId; version monotonically increments; writes TEMPLATE_VERSION_PUBLISHED to auditLog",
+        "admin/templates/archive: sets archivedAt; existing cases with pinned templateVersionId are NOT affected; writes TEMPLATE_ARCHIVED to auditLog",
+        "All admin mutations throw FORBIDDEN for non-ADMIN users",
+        "convex/seed.ts: creates one user with role=ADMIN and three template+version rows (workplace, family, personal) each with minimal globalGuidance; throws INTERNAL if called outside dev environment",
+        "templateVersions rows have no update mutation (immutability enforced by absence)"
+      ],
+      "depends_on": ["T4"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T12",
+      "title": "Private coaching backend (send message, AI response, mark complete, crisis detection, token tracking)",
+      "summary": "Implement: privateCoaching/myMessages query (caller's messages only), privateCoaching/sendUserMessage mutation (inserts user message, checks for crisis keywords, schedules generateAIResponse), generateAIResponse action (assembles PRIVATE_COACH prompt via T6 + compression via T7, calls Claude Sonnet with streaming, updates privateMessages row, increments cases.tokenCount), privateCoaching/markComplete mutation (schedules synthesis if both complete).",
+      "acceptance_criteria": [
+        "privateCoaching/myMessages: returns only rows where userId == caller; FORBIDDEN if caller is not party",
+        "privateCoaching/myMessages: the privateMessages.by_case index is never exposed via any client-callable query",
+        "privateCoaching/sendUserMessage: inserts user message row with status=COMPLETE; checks message content against crisis keyword list (abuse, suicidal, emergency, immediate danger, restraining order); if crisis keywords found, schedules a crisis-flag side-effect that causes the AI response to include a crisis resources notice",
+        "generateAIResponse: assembles PRIVATE_COACH prompt including caller's form fields + prior private message history ONLY (no other party data); applies compression via T7 at 60k token budget",
+        "generateAIResponse: inserts STREAMING message row before API call; updates content in batches every ~50ms of tokens; sets COMPLETE on finish; sets ERROR on failure",
+        "generateAIResponse: after completion, calls a mutation to increment cases.tokenCount by (usage.input_tokens + usage.output_tokens)",
+        "generateAIResponse: if cases.tokenCount × pricing >= HARD_CAP_USD, returns early with a system message 'AI assistance is currently limited for this case' without calling Claude",
+        "privateCoaching/markComplete: sets partyStates.privateCoachingCompletedAt; idempotent if already set",
+        "privateCoaching/markComplete: if both parties have privateCoachingCompletedAt set, schedules synthesis/generate action",
+        "Security test: calling privateCoaching/myMessages as User B for User A's caseId+userId returns FORBIDDEN"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T7", "T8"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90
+    },
+    {
+      "task_id": "T13",
+      "title": "AI synthesis backend (generate action, privacy filter, state transition)",
+      "summary": "Implement synthesis/generate action: reads both parties' private messages (server-side), assembles SYNTHESIS prompt via T6, calls Claude Sonnet (non-streaming), validates JSON output { forInitiator, forInvitee }, runs T5 privacy filter on each half (up to 2 retries; on final failure uses generic fallback + flags in auditLog), writes synthesisText + synthesisGeneratedAt to both partyStates, advances case to READY_FOR_JOINT. Increments tokenCount.",
+      "acceptance_criteria": [
+        "synthesis/generate reads privateMessages for BOTH parties via by_case index (server-side only)",
+        "Calls claude-sonnet-4-5 with SYNTHESIS prompt from T6; validates response is { forInitiator: string, forInvitee: string } JSON",
+        "If response is not valid JSON: retries once; second failure throws AI_ERROR",
+        "Runs T5 filterResponse on forInitiator (with invitee's private messages as 'other party') and on forInvitee (with initiator's messages as 'other party')",
+        "Privacy filter failure: retries generation up to 2 times; third failure writes SYNTHESIS_FILTER_FAILED to auditLog + uses generic fallback: 'Your Coach has prepared some general guidance for this session...'",
+        "On success: writes synthesisText + synthesisGeneratedAt to both partyStates rows atomically; sets case.status=READY_FOR_JOINT; sets updatedAt",
+        "Increments cases.tokenCount by usage tokens",
+        "Idempotent: if synthesisText already populated, returns without re-generating",
+        "Does not check HARD_CAP (synthesis is generated once per case; it is a gate, not a recurring call)"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T12"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T14",
+      "title": "Joint chat entry mutation and Coach facilitation backend",
+      "summary": "Implement jointChat/enter mutation (READY_FOR_JOINT → JOINT_ACTIVE transition, schedules opening Coach message), jointChat/messages query, jointChat/mySynthesis query, jointChat/sendUserMessage mutation (inserts user message, schedules generateCoachResponse with triggerType='USER_MESSAGE'). Implement generateCoachResponse action: Haiku classification gate (INFLAMMATORY / PROGRESS / QUESTION_TO_COACH / NORMAL_EXCHANGE) → conditionally calls Sonnet + T5 filter; handles MENTION and TIMER trigger types. Increments tokenCount.",
+      "acceptance_criteria": [
+        "jointChat/enter: throws CONFLICT if case.status is not READY_FOR_JOINT (and not already JOINT_ACTIVE); atomically sets case.status=JOINT_ACTIVE + updatedAt; schedules generateCoachResponse with triggerType='OPENING'",
+        "jointChat/enter is idempotent: if case is already JOINT_ACTIVE, returns success without error",
+        "generateCoachResponse with triggerType='OPENING': calls Sonnet to generate an opening message grounded in case.category + the mainTopics of both parties (from their partyStates); inserts as COACH jointMessage",
+        "jointChat/messages: throws FORBIDDEN if caller is not party; throws CONFLICT if case status is DRAFT_PRIVATE_COACHING or BOTH_PRIVATE_COACHING",
+        "jointChat/sendUserMessage input schema: { caseId: Id<'cases'>, content: string } — no triggerType accepted from client. @-mention detection is performed inside the mutation body (content.toLowerCase().includes('@coach')); if detected, schedules generateCoachResponse with triggerType='MENTION'; otherwise triggerType='USER_MESSAGE'. Throws CONFLICT if case.status is not JOINT_ACTIVE; inserts user joint message row.",
+        "generateCoachResponse with triggerType='USER_MESSAGE': calls claude-haiku-4-5-20251001 to classify last user message; Coach responds only for INFLAMMATORY, PROGRESS, QUESTION_TO_COACH — skips for NORMAL_EXCHANGE",
+        "Classification uses 10k token budget with compression via T7",
+        "generateCoachResponse with triggerType='MENTION': always generates Sonnet response",
+        "generateCoachResponse with triggerType='TIMER': fires when 5+ user exchanges have occurred since the last COACH jointMessage; always generates; checked synchronously in sendUserMessage before scheduling",
+        "Sonnet context: joint chat history + BOTH parties' synthesisTexts (NOT raw private messages); compressed via T7 at 60k budget",
+        "T5 privacy filter applied to Coach Sonnet response; on filter failure → retry up to 2x → generic fallback 'I'm having trouble responding to that right now. Could either of you rephrase?'",
+        "INFLAMMATORY-triggered responses set isIntervention=true on the jointMessage row",
+        "generateCoachResponse increments cases.tokenCount by usage tokens; enforces HARD_CAP (skips Sonnet call if at cap, posts boilerplate)",
+        "jointChat/mySynthesis: returns only the caller's own synthesisText"
+      ],
+      "depends_on": ["T4", "T5", "T6", "T7", "T13"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 105
+    },
+    {
+      "task_id": "T15",
+      "title": "Draft Coach backend (session lifecycle, AI conversation, readiness detection, send gate)",
+      "summary": "Implement draftCoach/session query, draftCoach/startSession mutation, draftCoach/sendMessage mutation, generateResponse action (readiness detection, finalDraft production), draftCoach/sendFinalDraft mutation, draftCoach/discardSession mutation. Increments tokenCount.",
+      "acceptance_criteria": [
+        "draftCoach/startSession: creates draftSessions row with status=ACTIVE; throws CONFLICT if case not JOINT_ACTIVE",
+        "draftCoach/sendMessage: inserts draftMessages row for caller; schedules generateResponse",
+        "generateResponse: context = drafting user's joint chat history + their own synthesisText ONLY (no other party synthesis, no other party private messages)",
+        "Readiness detection: if user message matches (case-insensitive) any of ['i\\'m ready', 'draft it', 'write the message', 'generate draft', 'looks good, write it'] OR a canonical button message → produce { 'draft': '...' } structured JSON response; writes result to draftSessions.finalDraft",
+        "Non-readiness turns: stream conversational response into draftMessages row (STREAMING → COMPLETE)",
+        "draftCoach/sendFinalDraft: reads session.finalDraft; throws CONFLICT if finalDraft is null; internally calls jointChat/sendUserMessage with finalDraft content; marks session status=SENT",
+        "draftCoach/discardSession: sets status=DISCARDED; no message posted to joint chat",
+        "draftCoach/session: returns only if caller is session owner; FORBIDDEN otherwise",
+        "Draft Coach conversation is invisible to the other party (never appears in jointMessages queries)",
+        "generateResponse increments cases.tokenCount; skips Sonnet call if at HARD_CAP"
+      ],
+      "depends_on": ["T4", "T6", "T14"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T16",
+      "title": "Case closure backend (propose, confirm, reject, unilateral close, abandoned cron)",
+      "summary": "Implement closure mutations: jointChat/proposeClosure, jointChat/confirmClosure, jointChat/rejectClosure, jointChat/unilateralClose. Implement convex/crons.ts daily job for CLOSED_ABANDONED detection. All write to auditLog.",
+      "acceptance_criteria": [
+        "jointChat/proposeClosure: sets partyStates.closureProposed=true for caller; writes proposed summary to partyStates.closureProposalSummary; throws CONFLICT if case not JOINT_ACTIVE; writes CLOSURE_PROPOSED to auditLog",
+        "jointChat/confirmClosure: throws CONFLICT if other party has not set closureProposed=true; atomically sets case.status=CLOSED_RESOLVED, case.closedAt, case.closureSummary (from proposer's closureProposalSummary), case.updatedAt; clears closureProposed on both parties; writes CASE_CLOSED_RESOLVED to auditLog",
+        "jointChat/rejectClosure: clears proposer's closureProposed and closureProposalSummary; optionally posts a system jointMessage notifying the proposer; writes CLOSURE_REJECTED to auditLog",
+        "jointChat/unilateralClose: sets case.status=CLOSED_UNRESOLVED + closedAt + updatedAt; writes CASE_CLOSED_UNRESOLVED to auditLog",
+        "Closed cases (any CLOSED_* or COST_LIMITED) make sendUserMessage, proposeClosure, confirmClosure throw CONFLICT",
+        "Cron job in convex/crons.ts: runs daily; queries JOINT_ACTIVE cases where max(jointMessages.createdAt) < now - 30 days; sets each to CLOSED_ABANDONED + closedAt; writes CASE_ABANDONED to auditLog",
+        "Dashboard query still returns CLOSED_* cases for archival access",
+        "closureProposalSummary field is defined in T2's schema (partyStates table); T16 uses it without any further schema changes needed"
+      ],
+      "depends_on": ["T4", "T8", "T14"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60
+    },
+    {
+      "task_id": "T17",
+      "title": "AI cost tracking hardening: budget enforcement, soft-cap degradation, Anthropic error handling",
+      "summary": "Cross-cutting hardening pass after T12-T15: implement budget enforcement in all AI actions (token accumulation already added in T12-T15; this task adds soft-cap degradation behavior, hard-cap enforcement, and full Anthropic error handling). Verify caps work end-to-end. Does not re-open T12-T15 for token counting (already there), but adds cap-enforcement logic and tests.",
+      "acceptance_criteria": [
+        "Soft cap ($2): when cases.tokenCount × pricing >= SOFT_CAP_USD, generateCoachResponse (T14) posts a templated boilerplate message instead of calling Sonnet: 'I\\'m limited right now — consider summarizing where you are and whether you\\'ve reached agreement.' Private coaching (T12) and synthesis (T13) continue unaffected",
+        "Hard cap ($10): when cases.tokenCount × pricing >= HARD_CAP_USD, all four AI actions (generateAIResponse, synthesis/generate, generateCoachResponse, generateResponse) return early without calling Claude; each posts a system message explaining the limitation; case.status is set to COST_LIMITED in a mutation",
+        "On 429 from Anthropic: action waits 2000ms then retries exactly once; on second 429, sets message status=ERROR; throws RATE_LIMITED",
+        "On network timeout (>30s): sets message status=ERROR with content 'Coach timed out. You can retry.'; throws AI_ERROR",
+        "On 401/403 from Anthropic: sets message status=ERROR with 'Coach is unavailable'; writes API_KEY_ERROR event to auditLog; throws AI_ERROR",
+        "On Anthropic content filter: sets message status=ERROR with 'Coach can\\'t respond to that — try rephrasing'; throws AI_ERROR",
+        "Integration test: seed a case with tokenCount at the soft cap threshold; send a joint message; verify Coach posts boilerplate (not a Sonnet call)",
+        "Integration test: seed a case with tokenCount at the hard cap; verify all AI actions return without API call and status becomes COST_LIMITED"
+      ],
+      "depends_on": ["T12", "T13", "T14", "T15"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T18",
+      "title": "Design tokens and global styles",
+      "summary": "Implement all CSS custom properties from design doc §2.1, Tailwind config mapping, Inter + JetBrains Mono fonts, dark mode via prefers-color-scheme, shadow levels, and motion tokens. Reduced-motion media query globally disables all animations.",
+      "acceptance_criteria": [
+        "All 16 color tokens from §2.1 defined as CSS custom properties in src/index.css",
+        "Dark mode via @media (prefers-color-scheme: dark) with inverted luminance, same warm/low-saturation palette",
+        "Tailwind config maps each token to a semantic utility class: bg-canvas, bg-surface, bg-surface-subtle, text-primary, text-secondary, text-tertiary, accent, accent-hover, accent-subtle, danger, danger-subtle, warning, border-default, border-strong, coach-accent, private-tint",
+        "Inter variable font loaded (400/500/600 weights); JetBrains Mono loaded",
+        "Body: 15px / 1.6 line-height; chat bubbles: 16px",
+        "Four shadow utilities: shadow-0 (flat), shadow-1, shadow-2, shadow-3 matching §2.4 values",
+        "@media (prefers-reduced-motion: reduce) global rule: all transitions set to 0ms, animations paused"
+      ],
+      "depends_on": ["T1"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30
+    },
+    {
+      "task_id": "T19a",
+      "title": "Core chat UI components (ChatWindow, MessageBubble, StreamingIndicator, MessageInput)",
+      "summary": "Build the foundational chat primitives used by all three chat UIs (private coaching, joint chat, draft coach). ChatWindow: scrollable message list + MessageInput; auto-scrolls to latest unless user has scrolled up. MessageBubble: USER/AI/COACH/SYSTEM variants with STREAMING/COMPLETE/ERROR states, streaming cursor, copy button, Retry button. StreamingIndicator: 500ms blinking cursor. MessageInput: textarea + Send; Shift-Enter newline; Send disabled while any STREAMING row exists.",
+      "acceptance_criteria": [
+        "ChatWindow renders a scrollable list; auto-scrolls to latest unless user scroll position is > 100px above bottom",
+        "MessageBubble USER: right-aligned, bg-surface background, no icon",
+        "MessageBubble COACH/AI: left-aligned, accent-subtle background, Sparkles icon",
+        "MessageBubble STREAMING: renders content + blinking cursor (500ms interval); no copy button",
+        "MessageBubble COMPLETE: renders full content + copy button (copies text to clipboard) + timestamp visible on hover",
+        "MessageBubble ERROR: warning-tint background, error message text, Retry button that calls the provided onRetry callback",
+        "StreamingIndicator: thin vertical bar, 500ms blink; rendered as aria-hidden",
+        "MessageInput: Enter sends (calls onSend callback); Shift+Enter inserts newline; Send button disabled when isStreaming prop is true",
+        "All components accept className prop for layout override",
+        "No accessibility defects introduced: MessageInput textarea has a visible label or aria-label"
+      ],
+      "depends_on": ["T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90
+    },
+    {
+      "task_id": "T19b",
+      "title": "Secondary UI components (PrivacyBanner, PartyAvatar, CoachIntervention, PhaseHeader, StatusPill, CrisisCard, skeletons)",
+      "summary": "Build remaining shared components: PrivacyBanner (persistent lock icon + privacy modal), PartyAvatar (role-colored circles), CoachIntervention (⟡ glyph + coach-accent border), PhaseHeader (top nav phase display), StatusPill (glyph-based status), CrisisCard (crisis resource notice surfaced when crisis keywords detected in private coaching), skeleton loaders for dashboard and case detail.",
+      "acceptance_criteria": [
+        "PrivacyBanner: persistent lock icon; clicking opens a Dialog explaining what's private and why (exact copy from design doc §4.7); reads 'Private conversation. Only you and the AI coach see this.' to screen readers",
+        "PartyAvatar: initiator=soft blue (#BFDBFE), invitee=soft rose (#FECDD3), coach=coach-accent lavender (#8B7AB5); shows first initial",
+        "CoachIntervention: 2px left border in coach-accent; ⟡ glyph prefix; accent-subtle background",
+        "PhaseHeader: top nav component showing current case phase label (Private Coaching / Joint Session / etc.) + Back to Dashboard link",
+        "StatusPill: renders ● (green), ○ (gray), ◐ (amber), ◼ (neutral) with correct color mapping per §4.4",
+        "CrisisCard: appears above MessageInput when crisis keywords detected in the user's most recent message; shows message 'If you are in immediate danger or experiencing abuse, please contact emergency services or a crisis hotline [link]. Conflict Coach is not a substitute for professional help.' Dismissable.",
+        "Dashboard skeleton: 3 case row skeletons (text placeholder blocks matching case row layout)",
+        "Case detail skeleton: matches the layout of the phase-appropriate view",
+        "Skeletons are shown for content loading > 300ms (implemented via a delay prop or CSS)"
+      ],
+      "depends_on": ["T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90
+    },
+    {
+      "task_id": "T20",
+      "title": "Landing page and login/register page",
+      "summary": "Implement / (hero, 3-step explainer, privacy section, footer) and /login (email magic link, Google OAuth, magic-link-sent state, error state, ToS fine print). Wire Convex Auth signIn methods.",
+      "acceptance_criteria": [
+        "/ displays: single-sentence tagline, 3-step process explainer (Private Coaching → Shared Conversation → Resolution), privacy section with link to /privacy, footer with links to /terms, /privacy, contact",
+        "/ has a 'Start a case' CTA that routes to /login (logged out) or /dashboard (logged in); no testimonials, pricing, or repeated CTAs",
+        "/login: centered ~400px card; email input + 'Send magic link' primary button; 'or' divider; 'Continue with Google' secondary button",
+        "Submitting email triggers Convex Auth magic link; form replaced by 'Check your email — we sent a link to [email]'",
+        "Error state renders inline below the email input (not a toast)",
+        "Fine print links to /terms and /privacy; includes 'By signing in, you agree to our Terms and Privacy Policy.'",
+        "After successful auth, user redirected to /dashboard",
+        "Keyboard-only user can: Tab to email input → type → Tab to Send magic link → activate with Enter → Tab to Continue with Google → activate with Enter (verified by Playwright keyboard assertions in T34)"
+      ],
+      "depends_on": ["T3", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60
+    },
+    {
+      "task_id": "T21",
+      "title": "Invite acceptance page (/invite/:token)",
+      "summary": "Implement invite acceptance per design doc §4.3. Logged-out: explanation + 'Sign in to continue' (token preserved through auth). Logged-in+unredeemed: show initiator name, mainTopic (labeled private), category, Accept/Decline. Decline → CLOSED_ABANDONED. Accept → invites/redeem → /cases/:id/private.",
+      "acceptance_criteria": [
+        "GET /invite/:token by logged-out user: shows explanation card + 'Sign in to continue'; after auth user returns to /invite/:token (token preserved in URL)",
+        "Logged-in unredeemed view: shows initiator's displayName, mainTopic (labeled 'Alex wrote this in the shared summary. You\\'ll have your own private space to share your perspective.'), category",
+        "Description, desiredOutcome, and private coaching content are NOT shown",
+        "Accept button calls invites/redeem; on success routes to /cases/:caseId/private",
+        "Decline button calls mutation → case.status=CLOSED_ABANDONED → redirect to /dashboard with toast 'You declined the invitation'",
+        "CONSUMED token shows: 'This invite has already been used.' + link to /dashboard",
+        "Non-existent token shows a NOT_FOUND error message"
+      ],
+      "depends_on": ["T9", "T10", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60
+    },
+    {
+      "task_id": "T22",
+      "title": "Dashboard page (/dashboard) with unilateral-close notification indicator",
+      "summary": "Implement /dashboard per design doc §4.4. Active/Closed sections, case rows with status glyphs, Nudge button (>7 days no join), empty state, [+ New Case] button. Includes a notification indicator on case rows when the other party has unilaterally closed the case.",
+      "acceptance_criteria": [
+        "Fetches cases/list; renders skeleton rows while loading",
+        "Active Cases section: all non-CLOSED_* cases; Closed Cases section: CLOSED_* cases, collapsed by default, auto-expands if a case just transitioned to CLOSED_* (reactive update)",
+        "Status glyph mapping: initiator waiting for invitee → ○ gray; user's turn to act → ● green; waiting on other party's PC → ○ gray; READY_FOR_JOINT → ◐ amber; JOINT_ACTIVE (new message) → ● green; JOINT_ACTIVE (no new message) → ○ gray; CLOSED_* → ◼",
+        "When case.status = CLOSED_UNRESOLVED and the caller is NOT the user who closed it: case row shows ◼ with a red dot indicator and the text 'Jordan closed this case.' The closed cases section auto-expands",
+        "Counterparty name: shows inviteeName before invitee joins, then invitee's displayName after join",
+        "Nudge button: appears on DRAFT_PRIVATE_COACHING cases where updatedAt > 7 days ago and inviteeUserId is null; clicking routes to /cases/:id/invite",
+        "Empty state: 'No cases yet. When you\\'re ready to work through something, start a new case.' + link to /cases/new",
+        "[+ New Case] primary button routes to /cases/new",
+        "Case rows are keyboard-navigable; Enter activates the row"
+      ],
+      "depends_on": ["T9", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60
+    },
+    {
+      "task_id": "T23",
+      "title": "Case creation form and post-create invite sharing screen",
+      "summary": "Implement /cases/new (5-step progressive form) and /cases/:id/invite (share screen). Form: category radio cards, main topic with 140-char counter + 'visible to other party' label, description + desired outcome with privacy lock icon + tooltip, other party's name, Advanced disclosure for solo mode. Crisis language on creation screen. Submit calls cases/create. Invite screen: large copyable link, email/text/copy options, 'What should I tell them?' collapsible.",
+      "acceptance_criteria": [
+        "Five steps in sequence with Back/Next navigation; Submit only on step 5",
+        "Step 1: category as radio cards (not dropdown) for all 5 categories",
+        "Step 2: mainTopic with soft 140-char counter (allows over with visual warning); labeled 'visible to the other person'",
+        "Steps 3+4: description and desiredOutcome show lock icon with tooltip 'Only you and the AI coach will see this'; fields labeled as private",
+        "Step 5: other party name input; 'Advanced' disclosure with solo mode checkbox",
+        "Form displays prominently: 'Conflict Coach is not for crisis or abuse situations. If you are in immediate danger, please contact emergency services.'",
+        "Submit calls cases/create with all fields + correct templateVersionId from templates/list (category-matching current version); on success routes to /cases/:caseId/invite",
+        "/cases/:id/invite: invite URL in large monospace copyable field with Copy button",
+        "Email mailto pre-fills with template message from §4.6 verbatim",
+        "'Start your private coaching now' navigates to /cases/:caseId/private"
+      ],
+      "depends_on": ["T9", "T11", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T24",
+      "title": "Case detail router and phase-appropriate view scaffold",
+      "summary": "Implement CaseDetail.tsx at /cases/:caseId routing to phase-appropriate sub-routes by case.status. Guard against phase-skipping. PhaseHeader shown on all sub-routes.",
+      "acceptance_criteria": [
+        "GET /cases/:caseId redirects to the correct sub-route based on case.status",
+        "GET /cases/:caseId/private when case.status >= READY_FOR_JOINT: redirect to /cases/:caseId/ready with toast",
+        "GET /cases/:caseId/joint when case.status is DRAFT_PRIVATE_COACHING or BOTH_PRIVATE_COACHING: redirect to /private with toast 'You can enter joint chat once both parties complete private coaching'",
+        "PhaseHeader component present on all case sub-routes with current phase label and Back-to-dashboard link",
+        "Loading: skeleton layout while cases/get is in flight",
+        "caseId not found or caller not a party: friendly error page (not blank screen)"
+      ],
+      "depends_on": ["T9", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30
+    },
+    {
+      "task_id": "T25",
+      "title": "Private coaching view (/cases/:id/private) with crisis card integration",
+      "summary": "Implement PrivateCoachingView.tsx: full-height chat using ChatWindow (T19a), PrivacyBanner, mark-complete footer CTA + confirmation modal. Integrates CrisisCard (T19b) which appears above MessageInput when crisis keywords are detected in the user's message. AI integration via privateCoaching/myMessages + sendUserMessage + streaming.",
+      "acceptance_criteria": [
+        "Loads privateCoaching/myMessages reactively; renders existing messages before user types",
+        "PrivacyBanner always visible at top; lock icon opens Dialog with privacy model explanation",
+        "Coach messages: left-aligned, accent-subtle, Sparkles icon; User messages: right-aligned, bg-surface",
+        "STREAMING → blinking cursor; COMPLETE → copy button + timestamp on hover; ERROR → Retry button",
+        "Send disabled while any STREAMING message exists; auto-scroll to latest unless user scrolled up",
+        "'Mark private coaching complete' is a subtle footer CTA (not a large primary button)",
+        "Mark-complete confirmation modal: shows message count; 'Continue Coaching' / 'Mark Complete' buttons",
+        "Confirm calls privateCoaching/markComplete; if case advances to READY_FOR_JOINT, routes to /cases/:id/ready",
+        "If other party not yet complete: stays on /private with note 'Waiting for [name] to finish their private coaching'",
+        "CrisisCard appears above MessageInput when the most recent user message contains crisis keywords (detected client-side from the message before sendUserMessage is called); card is dismissable but re-appears if a new crisis keyword message is sent"
+      ],
+      "depends_on": ["T12", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T26",
+      "title": "Ready-for-joint view (/cases/:id/ready, synthesis display, enter CTA)",
+      "summary": "Implement ReadyForJointView.tsx: synthesis card with privacy label, markdown-rendered synthesis, 'Enter Joint Session' CTA that calls jointChat/enter (T14) and routes to /joint. Synthesis accessible from joint chat nav link.",
+      "acceptance_criteria": [
+        "Fetches jointChat/mySynthesis; skeleton loader while in flight",
+        "Synthesis card shows privacy label: 'Private to you — [name] has their own version'",
+        "Synthesis text rendered as markdown (bold section headings, paragraph text)",
+        "'Enter Joint Session →' is a large primary button",
+        "Clicking calls jointChat/enter mutation; on success routes to /cases/:id/joint",
+        "jointChat/enter is idempotent: if case already JOINT_ACTIVE, routes to /joint without error",
+        "If the other party has already entered (case is JOINT_ACTIVE): shows 'Jordan has entered. Join them when you\\'re ready.' + same CTA",
+        "If this party has not yet entered and case is still READY_FOR_JOINT: shows CTA without 'waiting' message"
+      ],
+      "depends_on": ["T13", "T14", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 45
+    },
+    {
+      "task_id": "T27",
+      "title": "Joint chat view (/cases/:id/joint) with COST_LIMITED state handling",
+      "summary": "Implement JointChatView.tsx: real-time reactive messages, party avatars, Coach ⟡ messages, @-mention, 'Coach is thinking' indicator, closure banner, 'My guidance' Sheet, closure modal trigger. Handles COST_LIMITED case status with banner and disabled Draft Coach.",
+      "acceptance_criteria": [
+        "jointChat/messages reactive query auto-updates both clients when new messages arrive",
+        "Party avatar colors: initiator=soft blue, invitee=soft rose, Coach=lavender; ⟡ glyph + coach-accent border on Coach messages",
+        "isIntervention=true messages: warning-tint (--warning) background",
+        "Timestamps on hover for each message",
+        "'Coach is thinking...' inline indicator when a Coach STREAMING message row is present",
+        "@-mention detection: if user input contains '@Coach' (case-insensitive), sendUserMessage adds triggerType='MENTION' metadata to schedule a guaranteed Coach response",
+        "Closure proposal banner: when other party has closureProposed=true, shows banner above input with proposed summary + 'Confirm' and 'Reject and keep talking' buttons",
+        "'My guidance' opens a Sheet/drawer showing the user's own synthesisText (read-only, markdown)",
+        "'Close' button in top nav opens the closure modal (implemented in T29)",
+        "COST_LIMITED state: when case.status = COST_LIMITED, a banner appears 'AI assistance is currently limited for this case'; Draft Coach button is hidden; user-to-user message send remains enabled; Coach messages area shows 'Coach is no longer available due to session limits'",
+        "Read-only mode: when case status is CLOSED_*, input and Draft Coach button are hidden; banner 'This case is closed. No new messages can be added.'",
+        "Mobile: Draft Coach rendered as a bottom Sheet (full-screen); top nav collapses"
+      ],
+      "depends_on": ["T14", "T17", "T19a", "T19b", "T24"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90
+    },
+    {
+      "task_id": "T28",
+      "title": "Draft Coach panel (side panel/bottom sheet, draft ready card, send gate)",
+      "summary": "Implement DraftCoachPanel.tsx: 420px right side panel on desktop, full-screen bottom Sheet on mobile. Private label, ChatWindow for draft conversation, 'Draft it for me' button, DraftReadyCard with Send/Edit/Refine/Discard actions. Strict send gate: Send is the only path to joint chat.",
+      "acceptance_criteria": [
+        "Clicking '✨ Draft with Coach' calls draftCoach/startSession; opens panel",
+        "Panel shows '🔒 This is private to you. [Name] can\\'t see what you\\'re discussing here.'",
+        "Lock icon tooltip: 'Jordan can\\'t see any of this. Only the final message you send goes to the joint chat.'",
+        "ChatWindow connects to draftCoach/sendMessage; shows conversation history from draftCoach/session",
+        "'Draft it for me' posts canonical 'Generate Draft' message; triggers readiness detection in backend",
+        "DraftReadyCard appears when draftSessions.finalDraft is populated: shows draft in bordered box",
+        "'Send this message' (PRIMARY): calls draftCoach/sendFinalDraft; panel closes; message appears in joint chat",
+        "'Edit before sending': transfers draft text to joint-chat main input; closes panel; does NOT auto-send",
+        "'Keep refining': returns to ChatWindow; AI can produce a new draft on next readiness signal",
+        "'Discard': calls draftCoach/discardSession; panel closes; no message sent",
+        "Esc closes panel; focus returns to joint-chat input",
+        "On mobile (<768px): renders as a full-screen Sheet from bottom",
+        "Focus moves to draft input textarea when panel opens"
+      ],
+      "depends_on": ["T15", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T29",
+      "title": "Closure flow UI and closed case view (/cases/:id/closed)",
+      "summary": "Implement the closure modal (Resolved/Not resolved/Take a break), rejection flow, and /cases/:id/closed read-only archive view with Joint Chat / My Private Coaching / My Guidance tabs.",
+      "acceptance_criteria": [
+        "Closure modal triggered by '[Close]' in joint chat top nav; three options: Resolved / Not resolved / Take a break",
+        "Resolved: summary textarea required (min 10 chars); 'Propose Resolution' calls jointChat/proposeClosure; modal closes; proposal banner appears in other party's view (reactive)",
+        "Not resolved: warning styling (danger-subtle background); calls jointChat/unilateralClose; case transitions to CLOSED_UNRESOLVED immediately for both parties",
+        "'Take a break': closes modal with no state change",
+        "Rejection: 'Reject and keep talking' calls jointChat/rejectClosure; clears proposal banner; optionally posts a system message in the joint chat",
+        "Confirmation: calls jointChat/confirmClosure; both parties routed to /cases/:id/closed (reactive route update)",
+        "/cases/:id/closed: header shows outcome label (Resolved / Not Resolved / Abandoned) + closure date; closure summary prominently displayed if CLOSED_RESOLVED",
+        "Nav tabs: 'Joint Chat' (default, read-only jointMessages), 'My Private Coaching' (read-only privateCoaching/myMessages), 'My Guidance' (synthesisText)",
+        "Input and Draft Coach button absent in closed view",
+        "Banner: 'This case is closed. No new messages can be added.'",
+        "Other party's private coaching tab does NOT exist; URL navigation to other party's private data returns FORBIDDEN"
+      ],
+      "depends_on": ["T16", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 75
+    },
+    {
+      "task_id": "T30",
+      "title": "Solo mode UI (PartyToggle, useSoloActingParty hook, all views integrated)",
+      "summary": "Implement PartyToggle component and useSoloActingParty hook with URL param state. Integrate into all data queries across private coaching, joint chat, dashboard. Add solo case flagging in dashboard + case header.",
+      "acceptance_criteria": [
+        "PartyToggle: segmented control in coach-accent color; only rendered when case.isSolo=true",
+        "Toggle state stored as ?as=initiator|invitee URL query param; browser refresh preserves state",
+        "useSoloActingParty(): returns the partyStates row role corresponding to selected party; used as a filter in all queries",
+        "privateCoaching/myMessages in solo mode: toggling to Invitee returns only messages linked to the INVITEE partyStates row (same userId, different role); toggling back to Initiator shows only Initiator messages",
+        "Toggling parties in solo mode and querying privateCoaching/myMessages returns different message sets (assert count differs or content differs)",
+        "Both parties' synthesisTexts in solo mode are different strings (each party receives their own per-party synthesis)",
+        "PartyToggle is absent (null rendered) when case.isSolo=false",
+        "Solo cases show a 'Solo test' badge on the dashboard case row and in the case PhaseHeader",
+        "Solo mode works across all views: private coaching (both party contexts), synthesis display (each party sees their own), joint chat (toggle affects whose perspective is acting), closure flow"
+      ],
+      "depends_on": ["T9", "T22", "T25", "T27"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90
+    },
+    {
+      "task_id": "T31",
+      "title": "Profile page and logout",
+      "summary": "Implement /profile: display name edit, sign-out. Sign-out clears client + server session and redirects to /.",
+      "acceptance_criteria": [
+        "/profile shows current user email (read-only) and displayName in an editable text field",
+        "users/updateDisplayName mutation (defined in convex/users.ts alongside the upsert logic): input { displayName: string }; calls requireAuth(ctx); updates users.displayName for the current user; returns void. Saving displayName from the profile form calls this mutation; success shows toast 'Display name updated'",
+        "'Sign out' calls Convex Auth signOut; client session cleared; user redirected to /",
+        "Accessing /profile while logged out redirects to /login",
+        "Profile accessible from user avatar/name in top nav"
+      ],
+      "depends_on": ["T3", "T19a", "T19b"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30
+    },
+    {
+      "task_id": "T32",
+      "title": "Admin template UI (list, edit with version history, audit log)",
+      "summary": "Implement admin-only routes: /admin/templates (TemplatesListPage), /admin/templates/:id (TemplateEditPage with two-pane form + version history), /admin/audit (AuditLogPage). All routes server-side guarded by role=ADMIN check.",
+      "acceptance_criteria": [
+        "GET /admin/templates: 403 page for non-admins (server-side role check, not client flag)",
+        "TemplatesListPage: table with Category | Name | Current Version | Status (Active/Archived) | Pinned Cases Count; [+ New Template] button",
+        "Pinned Cases Count: computed via a query counting cases where templateVersionId is in the set of versions for that template",
+        "'+ New Template': opens form; submission calls admin/templates/create",
+        "TemplateEditPage: left pane with category, name, globalGuidance (large textarea), coachInstructions, draftCoachInstructions, notes; 'Publish New Version' primary button creates new immutable version + updates currentVersionId",
+        "Version history right pane: each version shows date, admin email, notes, version number, 'View' button; View opens a read-only modal showing both versions' globalGuidance side-by-side for comparison (simple diff: show v(n-1) and v(n) text, no diffing algorithm required in v1)",
+        "'Archive Template': confirmation modal shows pinned case count warning; calls admin/templates/archive",
+        "AuditLogPage: filterable table (Actor email | Action | Target | Timestamp) newest-first; clicking row opens Drawer with full metadata JSON",
+        "Audit log is read-only (no mutations)"
+      ],
+      "depends_on": ["T11", "T18"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 90
+    },
+    {
+      "task_id": "T33",
+      "title": "Accessibility pass (WCAG 2.1 AA, keyboard navigation, screen reader, reduced motion)",
+      "summary": "Systematic accessibility audit and remediation across all 12+ routes per tech spec §5.4 and design doc §7. Covers structural landmarks, aria-live regions on chat UIs, focus management in modals/panels, keyboard shortcuts, WCAG AA contrast for all token combinations in light and dark mode, prefers-reduced-motion, screen reader copy per design doc §7.5.",
+      "acceptance_criteria": [
+        "Every page has exactly one <main> landmark; navigation uses <nav>; side panels use <aside>",
+        "All three chat regions (private coaching, joint chat, draft coach) have role='log' and aria-live='polite'",
+        "Streaming messages announce 'Coach is replying' exactly once per response, not per token (aria-label on the streaming row, not per character)",
+        "PrivacyBanner screen reader text: 'Private conversation. Only you and the AI coach see this.'",
+        "Mark-complete CTA aria-label: 'Mark private coaching complete. This moves the case to the joint session with [other party name].'",
+        "All modals trap focus (no Tab-out); Esc closes them; focus returns to trigger element on close",
+        "Route change moves focus to the page h1 (React Router useEffect on route change)",
+        "Draft Coach panel open: focus moves to textarea",
+        "@media (prefers-reduced-motion: reduce): streaming cursor animation disabled, route crossfades disabled, message fade-ins disabled (all transitions = 0ms)",
+        "All text meets 4.5:1 contrast ratio in both light and dark mode (verified via Playwright axe-core accessibility scan in T34)",
+        "Keyboard-only critical path test: login → /cases/new → submit form → /cases/:id/private → send message → mark complete → enter joint chat → send message → open Draft Coach → generate draft → send draft → propose closure → confirm closure. User navigates entirely via Tab/Shift+Tab/Enter/Esc without mouse.",
+        "All buttons have visible text label OR aria-label (verified by axe-core: no 'button-name' violations)",
+        "Focus rings: --accent color, 2px outline, 2px offset; never removed (no outline: none without a custom focus-visible replacement)"
+      ],
+      "depends_on": ["T20", "T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29", "T30", "T31", "T32"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 240
+    },
+    {
+      "task_id": "T34",
+      "title": "Playwright E2E test suite (all 7 spec files, multi-browser)",
+      "summary": "Implement the full Playwright test suite per tech spec §10.1: 7 spec files (auth, solo-full-flow, invite-flow, draft-coach, privacy, admin-templates, state-machine). Configure Playwright projects for chromium, firefox, and webkit. Use CLAUDE_MOCK=true stub. Run solo-full-flow in all three browsers; functional specs in chromium only.",
+      "acceptance_criteria": [
+        "CLAUDE_MOCK=true: all AI actions use a deterministic stub returning canned responses with configurable delays; no live Anthropic calls in tests",
+        "auth.spec.ts: registers via mock magic link, logs out, logs back in; Google OAuth mocked",
+        "solo-full-flow.spec.ts: complete mediation end-to-end via solo mode — create case → toggle Initiator → private coaching → mark complete → toggle Invitee → private coaching → mark complete → synthesis visible for both parties → enter joint chat → Draft Coach iteration → 'Draft it for me' → 'Send this message' (verifies message appears in joint chat) → propose closure → confirm → case in Closed section on dashboard. Runs in chromium, firefox, webkit.",
+        "invite-flow.spec.ts: two Playwright browser contexts; User A creates case, User B opens invite link in second context, registers, accepts; both see case in their dashboards",
+        "draft-coach.spec.ts: open Draft Coach → send messages → click 'Generate Draft' → assert jointMessages count has NOT increased → click 'Send this message' → assert jointMessages count increased by 1; discard a draft → assert no message sent",
+        "privacy.spec.ts: as User B, direct Convex query for User A's privateMessages (caseId + userId=A) returns FORBIDDEN; as admin user, same query returns FORBIDDEN; Coach response in joint chat does not contain any 8-token substring from either party's private coaching messages (checked against canned mock responses that include seeded 'other party' text)",
+        "admin-templates.spec.ts: admin creates template → publishes v1 → creates case (pinned to v1) → publishes v2 → verifies pinned case still resolves to v1 templateVersionId; archives template → template hidden from picker but pinned case loads normally",
+        "state-machine.spec.ts: sendUserMessage when case in BOTH_PRIVATE_COACHING → CONFLICT; markComplete twice → idempotent (no error, single privateCoachingCompletedAt value); redeem consumed token → TOKEN_INVALID",
+        "Playwright configured with three projects: chromium, firefox, webkit; solo-full-flow and privacy run in all three; other specs run in chromium only (for CI performance)",
+        "Playwright axe-core accessibility scan in solo-full-flow.spec.ts for each major page; fails if any WCAG AA critical violation detected",
+        "All specs pass 100% with CLAUDE_MOCK=true"
+      ],
+      "depends_on": ["T30", "T32"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 180
+    },
+    {
+      "task_id": "T35",
+      "title": "Vitest unit tests for core utility modules",
+      "summary": "Vitest unit tests per tech spec §10.2 covering privacy filter, prompt assembly, transcript compression, invite token generation, state machine transitions. Can be written and run as soon as T5-T8 are complete — early in the build.",
+      "acceptance_criteria": [
+        "privacyFilter: ≥5 adversarial cases (verbatim quote → passed=false), ≥3 benign cases (rephrased → passed=true), boundary case (exactly 8 tokens → passed=false), below-boundary (7 tokens → passed=true)",
+        "prompts.assemblePrompt: for each of 4 roles, asserts system string contains required verbatim instruction segments from §6.3 and the no-quote rule",
+        "prompts.assemblePrompt DRAFT_COACH: when otherPartySynthesis is provided in opts, assert it does NOT appear in the assembled messages array",
+        "transcriptCompression: over-budget array → smaller array with one SUMMARY message; under-budget → no API call, original array returned; same content compressed twice → only one API call (cache hit verified via spy)",
+        "inviteToken generator: 100 generated tokens are all unique, all 32 chars, all url-safe (regex /^[a-zA-Z0-9_-]+$/)",
+        "stateMachine: all 9 valid transitions succeed; ≥8 illegal transitions (wrong source state) each throw CONFLICT; markComplete idempotency confirmed; decline-invite (DRAFT_PRIVATE_COACHING → CLOSED_ABANDONED) returns CLOSED_ABANDONED",
+        "All tests pass with `npx vitest run`; no live Convex or Anthropic calls"
+      ],
+      "depends_on": ["T5", "T6", "T7", "T8"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 60
+    },
+    {
+      "task_id": "T36",
+      "title": "CI pipeline (GitHub Actions: lint, typecheck, unit, E2E)",
+      "summary": "Configure .github/workflows/ci.yml with four jobs: lint, typecheck, unit, e2e. All four pass on every PR to main. E2E job seeds a Convex dev deployment with admin user + 3 templates before running Playwright with CLAUDE_MOCK=true and multi-browser projects.",
+      "acceptance_criteria": [
+        "ci.yml defines four jobs: lint, typecheck, unit, e2e; all run on push to PR branches targeting main",
+        "lint job: ESLint + Prettier check; fails on any warning or error",
+        "typecheck job: tsc --noEmit; fails on any type error",
+        "unit job: npx vitest run; all T35 tests pass",
+        "e2e job: uses CONVEX_DEPLOY_KEY secret to deploy to a Convex dev environment; runs convex/seed.ts; runs Playwright with CLAUDE_MOCK=true; Playwright projects: chromium (all specs), firefox (solo-full-flow + privacy), webkit (solo-full-flow + privacy)",
+        "README documents how to run each check locally: npm run lint, npm run typecheck, npm run test:unit, npm run test:e2e",
+        "GitHub Actions workflow caches node_modules for speed",
+        "PRD §7.1 launch criterion 7 ('Playwright suite passes 100% in CI') satisfied",
+        "T33 and T34 can run in parallel (T36 waits for both before CI passes)"
+      ],
+      "depends_on": ["T33", "T34", "T35"],
+      "suggested_jira_type": "Task",
+      "original_estimate_minutes": 30
+    }
+  ]
+}

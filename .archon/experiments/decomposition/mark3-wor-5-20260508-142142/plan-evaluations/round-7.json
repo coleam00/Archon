@@ -1,0 +1,34 @@
+{
+  "round": 7,
+  "scores": {
+    "user_story_coverage": 10,
+    "user_story_fanout": 9,
+    "nfr_completeness": 10,
+    "nfr_application": 9,
+    "phase_0_completeness": 9,
+    "sizing": 10,
+    "dependency_completeness": 7,
+    "playwright_ownership": 9,
+    "no_standalone_test_tickets": 10,
+    "testing_realism": 9,
+    "design_fidelity": 9,
+    "privacy_security_fidelity": 9,
+    "decisions_surfaced": 8
+  },
+  "passed": false,
+  "objections": [
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T26", "T31"],
+      "issue": "T31 explicitly owns the closure modal component (T31's summary: 'Build three closure UI pieces: the closure modal (triggered by \\'Close\\' in joint chat nav...)'; T31 AC1: 'Clicking \\'Close\\' in joint chat top nav opens a Dialog with three options'). T26 references this modal via its summary ('Close button in top nav opens the closure modal (T31)') — meaning T26 must import the closure modal component from T31's code. This makes T26 depend_on T31. But T31 already lists T26 in its depends_on: ['T26', 'T30', 'T37', 'T16', 'T43']. T26→T31 AND T31→T26 is a circular dependency — neither ticket can be built first. Similarly, T31's confirmation banner ('When the other party has proposed closure, a confirmation banner appears above the chat input...') renders inside JointChatView (T26), so T26 also needs T31's banner component, confirming the circular import. The current plan has T31 owning both of these components AND declaring T26 as a dependency, which is structurally contradictory.",
+      "fix": "Resolve the circular dependency by choosing one of two approaches: (A) Move the closure modal dialog and the confirmation banner into T26's scope (JointChatView owns them as inline components); update T31's summary and ACs to cover only ClosedCaseView (/cases/:caseId/closed); remove T26 from T31.depends_on (T31 only needs T30 for mutations, T37 for transcript query, T16 for private message tab, and T43 for guidance tab — not T26). This is the simplest fix because ClosedCaseView does not import code from JointChatView, it subscribes to the same queries (T37, T16, T43) independently. OR (B) Keep closure modal in T31, remove T26 from T31.depends_on, and add T31 to T26.depends_on — T26 imports the modal/banner from T31 which is built first. Either fix must be applied consistently to the summary, ACs, and depends_on of both T26 and T31."
+    },
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T21", "T19", "T24", "T26"],
+      "issue": "T21 (useSoloActingParty hook + PartyToggle) declares depends_on: ['T17', 'T19', 'T20'], but T21's own AC states: 'All Convex query subscriptions in case views (PrivateCoachingView, ReadyForJointView, JointChatView) pass both the toggled userId and role' — meaning PrivateCoachingView (T19), ReadyForJointView (T24), and JointChatView (T26) all import and call useSoloActingParty(). When T19 uses T21's hook, T19 must be compiled after T21, so T19 depends_on T21 — but the current plan has T21 depends_on T19 (reverse direction). This is a dependency direction error: T21 implements the hook independently of T19's component code; T19 is the consumer. Furthermore, T24 and T26 (M3 tickets) are also consumers of the hook but neither lists T21 in depends_on: T24.depends_on = ['T11', 'T43', 'T25'] and T26.depends_on = ['T11', 'T8', 'T25', 'T37', 'T29', 'T43'] — both missing T21.",
+      "fix": "Remove T19 from T21.depends_on (T21 implements the hook purely from schema types and URL query params — it does not import PrivateCoachingView code). Add T21 to T19.depends_on (T19 imports useSoloActingParty). Add T21 to T24.depends_on and T26.depends_on (both views use the hook to resolve the acting-party context). T21.depends_on should become ['T17', 'T20'] or ['T11', 'T17', 'T20'] (T11 for the TopNav shell where PartyToggle is inserted). The resulting dependency chain is T21→T20 and T19/T24/T26→T21, which is acyclic and correctly reflects build order."
+    }
+  ],
+  "summary": "Round 7 correctly addresses both round-6 objections: T14.depends_on now includes T16, and T15 now explicitly omits the Decline button (AC2: 'Accept button only (no Decline)') with a thorough decision field explaining the state-machine conflict and PRD absence. Coverage, fanout, NFR library, NFR application, Phase 0 completeness, sizing, playwright ownership, standalone test discipline, testing realism, design fidelity, and privacy/security fidelity all remain solid, with design tokens and privacy ACs thoroughly applied across the plan. Two new dependency_completeness issues were found. First, a circular dependency: T31 claims ownership of the closure modal and confirmation banner (in its summary and ACs) but also lists T26 in its depends_on — if T26 must import the modal from T31 (T26→T31) while T31 depends_on T26, neither can be built first. The plan must resolve this by either moving the closure modal/banner into T26's scope and removing T26 from T31.depends_on, or removing T26 from T31.depends_on and adding T31 to T26.depends_on. Second, a dependency direction error: T21 lists T19 in depends_on, but T21 provides the useSoloActingParty hook that T19 consumes — the dependency runs T19→T21, not T21→T19. Additionally, T24 and T26 also consume the hook but neither lists T21 in their depends_on. Both issues must be fixed for the dependency graph to be acyclic and correctly ordered."
+}

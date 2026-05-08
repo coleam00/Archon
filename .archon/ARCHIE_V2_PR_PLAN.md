@@ -1,8 +1,6 @@
-# Agentic Workflow Improvements — Implementation Plan
+# Archie v2 — PR Plan
 
-Companion to `agentic_workflow_improvements_prd_spec.md` (the design doc). This
-document describes the concrete PRs we will ship, in order, to land the
-improvements against the existing Archon pipeline that drives ConflictCoach.
+**When to read this:** when actively shipping v2 work. This document is the ordered PR sequence for landing v2 improvements against the existing Archon pipeline. Companion to `ARCHIE_V2_BACKLOG.md` (the broader v2 enhancement list) and `ARCHIE_PRD.md` (the system-as-built spec).
 
 Status: **PR 1 is starting now.** The remaining PRs stay deferred until PR 1
 has run for at least one Epic-worth of tickets.
@@ -321,7 +319,7 @@ written tests.
 - The cage hook gets one more deny rule: writes to `.archon/contracts/`
   after the contract has been committed, blocked the same way `tests/` and
   `e2e/` are protected from the dev agent.
-- `JIRA_PIPELINE.md` — update the workflow diagram + description.
+- `ARCHIE_PIPELINE.md` — update the workflow diagram + description.
 
 ### Acceptance
 
@@ -387,7 +385,7 @@ benefit. Schema-level validation is a follow-up if structured output drifts.
 **What changes:**
 
 - Update `archon-dev-review.md` and `archon-test-review.md` (and the
-  synthesizer command, when the synthesizer fix from `JIRA_PIPELINE.md` open
+  synthesizer command, when the synthesizer fix from `ARCHIE_PIPELINE.md` open
   items lands) to require their final output in a fixed shape:
   ```yaml
   status: pass | fail
@@ -400,13 +398,13 @@ benefit. Schema-level validation is a follow-up if structured output drifts.
   prompt) extracts these fields by regex/grep — same approach we already
   use for the synthesis verdict. No new schema runtime.
 - Add `verify-reviewer-artifacts` guard node before `synthesize` (the
-  deferred fix from `JIRA_PIPELINE.md` open items): fail the workflow if
+  deferred fix from `ARCHIE_PIPELINE.md` open items): fail the workflow if
   zero `*-findings.md` files exist on disk before synthesize runs.
 
 **Acceptance:**
 
 - Verdicts have a consistent shape across the three reviewer types.
-- The synthesizer hallucination scenario from `JIRA_PIPELINE.md` (all
+- The synthesizer hallucination scenario from `ARCHIE_PIPELINE.md` (all
   reviewers cascade-skip → synthesize fabricates) is caught by the new
   guard node and the workflow halts loudly instead.
 

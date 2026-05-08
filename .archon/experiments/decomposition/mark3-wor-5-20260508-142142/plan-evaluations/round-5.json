@@ -1,0 +1,40 @@
+{
+  "round": 5,
+  "scores": {
+    "user_story_coverage": 10,
+    "user_story_fanout": 9,
+    "nfr_completeness": 10,
+    "nfr_application": 9,
+    "phase_0_completeness": 9,
+    "sizing": 10,
+    "dependency_completeness": 7,
+    "playwright_ownership": 9,
+    "no_standalone_test_tickets": 10,
+    "testing_realism": 9,
+    "design_fidelity": 8,
+    "privacy_security_fidelity": 9,
+    "decisions_surfaced": 9
+  },
+  "passed": false,
+  "objections": [
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T21"],
+      "issue": "T21 (Solo mode frontend: PartyToggle, useSoloActingParty hook) is missing T17 (Dashboard) in its depends_on. T21's AC explicitly states: \"'+ New Solo Case' option on Dashboard opens /cases/new with the Advanced disclosure expanded and solo checkbox pre-checked.\" Adding this option requires modifying the Dashboard page built in T17. T21 currently depends on [\"T19\", \"T20\"] — T17 is absent. Without T17 completed first, there is no Dashboard component to modify with the '+ New Solo Case' affordance.",
+      "fix": "Add T17 to T21's depends_on. The resulting depends_on should be [\"T17\", \"T19\", \"T20\"]."
+    },
+    {
+      "dimension": "dependency_completeness",
+      "task_ids": ["T14"],
+      "issue": "T14 (Case creation form and invite share screen frontend) is missing T20 (Solo mode backend: isSolo case creation variant) in its depends_on. T14's AC2 states: \"Solo mode 'New Solo Case' checkbox is hidden under an Advanced disclosure, not visible by default.\" and AC3 states: \"Submit calls cases/create mutation.\" When the checkbox is checked, cases/create is called with isSolo=true. The isSolo=true handling — creating two partyStates rows for the same userId, skipping inviteTokens, setting inviteeUserId=initiatorUserId — is entirely implemented in T20 (which extends cases/create). T14 with the solo checkbox can be built in isolation, but the checkbox cannot be considered functional (and T14 cannot be considered complete per its own ACs) until T20 is merged. T14's current depends_on is [\"T11\", \"T12\"] — T20 is absent.",
+      "fix": "Add T20 to T14's depends_on. The resulting depends_on should be [\"T11\", \"T12\", \"T20\"]."
+    },
+    {
+      "dimension": "playwright_ownership",
+      "task_ids": ["T35"],
+      "issue": "T35 (Landing page frontend, src/routes/LandingPage.tsx) is a react-page surface with empty playwright_owned. The landing page is user-visible: it is the entry point for logged-out users and is explicitly referenced in US-04 (\"Invite link routes to a landing page explaining what Conflict Coach is\"). The rule is: every user-visible feature ticket must have non-empty playwright_owned. T35 currently has no playwright spec ownership. No other ticket claims a spec that covers the landing page's own behavior (the redirect-to-dashboard for logged-in users, hero section render, CTA routing).",
+      "fix": "Add T35 to the playwright_owned list of an appropriate spec (e.g., auth.spec.ts covers the redirect-to-dashboard behavior for logged-in users, and invite-flow.spec.ts touches the landing page as the entry point for invited users). The simplest fix: set T35's playwright_owned to [\"auth.spec.ts\"] — auth.spec.ts is owned by T11 and covers the logged-in redirect, which is the landing page's primary behavioral AC."
+    }
+  ],
+  "summary": "Round 5 correctly incorporates the round-4 fix: T24's depends_on now includes T25 (enterJointChat mutation), resolving the previously identified missing edge. Coverage (all 15 P0/P1 stories), NFR completeness and application, Phase 0 completeness, sizing (all 48 tickets single-surface), Playwright infrastructure, testing realism (convex-test for backend, Vitest for utilities, CLAUDE_MOCK for E2E), design fidelity, privacy/security fidelity, and decision surfacing all remain solid. Two new dependency gaps were found in the solo mode ticket cluster: T21 (Solo mode frontend) modifies the Dashboard to add '+ New Solo Case' but does not declare T17 (Dashboard) as a dependency; and T14 (Case creation form) includes the solo checkbox that calls cases/create with isSolo=true but does not declare T20 (solo mode backend, which extends cases/create to handle isSolo) as a dependency. Additionally, T35 (Landing page, react-page) has empty playwright_owned despite being a user-visible page. These are the same structural class of problem found in rounds 3 and 4 — a frontend page that invokes or extends the work of another ticket without declaring a dependency. Both T21→T17 and T14→T20 edges are missing; add them and set T35's playwright_owned to [\"auth.spec.ts\"]."
+}

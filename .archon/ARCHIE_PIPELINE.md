@@ -1,8 +1,8 @@
-# Jira-driven Autonomous Pipeline ("Archie POC")
+# Archie Pipeline — Operational Reference
 
-A working summary of the Jira → Archon SDLC pipeline we've been building on the
-`feature/jira-adapter` branch. This is operational state, not a final design —
-read top-to-bottom if new, or jump to a section.
+**When to read this:** before doing any Mode 2 (workflow authoring) or Mode 3 (operating runs) work on Archie. This is the canonical reference for *how Archie actually runs today* — workflow chain, task-implement DAG with rationale, scripts inventory, validation contract, pause-label semantics, reset/cleanup recipes, log/DB queries, and the open-items backlog of Mode-1 patches that Mode-2 work has surfaced. Read top-to-bottom on first encounter; grep alone misses cross-script logic.
+
+Companion docs: `ARCHIE_PRD.md` (system-as-built spec), `ARCHIE_V2_BACKLOG.md` (planned engine improvements), `ARCHIE_V2_PR_PLAN.md` (PR sequence for in-flight work), `ARCHIE_V3_CANDIDATES.md` (post-v2 architectural rewrites).
 
 ---
 
