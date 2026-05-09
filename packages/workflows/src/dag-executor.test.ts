@@ -6225,13 +6225,14 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
-    // so any leak of the script body via err.message would violate the length
-    // assertion below. Bun's stderr echoes only a few lines of context.
-    const paddingAboveMax = '// padding line '.repeat(200);
+    // 500 × 7 chars = 3.5 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // so any leak of the full script body via err.message would violate the length
+    // assertion below. Block-comment padding (no newlines) avoids Windows execFile
+    // arg truncation at \n that would cause bun to exit 0 on the comment-only prefix.
+    const paddingAboveMax = '/* p */'.repeat(500);
     const scriptNode: ScriptNode = {
       id: 'fail-script-1389',
-      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      script: `${paddingAboveMax} this is not valid javascript`,
       runtime: 'bun',
     };
 
