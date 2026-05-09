@@ -6225,13 +6225,14 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
-    // so any leak of the script body via err.message would violate the length
-    // assertion below. Bun's stderr echoes only a few lines of context.
-    const paddingAboveMax = '// padding line '.repeat(200);
+    // 500 × 7 chars = 3.5 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // so any leak of the full script body via err.message would violate the length
+    // assertion below. Block-comment padding (no newlines) avoids Windows execFile
+    // arg truncation at \n that would cause bun to exit 0 on the comment-only prefix.
+    const paddingAboveMax = '/* p */'.repeat(500);
     const scriptNode: ScriptNode = {
       id: 'fail-script-1389',
-      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      script: `${paddingAboveMax} this is not valid javascript`,
       runtime: 'bun',
     };
 
@@ -6934,5 +6935,153 @@ describe('executeDagWorkflow -- final status derivation', () => {
       expect.anything(),
       expect.stringContaining('b')
     );
+  });
+});
+
+describe('provider resolution -- regression for #1610', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-provider-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'My command prompt for $USER_MESSAGE');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'response' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('node with no provider annotation routes to workflowProvider (codex), not to model-implied provider', async () => {
+    // Regression: a node with model: opus[1m] but no provider: must route to
+    // workflowProvider ('codex' when defaultAssistant: codex), not to 'claude'.
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-provider',
+      testDir,
+      // Node has model: opus[1m] but NO provider: — must inherit workflowProvider
+      {
+        name: 'provider-regression',
+        nodes: [{ id: 'implement', command: 'my-cmd', model: 'opus[1m]' }],
+      },
+      workflowRun,
+      'codex', // workflowProvider (simulates defaultAssistant: codex)
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    // getAgentProvider must have been called with 'codex', not 'claude'
+    expect(mockGetAgentProviderDag).toHaveBeenCalledWith('codex');
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalledWith('claude');
+  });
+
+  it('node with explicit provider: claude routes to claude even when workflowProvider is codex', async () => {
+    // When provider: claude is set on the node, it must override workflowProvider.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-provider',
+      testDir,
+      // Node has both model: opus[1m] AND provider: claude
+      {
+        name: 'provider-explicit',
+        nodes: [{ id: 'implement', command: 'my-cmd', model: 'opus[1m]', provider: 'claude' }],
+      },
+      workflowRun,
+      'codex', // workflowProvider
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    // getAgentProvider must have been called with 'claude'
+    expect(mockGetAgentProviderDag).toHaveBeenCalledWith('claude');
+  });
+});
+
+describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
+  it('every bundled node with an opus model has provider: claude at the node or workflow level', async () => {
+    // Resolve the defaults directory relative to this package (same logic as getAppArchonBasePath).
+    // import.meta.dir = packages/workflows/src → go up 3 levels to repo root → .archon/workflows/defaults
+    const repoRoot = join(import.meta.dir, '..', '..', '..');
+    const defaultsDir = join(repoRoot, '.archon', 'workflows', 'defaults');
+
+    const { readdir, readFile: readFileFs } = await import('fs/promises');
+    const files = (await readdir(defaultsDir)).filter(f => f.endsWith('.yaml'));
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const file of files) {
+      const src = await readFileFs(join(defaultsDir, file), 'utf-8');
+      const result = parseWorkflow(src, file);
+      if (!('workflow' in result)) continue; // skip load errors
+
+      const wf = result.workflow;
+      if (!('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows
+
+      const workflowProvider: string | undefined = (wf as { provider?: string }).provider;
+
+      for (const n of wf.nodes) {
+        const nodeModel: string | undefined = (n as { model?: string }).model;
+        if (!nodeModel || !nodeModel.toLowerCase().includes('opus')) continue;
+
+        const nodeProvider: string | undefined = (n as { provider?: string }).provider;
+        const hasExplicitClaude = nodeProvider === 'claude' || workflowProvider === 'claude';
+
+        expect(hasExplicitClaude).toBe(true);
+        if (!hasExplicitClaude) {
+          // Surface which file+node is missing the annotation
+          throw new Error(
+            `${file}: node '${(n as { id?: string }).id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
+          );
+        }
+      }
+    }
   });
 });
