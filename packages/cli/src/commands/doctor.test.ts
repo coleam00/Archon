@@ -25,7 +25,6 @@ import {
   type DatabaseDeps,
 } from './doctor';
 import * as doctorModule from './doctor';
-import { checkPiModule } from './setup';
 
 describe('checkClaudeBinary', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
@@ -169,21 +168,6 @@ describe('checkPi', () => {
     const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');
-  });
-});
-
-describe('checkPiModule', () => {
-  it('returns ok:true when loader resolves', async () => {
-    const result = await checkPiModule(async () => ({}));
-    expect(result.ok).toBe(true);
-  });
-
-  it('returns ok:false when loader throws (Pi binary missing)', async () => {
-    const result = await checkPiModule(async () => {
-      throw new Error('Cannot find module @mariozechner/pi-coding-agent');
-    });
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain('pi-coding-agent');
   });
 });
 

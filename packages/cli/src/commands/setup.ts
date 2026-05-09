@@ -47,7 +47,14 @@ import {
   getArchonEnvPath as pathsGetArchonEnvPath,
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
   getArchonHome as pathsGetArchonHome,
+  createLogger,
 } from '@archon/paths';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('cli.setup');
+  return cachedLog;
+}
 
 // =============================================================================
 // Types
@@ -408,6 +415,10 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
       hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
       hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
       hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    // Detection is intentionally API-key-only (no DEFAULT_AI_ASSISTANT=pi check)
+    // so that re-runs after partial configs still surface Pi. Doctor's checkPi
+    // uses the stricter DEFAULT_AI_ASSISTANT=pi gate to avoid false passes for
+    // Claude users who share the same key env vars.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),
@@ -503,7 +514,7 @@ async function collectPiConfig(): Promise<{
     process.exit(0);
   }
 
-  const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+  const key = apiKey.trim();
 
   return {
     model,
@@ -513,8 +524,8 @@ async function collectPiConfig(): Promise<{
 
 /**
  * Verify the Pi npm module is loadable. Pi is bundled as a transitive dep of
- * `@archon/providers` so this should always pass, but it serves the same
- * doctor-step role as `checkClaudeBinary` and catches broken compiled builds.
+ * `@archon/providers` so this should always pass, but catching broken compiled
+ * builds at setup time is preferable to a silent runtime failure.
  *
  * The `loader` parameter is injected in tests so we don't need
  * `mock.module()` on `@archon/providers` (which would pollute other tests).
@@ -526,7 +537,9 @@ export async function checkPiModule(
     await loader();
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    const message = err instanceof Error ? err.message : String(err);
+    getLog().warn({ err }, 'setup.pi_module_load_failed');
+    return { ok: false, error: message };
   }
 }
 
@@ -2058,6 +2071,7 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       const e = err as NodeJS.ErrnoException;
       const code = e.code ? ` (${e.code})` : '';
       log.warning(`Could not write Pi model config: ${e.message}${code}`);
+      getLog().warn({ err: e }, 'setup.pi_model_config_write_failed');
     }
   }
 
