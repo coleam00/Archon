@@ -49,7 +49,7 @@ function resolveOutputRef(
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
     if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
-    return ''; // null, undefined, symbol, bigint → empty
+    return ''; // undefined, symbol, bigint → empty
   } catch {
     getLog().warn(
       { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100) },
