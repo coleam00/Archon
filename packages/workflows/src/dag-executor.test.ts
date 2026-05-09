@@ -6285,13 +6285,15 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // 200 × 19 chars ≈ 3.8 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
     // so any leak of the script body via err.message would violate the length
     // assertion below. Bun's stderr echoes only a few lines of context.
-    const paddingAboveMax = '// padding line '.repeat(200);
+    // Block comments (/* */) are used instead of line comments (//) to keep the
+    // script on a single line — Windows truncates multi-line command args at \n.
+    const paddingAboveMax = '/* padding line */ '.repeat(200);
     const scriptNode: ScriptNode = {
       id: 'fail-script-1389',
-      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      script: `${paddingAboveMax}const x = "marker"; this is not valid javascript`,
       runtime: 'bun',
     };
 
