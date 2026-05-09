@@ -82,11 +82,19 @@ describe('ClaudeProvider', () => {
 
   describe('constructor', () => {
     test('throws when running as root (UID 0)', () => {
+      // Temporarily clear IS_SANDBOX so the root-check branch is reachable
+      // (Claude Code sets IS_SANDBOX=1 in its sandbox environment).
+      const origSandbox = process.env.IS_SANDBOX;
+      delete process.env.IS_SANDBOX;
       const spy = spyOn(claudeModule, 'getProcessUid').mockReturnValue(0);
-      expect(() => new ClaudeProvider()).toThrow(
-        'does not support bypassPermissions when running as root'
-      );
-      spy.mockRestore();
+      try {
+        expect(() => new ClaudeProvider()).toThrow(
+          'does not support bypassPermissions when running as root'
+        );
+      } finally {
+        spy.mockRestore();
+        if (origSandbox !== undefined) process.env.IS_SANDBOX = origSandbox;
+      }
     });
 
     test('does not throw for non-root user', () => {
