@@ -388,6 +388,7 @@ export function substituteWorkflowVariables(
   // Substitute basic variables
   let result = prompt
     .replace(/\$WORKFLOW_ID/g, workflowId)
+    .replace(/\$\{run\.id\}/g, workflowId)
     .replace(/\$USER_MESSAGE/g, userMessage)
     .replace(/\$ARGUMENTS/g, userMessage)
     .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
