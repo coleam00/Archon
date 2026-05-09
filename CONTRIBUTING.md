@@ -58,6 +58,39 @@ bun run validate
 
 See [CLAUDE.md](./CLAUDE.md) for detailed architecture documentation.
 
+## Contributing Workflows to the Marketplace
+
+Share your Archon workflows with the community by adding an entry to the marketplace registry at [`packages/docs-web/src/data/marketplace.ts`](packages/docs-web/src/data/marketplace.ts).
+
+### How to Submit
+
+1. Keep your workflow YAML in a **public GitHub repository**
+2. Pin it to a specific commit SHA (ensures immutability after merge)
+3. Fork Archon and add an entry to `packages/docs-web/src/data/marketplace.ts`
+4. Open a PR — automated lint validates your entry before review
+
+### Entry Requirements
+
+| Field | Requirement |
+|-------|-------------|
+| `slug` | Lowercase, hyphens only (e.g. `my-review-workflow`) — must be unique |
+| `name` | Human-readable display name |
+| `author` | Your GitHub username |
+| `description` | 1–3 sentences: what it does and when to use it |
+| `sourceUrl` | GitHub blob URL to your workflow YAML (e.g. `https://github.com/you/repo/blob/main/my-workflow.yaml`) |
+| `sha` | Full 40-character commit SHA pinning the exact version |
+| `tags` | At least one from: `development`, `review`, `automation`, `planning` |
+| `archonVersionCompat` | Semver range (e.g. `>=0.3.0`) |
+
+### Self-Attestation
+
+By submitting, you attest that:
+
+- [ ] The workflow does not exfiltrate data, credentials, or secrets
+- [ ] The workflow does not execute destructive operations without user confirmation
+- [ ] You have the right to share this workflow publicly
+- [ ] The pinned SHA points to a reviewed, stable version of your workflow
+
 ## Questions?
 
 Open an [issue](https://github.com/coleam00/Archon/issues) or start a [discussion](https://github.com/coleam00/Archon/discussions).
