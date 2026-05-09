@@ -2,10 +2,11 @@
   <img src="assets/logo.png" alt="Archon" width="160" />
 </p>
 
-<h1 align="center">Archon</h1>
+<h1 align="center">bdc-harness</h1>
 
 <p align="center">
-  The first open-source harness builder for AI coding. Make AI coding deterministic and repeatable.
+  Blue Devil Collectibles' AI build harness. Forked from <a href="https://github.com/coleam00/Archon">coleam00/Archon</a> (MIT).
+  BDC-specific extensions: ${run.id} substitution fix, fresh_context default, sonnet model default.
 </p>
 
 <p align="center">
