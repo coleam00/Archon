@@ -120,6 +120,30 @@ describe('GET /api/workflows', () => {
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
   });
+
+  test('falls back to null cwd when no cwd query and no codebases registered', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    // No registered codebases → handler should call discovery with null cwd
+    // so bundled + home-scoped workflows still surface (issue #1173).
+    mockListCodebases.mockImplementationOnce(async () => []);
+
+    const response = await app.request('/api/workflows');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      workflows: Array<{ workflow: { name: string }; source: string }>;
+    };
+
+    // Discovery is invoked with null (not skipped), so bundled defaults can surface.
+    expect(mockDiscoverWorkflows).toHaveBeenLastCalledWith(null, expect.any(Function));
+    // The mocked discovery returns one bundled workflow regardless of cwd, so the
+    // response is non-empty — proving the handler no longer short-circuits on no-cwd.
+    expect(Array.isArray(body.workflows)).toBe(true);
+    expect(body.workflows.length).toBeGreaterThan(0);
+    expect(body.workflows[0]?.source).toBe('bundled');
+  });
 });
 
 describe('POST /api/workflows/validate', () => {

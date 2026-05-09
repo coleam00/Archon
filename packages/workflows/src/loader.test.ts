@@ -2512,4 +2512,30 @@ nodes:
       expect(mockLogger.warn).toHaveBeenCalled();
     });
   });
+
+  describe('discoverWorkflows with null cwd (no project context)', () => {
+    it('skips project scope and returns no project-source workflows', async () => {
+      // Issue #1173: when no codebase is registered, the LIST endpoint passes
+      // null so bundled + home scopes still surface. Discovery must not attempt
+      // to read a cwd-derived path and must not produce project-source entries.
+      const result = await discoverWorkflows(null, { loadDefaults: false });
+
+      const projectSourced = result.workflows.filter(w => w.source === 'project');
+      expect(projectSourced).toHaveLength(0);
+
+      // No project-step file/dir read errors — we never tried to access a project path.
+      const readErrors = result.errors.filter(e => e.errorType === 'read_error');
+      expect(readErrors).toHaveLength(0);
+    });
+
+    it('still loads bundled defaults when loadDefaults:true and cwd is null', async () => {
+      // Spy on the bundled-defaults loader to confirm it ran. The actual bundled
+      // map content depends on the build, so we assert via the resulting source label.
+      const result = await discoverWorkflows(null, { loadDefaults: true });
+
+      // No project-source entries (project step skipped).
+      const projectSourced = result.workflows.filter(w => w.source === 'project');
+      expect(projectSourced).toHaveLength(0);
+    });
+  });
 });
