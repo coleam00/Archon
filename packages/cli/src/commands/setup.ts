@@ -1033,12 +1033,9 @@ After upgrading, run 'archon setup' again.`,
     }
 
     defaultAssistant = defaultChoice;
-  } else if (hasCodex && !hasClaude && !hasPi) {
-    defaultAssistant = 'codex';
-  } else if (hasPi && !hasClaude && !hasCodex) {
-    defaultAssistant = 'pi';
+  } else if (selectedProviders.length === 1) {
+    defaultAssistant = selectedProviders[0];
   }
-  // else hasClaude alone: defaultAssistant stays as the registry default ('claude').
 
   return {
     claude: hasClaude,
@@ -1633,8 +1630,7 @@ export function writeHomePiModelConfig(model: string): void {
  */
 export function serializeEnv(entries: Record<string, string>): string {
   const lines: string[] = [];
-  for (const [key, rawValue] of Object.entries(entries)) {
-    const value = rawValue;
+  for (const [key, value] of Object.entries(entries)) {
     const needsQuoting = /[\s#"'\n\r]/.test(value) || value === '';
     if (needsQuoting) {
       const escaped = value
@@ -2113,19 +2109,18 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
       process.exit(0);
     }
 
-    const skillTarget = skillTargetRaw;
     s.start('Installing Archon skill...');
     try {
-      await copyArchonSkill(skillTarget);
+      await copyArchonSkill(skillTargetRaw);
     } catch (err) {
       s.stop('Archon skill installation failed');
       cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
       process.exit(1);
     }
     s.stop('Archon skill installed');
-    skillInstalledPath = join(skillTarget, '.claude', 'skills', 'archon');
+    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon');
 
-    const bootstrapResult = bootstrapProjectConfig(skillTarget);
+    const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
     if (bootstrapResult.state === 'created') {
       log.info(`Created project config: ${bootstrapResult.path}`);
       projectConfigCreatedPath = bootstrapResult.path;
