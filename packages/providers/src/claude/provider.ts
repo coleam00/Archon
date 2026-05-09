@@ -219,13 +219,17 @@ function expandEnvVarsInRecord(
       result[key] = String(val);
       continue;
     }
-    result[key] = val.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, varName: string) => {
-      const envVal = process.env[varName];
-      if (envVal === undefined) {
-        missingVars.push(varName);
+    result[key] = val.replace(
+      /\$(?:\{([A-Z_][A-Z0-9_]*)\}|([A-Z_][A-Z0-9_]*))/g,
+      (_, braced: string | undefined, bare: string | undefined) => {
+        const varName = braced ?? bare ?? '';
+        const envVal = process.env[varName];
+        if (envVal === undefined) {
+          missingVars.push(varName);
+        }
+        return envVal ?? '';
       }
-      return envVal ?? '';
-    });
+    );
   }
   return result;
 }
