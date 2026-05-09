@@ -606,8 +606,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                 <div key={provider.id} className="rounded-md border border-border p-3 text-sm">
                   <div className="font-medium">{provider.displayName}</div>
                   <div className="mt-1 text-muted-foreground">
-                    Provider-specific settings are stored generically for Phase 2. This provider
-                    does not have a dedicated editor yet.
+                    This provider does not have a dedicated settings panel yet.
                   </div>
                   {Object.keys(providerSettings).length > 0 && (
                     <pre className="mt-2 overflow-x-auto rounded bg-muted p-2 text-xs">

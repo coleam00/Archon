@@ -183,7 +183,7 @@ describe('GET /api/providers', () => {
     expect(Array.isArray(body.providers)).toBe(true);
   });
 
-  test('includes built-in providers', async () => {
+  test('claude and codex are flagged builtIn', async () => {
     const response = await app.request('/api/providers');
     const body = (await response.json()) as {
       providers: { id: string; builtIn: boolean }[];
