@@ -1,3 +1,15 @@
+## Local Fork Notes (Steven / wadeste)
+
+> Local-only context. Do not upstream this section to `coleam00/archon`.
+
+- This checkout is a **soft fork** of `coleam00/archon`.
+  - `origin` = `https://github.com/wadeste/Archon.git` (Steven's fork — work happens here)
+  - `upstream` = `https://github.com/coleam00/archon.git` (occasional pulls only)
+- Steven plans to diverge from upstream with personal changes. **Do NOT propose or open upstream PRs against `coleam00/archon` by default.** Treat all feature work as living in `wadeste/Archon`.
+- When pulling from upstream, prefer `git fetch upstream && git merge upstream/dev` (or cherry-pick) into local `dev`. Resolve conflicts in favour of local changes when they conflict with upstream.
+- The "Git Workflow and Releases" section below (`dev` → PR → `main` via `/release`) still applies for `wadeste/Archon`'s internal release flow. CHANGELOG entries are local-fork-relative; they do not need to mirror upstream's changelog.
+- Staging deploy lives at `stewade@192.168.1.165:~/archon` (branch `dev`). Restart with `systemctl --user restart archon-server.service archon-web.service`.
+
 ## Project Overview
 
 **Remote Agentic Coding Platform**: Control AI coding assistants (Claude Code SDK, Codex SDK) remotely from Slack, Telegram, and GitHub. Built with **Bun + TypeScript + SQLite/PostgreSQL**, single-developer tool for AI-assisted development practitioners. Architecture prioritizes simplicity, flexibility, and user control.
