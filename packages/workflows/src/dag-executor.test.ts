@@ -3182,6 +3182,50 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       });
     });
 
+    it('passes loop node systemPrompt to the agent provider', async () => {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Did the task. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-session-1' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-system-prompt',
+          nodes: [
+            {
+              id: 'my-loop',
+              systemPrompt: 'TEST POLICY CONTENT',
+              loop: {
+                prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      const options = mockSendQueryDag.mock.calls[0][3] as { systemPrompt?: string };
+      expect(options.systemPrompt).toBe('TEST POLICY CONTENT');
+    });
+
     it('completes after multiple iterations', async () => {
       let callCount = 0;
       mockSendQueryDag.mockImplementation(function* () {

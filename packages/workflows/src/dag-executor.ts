@@ -1692,6 +1692,7 @@ async function executeScriptNode(
  * Uses the same nodeConfig + assistantConfig pattern as resolveNodeProviderAndModel.
  */
 function buildLoopNodeOptions(
+  node: LoopNode,
   provider: string,
   model: string | undefined,
   config: WorkflowConfig,
@@ -1702,6 +1703,7 @@ function buildLoopNodeOptions(
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     options.env = config.envVars;
   }
+  if (node.systemPrompt !== undefined) options.systemPrompt = node.systemPrompt;
   options.assistantConfig = config.assistants[provider] ?? {};
   // Pass workflow-level options as nodeConfig so providers can apply them
   if (workflowLevelOptions) {
@@ -1774,6 +1776,7 @@ async function executeLoopNode(
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
   const resolvedOptions = buildLoopNodeOptions(
+    node,
     workflowProvider,
     workflowModel,
     config,

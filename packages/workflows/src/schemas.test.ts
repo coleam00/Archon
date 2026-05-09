@@ -9,6 +9,7 @@ import {
   LOOP_NODE_AI_FIELDS,
   approvalOnRejectSchema,
   dagNodeSchema,
+  workflowDefinitionSchema,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -35,6 +36,26 @@ const dagWorkflow: WorkflowDefinition = {
   description: 'DAG execution',
   nodes: [commandNode, promptNode, bashNode],
 };
+
+// ---------------------------------------------------------------------------
+// workflowDefinitionSchema
+// ---------------------------------------------------------------------------
+
+describe('workflowDefinitionSchema', () => {
+  test('accepts policyFile on workflow definitions', () => {
+    const result = workflowDefinitionSchema.safeParse({
+      name: 'policy-workflow',
+      description: 'Policy workflow',
+      policyFile: '/tmp/test-policy.md',
+      nodes: [{ id: 'node1', prompt: 'Do something' }],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.policyFile).toBe('/tmp/test-policy.md');
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // isBashNode

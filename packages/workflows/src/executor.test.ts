@@ -4,6 +4,9 @@
  * that the inner dag-executor.test.ts cannot reach.
  */
 import { describe, it, expect, mock, beforeEach } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
@@ -132,6 +135,10 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     metadata: {},
     ...overrides,
   };
+}
+
+function getExecutedWorkflow(): WorkflowDefinition {
+  return mockExecuteDagWorkflow.mock.calls[0]?.[4] as WorkflowDefinition;
 }
 
 describe('executeWorkflow', () => {
@@ -707,6 +714,125 @@ describe('executeWorkflow', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.summary).toBeUndefined();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // policyFile
+  // -------------------------------------------------------------------------
+
+  describe('policyFile', () => {
+    it('loads policyFile content into prompt node systemPrompt', async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'archon-policy-'));
+      try {
+        await writeFile(join(cwd, 'policy.md'), 'TEST POLICY CONTENT');
+        const deps = makeDeps();
+
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          cwd,
+          makeWorkflow({
+            policyFile: 'policy.md',
+            nodes: [
+              { id: 'node1', prompt: 'Do something' },
+              { id: 'loop1', loop: { prompt: 'Iterate', until: 'DONE', max_iterations: 2 } },
+            ],
+          }),
+          'test',
+          'db-conv-1'
+        );
+
+        expect(result.success).toBe(true);
+        expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+        const executedWorkflow = getExecutedWorkflow();
+        expect(executedWorkflow.nodes[0]).toMatchObject({
+          systemPrompt: 'TEST POLICY CONTENT',
+        });
+        expect(executedWorkflow.nodes[1]).toMatchObject({
+          systemPrompt: 'TEST POLICY CONTENT',
+        });
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    });
+
+    it('fails closed when policyFile is missing', async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'archon-policy-'));
+      try {
+        const deps = makeDeps();
+
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          cwd,
+          makeWorkflow({ policyFile: 'missing-policy.md' }),
+          'test',
+          'db-conv-1'
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('policyFile not found');
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    });
+
+    it('fails closed when policyFile is empty', async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'archon-policy-'));
+      try {
+        await writeFile(join(cwd, 'empty-policy.md'), '');
+        const deps = makeDeps();
+
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          cwd,
+          makeWorkflow({ policyFile: 'empty-policy.md' }),
+          'test',
+          'db-conv-1'
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('policyFile is empty');
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    });
+
+    it('prepends policyFile content before an existing prompt node systemPrompt', async () => {
+      const cwd = await mkdtemp(join(tmpdir(), 'archon-policy-'));
+      try {
+        await writeFile(join(cwd, 'policy.md'), 'TEST POLICY CONTENT');
+        const deps = makeDeps();
+
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          cwd,
+          makeWorkflow({
+            policyFile: 'policy.md',
+            nodes: [{ id: 'node1', prompt: 'Do something', systemPrompt: 'NODE-SPECIFIC' }],
+          }),
+          'test',
+          'db-conv-1'
+        );
+
+        expect(result.success).toBe(true);
+        expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+        const executedWorkflow = getExecutedWorkflow();
+        expect(executedWorkflow.nodes[0]).toMatchObject({
+          systemPrompt: 'TEST POLICY CONTENT\n\nNODE-SPECIFIC',
+        });
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
       }
     });
   });

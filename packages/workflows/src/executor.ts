@@ -1,8 +1,8 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import { mkdir } from 'fs/promises';
-import { join } from 'path';
+import { mkdir, readFile } from 'fs/promises';
+import { join, resolve } from 'path';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -210,6 +210,46 @@ async function resolveProjectPaths(
   };
 }
 
+async function applyWorkflowPolicyFile(
+  workflow: WorkflowDefinition,
+  cwd: string
+): Promise<WorkflowDefinition> {
+  if (!workflow.policyFile) {
+    return workflow;
+  }
+
+  const policyPath = resolve(cwd, workflow.policyFile);
+  let policyContent: string;
+  try {
+    policyContent = await readFile(policyPath, 'utf-8');
+  } catch {
+    throw new Error(`policyFile not found: ${workflow.policyFile} (resolved to ${policyPath})`);
+  }
+
+  if (!policyContent.trim()) {
+    throw new Error(`policyFile is empty: ${workflow.policyFile}`);
+  }
+
+  return {
+    ...workflow,
+    nodes: workflow.nodes.map(node => {
+      const isAiPromptNode =
+        ('prompt' in node && node.prompt !== undefined) ||
+        ('loop' in node && node.loop !== undefined);
+      if (!isAiPromptNode) {
+        return node;
+      }
+
+      return {
+        ...node,
+        systemPrompt: node.systemPrompt
+          ? `${policyContent}\n\n${node.systemPrompt}`
+          : policyContent,
+      };
+    }),
+  };
+}
+
 /**
  * Execute a complete DAG-based workflow.
  *
@@ -290,7 +330,8 @@ export async function executeWorkflow(
     );
   }
   const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined) ?? "claude-sonnet-4-5";
+  const resolvedModel =
+    workflow.model ?? (assistantDefaults?.model as string | undefined) ?? 'claude-sonnet-4-5';
 
   getLog().info(
     {
@@ -597,16 +638,19 @@ export async function executeWorkflow(
 
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error
   try {
+    // BDC patch: load policyFile if specified and inject as systemPrompt for all prompt nodes.
+    const executableWorkflow = await applyWorkflowPolicyFile(workflow, cwd);
+
     getLog().info(
       {
-        workflowName: workflow.name,
+        workflowName: executableWorkflow.name,
         workflowRunId: workflowRun.id,
         hasIssueContext: !!issueContext,
         issueContextLength: issueContext?.length ?? 0,
       },
       'workflow_starting'
     );
-    await logWorkflowStart(logDir, workflowRun.id, workflow.name, userMessage);
+    await logWorkflowStart(logDir, workflowRun.id, executableWorkflow.name, userMessage);
 
     // Register run with emitter and emit workflow_started
     const emitter = getWorkflowEventEmitter();
@@ -615,7 +659,7 @@ export async function executeWorkflow(
     emitter.emit({
       type: 'workflow_started',
       runId: workflowRun.id,
-      workflowName: workflow.name,
+      workflowName: executableWorkflow.name,
       conversationId: conversationDbId,
     });
 
@@ -623,8 +667,8 @@ export async function executeWorkflow(
     // description (authored by the user in their YAML) + platform + version.
     // Opt out via ARCHON_TELEMETRY_DISABLED=1 or DO_NOT_TRACK=1.
     captureWorkflowInvoked({
-      workflowName: workflow.name,
-      workflowDescription: workflow.description,
+      workflowName: executableWorkflow.name,
+      workflowDescription: executableWorkflow.description,
       platform: platform.getPlatformType(),
       archonVersion: BUNDLED_VERSION,
     });
@@ -632,7 +676,7 @@ export async function executeWorkflow(
       .createWorkflowEvent({
         workflow_run_id: workflowRun.id,
         event_type: 'workflow_started',
-        data: { workflowName: workflow.name },
+        data: { workflowName: executableWorkflow.name },
       })
       .catch((err: Error) => {
         getLog().error(
@@ -701,7 +745,7 @@ export async function executeWorkflow(
 
     // Add workflow start message (step details omitted from text notification)
     // Strip routing metadata from description (Use when:, Handles:, NOT for:, Capability:, Triggers:)
-    const cleanDescription = (workflow.description ?? '')
+    const cleanDescription = (executableWorkflow.description ?? '')
       .split('\n')
       .filter(
         line =>
@@ -709,8 +753,8 @@ export async function executeWorkflow(
       )
       .join('\n')
       .trim();
-    const descriptionText = cleanDescription || workflow.name;
-    startupMessage += `🚀 **Starting workflow**: \`${workflow.name}\`\n\n> ${descriptionText}`;
+    const descriptionText = cleanDescription || executableWorkflow.name;
+    startupMessage += `🚀 **Starting workflow**: \`${executableWorkflow.name}\`\n\n> ${descriptionText}`;
 
     // Send consolidated message - use critical send with limited retries (1 retry max)
     // to avoid blocking workflow execution while still catching transient failures
@@ -736,7 +780,7 @@ export async function executeWorkflow(
       platform,
       conversationId,
       cwd,
-      workflow,
+      executableWorkflow,
       workflowRun,
       resolvedProvider,
       resolvedModel,
