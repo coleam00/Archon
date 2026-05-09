@@ -4,7 +4,7 @@ description: |
   Triggers: "review this PR", "review PR #123", "comprehensive review", "full PR review",
             "review and fix", "check this PR", "code review".
   Does: Syncs PR with main (rebase if needed) -> runs 5 specialized review agents in parallel ->
-        synthesizes findings -> auto-fixes CRITICAL/HIGH issues -> reports remaining issues.
+        synthesizes findings -> auto-fixes CRITICAL/HIGH/MEDIUM/LOW issues -> reports remaining issues.
   NOT for: Quick questions about a PR, checking CI status, simple "what changed" queries.
 
   This workflow produces artifacts in $ARTIFACTS_DIR/../reviews/pr-{number}/ and posts

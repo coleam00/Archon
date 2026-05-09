@@ -1,5 +1,5 @@
 ---
-description: Implement CRITICAL and HIGH fixes from review, add tests, report remaining issues
+description: Implement CRITICAL, HIGH, MEDIUM and LOW fixes from review, add tests, report remaining issues
 argument-hint: (none - reads from consolidated review artifact)
 ---
 
@@ -19,7 +19,7 @@ argument-hint: (none - reads from consolidated review artifact)
 
 ## Your Mission
 
-Read the consolidated review artifact and implement all CRITICAL and HIGH priority fixes. Add tests for fixed code if missing. Commit and push changes. Report what was fixed, what wasn't (and why), and suggest follow-up issues for remaining items.
+Read the consolidated review artifact and implement all CRITICAL, HIGH, MEDIUM and LOW priority fixes. Add tests for fixed code if missing. Commit and push changes. Report what was fixed, what wasn't (and why), and suggest follow-up issues for remaining items.
 
 **Output artifact**: `$ARTIFACTS_DIR/review/fix-report.md`
 **Git action**: Commit AND push fixes to the PR branch
@@ -59,8 +59,8 @@ cat $ARTIFACTS_DIR/review/consolidated-review.md
 Extract:
 - All CRITICAL issues with fixes
 - All HIGH issues with fixes
-- MEDIUM issues (for reporting)
-- LOW issues (for reporting)
+- MEDIUM issues with fixes
+- LOW issues with fixes
 
 ### 1.4 Read Individual Artifacts for Details
 
@@ -86,7 +86,7 @@ Verify you are on the correct PR branch (should be `$HEAD_BRANCH`).
 - [ ] PR number identified
 - [ ] On the correct PR branch (NOT base branch, NOT a new branch)
 - [ ] Consolidated review loaded
-- [ ] CRITICAL/HIGH issues extracted
+- [ ] CRITICAL/HIGH/MEDIUM/LOW issues extracted
 
 ---
 
@@ -103,7 +103,16 @@ Verify you are on the correct PR branch (should be `$HEAD_BRANCH`).
 
 Same process as CRITICAL.
 
-### 2.3 For Test Coverage Gaps
+### 2.3 For Each MEDIUMN Issue
+
+Same process as CRITICAL.
+
+### 2.4 For Each LOW Issue
+
+Same process as CRITICAL.
+
+
+### 2.5 For Test Coverage Gaps
 
 If test-coverage-agent identified missing tests for fixed code:
 
@@ -111,7 +120,7 @@ If test-coverage-agent identified missing tests for fixed code:
 2. **Add tests for the fix**
 3. **Verify tests pass**: `bun test {file}`
 
-### 2.4 Handle Unfixable Issues
+### 2.6 Handle Unfixable Issues
 
 If a fix cannot be applied:
 - **Conflict**: Code has changed since review
@@ -124,6 +133,8 @@ Document the reason clearly.
 **PHASE_2_CHECKPOINT:**
 - [ ] All CRITICAL fixes attempted
 - [ ] All HIGH fixes attempted
+- [ ] All MEDIUM fixes attempted
+- [ ] All LOW fixes attempted
 - [ ] Tests added for fixes
 - [ ] Unfixable issues documented
 
@@ -191,7 +202,7 @@ git status --porcelain  # verify nothing scratch/review/PR-body is staged
 ### 4.2 Commit
 
 ```bash
-git commit -m "fix: Address review findings (CRITICAL/HIGH)
+git commit -m "fix: Address review findings (CRITICAL/HIGH/MEDIUM/LOW)
 
 Fixes applied:
 - {brief list of fixes}
@@ -261,6 +272,25 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 | Issue | Location | Status | Details |
 |-------|----------|--------|---------|
 | {title} | `file:line` | ✅ FIXED | {what was done} |
+| {title} | `file:line` | ❌ SKIPPED | {why} |
+
+---
+
+### MEDIUM Fixes ({n}/{total})
+
+| Issue | Location | Status | Details |
+|-------|----------|--------|---------|
+| {title} | `file:line` | ✅ FIXED | {what was done} |
+| {title} | `file:line` | ❌ SKIPPED | {why} |
+
+---
+
+### LOW Fixes ({n}/{total})
+
+| Issue | Location | Status | Details |
+|-------|----------|--------|---------|
+| {title} | `file:line` | ✅ FIXED | {what was done} |
+| {title} | `file:line` | ❌ SKIPPED | {why} |
 
 ---
 
@@ -276,30 +306,12 @@ Write to `$ARTIFACTS_DIR/review/fix-report.md`:
 
 ### {Issue Title}
 
-**Severity**: {CRITICAL/HIGH}
+**Severity**: {CRITICAL/HIGH/MEDIUM/LOW}
 **Location**: `{file}:{line}`
 **Reason Not Fixed**: {reason}
 
 **Suggested Action**:
 {What the user should do}
-
----
-
-## MEDIUM Issues (User Decision Required)
-
-| Issue | Location | Options |
-|-------|----------|---------|
-| {title} | `file:line` | Fix now / Create issue / Skip |
-
----
-
-## LOW Issues (For Consideration)
-
-| Issue | Location | Suggestion |
-|-------|----------|------------|
-| {title} | `file:line` | {brief suggestion} |
-
----
 
 ## Suggested Follow-up Issues
 
@@ -352,6 +364,8 @@ gh pr comment {number} --body "$(cat <<'EOF'
 |----------|-------|---------|
 | 🔴 CRITICAL | {n} | {n} |
 | 🟠 HIGH | {n} | {n} |
+| 🟡 MEDIUM | {n} | {n} |
+| 🔵 LOW | {n} | {n} |
 
 ### What Was Fixed
 
@@ -369,15 +383,6 @@ gh pr comment {number} --body "$(cat <<'EOF'
 
 {If any:}
 - **{title}** (`{file}`) - {reason}
-
----
-
-## 🟡 MEDIUM Issues (Your Decision)
-
-{If any:}
-| Issue | Options |
-|-------|---------|
-| {title} | Fix now / Create issue / Skip |
 
 ---
 
@@ -420,6 +425,8 @@ Output only this summary (keep it brief):
 |----------|-------|
 | CRITICAL | {n}/{total} |
 | HIGH | {n}/{total} |
+| MEDIUM | {n}/{total} |
+| LOW | {n}/{total} |
 
 **Validation**: ✅ All checks pass
 **Pushed**: ✅ Changes pushed to PR
@@ -457,6 +464,8 @@ See fix report: `$ARTIFACTS_DIR/review/fix-report.md`
 - **ON_CORRECT_BRANCH**: Working on PR's head branch, not base branch or new branch
 - **CRITICAL_ADDRESSED**: All CRITICAL issues attempted
 - **HIGH_ADDRESSED**: All HIGH issues attempted
+- **MEDIUM_ADDRESSED**: All MEDIUM issues attempted
+- **LOW_ADDRESSED**: All LOW issues attempted
 - **VALIDATION_PASSED**: Type check, lint, tests, build all pass
 - **COMMITTED_AND_PUSHED**: Changes committed AND pushed to PR branch
 - **REPORTED**: Fix report artifact and GitHub comment created
