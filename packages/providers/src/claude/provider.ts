@@ -206,7 +206,7 @@ export function getProcessUid(): number | undefined {
 // ─── MCP Config Loading (absorbed from dag-executor) ───────────────────────
 
 /**
- * Expand $VAR_NAME references in string-valued records from process.env.
+ * Expand $VAR_NAME and ${VAR_NAME} references in string-valued records from process.env.
  */
 function expandEnvVarsInRecord(
   record: Record<string, unknown>,
