@@ -5,7 +5,7 @@ description: |
   Does: Reads the WO spec, enumerates files and violations, applies locked mapping table, verifies sweeps, commits, pushes, opens PRs, and builds manifest.
   NOT for: Feature development (use bdc-feature-development.yaml), doctrine updates, infra deploys, or sweeps requiring judgment.
 
-policyFile: BDC_XO/harness/policies/agent-behavior.md
+policyFile: harness/policies/agent-behavior.md
 model: claude-sonnet-4-5
 
 nodes:
@@ -20,9 +20,14 @@ nodes:
         echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
         exit 1
       fi
-      SPEC_PATH="BDC_XO/docs/superpowers/specs/${WO_ID}.md"
+      # Try direct path first, then date-prefixed glob (specs are commonly named YYYY-MM-DD-WO-...md)
+      # CWD is the bdc-xo repo root (Archon worktree), so paths are relative — no BDC_XO/ prefix.
+      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
       if [ ! -f "$SPEC_PATH" ]; then
-        echo "Spec not found: $SPEC_PATH" >&2
+        SPEC_PATH=$(ls docs/superpowers/specs/*${WO_ID}.md 2>/dev/null | head -n 1 || true)
+      fi
+      if [ -z "$SPEC_PATH" ] || [ ! -f "$SPEC_PATH" ]; then
+        echo "Spec not found for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob)" >&2
         exit 1
       fi
       printf 'WO_ID=%s\nSPEC_PATH=%s\n\n' "$WO_ID" "$SPEC_PATH"
