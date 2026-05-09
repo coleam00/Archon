@@ -2529,13 +2529,16 @@ nodes:
     });
 
     it('still loads bundled defaults when loadDefaults:true and cwd is null', async () => {
-      // Spy on the bundled-defaults loader to confirm it ran. The actual bundled
-      // map content depends on the build, so we assert via the resulting source label.
       const result = await discoverWorkflows(null, { loadDefaults: true });
 
       // No project-source entries (project step skipped).
       const projectSourced = result.workflows.filter(w => w.source === 'project');
       expect(projectSourced).toHaveLength(0);
+
+      // Bundled-source entries must surface — without this assertion the test
+      // would silently pass even if the bundled-defaults loader regressed.
+      const bundledSourced = result.workflows.filter(w => w.source === 'bundled');
+      expect(bundledSourced.length).toBeGreaterThan(0);
     });
   });
 });
