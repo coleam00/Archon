@@ -1127,3 +1127,143 @@ export async function workflowEventEmitCommand(
   // have been persisted if the DB was unavailable. Check server logs if missing.
   console.log(`Event submitted (best-effort): ${eventType} for run ${runId}`);
 }
+
+// ─── Marketplace commands ────────────────────────────────────────────────────
+
+interface MarketplaceEntryJson {
+  slug: string;
+  name: string;
+  author: string;
+  description: string;
+  sourceUrl: string;
+  sha: string;
+  tags: string[];
+  archonVersionCompat: string;
+  featured?: boolean;
+}
+
+const DEFAULT_MARKETPLACE_URL = 'https://archon.diy/workflows.json';
+
+async function fetchMarketplace(): Promise<MarketplaceEntryJson[]> {
+  const url = process.env.ARCHON_MARKETPLACE_URL ?? DEFAULT_MARKETPLACE_URL;
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (error) {
+    const err = error as Error;
+    throw new Error(`Cannot reach marketplace at ${url}: ${err.message}`);
+  }
+  if (!res.ok) {
+    throw new Error(`Marketplace fetch failed: HTTP ${String(res.status)} from ${url}`);
+  }
+  const raw: unknown = await res.json();
+  if (!Array.isArray(raw)) {
+    throw new Error('Unexpected marketplace response format (expected array)');
+  }
+  return raw as MarketplaceEntryJson[];
+}
+
+export async function workflowSearchCommand(query?: string, json?: boolean): Promise<void> {
+  const entries = await fetchMarketplace();
+
+  const results = query
+    ? entries.filter(e => {
+        const q = query.toLowerCase();
+        return (
+          e.name.toLowerCase().includes(q) ||
+          e.author.toLowerCase().includes(q) ||
+          e.description.toLowerCase().includes(q) ||
+          e.tags.some(t => t.toLowerCase().includes(q))
+        );
+      })
+    : entries;
+
+  if (json) {
+    console.log(JSON.stringify(results, null, 2));
+    return;
+  }
+
+  if (results.length === 0) {
+    console.log(query ? `No workflows matching "${query}".` : 'Marketplace is empty.');
+    console.log('Browse at https://archon.diy/workflows/');
+    return;
+  }
+
+  console.log(
+    `\nWorkflow Marketplace${query ? ` — results for "${query}"` : ''} (${String(results.length)})\n`
+  );
+  for (const e of results) {
+    const tags = e.tags.join(', ');
+    const desc = e.description.length > 80 ? e.description.slice(0, 77) + '...' : e.description;
+    console.log(`  ${e.slug}`);
+    console.log(`    Name:   ${e.name}`);
+    console.log(`    Author: @${e.author}`);
+    console.log(`    Tags:   ${tags}`);
+    console.log(`    ${desc}`);
+    console.log('');
+  }
+  console.log('Install: archon workflow install <slug>');
+}
+
+export async function workflowInstallCommand(
+  slug: string,
+  cwd: string,
+  force?: boolean
+): Promise<void> {
+  const entries = await fetchMarketplace();
+  const entry = entries.find(e => e.slug === slug);
+
+  if (!entry) {
+    console.error(`Error: Workflow '${slug}' not found in marketplace.`);
+    console.error("Run 'archon workflow search' to browse available workflows.");
+    throw new Error(`Workflow '${slug}' not found`);
+  }
+
+  if (!entry.sourceUrl.startsWith('https://github.com/')) {
+    throw new Error(
+      `Untrusted source URL for '${slug}': ${entry.sourceUrl}\nOnly github.com sources are permitted.`
+    );
+  }
+
+  // Transform GitHub blob URL → raw content URL at pinned SHA
+  const rawUrl = entry.sourceUrl
+    .replace('https://github.com/', 'https://raw.githubusercontent.com/')
+    .replace(/\/blob\/[^/]+\//, `/${entry.sha}/`);
+
+  let res: Response;
+  try {
+    res = await fetch(rawUrl);
+  } catch (error) {
+    const err = error as Error;
+    throw new Error(`Cannot fetch workflow source at ${rawUrl}: ${err.message}`);
+  }
+  if (!res.ok) {
+    throw new Error(`Source fetch failed: HTTP ${String(res.status)} from ${rawUrl}`);
+  }
+  const yamlContent = await res.text();
+
+  if (!yamlContent.trim()) {
+    throw new Error(`Downloaded YAML is empty for '${slug}'`);
+  }
+
+  const { findRepoRoot } = await import('@archon/git');
+  const repoRoot = await findRepoRoot(cwd);
+  if (!repoRoot) {
+    throw new Error('Not in a git repository. Run archon workflow install from within a git repo.');
+  }
+
+  const { existsSync, mkdirSync, writeFileSync } = await import('node:fs');
+
+  const workflowsDir = join(repoRoot, '.archon', 'workflows');
+  const destPath = join(workflowsDir, `${slug}.yaml`);
+
+  if (existsSync(destPath) && !force) {
+    throw new Error(`Workflow '${slug}' already exists at ${destPath}.\nUse --force to overwrite.`);
+  }
+
+  mkdirSync(workflowsDir, { recursive: true });
+  writeFileSync(destPath, yamlContent);
+
+  console.log(`Installed '${entry.name}' to ${destPath}`);
+  console.log(`Run with: archon workflow run ${slug} "<message>"`);
+}
