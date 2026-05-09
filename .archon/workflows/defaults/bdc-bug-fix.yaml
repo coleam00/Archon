@@ -1,0 +1,462 @@
+name: bdc-bug-fix
+description: |
+  Use when: Executing a BDC bug-class Work Order from an approved spec.
+  Input: WO_ID in the environment or user message, plus repo context from Overlord.
+  Does: Reads the BDC WO spec, writes a failing test that reproduces the bug, implements a fix, verifies all tests pass, commits, pushes, opens PRs, and builds a Captain CI manifest.
+  NOT for: Features, doctrine-only updates, cleanup sweeps, infrastructure deploys, or P0 incidents requiring emergency hotfixes.
+
+policyFile: BDC_XO/harness/policies/agent-behavior.md
+model: claude-sonnet-4-5
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      SPEC_PATH="BDC_XO/docs/superpowers/specs/${WO_ID}.md"
+      if [ ! -f "$SPEC_PATH" ]; then
+        echo "Spec not found: $SPEC_PATH" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=%s\n\n' "$WO_ID" "$SPEC_PATH"
+      cat "$SPEC_PATH"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Builder-4\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  - id: reproduce
+    depends_on: [read-spec]
+    task_class: medium_work
+    prompt: |
+      Read the BDC Work Order spec below and produce a failing test that reproduces the bug.
+
+      ## Required Output
+      Return a test file content in Markdown code block with:
+      1. Clear description of what the test is checking
+      2. The test code that WILL FAIL before any fix is applied
+      3. The expected error or assertion failure when test runs
+      4. The file path where this test should be placed
+
+      The test must demonstrate the bug in its current form. The test must fail if you run it now against the unfixed code.
+
+      ## Spec
+      $read-spec.output
+
+  - id: verify-test-fails
+    depends_on: [reproduce]
+    bash: |
+      set -euo pipefail
+      # Extract test file path and command from reproduce output
+      # The test MUST fail before the fix. If test passes, reproduction is wrong.
+      echo "Extracting test file path and run command from reproduce output..."
+      TEST_PATH=$(printf '%s\n' "$reproduce.output" | grep -Eo '\`[^`]+\.(test\.(ts|js|py)|spec\.(ts|js|py))[^`]*\`' | head -n 1 | sed 's/`//g' || echo "")
+      if [ -z "$TEST_PATH" ]; then
+        echo "Could not extract test file path from reproduce output. Look for test file references." >&2
+        exit 1
+      fi
+      echo "Test file: $TEST_PATH"
+
+      # Detect test runner and run the specific test
+      if [ -f package.json ] && grep -q '"test"' package.json; then
+        echo "Running test via npm test..."
+        if npm test -- "$TEST_PATH" 2>&1; then
+          echo "ERROR: Test passed, but it MUST fail before the fix is applied!" >&2
+          exit 1
+        fi
+      elif [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+        echo "Running test via pytest..."
+        if pytest "$TEST_PATH" -v 2>&1; then
+          echo "ERROR: Test passed, but it MUST fail before the fix is applied!" >&2
+          exit 1
+        fi
+      else
+        echo "Could not detect test runner. Assuming npm test..." >&2
+        if npm test -- "$TEST_PATH" 2>&1; then
+          echo "ERROR: Test passed, but it MUST fail before the fix is applied!" >&2
+          exit 1
+        fi
+      fi
+      echo "Confirmed: test fails as expected before fix."
+
+  - id: plan-fix
+    depends_on: [verify-test-fails]
+    task_class: medium_work
+    prompt: |
+      Given the reproduction from the bug investigation, plan the minimal fix to address the root cause.
+
+      ## Required Output
+      Return structured Markdown with these headings:
+      - Root cause analysis
+      - Fix strategy (minimal, surgical approach)
+      - Files to modify
+      - Files to create
+      - Verification commands (run the test again)
+      - Commit message
+      - Push policy (same as feature-development: staging gate for Rule 20 repos)
+
+      ## BDC Push Policy
+      Hardcoded Rule 20 staging-gate repos:
+      - bluedevilcollectibles/lspro-react
+      - bluedevilcollectibles/shopops-storefront
+      - bluedevilcollectibles/shopops/
+
+      For those repos, use a feature branch plus PR and require the staging gate.
+      For other code repos, use feature branch plus PR without staging gate.
+
+      ## Spec
+      $read-spec.output
+
+      ## Reproduction
+      $reproduce.output
+
+  - id: implement-fix
+    depends_on: [plan-fix]
+    task_class: medium_work
+    model: opus[1m]
+    loop:
+      prompt: |
+        Implement the approved fix plan for this BDC bug Work Order.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan-fix.output
+
+        ## Reproduction Test Path
+        $reproduce.output
+
+        ## Execution Rules
+        - Modify only the files identified as in scope by the plan.
+        - Prefer existing repo patterns and helpers.
+        - Do not reformat unrelated code.
+        - Do not deploy.
+        - Do not bypass approval gates.
+        - Stop and report a blocker if the plan is ambiguous or a needed source of truth is missing.
+
+        ## Loop Completion Criteria
+        After each implementation attempt:
+        1. Run the reproduction test (the one that was failing before the fix)
+        2. If test PASSES, output <promise>COMPLETE</promise>
+        3. If test FAILS, output the error and iterate
+
+        You are in loop iteration $LOOP_ITERATION.
+      until: COMPLETE
+      max_iterations: 5
+      fresh_context: true
+
+  - id: verify-test-passes
+    depends_on: [implement-fix]
+    bash: |
+      set -euo pipefail
+      echo "Verifying the reproduction test now passes after the fix..."
+      TEST_PATH=$(printf '%s\n' "$reproduce.output" | grep -Eo '\`[^`]+\.(test\.(ts|js|py)|spec\.(ts|js|py))[^`]*\`' | head -n 1 | sed 's/`//g' || echo "")
+      if [ -z "$TEST_PATH" ]; then
+        echo "Could not extract test file path from reproduce output." >&2
+        exit 1
+      fi
+
+      if [ -f package.json ] && grep -q '"test"' package.json; then
+        npm test -- "$TEST_PATH"
+      elif [ -f pyproject.toml ] || [ -f requirements.txt ]; then
+        pytest "$TEST_PATH" -v
+      else
+        npm test -- "$TEST_PATH"
+      fi
+      echo "Test passes after fix."
+
+  - id: verify-build
+    depends_on: [implement-fix]
+    bash: |
+      set -euo pipefail
+      if [ -f package.json ]; then
+        if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+          npm run build
+        else
+          echo "No npm build script; skipping build."
+        fi
+      elif [ -f tests/run_all.js ]; then
+        node tests/run_all.js
+      else
+        echo "No recognized build command; record as not applicable in manifest."
+      fi
+
+  - id: verify-types
+    depends_on: [implement-fix]
+    bash: |
+      set -euo pipefail
+      if [ -f tsconfig.json ]; then
+        npx tsc --noEmit
+      else
+        echo "No tsconfig.json; skipping TypeScript check."
+      fi
+
+  - id: verify-other-tests
+    depends_on: [implement-fix]
+    bash: |
+      set -euo pipefail
+      echo "Running full test suite to check for regressions..."
+      if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+        npm test
+      elif find . -path ./.git -prune -o \( -name '*test*' -o -name '*spec*' \) -type f -print -quit | grep -q .; then
+        echo "Test files detected but no npm test script was found." >&2
+        exit 1
+      else
+        echo "No test files detected; record as not applicable in manifest."
+      fi
+
+  - id: war-council-validator
+    depends_on: [verify-test-passes, verify-build, verify-types, verify-other-tests]
+    task_class: medium_work
+    prompt: |
+      Invoke or emulate the war-council-validator review for this Work Order.
+
+      ## Validator Agent
+      war-council-validator
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Fix Plan:
+      $plan-fix.output
+
+      Implementation output:
+      $implement-fix.output
+
+      Reproduction test status:
+      $verify-test-passes.output
+
+      Build verification:
+      $verify-build.output
+
+      Type checking:
+      $verify-types.output
+
+      Regression test suite:
+      $verify-other-tests.output
+
+      Git diff:
+      Run `git diff --stat` and `git diff --check`, then inspect the relevant changed files.
+
+      ## Critical Question for Bug Fixes
+      Does the fix address the ROOT CAUSE of the bug, or does it mask the symptom?
+      A fix that hides the real problem is worse than no fix at all.
+
+      ## Required Output
+      Return either:
+      - satisfied: with evidence that the spec deliverables were met and root cause was addressed
+      - needs_revision: with exact file/path/behavior findings
+
+  - id: decide-push-target
+    depends_on: [war-council-validator]
+    task_class: clerical
+    prompt: |
+      Decide the push target for this BDC bug Work Order.
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Validator:
+      $war-council-validator.output
+
+      ## Required Repo Policy
+      Read the git remote URL and match it against this hardcoded staging-gate list:
+      - bluedevilcollectibles/lspro-react
+      - bluedevilcollectibles/shopops-storefront
+      - bluedevilcollectibles/shopops/
+
+      If the repo matches one of those entries, output:
+      push_target: feature-branch:<spec-derived-branch-name>
+      pr_required: true
+      staging_gate_required: true
+
+      If the repo is bdc-xo non-doctrine code or another code repo, output:
+      push_target: feature-branch:<spec-derived-branch-name>
+      pr_required: true
+      staging_gate_required: false
+
+      If this is doc-only or other non-code work, output:
+      out_of_scope: true
+      reason: use appropriate workflow for this work class
+
+  - id: commit-and-push
+    depends_on: [decide-push-target]
+    bash: |
+      set -euo pipefail
+      echo "$decide-push-target.output"
+      if printf '%s\n' "$decide-push-target.output" | grep -q '^out_of_scope: true'; then
+        echo "Out of scope for bdc-bug-fix; failing closed." >&2
+        exit 1
+      fi
+      BRANCH=$(printf '%s\n' "$decide-push-target.output" | sed -n 's/^push_target: feature-branch://p' | head -n 1)
+      if [ -z "$BRANCH" ]; then
+        echo "No feature branch target found in decide-push-target output." >&2
+        exit 1
+      fi
+      git checkout -B "$BRANCH"
+      git status --short
+      CHANGED_FILES=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files found; cannot commit." >&2
+        exit 1
+      fi
+      while IFS= read -r path; do
+        if [ -z "$path" ]; then
+          continue
+        fi
+        if ! printf '%s\n' "$plan-fix.output" | grep -F -- "$path" >/dev/null; then
+          echo "Changed file was not listed in plan output: $path" >&2
+          exit 1
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED_FILES
+      EOF
+      if git diff --cached --quiet; then
+        echo "No changes staged; cannot commit." >&2
+        exit 1
+      fi
+      COMMIT_MESSAGE=$(printf '%s\n' "$plan-fix.output" | sed -n 's/^Commit message: //p' | head -n 1)
+      if [ -z "$COMMIT_MESSAGE" ]; then
+        WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+        COMMIT_MESSAGE="fix: ${WO_ID} bug fix"
+      fi
+      git commit -m "$COMMIT_MESSAGE"
+      git push -u origin "$BRANCH"
+
+  - id: open-pr-if-needed
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      if ! printf '%s\n' "$decide-push-target.output" | grep -q '^pr_required: true'; then
+        echo "PR not required; skipping."
+        exit 0
+      fi
+      TITLE=$(printf '%s\n' "$plan-fix.output" | sed -n 's/^Commit message: //p' | head -n 1)
+      if [ -z "$TITLE" ]; then
+        TITLE="BDC bug fix Work Order"
+      fi
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "$plan-fix.output"
+        echo
+        echo "## Test Verification"
+        echo "Failing test before fix:"
+        echo "$verify-test-fails.output"
+        echo
+        echo "Passing test after fix:"
+        echo "$verify-test-passes.output"
+        echo
+        echo "## Validation"
+        echo "$verify-build.output"
+        echo "$verify-types.output"
+        echo "$verify-other-tests.output"
+        echo
+        echo "## Root Cause Review"
+        echo "$war-council-validator.output"
+      } > "$BODY_FILE"
+      gh pr create --title "$TITLE" --body-file "$BODY_FILE"
+
+  - id: build-manifest
+    depends_on: [open-pr-if-needed]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest for this BDC bug Work Order.
+
+      ## CRITICAL: Test Before/After Status
+      This manifest MUST include:
+      1. Path to the reproduction test file
+      2. Test status BEFORE the fix: FAILING
+      3. Test status AFTER the fix: PASSING
+      4. Evidence from test runs
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Fix Plan:
+      $plan-fix.output
+
+      Reproduction:
+      $reproduce.output
+
+      Test verification (before):
+      $verify-test-fails.output
+
+      Test verification (after):
+      $verify-test-passes.output
+
+      Implementation:
+      $implement-fix.output
+
+      Build verification:
+      $verify-build.output
+
+      Type checking:
+      $verify-types.output
+
+      Regression tests:
+      $verify-other-tests.output
+
+      Root cause validator:
+      $war-council-validator.output
+
+      ## Required Manifest Fields
+      - WO ID
+      - Test file path (the reproduction test)
+      - Test status before fix (FAILING)
+      - Test status after fix (PASSING)
+      - Files created
+      - Files modified
+      - Root cause analysis (from validator)
+      - Routes added (if applicable)
+      - Migrations (if applicable)
+      - Tests passed count
+      - Commit SHA
+      - Validation evidence by WO class
+      - PR URL, if opened
+      - Staging gate status, if required
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Builder-4\",\"detail\":${DETAIL}}"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page if Notion MCP is available in this runtime.
+
+      ## Required Notion Changes
+      - Claude Status: REVIEW
+      - Status: Review
+      - Add the Captain CI manifest as a page comment
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is not available inside the container, do not invent a workaround.
+      Output a TODO for XO to flip Notion manually with the manifest above.
