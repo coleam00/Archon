@@ -1160,6 +1160,17 @@ async function fetchMarketplace(): Promise<MarketplaceEntryJson[]> {
   if (!Array.isArray(raw)) {
     throw new Error('Unexpected marketplace response format (expected array)');
   }
+  for (const item of raw) {
+    if (
+      typeof item !== 'object' ||
+      item === null ||
+      typeof (item as Record<string, unknown>).slug !== 'string' ||
+      typeof (item as Record<string, unknown>).sourceUrl !== 'string' ||
+      !Array.isArray((item as Record<string, unknown>).tags)
+    ) {
+      throw new Error('Marketplace response contains invalid entries');
+    }
+  }
   return raw as MarketplaceEntryJson[];
 }
 
@@ -1250,6 +1261,10 @@ export async function workflowInstallCommand(
   const repoRoot = await findRepoRoot(cwd);
   if (!repoRoot) {
     throw new Error('Not in a git repository. Run archon workflow install from within a git repo.');
+  }
+
+  if (!/^[a-z0-9-]+$/.test(slug)) {
+    throw new Error(`Invalid slug '${slug}': must be lowercase alphanumeric with hyphens only.`);
   }
 
   const { existsSync, mkdirSync, writeFileSync } = await import('node:fs');
