@@ -2332,6 +2332,66 @@ describe('loadMcpConfig', () => {
     expect(result.missingVars).toContain('NONEXISTENT_VAR_445');
   });
 
+  it('expands ${VAR} brace syntax in env values', async () => {
+    process.env.TEST_MCP_BRACE_TOKEN_1612 = 'secret-brace';
+    const config = { github: { command: 'npx', env: { TOKEN: '${TEST_MCP_BRACE_TOKEN_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.github as Record<string, unknown>;
+    expect(server.env).toEqual({ TOKEN: 'secret-brace' });
+
+    delete process.env.TEST_MCP_BRACE_TOKEN_1612;
+  });
+
+  it('expands mixed $VAR and ${VAR} syntax in the same string', async () => {
+    process.env.TEST_MCP_HOST_1612 = 'localhost';
+    process.env.TEST_MCP_PORT_1612 = '5432';
+    const config = {
+      db: {
+        command: 'npx',
+        env: { URL: 'postgresql://$TEST_MCP_HOST_1612:${TEST_MCP_PORT_1612}/mydb' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.db as Record<string, unknown>;
+    expect(server.env).toEqual({ URL: 'postgresql://localhost:5432/mydb' });
+
+    delete process.env.TEST_MCP_HOST_1612;
+    delete process.env.TEST_MCP_PORT_1612;
+  });
+
+  it('reports missing vars for ${VAR} brace syntax', async () => {
+    delete process.env.NONEXISTENT_BRACE_VAR_1612;
+    const config = { svc: { command: 'npx', env: { KEY: '${NONEXISTENT_BRACE_VAR_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ KEY: '' });
+    expect(result.missingVars).toContain('NONEXISTENT_BRACE_VAR_1612');
+  });
+
+  it('expands ${VAR} brace syntax in headers values', async () => {
+    process.env.TEST_MCP_BRACE_KEY_1612 = 'bearer-token';
+    const config = {
+      api: {
+        type: 'http',
+        url: 'https://example.com',
+        headers: { Authorization: 'Bearer ${TEST_MCP_BRACE_KEY_1612}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.api as Record<string, unknown>;
+    expect(server.headers).toEqual({ Authorization: 'Bearer bearer-token' });
+
+    delete process.env.TEST_MCP_BRACE_KEY_1612;
+  });
+
   it('does not expand vars in command or args fields', async () => {
     process.env.TEST_CMD_445 = 'should-not-expand';
     const config = { svc: { command: '$TEST_CMD_445', args: ['$TEST_CMD_445'] } };
@@ -6225,13 +6285,15 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // 200 × 19 chars ≈ 3.8 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
     // so any leak of the script body via err.message would violate the length
     // assertion below. Bun's stderr echoes only a few lines of context.
-    const paddingAboveMax = '// padding line '.repeat(200);
+    // Block comments (/* */) are used instead of line comments (//) to keep the
+    // script on a single line — Windows truncates multi-line command args at \n.
+    const paddingAboveMax = '/* padding line */ '.repeat(200);
     const scriptNode: ScriptNode = {
       id: 'fail-script-1389',
-      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      script: `${paddingAboveMax}const x = "marker"; this is not valid javascript`,
       runtime: 'bun',
     };
 

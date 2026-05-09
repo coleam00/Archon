@@ -36,7 +36,8 @@ const bundledSrc = readFileSync(BUNDLED_SKILL_PATH, 'utf-8');
 // NOTE: This is a substring check — a filename that appears in a comment or
 // stale string literal will also pass. It's a safety net against missing imports,
 // not a structural verification of the export map.
-const missing = skillFiles.filter(f => !bundledSrc.includes(f));
+// Normalize to forward slashes so the check passes on Windows (path.relative uses \).
+const missing = skillFiles.filter(f => !bundledSrc.includes(f.replace(/\\/g, '/')));
 
 if (missing.length > 0) {
   console.error(
