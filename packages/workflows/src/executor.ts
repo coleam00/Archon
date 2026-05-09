@@ -290,7 +290,7 @@ export async function executeWorkflow(
     );
   }
   const assistantDefaults = config.assistants[resolvedProvider];
-  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined);
+  const resolvedModel = workflow.model ?? (assistantDefaults?.model as string | undefined) ?? "claude-sonnet-4-5";
 
   getLog().info(
     {
