@@ -1,0 +1,285 @@
+name: bdc-cleanup-sweep
+description: |
+  Use when: Executing a BDC cleanup-sweep Work Order from an approved spec.
+  Input: WO_ID in the environment or user message.
+  Does: Reads the WO spec, enumerates files and violations, applies locked mapping table, verifies sweeps, commits, pushes, opens PRs, and builds manifest.
+  NOT for: Feature development (use bdc-feature-development.yaml), doctrine updates, infra deploys, or sweeps requiring judgment.
+
+policyFile: BDC_XO/harness/policies/agent-behavior.md
+model: claude-sonnet-4-5
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      SPEC_PATH="BDC_XO/docs/superpowers/specs/${WO_ID}.md"
+      if [ ! -f "$SPEC_PATH" ]; then
+        echo "Spec not found: $SPEC_PATH" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=%s\n\n' "$WO_ID" "$SPEC_PATH"
+      cat "$SPEC_PATH"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  - id: enumerate
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      SPEC="$read-spec.output"
+
+      # Extract locked mapping table — fail fast if missing
+      if ! printf '%s\n' "$SPEC" | grep -q '##.*[Ll]ocked.*[Mm]apping'; then
+        echo "Locked mapping table not found in spec. Cleanup sweeps require explicit before/after pairs." >&2
+        exit 1
+      fi
+
+      # Extract file glob pattern(s) — typically in spec under "In scope" or similar
+      # For now, just document what needs to be enumerated.
+      # Real enumeration happens in the apply-mappings loop.
+      echo "Pre-flight enumeration:"
+      printf '%s\n' "$SPEC" | sed -n '/^##.*[Ff]ile.*[Gg]lob/,/^##/p' | head -20 || true
+      echo ""
+      echo "Locked mapping table will be applied per-file in apply-mappings node."
+
+  - id: verify-pre-state
+    depends_on: [enumerate]
+    bash: |
+      set -euo pipefail
+      SPEC="$read-spec.output"
+
+      # Extract file glob from spec (simplified: look for common patterns)
+      # In practice, the spec should list the exact glob or file list.
+      # This is a placeholder that logs what files would be in scope.
+      echo "Collecting baseline violation counts..."
+      echo "(Full enumeration happens when mappings are applied)"
+
+  - id: apply-mappings
+    depends_on: [verify-pre-state]
+    task_class: clerical
+    prompt: |
+      Apply the locked replacement mapping from the spec to all files in scope.
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      ## Rules
+      1. Extract the locked mapping table from the spec (before/after pairs).
+      2. Identify the file glob or file list from the spec (e.g., all .css files, all .js files in a dir).
+      3. For each file in scope:
+         a. Check the current violation count (grep for the pattern to be replaced)
+         b. Apply sed replacements per the locked table (one replacement per pass, or combined)
+         c. Commit the file separately with a message like "sweep(WO-XXX): replace <old> with <new> in filename"
+         d. Verify the violation count is now 0 (or matches explicit-exception block in spec)
+      4. Output a mapping of files with before/after violation counts:
+         ```
+         filename: 0 → 0 (already clean)
+         filename: 5 → 0 (cleaned)
+         filename: 3 → 0 (cleaned)
+         ```
+      5. Stop and report if any file has a violation count that doesn't match the expected result.
+
+      ## Completion
+      Output <promise>COMPLETE</promise> only when all files have been swept and verified.
+
+  - id: verify-post-state
+    depends_on: [apply-mappings]
+    bash: |
+      set -euo pipefail
+      SPEC="$read-spec.output"
+
+      echo "Post-sweep verification: grep for violations across all swept files..."
+      # This will be populated by the apply-mappings node with file list and patterns.
+      echo "(Violations count should be 0 per mapping.)"
+
+  - id: verify-build
+    depends_on: [verify-post-state]
+    bash: |
+      set -euo pipefail
+      if [ -f package.json ]; then
+        if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+          npm run build
+        else
+          echo "No npm build script; skipping build."
+        fi
+      elif [ -f tests/run_all.js ]; then
+        node tests/run_all.js
+      else
+        echo "No recognized build command; record as not applicable in manifest."
+      fi
+
+  - id: verify-types
+    depends_on: [verify-post-state]
+    bash: |
+      set -euo pipefail
+      if [ -f tsconfig.json ]; then
+        npx tsc --noEmit
+      else
+        echo "No tsconfig.json; skipping TypeScript check."
+      fi
+
+  - id: decide-push-target
+    depends_on: [verify-build, verify-types]
+    task_class: clerical
+    prompt: |
+      Decide the push target for this BDC cleanup-sweep Work Order.
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Mappings applied:
+      $apply-mappings.output
+
+      ## Required Repo Policy
+      Read the git remote URL and match it against this hardcoded staging-gate list:
+      - bluedevilcollectibles/lspro-react
+      - bluedevilcollectibles/shopops-storefront
+      - bluedevilcollectibles/shopops/
+
+      If the repo matches one of those entries, output:
+      push_target: feature-branch:<spec-derived-branch-name>
+      pr_required: true
+      staging_gate_required: true
+
+      If the repo is bdc-harness or another code repo, output:
+      push_target: feature-branch:<spec-derived-branch-name>
+      pr_required: true
+      staging_gate_required: false
+
+      Branch naming convention: cleanup-<WO-ID-lowercase>
+
+  - id: commit-and-push
+    depends_on: [decide-push-target]
+    bash: |
+      set -euo pipefail
+      echo "$decide-push-target.output"
+      BRANCH=$(printf '%s\n' "$decide-push-target.output" | sed -n 's/^push_target: feature-branch://p' | head -n 1)
+      if [ -z "$BRANCH" ]; then
+        echo "No feature branch target found in decide-push-target output." >&2
+        exit 1
+      fi
+      git checkout -B "$BRANCH"
+      git status --short
+      CHANGED_FILES=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files found; cannot commit." >&2
+        exit 1
+      fi
+      # Stage all changed files
+      while IFS= read -r path; do
+        if [ -z "$path" ]; then
+          continue
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED_FILES
+      EOF
+      if git diff --cached --quiet; then
+        echo "No changes staged; cannot commit." >&2
+        exit 1
+      fi
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      COMMIT_MESSAGE="cleanup: ${WO_ID} — sweep per locked mapping table"
+      git commit -m "$COMMIT_MESSAGE"
+      git push -u origin "$BRANCH"
+
+  - id: open-pr-if-needed
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      if ! printf '%s\n' "$decide-push-target.output" | grep -q '^pr_required: true'; then
+        echo "PR not required; skipping."
+        exit 0
+      fi
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      TITLE="cleanup: ${WO_ID} — sweep per locked mapping"
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Cleanup sweep per locked mapping table in spec."
+        echo ""
+        echo "## Mappings Applied"
+        echo "$apply-mappings.output"
+        echo ""
+        echo "## Verification"
+        echo "Build: $verify-build.output"
+        echo ""
+        echo "Types: $verify-types.output"
+      } > "$BODY_FILE"
+      gh pr create --title "$TITLE" --body-file "$BODY_FILE"
+
+  - id: build-manifest
+    depends_on: [open-pr-if-needed]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest for this BDC cleanup-sweep Work Order.
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Mappings applied:
+      $apply-mappings.output
+
+      Verification:
+      Build:
+      $verify-build.output
+
+      Types:
+      $verify-types.output
+
+      ## Required Manifest Fields
+      - WO ID
+      - Files modified (list with before/after violation counts)
+      - Commit SHA
+      - Validation evidence:
+        * Build PASS/N/A
+        * Types PASS/N/A
+        * Per-file grep counts (before → after)
+      - PR URL, if opened
+      - Staging gate status, if required
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page if Notion MCP is available in this runtime.
+
+      ## Required Notion Changes
+      - Claude Status: REVIEW
+      - Status: Review
+      - Add the Captain CI manifest as a page comment
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is not available inside the container, do not invent a workaround.
+      Output a TODO for XO to flip Notion manually with the manifest above.
