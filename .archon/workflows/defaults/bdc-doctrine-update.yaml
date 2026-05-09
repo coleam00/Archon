@@ -1,0 +1,246 @@
+name: bdc-doctrine-update
+description: |
+  Use when: Executing a BDC doctrine-class Work Order from an approved spec.
+  Input: WO_ID in the environment or user message, plus repo context from Overlord.
+  Does: Reads the BDC WO spec, plans surgical doctrine edits, verifies via grep, commits and pushes directly to master, and builds a Captain CI manifest.
+  NOT for: Code-shipping WOs, feature development, infrastructure deploys, or bug-fix WOs with their own workflow.
+
+policyFile: BDC_XO/harness/policies/agent-behavior.md
+model: claude-sonnet-4-5
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      SPEC_PATH="BDC_XO/docs/superpowers/specs/${WO_ID}.md"
+      if [ ! -f "$SPEC_PATH" ]; then
+        echo "Spec not found: $SPEC_PATH" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=%s\n\n' "$WO_ID" "$SPEC_PATH"
+      cat "$SPEC_PATH"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  - id: plan
+    depends_on: [read-spec]
+    task_class: medium_work
+    prompt: |
+      Read the BDC doctrine Work Order spec below and produce a concise implementation plan.
+
+      ## Required Output
+      Return structured Markdown with these headings:
+      - WO ID
+      - Files to modify
+      - Files to create
+      - Files explicitly out of scope
+      - Grep verification checks (assertions to run on each modified file)
+      - Commit message
+      - Push policy
+
+      ## Doctrine WO Policy
+      Hardcoded Rule: doctrine-only WOs push directly to master. No feature branch. No PR gate.
+      This includes edits to: CLAUDE.md, skills, memory, wiki, policies, README, ATTRIBUTION.
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    model: opus[1m]
+    loop:
+      prompt: |
+        Implement the approved plan for this BDC doctrine Work Order.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan.output
+
+        ## Execution Rules
+        - Modify only the files identified as in scope by the spec.
+        - Preserve all unrelated content; never reformat files outside the target edits.
+        - Do not deploy.
+        - Do not bypass approval gates.
+        - Stop and report a blocker if the spec is ambiguous or a needed source of truth is missing.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when all spec stop conditions that can be run in this checkout have passed, or when a true blocker is identified with evidence.
+      until: COMPLETE
+      max_iterations: 3
+      fresh_context: true
+
+  - id: verify-greps
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      echo "Running grep verification checks on doctrine edits..."
+      # Extract grep checks from plan output
+      # Format: each line starting with "grep:" is a check
+      CHECKS=$(printf '%s\n' "$plan.output" | sed -n '/## Grep verification checks/,/^##/p' | sed '1d;$d' | grep -v '^$' || true)
+      if [ -z "$CHECKS" ]; then
+        echo "No grep checks defined in plan; skipping detailed verification."
+        exit 0
+      fi
+      FAILED=0
+      while IFS= read -r CHECK; do
+        if [ -z "$CHECK" ]; then
+          continue
+        fi
+        echo "Checking: $CHECK"
+        if eval "$CHECK"; then
+          echo "  PASS"
+        else
+          echo "  FAIL"
+          FAILED=$((FAILED + 1))
+        fi
+      done <<EOF
+      $CHECKS
+      EOF
+      if [ "$FAILED" -gt 0 ]; then
+        echo "Grep verification failed on $FAILED check(s)." >&2
+        exit 1
+      fi
+      echo "All grep checks passed."
+
+  - id: decide-push-target
+    depends_on: [verify-greps]
+    task_class: clerical
+    prompt: |
+      Confirm the push target for this BDC doctrine Work Order.
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      ## Doctrine WO Policy (LOCKED)
+      All doctrine-only Work Orders push directly to master.
+      No feature branch. No staging gate. No PR.
+
+      ## Required Output
+      Return:
+      push_target: master
+      pr_required: false
+
+  - id: commit-and-push
+    depends_on: [decide-push-target]
+    bash: |
+      set -euo pipefail
+      echo "$decide-push-target.output"
+      # Verify master direct decision
+      if ! printf '%s\n' "$decide-push-target.output" | grep -q '^push_target: master'; then
+        echo "Push target was not 'master direct'; this workflow applies only to doctrine WOs." >&2
+        exit 1
+      fi
+      # Get current branch (should be main or master depending on repo default)
+      CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+      echo "Currently on branch: $CURRENT_BRANCH"
+
+      git status --short
+      CHANGED_FILES=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files found; cannot commit." >&2
+        exit 1
+      fi
+
+      # Verify all changed files are in the plan
+      while IFS= read -r path; do
+        if [ -z "$path" ]; then
+          continue
+        fi
+        if ! printf '%s\n' "$plan.output" | grep -F -- "$path" >/dev/null; then
+          echo "Changed file was not listed in plan output: $path" >&2
+          exit 1
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED_FILES
+      EOF
+
+      if git diff --cached --quiet; then
+        echo "No changes staged; cannot commit." >&2
+        exit 1
+      fi
+
+      COMMIT_MESSAGE=$(printf '%s\n' "$plan.output" | sed -n 's/^Commit message: //p' | head -n 1)
+      if [ -z "$COMMIT_MESSAGE" ]; then
+        WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+        COMMIT_MESSAGE="docs(doctrine): ${WO_ID}"
+      fi
+
+      git commit -m "$COMMIT_MESSAGE"
+      git push origin "$CURRENT_BRANCH"
+
+  - id: build-manifest
+    depends_on: [commit-and-push]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest for this BDC doctrine Work Order.
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Plan:
+      $plan.output
+
+      Implementation:
+      $implement.output
+
+      Verification:
+      $verify-greps.output
+
+      ## Required Manifest Fields
+      - WO ID
+      - Files created
+      - Files modified
+      - Grep verification results
+      - Commit SHA
+      - Push target (master direct)
+
+      ## Format
+      Return as a structured block suitable for pasting into the Notion Notes field.
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page if Notion MCP is available in this runtime.
+
+      ## Required Notion Changes
+      - Claude Status: REVIEW
+      - Status: Review
+      - Add the Captain CI manifest as a page comment
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is not available inside the container, do not invent a workaround.
+      Output a TODO for XO to flip Notion manually with the manifest above.
