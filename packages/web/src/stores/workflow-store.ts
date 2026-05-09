@@ -255,6 +255,12 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
                 duration: event.duration,
                 error: event.error,
                 reason: event.reason,
+                ...(event.providerId !== undefined ? { providerId: event.providerId } : {}),
+                ...(event.authMode !== undefined ? { authMode: event.authMode } : {}),
+                ...(event.credentialHint !== undefined
+                  ? { credentialHint: event.credentialHint }
+                  : {}),
+                ...(event.model !== undefined ? { model: event.model } : {}),
               };
 
               if (existingIdx >= 0) {

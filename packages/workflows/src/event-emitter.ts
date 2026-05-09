@@ -84,6 +84,10 @@ interface NodeStartedEvent {
   runId: string;
   nodeId: string;
   nodeName: string; // command name or node.id for inline prompts
+  providerId?: string;
+  authMode?: string;
+  credentialHint?: string;
+  model?: string;
 }
 
 interface NodeCompletedEvent {

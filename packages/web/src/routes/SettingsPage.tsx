@@ -10,6 +10,7 @@ import {
   getHealth,
   listCodebases,
   listProviders,
+  listProviderDiagnostics,
   addCodebase,
   getCodebaseInput,
   deleteCodebase,
@@ -23,6 +24,7 @@ import type {
   CodebaseResponse,
   ProviderDefaults,
   ProviderInfo,
+  ProviderDiagnostics,
 } from '@/lib/api';
 
 const selectClass =
@@ -606,6 +608,123 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
   );
 }
 
+function ProviderDiagnosticsSection(): React.ReactElement {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['providerDiagnostics'],
+    queryFn: listProviderDiagnostics,
+    staleTime: 30 * 1000,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Provider Diagnostics</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="text-sm text-muted-foreground">Inspecting provider environment...</div>
+        ) : error ? (
+          <div className="text-sm text-destructive">
+            {error instanceof Error ? error.message : 'Failed to load provider diagnostics.'}
+          </div>
+        ) : !data || data.length === 0 ? (
+          <div className="text-sm text-muted-foreground">No providers registered.</div>
+        ) : (
+          <div className="space-y-4">
+            {data.map((provider: ProviderDiagnostics) => (
+              <div key={provider.id} className="rounded-md border border-border p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium">{provider.displayName}</div>
+                    <div className="text-xs text-muted-foreground font-mono">{provider.id}</div>
+                  </div>
+                  <Badge variant={provider.credentialStatus.available ? 'default' : 'secondary'}>
+                    {provider.credentialStatus.available ? 'Credentials detected' : 'Not detected'}
+                  </Badge>
+                </div>
+
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Auth Mode
+                    </div>
+                    <div className="font-medium">{provider.credentialStatus.mode}</div>
+                    {provider.credentialStatus.activeCredentialHint && (
+                      <div className="mt-1 text-xs text-text-secondary">
+                        Key hint: {provider.credentialStatus.activeCredentialHint}
+                      </div>
+                    )}
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {provider.credentialStatus.verified
+                        ? 'Credential presence verified locally.'
+                        : 'Credential presence inferred only.'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Configured Model
+                    </div>
+                    <div className="font-medium">
+                      {provider.modelStatus.configured ?? 'No default configured'}
+                    </div>
+                    {!provider.modelStatus.accessVerified && (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Account/model access is not verified offline.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-1">
+                  {provider.credentialStatus.sources.map(source => (
+                    <div
+                      key={`${provider.id}-${source.type}-${source.name}`}
+                      className="flex items-center justify-between gap-3 text-xs"
+                    >
+                      <span className="font-mono text-text-primary">
+                        {source.name}
+                        {source.displayHint ? ` ${source.displayHint}` : ''}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {source.active && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            active
+                          </Badge>
+                        )}
+                        <Badge variant={source.present ? 'default' : 'secondary'}>
+                          {source.present ? 'present' : 'missing'}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {(provider.credentialStatus.notes.length > 0 ||
+                  provider.modelStatus.notes.length > 0 ||
+                  provider.modelStatus.examples.length > 0) && (
+                  <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                    {provider.credentialStatus.notes.map(note => (
+                      <div key={`${provider.id}-credential-note-${note}`}>{note}</div>
+                    ))}
+                    {provider.modelStatus.notes.map(note => (
+                      <div key={`${provider.id}-model-note-${note}`}>{note}</div>
+                    ))}
+                    {provider.modelStatus.examples.length > 0 && (
+                      <div>
+                        Example models: {provider.modelStatus.examples.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function PlatformConnectionsSection({
   activePlatforms,
 }: {
@@ -722,6 +841,8 @@ export function SettingsPage(): React.ReactElement {
             {configData && <AssistantConfigSection config={configData.config} />}
             <PlatformConnectionsSection activePlatforms={health?.activePlatforms} />
           </div>
+
+          <ProviderDiagnosticsSection />
 
           <ProjectsSection />
         </div>

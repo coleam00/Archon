@@ -37,3 +37,43 @@ export const providerListResponseSchema = z
     providers: z.array(providerInfoSchema),
   })
   .openapi('ProviderListResponse');
+
+const providerCredentialSourceSchema = z
+  .object({
+    type: z.enum(['env', 'file', 'login']),
+    name: z.string(),
+    present: z.boolean(),
+    active: z.boolean().optional(),
+    note: z.string().optional(),
+    displayHint: z.string().optional(),
+  })
+  .openapi('ProviderCredentialSource');
+
+const providerDiagnosticsSchema = z
+  .object({
+    id: z.string(),
+    displayName: z.string(),
+    builtIn: z.boolean(),
+    capabilities: providerCapabilitiesSchema,
+    credentialStatus: z.object({
+      available: z.boolean(),
+      verified: z.boolean(),
+      mode: z.string(),
+      activeCredentialHint: z.string().optional(),
+      sources: z.array(providerCredentialSourceSchema),
+      notes: z.array(z.string()),
+    }),
+    modelStatus: z.object({
+      configured: z.string().nullable(),
+      examples: z.array(z.string()),
+      accessVerified: z.boolean(),
+      notes: z.array(z.string()),
+    }),
+  })
+  .openapi('ProviderDiagnostics');
+
+export const providerDiagnosticsListResponseSchema = z
+  .object({
+    providers: z.array(providerDiagnosticsSchema),
+  })
+  .openapi('ProviderDiagnosticsListResponse');

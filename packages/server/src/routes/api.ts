@@ -120,8 +120,15 @@ import {
   configResponseSchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
-import { providerListResponseSchema } from './schemas/provider.schemas';
-import { getProviderInfoList, isRegisteredProvider } from '@archon/providers';
+import {
+  providerListResponseSchema,
+  providerDiagnosticsListResponseSchema,
+} from './schemas/provider.schemas';
+import {
+  getProviderInfoList,
+  getProviderDiagnosticsList,
+  isRegisteredProvider,
+} from '@archon/providers';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -784,6 +791,20 @@ const getProvidersRoute = createRoute({
       content: { 'application/json': { schema: providerListResponseSchema } },
       description: 'List of registered providers',
     },
+  },
+});
+
+const getProviderDiagnosticsRoute = createRoute({
+  method: 'get',
+  path: '/api/providers/diagnostics',
+  tags: ['System'],
+  summary: 'List safe AI provider diagnostics',
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerDiagnosticsListResponseSchema } },
+      description: 'Provider diagnostics',
+    },
+    500: jsonError('Server error'),
   },
 });
 
@@ -2637,6 +2658,17 @@ export function registerApiRoutes(
   // GET /api/providers - List registered AI providers
   registerOpenApiRoute(getProvidersRoute, c => {
     return c.json({ providers: getProviderInfoList() });
+  });
+
+  // GET /api/providers/diagnostics - Safe provider diagnostics for operators
+  registerOpenApiRoute(getProviderDiagnosticsRoute, async c => {
+    try {
+      const config = await loadConfig();
+      return c.json({ providers: getProviderDiagnosticsList(config.assistants) });
+    } catch (error) {
+      getLog().error({ err: error }, 'providers.diagnostics_failed');
+      return apiError(c, 500, 'Failed to inspect provider diagnostics');
+    }
   });
 
   // GET /api/codebases/:id/environments - List isolation environments for a codebase

@@ -9,6 +9,8 @@ export type {
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,
+  ProviderDiagnostics,
+  ProviderCredentialSourceInfo,
   MessageChunk,
   TokenUsage,
 } from './types';
@@ -45,6 +47,7 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 export { resetCodexSingleton } from './codex/provider';
 export { resolveCodexBinaryPath, fileExists as codexFileExists } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
+export { getProviderDiagnosticsList, getProviderDiagnostics } from './diagnostics';
 
 // Community providers
 export {

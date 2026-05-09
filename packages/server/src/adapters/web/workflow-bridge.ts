@@ -106,6 +106,10 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         duration: event.type === 'node_completed' ? event.duration : undefined,
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
+        providerId: event.type === 'node_started' ? event.providerId : undefined,
+        authMode: event.type === 'node_started' ? event.authMode : undefined,
+        credentialHint: event.type === 'node_started' ? event.credentialHint : undefined,
+        model: event.type === 'node_started' ? event.model : undefined,
         timestamp: Date.now(),
       });
 

@@ -119,6 +119,10 @@ export interface DagNodeEvent extends BaseSSEEvent {
   duration?: number;
   error?: string;
   reason?: 'when_condition' | 'trigger_rule';
+  providerId?: string;
+  authMode?: string;
+  credentialHint?: string;
+  model?: string;
 }
 
 // Workflow tool activity (tool_started / tool_completed from executor)
@@ -247,6 +251,10 @@ export interface DagNodeState {
   duration?: number;
   error?: string;
   reason?: 'when_condition' | 'trigger_rule';
+  providerId?: string;
+  authMode?: string;
+  credentialHint?: string;
+  model?: string;
   currentIteration?: number;
   maxIterations?: number;
   iterations?: LoopIterationInfo[];

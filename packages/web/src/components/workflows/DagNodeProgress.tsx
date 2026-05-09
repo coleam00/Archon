@@ -20,6 +20,12 @@ function DagNodeItem({
 }): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const hasIterations = (node.iterations?.length ?? 0) > 0;
+  const metaBadges = [
+    node.providerId ? { label: 'Provider', value: node.providerId } : null,
+    node.authMode ? { label: 'Auth', value: node.authMode } : null,
+    node.credentialHint ? { label: 'Key', value: node.credentialHint } : null,
+    node.model ? { label: 'Model', value: node.model } : null,
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
 
   return (
     <div>
@@ -67,6 +73,18 @@ function DagNodeItem({
         {node.reason && (
           <div className="text-xs text-text-tertiary mt-0.5 ml-6">
             Skipped: {node.reason.replace(/_/g, ' ')}
+          </div>
+        )}
+        {metaBadges.length > 0 && (
+          <div className="mt-1 ml-6 flex flex-wrap gap-1.5">
+            {metaBadges.map(badge => (
+              <span
+                key={`${badge.label}-${badge.value}`}
+                className="rounded border border-border bg-surface px-1.5 py-0.5 text-[10px] text-text-secondary"
+              >
+                <span className="text-text-tertiary">{badge.label}:</span> {badge.value}
+              </span>
+            ))}
           </div>
         )}
       </div>

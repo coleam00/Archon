@@ -125,12 +125,25 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
               // Keep the latest non-running status (completed/failed/skipped override running)
               if (!existing || status !== 'running') {
                 nodeMap.set(nodeId, {
+                  ...(existing ?? {}),
                   nodeId,
                   name: nodeId,
                   status: status as WorkflowStepStatus,
                   duration: e.data.duration_ms as number | undefined,
                   error: e.data.error as string | undefined,
                   reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
+                  ...(e.data.provider_id !== undefined
+                    ? { providerId: e.data.provider_id as string | undefined }
+                    : {}),
+                  ...(e.data.auth_mode !== undefined
+                    ? { authMode: e.data.auth_mode as string | undefined }
+                    : {}),
+                  ...(e.data.credential_hint !== undefined
+                    ? { credentialHint: e.data.credential_hint as string | undefined }
+                    : {}),
+                  ...(e.data.model !== undefined
+                    ? { model: e.data.model as string | undefined }
+                    : {}),
                 });
               }
             }
@@ -432,7 +445,17 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         case 'loop_iteration_failed':
           return `[${ts}] Iteration ${String(e.data.iteration)} failed: ${(e.data.error as string | undefined) ?? 'Unknown error'}`;
         case 'node_started':
-          return `[${ts}] Node started: ${e.step_name ?? 'node'}`;
+          return (() => {
+            const details = [
+              e.data.provider_id as string | undefined,
+              e.data.auth_mode as string | undefined,
+              e.data.credential_hint as string | undefined,
+              e.data.model as string | undefined,
+            ]
+              .filter(Boolean)
+              .join(' • ');
+            return `[${ts}] Node started: ${e.step_name ?? 'node'}${details ? ` ${details}` : ''}`;
+          })();
         case 'node_completed':
           return `[${ts}] Node completed: ${e.step_name ?? 'node'}`;
         case 'node_failed':
@@ -468,6 +491,21 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const scrollToNodeTimestamp = selectedDagNode
     ? (nodeStartTimes.get(selectedDagNode) ?? null)
     : null;
+
+  const selectedNodeMeta = useMemo((): DagNodeState | null => {
+    if (!selectedDagNode) return null;
+    return workflow?.dagNodes.find(node => node.nodeId === selectedDagNode) ?? null;
+  }, [workflow?.dagNodes, selectedDagNode]);
+  const selectedNodeMetaBadges = [
+    selectedNodeMeta?.providerId
+      ? { label: 'Provider', value: selectedNodeMeta.providerId }
+      : null,
+    selectedNodeMeta?.authMode ? { label: 'Auth', value: selectedNodeMeta.authMode } : null,
+    selectedNodeMeta?.credentialHint
+      ? { label: 'Key', value: selectedNodeMeta.credentialHint }
+      : null,
+    selectedNodeMeta?.model ? { label: 'Model', value: selectedNodeMeta.model } : null,
+  ].filter(Boolean) as Array<{ label: string; value: string }>;
 
   // Handler for user-initiated node clicks (graph or sidebar).
   // Increments scroll trigger so WorkflowLogs scrolls to the node's section.
@@ -511,6 +549,21 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   // Logs panel — detect whether the selected node has any DB events so we can show an empty-state
   const logsPanel = (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
+      {selectedNodeMeta && selectedNodeMetaBadges.length > 0 && (
+        <div className="border-b border-border px-4 py-2 bg-surface">
+          <div className="text-xs font-medium text-text-primary mb-1">{selectedNodeMeta.name}</div>
+          <div className="flex flex-wrap gap-1.5">
+            {selectedNodeMetaBadges.map(badge => (
+              <span
+                key={`${badge.label}-${badge.value}`}
+                className="rounded border border-border bg-surface-elevated px-1.5 py-0.5 text-[10px] text-text-secondary"
+              >
+                <span className="text-text-tertiary">{badge.label}:</span> {badge.value}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         {logsPlatformId && !selectedStepHasEvents && !isRunning ? (
           <div className="flex-1 flex items-center justify-center text-text-secondary text-sm">

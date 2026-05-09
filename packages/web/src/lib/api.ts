@@ -80,6 +80,36 @@ export interface ProviderInfo {
   builtIn: boolean;
 }
 
+export interface ProviderCredentialSource {
+  type: 'env' | 'file' | 'login';
+  name: string;
+  present: boolean;
+  active?: boolean;
+  note?: string;
+  displayHint?: string;
+}
+
+export interface ProviderDiagnostics {
+  id: string;
+  displayName: string;
+  builtIn: boolean;
+  capabilities: Record<string, boolean>;
+  credentialStatus: {
+    available: boolean;
+    verified: boolean;
+    mode: string;
+    activeCredentialHint?: string;
+    sources: ProviderCredentialSource[];
+    notes: string[];
+  };
+  modelStatus: {
+    configured: string | null;
+    examples: string[];
+    accessVerified: boolean;
+    notes: string[];
+  };
+}
+
 export type ProviderDefaults = Record<string, unknown>;
 
 export interface SafeConfigResponse {
@@ -108,6 +138,11 @@ export interface UpdateAssistantConfigBody {
 
 export async function listProviders(): Promise<ProviderInfo[]> {
   const data = await fetchJSON<{ providers: ProviderInfo[] }>('/api/providers');
+  return data.providers;
+}
+
+export async function listProviderDiagnostics(): Promise<ProviderDiagnostics[]> {
+  const data = await fetchJSON<{ providers: ProviderDiagnostics[] }>('/api/providers/diagnostics');
   return data.providers;
 }
 

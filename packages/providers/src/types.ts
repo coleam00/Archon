@@ -296,6 +296,38 @@ export interface ProviderInfo {
   builtIn: boolean;
 }
 
+/** Safe description of one credential source Archon can inspect locally. */
+export interface ProviderCredentialSourceInfo {
+  type: 'env' | 'file' | 'login';
+  name: string;
+  present: boolean;
+  active?: boolean;
+  note?: string;
+  displayHint?: string;
+}
+
+/** Safe provider diagnostics for operator-facing UI/API surfaces. */
+export interface ProviderDiagnostics {
+  id: string;
+  displayName: string;
+  builtIn: boolean;
+  capabilities: ProviderCapabilities;
+  credentialStatus: {
+    available: boolean;
+    verified: boolean;
+    mode: string;
+    activeCredentialHint?: string;
+    sources: ProviderCredentialSourceInfo[];
+    notes: string[];
+  };
+  modelStatus: {
+    configured: string | null;
+    examples: string[];
+    accessVerified: boolean;
+    notes: string[];
+  };
+}
+
 /**
  * Generic agent provider interface.
  * Allows supporting multiple agent providers (Claude, Codex, etc.)

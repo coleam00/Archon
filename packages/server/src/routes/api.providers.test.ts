@@ -222,3 +222,67 @@ describe('GET /api/providers', () => {
     expect(typeof caps.structuredOutput).toBe('boolean');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests: GET /api/providers/diagnostics
+// ---------------------------------------------------------------------------
+
+describe('GET /api/providers/diagnostics', () => {
+  let app: Hono;
+
+  beforeEach(() => {
+    app = makeApp();
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env.CLAUDE_API_KEY;
+    delete process.env.CLAUDE_USE_GLOBAL_AUTH;
+    delete process.env.CODEX_ID_TOKEN;
+    delete process.env.CODEX_ACCESS_TOKEN;
+    delete process.env.CODEX_REFRESH_TOKEN;
+    delete process.env.CODEX_ACCOUNT_ID;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+  });
+
+  test('returns 200 with provider diagnostics list', async () => {
+    const response = await app.request('/api/providers/diagnostics');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      providers: Record<string, unknown>[];
+    };
+    expect(Array.isArray(body.providers)).toBe(true);
+    expect(body.providers.length).toBeGreaterThan(0);
+  });
+
+  test('includes credential and model status fields', async () => {
+    const response = await app.request('/api/providers/diagnostics');
+    const body = (await response.json()) as {
+      providers: Record<string, unknown>[];
+    };
+    for (const provider of body.providers) {
+      expect(provider).toHaveProperty('id');
+      expect(provider).toHaveProperty('displayName');
+      expect(provider).toHaveProperty('credentialStatus');
+      expect(provider).toHaveProperty('modelStatus');
+    }
+  });
+
+  test('reflects Claude env credential presence without leaking secret values', async () => {
+    process.env.CLAUDE_API_KEY = 'sk-ant-test';
+
+    const response = await app.request('/api/providers/diagnostics');
+    const body = (await response.json()) as {
+      providers: Array<{
+        id: string;
+        credentialStatus: { mode: string; sources: Array<{ name: string; present: boolean }> };
+      }>;
+    };
+    const claude = body.providers.find(provider => provider.id === 'claude');
+    expect(claude).toBeDefined();
+    expect(claude?.credentialStatus.mode).toBe('explicit-api-key');
+    expect(
+      claude?.credentialStatus.sources.find(source => source.name === 'CLAUDE_API_KEY')?.present
+    ).toBe(true);
+    expect(JSON.stringify(claude)).not.toContain('sk-ant-test');
+  });
+});

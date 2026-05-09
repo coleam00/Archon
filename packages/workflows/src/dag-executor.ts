@@ -23,6 +23,7 @@ import type {
 } from '@archon/providers/types';
 import {
   getProviderCapabilities,
+  getProviderDiagnostics,
   getRegisteredProviders,
   isRegisteredProvider,
 } from '@archon/providers';
@@ -227,6 +228,29 @@ function getEffectiveNodeRetryConfig(node: DagNode): {
  */
 function isTransientNodeError(errorMessage: string): boolean {
   return classifyError(new Error(errorMessage)) === 'TRANSIENT';
+}
+
+interface NodeProviderDisplayMeta {
+  providerId: string;
+  authMode?: string;
+  credentialHint?: string;
+  model?: string;
+}
+
+function getNodeProviderDisplayMeta(
+  providerId: string,
+  config: WorkflowConfig,
+  requestedModel: string | undefined
+): NodeProviderDisplayMeta {
+  const diagnostics = getProviderDiagnostics(providerId, config.assistants);
+  return {
+    providerId,
+    ...(diagnostics?.credentialStatus.mode ? { authMode: diagnostics.credentialStatus.mode } : {}),
+    ...(diagnostics?.credentialStatus.activeCredentialHint
+      ? { credentialHint: diagnostics.credentialStatus.activeCredentialHint }
+      : {}),
+    ...(requestedModel ? { model: requestedModel } : {}),
+  };
 }
 
 /**
@@ -572,7 +596,7 @@ async function executeNodeInternal(
   cwd: string,
   workflowRun: WorkflowRun,
   node: CommandNode | PromptNode,
-  provider: string,
+  providerMeta: NodeProviderDisplayMeta,
   nodeOptions: SendQueryOptions | undefined,
   artifactsDir: string,
   logDir: string,
@@ -585,6 +609,7 @@ async function executeNodeInternal(
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
+  const provider = providerMeta.providerId;
 
   const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
@@ -596,7 +621,14 @@ async function executeNodeInternal(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: node.id,
-      data: { command: node.command ?? null, provider },
+      data: {
+        command: node.command ?? null,
+        provider,
+        provider_id: providerMeta.providerId,
+        auth_mode: providerMeta.authMode ?? null,
+        credential_hint: providerMeta.credentialHint ?? null,
+        model: providerMeta.model ?? null,
+      },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -611,6 +643,10 @@ async function executeNodeInternal(
     runId: workflowRun.id,
     nodeId: node.id,
     nodeName: node.command ?? node.id,
+    providerId: providerMeta.providerId,
+    authMode: providerMeta.authMode,
+    credentialHint: providerMeta.credentialHint,
+    model: providerMeta.model,
   });
 
   // Load prompt
@@ -2397,7 +2433,7 @@ async function executeApprovalNode(
       ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
     };
 
-    const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+    const { provider, model, options: nodeOptions } = await resolveNodeProviderAndModel(
       syntheticNode,
       workflowProvider,
       workflowModel,
@@ -2408,6 +2444,7 @@ async function executeApprovalNode(
       cwd,
       workflowLevelOptions
     );
+    const providerMeta = getNodeProviderDisplayMeta(provider, config, model);
 
     const output = await executeNodeInternal(
       deps,
@@ -2416,7 +2453,7 @@ async function executeApprovalNode(
       cwd,
       workflowRun,
       syntheticNode,
-      provider,
+      providerMeta,
       nodeOptions,
       artifactsDir,
       logDir,
@@ -2845,7 +2882,7 @@ export async function executeDagWorkflow(
           }
 
           // 4. Resolve per-node provider/model/options
-          const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+          const { provider, model, options: nodeOptions } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
             workflowModel,
@@ -2856,6 +2893,7 @@ export async function executeDagWorkflow(
             cwd,
             workflowLevelOptions
           );
+          const providerMeta = getNodeProviderDisplayMeta(provider, config, model);
 
           // 5. Determine session — parallel or context:fresh → always fresh
           // Parallel layers always get fresh sessions; explicit 'fresh' context also forces it.
@@ -2879,7 +2917,7 @@ export async function executeDagWorkflow(
               cwd,
               workflowRun,
               node,
-              provider,
+              providerMeta,
               nodeOptions,
               artifactsDir,
               logDir,
