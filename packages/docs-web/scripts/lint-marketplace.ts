@@ -49,25 +49,56 @@ for (const entry of marketplaceEntries) {
   }
 }
 
-// 3. SHA + file existence (network checks)
-console.log('Verifying source files exist at pinned SHAs...');
+// 3. SHA + source existence (network checks — supports both file and directory URLs)
+console.log('Verifying sources exist at pinned SHAs...');
 const checks = marketplaceEntries.map(async (entry) => {
-  const rawUrl = entry.sourceUrl
-    .replace('https://github.com/', 'https://raw.githubusercontent.com/')
-    .replace(/\/blob\/[^/]+\//, `/${entry.sha}/`);
+  const isDir = entry.sourceUrl.includes('/tree/');
 
-  try {
-    const res = await fetch(rawUrl, { method: 'HEAD' });
-    if (!res.ok) {
-      fail(
-        `[${entry.slug}] Source file not found at pinned SHA: ${rawUrl} (HTTP ${String(res.status)})`,
-      );
-    } else {
-      console.log(`  ✓ [${entry.slug}] ${rawUrl}`);
+  if (isDir) {
+    // Directory: validate via GitHub Contents API
+    const match = entry.sourceUrl.match(
+      /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/[^/]+\/(.+)$/,
+    );
+    if (!match) {
+      fail(`[${entry.slug}] Cannot parse directory URL: ${entry.sourceUrl}`);
+      return;
     }
-  } catch (error) {
-    const err = error as Error;
-    fail(`[${entry.slug}] Failed to reach source: ${err.message}`);
+    const [, owner, repo, path] = match;
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${entry.sha}`;
+    try {
+      const res = await fetch(apiUrl, {
+        method: 'GET',
+        headers: { Accept: 'application/vnd.github.v3+json' },
+      });
+      if (!res.ok) {
+        fail(
+          `[${entry.slug}] Directory not found at pinned SHA: ${apiUrl} (HTTP ${String(res.status)})`,
+        );
+      } else {
+        console.log(`  ✓ [${entry.slug}] directory verified at ${entry.sha.slice(0, 8)}`);
+      }
+    } catch (error) {
+      const err = error as Error;
+      fail(`[${entry.slug}] Failed to reach GitHub API: ${err.message}`);
+    }
+  } else {
+    // Single file: validate via raw URL
+    const rawUrl = entry.sourceUrl
+      .replace('https://github.com/', 'https://raw.githubusercontent.com/')
+      .replace(/\/blob\/[^/]+\//, `/${entry.sha}/`);
+    try {
+      const res = await fetch(rawUrl, { method: 'HEAD' });
+      if (!res.ok) {
+        fail(
+          `[${entry.slug}] Source file not found at pinned SHA: ${rawUrl} (HTTP ${String(res.status)})`,
+        );
+      } else {
+        console.log(`  ✓ [${entry.slug}] ${rawUrl}`);
+      }
+    } catch (error) {
+      const err = error as Error;
+      fail(`[${entry.slug}] Failed to reach source: ${err.message}`);
+    }
   }
 });
 

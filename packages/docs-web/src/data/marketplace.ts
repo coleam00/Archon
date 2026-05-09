@@ -3,7 +3,7 @@ export interface MarketplaceEntry {
   name: string;
   author: string;
   description: string;
-  sourceUrl: string; // GitHub blob URL: https://github.com/<owner>/<repo>/blob/main/<path>
+  sourceUrl: string; // GitHub blob/tree URL — file (.yaml) or directory containing workflow + commands/scripts
   sha: string; // Commit SHA pin
   tags: string[];
   archonVersionCompat: string;
