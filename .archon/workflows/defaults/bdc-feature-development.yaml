@@ -39,6 +39,7 @@ nodes:
 
   - id: plan
     depends_on: [read-spec]
+    task_class: medium_work
     prompt: |
       Read the BDC Work Order spec below and produce a concise implementation plan.
 
@@ -68,6 +69,7 @@ nodes:
 
   - id: implement
     depends_on: [plan]
+    task_class: medium_work
     model: opus[1m]
     loop:
       prompt: |
@@ -134,6 +136,7 @@ nodes:
 
   - id: war-council-validator
     depends_on: [verify-build, verify-types, verify-tests]
+    task_class: medium_work
     prompt: |
       Invoke or emulate the war-council-validator review for this Work Order.
 
@@ -160,6 +163,7 @@ nodes:
 
   - id: decide-push-target
     depends_on: [war-council-validator]
+    task_class: clerical
     prompt: |
       Decide the push target for this BDC feature Work Order.
 
@@ -237,6 +241,7 @@ nodes:
 
   - id: open-pr-if-needed
     depends_on: [commit-and-push]
+    task_class: clerical
     bash: |
       set -euo pipefail
       if ! printf '%s\n' "$decide-push-target.output" | grep -q '^pr_required: true'; then
@@ -264,6 +269,7 @@ nodes:
 
   - id: build-manifest
     depends_on: [open-pr-if-needed]
+    task_class: clerical
     prompt: |
       Construct the Captain CI completion manifest for this BDC feature Work Order.
 
@@ -314,6 +320,7 @@ nodes:
 
   - id: flip-notion
     depends_on: [post-completed]
+    task_class: clerical
     prompt: |
       Update the Notion Work Order page if Notion MCP is available in this runtime.
 
