@@ -1,0 +1,379 @@
+name: bdc-infra-deploy
+description: |
+  Use when: Executing infrastructure/container changes against Hetzner (Docker, compose, env vars, n8n configs).
+  Input: WO_ID in environment or user message, WO spec required.
+  Does: Captures pre-state, backs up mutable configs, applies infra change, verifies container health + source live (Rule 19),
+        collects Rule 14 INFRA evidence (docker inspect, docker logs, curl), commits source if changed, opens PR, builds manifest.
+  NOT for: Code-only features (use bdc-feature-development), doctrine updates, database migrations.
+
+  ⚠️  SERIAL ONLY: parallel_ok=false. Multiple infra deploys against the same Hetzner host create race conditions.
+       Every WO using this YAML must declare parallel_ok=false.
+
+policyFile: BDC_XO/harness/policies/agent-behavior.md
+model: claude-sonnet-4-5
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      SPEC_PATH="BDC_XO/docs/superpowers/specs/${WO_ID}.md"
+      if [ ! -f "$SPEC_PATH" ]; then
+        echo "Spec not found: $SPEC_PATH" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=%s\n\n' "$WO_ID" "$SPEC_PATH"
+      cat "$SPEC_PATH"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  - id: capture-pre-state
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      ARTIFACT_DIR="${ARTIFACTS_DIR:-.}"
+      mkdir -p "$ARTIFACT_DIR/pre-state"
+
+      # Generic Docker inspection — caller specifies which container via spec
+      CONTAINER_NAME="${CONTAINER_NAME:-overlord}"
+
+      echo "=== Capturing pre-state for container: $CONTAINER_NAME ===" | tee "$ARTIFACT_DIR/pre-state/capture.log"
+
+      # Docker inspect
+      docker inspect "$CONTAINER_NAME" > "$ARTIFACT_DIR/pre-state/docker-inspect.json" 2>&1 || true
+      echo "docker inspect saved" | tee -a "$ARTIFACT_DIR/pre-state/capture.log"
+
+      # Docker logs (last 100 lines)
+      docker logs --tail 100 "$CONTAINER_NAME" > "$ARTIFACT_DIR/pre-state/docker-logs.txt" 2>&1 || true
+      echo "docker logs saved" | tee -a "$ARTIFACT_DIR/pre-state/capture.log"
+
+      # Current env (if accessible)
+      docker exec "$CONTAINER_NAME" printenv > "$ARTIFACT_DIR/pre-state/container-env.txt" 2>&1 || true
+      echo "container env saved" | tee -a "$ARTIFACT_DIR/pre-state/capture.log"
+
+      # List open ports
+      docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Ports}}" > "$ARTIFACT_DIR/pre-state/ports.txt" 2>&1 || true
+      echo "ports snapshot saved" | tee -a "$ARTIFACT_DIR/pre-state/capture.log"
+
+      echo "Pre-state capture complete"
+
+  - id: backup
+    depends_on: [read-spec, capture-pre-state]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      TIMESTAMP=$(date +%s)
+      BACKUP_DIR="/opt/bdc/backups/${TIMESTAMP}-${WO_ID}"
+
+      mkdir -p "$BACKUP_DIR"
+      echo "Backup directory: $BACKUP_DIR"
+
+      # Backup docker-compose.yml if exists
+      if [ -f docker-compose.yml ]; then
+        cp docker-compose.yml "$BACKUP_DIR/docker-compose.yml.bak"
+        echo "docker-compose.yml backed up"
+      fi
+
+      # Backup .env file(s) if exist
+      if [ -f .env ]; then
+        cp .env "$BACKUP_DIR/.env.bak"
+        echo ".env backed up"
+      fi
+
+      # Save current image SHAs for rollback
+      CONTAINER_NAME="${CONTAINER_NAME:-overlord}"
+      docker inspect "$CONTAINER_NAME" | grep -A 5 '"Id"' > "$BACKUP_DIR/container-id.txt" 2>&1 || true
+      echo "container ID saved for rollback"
+
+      echo "BACKUP_DIR=$BACKUP_DIR" > "$ARTIFACT_DIR/backup-info.txt"
+      echo "Backup complete: $BACKUP_DIR"
+
+  - id: plan-change
+    depends_on: [read-spec]
+    task_class: medium_work
+    prompt: |
+      Read the infra WO spec and produce a concise deployment plan.
+
+      ## Required Output
+      Return structured Markdown with these headings:
+      - WO ID
+      - Infra change type (container rebuild, env var update, compose file change, etc.)
+      - Exact commands to apply the change
+      - Target container/service
+      - Rollback procedure
+      - Verification commands
+
+      ## Spec
+      $read-spec.output
+
+  - id: apply-change
+    depends_on: [plan-change]
+    loop:
+      task_class: medium_work
+      model: opus[1m]
+      prompt: |
+        Execute the approved infra deployment plan.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan-change.output
+
+        ## Execution Rules
+        - Execute ONLY the commands listed in the plan.
+        - Capture all output to $ARTIFACTS_DIR for evidence.
+        - Report each command's exit code.
+        - Stop and report blocker if any command fails; do not proceed to verification.
+        - Do not skip error handling.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when all planned infra changes have been applied successfully.
+      until: COMPLETE
+      max_iterations: 2
+      fresh_context: true
+
+  - id: verify-container-healthy
+    depends_on: [apply-change]
+    bash: |
+      set -euo pipefail
+      CONTAINER_NAME="${CONTAINER_NAME:-overlord}"
+      ARTIFACT_DIR="${ARTIFACTS_DIR:-.}"
+      mkdir -p "$ARTIFACT_DIR/post-state"
+
+      # Check container is running
+      docker ps --filter "name=$CONTAINER_NAME" --filter "status=running" | grep "$CONTAINER_NAME" > /dev/null || {
+        echo "Container $CONTAINER_NAME is not running or does not exist" >&2
+        exit 1
+      }
+
+      echo "✓ Container $CONTAINER_NAME is running"
+
+      # Check for health status
+      HEALTH=$(docker inspect "$CONTAINER_NAME" --format='{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+      echo "  Health status: $HEALTH"
+
+      # Save post-state docker inspect
+      docker inspect "$CONTAINER_NAME" > "$ARTIFACT_DIR/post-state/docker-inspect.json"
+      docker ps --filter "name=$CONTAINER_NAME" > "$ARTIFACT_DIR/post-state/docker-ps.txt"
+      echo "✓ Post-state docker inspect saved"
+
+  - id: verify-source-live
+    depends_on: [verify-container-healthy]
+    bash: |
+      set -euo pipefail
+      CONTAINER_NAME="${CONTAINER_NAME:-overlord}"
+      ARTIFACT_DIR="${ARTIFACTS_DIR:-.}"
+
+      # Rule 19: For shopops-api, verify source change is live in /app/
+      if [ "$CONTAINER_NAME" = "shopops-api" ]; then
+        SOURCE_FILE="${SOURCE_FILE:-.}"
+        SOURCE_LINE="${SOURCE_LINE:-}"
+
+        if [ -n "$SOURCE_LINE" ]; then
+          echo "Rule 19: Verifying source change is live in shopops-api /app/"
+          docker exec "$CONTAINER_NAME" grep -n "$SOURCE_LINE" /app/"$SOURCE_FILE" > "$ARTIFACT_DIR/post-state/source-grep-evidence.txt" 2>&1 || {
+            echo "Source verification failed: line not found in /app/$SOURCE_FILE" >&2
+            exit 1
+          }
+          echo "✓ Rule 19: Source line verified live in container"
+        else
+          echo "SOURCE_LINE not set; skipping Rule 19 grep (not a source change deploy)"
+        fi
+      else
+        echo "Container $CONTAINER_NAME is not shopops-api; skipping Rule 19 grep"
+      fi
+
+  - id: verify-env-vars
+    depends_on: [apply-change]
+    bash: |
+      set -euo pipefail
+      CONTAINER_NAME="${CONTAINER_NAME:-overlord}"
+      ARTIFACT_DIR="${ARTIFACTS_DIR:-.}"
+      mkdir -p "$ARTIFACT_DIR/post-state"
+
+      # If env vars were introduced, verify they exist in container
+      ENV_VARS="${ENV_VARS:-}"
+      if [ -n "$ENV_VARS" ]; then
+        echo "Verifying env vars in container..."
+        docker exec "$CONTAINER_NAME" printenv > "$ARTIFACT_DIR/post-state/container-env.txt"
+
+        while IFS= read -r var; do
+          if [ -z "$var" ]; then
+            continue
+          fi
+          if docker exec "$CONTAINER_NAME" printenv | grep -q "^${var}="; then
+            echo "✓ $var is set"
+          else
+            echo "✗ $var is NOT set" >&2
+            exit 1
+          fi
+        done <<EOF
+        $ENV_VARS
+        EOF
+        echo "✓ All env vars verified"
+      else
+        echo "ENV_VARS not set; skipping env var verification"
+      fi
+
+  - id: runtime-smoke-test
+    depends_on: [verify-env-vars]
+    bash: |
+      set -euo pipefail
+      CONTAINER_NAME="${CONTAINER_NAME:-overlord}"
+      ARTIFACT_DIR="${ARTIFACTS_DIR:-.}"
+      SMOKE_CMD="${SMOKE_CMD:-curl -sS http://localhost:8085/health || true}"
+
+      echo "Running smoke test: $SMOKE_CMD"
+      eval "$SMOKE_CMD" > "$ARTIFACT_DIR/post-state/smoke-test.txt" 2>&1 || true
+      echo "✓ Smoke test complete (evidence saved)"
+
+  - id: decide-push-target
+    depends_on: [runtime-smoke-test]
+    task_class: clerical
+    prompt: |
+      Decide whether source files were modified during the infra deploy and if so, which branch to push to.
+
+      ## Policy
+      For bdc-harness, infra-only deploys (no source files modified):
+      - output: no_push_needed: true
+
+      If source files were modified (rare for pure infra):
+      - Derive a feature branch name from the WO ID
+      - output: push_target: feature-branch:<branch-name>
+      - output: pr_required: true
+
+      ## Analysis
+      Check if the apply-change node modified any source files (check git status).
+      If only config/docker-compose/env changes → no_push_needed.
+      If source files changed → feature branch + PR.
+
+  - id: commit-and-push
+    depends_on: [decide-push-target]
+    bash: |
+      set -euo pipefail
+      if printf '%s\n' "$decide-push-target.output" | grep -q '^no_push_needed: true'; then
+        echo "No source files modified; skipping commit and push."
+        exit 0
+      fi
+
+      BRANCH=$(printf '%s\n' "$decide-push-target.output" | sed -n 's/^push_target: feature-branch://p' | head -n 1)
+      if [ -z "$BRANCH" ]; then
+        echo "No feature branch target found; skipping push." >&2
+        exit 1
+      fi
+
+      git checkout -B "$BRANCH"
+      git status --short
+      CHANGED_FILES=$(git status --porcelain | awk '{print substr($0,4)}')
+
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files detected; nothing to commit."
+        exit 0
+      fi
+
+      while IFS= read -r path; do
+        if [ -z "$path" ]; then
+          continue
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED_FILES
+      EOF
+
+      if git diff --cached --quiet; then
+        echo "No changes staged."
+        exit 0
+      fi
+
+      COMMIT_MESSAGE="infra: deploy changes via WO"
+      git commit -m "$COMMIT_MESSAGE"
+      git push -u origin "$BRANCH"
+      echo "Pushed to $BRANCH"
+
+  - id: open-pr-if-needed
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      if ! printf '%s\n' "$decide-push-target.output" | grep -q '^pr_required: true'; then
+        echo "PR not required; skipping."
+        exit 0
+      fi
+
+      TITLE="infra: deployment via WO"
+      BODY="Infra deployment WO. See manifest in Notion for evidence."
+
+      gh pr create --title "$TITLE" --body "$BODY" || true
+
+  - id: build-manifest
+    depends_on: [open-pr-if-needed]
+    task_class: clerical
+    prompt: |
+      Construct the Rule 14 INFRA evidence manifest for Captain CI validation.
+
+      ## Required Manifest Fields
+      - WO ID
+      - Infra change type
+      - Pre-state capture timestamp
+      - Backup location
+      - Commands applied
+      - Post-state verification: container healthy (Y/N)
+      - Post-state verification: source live per Rule 19 (Y/N if applicable)
+      - Post-state verification: env vars present (Y/N if applicable)
+      - Post-state verification: smoke test result
+      - docker inspect output (excerpt from post-state)
+      - docker logs excerpt
+      - curl evidence (if applicable)
+      - Rollback procedure documented
+      - Commit SHA (if source changed)
+      - PR URL (if opened)
+
+      ## Evidence Location
+      Artifacts in $ARTIFACTS_DIR/:
+      - pre-state/: capture before changes
+      - post-state/: docker inspect, logs, env, smoke test results
+      - backup-info.txt: backup directory for rollback
+
+      The manifest must explicitly reference Rule 14 INFRA fields and Rule 19 source verification (if shopops-api).
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '{}')
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page to reflect completion.
+
+      ## Required Notion Changes
+      - Claude Status: REVIEW
+      - Status: Review
+      - Add the Rule 14 INFRA manifest as a page comment
+      - Include backup location and rollback procedure
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is not available, output a TODO for XO to flip Notion manually.
