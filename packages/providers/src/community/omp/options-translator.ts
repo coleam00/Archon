@@ -16,52 +16,54 @@ const OMP_NATIVE_LEVELS: ReadonlySet<OmpThinkingLevel> = new Set<OmpThinkingLeve
 export const DEFAULT_OMP_TOOL_NAMES = [
   'ask',
   'bash',
-  'python',
+  'eval',
   'calc',
   'ssh',
   'edit',
   'find',
-  'grep',
+  'search',
   'ast_grep',
   'ast_edit',
   'lsp',
-  'notebook',
   'read',
   'browser',
   'task',
-  'poll',
+  'job',
   'todo_write',
-  'fetch',
   'web_search',
   'write',
-  'generate_image',
+  'render_mermaid',
+  'inspect_image',
 ] as const;
 
 const KNOWN_OMP_TOOL_NAMES = new Set<string>([
   ...DEFAULT_OMP_TOOL_NAMES,
-  // Extra OMP tools present in SDK registries but not documented as default
-  // built-ins in the v14.7.0 `--tools` table.
+  // Extra OMP tools present in SDK registries or loaded conditionally outside
+  // the default tool set.
   'debug',
-  'eval',
   'github',
-  'inspect_image',
   'checkpoint',
   'rewind',
-  'job',
   'recipe',
   'irc',
   'yield',
   'resolve',
   'exit_plan_mode',
-  'render_mermaid',
-  'search',
   'search_tool_bm25',
   'retain',
   'recall',
   'reflect',
   'report_finding',
   'report_tool_issue',
+  'generate_image',
 ]);
+
+const LEGACY_OMP_TOOL_ALIASES: Record<string, string> = {
+  python: 'eval',
+  grep: 'search',
+  poll: 'job',
+  fetch: 'read',
+};
 
 const OMP_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   anthropic: ['ANTHROPIC_API_KEY'],
@@ -118,8 +120,9 @@ export interface ResolvedOmpTools {
 
 function normalizeToolName(name: string, unknownTools: string[]): string | undefined {
   const lower = name.toLowerCase();
-  if (lower.startsWith('mcp__')) return lower;
-  if (KNOWN_OMP_TOOL_NAMES.has(lower)) return lower;
+  const normalized = LEGACY_OMP_TOOL_ALIASES[lower] ?? lower;
+  if (normalized.startsWith('mcp__')) return normalized;
+  if (KNOWN_OMP_TOOL_NAMES.has(normalized)) return normalized;
   unknownTools.push(name);
   return undefined;
 }

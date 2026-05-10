@@ -27,9 +27,9 @@
     "@archon/paths": "workspace:*",
     "@mariozechner/pi-ai": "^0.67.5",
     "@mariozechner/pi-coding-agent": "^0.67.5",
-    "@oh-my-pi/pi-agent-core": "^14.7.0",
-    "@oh-my-pi/pi-ai": "^14.7.0",
-    "@oh-my-pi/pi-coding-agent": "^14.7.0",
+    "@oh-my-pi/pi-agent-core": "^14.9.2",
+    "@oh-my-pi/pi-ai": "^14.9.2",
+    "@oh-my-pi/pi-coding-agent": "^14.9.2",
     "@openai/codex-sdk": "^0.125.0",
     "@sinclair/typebox": "^0.34.41"
   },

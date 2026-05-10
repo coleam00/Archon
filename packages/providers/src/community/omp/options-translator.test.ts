@@ -28,16 +28,23 @@ describe('resolveOmpToolNames', () => {
     expect(resolveOmpToolNames().toolNames).toEqual([...DEFAULT_OMP_TOOL_NAMES]);
   });
 
-  test('uses current OMP --tools names', () => {
+  test('uses current OMP tool names', () => {
+    expect(resolveOmpToolNames({ allowed_tools: ['eval', 'search', 'read', 'job'] })).toEqual({
+      toolNames: ['eval', 'search', 'read', 'job'],
+      unknownTools: [],
+    });
+  });
+
+  test('maps legacy OMP tool aliases to current names', () => {
     expect(resolveOmpToolNames({ allowed_tools: ['python', 'grep', 'fetch', 'poll'] })).toEqual({
-      toolNames: ['python', 'grep', 'fetch', 'poll'],
+      toolNames: ['eval', 'search', 'read', 'job'],
       unknownTools: [],
     });
   });
 
   test('honors allowed and denied tools in OMP namespace', () => {
     expect(
-      resolveOmpToolNames({ allowed_tools: ['read', 'ssh', 'grep'], denied_tools: ['grep'] })
+      resolveOmpToolNames({ allowed_tools: ['read', 'ssh', 'grep'], denied_tools: ['search'] })
     ).toEqual({ toolNames: ['read', 'ssh'], unknownTools: [] });
   });
 
