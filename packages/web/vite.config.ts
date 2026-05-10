@@ -46,7 +46,12 @@ export default defineConfig(({ mode }) => {
       ],
     },
     server: {
+      host: '0.0.0.0',
       port: 5173,
+      // Allow Tailscale tailnet hostname so VAs can hit the dev server via
+      // https://gregs-mac-mini.tail4e0ac6.ts.net:<port>/. Vite blocks unknown
+      // Host headers by default to prevent DNS rebinding.
+      allowedHosts: ['localhost', '127.0.0.1', '.ts.net', '.tail4e0ac6.ts.net'],
       fs: {
         allow: [path.resolve(__dirname, '../..'), path.resolve(__dirname, '../../../second-brain')],
       },
