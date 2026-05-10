@@ -46,7 +46,10 @@ async function registerRepoAtPath(
   // Built-in providers use well-known folders (.claude/, .codex/).
   // Falls back to first registered built-in provider if no folder detected.
   const { getRegisteredProviders } = await import('@archon/providers');
-  const defaultProvider = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
+  const defaultProvider =
+    getRegisteredProviders().find(p => p.builtIn)?.id ??
+    process.env.DEFAULT_AI_ASSISTANT ??
+    'claude';
   let suggestedAssistant = defaultProvider;
   const codexFolder = join(targetPath, '.codex');
   const claudeFolder = join(targetPath, '.claude');

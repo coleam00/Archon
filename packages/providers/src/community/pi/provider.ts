@@ -449,9 +449,7 @@ export class PiProvider implements IAgentProvider {
           ? { ...(gv as Record<string, unknown>), ...(pv as Record<string, unknown>) }
           : pv;
     }
-    const settingsManager = piCodingAgent.SettingsManager.inMemory(
-      seedSettings as ReturnType<typeof fileSettings.getGlobalSettings>
-    );
+    const settingsManager = piCodingAgent.SettingsManager.inMemory(seedSettings);
     // Default ON: extensions (community packages like @plannotator/pi-extension
     // or your own local ones) are a core reason users run Pi. Opt out with
     // `assistants.pi.enableExtensions: false` (or `interactive: false`) in

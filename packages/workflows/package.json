@@ -27,6 +27,7 @@
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^0.19.6",
+    "js-yaml": "^4.1.0",
     "zod": "^3.25.28"
   },
   "peerDependencies": {

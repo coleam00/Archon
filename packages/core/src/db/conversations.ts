@@ -5,6 +5,7 @@ import { pool, getDialect } from './connection';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
+import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -72,7 +73,7 @@ export async function getOrCreateConversation(
   // Check if we should inherit from a parent conversation (e.g., Discord thread inheriting from parent channel)
   let inheritedCodebaseId: string | null = null;
   let inheritedCwd: string | null = null;
-  let assistantType = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
+  let assistantType: string | undefined = undefined;
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(
@@ -102,6 +103,12 @@ export async function getOrCreateConversation(
     if (codebase.rows[0]) {
       assistantType = codebase.rows[0].ai_assistant_type;
     }
+  }
+
+  // Fall back to config.assistant (single source of truth: merged config)
+  if (assistantType === undefined) {
+    const config = await loadConfig();
+    assistantType = config.assistant;
   }
 
   const created = await pool.query<Conversation>(
@@ -231,16 +238,20 @@ export async function touchConversation(id: string): Promise<void> {
 }
 
 /**
- * Update conversation title
+ * Update conversation title.
+ *
+ * Fire-and-forget safe — does not throw when the conversation does not exist.
+ * The caller (title-generator) already wraps this in a try-catch.
  */
 export async function updateConversationTitle(id: string, title: string): Promise<void> {
   const dialect = getDialect();
+  const log = createLogger('db.conversations');
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET title = $1, updated_at = ${dialect.now()} WHERE id = $2`,
     [title, id]
   );
   if (result.rowCount === 0) {
-    throw new ConversationNotFoundError(id);
+    log.warn({ conversationId: id }, 'update_conversation_title_not_found');
   }
 }
 

@@ -14,6 +14,7 @@ import {
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
+import jsYaml from 'js-yaml';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -23,10 +24,11 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Parse YAML using Bun's native YAML parser
+ * Parse YAML using js-yaml (Bun.YAML is not available in all Bun versions)
  */
 function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+  const json = jsYaml.load(content);
+  return json;
 }
 
 /**

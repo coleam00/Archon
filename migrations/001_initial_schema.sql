@@ -8,7 +8,7 @@ CREATE TABLE remote_agent_codebases (
   name VARCHAR(255) NOT NULL,
   repository_url VARCHAR(500),
   default_cwd VARCHAR(500) NOT NULL,
-  ai_assistant_type VARCHAR(20) DEFAULT 'claude',
+  ai_assistant_type VARCHAR(20) DEFAULT NULL,
   commands JSONB DEFAULT '{}'::jsonb,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
@@ -21,7 +21,7 @@ CREATE TABLE remote_agent_conversations (
   platform_conversation_id VARCHAR(255) NOT NULL,
   codebase_id UUID REFERENCES remote_agent_codebases(id),
   cwd VARCHAR(500),
-  ai_assistant_type VARCHAR(20) DEFAULT 'claude',
+  ai_assistant_type VARCHAR(20) DEFAULT NULL,
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW(),
   UNIQUE(platform_type, platform_conversation_id)

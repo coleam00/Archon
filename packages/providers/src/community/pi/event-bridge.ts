@@ -68,8 +68,9 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
 
   private async *iterate(): AsyncGenerator<T> {
     while (true) {
-      const next = this.buffer.shift();
-      if (next !== undefined) {
+      if (this.buffer.length > 0) {
+        // `shift()` can return undefined only when empty; length guard avoids that.
+        const next = this.buffer.shift() as T;
         yield next;
         continue;
       }
@@ -331,7 +332,10 @@ export async function* bridgeSession(
         queue.push({ kind: 'chunk', chunk });
       }
     } catch (err) {
-      queue.push({ kind: 'error', error: err as Error });
+      queue.push({
+        kind: 'error',
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     }
   });
 
@@ -356,13 +360,20 @@ export async function* bridgeSession(
       queue.push({ kind: 'done' });
     },
     (err: unknown) => {
-      queue.push({ kind: 'error', error: err as Error });
+      queue.push({
+        kind: 'error',
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     }
   );
 
   try {
     for await (const item of queue) {
       if (item.kind === 'done') return;
+      // When session.prompt() rejects, the actual error is pushed here.
+      // Throw immediately so the real error message surfaces to the user
+      // instead of being swallowed by the result-chunk path (which only
+      // has the generic `stopReason: "error"` and loses the details).
       if (item.kind === 'error') throw item.error;
       // Annotate the terminal result chunk with Pi's session UUID so Archon's
       // orchestrator can pass it back as `resumeSessionId` on the next call.
