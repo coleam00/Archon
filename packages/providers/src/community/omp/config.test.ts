@@ -113,4 +113,8 @@ describe('parseOmpConfig', () => {
       })
     ).toEqual({ toolNames: [] });
   });
+
+  test('drops invalid non-string toolNames without clearing defaults', () => {
+    expect(parseOmpConfig({ toolNames: [123, false, null] })).toEqual({});
+  });
 });
