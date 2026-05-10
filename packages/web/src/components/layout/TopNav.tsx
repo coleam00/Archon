@@ -13,6 +13,10 @@ import {
   ClipboardList,
   Share2,
   Briefcase,
+  Mail,
+  FlaskConical,
+  Wrench,
+  CheckSquare,
 } from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -20,6 +24,12 @@ import { cn } from '@/lib/utils';
 const tabs = [
   { to: '/chat', end: false, icon: MessageSquare, label: 'Chat' },
   { to: '/dashboard', end: true, icon: LayoutDashboard, label: 'Dashboard' },
+  // Categories — operating-lens nav (per 2026-05-07 consultant review)
+  { to: '/category/writing-comms', end: false, icon: Mail, label: 'Writing' },
+  { to: '/category/research-learning', end: false, icon: FlaskConical, label: 'Research' },
+  { to: '/category/techbase', end: false, icon: Wrench, label: 'Techbase' },
+  { to: '/category/work-daily-ops', end: false, icon: CheckSquare, label: 'Daily Ops' },
+  // Brand tabs (drill-down per business)
   { to: '/pmc', end: false, icon: Briefcase, label: 'PMC' },
   { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },
   { to: '/settings', end: false, icon: Settings, label: 'Settings' },
