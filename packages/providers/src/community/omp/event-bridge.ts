@@ -310,8 +310,11 @@ export async function* bridgeSession(
     });
 
     if (abortSignal) {
-      if (abortSignal.aborted) onAbort();
-      else abortSignal.addEventListener('abort', onAbort, { once: true });
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
+      abortSignal.addEventListener('abort', onAbort, { once: true });
     }
 
     promptPromise = session.prompt(prompt).then(

@@ -310,6 +310,40 @@ describe('bridgeSession', () => {
     expect(chunks).toEqual([{ type: 'result' }]);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   }, 5_000);
+
+  test('does not prompt when abort signal is already aborted', async () => {
+    let promptCalled = false;
+    let abortCalled = false;
+    let disposed = false;
+    const controller = new AbortController();
+    controller.abort();
+    const session: OmpSession = {
+      subscribe() {
+        return () => undefined;
+      },
+      async prompt() {
+        promptCalled = true;
+        return undefined;
+      },
+      async abort() {
+        abortCalled = true;
+        return undefined;
+      },
+      dispose() {
+        disposed = true;
+      },
+    };
+
+    const chunks: unknown[] = [];
+    for await (const chunk of bridgeSession(session, 'hi', controller.signal)) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual([]);
+    expect(promptCalled).toBe(false);
+    expect(abortCalled).toBe(true);
+    expect(disposed).toBe(true);
+  });
   test('cleans up session state when subscribe throws during setup', async () => {
     let disposed = false;
     const emitterStates: Array<unknown> = [];

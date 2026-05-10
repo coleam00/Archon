@@ -8,9 +8,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringArray(value: unknown, keepExplicitEmpty = false): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
+  if (keepExplicitEmpty && value.length === 0) return [];
   const filtered = value.filter((item): item is string => typeof item === 'string');
-  if (filtered.length > 0) return filtered;
-  return keepExplicitEmpty ? [] : undefined;
+  return filtered.length > 0 ? filtered : undefined;
 }
 
 function stringRecord(value: unknown): Record<string, string> | undefined {
