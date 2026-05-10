@@ -334,12 +334,12 @@ describe('bridgeSession', () => {
       },
     };
 
-    const chunks: unknown[] = [];
-    for await (const chunk of bridgeSession(session, 'hi', controller.signal)) {
-      chunks.push(chunk);
-    }
+    await expect(async () => {
+      for await (const _chunk of bridgeSession(session, 'hi', controller.signal)) {
+        // consume
+      }
+    }).toThrow('Oh My Pi request aborted before prompt start.');
 
-    expect(chunks).toEqual([]);
     expect(promptCalled).toBe(false);
     expect(abortCalled).toBe(true);
     expect(disposed).toBe(true);
