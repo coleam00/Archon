@@ -1257,6 +1257,16 @@ async function executeNodeInternal(
 const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
 
 /**
+ * Empty file Bun is pointed at via `--env-file=` to suppress its
+ * cwd `.env` auto-load for `script:` nodes. `--no-env-file` only
+ * disables explicit `--env-file=…` args; the cwd auto-load survives
+ * unless we point Bun at a real (empty) file. `/dev/null` on POSIX,
+ * `NUL` on Windows. (Verified empirically against bun 1.3.x — see
+ * the regression test in `dag-executor.test.ts` for #1135.)
+ */
+export const BUN_NULL_ENV_FILE = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+/**
  * Execute a bash (shell script) DAG node.
  * Runs the script via `bash -c`, captures stdout as node output.
  * No AI session is created — bash nodes are free/deterministic.
@@ -1498,10 +1508,13 @@ async function executeScriptNode(
       // Inline code execution
       if (node.runtime === 'bun') {
         cmd = 'bun';
-        // --no-env-file prevents Bun from auto-loading .env from the execution
-        // cwd (the target repo). Without this, repo .env leaks into the script
-        // subprocess despite Archon's parent process cleanup.
-        args = ['--no-env-file', '-e', finalScript];
+        // Suppress Bun's auto-load of `.env` from the execution cwd
+        // (the target repo). `--no-env-file` ONLY disables explicit
+        // `--env-file=…` args — it does NOT stop the cwd auto-load.
+        // The portable way to actually suppress the auto-load is to
+        // point Bun at an empty file: `/dev/null` on POSIX, `NUL` on
+        // Windows. Verified empirically against bun 1.3.x.
+        args = [`--env-file=${BUN_NULL_ENV_FILE}`, '-e', finalScript];
       } else {
         // uv run --with dep1 --with dep2 python -c <code>
         cmd = 'uv';
@@ -1509,7 +1522,8 @@ async function executeScriptNode(
         args = ['run', ...withFlags, 'python', '-c', finalScript];
       }
     } else {
-      // Named script — look up across repo and home scopes.
+      // Named script — look up across repo and home scopes. Same
+      // `--env-file=<null>` rationale as inline scripts above.
       // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
       // Wrap discovery in its own try/catch so a permission error on ~/.archon/scripts/
       // isn't mis-attributed by the outer catch's "permission denied (check cwd
@@ -1586,7 +1600,7 @@ async function executeScriptNode(
         args = ['run', ...withFlags, scriptDef.path];
       } else {
         cmd = 'bun';
-        args = ['--no-env-file', 'run', scriptDef.path];
+        args = [`--env-file=${BUN_NULL_ENV_FILE}`, 'run', scriptDef.path];
       }
     }
 

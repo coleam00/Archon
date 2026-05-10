@@ -45,7 +45,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 // --- Imports (after all mock.module calls) ---
-import { executeDagWorkflow } from './dag-executor';
+import { executeDagWorkflow, BUN_NULL_ENV_FILE } from './dag-executor';
 import type { ScriptNode, WorkflowRun } from './schemas';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
@@ -287,7 +287,7 @@ describe('script node deps field — command construction', () => {
     expect(args).toEqual(['run', 'python', '-c', 'print("no deps")']);
   });
 
-  it('bun inline with deps uses bun --no-env-file -e (no extra dep flags — bun auto-installs)', async () => {
+  it('bun inline with deps uses bun --env-file=<null> -e (no extra dep flags — bun auto-installs)', async () => {
     const node: ScriptNode = {
       id: 'bun-with-deps',
       script: 'import { z } from "zod"; console.log(z.string().parse("hello"))',
@@ -316,13 +316,15 @@ describe('script node deps field — command construction', () => {
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('bun');
-    // --no-env-file prevents repo .env auto-load; no dep flags — bun auto-installs
-    expect(args).toEqual(['--no-env-file', '-e', node.script]);
+    // --env-file=<null> prevents Bun's cwd .env auto-load (--no-env-file
+    // only suppresses explicit --env-file=… args, not the auto-load).
+    // No dep flags — bun auto-installs.
+    expect(args).toEqual([`--env-file=${BUN_NULL_ENV_FILE}`, '-e', node.script]);
     expect(args).not.toContain('--packages');
     expect(args).not.toContain('--with');
   });
 
-  it('bun inline without deps uses bun --no-env-file -e', async () => {
+  it('bun inline without deps uses bun --env-file=<null> -e', async () => {
     const node: ScriptNode = {
       id: 'bun-no-deps',
       script: 'console.log("hello")',
@@ -350,7 +352,7 @@ describe('script node deps field — command construction', () => {
     expect(scriptCall).toBeDefined();
     const [cmd, args] = scriptCall as [string, string[]];
     expect(cmd).toBe('bun');
-    expect(args).toEqual(['--no-env-file', '-e', 'console.log("hello")']);
+    expect(args).toEqual([`--env-file=${BUN_NULL_ENV_FILE}`, '-e', 'console.log("hello")']);
   });
 
   it('uv named script with deps uses uv run --with flags', async () => {

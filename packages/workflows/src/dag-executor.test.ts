@@ -37,6 +37,7 @@ import {
   checkTriggerRule,
   substituteNodeOutputRefs,
   executeDagWorkflow,
+  BUN_NULL_ENV_FILE,
 } from './dag-executor';
 import { loadMcpConfig } from '@archon/providers/claude/provider';
 import type { DagNode, BashNode, ScriptNode, NodeOutput, WorkflowRun } from './schemas';
@@ -6512,9 +6513,13 @@ describe('executeDagWorkflow -- script nodes', () => {
       { ...minimalConfig, envVars: { MY_SECRET: 'abc123' } }
     );
 
+    // The first arg suppresses Bun's cwd .env auto-load. `--no-env-file`
+    // doesn't actually do that — it only disables explicit `--env-file=…`
+    // args. The portable null-env-file value is `/dev/null` on POSIX and
+    // `NUL` on Windows; the imported constant resolves to the right one.
     expect(execSpy).toHaveBeenCalledWith(
       'bun',
-      ['--no-env-file', '-e', 'console.log("ok")'],
+      [`--env-file=${BUN_NULL_ENV_FILE}`, '-e', 'console.log("ok")'],
       expect.objectContaining({
         env: expect.objectContaining({ MY_SECRET: 'abc123' }),
       })
