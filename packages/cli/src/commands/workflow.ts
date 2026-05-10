@@ -1221,6 +1221,14 @@ function isDirectoryUrl(sourceUrl: string): boolean {
   return sourceUrl.includes('/tree/');
 }
 
+/**
+ * Validate that a path component from an external source is safe to use in a filesystem path.
+ * Rejects names containing path separators, traversal sequences, or non-portable characters.
+ */
+function isSafePathComponent(name: string): boolean {
+  return name !== '.' && name !== '..' && /^[a-zA-Z0-9._-]+$/.test(name);
+}
+
 /** Parse owner/repo and path from a GitHub blob or tree URL. */
 function parseGitHubUrl(sourceUrl: string): { owner: string; repo: string; path: string } {
   // https://github.com/owner/repo/blob/ref/path or https://github.com/owner/repo/tree/ref/path
@@ -1400,6 +1408,11 @@ async function installDirectory(
   let installedCount = 1;
 
   for (const subdir of subdirs) {
+    if (!isSafePathComponent(subdir.name)) {
+      console.log(`  Skipped (unsafe directory name): ${subdir.name}`);
+      continue;
+    }
+
     const subItems = await fetchGitHubDirectory(owner, repo, subdir.path, entry.sha);
     const files = subItems.filter(f => f.type === 'file');
 
@@ -1416,6 +1429,10 @@ async function installDirectory(
     mkdirSync(targetDir, { recursive: true });
 
     for (const file of files) {
+      if (!isSafePathComponent(file.name)) {
+        console.log(`  Skipped (unsafe filename): ${file.name}`);
+        continue;
+      }
       const destFile = join(targetDir, file.name);
       if (existsSync(destFile) && !force) {
         console.log(`  Skipped (exists): ${destFile}`);
@@ -1431,6 +1448,10 @@ async function installDirectory(
   // Also install any other root-level non-YAML files (e.g. README)
   const otherRootFiles = items.filter(f => f.type === 'file' && !f.name.endsWith('.yaml'));
   for (const file of otherRootFiles) {
+    if (!isSafePathComponent(file.name)) {
+      console.log(`  Skipped (unsafe filename): ${file.name}`);
+      continue;
+    }
     const destFile = join(workflowsDir, file.name);
     if (existsSync(destFile) && !force) continue;
     const content = await downloadRawFile(owner, repo, file.path, entry.sha);
