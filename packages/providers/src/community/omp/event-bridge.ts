@@ -312,7 +312,7 @@ export async function* bridgeSession(
     if (abortSignal) {
       if (abortSignal.aborted) {
         onAbort();
-        return;
+        throw new Error('Oh My Pi request aborted before prompt start.');
       }
       abortSignal.addEventListener('abort', onAbort, { once: true });
     }
