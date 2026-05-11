@@ -1,0 +1,91 @@
+name: archon-idea-to-wo
+description: |
+  Use when: User wants to turn a raw idea into structured BKM Work Orders.
+  Triggers: "idea to wo", "idea to work orders", "turn this idea into work orders",
+            "wo from idea", "create work orders", "work order from idea".
+  NOT for: PRD creation (use archon-interactive-prd), direct implementation (use archon-piv-loop).
+
+  Interactive workflow that guides users from raw idea → BKM Work Orders:
+  1. Understand the idea → ask foundation questions → wait for answers
+  2. Research codebase & propose scope/approach → wait for approval
+  3. Break work into phases with risks → wait for approval
+  4. Generate BKM Work Orders → final review
+
+provider: claude
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: UNDERSTAND — Foundation questions
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: understand-idea
+    model: sonnet
+    command: archon-wo-understand-idea
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 1: User answers foundation questions
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: foundation-gate
+    approval:
+      message: "Answer the foundation questions above. Your answers guide the scope and approach phase."
+      capture_response: true
+    depends_on: [understand-idea]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: SCOPE — Research codebase, propose approach
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: scope-and-approach
+    model: sonnet
+    command: archon-wo-scope-and-approach
+    depends_on: [foundation-gate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 2: User approves scope and approach
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: approach-gate
+    approval:
+      message: "Review the proposed scope and approach. Approve or provide corrections."
+      capture_response: true
+    depends_on: [scope-and-approach]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: DECOMPOSE — Break into phases with risks
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: risk-and-decomposition
+    model: sonnet
+    command: archon-wo-risk-and-decomposition
+    depends_on: [approach-gate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 3: User approves decomposition
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: decomposition-gate
+    approval:
+      message: "Review the work breakdown and risk assessment. Approve or request adjustments."
+      capture_response: true
+    depends_on: [risk-and-decomposition]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: GENERATE — Produce BKM Work Orders
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: generate-wos
+    model: sonnet
+    command: archon-wo-generate-wos
+    depends_on: [decomposition-gate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 4: Final review of generated Work Orders
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: review-wos
+    approval:
+      message: "Review the generated Work Orders in $ARTIFACTS_DIR/work-orders/. Approve to complete, or provide feedback for revision."
+      capture_response: true
+    depends_on: [generate-wos]
