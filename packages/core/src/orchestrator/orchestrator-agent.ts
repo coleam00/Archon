@@ -43,10 +43,7 @@ import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
 import { IsolationBlockedError } from '@archon/isolation';
-import {
-  buildOrchestratorSystemAppend,
-  formatWorkflowContextSection,
-} from './prompt-builder';
+import { buildOrchestratorSystemAppend, formatWorkflowContextSection } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
@@ -506,11 +503,7 @@ function buildFullPrompt(
   }
 
   return (
-    workflowContextSuffix +
-    '\n\n---\n\n## User Message\n\n' +
-    message +
-    contextSuffix +
-    fileSuffix
+    workflowContextSuffix + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix
   );
 }
 

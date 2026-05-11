@@ -331,7 +331,9 @@ export class PiProvider implements IAgentProvider {
 
     //    4c. systemPrompt: request-level (AgentRequestOptions) wins over
     //        node-level; either overrides Pi's default.
-    const systemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
+    //        Pi only supports string system prompts; ignore structured preset objects.
+    const rawSystemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
+    const systemPrompt = typeof rawSystemPrompt === 'string' ? rawSystemPrompt : undefined;
 
     //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
     //        Resolve each name against .agents/skills and .claude/skills (project
