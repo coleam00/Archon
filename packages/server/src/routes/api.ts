@@ -2238,7 +2238,7 @@ export function registerApiRoutes(
 
       const filename = `${name}.yaml`;
 
-      // 1. Try user-defined workflow in cwd (project scope)
+      // 1. Try user-defined workflow in cwd.
       if (workingDir) {
         const [workflowFolder] = getWorkflowFolderSearchPaths();
         const filePath = join(workingDir, workflowFolder, filename);
@@ -2262,10 +2262,7 @@ export function registerApiRoutes(
       }
 
       // 2. Fall back to home-scoped workflow (`~/.archon/workflows/`).
-      // Mirrors the discovery order in `discoverWorkflowsWithConfig` — this
-      // endpoint previously skipped the home scope, so global workflows were
-      // invisible to the web UI builder (it loads via this single-workflow
-      // endpoint) even though `GET /api/workflows` (list) returned them.
+      // Mirrors the discovery order in `discoverWorkflowsWithConfig`.
       {
         const homeFilePath = join(getHomeWorkflowsPath(), filename);
         try {
@@ -2287,7 +2284,7 @@ export function registerApiRoutes(
         }
       }
 
-      // 3. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
+      // 3. Fall back to bundled defaults.
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
         const bundledContent = BUNDLED_WORKFLOWS[name];
         const result = parseWorkflow(bundledContent, filename);

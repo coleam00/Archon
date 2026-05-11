@@ -290,6 +290,40 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('returns 500 when home-scoped workflow file is malformed YAML', async () => {
+    const tmpHome = join(tmpdir(), `wf-home-invalid-test-${Date.now()}`);
+    const homeWorkflowsDir = join(tmpHome, 'workflows');
+    await mkdir(homeWorkflowsDir, { recursive: true });
+    await writeFile(join(homeWorkflowsDir, 'broken.yaml'), 'invalid: [yaml');
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      // No registered codebase → project scope skipped → home scope attempted.
+      mockListCodebases.mockImplementationOnce(async () => []);
+      // Force parseWorkflow to surface a parse error for the home file.
+      mockParseWorkflow.mockReturnValueOnce({
+        workflow: null,
+        error: { filename: 'broken.yaml', error: 'unexpected token', errorType: 'parse_error' },
+      });
+
+      const response = await app.request('/api/workflows/broken');
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain('Home workflow file is invalid');
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   test('project-scope shadows home-scope when same filename exists in both', async () => {
     const testDir = join(tmpdir(), `wf-shadow-test-${Date.now()}`);
     const projectDir = join(testDir, '.archon', 'workflows');
