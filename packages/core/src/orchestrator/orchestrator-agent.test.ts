@@ -106,8 +106,16 @@ mock.module('@archon/workflows/router', () => ({
     workflows.find(w => w.name === name)
   ),
 }));
+const mockHydrateResumableRun = mock(
+  async (_deps: unknown, candidate: { id: string }) =>
+    ({
+      run: { ...candidate, status: 'running' },
+      priorCompletedNodes: new Map([['n1', 'v1']]),
+    }) as unknown
+);
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  hydrateResumableRun: mockHydrateResumableRun,
 }));
 
 mock.module('@archon/providers', () => ({
@@ -1111,18 +1119,21 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
     // Regression for the auto-resume plumbing: the interactive web dispatch
     // must pass the caller conversation's DB id as parentConversationId
-    // (11th positional arg) so the approve/reject API handlers can dispatch
-    // resume back through the orchestrator.
+    // (opts.parentConversationId on the options bag at position 7) so the
+    // approve/reject API handlers can dispatch resume back through the
+    // orchestrator.
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    expect(callArgs[10]).toBe('conv-1'); // parentConversationId = conversation.id
+    const opts = callArgs[7] as { parentConversationId?: string };
+    expect(opts.parentConversationId).toBe('conv-1');
   });
 
   test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
-    // Regression for the foreground-resume branch added as part of the
-    // auto-resume fix: when `findResumableRunByParentConversation` returns a
-    // paused run, the orchestrator picks the working_path from that run and
-    // must still carry parentConversationId forward so the API helpers can
-    // keep dispatching resume on subsequent approvals.
+    // Regression for the foreground-resume branch: when
+    // findResumableRunByParentConversation returns a paused run, the
+    // orchestrator must hydrate it (single DB roundtrip — no second
+    // findResumableRun) and hand the resumed run + priorCompletedNodes to
+    // executeWorkflow via opts. parentConversationId still flows so the API
+    // helpers keep dispatching resume on subsequent approvals.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
@@ -1139,12 +1150,20 @@ describe('workflow dispatch routing — interactive flag', () => {
     const platform = makePlatform(); // getPlatformType returns 'web'
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
 
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    // cwd (position 3) should come from the resumable run's working_path
+    // cwd (position 3) should come from the resumable run's working_path.
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
-    // parentConversationId (position 10) should still be the caller conversation id
-    expect(callArgs[10]).toBe('conv-1');
+    // Resume payload lives on the opts bag (position 7).
+    const opts = callArgs[7] as {
+      parentConversationId?: string;
+      preCreatedRun?: { id: string };
+      priorCompletedNodes?: Map<string, string>;
+    };
+    expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.preCreatedRun?.id).toBe('resumable-run-1');
+    expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
   });
 
   test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {

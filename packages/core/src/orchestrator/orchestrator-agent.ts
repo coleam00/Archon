@@ -31,7 +31,7 @@ import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow } from '@archon/workflows/router';
-import { executeWorkflow } from '@archon/workflows/executor';
+import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import type {
   WorkflowDefinition,
   WorkflowWithSource,
@@ -285,18 +285,30 @@ async function dispatchOrchestratorWorkflow(
         },
         'orchestrator.foreground_resume_detected'
       );
+      // Hydrate the already-found candidate (skip a second findResumableRun
+      // query). If hydration returns null, the run vanished or has nothing
+      // worth resuming — throw rather than silently start fresh.
+      const deps = createWorkflowDeps();
+      const prepared = await hydrateResumableRun(deps, resumableRun);
+      if (!prepared) {
+        throw new Error(
+          `Resumable run '${resumableRun.id}' for '${workflow.name}' could not be hydrated for resume.`
+        );
+      }
       await executeWorkflow(
-        createWorkflowDeps(),
+        deps,
         platform,
         conversationId,
         resumableRun.working_path,
         workflow,
         userMessage,
         conversation.id,
-        codebase.id,
-        undefined, // issueContext
-        undefined, // isolationContext
-        conversation.id // parentConversationId — enables approve/reject auto-resume
+        {
+          codebaseId: codebase.id,
+          parentConversationId: conversation.id,
+          preCreatedRun: prepared.run,
+          priorCompletedNodes: prepared.priorCompletedNodes,
+        }
       );
     } else if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation
@@ -308,10 +320,10 @@ async function dispatchOrchestratorWorkflow(
         workflow,
         userMessage,
         conversation.id,
-        codebase.id,
-        undefined, // issueContext
-        undefined, // isolationContext
-        conversation.id // parentConversationId — enables approve/reject auto-resume
+        {
+          codebaseId: codebase.id,
+          parentConversationId: conversation.id,
+        }
       );
     } else {
       await dispatchBackgroundWorkflow(
@@ -337,10 +349,10 @@ async function dispatchOrchestratorWorkflow(
       workflow,
       userMessage,
       conversation.id,
-      codebase.id,
-      undefined, // issueContext
-      undefined, // isolationContext
-      conversation.id // parentConversationId — enables approve/reject auto-resume
+      {
+        codebaseId: codebase.id,
+        parentConversationId: conversation.id,
+      }
     );
   }
 }
