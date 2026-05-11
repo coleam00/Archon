@@ -1,0 +1,32 @@
+name: Marketplace Auto-Review
+
+on:
+  pull_request_target:
+    paths:
+      - "packages/docs-web/src/data/marketplace.ts"
+    types: [opened, synchronize, reopened]
+
+jobs:
+  auto-review:
+    name: Run marketplace auto-review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run marketplace auto-review workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          bun run cli workflow run marketplace-pr-review-and-merge --no-worktree \
+            "${{ github.event.pull_request.number }}"
