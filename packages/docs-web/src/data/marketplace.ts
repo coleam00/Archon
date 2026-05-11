@@ -95,4 +95,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     archonVersionCompat: '>=0.3.0',
     featured: true,
   },
+  {
+    slug: 'video-generic',
+    name: 'Video Generic',
+    author: 'coleam00',
+    description:
+      'Turn a freeform prompt (URL, GitHub repo, release notes, topic) into a voiced + animated Remotion video. Three approval gates let you steer the spec, script, and live preview before render. Requires an ElevenLabs API key.',
+    sourceUrl:
+      'https://github.com/leex279/remotion-video-test/tree/4dac83c28d2e4a745b81520343101c402539b84f/.archon',
+    sha: '4dac83c28d2e4a745b81520343101c402539b84f',
+    tags: ['automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];
