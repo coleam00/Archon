@@ -10,6 +10,7 @@ import { resolve, relative } from 'node:path';
 // export in CI. Direct file import avoids the resolution gap.
 import { setLogLevel } from '../../packages/paths/src/logger.ts';
 import { parseWorkflow } from '../../packages/workflows/src/loader.ts';
+import { registerBuiltinProviders, registerCommunityProviders } from '../../packages/providers/src/registry.ts';
 
 // Silence the loader's Pino warnings (workflow_missing_description, etc).
 // parseWorkflow logs to stdout by default; the decide node substitutes our
@@ -17,6 +18,23 @@ import { parseWorkflow } from '../../packages/workflows/src/loader.ts';
 // loader's child logger is lazy-initialized, so setting the root level
 // before the first parseWorkflow call propagates correctly.
 setLogLevel('fatal');
+
+// parseWorkflow checks `provider:` against the runtime providers registry.
+// The CLI populates it at startup; this standalone script must do the same
+// or every workflow with `provider: claude` gets a false-positive
+// "Unknown provider" error.
+registerBuiltinProviders();
+registerCommunityProviders();
+
+/**
+ * Decide whether a YAML file is shaped like an Archon workflow definition
+ * (top-level `nodes:` block). Marketplace directory submissions commonly
+ * include non-workflow YAML like brand.yaml, config.yaml, or template
+ * scaffolds — those should not be validated against the workflow schema.
+ */
+function looksLikeWorkflow(yamlContent: string): boolean {
+  return /^nodes\s*:/m.test(yamlContent);
+}
 
 interface FileResult {
   name: string;
@@ -56,9 +74,20 @@ if (yamlFiles.length === 0) {
   process.exit(0);
 }
 
+// Pre-filter to only workflow-shaped YAMLs. Directory submissions commonly
+// ship non-workflow YAML alongside the workflow (brand metadata, Archon
+// per-repo config, template scaffolds). Validating those as workflows
+// produces false-positive errors and tanks legitimate submissions.
+const workflowFiles = yamlFiles.filter((p) => looksLikeWorkflow(readFileSync(p, 'utf8')));
+
+if (workflowFiles.length === 0) {
+  console.log(JSON.stringify({ valid: true, files: [], note: 'no workflow yaml files (no top-level nodes:)' }));
+  process.exit(0);
+}
+
 const results: FileResult[] = [];
 
-for (const fullPath of yamlFiles) {
+for (const fullPath of workflowFiles) {
   const relName = relative(sourceDir, fullPath);
   const content = readFileSync(fullPath, 'utf8');
   const result = parseWorkflow(content, relName);
