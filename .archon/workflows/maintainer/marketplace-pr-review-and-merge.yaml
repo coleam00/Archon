@@ -3,11 +3,11 @@ description: |
   Automatically reviews a marketplace submission PR. Verifies scope (only
   marketplace.ts changed), fetches source at pinned SHA, validates schema,
   runs a deterministic security scan, runs a Haiku AI review, then decides:
-  auto-approve / request-changes / reject.
+  auto-merge / auto-approve / request-changes / reject.
+  Clean submissions (scan severity none, AI approval) are auto-merged.
   Triggers: "marketplace review", "review marketplace PR <n>",
             "marketplace-pr-review-and-merge <n>".
   Arguments: PR number (integer).
-  v0 scope: review-comment poster only. No auto-merge. Maintainer decides merges manually.
 
 provider: claude
 model: claude-haiku-4-5-20251001
@@ -164,7 +164,8 @@ nodes:
       - If the security scan has `severity: "critical"` or `severity: "high"`, recommendation MUST be "reject".
       - If schema validation failed (`valid: false`), recommendation MUST be "request_changes".
       - If the PR is a draft (`isDraft: true`), recommendation should be "request_changes".
-      - For clean submissions with no issues, recommend "auto_approve".
+      - For clean submissions with no issues (scan severity "none", schema valid), recommend "auto_merge".
+      - For clean submissions where you have minor uncertainty but no concrete issues, recommend "auto_approve".
       - For suspicious but not definitively malicious submissions, recommend "request_changes".
 
       Be concise. Flag genuine risks only — don't nitpick style.
@@ -188,7 +189,7 @@ nodes:
             type: string
         recommendation:
           type: string
-          enum: [auto_approve, request_changes, reject]
+          enum: [auto_merge, auto_approve, request_changes, reject]
         reasoning:
           type: string
       required:
@@ -220,11 +221,19 @@ nodes:
 
       const scanResult = $security-scan.output;
       const aiReview = $ai-review.output;
+      const schemaResult = $validate-schema.output;
 
       const author = prMeta.author.login;
       const isDraft = prMeta.isDraft;
 
-      let decision: 'auto_approve' | 'request_changes' | 'reject';
+      // Read slug from entry.json for merge commit subject
+      let slug = '';
+      try {
+        const entry = JSON.parse(readFileSync(resolve(artifactsDir, 'entry.json'), 'utf8')) as { slug?: string };
+        slug = entry.slug ?? '';
+      } catch {}
+
+      let decision: 'auto_merge' | 'auto_approve' | 'request_changes' | 'reject';
       let reason: string;
 
       if (scopeResult !== 'SCOPE_OK') {
@@ -239,18 +248,21 @@ nodes:
       } else if (aiReview.recommendation === 'reject') {
         decision = 'reject';
         reason = aiReview.reasoning;
-      } else if (!$validate-schema.output.valid && $validate-schema.output.files && ($validate-schema.output.files as Array<{valid: boolean}>).length > 0) {
+      } else if (!schemaResult.valid && schemaResult.files && (schemaResult.files as Array<{valid: boolean}>).length > 0) {
         decision = 'request_changes';
         reason = 'Workflow YAML failed schema validation. Fix structural errors before merging.';
-      } else if (aiReview.recommendation === 'auto_approve') {
-        decision = 'auto_approve';
+      } else if (scanResult.severity === 'medium' || aiReview.recommendation === 'request_changes') {
+        decision = 'request_changes';
+        reason = aiReview.reasoning;
+      } else if (scanResult.severity === 'none' && (aiReview.recommendation === 'auto_merge' || aiReview.recommendation === 'auto_approve')) {
+        decision = 'auto_merge';
         reason = aiReview.reasoning;
       } else {
-        decision = 'request_changes';
+        decision = 'auto_approve';
         reason = aiReview.reasoning;
       }
 
-      const output = { decision, reason, author };
+      const output = { decision, reason, author, slug };
       writeFileSync(resolve(artifactsDir, 'decision.json'), JSON.stringify(output, null, 2));
       console.log(JSON.stringify(output));
 
@@ -263,10 +275,20 @@ nodes:
       PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
       DECISION=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.decision')
       REASON=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.reason')
+      SLUG=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.slug // empty')
 
       case "$DECISION" in
+        auto_merge)
+          echo "Decision: AUTO_MERGE — approving and merging PR #$PR_NUM"
+          gh pr review "$PR_NUM" --approve --body "**Marketplace Auto-Review: Approved & Merging**
+
+      $REASON
+
+      *Reviewed and auto-merged by Archon marketplace-pr-review-and-merge workflow.*"
+          gh pr merge "$PR_NUM" --squash --delete-branch --subject "feat(marketplace): add ${SLUG:-marketplace-entry}"
+          ;;
         auto_approve)
-          echo "Decision: AUTO_APPROVE — approving PR #$PR_NUM"
+          echo "Decision: AUTO_APPROVE — approving PR #$PR_NUM (manual merge required)"
           gh pr review "$PR_NUM" --approve --body "**Marketplace Auto-Review: Approved**
 
       $REASON

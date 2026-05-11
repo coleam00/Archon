@@ -1,7 +1,7 @@
 name: Marketplace Auto-Review
 
 on:
-  pull_request:
+  pull_request_target:
     paths:
       - "packages/docs-web/src/data/marketplace.ts"
     types: [opened, synchronize, reopened]
@@ -11,6 +11,7 @@ jobs:
     name: Run marketplace auto-review
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +26,7 @@ jobs:
       - name: Run marketplace auto-review workflow
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           bun run cli workflow run marketplace-pr-review-and-merge --no-worktree \
             "${{ github.event.pull_request.number }}"
