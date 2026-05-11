@@ -5,10 +5,25 @@
  * return value so a doctor failure does not abort setup (the env file was
  * already written successfully).
  */
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
+
+// Env vars that indicate a Pi backend API key is configured. Keep in sync with
+// `PI_BACKENDS` in setup.ts — these are the auth signals checkPi inspects.
+const PI_API_KEY_VARS = [
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'GEMINI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GROQ_API_KEY',
+  'MISTRAL_API_KEY',
+  'XAI_API_KEY',
+  'CEREBRAS_API_KEY',
+  'HUGGINGFACE_API_KEY',
+] as const;
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -69,6 +84,45 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
       message: `gh auth status failed: ${(err as Error).message}. Run \`gh auth login\`.`,
     };
   }
+}
+
+/**
+ * Thin wrapper around `existsSync` so tests can spy on it by name without
+ * fighting ESM named-import rebinding limitations.  Matches the `probeFileExists`
+ * pattern in `setup.ts`.
+ */
+export function probeAuthJsonExists(path: string): boolean {
+  return existsSync(path);
+}
+
+export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const label = 'Pi provider';
+  const isDefault = env.DEFAULT_AI_ASSISTANT === 'pi';
+
+  // Skip when Pi isn't the default — shared keys like ANTHROPIC_API_KEY shouldn't
+  // trigger a pass for Claude-only users who happen to have them set.
+  if (!isDefault) {
+    return { label, status: 'skip', message: 'Pi not configured' };
+  }
+
+  // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
+  // or API key env vars; either path is sufficient.
+  const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
+  if (probeAuthJsonExists(authJsonPath)) {
+    return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
+  }
+
+  const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
+  if (foundKey) {
+    return { label, status: 'pass', message: `${foundKey} is set` };
+  }
+
+  return {
+    label,
+    status: 'fail',
+    message:
+      'Pi is configured as default but no auth found. Run `pi /login` or set an API key env var (e.g. ANTHROPIC_API_KEY).',
+  };
 }
 
 export interface DatabaseDeps {
@@ -224,6 +278,7 @@ export async function doctorCommand(
     : [
         checkClaudeBinary(env),
         checkGhAuth(env),
+        checkPi(env),
         checkDatabase(),
         checkWorkspaceWritable(),
         checkBundledDefaults(),
