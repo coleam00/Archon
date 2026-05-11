@@ -7,7 +7,7 @@
  *   to avoid process-global mock.module pollution that would break git.test.ts
  * - Lazy logger pattern means @archon/paths mock must be set up before the module import
  */
-import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import { createMockLogger } from '../test/mocks/logger';
@@ -67,7 +67,7 @@ mock.module('../utils/commands', () => ({
 }));
 
 // ── Import module under test AFTER mocks are registered ────────────────────
-import { cloneRepository, registerRepository } from './clone';
+import { cloneRepository, registerRepository, normalizeRepoUrl } from './clone';
 
 // ── Spies for fs/promises and @archon/git ──────────────────────────────────
 let spyFsAccess: ReturnType<typeof spyOn>;
@@ -298,6 +298,93 @@ describe('cloneRepository', () => {
         args => args[0] === 'git' && args[1]?.[0] === 'clone'
       );
       expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+    });
+
+    // ── GitHub Enterprise Server (GITHUB_HOST override) ──────────────────
+    describe('with GITHUB_HOST override', () => {
+      beforeEach(() => {
+        process.env.GITHUB_HOST = 'ghe.example.com';
+      });
+
+      afterAll(() => {
+        delete process.env.GITHUB_HOST;
+      });
+
+      test('injects GH_TOKEN into HTTPS clone URL on the configured host', async () => {
+        mockCreateCodebase.mockResolvedValueOnce(
+          makeCodebase({
+            name: 'owner/repo',
+            repository_url: 'https://ghe.example.com/owner/repo',
+          }) as ReturnType<typeof makeCodebase>
+        );
+
+        await cloneRepository('https://ghe.example.com/owner/repo');
+
+        const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+          args => args[0] === 'git' && args[1]?.[0] === 'clone'
+        );
+        expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@ghe.example.com');
+      });
+
+      test('converts SSH to HTTPS for the configured host and injects GH_TOKEN', async () => {
+        mockCreateCodebase.mockResolvedValueOnce(
+          makeCodebase({
+            name: 'owner/repo',
+            repository_url: 'https://ghe.example.com/owner/repo',
+          }) as ReturnType<typeof makeCodebase>
+        );
+
+        await cloneRepository('git@ghe.example.com:owner/repo.git');
+
+        const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+          args => args[0] === 'git' && args[1]?.[0] === 'clone'
+        );
+        expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@ghe.example.com');
+      });
+
+      test('does NOT inject GH_TOKEN into github.com URLs when GITHUB_HOST points elsewhere', async () => {
+        mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+        await cloneRepository('https://github.com/owner/repo');
+
+        const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+          args => args[0] === 'git' && args[1]?.[0] === 'clone'
+        );
+        expect(cloneCall?.[1]?.[1]).not.toContain('ghp_testtoken123');
+      });
+    });
+  });
+
+  // ── normalizeRepoUrl (host-aware) ──────────────────────────────────────
+  describe('normalizeRepoUrl', () => {
+    afterEach(() => {
+      delete process.env.GITHUB_HOST;
+    });
+
+    test('rewrites git@github.com: to https://github.com/ by default', () => {
+      const r = normalizeRepoUrl('git@github.com:owner/repo.git');
+      expect(r.workingUrl).toBe('https://github.com/owner/repo.git');
+      expect(r.ownerName).toBe('owner');
+      expect(r.repoName).toBe('repo');
+    });
+
+    test('rewrites git@<GITHUB_HOST>: to https://<GITHUB_HOST>/', () => {
+      process.env.GITHUB_HOST = 'ghe.example.com';
+      const r = normalizeRepoUrl('git@ghe.example.com:owner/repo.git');
+      expect(r.workingUrl).toBe('https://ghe.example.com/owner/repo.git');
+      expect(r.ownerName).toBe('owner');
+      expect(r.repoName).toBe('repo');
+    });
+
+    test('leaves other SSH hosts untouched (no implicit rewrite)', () => {
+      process.env.GITHUB_HOST = 'ghe.example.com';
+      const r = normalizeRepoUrl('git@gitlab.com:owner/repo.git');
+      expect(r.workingUrl).toBe('git@gitlab.com:owner/repo.git');
+    });
+
+    test('strips trailing slashes', () => {
+      const r = normalizeRepoUrl('https://github.com/owner/repo///');
+      expect(r.workingUrl).toBe('https://github.com/owner/repo');
     });
   });
 

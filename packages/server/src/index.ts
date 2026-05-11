@@ -73,6 +73,7 @@ import {
   loadConfig,
   logConfig,
   getPort,
+  getGitHubApiUrl,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
 import {
@@ -282,11 +283,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     if (process.env.GITHUB_TOKEN && process.env.WEBHOOK_SECRET) {
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
+      // Pass `apiBaseUrl` only when the user has explicitly set GITHUB_API_URL
+      // so Octokit's public github.com default is preserved otherwise.
+      const apiBaseUrl = getGitHubApiUrl();
       github = new GitHubAdapter(
         process.env.GITHUB_TOKEN,
         process.env.WEBHOOK_SECRET,
         lockManager,
-        botMention
+        botMention,
+        apiBaseUrl ? { apiBaseUrl } : undefined
       );
       await github.start();
       activePlatforms.push('GitHub');

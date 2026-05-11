@@ -153,6 +153,26 @@ describe('GitHubAdapter', () => {
     });
   });
 
+  describe('GitHub Enterprise (apiBaseUrl)', () => {
+    type OctokitWithEndpoint = {
+      request: { endpoint: { DEFAULTS: { baseUrl: string } } };
+    };
+
+    test('uses Octokit default baseUrl when apiBaseUrl is not provided', () => {
+      const a = new GitHubAdapter('token', 'secret', mockLockManager);
+      const octokit = (a as unknown as { octokit: OctokitWithEndpoint }).octokit;
+      expect(octokit.request.endpoint.DEFAULTS.baseUrl).toBe('https://api.github.com');
+    });
+
+    test('passes apiBaseUrl through to Octokit when provided', () => {
+      const a = new GitHubAdapter('token', 'secret', mockLockManager, undefined, {
+        apiBaseUrl: 'https://ghe.example.com/api/v3',
+      });
+      const octokit = (a as unknown as { octokit: OctokitWithEndpoint }).octokit;
+      expect(octokit.request.endpoint.DEFAULTS.baseUrl).toBe('https://ghe.example.com/api/v3');
+    });
+  });
+
   describe('lifecycle methods', () => {
     test('should start without errors', async () => {
       await expect(adapter.start()).resolves.toBeUndefined();

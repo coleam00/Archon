@@ -58,9 +58,16 @@ export class GitHubAdapter implements IPlatformAdapter {
     webhookSecret: string,
     lockManager: ConversationLockManager,
     botMention?: string,
-    options?: { retryDelayMs?: (attempt: number) => number }
+    options?: { retryDelayMs?: (attempt: number) => number; apiBaseUrl?: string }
   ) {
-    this.octokit = new Octokit({ auth: token });
+    // Pass `baseUrl` to Octokit only when explicitly provided so the public
+    // github.com default is preserved unchanged for users who don't set
+    // GITHUB_API_URL.
+    const octokitOptions: { auth: string; baseUrl?: string } = { auth: token };
+    if (options?.apiBaseUrl) {
+      octokitOptions.baseUrl = options.apiBaseUrl;
+    }
+    this.octokit = new Octokit(octokitOptions);
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
