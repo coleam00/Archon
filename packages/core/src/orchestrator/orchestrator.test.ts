@@ -146,10 +146,12 @@ mock.module('./orchestrator', () => ({
 // Prompt builder mock
 const mockBuildOrchestratorPrompt = mock(() => 'You are the orchestrator agent.');
 const mockBuildProjectScopedPrompt = mock(() => 'You are scoped to project X.');
+const mockBuildOrchestratorSystemAppend = mock(() => 'orchestrator system append');
 
 mock.module('./prompt-builder', () => ({
   buildOrchestratorPrompt: mockBuildOrchestratorPrompt,
   buildProjectScopedPrompt: mockBuildProjectScopedPrompt,
+  buildOrchestratorSystemAppend: mockBuildOrchestratorSystemAppend,
 }));
 
 // Error/tool formatter mocks
@@ -282,6 +284,7 @@ function clearAllMocks(): void {
   mockDispatchBackgroundWorkflow.mockClear();
   mockBuildOrchestratorPrompt.mockClear();
   mockBuildProjectScopedPrompt.mockClear();
+  mockBuildOrchestratorSystemAppend.mockClear();
   mockLoadConfig.mockClear();
   mockExistsSync.mockClear();
   mockGenerateAndSetTitle.mockClear();
@@ -618,7 +621,11 @@ describe('orchestrator-agent handleMessage', () => {
       await handleMessage(platform, 'chat-456', 'help me');
 
       expect(mockListCodebases).toHaveBeenCalled();
-      expect(mockBuildOrchestratorPrompt).toHaveBeenCalledWith([mockCodebase], expect.any(Array));
+      expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
+        expect.objectContaining({ id: expect.any(String) }),
+        [mockCodebase],
+        expect.any(Array)
+      );
     });
 
     test('builds project-scoped prompt when conversation has codebase_id', async () => {
@@ -632,8 +639,8 @@ describe('orchestrator-agent handleMessage', () => {
 
       await handleMessage(platform, 'chat-456', 'help');
 
-      expect(mockBuildProjectScopedPrompt).toHaveBeenCalledWith(
-        mockCodebase,
+      expect(mockBuildOrchestratorSystemAppend).toHaveBeenCalledWith(
+        expect.objectContaining({ codebase_id: 'codebase-789' }),
         [mockCodebase],
         expect.any(Array)
       );

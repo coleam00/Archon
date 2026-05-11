@@ -1,5 +1,9 @@
 import { describe, test, expect } from 'bun:test';
-import { buildRoutingRulesWithProject, formatWorkflowContextSection } from './prompt-builder';
+import {
+  buildRoutingRulesWithProject,
+  formatWorkflowContextSection,
+  buildOrchestratorSystemAppend,
+} from './prompt-builder';
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -68,5 +72,66 @@ describe('formatWorkflowContextSection', () => {
       { workflowName: 'assist', runId: 'r-1', summary: 'Done.' },
     ]);
     expect(result).toBe(result.trimEnd());
+  });
+});
+
+describe('buildOrchestratorSystemAppend', () => {
+  const makeConversation = (codebaseId: string | null) =>
+    ({
+      id: 'conv-1',
+      platform_type: 'web',
+      platform_conversation_id: 'web-1',
+      codebase_id: codebaseId,
+      cwd: null,
+      isolation_env_id: null,
+      ai_assistant_type: 'claude',
+      title: null,
+      hidden: false,
+      deleted_at: null,
+      last_activity_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    }) as const;
+
+  const codebases = [
+    {
+      id: 'cb-1',
+      name: 'my-project',
+      default_cwd: '/path/to/project',
+      ai_assistant_type: 'claude',
+      repository_url: null,
+      commands: null,
+    },
+  ];
+
+  const workflows = [
+    {
+      name: 'assist',
+      description: 'General assistance',
+      nodes: [{ id: 'step1', command: 'archon-assist', depends_on: [] }],
+    },
+  ] as unknown as import('@archon/workflows/schemas/workflow').WorkflowDefinition[];
+
+  test('returns orchestrator prompt when no codebase is scoped', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+    expect(result).toContain('# Archon Orchestrator');
+    expect(result).toContain('## Registered Projects');
+    expect(result).toContain('my-project');
+  });
+
+  test('returns project-scoped prompt when codebase is scoped', () => {
+    const result = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows);
+    expect(result).toContain('# Archon Orchestrator');
+    expect(result).toContain('## Active Project');
+    expect(result).toContain('my-project');
+  });
+
+  test('falls back to orchestrator prompt when codebase_id does not match', () => {
+    const result = buildOrchestratorSystemAppend(
+      makeConversation('nonexistent'),
+      codebases,
+      workflows
+    );
+    expect(result).toContain('## Registered Projects');
   });
 });

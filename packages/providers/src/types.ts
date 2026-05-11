@@ -155,7 +155,10 @@ export type MessageChunk =
 export interface AgentRequestOptions {
   model?: string;
   abortSignal?: AbortSignal;
-  systemPrompt?: string;
+  systemPrompt?:
+    | string
+    | string[]
+    | { type: 'preset'; preset: 'claude_code'; append?: string; excludeDynamicSections?: boolean };
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   env?: Record<string, string>;
   maxBudgetUsd?: number;
@@ -208,7 +211,10 @@ export interface NodeConfig {
   betas?: string[];
   output_format?: Record<string, unknown>;
   maxBudgetUsd?: number;
-  systemPrompt?: string;
+  systemPrompt?:
+    | string
+    | string[]
+    | { type: 'preset'; preset: 'claude_code'; append?: string; excludeDynamicSections?: boolean };
   fallbackModel?: string;
   idle_timeout?: number;
   [key: string]: unknown;
