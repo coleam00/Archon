@@ -8,7 +8,15 @@ import { resolve, relative } from 'node:path';
 // Resolve workspace package via relative path: Bun's run-script context for
 // .archon/scripts/ doesn't reliably honor the @archon/workflows/loader subpath
 // export in CI. Direct file import avoids the resolution gap.
+import { setLogLevel } from '../../packages/paths/src/logger.ts';
 import { parseWorkflow } from '../../packages/workflows/src/loader.ts';
+
+// Silence the loader's Pino warnings (workflow_missing_description, etc).
+// parseWorkflow logs to stdout by default; the decide node substitutes our
+// stdout into a TS expression, so any log noise breaks that parse. The
+// loader's child logger is lazy-initialized, so setting the root level
+// before the first parseWorkflow call propagates correctly.
+setLogLevel('fatal');
 
 interface FileResult {
   name: string;
