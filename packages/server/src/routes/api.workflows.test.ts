@@ -13,7 +13,7 @@ function createTestApp(): OpenAPIHono {
   return new OpenAPIHono({ defaultHook: validationErrorHook });
 }
 
-const mockDiscoverWorkflows = mock(async (_cwd: string) => ({
+const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
   workflows: [makeTestWorkflowWithSource({ name: 'deploy', description: 'Deploy app' }, 'bundled')],
   errors: [
     { filename: '/tmp/.archon/workflows/bad.md', error: 'invalid', errorType: 'parse_error' },

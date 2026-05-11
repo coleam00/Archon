@@ -33,7 +33,7 @@ import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 
-import { discoverWorkflows } from './workflow-discovery';
+import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
 import * as bundledDefaults from './defaults/bundled-defaults';
 
@@ -2539,6 +2539,15 @@ nodes:
       // would silently pass even if the bundled-defaults loader regressed.
       const bundledSourced = result.workflows.filter(w => w.source === 'bundled');
       expect(bundledSourced.length).toBeGreaterThan(0);
+    });
+
+    it('discoverWorkflowsWithConfig does not call loadConfig when cwd is null', async () => {
+      // Guards the `if (cwd !== null)` branch in workflow-discovery.ts.
+      // If that guard is removed in a future refactor, the per-project opt-out
+      // would silently start running with no project context.
+      const mockLoadConfig = mock(async () => ({ defaults: { loadDefaultWorkflows: true } }));
+      await discoverWorkflowsWithConfig(null, mockLoadConfig);
+      expect(mockLoadConfig).not.toHaveBeenCalled();
     });
   });
 });

@@ -204,6 +204,8 @@ curl http://localhost:3090/api/workflows
 Query parameters:
 - `cwd` (optional) -- Working directory to discover project-specific workflows
 
+When `cwd` is omitted, Archon returns bundled default workflows and any from `~/.archon/workflows/` (home-scoped). Project-specific workflows require either the `cwd` query param or a registered codebase, so the endpoint is useful on first launch before any project is registered.
+
 Returns `{ workflows: [...], errors?: [...] }`. The `errors` array contains any YAML parsing failures encountered during discovery.
 
 #### Get a Workflow

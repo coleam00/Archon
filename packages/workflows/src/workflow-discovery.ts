@@ -367,9 +367,9 @@ export async function discoverWorkflows(
  * defaults.loadDefaultWorkflows, fall back to true on config load failure.
  * Logs config failures at warn level for observability.
  *
- * When `cwd` is `null` (no project context), config lookup is skipped and
- * defaults are always loaded — the per-project opt-out only makes sense when
- * a project is actually selected.
+ * When `cwd` is `null` (no project context), `loadConfig` is not invoked and
+ * `loadDefaults` keeps its initial value of `true`. The per-project opt-out
+ * is a project-scoped setting; without a project there is no config to read.
  */
 export async function discoverWorkflowsWithConfig(
   cwd: string | null,

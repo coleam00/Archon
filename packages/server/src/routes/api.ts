@@ -1778,7 +1778,7 @@ export function registerApiRoutes(
       // No project context (no cwd query param and no registered codebases) —
       // pass null to discovery so it returns bundled + home-scoped workflows.
       // This avoids a misleading empty state on first run, before any project
-      // is registered, when bundled defaults are present.
+      // is registered, when bundled defaults are present
       const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
