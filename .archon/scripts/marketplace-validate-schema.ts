@@ -63,4 +63,7 @@ for (const fullPath of yamlFiles) {
 
 const allValid = results.every((r) => r.valid);
 console.log(JSON.stringify({ valid: allValid, files: results }));
-if (!allValid) process.exit(1);
+// Always exit 0 — the decide node reads `valid` from the JSON output and
+// routes to `request_changes` if false. Exit 1 here would crash the DAG
+// before decide/act can post a useful review comment to the PR.
+process.exit(0);
