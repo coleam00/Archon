@@ -1,0 +1,305 @@
+name: bdc-storefront-coming-soon-placeholder
+description: |
+  Use when: Shipping the WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01 single-page placeholder.
+  Input: WO_ID = WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01 (or pass via $WORKFLOW_ID env / user message).
+  Does: Reads the BDC WO spec, plans the swap, writes the page + CSS, runs Rule 10 grep,
+        Playwright smoke against Vercel staging, opens PR against `staging`, flips Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops-storefront (registered codebase).
+  NOT for: any other WO. This workflow is bound to the placeholder substrate WO.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      # Spec lives in bdc-xo repo (NOT this codebase). Cross-repo fetch via gh api.
+      # Try direct path first, then date-prefix glob (specs are commonly named YYYY-MM-DD-WO-...md).
+      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Date-prefix glob fallback: list specs dir, find files ending in <WO_ID>.md
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --jq ".[] | select(.name | endswith(\"${WO_ID}.md\")) | .path" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob via gh api)" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf '%s\n' "$SPEC_CONTENT"
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"Coming Soon placeholder build started (workflow: bdc-storefront-coming-soon-placeholder)\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" || echo "builder-status post failed (non-fatal)"
+
+  - id: plan
+    depends_on: [read-spec]
+    task_class: medium_work
+    prompt: |
+      Read the BDC Work Order spec below and produce a surgical implementation plan.
+
+      ## Required Output (Markdown)
+      - WO ID
+      - Files to create: app/styles/coming-soon.css
+      - Files to modify: app/shops/[slug]/page.tsx
+      - Files explicitly out of scope: middleware.ts, app/under-construction/page.tsx,
+        app/components/home/*, every other route under app/shops/[slug]/*
+      - Tenant-name helper: inline in page.tsx (NO new lib module)
+      - Color tokens used (must all be from var(--bdc-*) registry per Rule 10):
+        --bdc-ink, --bdc-blue-200, --bdc-blue-400, --bdc-blue-500, --bdc-gold-300, --bdc-gold-500
+      - Verification commands:
+        npx tsc --noEmit
+        npm run build
+        grep -E '#[0-9a-fA-F]{3,8}' app/styles/coming-soon.css | grep -v '^\s*/\*'  (must be empty)
+      - Commit message: feat(storefront): WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01 — branded placeholder for /shops/[slug]
+      - Push policy: feature branch wo/coming-soon-placeholder-01 -> PR against `staging` (Rule 20)
+      - Staging gate required: TRUE
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      prompt: |
+        Implement the approved plan for WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan.output
+
+        ## Execution Rules
+        - Modify ONLY app/shops/[slug]/page.tsx (REPLACE its full content) and CREATE app/styles/coming-soon.css.
+        - All colors via var(--bdc-*) tokens. Zero raw hex in coming-soon.css. Confirm with grep.
+        - tenantDisplayName helper lives INLINE in page.tsx — do not create lib/tenant.ts or similar.
+        - Do NOT delete app/components/home/*. Do NOT touch middleware.ts. Do NOT add catalog/PDP/portal/cart code.
+        - Do NOT deploy. Do NOT push to master.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when:
+          - app/shops/[slug]/page.tsx exists and exports a default component
+          - app/styles/coming-soon.css exists and contains zero raw hex colors
+          - npx tsc --noEmit passes
+          - npm run build passes
+      until: COMPLETE
+      max_iterations: 5
+      fresh_context: true
+
+  - id: verify-rule10
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      CSS_FILE="app/styles/coming-soon.css"
+      if [ ! -f "$CSS_FILE" ]; then
+        echo "Rule 10 check FAIL: $CSS_FILE not found" >&2
+        exit 1
+      fi
+      HEX_HITS=$(grep -E '#[0-9a-fA-F]{3,8}' "$CSS_FILE" | grep -v '^\s*/\*' || true)
+      if [ -n "$HEX_HITS" ]; then
+        echo "Rule 10 check FAIL: raw hex colors found in $CSS_FILE" >&2
+        echo "$HEX_HITS" >&2
+        exit 1
+      fi
+      echo "Rule 10 PASS: $CSS_FILE has zero raw hex colors"
+
+  - id: verify-build
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      npx tsc --noEmit
+      npm run build
+
+  - id: playwright-smoke
+    depends_on: [verify-build, verify-rule10]
+    bash: |
+      set -euo pipefail
+      # Wait for Vercel staging to pick up the push (the commit-and-push node has not run yet —
+      # this node runs against the PRE-PUSH local build via `next start` on a random port).
+      # Post-push Vercel-staging verification happens in verify-staging below.
+      PORT=$((3000 + RANDOM % 1000))
+      npx next start -p "$PORT" &
+      SERVER_PID=$!
+      trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+      # Give Next a moment to bind
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -sf "http://127.0.0.1:${PORT}/shops/bdc" >/dev/null 2>&1; then break; fi
+        sleep 1
+      done
+      # BDC tenant
+      BDC_BODY=$(curl -sf "http://127.0.0.1:${PORT}/shops/bdc")
+      printf '%s\n' "$BDC_BODY" | grep -q 'Blue Devil Collectibles' || { echo "BDC tenant name missing" >&2; exit 1; }
+      printf '%s\n' "$BDC_BODY" | grep -q "rebuilding the storefront" || { echo "Headline missing for BDC" >&2; exit 1; }
+      printf '%s\n' "$BDC_BODY" | grep -oE 'mailto:[^"]+' >/dev/null || { echo "mailto link missing for BDC" >&2; exit 1; }
+      # Mutant Market tenant
+      MM_BODY=$(curl -sf "http://127.0.0.1:${PORT}/shops/mutant-market")
+      printf '%s\n' "$MM_BODY" | grep -q 'Mutant Market' || { echo "Mutant Market tenant name missing" >&2; exit 1; }
+      echo "Playwright-equivalent smoke PASS for /shops/bdc and /shops/mutant-market"
+
+  - id: commit-and-push
+    depends_on: [playwright-smoke]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/coming-soon-placeholder-01"
+      git checkout -B "$BRANCH"
+      git status --short
+      # Per spec, ONLY these two paths are allowed to change. Fail if anything else is dirty.
+      ALLOWED='^(app/shops/\[slug\]/page\.tsx|app/styles/coming-soon\.css)$'
+      CHANGED=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED" ]; then
+        echo "No changed files; cannot commit." >&2
+        exit 1
+      fi
+      while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        if ! printf '%s\n' "$path" | grep -qE "$ALLOWED"; then
+          echo "Out-of-scope file changed: $path (allowed: $ALLOWED)" >&2
+          exit 1
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED
+      EOF
+      if git diff --cached --quiet; then
+        echo "Nothing staged; cannot commit." >&2
+        exit 1
+      fi
+      git commit -m "feat(storefront): WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01 — branded placeholder for /shops/[slug]"
+      git push -u origin "$BRANCH"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Replaces the dark-void render at /shops/[slug] with a friendly branded Coming Soon placeholder."
+        echo "Single page + single CSS file. No catalog, no PDP, no portal, no auth. Wave-2 supersedes."
+        echo
+        echo "## WO"
+        echo "WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01"
+        echo
+        echo "## Plan"
+        echo '$plan.output'
+        echo
+        echo "## Verification"
+        echo "Rule 10:"
+        echo '$verify-rule10.output'
+        echo
+        echo "Build:"
+        echo '$verify-build.output'
+        echo
+        echo "Smoke:"
+        echo '$playwright-smoke.output'
+        echo
+        echo "## Stop conditions remaining (verified by Captain CI on Vercel staging)"
+        echo "- Stop 5: curl https://staging.comicstoreos.com/shops/bdc contains 'Blue Devil Collectibles'"
+        echo "- Stop 6: curl https://staging.comicstoreos.com/shops/mutant-market contains 'Mutant Market'"
+      } > "$BODY_FILE"
+      gh pr create \
+        --base staging \
+        --head wo/coming-soon-placeholder-01 \
+        --title "feat(storefront): WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01 — branded placeholder for /shops/[slug]" \
+        --body-file "$BODY_FILE"
+
+  - id: verify-staging
+    depends_on: [open-pr]
+    bash: |
+      set -euo pipefail
+      # Vercel preview deploy happens on push; staging.comicstoreos.com aliases to the staging branch.
+      # Wait up to 3 minutes for the deploy to land.
+      URL_BDC="https://staging.comicstoreos.com/shops/bdc"
+      URL_MM="https://staging.comicstoreos.com/shops/mutant-market"
+      for i in $(seq 1 18); do
+        if curl -sfL "$URL_BDC" | grep -q 'Blue Devil Collectibles' && \
+           curl -sfL "$URL_MM" | grep -q 'Mutant Market'; then
+          echo "Staging verified: BDC + Mutant Market both render correctly."
+          exit 0
+        fi
+        sleep 10
+      done
+      echo "Staging verification FAILED after 3 minutes — Vercel may still be deploying. Captain CI will re-verify." >&2
+      exit 1
+
+  - id: build-manifest
+    depends_on: [verify-staging]
+    task_class: clerical
+    prompt: |
+      Build the Captain CI completion manifest for WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01.
+
+      ## Required Manifest Fields
+      - WO: WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01
+      - Files created: app/styles/coming-soon.css
+      - Files modified: app/shops/[slug]/page.tsx
+      - Routes added: none (same /shops/[slug] route, swapped implementation)
+      - Migrations: none
+      - Tests: 6 stop conditions / 6 passing (file-exists, tsc, build, Rule 10 grep, smoke /shops/bdc, smoke /shops/mutant-market) + Vercel staging verified
+      - Git commit: include the SHA from $commit-and-push.output
+      - PR URL: include from $open-pr.output
+      - Staging gate: PASS (verified by verify-staging node)
+      - VALIDATION: PASS
+
+      ## Inputs
+      Spec: $read-spec.output
+      Plan: $plan.output
+      Implementation: $implement.output
+      Rule 10 check: $verify-rule10.output
+      Build: $verify-build.output
+      Smoke: $playwright-smoke.output
+      Push: $commit-and-push.output
+      PR: $open-pr.output
+      Staging verify: $verify-staging.output
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || echo "builder-status post failed (non-fatal)"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page for WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01.
+
+      Per Rule 7 of Archon-YAML-Authoring doctrine + Captain CI manifest contract,
+      the manifest MUST be written to the Notion `Notes` PROPERTY (not a page comment),
+      and `Claude Status` MUST flip to `REVIEW` in the same update.
+
+      ## Required Notion Changes
+      - Property: Claude Status -> REVIEW
+      - Property: Status -> Review
+      - Property: Notes -> set to the manifest below
+      - (Optional) page comment with link to PR for human-readable trail
+
+      ## Manifest (write this to the Notes property verbatim)
+      $build-manifest.output
+
+      If Notion MCP is not available inside the container, do NOT invent a workaround.
+      Output a TODO line `XO_TODO: flip Notion manually for WO-STOREFRONT-COMING-SOON-PLACEHOLDER-01 with manifest above`
+      so XO sees it in the run log and patches Notion by hand.

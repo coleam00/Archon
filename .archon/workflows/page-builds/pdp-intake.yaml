@@ -1,0 +1,360 @@
+name: bdc-storefront-pdp-intake
+description: |
+  Use when: Rebuilding the Storefront PDP from Claude Design (CD) source HTML/CSS with
+  Rule 10 token discipline baked in at intake. Single-WO workflow targeting
+  bluedevilcollectibles/shopops-storefront. Spec: WO-STOREFRONT-PDP-V2-INTAKE-01.
+  Input: WO_ID (defaults to WO-STOREFRONT-PDP-V2-INTAKE-01) and CD source path env var
+  CD_SOURCE_HOST_PATH (path on the harness host where the design fetch dir is mounted).
+  Does: Ingests CD source into design/pdp/v2-source/, scaffolds the v2 React component
+  tree, authors app/styles/pdp.css token-clean, runs Rule 10 grep gate in a self-review
+  loop until zero raw colors, runs build + types + Playwright click-verify (Pre-FOC +
+  Released states), opens PR against staging branch (Rule 20), builds Captain CI
+  manifest, flips Notion to REVIEW.
+  NOT for: any other storefront page; any non-CD-source rebuild; deploys to master
+  (staging-gated, John promotes).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      # Spec lives in bdc-xo repo (NOT this codebase). Cross-repo fetch via gh api.
+      # Try direct path first, then date-prefix glob (specs are commonly named YYYY-MM-DD-WO-...md).
+      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Date-prefix glob fallback: list specs dir, find files ending in <WO_ID>.md
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --jq ".[] | select(.name | endswith(\"${WO_ID}.md\")) | .path" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob via gh api)" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf '%s\n' "$SPEC_CONTENT"
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"PDP v2 intake — CD source rebuild + Rule 10 at intake\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  - id: ingest-cd-source
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # Rule 4: relative paths (CWD = shopops-storefront repo root).
+      CD_SRC=$(printf '%s\n' "$read-spec.output" | sed -n 's/^CD_SOURCE_HOST_PATH=//p' | head -n 1)
+      DEST="design/pdp/v2-source"
+      mkdir -p "$DEST"
+      if [ ! -f "$CD_SRC/index.html" ]; then
+        echo "CD source not found at $CD_SRC/index.html — caller must mount Downloads dir" >&2
+        exit 1
+      fi
+      # Canonical version assertion: fetch-11 is 57710 bytes (per spec §2)
+      SIZE=$(stat -c %s "$CD_SRC/index.html")
+      if [ "$SIZE" -ne 57710 ]; then
+        echo "CD source size mismatch: expected 57710, got $SIZE — refusing to ingest non-canonical version" >&2
+        exit 1
+      fi
+      cp "$CD_SRC/index.html" "$DEST/index.html"
+      for css in comic-energy.css components.css tokens.css shared.css; do
+        if [ -f "$CD_SRC/$css" ]; then cp "$CD_SRC/$css" "$DEST/$css"; fi
+      done
+      printf '# CD Source Provenance\n\nCanonical CD export: anthropic-design-fetch-11\nmtime: 2026-05-07 05:50 ET\nsize: 57710 bytes (index.html)\n\nfetch-10 is byte-identical duplicate; fetch-11 is canonical (newer mtime).\nIngested by bdc-storefront-pdp-intake workflow per WO-STOREFRONT-PDP-V2-INTAKE-01.\n' > "$DEST/SOURCE-NOTE.md"
+      ls -la "$DEST"
+
+  - id: plan
+    depends_on: [ingest-cd-source]
+    task_class: medium_work
+    prompt: |
+      You are planning the v2 PDP rebuild for shopops-storefront from the CD source
+      now ingested at design/pdp/v2-source/.
+
+      ## Spec
+      $read-spec.output
+
+      ## Required Output (Markdown)
+      - WO ID
+      - Files to create (15 component .tsx files + mock-products.json + 8 cover .webp + 2 Playwright spec files)
+      - Files to rewrite (page.tsx + pdp.css)
+      - Files explicitly out of scope (legacy /catalog/[id], tokens.css, theme-shell)
+      - Component partition: which CD source <section> maps to which .tsx file
+      - Color audit: list every raw hex/rgba value found in design/pdp/v2-source/*.css and the
+        token replacement decision per RULE10 §6 mappings (cited in the spec).
+      - Verification commands (build, types, playwright Pre-FOC, playwright Released, grep gate)
+      - Commit message: `feat(storefront): WO-STOREFRONT-PDP-V2-INTAKE-01 — rebuild PDP from CD source with Rule 10 baked in`
+      - Push policy: feature branch -> PR to **staging** (Rule 20; NOT master)
+      - Staging gate required: TRUE
+
+      ## Hard rules
+      - If a CD source color has NO mapping in spec §RULE10-CSS-CLEANUP §6, list it under
+        "BLOCKERS" and STOP. Do NOT invent token names.
+      - Do not propose ANY tokens.css change.
+      - Do not propose ANY theme-shell or globals.css change.
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    model: opus[1m]
+    loop:
+      prompt: |
+        Implement the approved plan for the PDP v2 intake WO.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan.output
+
+        ## CD source (ingested)
+        Read design/pdp/v2-source/index.html and the companion CSS files in full before
+        writing components. Translate sections to React components per the plan's
+        partition. Re-use the existing AddToCartButton, Toast, Modal from theme-shell.
+
+        ## Rule 10 at intake (NOT retrofit)
+        - app/styles/pdp.css ships ZERO raw hex / rgba on the FIRST commit.
+        - For every color encountered in CD source, replace per RULE10 §6 mappings BEFORE
+          writing the line. Do not write a raw color first then patch later.
+        - For tinted overlays, use color-mix(in srgb, var(--TOKEN) N%, transparent) — never raw rgba().
+        - Inline TSX style={{}} colors are forbidden. Use CSS classes only.
+        - If any CD source color has no §6 mapping, STOP and emit BLOCKER.
+
+        ## Mock data
+        Create app/data/mock-products.json with the two fixtures per spec §4. Real cover
+        images go in public/mock-covers/ (8 files). If you can't find real cover art on
+        the host, use any 600x900 webp placeholder that is NOT a gray box and NOT a 404.
+
+        ## Playwright tests
+        Author tests/playwright/pdp-pre-foc.spec.ts and pdp-released.spec.ts per spec
+        §10 — every assertion in §10 must be present.
+
+        ## Execution Rules
+        - Modify only files listed in the plan as in-scope.
+        - Do not reformat unrelated code.
+        - Do not deploy.
+        - Do not push to master directly. Push to feat/wo-storefront-pdp-v2-intake-01 branch
+          and open PR to staging.
+        - Stop and report BLOCKER if a needed CD-source color has no §6 mapping or if
+          theme-shell predecessor isn't on staging.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when:
+        - All 15 components written
+        - app/styles/pdp.css authored Rule 10 clean
+        - mock-products.json + 8 cover images in place
+        - Both Playwright spec files written with every §10 assertion
+        - `grep -cE '#[0-9A-Fa-f]{3,8}\b|rgba?\(' app/styles/pdp.css` returns 0 (verify in your last iteration)
+      until: COMPLETE
+      max_iterations: 6
+      fresh_context: true
+
+  - id: verify-rule10-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      RAW_COUNT=$(grep -cE '#[0-9A-Fa-f]{3,8}\b|rgba?\(' app/styles/pdp.css || true)
+      echo "pdp.css raw hex/rgba count: $RAW_COUNT"
+      if [ "$RAW_COUNT" -ne 0 ]; then
+        echo "Rule 10 violated: pdp.css ships with raw colors. Reject." >&2
+        exit 1
+      fi
+      INLINE_COUNT=$(grep -RE "style=\\{\\{[^}]*(color|background)[^}]*#[0-9A-Fa-f]" \
+        app/components/pdp/ "app/shops/[slug]/products/" 2>/dev/null | wc -l || echo 0)
+      echo "inline TSX color count: $INLINE_COUNT"
+      if [ "$INLINE_COUNT" -ne 0 ]; then
+        echo "Rule 10 violated: inline TSX color attributes detected." >&2
+        exit 1
+      fi
+
+  - id: verify-build
+    depends_on: [verify-rule10-grep]
+    bash: |
+      set -euo pipefail
+      npm run build
+
+  - id: verify-types
+    depends_on: [verify-rule10-grep]
+    bash: |
+      set -euo pipefail
+      npx tsc --noEmit
+
+  - id: verify-playwright
+    depends_on: [verify-build, verify-types]
+    bash: |
+      set -euo pipefail
+      # Click-verify hard stop per spec §11.12 — both states must pass
+      npm run test:pdp -- --grep="pre-foc"
+      npm run test:pdp -- --grep="released"
+
+  - id: war-council-validator
+    depends_on: [verify-playwright]
+    task_class: medium_work
+    prompt: |
+      Validate the PDP v2 intake build.
+
+      ## Spec
+      $read-spec.output
+
+      ## Plan
+      $plan.output
+
+      ## Implementation log
+      $implement.output
+
+      ## Verification outputs
+      Rule 10 grep: $verify-rule10-grep.output
+      Build: $verify-build.output
+      Types: $verify-types.output
+      Playwright: $verify-playwright.output
+
+      ## Required Output
+      Return one of:
+      - satisfied: with explicit confirmation that (a) CD source ingested at design/pdp/v2-source/,
+        (b) pdp.css raw color count is 0, (c) both Playwright suites passed all §10 assertions,
+        (d) no inline TSX colors, (e) no tokens.css changes
+      - needs_revision: with exact file/line/behavior findings
+
+  - id: decide-push-target
+    depends_on: [war-council-validator]
+    task_class: clerical
+    prompt: |
+      shopops-storefront is a Rule 20 customer-facing repo. Push target is fixed:
+
+      push_target: feature-branch:feat/wo-storefront-pdp-v2-intake-01
+      pr_target: staging
+      pr_required: true
+      staging_gate_required: true
+
+      Confirm validator output is `satisfied`. If `needs_revision`, output:
+      out_of_scope: true
+      reason: validator rejected; see $war-council-validator.output
+
+  - id: commit-and-push
+    depends_on: [decide-push-target]
+    bash: |
+      set -euo pipefail
+      if printf '%s\n' "$decide-push-target.output" | grep -q '^out_of_scope: true'; then
+        echo "Validator rejected; failing closed." >&2
+        exit 1
+      fi
+      BRANCH="feat/wo-storefront-pdp-v2-intake-01"
+      git checkout -B "$BRANCH"
+      git status --short
+      CHANGED=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED" ]; then
+        echo "No changed files; cannot commit." >&2
+        exit 1
+      fi
+      while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        if ! printf '%s\n' "$plan.output" | grep -F -- "$path" >/dev/null; then
+          echo "Changed file not listed in plan: $path" >&2
+          exit 1
+        fi
+        git add -- "$path"
+      done <<< "$CHANGED"
+      if git diff --cached --quiet; then
+        echo "No changes staged." >&2
+        exit 1
+      fi
+      git commit -m "feat(storefront): WO-STOREFRONT-PDP-V2-INTAKE-01 — rebuild PDP from CD source with Rule 10 baked in"
+      git push -u origin "$BRANCH"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Rebuild PDP from CD source (anthropic-design-fetch-11) with Rule 10 token discipline baked in at intake."
+        echo "Replaces v1 PDP. Both Pre-FOC + Released states. Click-verify Playwright suites included."
+        echo
+        echo "## Spec"
+        echo "WO-STOREFRONT-PDP-V2-INTAKE-01 — docs/superpowers/specs/2026-05-10-WO-STOREFRONT-PDP-V2-INTAKE-01.md"
+        echo
+        echo "## Plan"
+        echo "$plan.output"
+        echo
+        echo "## Validation"
+        echo "Rule 10 grep: $verify-rule10-grep.output"
+        echo "Build: $verify-build.output"
+        echo "Types: $verify-types.output"
+        echo "Playwright: $verify-playwright.output"
+        echo
+        echo "## Validator"
+        echo "$war-council-validator.output"
+        echo
+        echo "## Staging gate"
+        echo "Target: staging branch. John promotes staging->master after eyeball check on staging.comicstoreos.com."
+      } > "$BODY"
+      gh pr create --base staging --head "feat/wo-storefront-pdp-v2-intake-01" \
+        --title "feat(storefront): WO-STOREFRONT-PDP-V2-INTAKE-01 — rebuild PDP from CD source with Rule 10 baked in" \
+        --body-file "$BODY"
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI manifest per spec §12.
+
+      ## Inputs
+      Spec: $read-spec.output
+      Plan: $plan.output
+      Implement: $implement.output
+      Rule 10 grep: $verify-rule10-grep.output
+      Build: $verify-build.output
+      Types: $verify-types.output
+      Playwright: $verify-playwright.output
+      Validator: $war-council-validator.output
+
+      ## Required fields (per spec §12)
+      WO, Branch, Files created, Files modified, Routes added, Migrations,
+      Tests (build + types + Playwright Pre-FOC + Playwright Released),
+      GREP VERIFICATION (paste actual output), CLICK-VERIFY EVIDENCE
+      (cover image naturalWidth, breadcrumb 200, console error count = 0),
+      Vercel preview URL, Staging URLs (curl 200), Screenshots, Git commit, PR URL.
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update Notion WO row WO-STOREFRONT-PDP-V2-INTAKE-01 if Notion MCP is available:
+      - Claude Status: REVIEW
+      - Status: Review
+      - Notes field: paste the Captain CI manifest below VERBATIM
+        (Captain CI reads Notes, NOT comments — per Rule 7 + memory:feedback_captain-ci-reads-notes-field-not-comments.md)
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP unavailable, output a TODO for XO to flip Notion manually with the
+      manifest text above. Do not invent a workaround.

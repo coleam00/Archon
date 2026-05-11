@@ -1,0 +1,386 @@
+name: bdc-storefront-home-intake
+description: |
+  Use when: Rebuilding the shopops-storefront tenant Home page (/shops/[slug]/) from CD source.
+  Input: WO_ID (default WO-STOREFRONT-HOME-V5-INTAKE-01) in environment or user message.
+  Does: Reads WO spec, ingests CD source, enforces Rule 10 at intake (grep gate),
+        enforces Playwright click-verify on every CTA (the v1-v4 failure mode),
+        commits to feature branch, opens PR against `staging` (Rule 20),
+        builds Captain CI manifest, flips Notion to REVIEW.
+  NOT for: Theme shell work, PDP/PullList/Wizard rebuilds, generic feature WOs (use bdc-feature-development).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  # 1. Read the WO spec from disk (Rule 4 + Rule 5: relative path + date-prefix glob fallback)
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      # Spec lives in bdc-xo repo (NOT this codebase). Cross-repo fetch via gh api.
+      # Try direct path first, then date-prefix glob (specs are commonly named YYYY-MM-DD-WO-...md).
+      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Date-prefix glob fallback: list specs dir, find files ending in <WO_ID>.md
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --jq ".[] | select(.name | endswith(\"${WO_ID}.md\")) | .path" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob via gh api)" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf '%s\n' "$SPEC_CONTENT"
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"bdc-storefront-home-intake workflow started\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  # 3. Verify Theme Shell v4 dependency on staging BEFORE planning anything
+  - id: verify-theme-shell-v4
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      STAGING_URL="https://staging.comicstoreos.com/shops/bdc/"
+      HTTP_CODE=$(curl -s -o /tmp/staging-home.html -w '%{http_code}' "$STAGING_URL" || echo 000)
+      if [ "$HTTP_CODE" != "200" ]; then
+        echo "BLOCKER: Theme Shell v4 staging gate not reachable (HTTP $HTTP_CODE)" >&2
+        echo "blocker: theme-shell-v4-not-staged"
+        exit 1
+      fi
+      # Sanity check: v4 chrome marker present
+      if ! grep -q 'data-theme-shell-version="v4"' /tmp/staging-home.html; then
+        echo "BLOCKER: staging /shops/bdc/ does not advertise theme shell v4" >&2
+        echo "blocker: theme-shell-v4-not-staged"
+        exit 1
+      fi
+      echo "theme-shell-v4: OK"
+
+  # 4. Plan implementation
+  - id: plan
+    depends_on: [read-spec, verify-theme-shell-v4]
+    task_class: medium_work
+    prompt: |
+      Read the BDC Work Order spec below and produce an implementation plan
+      specifically for the shopops-storefront Home page rebuild from CD source.
+
+      ## Required Output (Markdown)
+      - WO ID
+      - CD source file path (Downloads or repo)
+      - Files to create (full paths)
+      - Files to modify (full paths)
+      - Files explicitly out of scope
+      - Section-by-section build order matching the §5 component tree
+      - Token mapping for every color used (cite tokens.css registry)
+      - Verification commands
+      - Commit message
+      - Push policy: feature branch -> PR against `staging` (Rule 20)
+
+      ## Spec
+      $read-spec.output
+
+  # 5. Ingest CD source — copy from Downloads into repo working tree as design reference
+  - id: ingest-cd-source
+    depends_on: [plan]
+    bash: |
+      set -euo pipefail
+      mkdir -p design/home/v5-source
+      # CD source ships from author's Downloads — Archon container does NOT have access to /Users/pcmed/Downloads.
+      # Spec §11.1 requires the design/home/v5-source/index.html to be CREATED by builder from the CD chunk text in $read-spec.output.
+      # This node creates the directory + a stub readme; the actual HTML is built by the next node (build).
+      cat > design/home/v5-source/README.md <<'EOF'
+      # Home v5 source (CD-driven)
+      Built from `Downloads/CD-PROMPT-chunk-2-homepage-guest.md` per WO-STOREFRONT-HOME-V5-INTAKE-01.
+      Rule 10 clean from line 1. Replaces v1-v4 (deleted; v4 in PR #28 commit 8b99eb0 for reference only).
+      EOF
+      echo "design/home/v5-source/ scaffolded"
+
+  # 6. Rule 10 pre-pass — pre-check tokens.css registry exists
+  - id: rule10-pass
+    depends_on: [ingest-cd-source]
+    bash: |
+      set -euo pipefail
+      test -f app/styles/tokens.css || { echo "BLOCKER: app/styles/tokens.css missing — Rule 10 cannot proceed" >&2; exit 1; }
+      echo "tokens.css present:"
+      grep -E '^\s*--bdc-' app/styles/tokens.css | head -20
+
+  # 7. Build (implementation loop)
+  - id: build
+    depends_on: [rule10-pass]
+    task_class: medium_work
+    loop:
+      prompt: |
+        Implement the WO-STOREFRONT-HOME-V5-INTAKE-01 plan.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan.output
+
+        ## Hard Rules
+        - Component tree (spec §5) is canonical. Build top-to-bottom.
+        - Rule 10: ZERO raw hex / rgba in app/styles/home.css. Use tokens only. Cover-art palette block is the ONLY exception, wrapped in `/* RULE 10 EXCEPTION */ ... /* END RULE 10 EXCEPTION */`.
+        - Every clickable element MUST have `data-testid="..."` per spec §11.4 table.
+        - Replace the Coming Soon placeholder in `app/shops/[slug]/page.tsx` — do NOT leave it.
+        - Inherit Theme Shell v4 chrome (Header, Ticker, Footer, CookieBanner, ToastStack). Do NOT redesign chrome.
+        - CD source path: `Downloads/CD-PROMPT-chunk-2-homepage-guest.md` (full text inside $read-spec.output via spec §2).
+        - Use BDC component library where available (consult BDC-Component-Library skill).
+        - Do NOT reformat unrelated files. Surgical changes only.
+
+        ## Stop
+        Output <promise>COMPLETE</promise> only when all spec deliverables are in place AND the next-node grep gate would pass.
+      until: COMPLETE
+      max_iterations: 5
+      fresh_context: true
+
+  # 8. Verify build
+  - id: verify-build
+    depends_on: [build]
+    bash: |
+      set -euo pipefail
+      npm run build
+
+  # 9. Verify Rule 10 grep gate (HARD)
+  - id: verify-rule10-grep
+    depends_on: [build]
+    bash: |
+      set -euo pipefail
+      RAW_HEX=$(grep -cE '#[0-9A-Fa-f]{3,8}\b' app/styles/home.css || echo 0)
+      RAW_RGBA=$(grep -cE 'rgba?\(' app/styles/home.css || echo 0)
+      echo "home.css raw hex count: $RAW_HEX"
+      echo "home.css raw rgba count: $RAW_RGBA"
+      if [ "$RAW_HEX" != "0" ]; then
+        echo "FAIL: $RAW_HEX raw hex in home.css — Rule 10 violation" >&2
+        grep -nE '#[0-9A-Fa-f]{3,8}\b' app/styles/home.css || true
+        exit 1
+      fi
+      if [ "$RAW_RGBA" != "0" ]; then
+        echo "FAIL: $RAW_RGBA raw rgba in home.css — Rule 10 violation" >&2
+        grep -nE 'rgba?\(' app/styles/home.css || true
+        exit 1
+      fi
+      # Also check page.tsx for inline style hex
+      INLINE_HEX=$(grep -cE "style=\{\{[^}]*#[0-9A-Fa-f]" app/shops/\[slug\]/page.tsx || echo 0)
+      if [ "$INLINE_HEX" != "0" ]; then
+        echo "FAIL: inline style hex in page.tsx — Rule 10 violation" >&2
+        exit 1
+      fi
+      # Also check Coming Soon placeholder is GONE
+      if grep -q 'Coming Soon' app/shops/\[slug\]/page.tsx; then
+        echo "FAIL: 'Coming Soon' still present — placeholder not replaced" >&2
+        exit 1
+      fi
+      echo "Rule 10 gate: PASS"
+
+  # 10. Verify tests (unit + tsc)
+  - id: verify-tests
+    depends_on: [verify-build]
+    bash: |
+      set -euo pipefail
+      npx tsc --noEmit
+      if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+        npm test
+      else
+        echo "No npm test script; relying on Playwright in next node."
+      fi
+
+  # 11. Playwright click-verify (THE failure mode that killed v1-v4)
+  - id: playwright-click-verify
+    depends_on: [verify-build, verify-rule10-grep]
+    bash: |
+      set -euo pipefail
+      test -f tests/playwright/home.spec.ts || { echo "FAIL: tests/playwright/home.spec.ts missing — spec §11.4 not satisfied" >&2; exit 1; }
+      # Assert the suite contains real click+URL assertions, not just toBeVisible
+      CLICK_COUNT=$(grep -cE '\.click\(' tests/playwright/home.spec.ts || echo 0)
+      URL_ASSERT_COUNT=$(grep -cE 'toHaveURL|toContain.*url' tests/playwright/home.spec.ts || echo 0)
+      if [ "$CLICK_COUNT" -lt 8 ]; then
+        echo "FAIL: only $CLICK_COUNT click() calls in home.spec.ts — spec §11.4 needs 10" >&2
+        exit 1
+      fi
+      if [ "$URL_ASSERT_COUNT" -lt 6 ]; then
+        echo "FAIL: only $URL_ASSERT_COUNT URL assertions — spec §11.4 needs navigation proofs" >&2
+        exit 1
+      fi
+      # Run the suite against Vercel preview if available, else local dev
+      TARGET_URL="${VERCEL_PREVIEW_URL:-http://localhost:3000}"
+      PLAYWRIGHT_BASE_URL="$TARGET_URL" npx playwright test tests/playwright/home.spec.ts --reporter=line
+
+  # 12. War Council Validator
+  - id: war-council-validator
+    depends_on: [verify-build, verify-rule10-grep, verify-tests, playwright-click-verify]
+    task_class: medium_work
+    prompt: |
+      Invoke war-council-validator review for WO-STOREFRONT-HOME-V5-INTAKE-01.
+
+      ## Inputs
+      Spec: $read-spec.output
+      Plan: $plan.output
+      Build output: $build.output
+      Rule 10 grep result: $verify-rule10-grep.output
+      Playwright result: $playwright-click-verify.output
+
+      ## Required Output
+      Return either:
+      - satisfied: with file/line evidence that all 9 stop conditions in spec §11 are met
+      - needs_revision: with exact path/line findings
+
+      Pay special attention to:
+      - §11.2: Coming Soon REPLACED, headline present
+      - §11.4: every clickable in the table has both click() AND a URL/state assertion
+      - §11.5: ticker shows REAL FOC items (not 'placeholder', 'loading', 'TBD')
+
+  # 13. Decide push target (Rule 20: PR base = staging)
+  - id: decide-push-target
+    depends_on: [war-council-validator]
+    task_class: clerical
+    prompt: |
+      Decide push target for shopops-storefront Home v5 intake.
+
+      ## Validator
+      $war-council-validator.output
+
+      ## Required Output
+      bluedevilcollectibles/shopops-storefront is on the Rule 20 staging-gate list.
+
+      Output exactly:
+      push_target: feature-branch:wo-storefront-home-v5-intake-01
+      pr_required: true
+      pr_base: staging
+      staging_gate_required: true
+
+  # 14. Commit and push (feature branch off origin/staging per Rule 20 + branching hygiene)
+  - id: commit-and-push
+    depends_on: [decide-push-target]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo-storefront-home-v5-intake-01"
+      git fetch origin staging
+      git checkout -B "$BRANCH" origin/staging
+      git status --short
+      CHANGED_FILES=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files; cannot commit." >&2
+        exit 1
+      fi
+      while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        if ! printf '%s\n' "$plan.output" | grep -F -- "$path" >/dev/null; then
+          echo "Changed file not in plan: $path" >&2
+          exit 1
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED_FILES
+      EOF
+      git diff --cached --quiet && { echo "Nothing staged" >&2; exit 1; }
+      git commit -m "feat(storefront): WO-STOREFRONT-HOME-V5-INTAKE-01 — rebuild Home from CD source, Rule 10 at intake"
+      git push -u origin "$BRANCH"
+
+  # 15. Open PR against staging
+  - id: open-pr-if-needed
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Rebuild storefront Home page from CD source (Downloads/CD-PROMPT-chunk-2-homepage-guest.md)."
+        echo "Replaces Coming Soon placeholder. Rule 10 enforced at intake. Click-verify on every CTA."
+        echo
+        echo "## Plan"
+        echo "$plan.output"
+        echo
+        echo "## Verification"
+        echo '### Build'
+        echo "$verify-build.output"
+        echo '### Rule 10 grep gate'
+        echo "$verify-rule10-grep.output"
+        echo '### Playwright click-verify'
+        echo "$playwright-click-verify.output"
+        echo
+        echo "## Validator"
+        echo "$war-council-validator.output"
+      } > "$BODY_FILE"
+      gh pr create --base staging --title "feat(storefront): WO-STOREFRONT-HOME-V5-INTAKE-01 — Home v5 from CD source (Rule 10 at intake)" --body-file "$BODY_FILE"
+
+  # 16. Build Captain CI manifest
+  - id: build-manifest
+    depends_on: [open-pr-if-needed]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest for WO-STOREFRONT-HOME-V5-INTAKE-01.
+
+      ## Inputs
+      Spec: $read-spec.output
+      Plan: $plan.output
+      Build: $verify-build.output
+      Rule 10 gate: $verify-rule10-grep.output
+      Tests: $verify-tests.output
+      Playwright: $playwright-click-verify.output
+      Validator: $war-council-validator.output
+
+      ## Required Manifest Fields (per spec §12)
+      - WO ID
+      - Files created (full paths)
+      - Files modified (full paths)
+      - Routes added (none expected)
+      - Migrations (none expected)
+      - Tests with pass counts
+      - GREP VERIFICATION block (paste actual counts)
+      - PR URL (base=staging)
+      - Vercel preview URL
+      - Staging URL after merge
+      - Git commit SHA
+
+  # 17. Post 'completed' to builder-status webhook
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  # 18. Flip Notion to REVIEW (manifest into Notes field, NOT comments — per Rule 7 + feedback memory)
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page for WO-STOREFRONT-HOME-V5-INTAKE-01.
+
+      ## Required Notion Changes (single update if MCP available)
+      - Claude Status: REVIEW
+      - Status: Review
+      - Notes property: paste the FULL manifest below
+
+      ## CRITICAL
+      The manifest goes in the `Notes` property, NOT as a page comment. Captain CI reads Notes,
+      not comments (per `feedback_captain-ci-reads-notes-field-not-comments.md`).
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is unavailable in this runtime, output a TODO for XO with:
+      - WO_ID
+      - PR URL
+      - Manifest text
+      so XO can flip Notion manually.

@@ -1,0 +1,350 @@
+name: bdc-storefront-sommelier-wizard-intake
+description: |
+  Use when: Rebuilding the Sommelier Wizard from CD source under WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01.
+  Input: WO_ID=WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01 in environment or user message.
+  Does: Reads V2 spec; copies CD source from Downloads to repo design/ tree; deletes V1 wizard implementation; rebuilds 7-step anonymous wizard from CD source with Rule 10 enforced at intake (zero raw hex / zero raw rgba in wizard.css); writes Playwright forward + backward + alternate-path traversal; opens PR against staging; flips Notion to REVIEW.
+  NOT for: V1 patches (use RULE10-CSS-CLEANUP), other storefront pages, non-customer-facing repos.
+
+# Rule 6 — policyFile declared, repo-relative (no BDC_XO/ prefix)
+policyFile: harness/policies/agent-behavior.md
+
+# Rule 1 — model: sonnet at root (per-node opus override on implement only)
+model: claude-sonnet-4-5
+
+nodes:
+  # ---- 1. Read spec (Rule 4: repo-relative path; Rule 5: date-prefix glob fallback)
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      # Spec lives in bdc-xo repo (NOT this codebase). Cross-repo fetch via gh api.
+      # Try direct path first, then date-prefix glob (specs are commonly named YYYY-MM-DD-WO-...md).
+      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Date-prefix glob fallback: list specs dir, find files ending in <WO_ID>.md
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --jq ".[] | select(.name | endswith(\"${WO_ID}.md\")) | .path" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob via gh api)" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf '%s\n' "$SPEC_CONTENT"
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # Rule 2: $WORKFLOW_ID for bash run-id refs (not used here but referenced in detail string)
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"sommelier-wizard-intake workflow run=$WORKFLOW_ID\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  # ---- 3. Verify CD source available on host (intake artifact gate)
+  - id: verify-cd-source
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # CD source lives on John's host at Downloads/. Archon mounts Downloads/ into the workspace as /workspace/Downloads/ (verified pattern from prior storefront workflows).
+      CD_DIR="${CD_SOURCE_DIR:-/workspace/Downloads/stitch_sommelier_extracted}"
+      if [ ! -f "$CD_DIR/DESIGN.md" ] || [ ! -f "$CD_DIR/code.html" ] || [ ! -f "$CD_DIR/screen.png" ]; then
+        echo "CD source incomplete at $CD_DIR. Required: DESIGN.md + code.html + screen.png" >&2
+        ls -la "$CD_DIR" 2>&1 || true
+        exit 1
+      fi
+      echo "CD_DIR=$CD_DIR"
+      echo "CD source verified."
+
+  # ---- 4. Plan (sonnet — bounded translation work)
+  - id: plan
+    depends_on: [read-spec, verify-cd-source]
+    task_class: medium_work
+    prompt: |
+      Read the BDC Work Order spec below and produce a surgical implementation plan for rebuilding the Sommelier Wizard from CD source.
+
+      ## Required Output
+      Return structured Markdown with these headings:
+      - WO ID
+      - Files to delete (from V1)
+      - Files to create (12 expected per spec §4)
+      - Files to modify (minimal — page registration only if required)
+      - Files explicitly out of scope
+      - CD source → React component mapping (Step 1..7, Chip, StepNav, WizardShell)
+      - Rule 10 color mapping table: every hex/rgba in CD source → which `var(--bdc-*)` token replaces it
+      - Verification commands (the 5 stop conditions from spec §5, verbatim as bash)
+      - Commit message (format: `feat: WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01 — rebuild wizard from CD source with Rule 10 at intake`)
+      - Push policy: feature branch `wo-sommelier-wizard-v2-intake` → PR against `staging` branch
+      - Staging gate required: TRUE (Rule 20: shopops-storefront is customer-facing)
+
+      ## Anti-guess requirement
+      For each color value in the CD source `code.html`, you MUST resolve it to a token from the spec §2 token registry. If a color does not map cleanly, propose a replacement and flag it in the output — do NOT silently hand-pick a "close enough" hex.
+
+      ## Spec
+      $read-spec.output
+
+      ## CD source location
+      $verify-cd-source.output
+
+  # ---- 5. Implement (opus[1m] — translation needs care; loop until COMPLETE; Rule 3: fresh_context)
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    model: opus[1m]
+    loop:
+      prompt: |
+        Implement the approved plan for the Sommelier Wizard V2 INTAKE Work Order.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan.output
+
+        ## CD source
+        Located at: $verify-cd-source.output
+        Read DESIGN.md + code.html + screen.png. Translate to React + Rule-10-clean CSS.
+
+        ## Hard rules
+        - Use native `<button>` elements for chips (NOT `<div role="button">`)
+        - `aria-pressed={isSelected}` and `data-selected` attribute on every chip
+        - useState for step + selections; no useEffect for derivable state
+        - Server + client render must be identical (no hydration mismatch)
+        - wizard.css MUST contain ZERO raw hex and ZERO raw rgba (verified by grep stop condition)
+        - NO `RULE 10 EXCEPTION` comments in wizard.css for this WO
+        - All chip clicks must visibly toggle (assert via data-selected attribute, not class string)
+        - All Back/Next must navigate (assert via step counter change)
+
+        ## Files in scope
+        Per plan output — do NOT modify files outside the plan.
+
+        ## Out of scope
+        - Real `/api/sommelier/intake` backend (stub OK)
+        - Auth.js account creation
+        - Recommended-series step (was V1 Step 3 — removed in v2)
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when ALL 5 spec stop conditions pass in this checkout:
+        (a) CD source committed at design/sommelier-wizard/v2-source/
+        (b) Wizard page rebuilt
+        (c) All 10 component files exist + non-empty
+        (d) `wizard.css` Rule 10 grep returns hex=0 rgba=0
+        (e) Playwright spec passes all 5 scenarios (forward / backward / alternate / toggle / no-phantom)
+
+        If any blocker arises (CD source ambiguous, color doesn't map to any token, hydration mismatch unresolvable), STOP and report — do not ship "kinda works" V1 redux.
+      until: COMPLETE
+      max_iterations: 5
+      fresh_context: true   # Rule 3: required on self-review loops
+
+  # ---- 6. Verify build
+  - id: verify-build
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+        npm run build
+      else
+        echo "No npm build script; skipping."
+      fi
+
+  # ---- 7. Verify TypeScript
+  - id: verify-types
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f tsconfig.json ]; then
+        npx tsc --noEmit
+      else
+        echo "No tsconfig.json; skipping."
+      fi
+
+  # ---- 8. Verify Rule 10 — the critical fix vs V1
+  - id: verify-rule-10
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      CSS=app/styles/wizard.css
+      if [ ! -f "$CSS" ]; then
+        echo "wizard.css missing — implement step did not produce expected output" >&2
+        exit 1
+      fi
+      HEX_COUNT=$(grep -oE '#[0-9a-fA-F]{3,8}\b' "$CSS" | wc -l | tr -d ' ')
+      RGBA_COUNT=$(grep -cE '\brgba?\s*\(' "$CSS" || true)
+      printf 'wizard.css Rule 10: hex=%s rgba=%s\n' "$HEX_COUNT" "$RGBA_COUNT"
+      if [ "$HEX_COUNT" != "0" ] || [ "$RGBA_COUNT" != "0" ]; then
+        echo "RULE 10 VIOLATION — wizard.css has raw colors. V1 had 144; V2 must have 0." >&2
+        grep -nE '#[0-9a-fA-F]{3,8}\b|\brgba?\s*\(' "$CSS" >&2 || true
+        exit 1
+      fi
+
+  # ---- 9. Verify Playwright (forward + backward + alternate + toggle + no-phantom)
+  - id: verify-playwright
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      SPEC=tests/playwright/sommelier-wizard.spec.ts
+      if [ ! -f "$SPEC" ]; then
+        echo "Playwright spec missing at $SPEC" >&2
+        exit 1
+      fi
+      # Spec must contain all 5 required scenarios (per WO §5(e))
+      for scenario in "forward" "backward" "alternate" "toggle" "phantom"; do
+        if ! grep -qiE "${scenario}" "$SPEC"; then
+          echo "Playwright spec missing required scenario keyword: $scenario" >&2
+          exit 1
+        fi
+      done
+      npx playwright test "$SPEC"
+
+  # ---- 10. War council validator
+  - id: war-council-validator
+    depends_on: [verify-build, verify-types, verify-rule-10, verify-playwright]
+    task_class: medium_work
+    prompt: |
+      Invoke war-council-validator review for this WO.
+
+      ## Validator
+      war-council-validator
+
+      ## Inputs
+      Spec: $read-spec.output
+      Plan: $plan.output
+      Implementation output: $implement.output
+      Rule 10 result: $verify-rule-10.output
+      Playwright result: $verify-playwright.output
+
+      Run `git diff --stat` and `git diff --check`.
+
+      ## Required Output
+      satisfied: with evidence that all 5 spec stop conditions met (especially Rule 10 grep + Playwright forward/backward), OR
+      needs_revision: with exact file/path/behavior findings.
+
+      ## Special checks for this WO
+      - Confirm V1 files were DELETED (not orphaned) — `git diff --diff-filter=D` should show V1 component files removed
+      - Confirm wizard.css is a fresh write, not a patched V1 file
+      - Confirm CD source is committed under design/sommelier-wizard/v2-source/
+
+  # ---- 11. Commit + push to feature branch
+  - id: commit-and-push
+    depends_on: [war-council-validator]
+    bash: |
+      set -euo pipefail
+      BRANCH=wo-sommelier-wizard-v2-intake
+      git checkout -B "$BRANCH"
+      git status --short
+      CHANGED=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED" ]; then
+        echo "No changes to commit." >&2
+        exit 1
+      fi
+      # Stage everything in the planned scope (plan output should list all paths; implement step should not have touched anything else)
+      while IFS= read -r path; do
+        [ -z "$path" ] && continue
+        git add -- "$path"
+      done <<EOF
+      $CHANGED
+      EOF
+      if git diff --cached --quiet; then
+        echo "Nothing staged." >&2
+        exit 1
+      fi
+      git commit -m "feat: WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01 — rebuild wizard from CD source with Rule 10 at intake"
+      git push -u origin "$BRANCH"
+
+  # ---- 12. Open PR against staging (Rule 20: shopops-storefront customer-facing)
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Rebuilds the Sommelier Wizard from CD source (Downloads/stitch_sommelier_extracted/) per WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01."
+        echo
+        echo "Supersedes V1, which 'kinda worked' (intermittent clicks) and shipped 144 Rule 10 violations in wizard.css. V2 enforces Rule 10 at intake (grep hex=0 rgba=0) and click-verifies via Playwright forward + backward + alternate-path traversal."
+        echo
+        echo "## Validation"
+        echo '```'
+        echo "$verify-rule-10.output"
+        echo "$verify-playwright.output"
+        echo '```'
+        echo
+        echo "## Plan"
+        echo "$plan.output"
+        echo
+        echo "## Validator"
+        echo "$war-council-validator.output"
+        echo
+        echo "## Staging gate"
+        echo "Per Rule 20, this PR targets \`staging\` (NOT master). Auto-deploys to https://staging.comicstoreos.com/onboarding/wizard. John tests on staging then says PROCEED DEPLOY."
+      } > "$BODY"
+      gh pr create --base staging --title "WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01 — rebuild wizard from CD source" --body-file "$BODY"
+
+  # ---- 13. Build manifest (Rule 14, CODE class)
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest for this WO.
+
+      ## Inputs
+      Spec: $read-spec.output
+      Plan: $plan.output
+      Implementation: $implement.output
+      Build: $verify-build.output
+      Types: $verify-types.output
+      Rule 10: $verify-rule-10.output
+      Playwright: $verify-playwright.output
+      Validator: $war-council-validator.output
+
+      ## Required Manifest Fields (per WO §8)
+      - WO ID: WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01
+      - Files created (12 expected: 3 design source + 1 page + 10 components + 1 CSS + 1 test)
+      - Files deleted (3 from V1)
+      - Routes added: /onboarding/wizard
+      - Migrations: none
+      - Tests: 5 Playwright scenarios passing
+      - Commit SHA on `wo-sommelier-wizard-v2-intake`
+      - PR URL (against `staging`)
+      - Validation evidence: hex=0 rgba=0 grep output + Playwright pass output
+      - Staging URL: https://staging.comicstoreos.com/onboarding/wizard
+      - Final line: "VALIDATION: PASS"
+
+  # ---- 14. Post completion to builder monitor
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  # ---- 15. Flip Notion (Rule 7: every WO-implementing workflow needs flip-notion final node)
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page for WO-STOREFRONT-SOMMELIER-WIZARD-V2-INTAKE-01.
+
+      ## Required Notion Changes
+      - Claude Status: REVIEW
+      - Status: Review
+      - Notes field: paste the manifest below VERBATIM (NOT as a comment — Captain CI reads the Notes property, per feedback_captain-ci-reads-notes-field-not-comments.md)
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is not available in this runtime, output a TODO for XO to flip Notion manually with the manifest above. Do NOT invent a workaround.

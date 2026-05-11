@@ -1,0 +1,553 @@
+name: bdc-storefront-theme-shell-intake
+description: |
+  Use when: Building or rebuilding the BDC storefront Theme Shell (global chrome — header,
+  ticker, sidenav, page-wrapper, footer, cookie banner, toast, skeleton/empty-state) from a
+  Claude Design (CD) HTML source, with Rule 10 token discipline BAKED IN AT INTAKE rather
+  than retrofitted after build.
+  Input:
+    - WO_ID (env or user message) — must resolve to a spec at docs/superpowers/specs/*WO_ID.md
+      in the bluedevilcollectibles/shopops-storefront repo
+    - CD_SOURCE_PATH (env, optional) — path to the V4 CD-output HTML file relative to the
+      repo root. Defaults to design/theme-shell/v4-source/index.html if already committed,
+      otherwise /tmp/cd-source.html (workflow STOPS with blocker if neither found).
+  Does:
+    1. Reads the WO spec.
+    2. Posts started to builder-status.
+    3. Plans the implementation per spec §6 (Files to CREATE/MODIFY).
+    4. Ingests the CD source HTML, lands it at design/theme-shell/v4-source/index.html.
+    5. Runs a Rule 10 token-discipline pass over the ingested HTML BEFORE writing any
+       React component code. Replaces every raw #hex / rgba() with var(--bdc-*) per the
+       WO-STOREFRONT-RULE10-CSS-CLEANUP-01 mapping table; wraps deliberate exceptions in
+       /* RULE 10 EXCEPTION */ comment blocks.
+    6. Builds the React chrome components, layouts, theme-shell.css globals, and Playwright
+       click-verify suite per spec §5/§6/§9.
+    7. Verifies build (npm run build), types (tsc --noEmit), tests (npm test),
+       Rule 10 grep cleanliness across all chrome CSS, and Playwright click-verify against
+       the Vercel preview.
+    8. Decides push target (always feature branch + PR targeting `staging`, per Rule 20),
+       commits, pushes, opens PR, builds the Captain CI manifest, posts completed, and
+       flips Notion to REVIEW.
+  NOT for:
+    - Per-page builds (Catalog, PDP, Cart, Pull List, Statements) — use bdc-feature-development
+      with the per-page WO spec
+    - Storefront marketing/landing page — separate WO + workflow
+    - Subdomain routing changes (Issue #16) — separate WO + workflow
+    - Pushing directly to master — this workflow is hard-coded to PR against `staging`
+    - Adding new tokens to tokens.css — out of scope; collapse to existing tokens or stop
+    - Reconstructing the design from prose if CD source is missing — workflow STOPS
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      # Spec lives in bdc-xo repo (NOT this codebase). Cross-repo fetch via gh api.
+      # Try direct path first, then date-prefix glob (specs are commonly named YYYY-MM-DD-WO-...md).
+      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Date-prefix glob fallback: list specs dir, find files ending in <WO_ID>.md
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --jq ".[] | select(.name | endswith(\"${WO_ID}.md\")) | .path" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob via gh api)" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf '%s\n' "$SPEC_CONTENT"
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"Theme Shell V4 intake — workflow $WORKFLOW_ID\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  - id: plan
+    depends_on: [read-spec]
+    task_class: medium_work
+    prompt: |
+      Read the BDC Theme Shell intake Work Order below and produce a concise implementation plan.
+
+      ## Required Output (Markdown headings)
+      - WO ID
+      - CD source path resolution: where will design/theme-shell/v4-source/index.html come from?
+      - Files to create (full list per spec §6)
+      - Files to modify (per spec §6)
+      - Files explicitly out of scope (tokens.css, existing per-page CSS, page-level routes)
+      - Rule 10 mapping plan: which raw colors expected in CD source map to which var(--bdc-*) tokens
+      - Verification commands (build, tsc, playwright, grep)
+      - Commit message
+      - Push target: feature-branch:<derived-name> against base=staging
+      - Staging gate required: true
+
+      ## Hard rules from spec §12 (Anti-Guess Hardening)
+      1. CD source HTML lands FIRST. No React code before that file is committed at
+         design/theme-shell/v4-source/index.html with Rule 10 applied.
+      2. NO new tokens added to tokens.css. Collapse to existing or STOP.
+      3. PR target is `staging`, NEVER `master`.
+      4. All 14 Playwright click-verify scenarios must pass against Vercel preview AND staging.
+      5. If CD source HTML is not findable at workflow start, STOP with a blocker.
+      6. Reading V3 from git history is OK for layout reference; copy-pasting its CSS is NOT.
+
+      ## Spec
+      $read-spec.output
+
+  - id: ingest-cd-source
+    depends_on: [plan]
+    task_class: medium_work
+    prompt: |
+      Ingest the Claude Design (CD) HTML source for the V4 Theme Shell.
+
+      ## Resolution order (try in this order)
+      1. Check if design/theme-shell/v4-source/index.html already exists in the repo. If yes,
+         read it and confirm it appears to be the CD output (header/footer/nav structure visible).
+      2. Check CD_SOURCE_PATH env var. If set and file exists, read that file.
+      3. Check /tmp/cd-source.html. If exists, read it.
+      4. If none of the above, STOP and emit a blocker:
+         - Output: "BLOCKER: CD source HTML not found. Cannot proceed without source-of-truth design."
+         - Do NOT attempt to reconstruct the design from the spec prose or from V3 git history.
+
+      ## Required output (when source IS found)
+      - CD_SOURCE_FOUND: <path>
+      - CD_SOURCE_LINE_COUNT: <number>
+      - CD_SOURCE_RAW_HEX_COUNT: <output of `grep -cE '#[0-9A-Fa-f]{3,8}\b'`>
+      - CD_SOURCE_RAW_RGBA_COUNT: <output of `grep -cE 'rgba?\('>`
+      - First 200 lines of the source (for downstream Rule 10 pass to see the structure)
+
+      ## Required output (when source NOT found)
+      - BLOCKER: <reason>
+      - emit <promise>BLOCKER</promise>
+
+  - id: rule10-token-discipline-pass
+    depends_on: [ingest-cd-source]
+    task_class: medium_work
+    prompt: |
+      Apply Rule 10 token discipline to the ingested CD source HTML. This is the load-bearing
+      step that V3 got wrong (retrofitted after build instead of at intake).
+
+      ## Inputs
+      Spec (for the mapping table reference):
+      $read-spec.output
+
+      Plan (for the Rule 10 mapping pre-decisions):
+      $plan.output
+
+      Ingested CD source:
+      $ingest-cd-source.output
+
+      ## Required transformations
+      For every raw #hex value in the source <style> block:
+      - Map to nearest var(--bdc-*) token per WO-STOREFRONT-RULE10-CSS-CLEANUP-01 §6 mapping table
+      - If no acceptable mapping exists, wrap the LINE in /* RULE 10 EXCEPTION: <reason> */
+        ... /* END RULE 10 EXCEPTION */ comments. Use sparingly, only for cover-art-style
+        decorative gradients.
+      - Do NOT add new tokens to tokens.css.
+
+      For every raw rgba(R,G,B,A) value:
+      - Replace with color-mix(in srgb, var(--TOKEN) <A*100>%, transparent) where --TOKEN is
+        the semantic match for the (R,G,B) values per the §6 mapping.
+      - rgba is FORBIDDEN even if R,G,B come from a token's hex value. Always color-mix.
+
+      ## Required output
+      Write the transformed HTML to design/theme-shell/v4-source/index.html (CREATE the file
+      and parent directories if they don't exist).
+
+      Also write a Rule 10 audit log to design/theme-shell/v4-source/RULE10-AUDIT.md with:
+      - Original raw hex count vs final raw hex count (final = exception-wrapped count only)
+      - Original raw rgba count vs final raw rgba count (must be 0)
+      - Per-replacement table (raw value → token, with line number reference)
+      - List of EXCEPTION-wrapped blocks with justifications
+
+      Output <promise>COMPLETE</promise> when both files are written and the in-file grep
+      counts match the audit log.
+
+  - id: implement
+    depends_on: [rule10-token-discipline-pass]
+    task_class: medium_work
+    model: opus[1m]
+    loop:
+      prompt: |
+        Build the React Theme Shell components from the Rule-10-clean V4 source.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan.output
+
+        ## CD source (already Rule 10 clean) — at design/theme-shell/v4-source/index.html
+        Reference the source HTML for layout and styling. Translate <style> blocks into the
+        per-component CSS Modules listed in spec §5 and §6. Translate the HTML structure into
+        the React components in app/components/chrome/.
+
+        ## Execution Rules
+        - Build ONLY the files listed in spec §6 (Files to CREATE/MODIFY).
+        - Use existing repo patterns and helpers. Check the BDC-Component-Library skill for any
+          chrome primitives that already exist before writing new ones.
+        - Component CSS modules (*.module.css) must be Rule 10 compliant: zero raw hex outside
+          EXCEPTION-wrapped blocks, zero raw rgba, all colors via var(--bdc-*).
+        - app/styles/theme-shell.css must be Rule 10 compliant.
+        - Do NOT add tokens to app/styles/tokens.css (out of scope per spec §4).
+        - Do NOT modify existing per-page CSS (pull-list.css, pdp.css, wizard.css).
+        - Do NOT reformat unrelated code.
+        - Do NOT deploy.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> when:
+        - All files in spec §6 exist
+        - npm run build exits 0
+        - tsc --noEmit exits 0
+        - All chrome CSS files pass `grep -cE '#[0-9A-Fa-f]{3,8}\b'` returning 0 (excluding
+          EXCEPTION-wrapped blocks) AND `grep -cE 'rgba?\('` returning 0
+        - Playwright theme-shell.spec.ts file exists with all 14 scenarios from spec §9
+      until: COMPLETE
+      max_iterations: 5
+      fresh_context: true
+
+  - id: verify-build
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+        npm run build
+      else
+        echo "No npm build script found in shopops-storefront; this is unexpected — failing." >&2
+        exit 1
+      fi
+
+  - id: verify-types
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f tsconfig.json ]; then
+        npx tsc --noEmit
+      else
+        echo "No tsconfig.json found in shopops-storefront; this is unexpected — failing." >&2
+        exit 1
+      fi
+
+  - id: verify-rule10-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      echo "=== Rule 10 grep verification ==="
+
+      echo "-- design/theme-shell/v4-source/index.html --"
+      RAW_HEX_V4=$(grep -cE '#[0-9A-Fa-f]{3,8}\b' design/theme-shell/v4-source/index.html || true)
+      RAW_RGBA_V4=$(grep -cE 'rgba?\(' design/theme-shell/v4-source/index.html || true)
+      EXCEPTION_BLOCKS=$(grep -cE '/\* RULE 10 EXCEPTION' design/theme-shell/v4-source/index.html || true)
+      echo "raw hex count: $RAW_HEX_V4 (allowed: equal to or less than EXCEPTION-wrapped block count = $EXCEPTION_BLOCKS)"
+      echo "raw rgba count: $RAW_RGBA_V4 (must be 0)"
+      if [ "$RAW_RGBA_V4" -ne 0 ]; then
+        echo "FAIL: raw rgba in v4-source HTML" >&2
+        exit 1
+      fi
+
+      echo "-- app/styles/theme-shell.css --"
+      if [ ! -f app/styles/theme-shell.css ]; then
+        echo "FAIL: app/styles/theme-shell.css missing" >&2
+        exit 1
+      fi
+      RAW_HEX_GLOBAL=$(grep -cE '#[0-9A-Fa-f]{3,8}\b' app/styles/theme-shell.css || true)
+      RAW_RGBA_GLOBAL=$(grep -cE 'rgba?\(' app/styles/theme-shell.css || true)
+      echo "raw hex count: $RAW_HEX_GLOBAL (must be 0)"
+      echo "raw rgba count: $RAW_RGBA_GLOBAL (must be 0)"
+      if [ "$RAW_HEX_GLOBAL" -ne 0 ] || [ "$RAW_RGBA_GLOBAL" -ne 0 ]; then
+        echo "FAIL: raw hex/rgba in theme-shell.css" >&2
+        exit 1
+      fi
+
+      echo "-- app/components/chrome/**/*.module.css --"
+      DIRTY=$(find app/components/chrome -name '*.module.css' -exec grep -lE '#[0-9A-Fa-f]{3,8}\b|rgba?\(' {} \; || true)
+      if [ -n "$DIRTY" ]; then
+        echo "FAIL: chrome component CSS modules contain raw hex/rgba:" >&2
+        echo "$DIRTY" >&2
+        exit 1
+      fi
+      echo "All chrome component CSS modules clean."
+
+      echo "=== Rule 10 grep verification PASS ==="
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+        npm test || echo "Some tests failed; downstream playwright-click-verify is the load-bearing gate."
+      else
+        echo "No npm test script; relying on playwright-click-verify."
+      fi
+
+  - id: playwright-click-verify
+    depends_on: [verify-build, verify-types, verify-rule10-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      if [ ! -f tests/playwright/theme-shell.spec.ts ]; then
+        echo "FAIL: tests/playwright/theme-shell.spec.ts missing" >&2
+        exit 1
+      fi
+      # Run against local build first; staging URL re-run happens after merge by Captain CI
+      npx playwright install --with-deps chromium >/dev/null 2>&1 || true
+      npx playwright test tests/playwright/theme-shell.spec.ts --reporter=list
+
+  - id: war-council-validator
+    depends_on: [playwright-click-verify]
+    task_class: medium_work
+    prompt: |
+      Invoke or emulate the war-council-validator review for this Theme Shell intake WO.
+
+      ## Validator Agent
+      war-council-validator
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Plan:
+      $plan.output
+
+      CD source ingest:
+      $ingest-cd-source.output
+
+      Rule 10 pass:
+      $rule10-token-discipline-pass.output
+
+      Implementation:
+      $implement.output
+
+      Build:
+      $verify-build.output
+
+      Types:
+      $verify-types.output
+
+      Rule 10 grep:
+      $verify-rule10-grep.output
+
+      Playwright click-verify:
+      $playwright-click-verify.output
+
+      Git diff:
+      Run `git diff --stat` and inspect the changed files.
+
+      ## Validation gates (any single failure = needs_revision)
+      1. design/theme-shell/v4-source/index.html exists, committed
+      2. Rule 10 grep verification all green
+      3. All 14 Playwright scenarios pass
+      4. No new tokens added to app/styles/tokens.css (verify via git diff on that file = empty)
+      5. PR target will be `staging`, NOT `master`
+      6. No reformatting of unrelated code (git diff stat shows changes only in spec §6 files)
+
+      ## Required Output
+      Return either:
+      - satisfied: with evidence each gate passed
+      - needs_revision: with exact file/path/behavior findings
+
+  - id: decide-push-target
+    depends_on: [war-council-validator]
+    task_class: clerical
+    prompt: |
+      Decide the push target for this Theme Shell intake WO.
+
+      ## Hardcoded for this workflow
+      Repo is bluedevilcollectibles/shopops-storefront. Per Rule 20, this is a customer-facing
+      surface — staging gate MANDATORY. PR targets `staging`, NEVER `master`.
+
+      ## Required output
+      push_target: feature-branch:wo-storefront-theme-shell-v4-intake
+      pr_required: true
+      pr_base_branch: staging
+      staging_gate_required: true
+
+  - id: commit-and-push
+    depends_on: [decide-push-target]
+    bash: |
+      set -euo pipefail
+      echo "$decide-push-target.output"
+      BRANCH=$(printf '%s\n' "$decide-push-target.output" | sed -n 's/^push_target: feature-branch://p' | head -n 1)
+      if [ -z "$BRANCH" ]; then
+        echo "No feature branch target found in decide-push-target output." >&2
+        exit 1
+      fi
+      # Per branching hygiene doctrine: fresh branch off origin/staging, NOT off current HEAD
+      git fetch origin staging
+      git checkout -B "$BRANCH" origin/staging
+      # Re-apply the workflow's working-tree changes (Archon worktree state) onto the fresh branch.
+      # Note: in practice the agent's edits should already be in the worktree; this checkout
+      # preserves working tree changes when switching branches.
+      git status --short
+      CHANGED_FILES=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files found; cannot commit." >&2
+        exit 1
+      fi
+      while IFS= read -r path; do
+        if [ -z "$path" ]; then
+          continue
+        fi
+        if ! printf '%s\n' "$plan.output" | grep -F -- "$path" >/dev/null; then
+          echo "Changed file was not listed in plan output: $path" >&2
+          exit 1
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED_FILES
+      EOF
+      if git diff --cached --quiet; then
+        echo "No changes staged; cannot commit." >&2
+        exit 1
+      fi
+      COMMIT_MESSAGE=$(printf '%s\n' "$plan.output" | sed -n 's/^Commit message: //p' | head -n 1)
+      if [ -z "$COMMIT_MESSAGE" ]; then
+        WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+        COMMIT_MESSAGE="feat(storefront): ${WO_ID} — chrome rebuild from CD source with Rule 10 baked in"
+      fi
+      git commit -m "$COMMIT_MESSAGE"
+      git push -u origin "$BRANCH"
+
+  - id: open-pr-if-needed
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      if ! printf '%s\n' "$decide-push-target.output" | grep -q '^pr_required: true'; then
+        echo "PR not required; skipping. (Should not happen for this workflow.)" >&2
+        exit 1
+      fi
+      BASE_BRANCH=$(printf '%s\n' "$decide-push-target.output" | sed -n 's/^pr_base_branch: //p' | head -n 1)
+      if [ -z "$BASE_BRANCH" ]; then
+        BASE_BRANCH="staging"
+      fi
+      if [ "$BASE_BRANCH" != "staging" ]; then
+        echo "Refusing to open PR against base=$BASE_BRANCH; Rule 20 requires staging." >&2
+        exit 1
+      fi
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      TITLE="feat(storefront): ${WO_ID} — chrome rebuild from CD source with Rule 10 baked in"
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Theme Shell V4 — rebuild storefront chrome from a fresh CD source with Rule 10 token discipline applied AT INTAKE rather than retrofitted. Implements WO-STOREFRONT-THEME-SHELL-V4-INTAKE-01."
+        echo
+        echo "## Per Rule 20"
+        echo "PR target = staging. John promotes staging → master separately after click-verify on staging.comicstoreos.com."
+        echo
+        echo "## Plan"
+        echo "$plan.output"
+        echo
+        echo "## CD ingest + Rule 10 pass"
+        echo "$ingest-cd-source.output"
+        echo
+        echo "$rule10-token-discipline-pass.output"
+        echo
+        echo "## Validation"
+        echo "Build:"
+        echo "$verify-build.output"
+        echo
+        echo "Types:"
+        echo "$verify-types.output"
+        echo
+        echo "Rule 10 grep:"
+        echo "$verify-rule10-grep.output"
+        echo
+        echo "Playwright click-verify:"
+        echo "$playwright-click-verify.output"
+        echo
+        echo "## Validator"
+        echo "$war-council-validator.output"
+      } > "$BODY_FILE"
+      gh pr create --base "$BASE_BRANCH" --title "$TITLE" --body-file "$BODY_FILE"
+
+  - id: build-manifest
+    depends_on: [open-pr-if-needed]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest for this Theme Shell intake WO.
+      Match the manifest contract in spec §11 EXACTLY (line-by-line shape).
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Plan:
+      $plan.output
+
+      CD ingest:
+      $ingest-cd-source.output
+
+      Rule 10 pass:
+      $rule10-token-discipline-pass.output
+
+      Implementation:
+      $implement.output
+
+      Verification:
+      Build: $verify-build.output
+      Types: $verify-types.output
+      Rule 10 grep: $verify-rule10-grep.output
+      Tests: $verify-tests.output
+      Playwright: $playwright-click-verify.output
+
+      Validator:
+      $war-council-validator.output
+
+      ## Required Manifest Fields (per spec §11)
+      - WO ID
+      - Files created (full list)
+      - Files modified
+      - Routes added
+      - Migrations
+      - Tests (build/tsc/playwright pass counts)
+      - GREP VERIFICATION block (paste the actual numbers from $verify-rule10-grep.output)
+      - Vercel preview URL (if available from build output)
+      - Staging URL after merge to staging: https://staging.comicstoreos.com
+      - Branch name
+      - PR URL (target = staging)
+      - Git commit SHA
+      - "VALIDATION: PASS" (or specific failure detail)
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page to REVIEW with the Captain CI manifest.
+
+      ## Required Notion Changes (single update)
+      - Claude Status: REVIEW
+      - Status: Review
+      - Notes field: paste the manifest from $build-manifest.output verbatim (Captain CI reads
+        the Notes field, NOT page comments — see feedback_captain-ci-reads-notes-field-not-comments.md)
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is not available inside the container, do NOT invent a workaround. Output:
+      "TODO XO: flip Notion WO_ID=<id> to REVIEW manually with manifest above (Captain CI reads
+      Notes field). Manifest follows."
+      ...then output the manifest verbatim so XO can paste it.

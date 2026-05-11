@@ -1,0 +1,419 @@
+name: bdc-storefront-pull-list-intake
+description: |
+  Use when: Executing WO-STOREFRONT-PULL-LIST-V2-INTAKE-01 — rebuilds the BDC storefront pull-list
+  surface (BOTH public marketing /pull-list AND authenticated /portal/pull-list) from the
+  Claude Design source with Rule 10 (no raw color literals) enforced at intake.
+  Input: WO_ID env defaults to WO-STOREFRONT-PULL-LIST-V2-INTAKE-01; repo context = shopops-storefront.
+  Does: Reads the WO spec, copies CD source into design/, plans surgical implementation,
+  implements both pages + components in a single PR, runs Rule 10 grep + build + types + Playwright,
+  pushes to staging branch (Rule 20), opens PR against staging, builds Captain CI manifest,
+  posts builder-status events, and emits a TODO for Notion flip.
+  NOT for: any other page build, any backend wiring, any subscribe/unsubscribe write paths,
+  any deploy to production (John gates staging->master promote).
+
+policyFile: harness/policies/agent-behavior.md
+provider: claude
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      # Spec lives in bdc-xo repo (NOT this codebase). Cross-repo fetch via gh api.
+      # Try direct path first, then date-prefix glob (specs are commonly named YYYY-MM-DD-WO-...md).
+      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Date-prefix glob fallback: list specs dir, find files ending in <WO_ID>.md
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --jq ".[] | select(.name | endswith(\"${WO_ID}.md\")) | .path" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob via gh api)" >&2
+        exit 1
+      fi
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf '%s\n' "$SPEC_CONTENT"
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"bdc-storefront-pull-list-intake (workflow=$WORKFLOW_ID)\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+
+  - id: verify-predecessor
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # Predecessor: theme-shell v3 must be on master of shopops-storefront.
+      # This workflow runs in the shopops-storefront worktree; check master HEAD has the theme-shell components.
+      git fetch origin master --quiet
+      MASTER_SHA=$(git rev-parse origin/master)
+      echo "MASTER_SHA=$MASTER_SHA"
+      if ! git ls-tree -r origin/master --name-only | grep -qE 'app/components/(theme|chrome)/(Header|SideNav)\.tsx'; then
+        echo "Theme-shell v3 components not found on origin/master. Predecessor WO not merged. ABORT." >&2
+        exit 1
+      fi
+      echo "Predecessor theme-shell v3 confirmed on master."
+
+  - id: copy-cd-source
+    depends_on: [verify-predecessor]
+    bash: |
+      set -euo pipefail
+      mkdir -p design/pull-list/v2-source
+      # CD source path is on the host; this workflow runs in the shopops-storefront worktree.
+      # The source must be staged into the repo before commit. The host CD fetch lives at:
+      #   Downloads/anthropic-design-fetch-11/bdc-storefront/project/storefront-design/pull-list/index.html
+      # When running via harness, the host Downloads is bind-mounted at /host/Downloads (per harness convention).
+      CD_SRC="/host/Downloads/anthropic-design-fetch-11/bdc-storefront/project/storefront-design/pull-list/index.html"
+      if [ ! -f "$CD_SRC" ]; then
+        # Fallback: builder may have already staged it — if so, skip copy.
+        if [ -f design/pull-list/v2-source/index.html ]; then
+          echo "CD source already present at design/pull-list/v2-source/index.html — skip copy."
+        else
+          echo "CD source not found at $CD_SRC and design/pull-list/v2-source/index.html missing. Builder must stage manually." >&2
+          exit 1
+        fi
+      else
+        cp "$CD_SRC" design/pull-list/v2-source/index.html
+        echo "Copied CD source to design/pull-list/v2-source/index.html"
+      fi
+
+  - id: plan
+    depends_on: [copy-cd-source]
+    task_class: medium_work
+    prompt: |
+      Read the BDC Work Order spec below and produce a surgical implementation plan
+      for the pull-list intake rebuild.
+
+      ## Required Output
+      Return structured Markdown with these headings:
+      - WO ID
+      - Files to modify (REPLACE list)
+      - Files to create (NEW list)
+      - Files explicitly out of scope
+      - Rule 10 enforcement strategy (how the agent will keep raw color literals out of pull-list.css and TSX)
+      - Verification commands (build, types, grep for Rule 10, Playwright)
+      - Commit message
+      - Push policy: feature branch off staging, PR target staging (Rule 20)
+      - Staging gate required: true
+
+      ## BDC Push Policy (hardcoded)
+      Rule 20 staging-gate repos:
+      - bluedevilcollectibles/lspro-react
+      - bluedevilcollectibles/shopops-storefront
+      - bluedevilcollectibles/shopops/
+
+      Repo here is shopops-storefront -> feature branch + PR against staging, NOT master.
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    model: opus[1m]
+    loop:
+      prompt: |
+        Implement the approved plan for WO-STOREFRONT-PULL-LIST-V2-INTAKE-01.
+
+        ## Spec
+        $read-spec.output
+
+        ## Plan
+        $plan.output
+
+        ## Execution Rules
+        - Modify ONLY files listed in plan as in-scope.
+        - Both public AND portal pages must ship together. If you can only ship one, STOP and surface as a blocker.
+        - Rule 10 at intake: every color value in app/styles/pull-list.css must be a var(--bdc-*) or semantic alias.
+          The cover-art palette block (.cover-pal-1..N) is the ONLY exception, and MUST be wrapped in:
+            /* RULE 10 EXCEPTION: cover-art palette */ ... /* END EXCEPTION */
+        - No inline style={{ color: '#xxx' }} in any TSX under app/components/pull-list/, app/components/pull-list-public/,
+          app/shops/[slug]/pull-list/, or app/shops/[slug]/portal/pull-list/.
+        - Prefer existing repo patterns and helpers from theme-shell v3 (Header, Footer, SideNav, Modal, ToastStack).
+        - Do not reformat unrelated code.
+        - Do not deploy. Do not bypass approval gates.
+        - Stop and report a blocker if the spec is ambiguous or a needed source of truth is missing.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when:
+        - Both page.tsx files exist and are >500 bytes each.
+        - app/styles/pull-list.css passes the Rule 10 grep (0 unwrapped literals).
+        - npm run build && npx tsc --noEmit both exit 0.
+        - All §11 test scenarios that can run in this checkout have passed.
+      until: COMPLETE
+      max_iterations: 5
+      fresh_context: true
+
+  - id: verify-build
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
+        npm run build
+      else
+        echo "No npm build script found." >&2
+        exit 1
+      fi
+
+  - id: verify-types
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f tsconfig.json ]; then
+        npx tsc --noEmit
+      else
+        echo "No tsconfig.json found." >&2
+        exit 1
+      fi
+
+  - id: verify-rule10
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      # Stop D — Rule 10 grep on pull-list.css
+      VIOLATIONS=$(grep -nE '#[0-9a-fA-F]{3,8}\b|rgba\(' app/styles/pull-list.css 2>/dev/null | grep -v 'RULE 10 EXCEPTION' || true)
+      if [ -n "$VIOLATIONS" ]; then
+        echo "Rule 10 violations in app/styles/pull-list.css:" >&2
+        echo "$VIOLATIONS" >&2
+        exit 1
+      fi
+      echo "app/styles/pull-list.css passes Rule 10 grep (0 unwrapped literals)."
+      # Inline style hex check in TSX trees
+      INLINE=$(grep -rnE "style=\{\{[^}]*#[0-9a-fA-F]{3,8}" app/components/pull-list app/components/pull-list-public 'app/shops/[slug]/pull-list' 'app/shops/[slug]/portal/pull-list' 2>/dev/null || true)
+      if [ -n "$INLINE" ]; then
+        echo "Inline hex literals found in pull-list TSX:" >&2
+        echo "$INLINE" >&2
+        exit 1
+      fi
+      echo "Pull-list TSX trees pass inline-hex grep (0 violations)."
+
+  - id: verify-anti-half-ship
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      # Stop E — both pages exist, both non-empty (>500 bytes)
+      PUBLIC='app/shops/[slug]/pull-list/page.tsx'
+      PORTAL='app/shops/[slug]/portal/pull-list/page.tsx'
+      for f in "$PUBLIC" "$PORTAL"; do
+        if [ ! -f "$f" ]; then
+          echo "Anti-half-ship FAIL: $f missing" >&2
+          exit 1
+        fi
+        SIZE=$(wc -c < "$f")
+        if [ "$SIZE" -lt 500 ]; then
+          echo "Anti-half-ship FAIL: $f exists but is shell-sized ($SIZE bytes)" >&2
+          exit 1
+        fi
+      done
+      echo "Anti-half-ship check passed: both page.tsx files present, both >500 bytes."
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+        npm test
+      elif find . -path ./.git -prune -o \( -name '*.spec.ts' -o -name '*.spec.tsx' -o -name '*.test.ts' -o -name '*.test.tsx' \) -type f -print -quit | grep -q .; then
+        echo "Test files detected but no npm test script was found." >&2
+        exit 1
+      else
+        echo "No test files detected; record as not applicable in manifest."
+      fi
+
+  - id: war-council-validator
+    depends_on: [verify-build, verify-types, verify-rule10, verify-anti-half-ship, verify-tests]
+    task_class: medium_work
+    prompt: |
+      Invoke or emulate the war-council-validator review for WO-STOREFRONT-PULL-LIST-V2-INTAKE-01.
+
+      ## Validator Agent
+      war-council-validator
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Plan:
+      $plan.output
+
+      Implementation output:
+      $implement.output
+
+      Build:
+      $verify-build.output
+
+      Types:
+      $verify-types.output
+
+      Rule 10 grep:
+      $verify-rule10.output
+
+      Anti-half-ship check:
+      $verify-anti-half-ship.output
+
+      Tests:
+      $verify-tests.output
+
+      Git diff:
+      Run `git diff --stat` and `git diff --check`, then inspect the relevant changed files.
+
+      ## Required Output
+      Return either:
+      - satisfied: with evidence that the spec deliverables and ALL stop conditions (A–K) were met
+      - needs_revision: with exact file/path/behavior findings, including any Rule 10 / half-ship / screenshot gaps
+
+  - id: commit-and-push
+    depends_on: [war-council-validator]
+    bash: |
+      set -euo pipefail
+      git fetch origin staging --quiet
+      BRANCH="pull-list/v2-intake-${WORKFLOW_ID}"
+      git checkout -B "$BRANCH" origin/staging
+      git status --short
+      CHANGED_FILES=$(git status --porcelain | awk '{print substr($0,4)}')
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files found; cannot commit." >&2
+        exit 1
+      fi
+      while IFS= read -r path; do
+        if [ -z "$path" ]; then continue; fi
+        if ! printf '%s\n' "$plan.output" | grep -F -- "$path" >/dev/null; then
+          echo "Changed file was not listed in plan output: $path" >&2
+          exit 1
+        fi
+        git add -- "$path"
+      done <<EOF
+      $CHANGED_FILES
+      EOF
+      if git diff --cached --quiet; then
+        echo "No changes staged; cannot commit." >&2
+        exit 1
+      fi
+      COMMIT_MESSAGE=$(printf '%s\n' "$plan.output" | sed -n 's/^Commit message: //p' | head -n 1)
+      if [ -z "$COMMIT_MESSAGE" ]; then
+        COMMIT_MESSAGE="feat(pull-list): WO-STOREFRONT-PULL-LIST-V2-INTAKE-01 — public + portal rebuild, Rule 10 at intake"
+      fi
+      git commit -m "$COMMIT_MESSAGE"
+      git push -u origin "$BRANCH"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    task_class: clerical
+    bash: |
+      set -euo pipefail
+      TITLE=$(printf '%s\n' "$plan.output" | sed -n 's/^Commit message: //p' | head -n 1)
+      if [ -z "$TITLE" ]; then
+        TITLE="WO-STOREFRONT-PULL-LIST-V2-INTAKE-01: public + portal pull-list rebuild (Rule 10 at intake)"
+      fi
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "$plan.output"
+        echo
+        echo "## Validation"
+        echo "### Build"
+        echo "$verify-build.output"
+        echo "### Types"
+        echo "$verify-types.output"
+        echo "### Rule 10 grep"
+        echo "$verify-rule10.output"
+        echo "### Anti-half-ship"
+        echo "$verify-anti-half-ship.output"
+        echo "### Tests"
+        echo "$verify-tests.output"
+        echo
+        echo "## Validator"
+        echo "$war-council-validator.output"
+        echo
+        echo "## Staging gate"
+        echo "PR target = staging (Rule 20). PROCEED DEPLOY required from John before staging->master promote."
+      } > "$BODY_FILE"
+      gh pr create --base staging --title "$TITLE" --body-file "$BODY_FILE"
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest for WO-STOREFRONT-PULL-LIST-V2-INTAKE-01.
+
+      ## Inputs
+      Spec:
+      $read-spec.output
+
+      Plan:
+      $plan.output
+
+      Implementation:
+      $implement.output
+
+      Build:
+      $verify-build.output
+
+      Types:
+      $verify-types.output
+
+      Rule 10 grep:
+      $verify-rule10.output
+
+      Anti-half-ship:
+      $verify-anti-half-ship.output
+
+      Tests:
+      $verify-tests.output
+
+      Validator:
+      $war-council-validator.output
+
+      ## Required Manifest Fields
+      - WO ID: WO-STOREFRONT-PULL-LIST-V2-INTAKE-01
+      - Files created (full list)
+      - Files modified (full list)
+      - Routes added: /shops/[slug]/pull-list, /shops/[slug]/portal/pull-list
+      - Migrations: none
+      - Tests count
+      - Commit SHA + branch name
+      - Validation evidence (CODE class): build PASS, types PASS, Rule 10 grep PASS (0 unwrapped literals), anti-half-ship PASS
+      - PR URL
+      - Staging gate status: PENDING (awaiting John PROCEED DEPLOY)
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page if Notion MCP is available in this runtime.
+
+      ## Required Notion Changes
+      - Claude Status: REVIEW
+      - Status: Review
+      - Add the Captain CI manifest to the Notion `Notes` property (NOT as a comment — Captain CI reads Notes, not comments)
+
+      ## Manifest
+      $build-manifest.output
+
+      If Notion MCP is not available inside the container, do not invent a workaround.
+      Output a TODO for XO to flip Notion manually with the manifest above.
