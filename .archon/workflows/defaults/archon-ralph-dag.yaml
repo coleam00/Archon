@@ -399,13 +399,21 @@ nodes:
 
         ## Phase 4: COMMIT — Save Changes
 
-        ### 4.1 Review Staged Changes
+        ### 4.1 Stage Only Files You Edited
+
+        Stage **only** the files you actually edited for this story — never `git add -A`, `git add .`, or `git add -u`. List them by name:
 
         ```bash
-        git add -A
-        git status
+        git add path/to/file1 path/to/file2 ...
+        git status --porcelain  # verify nothing scratch/review/PR-body is staged
         git diff --cached --stat
         ```
+
+        **Never stage** scratch / review / PR-body artifacts, even if they show up in `git status`:
+
+        - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
+        - `review/`, `*-report.md` at the repo root
+        - Anything under `$ARTIFACTS_DIR`
 
         Verify only expected files are staged. If unexpected files appear, investigate before committing.
 

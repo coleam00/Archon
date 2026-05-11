@@ -255,6 +255,21 @@ git push origin dev
 > commit to dev — it does not bring the PR merge commit onto dev. This manual
 > `git pull origin main` is what ensures dev has the merge commit.
 
+> **Do NOT** use `git pull origin main --ff-only` or `git reset --hard origin/main`
+> for this sync. Fast-forward is impossible across a squash merge — main's squash
+> commit has a different SHA than dev's release commit, so dev is never
+> fast-forwardable to main. And resetting dev to main rewrites dev's history,
+> which severs every open PR's merge-base from its original commit and balloons
+> their diffs to thousands of lines (confirmed against v0.3.10's release: PRs
+> went from `+80/-1` to `+6626/-300` after a `git reset --hard origin/main` on
+> dev). The plain `git pull origin main` above creates a regular merge commit on
+> dev. The merge bubble in dev's `git log` is the right cost for preserving
+> open-PR sanity. If the merge produces a `homebrew/archon.rb` conflict during a
+> recovery flow, resolve with `git checkout origin/main -- homebrew/archon.rb`
+> (note: `origin/main`, NOT `main` — local main is often stale because the
+> release pushes via `git push origin dev:main` without fast-forwarding the local
+> branch).
+
 The GitHub Release is distinct from the git tag — without it, the release won't appear on the repository's Releases page. Always create it.
 
 If the user merges the PR themselves and comes back, still offer to tag, release, and sync.

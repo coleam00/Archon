@@ -27,8 +27,25 @@ function setupAuth(): void {
   const refreshToken = process.env.CODEX_REFRESH_TOKEN;
   const accountId = process.env.CODEX_ACCOUNT_ID;
 
-  // Skip if Codex credentials not provided
+  // No CODEX_* env vars provided: warn if a persisted auth.json already
+  // exists on the volume (may be stale), otherwise skip with "unavailable".
   if (!idToken || !accessToken || !refreshToken || !accountId) {
+    // /home/appuser is now persisted across restarts in Docker, so a stale
+    // auth.json from a previous run with creds is not automatically wiped.
+    // Surface this so operators don't end up with Codex silently using old/revoked tokens.
+    const persistedAuthPath = path.join(os.homedir(), '.codex', 'auth.json');
+    if (fs.existsSync(persistedAuthPath)) {
+      console.warn(
+        `⚠️  CODEX_* env vars not set, but persisted ${persistedAuthPath} exists from a previous run`
+      );
+      console.warn(
+        '    Codex will attempt to use those credentials. If they are stale or revoked,'
+      );
+      console.warn(
+        '    delete the file inside the container or wipe the archon_user_home volume to reset.'
+      );
+      return;
+    }
     console.log('⏭️  Skipping Codex auth setup - credentials not provided');
     console.log('   Codex assistant will be unavailable');
     return;

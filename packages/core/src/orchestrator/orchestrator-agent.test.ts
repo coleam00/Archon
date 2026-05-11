@@ -51,9 +51,11 @@ const mockLoadConfig = mock(() =>
 
 const mockLogger = createMockLogger();
 
+const mockEnsureArchonWorkspacesPath = mock(() => Promise.resolve('/home/test/.archon/workspaces'));
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
+  ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
   getArchonHome: mock(() => '/home/test/.archon'),
 }));
 
@@ -906,6 +908,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockSendQuery.mockClear();
     mockGetCodebaseEnvVars.mockReset();
     mockLoadConfig.mockReset();
+    mockEnsureArchonWorkspacesPath.mockClear();
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
@@ -931,6 +934,9 @@ describe('discoverAllWorkflows — remote sync', () => {
     expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
       resetAfterFetch: false,
     });
+    // Regression guard: orchestrator must resolve cwd through the ensure variant
+    // so the workspaces dir is created before the AI provider spawn (issue #1528).
+    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
   });
 
   test('passes resetAfterFetch=true for managed clones', async () => {

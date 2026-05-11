@@ -61,16 +61,29 @@ For each simplification:
 2. Run `bun run type-check` — if it fails, revert that change
 3. Run `bun run lint` — if it fails, fix or revert
 
+**Track every path you edit.** You will need this list in Phase 3 to stage only the files you touched.
+
 ### Phase 3: VALIDATE & COMMIT
 
 1. Run full validation: `bun run type-check && bun run lint`
-2. If changes were made:
+2. If simplifications were applied, stage **only** the files you edited in Phase 2 — never `git add -A`, `git add .`, or `git add -u`:
    ```bash
-   git add -A
+   # Stage by name, using the list you tracked in Phase 2
+   git add path/to/file1.ts path/to/file2.ts
+   # Verify nothing else snuck in
+   git status --porcelain
+   ```
+3. **Never stage** report, scratch, or PR-body artifacts, even if they show up as untracked or modified in the worktree:
+   - Anything under `$ARTIFACTS_DIR` (the artifacts directory normally lives outside the worktree, but copies/symlinks may exist)
+   - `review/`, `simplify-report.md`, `*-report.md` at the repo root
+   - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
+   - If `git status --porcelain` shows files you don't recognize as part of your simplifications, leave them unstaged
+4. Commit and push only the staged source edits:
+   ```bash
    git commit -m "simplify: reduce complexity in changed files"
    git push
    ```
-3. If no simplifications found, skip commit
+5. If no simplifications were applied, skip the commit entirely
 
 ### Phase 4: REPORT
 
