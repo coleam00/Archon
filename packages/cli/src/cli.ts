@@ -74,6 +74,7 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
+  isVerboseBoot,
 } from '@archon/paths';
 import * as git from '@archon/git';
 
@@ -279,8 +280,10 @@ async function main(): Promise<number> {
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // Set log level from flags (quiet > verbose > default)
-    if (values.quiet) {
+    // setup/doctor default to warn to avoid Pino info JSON interleaving with ○/✓ output; lazy loggers pick up this level at first creation
+    const isInteractiveCommand = command === 'setup' || command === 'doctor';
+    const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+    if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
