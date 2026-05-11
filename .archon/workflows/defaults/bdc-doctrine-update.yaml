@@ -62,6 +62,19 @@ nodes:
       Hardcoded Rule: doctrine-only WOs push directly to master. No feature branch. No PR gate.
       This includes edits to: CLAUDE.md, skills, memory, wiki, policies, README, ATTRIBUTION.
 
+      ## CRITICAL: Path discipline (Rule 4)
+      ALL file paths in your plan MUST be RELATIVE TO REPO ROOT.
+      The CWD is the bdc-xo repo root (or whatever codebase you are firing against).
+      DO NOT prefix paths with `BDC_XO/` or any other repo name.
+      WRONG: `BDC_XO/.gitattributes`, `BDC_XO/skills/hookify/foo.md`
+      RIGHT: `.gitattributes`, `skills/hookify/foo.md`
+      This applies to: file paths in "Files to modify" / "Files to create",
+      arguments to grep / git / sed / find / file in "Grep verification checks",
+      and any path mentioned in your plan.
+
+      Also: do NOT include placeholder substrings like `<the-file-that-failed>`
+      or `<TBD>` in grep checks. Every check must be a literal, runnable command.
+
       ## Spec
       $read-spec.output
 
@@ -97,33 +110,51 @@ nodes:
     bash: |
       set -euo pipefail
       echo "Running grep verification checks on doctrine edits..."
-      # Extract grep checks from plan output
-      # Format: each line starting with "grep:" is a check
-      CHECKS=$(printf '%s\n' "$plan.output" | sed -n '/## Grep verification checks/,/^##/p' | sed '1d;$d' | grep -v '^$' || true)
+      # Extract grep checks from plan output's "## Grep verification checks" section.
+      # Strip markdown code fences (```bash, ```) so they don't get eval'd as commands.
+      CHECKS=$(printf '%s\n' "$plan.output" \
+        | sed -n '/## Grep verification checks/,/^## /p' \
+        | sed '1d;$d' \
+        | grep -v '^[[:space:]]*$' \
+        | grep -v '^[[:space:]]*```' \
+        | grep -v '^[[:space:]]*#' \
+        || true)
       if [ -z "$CHECKS" ]; then
         echo "No grep checks defined in plan; skipping detailed verification."
         exit 0
       fi
+      # Per-check 15s timeout prevents node-level hangs from xargs-with-empty-stdin
+      # or other unbounded commands. Anchor: 2026-05-10 WO-DOCTRINE-GITATTRIBUTES-...
+      # hit a 120s workflow-node timeout because plan output contained
+      # `git ls-files BDC_XO/... | xargs file` which hangs when ls-files returns
+      # empty (CWD is bdc-xo repo root; "BDC_XO/" is a Rule 4 violation).
       FAILED=0
+      EXECUTED=0
       while IFS= read -r CHECK; do
         if [ -z "$CHECK" ]; then
           continue
         fi
+        EXECUTED=$((EXECUTED + 1))
         echo "Checking: $CHECK"
-        if eval "$CHECK"; then
+        if timeout 15 bash -c "$CHECK" >/dev/null 2>&1; then
           echo "  PASS"
         else
-          echo "  FAIL"
+          rc=$?
+          if [ "$rc" = "124" ]; then
+            echo "  FAIL (timed out after 15s)"
+          else
+            echo "  FAIL (exit $rc)"
+          fi
           FAILED=$((FAILED + 1))
         fi
       done <<EOF
       $CHECKS
       EOF
+      echo "verify-greps summary: $EXECUTED checks, $FAILED failed"
       if [ "$FAILED" -gt 0 ]; then
-        echo "Grep verification failed on $FAILED check(s)." >&2
+        echo "Grep verification failed on $FAILED of $EXECUTED check(s)." >&2
         exit 1
       fi
-      echo "All grep checks passed."
 
   - id: decide-push-target
     depends_on: [verify-greps]
