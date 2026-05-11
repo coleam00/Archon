@@ -62,18 +62,24 @@ export type NodeState = z.infer<typeof nodeStateSchema>;
  * `output` is the concatenated assistant text (or JSON-encoded string from the SDK
  * when output_format is set). Empty string for failed/skipped nodes.
  * `error` is required when state is 'failed', absent on all other states.
+ * `structuredOutput` carries the provider's parsed structured payload (set by Pi/Codex/Claude
+ * when the result chunk includes one). Downstream `$nodeId.output.field` substitution and
+ * `when:` conditions prefer this object over re-parsing `output`, so providers that emit
+ * fence-wrapped or preamble-prefixed JSON (Pi/Minimax) survive the round-trip.
  */
 export const nodeOutputSchema = z.discriminatedUnion('state', [
   z.object({
     state: z.enum(['completed', 'running']),
     output: z.string(),
     sessionId: z.string().optional(),
+    structuredOutput: z.unknown().optional(),
   }),
   z.object({
     state: z.literal('failed'),
     output: z.string(),
     sessionId: z.string().optional(),
     error: z.string(),
+    structuredOutput: z.unknown().optional(),
   }),
   z.object({
     state: z.enum(['pending', 'skipped']),
