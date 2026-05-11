@@ -90,8 +90,14 @@ nodes:
       }
 
       const diff = readFileSync(resolve(artifactsDir, 'pr-diff.txt'), 'utf8');
-      // Only look at added lines (+ prefix, not +++ file header)
-      const addedLines = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
+      // Only look at added lines (+ prefix, not +++ file header). Strip the leading
+      // '+' so multi-line values (Prettier wraps long strings) match across newlines —
+      // \s* skips whitespace including \n, but cannot skip the '+' diff prefix.
+      const addedLines = diff
+        .split('\n')
+        .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+        .map((l) => l.slice(1))
+        .join('\n');
 
       const slug = addedLines.match(/slug:\s*'([^']+)'/)?.[1] ?? '';
       const name = addedLines.match(/name:\s*'([^']+)'/)?.[1] ?? '';
