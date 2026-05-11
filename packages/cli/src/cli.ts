@@ -50,6 +50,8 @@ import {
   workflowRejectCommand,
   workflowCleanupCommand,
   workflowEventEmitCommand,
+  workflowSearchCommand,
+  workflowInstallCommand,
   isValidEventType,
 } from './commands/workflow';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
@@ -101,6 +103,8 @@ Commands:
   workflow list              List available workflows in current directory
   workflow run <name> [msg]  Run a workflow with optional message
   workflow status            Show status of running workflows
+  workflow search [query]    Search the workflow marketplace
+  workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into main
@@ -128,6 +132,7 @@ Options:
   --no-context               Skip context injection for 'continue'
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
+  --force                    Overwrite existing file (for workflow install)
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -139,6 +144,8 @@ Examples:
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
   archon skill install
   archon skill install /path/to/project
+  archon workflow search "pr review"
+  archon workflow install archon-piv-loop
 `);
 }
 
@@ -292,6 +299,19 @@ async function main(): Promise<number> {
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).
+
+    // Marketplace search doesn't need a git repo — handle before git validation
+    if (command === 'workflow' && subcommand === 'search') {
+      const query = positionals[2];
+      try {
+        await workflowSearchCommand(query, jsonFlag);
+      } catch (error) {
+        const err = error as Error;
+        console.error(`Error: ${err.message}`);
+        return 1;
+      }
+      return 0;
+    }
 
     // Validate working directory exists
     let effectiveCwd = cwd;
@@ -513,6 +533,17 @@ async function main(): Promise<number> {
             break;
           }
 
+          case 'install': {
+            const installSlug = positionals[2];
+            if (!installSlug) {
+              console.error('Usage: archon workflow install <slug> [--force]');
+              return 1;
+            }
+            const forceFlag = values.force as boolean | undefined;
+            await workflowInstallCommand(installSlug, effectiveCwd, forceFlag);
+            break;
+          }
+
           default:
             if (subcommand === undefined) {
               console.error('Missing workflow subcommand');
@@ -520,7 +551,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event'
+              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event, search, install'
             );
             return 1;
         }
