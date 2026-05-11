@@ -83,10 +83,17 @@ describe('ClaudeProvider', () => {
   describe('constructor', () => {
     test('throws when running as root (UID 0)', () => {
       const spy = spyOn(claudeModule, 'getProcessUid').mockReturnValue(0);
-      expect(() => new ClaudeProvider()).toThrow(
-        'does not support bypassPermissions when running as root'
-      );
-      spy.mockRestore();
+      // IS_SANDBOX=1 bypasses the root check; clear it so the guard can trigger
+      const savedSandbox = process.env.IS_SANDBOX;
+      delete process.env.IS_SANDBOX;
+      try {
+        expect(() => new ClaudeProvider()).toThrow(
+          'does not support bypassPermissions when running as root'
+        );
+      } finally {
+        if (savedSandbox !== undefined) process.env.IS_SANDBOX = savedSandbox;
+        spy.mockRestore();
+      }
     });
 
     test('does not throw for non-root user', () => {
@@ -726,12 +733,32 @@ describe('ClaudeProvider', () => {
       expect(callArgs.options.settingSources).toEqual(['project', 'user']);
     });
 
-    test('defaults settingSources to project when not provided', async () => {
+    test('defaults settingSources to project + user when not provided', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'test-session' };
       });
 
       for await (const _ of client.sendQuery('test', '/tmp')) {
+        // consume
+      }
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.settingSources).toEqual(['project', 'user']);
+    });
+
+    test("honors explicit settingSources: ['project'] to opt out of user scope", async () => {
+      // Locks in the contract: setting settingSources: ['project'] in
+      // .archon/config.yaml must NOT be silently widened to the new default.
+      // A future refactor that drops the `?? ['project', 'user']` guard would
+      // expand skill/command/agent scope for every project-only deployment.
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'test-session' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+        assistantConfig: { settingSources: ['project'] },
+      })) {
         // consume
       }
 

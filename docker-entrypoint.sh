@@ -13,10 +13,28 @@ if [ "$(id -u)" = "0" ]; then
     echo "ERROR: Failed to fix ownership of /.archon — volume may be read-only or mounted with incompatible options" >&2
     exit 1
   fi
+  # /home/appuser is persisted to a named volume (or bind-mounted via
+  # ARCHON_USER_HOME) so Claude/Codex/Pi config, ~/.gitconfig, shell history,
+  # and other user-specific state survive rebuilds. On bind mounts, host UIDs
+  # don't map to appuser (1001), so fix ownership the same way we do /.archon.
+  if ! chown -Rh appuser:appuser /home/appuser 2>/dev/null; then
+    echo "ERROR: Failed to fix ownership of /home/appuser — volume may be read-only or mounted with incompatible options" >&2
+    exit 1
+  fi
   RUNNER="gosu appuser"
 else
   # Already running as non-root (e.g., --user flag or Kubernetes)
   RUNNER=""
+fi
+
+# Warn if vars known to be ignored inside the container were set via env_file: .env.
+# These leak in but have no effect (ARCHON_HOME is overridden to /.archon by source;
+# ARCHON_DATA is a host-side compose substitution token, never read by the container).
+if [ -n "${ARCHON_HOME:-}" ]; then
+  echo "[archon] ARCHON_HOME=${ARCHON_HOME} ignored in Docker (container home is fixed at /.archon)" >&2
+fi
+if [ -n "${ARCHON_DATA:-}" ]; then
+  echo "[archon] ARCHON_DATA=${ARCHON_DATA} is a host-side compose token; not read inside the container" >&2
 fi
 
 # Register all git repositories under /.archon as safe directories.
@@ -26,8 +44,14 @@ fi
 # The Dockerfile RUN-layer registers fixed paths, but that gitconfig lives
 # in the image layer — bind mounts don't inherit it on restart, and
 # worktrees are nested at arbitrary depths unknown at build time.
+# With /home/appuser now persisted, ~/.gitconfig survives across restarts —
+# so we must check before --add or duplicate safe.directory lines accumulate
+# every boot.
 find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
-  $RUNNER git config --global --add safe.directory "$(dirname "$git_dir")"
+  repo_dir="$(dirname "$git_dir")"
+  if ! $RUNNER git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$repo_dir"; then
+    $RUNNER git config --global --add safe.directory "$repo_dir"
+  fi
 done
 
 # Configure git to use GH_TOKEN for HTTPS clones via credential helper
