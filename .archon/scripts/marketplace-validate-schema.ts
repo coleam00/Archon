@@ -5,7 +5,10 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
-import { parseWorkflow } from '@archon/workflows/loader';
+// Resolve workspace package via relative path: Bun's run-script context for
+// .archon/scripts/ doesn't reliably honor the @archon/workflows/loader subpath
+// export in CI. Direct file import avoids the resolution gap.
+import { parseWorkflow } from '../../packages/workflows/src/loader.ts';
 
 interface FileResult {
   name: string;
