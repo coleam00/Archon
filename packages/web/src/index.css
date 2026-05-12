@@ -6,81 +6,82 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* RawBlock Design System - Light/White Theme */
+/* PulsePoint Design System - Dark/Clinical Theme */
 :root {
-  /* Surface colors - stark black and white */
-  --surface: #ffffff;
-  --surface-elevated: #ffffff;
-  --surface-inset: #f0f0f0;
-  --surface-hover: #e8e8e8;
-  --surface-accent: #f5f5f5;
+  /* Surface colors - dark clinical */
+  --surface: #1E293B;
+  --surface-elevated: #334155;
+  --surface-inset: #0F172A;
+  --surface-hover: #334155;
+  --surface-accent: #1E3A5F;
 
-  /* Text colors - black and gray */
-  --text-primary: #000000;
-  --text-secondary: #4a4a4a;
-  --text-tertiary: #666666;
+  /* Text colors - light on dark */
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-tertiary: #64748B;
 
   /* Border colors */
-  --border: #000000;
-  --border-bright: #333333;
-  --border-subtle: #cccccc;
+  --border: #334155;
+  --border-bright: #475569;
+  --border-subtle: #1E293B;
 
-  /* Primary (black for RawBlock) */
-  --primary: #000000;
-  --primary-hover: #333333;
+  /* Primary (navy blue for PulsePoint) */
+  --primary: #1E3A5F;
+  --primary-hover: #264A75;
   --primary-foreground: #ffffff;
-  --accent: #000000;
-  --accent-hover: #333333;
+  --accent: #3B82F6;
+  --accent-hover: #60A5FA;
   --accent-foreground: #ffffff;
-  --accent-muted: #f0f0f0;
-  --accent-bright: #0000ff;
+  --accent-muted: #1E3A5F;
+  --accent-bright: #60A5FA;
 
-  /* Semantic colors - pure and stark */
-  --success: #008000;
-  --warning: #ffa500;
-  --error: #ff0000;
+  /* Semantic colors - clinical status */
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --error: #E63946;
+  --info: #3B82F6;
 
   /* Node type colors */
-  --node-command: #000000;
-  --node-prompt: #000000;
-  --node-bash: #ffa500;
-  --node-loop: #008000;
+  --node-command: #1E3A5F;
+  --node-prompt: #334155;
+  --node-bash: #F59E0B;
+  --node-loop: #22C55E;
 
-  /* shadcn variables mapped to RawBlock theme */
-  --radius: 0px;
-  --background: #ffffff;
-  --foreground: #000000;
-  --card: #ffffff;
-  --card-foreground: #000000;
-  --popover: #ffffff;
-  --popover-foreground: #000000;
-  --primary: #000000;
+  /* shadcn variables mapped to PulsePoint dark theme */
+  --radius: 4px;
+  --background: #0F172A;
+  --foreground: #F1F5F9;
+  --card: #1E293B;
+  --card-foreground: #F1F5F9;
+  --popover: #1E293B;
+  --popover-foreground: #F1F5F9;
+  --primary: #1E3A5F;
   --primary-foreground: #ffffff;
-  --secondary: #f0f0f0;
-  --secondary-foreground: #000000;
-  --muted: #f0f0f0;
-  --muted-foreground: #666666;
-  --accent: #f0f0f0;
-  --accent-foreground: #000000;
-  --destructive: #ff0000;
+  --secondary: #334155;
+  --secondary-foreground: #F1F5F9;
+  --muted: #334155;
+  --muted-foreground: #94A3B8;
+  --accent: #3B82F6;
+  --accent-foreground: #ffffff;
+  --destructive: #E63946;
   --destructive-foreground: #ffffff;
-  --border: #000000;
-  --input: #f0f0f0;
-  --input-border: #000000;
-  --ring: #000000;
-  --chart-1: #000000;
-  --chart-2: #008000;
-  --chart-3: #ffa500;
-  --chart-4: #ff0000;
-  --chart-5: #0000ff;
-  --sidebar: #ffffff;
-  --sidebar-foreground: #000000;
-  --sidebar-primary: #ffffff;
-  --sidebar-primary-foreground: #000000;
-  --sidebar-accent: #f0f0f0;
-  --sidebar-accent-foreground: #000000;
-  --sidebar-border: #000000;
-  --sidebar-ring: #000000;
+  --border: #334155;
+  --input: #334155;
+  --input-border: #475569;
+  --ring: #3B82F6;
+  --chart-1: #3B82F6;
+  --chart-2: #22C55E;
+  --chart-3: #F59E0B;
+  --chart-4: #E63946;
+  --chart-5: #8B5CF6;
+  --sidebar: #1E293B;
+  --sidebar-foreground: #F1F5F9;
+  --sidebar-primary: #1E3A5F;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #334155;
+  --sidebar-accent-foreground: #F1F5F9;
+  --sidebar-border: #334155;
+  --sidebar-ring: #3B82F6;
 }
 
 @theme inline {
@@ -102,15 +103,21 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-error: var(--error);
+  --color-info: var(--info);
   --color-node-command: var(--node-command);
   --color-node-prompt: var(--node-prompt);
   --color-node-bash: var(--node-bash);
   --color-node-loop: var(--node-loop);
 
-  /* Typography - RawBlock fonts */
-  --font-sans: 'Work Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-headline: 'Archivo Black', ui-sans-serif, sans-serif;
-  --font-mono: 'Space Mono', ui-monospace, monospace;
+  /* PulsePoint Typography */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-headline: 'Red Hat Display', ui-sans-serif, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Typography Scale */
+  --text-display: 2.25rem;
+  --text-headline: 1.75rem;
+  --text-body: 0.875rem;
 
   /* shadcn theme mappings */
   --color-foreground: var(--foreground);
@@ -144,16 +151,23 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
 
-  /* Border radii - 0 for RawBlock */
-  --radius-sm: 0px;
-  --radius-md: 0px;
-  --radius-lg: 0px;
-  --radius-xl: 0px;
-  --radius-2xl: 0px;
-  --radius-3xl: 0px;
-  --radius-4xl: 0px;
+  /* Border radii - subtle rounding for PulsePoint */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 8px;
+  --radius-2xl: 12px;
+  --radius-3xl: 16px;
+  --radius-4xl: 20px;
 
+  /* Elevation / Shadows */
+  --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 8px rgba(30, 58, 95, 0.15);
+  --shadow-medium: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 16px rgba(30, 58, 95, 0.2);
+  --shadow-alert: 0 0 20px rgba(230, 57, 70, 0.4), 0 0 6px rgba(230, 57, 70, 0.6);
+
+  /* Animations */
   --animate-slide-up: slide-up 0.25s ease-out;
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
 }
 
 @keyframes slide-up {
@@ -167,14 +181,23 @@
   }
 }
 
-/* Base body styling - RawBlock light theme */
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.6);
+  }
+}
+
+/* Base body styling - PulsePoint dark theme */
 body {
   background-color: var(--background);
   color: var(--text-primary);
   font-family: var(--font-sans);
 }
 
-/* Scrollbar styling for RawBlock - black thumb on white */
+/* Scrollbar styling for PulsePoint - dark theme */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -185,18 +208,19 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 0;
+  background: var(--border-bright);
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-bright);
+  background: var(--text-tertiary);
 }
 
-/* Highlight.js: stark black and white theme */
+/* Highlight.js: dark theme */
 .hljs {
   background: var(--surface-inset) !important;
-  border: 3px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 @layer base {
@@ -208,7 +232,7 @@ body {
   }
 }
 
-/* Chat markdown typography (replaces @tailwindcss/typography prose classes) */
+/* Chat markdown typography */
 .chat-markdown p {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
@@ -271,7 +295,7 @@ body {
 
 .chat-markdown hr {
   border-color: var(--border);
-  border-width: 3px;
+  border-width: 1px;
   margin-top: 1em;
   margin-bottom: 1em;
 }
@@ -286,7 +310,8 @@ body {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
   font-size: 0.8125rem;
-  border: 3px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 .chat-markdown th,
@@ -298,20 +323,22 @@ body {
 
 .chat-markdown th {
   font-weight: 600;
-  background: var(--surface-inset);
+  background: var(--surface-elevated);
 }
 
 .chat-markdown tr:nth-child(even) td {
   background: var(--surface-accent);
 }
 
-/* Code blocks - stark border, no rounding */
+/* Code blocks */
 .chat-markdown pre {
-  border: 3px solid var(--border);
-  border-radius: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
-/* Inline code - no rounding */
+/* Inline code */
 .chat-markdown code:not([class*='language-']) {
-  border-radius: 0;
+  border-radius: 2px;
+  background: var(--surface-elevated);
+  padding: 0.1em 0.3em;
 }

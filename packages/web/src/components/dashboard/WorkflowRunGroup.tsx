@@ -38,7 +38,7 @@ export function WorkflowRunGroup({
             onClick={(): void => {
               navigate(`/chat/${encodeURIComponent(parentPlatformId)}`);
             }}
-            className="flex items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-2.5 py-0.5 text-[11px] text-text-secondary hover:border-primary/40 hover:text-primary transition-colors shrink-0"
+            className="flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-2.5 py-0.5 text-[11px] text-text-secondary hover:border-info/40 hover:text-info transition-colors shrink-0"
           >
             <MessageSquare className="h-3 w-3" />
             {runs.length} run{runs.length !== 1 ? 's' : ''} from this chat

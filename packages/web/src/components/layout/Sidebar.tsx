@@ -169,16 +169,16 @@ export function Sidebar(): React.ReactElement {
 
   return (
     <aside
-      className="relative flex h-full flex-col bg-white border-r-[3px] border-black"
+      className="relative flex h-full flex-col bg-surface border-r border-border"
       style={{ width: `${String(width)}px` }}
     >
       {/* Logo */}
       <div className="flex flex-col gap-3 p-4">
         <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <div className="flex h-8 w-8 items-center justify-center bg-black text-white">
+          <div className="flex h-8 w-8 items-center justify-center bg-primary text-primary-foreground">
             <span className="text-sm font-semibold">A</span>
           </div>
-          <span className="text-base font-semibold text-black">Archon</span>
+          <span className="text-base font-semibold text-text-primary">Archon</span>
         </Link>
       </div>
 
@@ -198,7 +198,7 @@ export function Sidebar(): React.ReactElement {
       <div className="px-3 pb-2">
         <button
           onClick={handleNewOrchestratorChat}
-          className="flex w-full items-center gap-2 px-3 py-2 border-[3px] border-black text-sm font-semibold text-black bg-white hover:bg-black hover:text-white transition-colors"
+          className="flex w-full items-center gap-2 px-3 py-2 border border-border text-sm font-semibold text-text-primary bg-surface hover:bg-surface-hover hover:text-text-primary transition-colors"
         >
           <MessageSquarePlus className="h-4 w-4 shrink-0" />
           New Chat
@@ -210,7 +210,7 @@ export function Sidebar(): React.ReactElement {
       {/* Collapsible Project Selector */}
       <div className="px-2 py-2">
         <div className="flex items-center justify-between px-1">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-[#666666]">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
             Projects
           </span>
           <button
@@ -222,7 +222,7 @@ export function Sidebar(): React.ReactElement {
             className="p-1 border border-transparent hover:border-black transition-colors"
             title="Add project"
           >
-            <Plus className="h-4 w-4 text-[#666666] hover:text-black" />
+            <Plus className="h-4 w-4 text-text-tertiary hover:text-text-secondary" />
           </button>
         </div>
 
@@ -244,20 +244,20 @@ export function Sidebar(): React.ReactElement {
                 }}
                 placeholder="GitHub URL or local path"
                 disabled={addLoading}
-                className="w-full border-[3px] border-black bg-[#F0F0F0] px-2 py-1 text-xs text-black placeholder:text-[#666666] focus:bg-white focus:border-[5px] focus:outline-none disabled:opacity-50 font-mono"
+                className="w-full border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:bg-surface focus:border-border focus:outline-none disabled:opacity-50 font-mono"
               />
               {addLoading && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-black" />}
             </div>
-            {addError && <p className="mt-1 text-[10px] text-[#FF0000] line-clamp-2">{addError}</p>}
+            {addError && <p className="mt-1 text-[10px] text-error line-clamp-2">{addError}</p>}
           </div>
         )}
 
         <Collapsible open={projectsExpanded} onOpenChange={setProjectsExpanded}>
           {selectedProjectId && !projectsExpanded ? (
-            <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 mt-1 border-[3px] border-black text-left text-sm text-black hover:bg-black hover:text-white transition-colors">
+            <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 mt-1 border border-border text-left text-sm text-text-primary hover:bg-surface-hover hover:text-text-primary transition-colors">
               <FolderGit2 className="h-4 w-4 shrink-0" />
               <span className="truncate flex-1">{selectedProject?.name ?? 'Project'}</span>
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#666666]" />
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
             </CollapsibleTrigger>
           ) : (
             <CollapsibleTrigger className="hidden" />
@@ -287,7 +287,7 @@ export function Sidebar(): React.ReactElement {
           </div>
         )}
         {isErrorCodebases && (
-          <p className="px-2 text-[10px] text-[#FF0000] mt-1">Failed to load projects — retrying</p>
+          <p className="px-2 text-[10px] text-error mt-1">Failed to load projects — retrying</p>
         )}
       </div>
 
@@ -316,7 +316,7 @@ export function Sidebar(): React.ReactElement {
       {/* Resize handle */}
       <div
         onMouseDown={handleMouseDown}
-        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize bg-[#CCCCCC] hover:bg-black transition-colors"
+        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize bg-border hover:bg-border-bright transition-colors"
       />
     </aside>
   );
