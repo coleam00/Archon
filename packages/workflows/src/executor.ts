@@ -175,6 +175,9 @@ async function sendCriticalMessage(
  * Resolve the artifacts and log directories for a workflow run.
  * Looks up the codebase by ID once, parses owner/repo, and returns project-scoped paths.
  * Falls back to cwd-based paths for unregistered repos.
+ *
+ * When ARCHON_STORE_ARTIFACTS_IN_WORKTREE=true, artifacts are stored in the repo's
+ * .archon/artifacts/ directory (tracked by git) instead of the central location.
  */
 async function resolveProjectPaths(
   deps: WorkflowDeps,
@@ -182,6 +185,14 @@ async function resolveProjectPaths(
   workflowRunId: string,
   codebaseId?: string
 ): Promise<{ artifactsDir: string; logDir: string }> {
+  // Check env var for artifact location preference
+  if (archonPaths.shouldStoreArtifactsInWorktree()) {
+    return {
+      artifactsDir: join(cwd, '.archon', 'artifacts', 'runs', workflowRunId),
+      logDir: join(cwd, '.archon', 'logs'),
+    };
+  }
+
   if (codebaseId) {
     try {
       const codebase = await deps.store.getCodebase(codebaseId);

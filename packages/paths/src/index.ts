@@ -33,6 +33,7 @@ export {
   createProjectSourceSymlink,
   findMarkdownFilesRecursive,
   getWebDistDir,
+  shouldStoreArtifactsInWorktree,
 } from './archon-paths';
 
 // Env loader

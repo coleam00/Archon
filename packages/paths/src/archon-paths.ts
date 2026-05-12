@@ -49,6 +49,16 @@ export function isDocker(): boolean {
 }
 
 /**
+ * Check if artifacts should be stored in the worktree (repo) instead of central location.
+ * When true, artifacts go to <repo>/.archon/artifacts/ (tracked by git).
+ * When false (default), artifacts go to ~/.archon/workspaces/owner/repo/artifacts/.
+ */
+export function shouldStoreArtifactsInWorktree(): boolean {
+  const value = process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE?.toLowerCase();
+  return value === 'true' || value === '1';
+}
+
+/**
  * Get the Archon home directory
  * - Docker: /.archon
  * - Local: ~/.archon (or ARCHON_HOME env var)
