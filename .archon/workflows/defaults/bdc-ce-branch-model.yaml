@@ -47,17 +47,9 @@ nodes:
       printf -- '--- ARCHITECTURE v1 ---\n%s\n\n' "$ARCH_CONTENT"
       printf -- '--- GOVERNANCE ---\n%s\n' "$GOV_CONTENT"
 
-  - id: post-started
-    depends_on: [read-spec]
-    bash: |
-      # Best-effort webhook ping — never block the workflow on n8n
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      curl -sS --max-time 20 -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"CE branch-model build started\"}" \
-        > /dev/null 2>&1 || echo "builder-status webhook timed out or failed (non-fatal)"
-      echo "WEBHOOK_POSTED=true_or_skipped"
-      exit 0
+  # post-started node REMOVED 2026-05-12 - n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion is the canonical close action.
 
   - id: verify-baseline-commit
     depends_on: [read-spec]
@@ -266,7 +258,7 @@ nodes:
         echo "- [x] Backport policy referenced (enforced separately by WO-RELEASE-CE-BACKPORT-POLICY-01)"
         echo ""
         echo "## Captain CI Manifest"
-        echo "Will be built by post-completed node and written to Notion Notes."
+        echo "Will be built by build-manifest node and written to Notion Notes."
         echo ""
         echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
       } > "$BODY_FILE"
@@ -312,23 +304,12 @@ nodes:
       Push: $commit-and-push-main.output
       PR: $open-pr.output
 
-  - id: post-completed
-    depends_on: [build-manifest]
-    bash: |
-      # Best-effort webhook ping (Rule from diagnostic-first doctrine). n8n may be slow or down;
-      # downstream flip-notion is what actually closes the WO. Do NOT block on this.
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      # Send a SUMMARY ping, not the full manifest — payload size + webhook latency
-      # was the failure mode on 2026-05-12 (timed out at 120s with full 2KB manifest body).
-      curl -sS --max-time 20 -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"WO ${WO_ID} REVIEW — see Notion Notes for full manifest\"}" \
-        > /dev/null 2>&1 || echo "builder-status webhook timed out or failed (non-fatal)"
-      echo "WEBHOOK_POSTED=true_or_skipped"
-      exit 0
+  # post-completed node REMOVED 2026-05-12 - n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion below is the canonical close action.
 
   - id: flip-notion
-    depends_on: [post-completed]
+    depends_on: [build-manifest]
     task_class: clerical
     prompt: |
       Update the Notion Work Order page for WO-RELEASE-CE-BRANCH-MODEL-01.

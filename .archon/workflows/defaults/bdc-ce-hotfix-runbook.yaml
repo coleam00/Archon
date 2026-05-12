@@ -22,14 +22,9 @@ nodes:
       printf -- '--- SPEC ---\n%s\n\n' "$SPEC"
       printf -- '--- GOVERNANCE ---\n%s\n' "$GOV"
 
-  - id: post-started
-    depends_on: [read-spec]
-    bash: |
-      set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"XO\"}" || true
+  # post-started node REMOVED 2026-05-12 - n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion is the canonical close action.
 
   - id: implement
     depends_on: [read-spec]
@@ -104,18 +99,12 @@ nodes:
       Manifest v2 for WO-RELEASE-CE-HOTFIX-RUNBOOK-01. Files created, PR URL, VALIDATION: PASS.
       Inputs: $read-spec.output $verify.output $commit-and-push.output $open-pr.output
 
-  - id: post-completed
-    depends_on: [build-manifest]
-    bash: |
-      set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"XO\",\"detail\":${DETAIL}}" || true
+  # post-completed node REMOVED 2026-05-12 - n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion below is the canonical close action.
 
   - id: flip-notion
-    depends_on: [post-completed]
+    depends_on: [build-manifest]
     task_class: clerical
     prompt: |
       Flip Notion WO-RELEASE-CE-HOTFIX-RUNBOOK-01 to REVIEW.

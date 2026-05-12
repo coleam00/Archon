@@ -36,14 +36,9 @@ nodes:
       fi
       echo "release/ce exists. Proceeding."
 
-  - id: post-started
-    depends_on: [verify-prereq]
-    bash: |
-      set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\"}" || true
+  # post-started node REMOVED 2026-05-12 - n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion is the canonical close action.
 
   - id: plan
     depends_on: [verify-prereq]
@@ -144,18 +139,12 @@ nodes:
       PR URL, dashboard-TODO if applicable, VALIDATION: PASS.
       Inputs: $read-spec.output $plan.output $verify-grep.output $commit-and-push.output $open-pr.output
 
-  - id: post-completed
-    depends_on: [build-manifest]
-    bash: |
-      set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || true
+  # post-completed node REMOVED 2026-05-12 - n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion below is the canonical close action.
 
   - id: flip-notion
-    depends_on: [post-completed]
+    depends_on: [build-manifest]
     task_class: clerical
     prompt: |
       Flip Notion WO-RELEASE-CE-DEPLOY-LANE-01 to REVIEW.
