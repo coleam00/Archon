@@ -141,6 +141,7 @@ nodes:
       gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/templates/ce-promotion-pr-template.md?ref=main" --jq .content | base64 -d > .github/PULL_REQUEST_TEMPLATE/ce-promotion.md
       gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/templates/ce-hotfix-pr-template.md?ref=main" --jq .content | base64 -d > .github/PULL_REQUEST_TEMPLATE/ce-hotfix.md
       # Add a CE branch policy reference doc inline (one-pager pointing back to bdc-xo wiki)
+      mkdir -p docs
       cat > docs/CE-BRANCH-POLICY.md <<'POLICY_EOF'
       # CE Branch Policy (this repo: lspro-react)
 
@@ -180,8 +181,13 @@ nodes:
       hotfix/ce/<slug> → release/ce → main (backport)
       ```
       POLICY_EOF
-      mkdir -p docs
-      mv docs/CE-BRANCH-POLICY.md docs/CE-BRANCH-POLICY.md.tmp 2>/dev/null || true
+      # Sanity-check files exist before staging (defensive; the cat above + gh api copy above should have created all three)
+      for f in .github/PULL_REQUEST_TEMPLATE/ce-promotion.md .github/PULL_REQUEST_TEMPLATE/ce-hotfix.md docs/CE-BRANCH-POLICY.md; do
+        if [ ! -f "$f" ]; then
+          echo "Expected file missing: $f" >&2
+          exit 1
+        fi
+      done
       git add .github/PULL_REQUEST_TEMPLATE/ce-promotion.md \
               .github/PULL_REQUEST_TEMPLATE/ce-hotfix.md \
               docs/CE-BRANCH-POLICY.md
