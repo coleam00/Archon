@@ -50,11 +50,14 @@ nodes:
   - id: post-started
     depends_on: [read-spec]
     bash: |
-      set -euo pipefail
+      # Best-effort webhook ping — never block the workflow on n8n
       WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+      curl -sS --max-time 20 -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
         -H "Content-Type: application/json" \
-        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"CE branch-model build started (workflow: bdc-ce-branch-model)\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" || echo "builder-status post failed (non-fatal)"
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"CE branch-model build started\"}" \
+        > /dev/null 2>&1 || echo "builder-status webhook timed out or failed (non-fatal)"
+      echo "WEBHOOK_POSTED=true_or_skipped"
+      exit 0
 
   - id: verify-baseline-commit
     depends_on: [read-spec]
@@ -312,12 +315,17 @@ nodes:
   - id: post-completed
     depends_on: [build-manifest]
     bash: |
-      set -euo pipefail
+      # Best-effort webhook ping (Rule from diagnostic-first doctrine). n8n may be slow or down;
+      # downstream flip-notion is what actually closes the WO. Do NOT block on this.
       WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+      # Send a SUMMARY ping, not the full manifest — payload size + webhook latency
+      # was the failure mode on 2026-05-12 (timed out at 120s with full 2KB manifest body).
+      curl -sS --max-time 20 -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
         -H "Content-Type: application/json" \
-        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || echo "builder-status post failed (non-fatal)"
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"WO ${WO_ID} REVIEW — see Notion Notes for full manifest\"}" \
+        > /dev/null 2>&1 || echo "builder-status webhook timed out or failed (non-fatal)"
+      echo "WEBHOOK_POSTED=true_or_skipped"
+      exit 0
 
   - id: flip-notion
     depends_on: [post-completed]
