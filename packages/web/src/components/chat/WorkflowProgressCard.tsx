@@ -112,10 +112,10 @@ export function WorkflowProgressCard({
   // Loading state: no run data yet
   if (!runData && !isError) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs max-w-md">
-        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
-        <span className="truncate text-text-primary font-medium">{workflowName}</span>
-        <span className="text-text-tertiary">Starting...</span>
+      <div className="flex items-center gap-2 border-[3px] border-black bg-white px-3 py-2 text-xs max-w-md">
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-black shrink-0" />
+        <span className="truncate text-sm font-semibold text-black">{workflowName}</span>
+        <span className="text-[#666666]">Starting...</span>
       </div>
     );
   }
@@ -123,14 +123,14 @@ export function WorkflowProgressCard({
   // Error state: couldn't fetch run
   if (isError && !runData) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs max-w-md">
-        <span className="text-error text-xs shrink-0">&#x26A0;</span>
-        <span className="truncate text-text-primary font-medium">{workflowName}</span>
+      <div className="flex items-center gap-2 border-[3px] border-black bg-white px-3 py-2 text-xs max-w-md">
+        <span className="text-[#FF0000] text-xs shrink-0">&#x26A0;</span>
+        <span className="truncate text-sm font-semibold text-black">{workflowName}</span>
         <button
           onClick={(): void => {
             refetch();
           }}
-          className="text-primary hover:text-accent-bright transition-colors shrink-0"
+          className="text-[#0000FF] hover:underline shrink-0"
         >
           Retry
         </button>
@@ -141,9 +141,9 @@ export function WorkflowProgressCard({
   return (
     <div
       className={cn(
-        'rounded-lg border border-border bg-surface transition-colors max-w-md overflow-hidden',
-        isRunning && 'border-l-2 border-l-primary',
-        isPaused && 'border-l-2 border-l-warning'
+        'border-[3px] border-black bg-white transition-colors max-w-md overflow-hidden',
+        isRunning && 'border-l-[5px] border-l-black',
+        isPaused && 'border-l-[5px] border-l-[#FFA500]'
       )}
     >
       {/* Header bar - always visible, clickable */}
@@ -153,14 +153,14 @@ export function WorkflowProgressCard({
       >
         <ChevronRight
           className={cn(
-            'h-3.5 w-3.5 shrink-0 text-text-tertiary transition-transform duration-150',
+            'h-3.5 w-3.5 shrink-0 text-[#666666] transition-transform duration-150',
             expanded && 'rotate-90'
           )}
         />
         <span className="shrink-0">
           <StatusIcon status={status ?? 'pending'} />
         </span>
-        <span className="truncate text-xs font-medium text-text-primary">{workflowName}</span>
+        <span className="truncate text-xs font-semibold text-black">{workflowName}</span>
         {totalNodes > 0 && (
           <span className="shrink-0 text-[10px] text-text-secondary">
             {String(completedCount)}/{String(totalNodes)} nodes
@@ -168,11 +168,11 @@ export function WorkflowProgressCard({
         )}
         <span className="ml-auto shrink-0">
           {isRunning && elapsed > 0 ? (
-            <span className="rounded-full bg-primary/20 px-2 py-0.5 text-[10px] text-primary">
+            <span className="border border-black bg-black text-white px-2 py-0.5 text-[10px] font-semibold">
               {formatDurationMs(elapsed)}
             </span>
           ) : finalDuration != null ? (
-            <span className="rounded-full bg-surface-elevated px-2 py-0.5 text-[10px] text-text-secondary">
+            <span className="bg-[#F0F0F0] border border-[#CCCCCC] px-2 py-0.5 text-[10px] text-[#666666]">
               {formatDurationMs(finalDuration)}
             </span>
           ) : null}
@@ -181,7 +181,7 @@ export function WorkflowProgressCard({
 
       {/* Expanded body */}
       {expanded && (
-        <div className="border-t border-border">
+        <div className="border-t-[3px] border-black">
           {/* Node list */}
           {dagNodes.length > 0 && (
             <div className="space-y-0.5 px-3 py-2">
@@ -190,9 +190,9 @@ export function WorkflowProgressCard({
                   <span className="shrink-0">
                     <StatusIcon status={node.status} />
                   </span>
-                  <span className="truncate flex-1 text-text-secondary">{node.name}</span>
+                  <span className="truncate flex-1 text-[#4A4A4A]">{node.name}</span>
                   {node.duration !== undefined && (
-                    <span className="shrink-0 text-[10px] text-text-tertiary">
+                    <span className="shrink-0 text-[10px] text-[#666666]">
                       {formatDurationMs(node.duration)}
                     </span>
                   )}
@@ -203,10 +203,10 @@ export function WorkflowProgressCard({
 
           {/* Approval request banner */}
           {isPaused && (
-            <div className="border-t border-border px-3 py-2 space-y-2">
-              <div className="rounded-md bg-warning/5 border border-warning/20 px-3 py-2 flex items-start gap-2">
-                <Pause className="h-3.5 w-3.5 text-warning shrink-0 mt-0.5" />
-                <p className="text-xs text-text-secondary">
+            <div className="border-t-[3px] border-black px-3 py-2 space-y-2">
+              <div className="border-[3px] border-[#FFA500] px-3 py-2 flex items-start gap-2">
+                <Pause className="h-3.5 w-3.5 text-[#FFA500] shrink-0 mt-0.5" />
+                <p className="text-xs text-[#4A4A4A]">
                   {approval?.message ?? 'Waiting for approval'}
                 </p>
               </div>
@@ -216,7 +216,7 @@ export function WorkflowProgressCard({
                     approveMutation.mutate();
                   }}
                   disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-success/80 hover:bg-success/10 hover:text-success transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1 border-[2px] border-[#008000] text-[#008000] px-2 py-1 text-xs hover:bg-[#008000] hover:text-white transition-colors disabled:opacity-50"
                 >
                   <CheckCircle className="h-3.5 w-3.5" />
                   Approve
@@ -225,7 +225,7 @@ export function WorkflowProgressCard({
                   trigger={
                     <button
                       disabled={!runId || approveMutation.isPending || rejectMutation.isPending}
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-error/80 hover:bg-error/10 hover:text-error transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1 border-[2px] border-[#FF0000] text-[#FF0000] px-2 py-1 text-xs hover:bg-[#FF0000] hover:text-white transition-colors disabled:opacity-50"
                     >
                       <XCircle className="h-3.5 w-3.5" />
                       Reject
@@ -250,7 +250,7 @@ export function WorkflowProgressCard({
                 />
               </div>
               {(approveMutation.isError || rejectMutation.isError) && (
-                <p className="text-xs text-error">
+                <p className="text-xs text-[#FF0000]">
                   {mutationError instanceof Error
                     ? mutationError.message
                     : 'Action failed — please try again'}
@@ -261,16 +261,16 @@ export function WorkflowProgressCard({
 
           {/* Current tool activity */}
           {currentTool?.status === 'running' && (
-            <div className="flex items-center gap-2 px-3 py-1.5 text-xs border-t border-border">
-              <Loader2 className="h-3 w-3 animate-spin text-primary shrink-0" />
-              <span className="truncate font-mono text-primary">{currentTool.name}</span>
+            <div className="flex items-center gap-2 px-3 py-1.5 text-xs border-t-[3px] border-black">
+              <Loader2 className="h-3 w-3 animate-spin text-black shrink-0" />
+              <span className="truncate font-mono text-black">{currentTool.name}</span>
             </div>
           )}
 
           {/* Error message */}
           {status === 'failed' && error && (
             <div
-              className="px-3 py-1.5 text-xs text-error border-t border-border truncate"
+              className="px-3 py-1.5 text-xs text-[#FF0000] border-t-[3px] border-black truncate"
               title={error}
             >
               {error.slice(0, 120)}
@@ -278,10 +278,10 @@ export function WorkflowProgressCard({
           )}
 
           {/* Footer: View Full Screen */}
-          <div className="border-t border-border px-3 py-1.5">
+          <div className="border-t-[3px] border-black px-3 py-1.5">
             <button
               onClick={handleViewFullScreen}
-              className="text-[10px] text-primary hover:text-accent-bright transition-colors"
+              className="text-[10px] text-[#0000FF] hover:underline"
             >
               View Full Screen &rarr;
             </button>

@@ -16,7 +16,7 @@ export function SearchBar({
 }: SearchBarProps): React.ReactElement {
   return (
     <div className="relative flex items-center">
-      <Search className="absolute left-2 h-3.5 w-3.5 text-text-tertiary" />
+      <Search className="absolute left-2.5 h-3.5 w-3.5 text-[#666666]" />
       <input
         ref={inputRef}
         type="text"
@@ -25,16 +25,16 @@ export function SearchBar({
           onChange(e.target.value);
         }}
         placeholder={placeholder}
-        className="h-8 w-full rounded-md border border-border bg-surface pl-7 pr-7 text-sm text-text-primary placeholder:text-text-tertiary outline-none focus:border-primary transition-colors"
+        className="h-8 w-full border-[3px] border-black bg-[#F0F0F0] pl-8 pr-8 text-sm text-black placeholder:text-[#666666] focus:bg-white focus:border-[5px] focus:outline-none transition-[border-width]"
       />
       {value && (
         <button
           onClick={(): void => {
             onChange('');
           }}
-          className="absolute right-2 p-0.5 rounded hover:bg-surface-elevated"
+          className="absolute right-2 p-0.5 border border-transparent hover:border-black transition-colors"
         >
-          <X className="h-3 w-3 text-text-tertiary" />
+          <X className="h-3 w-3 text-[#666666]" />
         </button>
       )}
     </div>

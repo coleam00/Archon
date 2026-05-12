@@ -242,7 +242,7 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
 
   return (
     <div
-      className={`border-t border-border bg-surface p-4 transition-colors${dragging ? ' bg-primary/5' : ''}`}
+      className={`border-t-[3px] border-black bg-white p-4 transition-colors${dragging ? ' bg-[#F0F0F0]' : ''}`}
       title={disabledReason}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -255,9 +255,9 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             {files.map(({ file, id }) => (
               <div
                 key={id}
-                className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-text-secondary"
+                className="flex items-center gap-1 rounded-none border border-border bg-[#F0F0F0] px-2 py-1 text-xs text-text-secondary"
               >
-                <span className="max-w-[140px] truncate" title={file.name}>
+                <span className="max-w-[140px] truncate font-mono" title={file.name}>
                   {file.name}
                 </span>
                 <span className="text-text-tertiary">({formatBytes(file.size)})</span>
@@ -314,14 +314,14 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             disabled={disabled}
             placeholder={dragging ? 'Drop files here...' : (disabledReason ?? 'Message Archon...')}
             rows={1}
-            className="flex-1 resize-none overflow-hidden rounded-lg border border-border bg-background px-4 py-2 text-sm leading-6 text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex-1 resize-none overflow-hidden border-[3px] border-black bg-[#F0F0F0] px-4 py-2.5 text-sm leading-6 text-black placeholder:text-[#666666] focus:bg-white focus:border-[5px] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             style={{ minHeight: '40px', maxHeight: '200px' }}
           />
           <Button
             onClick={handleSend}
             disabled={disabled || !value.trim()}
             size="icon"
-            className="h-10 w-10 shrink-0 rounded-lg bg-primary text-primary-foreground hover:bg-accent-hover disabled:opacity-50"
+            className="h-10 w-10 shrink-0 border-[3px] border-black bg-black text-white hover:bg-white hover:text-black"
           >
             {disabled && !disabledReason ? (
               <Loader2 className="h-4 w-4 animate-spin" />

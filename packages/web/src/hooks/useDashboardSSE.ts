@@ -16,7 +16,11 @@ export function useDashboardSSE(): void {
       let event: { type: string };
       try {
         event = JSON.parse(e.data) as { type: string };
-      } catch {
+      } catch (parseErr) {
+        console.warn('[DashboardSSE] Failed to parse event', {
+          raw: e.data,
+          error: parseErr instanceof Error ? parseErr.message : String(parseErr),
+        });
         return;
       }
 

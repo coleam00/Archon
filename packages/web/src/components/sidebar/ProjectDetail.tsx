@@ -19,11 +19,11 @@ function RunStatusBadge({ status }: { status: string }): React.ReactElement {
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium',
-        status === 'running' && 'bg-primary/10 text-primary',
-        status === 'completed' && 'bg-success/10 text-success',
-        status === 'failed' && 'bg-error/10 text-error',
-        status === 'cancelled' && 'bg-surface-elevated text-text-secondary'
+        'inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold border-[2px]',
+        status === 'running' && 'border-black bg-black text-white',
+        status === 'completed' && 'border-[#008000] text-[#008000] bg-white',
+        status === 'failed' && 'border-[#FF0000] text-[#FF0000] bg-white',
+        status === 'cancelled' && 'border-[#CCCCCC] text-[#666666] bg-white'
       )}
     >
       {status}
@@ -107,15 +107,15 @@ export function ProjectDetail({
   return (
     <div className="min-w-0 flex flex-col gap-3">
       <div className="px-1">
-        <h3 className="text-sm font-semibold text-text-primary truncate">{projectName}</h3>
+        <h3 className="text-sm font-semibold text-black truncate">{projectName}</h3>
         {repositoryUrl && (
-          <p className="text-[10px] text-text-tertiary truncate">{repositoryUrl}</p>
+          <p className="text-[10px] text-[#666666] truncate font-mono">{repositoryUrl}</p>
         )}
       </div>
 
       <button
         onClick={handleNewChat}
-        className="mx-1 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
+        className="mx-1 border-[3px] border-black bg-black px-3 py-2 text-xs font-semibold text-white hover:bg-white hover:text-black transition-colors"
       >
         New Chat
       </button>
@@ -124,12 +124,12 @@ export function ProjectDetail({
 
       {/* Conversations section */}
       <div>
-        <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-[#666666]">
           Conversations
         </span>
         <div className="mt-1 flex flex-col gap-0.5">
           {isErrorConversations ? (
-            <span className="px-1 text-xs text-error">Failed to load — retrying</span>
+            <span className="px-1 text-xs text-[#FF0000]">Failed to load — retrying</span>
           ) : filteredConversations && filteredConversations.length > 0 ? (
             filteredConversations.map(conv => (
               <ConversationItem
@@ -139,19 +139,19 @@ export function ProjectDetail({
               />
             ))
           ) : (
-            <span className="px-1 text-xs text-text-tertiary">No conversations</span>
+            <span className="px-1 text-xs text-[#666666]">No conversations</span>
           )}
         </div>
       </div>
 
       {/* Workflow runs section */}
       <div>
-        <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-[#666666]">
           Workflow Runs
         </span>
         <div className="mt-1 flex flex-col gap-0.5">
           {isErrorRuns ? (
-            <span className="px-1 text-xs text-error">Failed to load — retrying</span>
+            <span className="px-1 text-xs text-[#FF0000]">Failed to load — retrying</span>
           ) : sortedRuns && sortedRuns.length > 0 ? (
             sortedRuns.map(run => (
               <button
@@ -159,17 +159,17 @@ export function ProjectDetail({
                 onClick={(): void => {
                   handleRunClick(run);
                 }}
-                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-surface-elevated transition-colors w-full text-left"
+                className="flex items-center gap-2 px-2 py-2 border-[2px] border-black text-xs hover:bg-black hover:text-white transition-colors w-full text-left"
               >
-                <span className="truncate flex-1 text-text-primary">{run.workflow_name}</span>
+                <span className="truncate flex-1 text-sm font-semibold">{run.workflow_name}</span>
                 <RunStatusBadge status={run.status} />
-                <span className="text-text-tertiary shrink-0">
+                <span className="text-[10px] text-[#666666] shrink-0 font-mono">
                   {formatDuration(run.started_at, run.completed_at)}
                 </span>
               </button>
             ))
           ) : (
-            <span className="px-1 text-xs text-text-tertiary">No workflow runs</span>
+            <span className="px-1 text-xs text-[#666666]">No workflow runs</span>
           )}
         </div>
       </div>
@@ -177,22 +177,22 @@ export function ProjectDetail({
       {/* Active worktrees section */}
       {(isErrorEnvironments || activeEnvironments.length > 0) && (
         <div>
-          <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+          <span className="px-1 text-[11px] font-semibold uppercase tracking-wider text-[#666666]">
             Active Worktrees{!isErrorEnvironments && ` (${String(activeEnvironments.length)})`}
           </span>
           <div className="mt-1 flex flex-col gap-0.5">
             {isErrorEnvironments ? (
-              <span className="px-1 text-xs text-error">Failed to load — retrying</span>
+              <span className="px-1 text-xs text-[#FF0000]">Failed to load — retrying</span>
             ) : (
               activeEnvironments.map((env: IsolationEnvironment) => (
                 <div
                   key={env.id}
-                  className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-xs"
+                  className="flex items-center justify-between gap-2 border-[2px] border-black px-2 py-1.5 text-xs"
                 >
-                  <span className="truncate font-mono text-[11px] text-text-primary">
+                  <span className="truncate font-mono text-[11px] text-black">
                     {env.branch_name}
                   </span>
-                  <span className="shrink-0 text-[10px] text-text-tertiary">
+                  <span className="shrink-0 text-[10px] text-[#666666]">
                     {env.days_since_activity === 0
                       ? 'today'
                       : `${String(env.days_since_activity)}d ago`}

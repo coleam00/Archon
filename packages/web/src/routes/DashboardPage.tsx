@@ -315,7 +315,7 @@ export function DashboardPage(): React.ReactElement {
       <div className="flex-1 overflow-auto p-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-text-primary">Mission Control</h1>
+          <h1 className="text-lg font-bold text-black">Mission Control</h1>
           {dataUpdatedAt > 0 && (
             <span className="text-xs text-text-tertiary">
               Last updated {new Date(dataUpdatedAt).toLocaleTimeString()}
@@ -339,7 +339,7 @@ export function DashboardPage(): React.ReactElement {
         />
 
         {actionError && (
-          <div className="rounded-md border border-error/30 bg-error/5 px-4 py-3 text-sm text-error">
+          <div className="border-[3px] border-[#FF0000] bg-white px-4 py-3 text-sm text-[#FF0000] font-semibold">
             {actionError}
           </div>
         )}
@@ -424,7 +424,7 @@ export function DashboardPage(): React.ReactElement {
                   onChange={(e): void => {
                     setPageSize(Number(e.target.value));
                   }}
-                  className="rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary focus:border-primary focus:outline-none"
+                  className="border-[3px] border-black bg-[#F0F0F0] px-2 py-1 text-xs text-black font-semibold focus:bg-white focus:border-[5px] focus:outline-none"
                 >
                   {PAGE_SIZE_OPTIONS.map(size => (
                     <option key={size} value={size}>

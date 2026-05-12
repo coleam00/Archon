@@ -112,17 +112,19 @@ export function ConversationItem({
       to={`/chat/${encodeURIComponent(conversation.platform_conversation_id)}`}
       className={({ isActive }): string =>
         cn(
-          'group relative flex min-h-[2.75rem] w-full items-start gap-2 rounded-md px-3 py-2 transition-colors duration-150',
-          isActive ? 'border-l-2 border-l-primary bg-accent-muted' : 'hover:bg-surface-elevated'
+          'group relative flex min-h-[2.75rem] w-full items-start gap-2 border-[3px] px-3 py-2 transition-colors duration-150',
+          isActive
+            ? 'border-black bg-black'
+            : 'border-transparent hover:border-black hover:bg-[#F0F0F0]'
         )
       }
     >
       <div
         className={cn(
-          'h-2 w-2 shrink-0 rounded-full',
-          status === 'running' && 'bg-primary animate-pulse',
-          status === 'failed' && 'bg-destructive',
-          status === 'idle' && 'bg-text-tertiary'
+          'h-2 w-2 shrink-0',
+          status === 'running' && 'bg-[#FFA500] animate-pulse',
+          status === 'failed' && 'bg-[#FF0000]',
+          status === 'idle' && 'bg-[#666666]'
         )}
       />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -139,28 +141,26 @@ export function ConversationItem({
               e.preventDefault();
               e.stopPropagation();
             }}
-            className="w-full bg-transparent text-sm text-text-primary outline-none border-b border-primary"
+            className="w-full bg-transparent text-sm text-black outline-none border-b-2 border-black"
           />
         ) : (
           <div className="flex items-center gap-1.5 min-w-0">
             <span
-              className="truncate text-sm text-text-primary"
+              className="truncate text-sm font-semibold text-black"
               title={conversation.title ?? 'Untitled conversation'}
             >
               {displayName}
             </span>
             {conversation.platform_type !== 'web' && (
-              <span className="text-[10px] font-medium uppercase tracking-wider text-text-tertiary bg-surface-secondary rounded px-1 py-0.5 shrink-0">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#666666] border border-[#CCCCCC] px-1.5 py-0.5 shrink-0">
                 {conversation.platform_type}
               </span>
             )}
           </div>
         )}
-        {renameError && <span className="text-[10px] text-error">{renameError}</span>}
-        <span className="truncate text-[11px] text-text-tertiary">{lastActivity}</span>
-        {projectName && (
-          <span className="truncate text-[10px] text-text-tertiary">{projectName}</span>
-        )}
+        {renameError && <span className="text-[10px] text-[#FF0000]">{renameError}</span>}
+        <span className="truncate text-[11px] text-[#666666]">{lastActivity}</span>
+        {projectName && <span className="truncate text-[10px] text-[#666666]">{projectName}</span>}
       </div>
       {!isEditing && (
         <>
@@ -177,10 +177,10 @@ export function ConversationItem({
                   inputRef.current?.select();
                 }, 0);
               }}
-              className="p-1 rounded hover:bg-surface-elevated"
+              className="p-1 border border-transparent hover:border-black transition-colors"
               title="Rename conversation"
             >
-              <Pencil className="h-3.5 w-3.5 text-text-tertiary hover:text-primary" />
+              <Pencil className="h-3.5 w-3.5 text-[#666666] hover:text-black" />
             </button>
             <button
               onClick={(e): void => {
@@ -189,10 +189,10 @@ export function ConversationItem({
                 setDeleteError(null);
                 setDeleteDialogOpen(true);
               }}
-              className="p-1 rounded hover:bg-surface-elevated"
+              className="p-1 border border-transparent hover:border-black transition-colors"
               title="Delete conversation"
             >
-              <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-error" />
+              <Trash2 className="h-3.5 w-3.5 text-[#666666] hover:text-[#FF0000]" />
             </button>
           </div>
           <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -204,7 +204,7 @@ export function ConversationItem({
                   cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              {deleteError && <p className="text-sm text-error px-1">{deleteError}</p>}
+              {deleteError && <p className="text-sm text-[#FF0000] px-1">{deleteError}</p>}
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
@@ -214,7 +214,7 @@ export function ConversationItem({
         </>
       )}
       {badge !== undefined && badge > 0 && (
-        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-error text-[10px] font-semibold text-white px-1">
+        <span className="flex h-5 min-w-5 items-center justify-center bg-[#FF0000] text-[10px] font-semibold text-white px-1">
           {badge > 99 ? '99+' : String(badge)}
         </span>
       )}

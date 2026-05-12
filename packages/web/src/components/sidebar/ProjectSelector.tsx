@@ -54,7 +54,7 @@ export function ProjectSelector({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-4">
-        <span className="text-xs text-text-tertiary">Loading...</span>
+        <span className="text-xs text-[#666666]">Loading...</span>
       </div>
     );
   }
@@ -62,9 +62,9 @@ export function ProjectSelector({
   if (projects.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-6">
-        <FolderGit2 className="h-8 w-8 text-text-tertiary" />
-        <span className="text-xs text-text-tertiary">No projects yet</span>
-        <span className="text-[10px] text-text-tertiary">Click + to add a repository</span>
+        <FolderGit2 className="h-8 w-8 text-[#666666]" />
+        <span className="text-xs text-[#666666]">No projects yet</span>
+        <span className="text-[10px] text-[#666666]">Click + to add a repository</span>
       </div>
     );
   }
@@ -78,7 +78,7 @@ export function ProjectSelector({
   if (filteredProjects.length === 0) {
     return (
       <div className="flex items-center justify-center py-4">
-        <span className="text-xs text-text-tertiary">No matching projects</span>
+        <span className="text-xs text-[#666666]">No matching projects</span>
       </div>
     );
   }
@@ -92,14 +92,14 @@ export function ProjectSelector({
             onSelectProject(null);
           }}
           className={cn(
-            'flex items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors w-full',
+            'flex items-center gap-2 px-3 py-2 text-left transition-colors w-full border-[3px]',
             selectedProjectId === null
-              ? 'border-l-2 border-primary bg-accent-muted text-primary'
-              : 'text-text-secondary hover:bg-surface-elevated hover:text-text-primary'
+              ? 'border-black bg-black text-white'
+              : 'border-transparent text-[#4A4A4A] hover:border-black hover:bg-[#F0F0F0]'
           )}
         >
           <FolderGit2 className="h-4 w-4 shrink-0" />
-          <span className="text-sm">All Projects</span>
+          <span className="text-sm font-semibold">All Projects</span>
         </button>
         {filteredProjects.map(project => (
           <div key={project.id} className="group relative">
@@ -108,17 +108,17 @@ export function ProjectSelector({
                 onSelectProject(project.id);
               }}
               className={cn(
-                'flex items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors w-full',
+                'flex items-center gap-2 px-3 py-2 text-left transition-colors w-full border-[3px]',
                 selectedProjectId === project.id
-                  ? 'border-l-2 border-primary bg-accent-muted text-primary'
-                  : 'text-text-secondary hover:bg-surface-elevated hover:text-text-primary'
+                  ? 'border-black bg-black text-white'
+                  : 'border-transparent text-[#4A4A4A] hover:border-black hover:bg-[#F0F0F0]'
               )}
             >
               <FolderGit2 className="h-4 w-4 shrink-0" />
               <div className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-sm">{project.name}</span>
+                <span className="truncate text-sm font-semibold">{project.name}</span>
                 {project.repository_url && (
-                  <span className="truncate text-[10px] text-text-tertiary">
+                  <span className="truncate text-[10px] text-[#666666]">
                     {project.repository_url}
                   </span>
                 )}
@@ -130,10 +130,10 @@ export function ProjectSelector({
                 setDeleteError(null);
                 setDeleteTarget(project);
               }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-surface-elevated"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 opacity-0 group-hover:opacity-100 transition-opacity border border-transparent hover:border-black"
               title="Remove project"
             >
-              <Trash2 className="h-3.5 w-3.5 text-text-tertiary hover:text-error" />
+              <Trash2 className="h-3.5 w-3.5 text-[#666666] hover:text-[#FF0000]" />
             </button>
           </div>
         ))}
@@ -156,7 +156,7 @@ export function ProjectSelector({
               workspace directory and worktrees. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {deleteError && <p className="text-sm text-error px-1">{deleteError}</p>}
+          {deleteError && <p className="text-sm text-[#FF0000] px-1">{deleteError}</p>}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete}>Remove</AlertDialogAction>

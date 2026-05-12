@@ -31,13 +31,13 @@ export function TopNav(): React.ReactElement {
   });
 
   return (
-    <nav className="flex items-center gap-1 border-b border-border bg-surface px-4">
+    <nav className="flex items-center gap-1 border-b-[3px] border-black bg-white px-4">
       {/* Brand logo */}
       <Link to="/chat" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
-          <span className="text-sm font-semibold text-primary-foreground">K</span>
+        <div className="flex h-7 w-7 items-center justify-center bg-black text-white">
+          <span className="text-sm font-semibold">A</span>
         </div>
-        <span className="text-sm font-semibold text-text-primary">Kairon</span>
+        <span className="text-sm font-semibold text-black">Archon</span>
       </Link>
 
       {tabs.map(({ to, end, icon: Icon, label }) => (
@@ -47,10 +47,10 @@ export function TopNav(): React.ReactElement {
           end={end}
           className={({ isActive }: { isActive: boolean }): string =>
             cn(
-              'flex items-center gap-2 px-3 py-3 text-sm font-medium border-b-2 transition-colors',
+              'flex items-center gap-2 px-3 py-3 text-sm font-semibold border-b-[3px] transition-colors',
               isActive
-                ? 'border-primary text-primary'
-                : 'border-transparent text-text-secondary hover:text-text-primary'
+                ? 'border-black text-black'
+                : 'border-transparent text-[#4A4A4A] hover:text-black hover:border-[#CCCCCC]'
             )
           }
         >
@@ -58,7 +58,7 @@ export function TopNav(): React.ReactElement {
           {label}
           {to === '/dashboard' && runningCount > 0 && (
             <span
-              className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
+              className="ml-1 inline-flex min-w-[1.25rem] items-center justify-center bg-black text-white px-1.5 py-0.5 text-[10px] font-semibold"
               aria-label={`${runningCount} workflows running`}
             >
               {runningCount}
@@ -66,18 +66,17 @@ export function TopNav(): React.ReactElement {
           )}
         </NavLink>
       ))}
-      <span className="ml-auto text-xs text-text-secondary">
+      <span className="ml-auto text-xs text-[#666666]">
         v{import.meta.env.VITE_APP_VERSION as string}
         {updateCheck?.updateAvailable && updateCheck.releaseUrl && (
           <a
             href={updateCheck.releaseUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="ml-1.5 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            className="ml-1.5 inline-flex items-center gap-1 text-xs text-[#0000FF] hover:underline"
             title={`v${updateCheck.latestVersion} available`}
           >
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />v
-            {updateCheck.latestVersion}
+            <span className="inline-block h-1.5 w-1.5 bg-black" />v{updateCheck.latestVersion}
           </a>
         )}
       </span>

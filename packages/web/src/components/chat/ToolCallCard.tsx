@@ -38,8 +38,8 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
   return (
     <div
       className={cn(
-        'rounded-lg border border-border bg-surface transition-colors hover:border-border-bright',
-        isRunning && 'border-l-2 border-l-primary'
+        'border-[3px] border-black bg-white transition-colors',
+        isRunning && 'border-l-[5px] border-l-black'
       )}
     >
       {/* Header - clickable to expand */}
@@ -51,24 +51,24 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
       >
         <ChevronRight
           className={cn(
-            'h-3.5 w-3.5 shrink-0 text-text-tertiary transition-transform duration-150',
+            'h-3.5 w-3.5 shrink-0 text-[#666666] transition-transform duration-150',
             expanded && 'rotate-90'
           )}
         />
         {isRunning ? (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-black" />
         ) : (
-          <Terminal className="h-3.5 w-3.5 shrink-0 text-text-secondary" />
+          <Terminal className="h-3.5 w-3.5 shrink-0 text-[#4A4A4A]" />
         )}
-        <span className="truncate font-mono text-xs text-text-secondary">{tool.name}</span>
-        {summaryText && <span className="truncate text-xs text-text-tertiary">{summaryText}</span>}
+        <span className="truncate font-mono text-xs text-[#4A4A4A]">{tool.name}</span>
+        {summaryText && <span className="truncate text-xs text-[#666666]">{summaryText}</span>}
         <span className="ml-auto shrink-0">
           {isRunning && elapsed > 0 ? (
-            <span className="rounded-full bg-primary/20 px-2 py-0.5 text-[10px] text-primary">
+            <span className="border border-black bg-black text-white px-2 py-0.5 text-[10px] font-semibold">
               {elapsed < 1000 ? `${String(elapsed)}ms` : `${(elapsed / 1000).toFixed(1)}s`}
             </span>
           ) : tool.duration !== undefined ? (
-            <span className="rounded-full bg-surface-elevated px-2 py-0.5 text-[10px] text-text-secondary">
+            <span className="bg-[#F0F0F0] border border-[#CCCCCC] px-2 py-0.5 text-[10px] text-[#666666]">
               {tool.duration < 1000
                 ? `${String(tool.duration)}ms`
                 : `${(tool.duration / 1000).toFixed(1)}s`}
@@ -79,23 +79,23 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
 
       {/* Expanded content */}
       {expanded && (
-        <div className="border-t border-border px-3 py-2">
+        <div className="border-t-[3px] border-black px-3 py-2">
           {Object.keys(tool.input).length > 0 && (
             <div className="mb-2">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-text-tertiary">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#666666]">
                 Input
               </span>
-              <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-xs text-text-secondary">
+              <pre className="mt-1 overflow-x-auto border-[3px] border-black bg-[#F0F0F0] p-2 font-mono text-xs text-black">
                 {JSON.stringify(tool.input, null, 2)}
               </pre>
             </div>
           )}
           {tool.output !== undefined && (
             <div>
-              <span className="text-[10px] font-medium uppercase tracking-wider text-text-tertiary">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#666666]">
                 Output
               </span>
-              <pre className="mt-1 max-h-80 overflow-auto rounded-md bg-background p-2 font-mono text-xs text-text-secondary">
+              <pre className="mt-1 max-h-80 overflow-auto border-[3px] border-black bg-[#F0F0F0] p-2 font-mono text-xs text-black">
                 {displayOutput || '(no output)'}
               </pre>
               {isLongOutput && !showAllOutput && (
@@ -103,7 +103,7 @@ export function ToolCallCard({ tool }: ToolCallCardProps): React.ReactElement {
                   onClick={(): void => {
                     setShowAllOutput(true);
                   }}
-                  className="mt-1 text-xs text-text-secondary hover:text-text-primary"
+                  className="mt-1 text-xs text-[#4A4A4A] hover:text-black"
                 >
                   Show {String(outputLines.length - 20)} more lines
                 </button>

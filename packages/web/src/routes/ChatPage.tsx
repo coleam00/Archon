@@ -179,14 +179,14 @@ export function ChatPage(): React.ReactElement {
     <div className="flex flex-1 overflow-hidden">
       {/* Left panel */}
       <div
-        className="relative flex h-full flex-col border-r border-border bg-surface overflow-hidden"
+        className="relative flex h-full flex-col bg-white border-r-[3px] border-black overflow-hidden"
         style={{ width: `${String(width)}px`, flexShrink: 0 }}
       >
         {/* New Chat button */}
         <div className="px-3 pt-3 pb-2">
           <button
             onClick={handleNewChat}
-            className="flex w-full items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-accent-hover transition-colors"
+            className="flex w-full items-center gap-2 border-[3px] border-black bg-black px-3 py-2.5 text-sm font-semibold text-white hover:bg-white hover:text-black transition-colors"
           >
             <MessageSquarePlus className="h-4 w-4 shrink-0" />
             New Chat
@@ -205,7 +205,7 @@ export function ChatPage(): React.ReactElement {
                 setAddError(null);
                 setAddValue('');
               }}
-              className="p-1 rounded hover:bg-surface-elevated transition-colors"
+              className="p-1 border border-transparent hover:border-black transition-colors"
               title="Add project"
             >
               <Plus className="h-3.5 w-3.5 text-text-tertiary hover:text-primary" />
@@ -229,7 +229,7 @@ export function ChatPage(): React.ReactElement {
                   }}
                   placeholder="GitHub URL or local path"
                   disabled={addLoading}
-                  className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none disabled:opacity-50"
+                  className="w-full border-[3px] border-black bg-[#F0F0F0] px-2 py-1.5 text-xs text-black placeholder:text-[#666666] focus:bg-white focus:border-[5px] focus:outline-none disabled:opacity-50"
                 />
                 {addLoading && (
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
@@ -249,7 +249,7 @@ export function ChatPage(): React.ReactElement {
               onChange={(e): void => {
                 setSelectedProjectId(e.target.value || null);
               }}
-              className="w-full rounded-md border border-border bg-surface-elevated px-2 py-1.5 text-xs text-text-primary focus:border-primary focus:outline-none"
+              className="w-full border-[3px] border-black bg-[#F0F0F0] px-2 py-2 text-xs text-black font-semibold focus:bg-white focus:border-[5px] focus:outline-none"
             >
               <option value="">All Projects</option>
               {codebases?.map(cb => (
@@ -274,7 +274,7 @@ export function ChatPage(): React.ReactElement {
                 setSearchQuery(e.target.value);
               }}
               placeholder="Search..."
-              className="w-full rounded-md border border-border bg-surface-elevated py-1.5 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-tertiary focus:border-primary focus:outline-none"
+              className="w-full border-[3px] border-black bg-[#F0F0F0] py-1.5 pl-8 pr-2 text-xs text-black placeholder:text-[#666666] focus:bg-white focus:border-[5px] focus:outline-none"
             />
           </div>
         </div>
@@ -314,7 +314,7 @@ export function ChatPage(): React.ReactElement {
         {/* Resize handle */}
         <div
           onMouseDown={handleMouseDown}
-          className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize bg-border/50 hover:bg-primary/40 transition-colors"
+          className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize bg-[#CCCCCC] hover:bg-black transition-colors"
         />
       </div>
 
