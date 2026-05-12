@@ -98,6 +98,34 @@ export interface PiProviderDefaults {
   maxConcurrent?: number;
 }
 
+/**
+ * Community provider defaults for Hermes (Nous Research hermes-agent).
+ * v1 minimal shape; extend as capabilities are wired in.
+ */
+export interface HermesProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref, e.g. 'kimi-k2.6-thinking' */
+  model?: string;
+  /** Inference provider override, e.g. 'kimi-coding'. Omit to use Hermes default. */
+  provider?: string;
+  /** Absolute path to the hermes CLI binary. Overrides PATH lookup. */
+  hermesBinaryPath?: string;
+  /** Comma-separated or single toolset name to enable, e.g. 'web,terminal' */
+  toolsets?: string;
+  /** Skill names to preload via --skills, e.g. ['github-pr-workflow'] */
+  skills?: string[];
+  /** Environment variables injected into the hermes subprocess. */
+  env?: Record<string, string>;
+  /** Maximum tool-calling iterations per conversation turn. @default 90 */
+  maxTurns?: number;
+  /** Bypass all dangerous command approval prompts. @default false */
+  yolo?: boolean;
+  /** Enable filesystem checkpoints before destructive file operations. @default false */
+  checkpoints?: boolean;
+  /** Run in an isolated git worktree. @default false */
+  worktree?: boolean;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 

@@ -53,3 +53,10 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
+
+export {
+  HermesProvider,
+  parseHermesConfig,
+  registerHermesProvider,
+  type HermesProviderDefaults,
+} from './community/hermes';
