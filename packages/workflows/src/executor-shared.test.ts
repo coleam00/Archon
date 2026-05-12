@@ -298,6 +298,42 @@ describe('substituteWorkflowVariables', () => {
     );
     expect(prompt).toBe('Plain prompt with no loop variable.');
   });
+
+  it('skips user-controlled variables when shellSafe is true', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'echo $USER_MESSAGE $ARGUMENTS $LOOP_USER_INPUT $REJECTION_REASON $LOOP_PREV_OUTPUT $CONTEXT',
+      'run-1',
+      'dangerous; rm -rf /',
+      '/tmp',
+      'main',
+      'docs/',
+      'issue-context',
+      'loop-input',
+      'rejection',
+      'prev-output',
+      { shellSafe: true }
+    );
+    expect(prompt).toBe(
+      'echo $USER_MESSAGE $ARGUMENTS $LOOP_USER_INPUT $REJECTION_REASON $LOOP_PREV_OUTPUT $CONTEXT'
+    );
+  });
+
+  it('still replaces system-controlled variables when shellSafe is true', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'cd $ARTIFACTS_DIR && git checkout $BASE_BRANCH # $WORKFLOW_ID $DOCS_DIR',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { shellSafe: true }
+    );
+    expect(prompt).toBe('cd /tmp/artifacts && git checkout main # run-1 docs/');
+  });
 });
 
 describe('buildPromptWithContext', () => {
