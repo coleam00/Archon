@@ -100,27 +100,42 @@ nodes:
     bash: |
       set -euo pipefail
       BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
-      # Race-condition workaround: GitHub PR API may need a moment to resolve newly-pushed refs.
-      # See WO-HARNESS-OPEN-PR-GRAPHQL-NO-COMMITS-FIX-01.
+      # Idempotent PR creation with existence check. See WO-HARNESS-OPEN-PR-GRAPHQL-NO-COMMITS-FIX-01.
       PR_URL=""
-      for attempt in 1 2 3; do
+      check_existing_pr() {
+        gh pr list --head "$BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null
+      }
+      for attempt in 1 2 3 4 5; do
+        EXISTING=$(check_existing_pr)
+        if [ -n "$EXISTING" ]; then
+          PR_URL="$EXISTING"
+          echo "open-pr: existing PR found on attempt $attempt: $PR_URL"
+          break
+        fi
         if PR_OUT=$(gh pr create --base main --head "$BRANCH" \
             --title "feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport check" \
             --body "Implements WO-RELEASE-CE-BACKPORT-POLICY-01. CE hotfixes that merge to release/ce without a backport PR to main now get a CI comment with instructions. 🤖 Generated with Claude Code" 2>&1); then
           PR_URL="$PR_OUT"
+          echo "open-pr: created on attempt $attempt: $PR_URL"
           break
         fi
-        if echo "$PR_OUT" | grep -qE 'No commits between|Head sha can.t be blank|Head ref must be a branch'; then
-          echo "open-pr attempt $attempt: GitHub PR API not ready (race condition), sleeping 10s"
-          sleep 10
+        if echo "$PR_OUT" | grep -qE 'No commits between|Head sha can.t be blank|Head ref must be a branch|already exists'; then
+          echo "open-pr attempt $attempt: GitHub PR API not ready or PR already exists, sleeping 20s before retry"
+          sleep 20
         else
-          echo "open-pr failed unexpectedly: $PR_OUT" >&2
-          exit 1
+          echo "open-pr attempt $attempt failed unexpectedly: $PR_OUT" >&2
+          sleep 20
         fi
       done
       if [ -z "$PR_URL" ]; then
-        echo "open-pr failed after 3 attempts; branch is pushed at $BRANCH but PR creation never succeeded" >&2
-        exit 1
+        EXISTING=$(check_existing_pr)
+        if [ -n "$EXISTING" ]; then
+          PR_URL="$EXISTING"
+          echo "open-pr: existing PR found in final check: $PR_URL"
+        else
+          echo "open-pr failed after 5 attempts; branch pushed at $BRANCH but no PR exists" >&2
+          exit 1
+        fi
       fi
       echo "PR_URL=$PR_URL"
 
