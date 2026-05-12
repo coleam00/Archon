@@ -2121,6 +2121,7 @@ async function executeLoopNode(
       await safeSendMessage(platform, conversationId, cleanOutput, msgContext);
     }
 
+    const prevIterationOutput = lastIterationOutput;
     lastIterationOutput = cleanOutput || fullOutput;
 
     // Check LLM completion signal — the AI decides whether the user approved.
@@ -2157,7 +2158,7 @@ async function executeLoopNode(
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
             LOOP_USER_INPUT: loopUserInput ?? '',
-            LOOP_PREV_OUTPUT: lastIterationOutput,
+            LOOP_PREV_OUTPUT: prevIterationOutput,
             REJECTION_REASON: '',
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',

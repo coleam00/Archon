@@ -1383,45 +1383,50 @@ describe('executeDagWorkflow -- bash nodes', () => {
 
   it('passes user message through env vars, not string substitution, preventing shell injection', async () => {
     const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('bash-shell-safe-run-id', {
-      workflow_name: 'bash-shell-safe',
-      conversation_id: 'conv-shell-safe',
-      user_message: '$(rm -rf /)',
-    });
+    try {
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('bash-shell-safe-run-id', {
+        workflow_name: 'bash-shell-safe',
+        conversation_id: 'conv-shell-safe',
+        user_message: '$(rm -rf /)',
+      });
 
-    const bashNode: BashNode = {
-      id: 'safe',
-      bash: 'echo $USER_MESSAGE',
-    };
+      const bashNode: BashNode = {
+        id: 'safe',
+        bash: 'echo $USER_MESSAGE',
+      };
 
-    await executeDagWorkflow(
-      mockDeps,
-      platform,
-      'conv-shell-safe',
-      testDir,
-      { name: 'bash-shell-safe-test', nodes: [bashNode] },
-      workflowRun,
-      'claude',
-      undefined,
-      join(testDir, 'artifacts'),
-      join(testDir, 'logs'),
-      'main',
-      'docs/',
-      minimalConfig
-    );
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-shell-safe',
+        testDir,
+        { name: 'bash-shell-safe-test', nodes: [bashNode] },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
 
-    // The script passed to bash -c must contain literal $USER_MESSAGE (not substituted)
-    const bashArgs = execSpy.mock.calls[0]?.[1] as string[];
-    expect(bashArgs[1]).toBe('echo $USER_MESSAGE');
+      expect(execSpy).toHaveBeenCalledTimes(1);
+      const firstCall = execSpy.mock.calls[0];
 
-    // The env must contain the user message
-    const envArg = (execSpy.mock.calls[0]?.[2] as { env: NodeJS.ProcessEnv }).env;
-    expect(envArg?.USER_MESSAGE).toBe('$(rm -rf /)');
-    expect(envArg?.ARGUMENTS).toBe('$(rm -rf /)');
+      // The script passed to bash -c must contain literal $USER_MESSAGE (not substituted)
+      const bashArgs = firstCall?.[1] as string[];
+      expect(bashArgs[1]).toBe('echo $USER_MESSAGE');
 
-    execSpy.mockRestore();
+      // The env must contain the user message
+      const envArg = (firstCall?.[2] as { env: NodeJS.ProcessEnv }).env;
+      expect(envArg?.USER_MESSAGE).toBe('$(rm -rf /)');
+      expect(envArg?.ARGUMENTS).toBe('$(rm -rf /)');
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 });
 
