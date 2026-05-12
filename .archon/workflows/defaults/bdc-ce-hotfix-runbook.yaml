@@ -98,10 +98,31 @@ nodes:
     bash: |
       set -euo pipefail
       BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
-      gh pr create --base main --head "$BRANCH" \
-        --title "docs(ce): WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — CE hotfix runbook" \
-        --body "Implements WO-RELEASE-CE-HOTFIX-RUNBOOK-01. Docs-only. 🤖 Generated with Claude Code"
-      gh pr view --json url --jq '"PR_URL=\(.url)"'
+      # Race-condition workaround: GitHub PR API may need a moment to resolve newly-pushed refs.
+      # Anchor: WO-RELEASE-CE-PROMOTION-RUNBOOK-01 ran twice and failed open-pr both times with
+      # misleading 'no commits between main and X' error despite ahead_by:1 on the branch.
+      # WO-HARNESS-OPEN-PR-GRAPHQL-NO-COMMITS-FIX-01 covers root-cause investigation.
+      PR_URL=""
+      for attempt in 1 2 3; do
+        if PR_OUT=$(gh pr create --base main --head "$BRANCH" \
+            --title "docs(ce): WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — CE hotfix runbook" \
+            --body "Implements WO-RELEASE-CE-HOTFIX-RUNBOOK-01. Docs-only. 🤖 Generated with Claude Code" 2>&1); then
+          PR_URL="$PR_OUT"
+          break
+        fi
+        if echo "$PR_OUT" | grep -qE 'No commits between|Head sha can.t be blank|Head ref must be a branch'; then
+          echo "open-pr attempt $attempt: GitHub PR API not ready (race condition), sleeping 10s"
+          sleep 10
+        else
+          echo "open-pr failed unexpectedly: $PR_OUT" >&2
+          exit 1
+        fi
+      done
+      if [ -z "$PR_URL" ]; then
+        echo "open-pr failed after 3 attempts; branch is pushed at $BRANCH but PR creation never succeeded" >&2
+        exit 1
+      fi
+      echo "PR_URL=$PR_URL"
 
   - id: build-manifest
     depends_on: [open-pr]

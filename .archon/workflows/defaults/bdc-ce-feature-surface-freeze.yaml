@@ -122,10 +122,29 @@ nodes:
     bash: |
       set -euo pipefail
       BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
-      gh pr create --base main --head "$BRANCH" \
-        --title "feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + freeze CE surface" \
-        --body "Implements WO-CE-FEATURE-SURFACE-FREEZE-01. Audit report at docs/CE-FEATURE-SURFACE-AUDIT.md. Tier guards added where leaks confirmed. 🤖 Generated with Claude Code"
-      gh pr view --json url --jq '"PR_URL=\(.url)"'
+      # Race-condition workaround: GitHub PR API may need a moment to resolve newly-pushed refs.
+      # See WO-HARNESS-OPEN-PR-GRAPHQL-NO-COMMITS-FIX-01.
+      PR_URL=""
+      for attempt in 1 2 3; do
+        if PR_OUT=$(gh pr create --base main --head "$BRANCH" \
+            --title "feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + freeze CE surface" \
+            --body "Implements WO-CE-FEATURE-SURFACE-FREEZE-01. Audit report at docs/CE-FEATURE-SURFACE-AUDIT.md. Tier guards added where leaks confirmed. 🤖 Generated with Claude Code" 2>&1); then
+          PR_URL="$PR_OUT"
+          break
+        fi
+        if echo "$PR_OUT" | grep -qE 'No commits between|Head sha can.t be blank|Head ref must be a branch'; then
+          echo "open-pr attempt $attempt: GitHub PR API not ready (race condition), sleeping 10s"
+          sleep 10
+        else
+          echo "open-pr failed unexpectedly: $PR_OUT" >&2
+          exit 1
+        fi
+      done
+      if [ -z "$PR_URL" ]; then
+        echo "open-pr failed after 3 attempts; branch is pushed at $BRANCH but PR creation never succeeded" >&2
+        exit 1
+      fi
+      echo "PR_URL=$PR_URL"
 
   - id: build-manifest
     depends_on: [open-pr]
