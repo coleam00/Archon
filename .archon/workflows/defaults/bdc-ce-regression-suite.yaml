@@ -129,7 +129,11 @@ nodes:
     bash: |
       set -euo pipefail
       BRANCH="wo/ci-ce-regression-suite-01"
-      git checkout -b "$BRANCH"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH"
+      else
+        git checkout -b "$BRANCH"
+      fi
       git add tests/ce-regression/ .github/workflows/ce-regression.yml package.json
       git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(ci): WO-CI-CE-REGRESSION-SUITE-01 — CE regression gate for release/ce PRs
