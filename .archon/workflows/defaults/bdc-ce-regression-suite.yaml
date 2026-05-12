@@ -162,7 +162,8 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      # Hardcoded — must match commit-and-push BASE_BRANCH literal. See WO-HARNESS-OPEN-PR-BRANCH-INTERPOLATION-FIX-01.
+      BRANCH="wo/ci-ce-regression-suite-01"
       REPO="bluedevilcollectibles/lspro-react"
       BASE="main"
       TITLE="feat(ci): WO-CI-CE-REGRESSION-SUITE-01 — CE regression gate"

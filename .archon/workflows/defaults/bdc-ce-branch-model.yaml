@@ -228,9 +228,11 @@ nodes:
     depends_on: [commit-and-push-main]
     bash: |
       set -euo pipefail
-      BRANCH=$(printf '%s\n' "$commit-and-push-main.output" | sed -n 's/^BRANCH=//p' | head -n 1)
-      PROTECTION_STATUS=$(printf '%s\n' "$add-branch-protection.output" | sed -n 's/^PROTECTION_STATUS=//p' | head -n 1)
-      PROTECTION_DETAIL=$(printf '%s\n' "$add-branch-protection.output" | sed -n 's/^PROTECTION_DETAIL=//p' | head -n 1)
+      # Hardcoded — must match commit-and-push-main BRANCH literal. See WO-HARNESS-OPEN-PR-BRANCH-INTERPOLATION-FIX-01.
+      # Archon shell-quote-wraps node output (dag-executor.ts L300), corrupting bash parsing.
+      BRANCH="wo/release-ce-branch-model-01"
+      PROTECTION_STATUS="unknown"
+      PROTECTION_DETAIL="see add-branch-protection node output"
       if [ "$PROTECTION_STATUS" = "applied" ]; then
         PROTECTION_LINE="- Applied GitHub branch protection: PR required, 1 review, no force-push, no deletion, conversation resolution required"
         PROTECTION_CHECK="- [x] Branch protection active (no direct pushes, PR required)"

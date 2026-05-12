@@ -104,7 +104,8 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      # Hardcoded — must match commit-and-push BRANCH literal. See WO-HARNESS-OPEN-PR-BRANCH-INTERPOLATION-FIX-01.
+      BRANCH="wo/release-ce-backport-policy-01"
       REPO="bluedevilcollectibles/lspro-react"
       BASE="main"
       TITLE="feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport check"

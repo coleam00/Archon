@@ -99,7 +99,8 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      # Hardcoded — must match commit-and-push BRANCH literal. See WO-HARNESS-OPEN-PR-BRANCH-INTERPOLATION-FIX-01.
+      BRANCH="wo/release-ce-promotion-runbook-01"
       REPO="bluedevilcollectibles/bdc-xo"
       BASE="main"
       TITLE="docs(ce): WO-RELEASE-CE-PROMOTION-RUNBOOK-01 — CE promotion runbook"

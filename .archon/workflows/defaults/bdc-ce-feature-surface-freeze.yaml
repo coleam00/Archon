@@ -126,7 +126,10 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      # Hardcoded — must match commit-and-push BRANCH literal. Parsing $commit-and-push.output
+      # via printf+sed broke because Archon shell-quote-wraps node output (dag-executor.ts L300),
+      # so the trailing `'` gets concatenated to the branch name. See WO-HARNESS-OPEN-PR-BRANCH-INTERPOLATION-FIX-01.
+      BRANCH="wo/ce-feature-surface-freeze-01"
       REPO="bluedevilcollectibles/lspro-react"
       BASE="main"
       TITLE="feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + freeze CE surface"
