@@ -29,14 +29,9 @@ nodes:
       printf -- '--- SPEC ---\n%s\n\n' "$SPEC_CONTENT"
       printf -- '--- CE REGRESSION MATRIX ---\n%s\n' "$MATRIX"
 
-  - id: post-started
-    depends_on: [read-spec]
-    bash: |
-      set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"CE regression suite build started\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" || echo "builder-status post failed"
+  # post-started node REMOVED 2026-05-12 — n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion is the canonical close action.
 
   - id: plan
     depends_on: [read-spec]
@@ -114,7 +109,9 @@ nodes:
       grep -c "test:ce-regression" package.json
       ls tests/ce-regression/*.spec.ts | wc -l
       ls .github/workflows/ce-regression.yml
-      grep -E "branches:.*release/ce" .github/workflows/ce-regression.yml || (echo "FAIL: release/ce branch trigger missing" >&2; exit 1)
+      # Multi-line YAML check: branches: + - release/ce can be on separate lines
+      grep -q "release/ce" .github/workflows/ce-regression.yml || (echo "FAIL: release/ce reference missing from workflow" >&2; exit 1)
+      grep -q "pull_request" .github/workflows/ce-regression.yml || (echo "FAIL: pull_request trigger missing from workflow" >&2; exit 1)
 
   - id: verify-tests
     depends_on: [implement]
@@ -205,18 +202,12 @@ nodes:
       $commit-and-push.output
       $open-pr.output
 
-  - id: post-completed
-    depends_on: [build-manifest]
-    bash: |
-      set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || echo "post failed"
+  # post-completed node REMOVED 2026-05-12 — n8n webhook hangs from Archon executor subprocess
+  # (see WO-HARNESS-N8N-WEBHOOK-EGRESS-FIX-01). Builder-status feed is optional bookkeeping;
+  # flip-notion below is the canonical close action.
 
   - id: flip-notion
-    depends_on: [post-completed]
+    depends_on: [build-manifest]
     task_class: clerical
     prompt: |
       Flip Notion WO-CI-CE-REGRESSION-SUITE-01 to REVIEW with the manifest in Notes property.
