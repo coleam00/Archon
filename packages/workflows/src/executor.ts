@@ -1,8 +1,9 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import { mkdir } from 'fs/promises';
+import { mkdir, readFile } from 'fs/promises';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -14,7 +15,7 @@ import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import { classifyError, resolveForgeProvider } from './executor-shared';
+import { classifyError, classifyFailureMode, resolveForgeProvider } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -208,6 +209,58 @@ async function resolveProjectPaths(
     artifactsDir: join(cwd, '.archon', 'artifacts', 'runs', workflowRunId),
     logDir: join(cwd, '.archon', 'logs'),
   };
+}
+
+/**
+ * Emit a workflow_fingerprint event with repo identity and commit SHA.
+ * Non-blocking: all git/fs failures are caught internally and logged.
+ */
+async function emitWorkflowFingerprint(
+  emitter: ReturnType<typeof getWorkflowEventEmitter>,
+  runId: string,
+  cwd: string
+): Promise<void> {
+  const { execFileAsync } = await import('@archon/git');
+
+  let repo = 'unknown';
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+      timeout: 5000,
+    });
+    const url = stdout.trim();
+    // Extract "owner/repo" from SSH (git@github.com:owner/repo.git) or HTTPS URLs
+    const match = /[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(url);
+    repo = match ? match[1] : url;
+  } catch {
+    // git not available or no remote — leave as 'unknown'
+  }
+
+  let commitSha = 'unknown';
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'rev-parse', 'HEAD'], {
+      timeout: 5000,
+    });
+    commitSha = stdout.trim();
+  } catch {
+    // git not available — leave as 'unknown'
+  }
+
+  let claudeMdHash: string | undefined;
+  try {
+    const content = await readFile(join(cwd, 'CLAUDE.md'), 'utf-8');
+    claudeMdHash = createHash('sha256').update(content).digest('hex');
+  } catch {
+    // CLAUDE.md absent or unreadable — omit the field
+  }
+
+  emitter.emit({
+    type: 'workflow_fingerprint',
+    runId,
+    repo,
+    commitSha,
+    workingPath: cwd,
+    ...(claudeMdHash !== undefined ? { claudeMdHash } : {}),
+  });
 }
 
 /**
@@ -646,6 +699,11 @@ export async function executeWorkflow(
         );
       });
 
+    // Emit codebase fingerprint — non-blocking, never throws to caller
+    emitWorkflowFingerprint(emitter, workflowRun.id, cwd).catch((err: Error) => {
+      getLog().warn({ err, workflowRunId: workflowRun.id }, 'workflow.fingerprint_emit_failed');
+    });
+
     // Set status to running now that execution has started (skip for resumed runs — already running)
     if (!dagPriorCompletedNodes) {
       try {
@@ -803,6 +861,7 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       error: err.message,
+      failureMode: classifyFailureMode(err),
     });
     deps.store
       .createWorkflowEvent({

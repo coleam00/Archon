@@ -66,6 +66,7 @@ import {
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
 import {
   classifyError,
+  classifyFailureMode,
   detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
@@ -2943,6 +2944,14 @@ export async function executeDagWorkflow(
               'dag_node_transient_retry'
             );
 
+            getWorkflowEventEmitter().emit({
+              type: 'retry_attempted',
+              runId: workflowRun.id,
+              nodeId: node.id,
+              attempt: attempt + 1,
+              reason: output.error ?? 'unknown error',
+            });
+
             const errorKind = isTransient ? 'transient error' : 'error';
             await safeSendMessage(
               platform,
@@ -3109,6 +3118,7 @@ export async function executeDagWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       error: failMsg,
+      failureMode: 'unknown',
     });
     emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
@@ -3125,6 +3135,11 @@ export async function executeDagWorkflow(
       .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
       .join('; ');
     const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
+    // Classify failure mode from the first failed node's error for metrics
+    const firstFailedOutput = [...nodeOutputs.values()].find(o => o.state === 'failed');
+    const firstFailedError =
+      firstFailedOutput?.state === 'failed' ? firstFailedOutput.error : failMsg;
+    const failureMode = classifyFailureMode(new Error(firstFailedError));
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {
       getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag_db_fail_failed');
     });
@@ -3140,6 +3155,7 @@ export async function executeDagWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       error: failMsg,
+      failureMode,
     });
     emitterForFail.unregisterRun(workflowRun.id);
     await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {

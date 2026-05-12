@@ -112,6 +112,10 @@ export interface TokenUsage {
   output: number;
   total?: number;
   cost?: number;
+  /** Tokens read from the prompt cache (Claude: cache_read_input_tokens). */
+  cacheRead?: number;
+  /** Tokens written to the prompt cache (Claude: cache_creation_input_tokens). */
+  cacheWrite?: number;
 }
 
 /**

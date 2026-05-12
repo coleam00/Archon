@@ -84,6 +84,70 @@ export function classifyError(error: Error): ErrorType {
   return 'UNKNOWN';
 }
 
+// ─── Failure Mode Classification ────────────────────────────────────────────
+
+/**
+ * Structured failure taxonomy for workflow runs.
+ * Used in metrics to distinguish failure causes for regression analysis.
+ */
+export type FailureMode =
+  | 'timeout'
+  | 'idle_timeout'
+  | 'model_error'
+  | 'max_budget'
+  | 'type_check_failure'
+  | 'test_failure'
+  | 'lint_failure'
+  | 'approval_rejected'
+  | 'merge_conflict'
+  | 'human_abort'
+  | 'unknown';
+
+/**
+ * Classify a workflow-level failure into a structured failure mode.
+ * Matches against known error message patterns. Returns 'unknown' for unrecognized errors.
+ */
+export function classifyFailureMode(error: Error): FailureMode {
+  const msg = error.message.toLowerCase();
+  // Check idle timeout before generic timeout so it gets the more specific tag
+  if (msg.includes('idle_timeout') || msg.includes('idle timeout')) return 'idle_timeout';
+  if (msg.includes('timed out') || msg.includes('timeout')) return 'timeout';
+  if (msg.includes('error_max_budget_usd') || msg.includes('max_budget')) return 'max_budget';
+  if (msg.includes('type-check') || msg.includes('type check') || msg.includes('tsc')) {
+    return 'type_check_failure';
+  }
+  if (msg.includes('eslint') || (msg.includes('lint') && !msg.includes('type'))) {
+    return 'lint_failure';
+  }
+  if (
+    (msg.includes('test') || msg.includes('bun test') || msg.includes('jest')) &&
+    (msg.includes('fail') || msg.includes('error') || msg.includes('exit'))
+  ) {
+    return 'test_failure';
+  }
+  if (msg.includes('approval_rejected') || msg.includes('rejected by reviewer')) {
+    return 'approval_rejected';
+  }
+  if (msg.includes('merge conflict') || msg.includes('conflict')) return 'merge_conflict';
+  if (
+    msg.includes('cancelled') ||
+    msg.includes('canceled') ||
+    msg.includes('human_abort') ||
+    msg.includes('user cancelled')
+  ) {
+    return 'human_abort';
+  }
+  if (
+    msg.includes('model') ||
+    msg.includes('claude') ||
+    msg.includes('provider') ||
+    msg.includes('sdk')
+  ) {
+    return 'model_error';
+  }
+  return 'unknown';
+}
+
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────
 
 /** Max characters of stderr/message we keep in user-facing and logged fields. */

@@ -43,6 +43,8 @@ interface WorkflowFailedEvent {
   runId: string;
   workflowName: string;
   error: string;
+  /** Structured failure taxonomy for metrics. Omitted when classification is unavailable. */
+  failureMode?: string;
 }
 
 interface LoopIterationStartedEvent {
@@ -142,6 +144,40 @@ interface WorkflowCancelledEvent {
   reason: string;
 }
 
+interface ApprovalResolvedEvent {
+  type: 'approval_resolved';
+  runId: string;
+  nodeId: string;
+  decision: 'approved' | 'rejected';
+  /** The comment (approve) or reason (reject) provided by the reviewer. */
+  reason?: string;
+  /** Milliseconds between approval_pending emission and resolution. */
+  waitMs: number;
+}
+
+interface RetryAttemptedEvent {
+  type: 'retry_attempted';
+  runId: string;
+  nodeId: string;
+  /** 1-based attempt number (1 = first retry after initial failure). */
+  attempt: number;
+  /** Error message that triggered the retry. */
+  reason: string;
+}
+
+interface WorkflowFingerprintEvent {
+  type: 'workflow_fingerprint';
+  runId: string;
+  /** "owner/repo" derived from the git remote URL, or the bare remote URL if parsing fails. */
+  repo: string;
+  /** Git commit SHA at workflow run start. */
+  commitSha: string;
+  /** Working directory for this workflow run. */
+  workingPath: string;
+  /** SHA-256 hex digest of CLAUDE.md contents, if the file is present. */
+  claudeMdHash?: string;
+}
+
 export type WorkflowEmitterEvent =
   | WorkflowStartedEvent
   | WorkflowCompletedEvent
@@ -157,6 +193,9 @@ export type WorkflowEmitterEvent =
   | ToolStartedEvent
   | ToolCompletedEvent
   | ApprovalPendingEvent
+  | ApprovalResolvedEvent
+  | RetryAttemptedEvent
+  | WorkflowFingerprintEvent
   | WorkflowCancelledEvent;
 
 // ---------------------------------------------------------------------------
