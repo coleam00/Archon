@@ -93,22 +93,16 @@ nodes:
   - id: add-branch-protection
     depends_on: [create-release-ce-branch]
     bash: |
-      set -euo pipefail
-      # Apply branch protection on release/ce per CE-BRANCH-GOVERNANCE.md:
-      # - PR required (no direct pushes)
-      # - At least 1 review
-      # - Required status checks (CE regression — will be wired by WO #2)
-      # - Restrict force-pushes + deletions
-      # Note: required_status_checks.contexts is intentionally a placeholder; WO-CI-CE-REGRESSION-SUITE-01
-      # adds the actual "ce-regression" check. Once that exists, this protection upgrades automatically.
-      gh api -X PUT "repos/bluedevilcollectibles/lspro-react/branches/release/ce/protection" \
+      # set -e DELIBERATELY OMITTED — protection is best-effort.
+      # GitHub branch protection on private repos requires Pro/Team. On free plans
+      # the API returns 403 and we record PROTECTION_STATUS=skipped_free_plan so the
+      # rest of the workflow can proceed. CE regression check (WO #2) + promotion gate
+      # (WO #8) provide CI-level enforcement that's plan-independent.
+      PROTECTION_RESULT=$(gh api -X PUT "repos/bluedevilcollectibles/lspro-react/branches/release/ce/protection" \
         -H "Accept: application/vnd.github+json" \
-        --input - <<EOF
+        --input - 2>&1 <<'PROT_EOF'
       {
-        "required_status_checks": {
-          "strict": true,
-          "contexts": []
-        },
+        "required_status_checks": {"strict": true, "contexts": []},
         "enforce_admins": false,
         "required_pull_request_reviews": {
           "dismiss_stale_reviews": true,
@@ -122,10 +116,20 @@ nodes:
         "block_creations": false,
         "required_conversation_resolution": true
       }
-      EOF
-      echo "Branch protection applied to release/ce"
-      # Verify
-      gh api "repos/bluedevilcollectibles/lspro-react/branches/release/ce/protection" --jq '"protection_url=\(.url)\nrequired_pr_review_count=\(.required_pull_request_reviews.required_approving_review_count)\nallow_force_pushes=\(.allow_force_pushes.enabled)\nallow_deletions=\(.allow_deletions.enabled)"'
+      PROT_EOF
+      )
+      PROTECTION_EXIT=$?
+      if [ $PROTECTION_EXIT -eq 0 ]; then
+        echo "PROTECTION_STATUS=applied"
+        echo "PROTECTION_DETAIL=branch protection rules in effect on release/ce"
+      elif echo "$PROTECTION_RESULT" | grep -qiE 'Upgrade to GitHub Pro|HTTP 403|not available'; then
+        echo "PROTECTION_STATUS=skipped_free_plan"
+        echo "PROTECTION_DETAIL=GitHub branch protection requires Pro/Team on private repos; CI-level enforcement (CE regression + promotion gate) provides the actual policy enforcement."
+      else
+        echo "PROTECTION_STATUS=failed_other"
+        echo "PROTECTION_DETAIL=$PROTECTION_RESULT"
+      fi
+      exit 0
 
   - id: add-pr-templates
     depends_on: [add-branch-protection]
@@ -189,7 +193,12 @@ nodes:
       set -euo pipefail
       # Commit governance refs to a feature branch (NOT main directly per Rule 20 staging-gate)
       BRANCH="wo/release-ce-branch-model-01"
-      git checkout -b "$BRANCH"
+      # Idempotent branch checkout — handles re-runs where worktree branch already exists
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH"
+      else
+        git checkout -b "$BRANCH"
+      fi
       git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
         commit -m "feat(ce): WO-RELEASE-CE-BRANCH-MODEL-01 — add CE branch policy doc + PR templates
 
@@ -198,8 +207,10 @@ nodes:
 
       Adds docs/CE-BRANCH-POLICY.md as a pointer to bdc-xo authoritative governance.
 
-      release/ce branch was created at \$(git rev-parse origin/main) and protected via
-      GitHub API: PR required, 1 review, no force-push, no deletion, conversation resolution required.
+      release/ce branch was created at the current main HEAD. GitHub branch protection
+      attempted via API; status recorded in PR body. CI-level enforcement via CE regression
+      check (WO-CI-CE-REGRESSION-SUITE-01) + promotion gate (WO-CI-CE-PROMOTION-GATE-01)
+      is the canonical policy enforcement regardless of GitHub plan.
 
       Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
       git push -u origin "$BRANCH"
@@ -212,6 +223,15 @@ nodes:
     bash: |
       set -euo pipefail
       BRANCH=$(printf '%s\n' "$commit-and-push-main.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      PROTECTION_STATUS=$(printf '%s\n' "$add-branch-protection.output" | sed -n 's/^PROTECTION_STATUS=//p' | head -n 1)
+      PROTECTION_DETAIL=$(printf '%s\n' "$add-branch-protection.output" | sed -n 's/^PROTECTION_DETAIL=//p' | head -n 1)
+      if [ "$PROTECTION_STATUS" = "applied" ]; then
+        PROTECTION_LINE="- Applied GitHub branch protection: PR required, 1 review, no force-push, no deletion, conversation resolution required"
+        PROTECTION_CHECK="- [x] Branch protection active (no direct pushes, PR required)"
+      else
+        PROTECTION_LINE="- Branch protection: \`${PROTECTION_STATUS}\` — ${PROTECTION_DETAIL}"
+        PROTECTION_CHECK="- [ ] Branch protection: \`${PROTECTION_STATUS}\` (governance enforced via CI gates from WO #2 + WO #8)"
+      fi
       BODY_FILE=$(mktemp)
       {
         echo "## Summary"
@@ -219,7 +239,7 @@ nodes:
         echo ""
         echo "## Changes"
         echo "- Created \`release/ce\` branch at current \`main\` HEAD"
-        echo "- Applied GitHub branch protection: PR required, 1 review, no force-push, no deletion, conversation resolution required"
+        echo "$PROTECTION_LINE"
         echo "- Added \`.github/PULL_REQUEST_TEMPLATE/ce-promotion.md\` (verbatim from bdc-xo)"
         echo "- Added \`.github/PULL_REQUEST_TEMPLATE/ce-hotfix.md\` (verbatim from bdc-xo)"
         echo "- Added \`docs/CE-BRANCH-POLICY.md\` pointing to bdc-xo authoritative governance"
@@ -232,7 +252,7 @@ nodes:
         echo ""
         echo "## Stop conditions"
         echo "- [x] release/ce exists ($create-release-ce-branch.output)"
-        echo "- [x] Branch protection active (no direct pushes, PR required)"
+        echo "$PROTECTION_CHECK"
         echo "- [x] CE branch policy doc committed"
         echo "- [x] Backport policy referenced (enforced separately by WO-RELEASE-CE-BACKPORT-POLICY-01)"
         echo ""
