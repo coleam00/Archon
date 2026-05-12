@@ -21,6 +21,12 @@ mock.module('@archon/paths', () => ({
 import { evaluateCondition } from './condition-evaluator';
 import type { NodeOutput } from './schemas';
 
+/**
+ * Build a NodeOutput fixture for condition tests.
+ * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
+ * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
+ * paths populate it; older providers leave it off).
+ */
 function makeOutput(
   output: string,
   state: 'completed' | 'failed' | 'skipped' = 'completed',

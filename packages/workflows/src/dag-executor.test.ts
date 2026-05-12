@@ -182,6 +182,12 @@ function node(id: string, depends_on?: string[], opts?: Partial<DagNode>): DagNo
   return { id, command: id, ...(depends_on?.length ? { depends_on } : {}), ...opts };
 }
 
+/**
+ * Build a NodeOutput fixture for substitution tests.
+ * Omits `structuredOutput` when undefined so the `'structuredOutput' in nodeOutput` presence
+ * check in substituteNodeOutputRefs matches real producer behavior (Pi/Codex/Claude populate
+ * it; older providers and the pending/skipped states leave it off).
+ */
 function makeOutput(
   state: NodeOutput['state'],
   output = '',
