@@ -155,7 +155,7 @@ export async function updateConversation(
   id: string,
   updates: { title?: string }
 ): Promise<{ success: boolean }> {
-  return fetchJSON(`/api/conversations/${id}`, {
+  return fetchJSON(`/api/conversations/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -163,7 +163,7 @@ export async function updateConversation(
 }
 
 export async function deleteConversation(id: string): Promise<{ success: boolean }> {
-  return fetchJSON(`/api/conversations/${id}`, { method: 'DELETE' });
+  return fetchJSON(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function sendMessage(
