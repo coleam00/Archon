@@ -124,6 +124,27 @@ function isAssistantMessage(m: unknown): m is AssistantMessage {
 }
 
 /**
+ * Extract the concatenated text content of the last assistant message from a
+ * Pi session transcript (the fully-assembled version from agent_end.messages).
+ * Used by bridgeSession to detect streaming truncation: if the assembled text
+ * is longer than what was delivered via text_delta events, the gap is emitted
+ * as a corrective assistant chunk before the result chunk.
+ * Returns undefined when no assistant message is present.
+ */
+function extractLastAssistantText(messages: readonly unknown[]): string | undefined {
+  const last = [...messages].reverse().find(isAssistantMessage);
+  if (!last) return undefined;
+  // AssistantMessage.content is (TextContent | ThinkingContent | ToolCall)[].
+  // Filter to text blocks only; thinking and tool-call blocks are not streamed
+  // as assistant chunks so they are excluded from the gap calculation.
+  const blocks = last.content as { type: string; text?: string }[];
+  return blocks
+    .filter(b => b.type === 'text')
+    .map(b => b.text ?? '')
+    .join('');
+}
+
+/**
  * Build the terminal `result` chunk from the final `agent_end` event. Pulls
  * usage/stopReason/error from the last assistant message in the returned
  * transcript. When the agent ended in error, surfaces it as `isError: true`.
@@ -321,10 +342,28 @@ export async function* bridgeSession(
   // passes through untouched.
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
+  // Track text streamed via text_delta for the current assistant turn.
+  // Reset at each turn_start so only the final turn's text is compared
+  // against finalAssembledText (see streaming-tail completion below).
+  let currentTurnText = '';
+  // Assembled text of the final assistant message from agent_end.messages.
+  // Set synchronously inside the subscribe callback before the result chunk
+  // is pushed to the queue, so it is always ready when the yield loop
+  // processes the result.
+  let finalAssembledText: string | undefined;
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
+      if (event.type === 'turn_start') {
+        currentTurnText = '';
+      }
+      if (event.type === 'agent_end') {
+        finalAssembledText = extractLastAssistantText(event.messages);
+      }
       for (const chunk of mapPiEvent(event)) {
+        if (chunk.type === 'assistant') {
+          currentTurnText += chunk.content;
+        }
         if (wantsStructured && chunk.type === 'assistant') {
           assistantBuffer += chunk.content;
         }
@@ -370,6 +409,33 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
+        // Streaming tail completion: Pi occasionally fails to flush the last
+        // characters of an assistant turn as text_delta events, leaving them
+        // present only in agent_end.messages. Detect the gap and emit the
+        // missing suffix as a corrective assistant chunk so the orchestrator's
+        // allMessages accumulator receives the full command text.
+        // Condition: assembled text is strictly longer, starts with what was
+        // streamed (ensuring we emit an extension, not a replacement), and is
+        // not undefined (no assistant message in transcript — treated as clean).
+        if (
+          finalAssembledText !== undefined &&
+          finalAssembledText.length > currentTurnText.length &&
+          finalAssembledText.startsWith(currentTurnText)
+        ) {
+          const tail = finalAssembledText.slice(currentTurnText.length);
+          yield { type: 'assistant', content: tail };
+          if (wantsStructured) {
+            assistantBuffer += tail;
+          }
+          getLog().warn(
+            {
+              streamedLen: currentTurnText.length,
+              assembledLen: finalAssembledText.length,
+              tailLen: tail.length,
+            },
+            'pi.event-bridge.streaming_tail_completed'
+          );
+        }
         let terminal: MessageChunk = item.chunk;
         if (session.sessionId) {
           terminal = { ...terminal, sessionId: session.sessionId };

@@ -68,10 +68,11 @@ mock.module('../db/conversations', () => ({
 }));
 
 const mockListCodebases = mock(() => Promise.resolve([] as unknown[]));
+const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
-  createCodebase: mock(() => Promise.resolve({ id: 'new-codebase-id' })),
+  createCodebase: mockCreateCodebase,
 }));
 
 const mockUpdateSession = mock(() => Promise.resolve());
@@ -289,6 +290,13 @@ describe('parseOrchestratorCommands', () => {
       expect(result.workflowInvocation).not.toBeNull();
       expect(result.workflowInvocation?.projectName).toBe('my-project');
     });
+
+    test('strips markdown bold from /invoke-workflow and parses correctly', () => {
+      const response = '**/invoke-workflow assist --project my-project**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.workflowInvocation?.workflowName).toBe('assist');
+      expect(result.workflowInvocation?.projectName).toBe('my-project');
+    });
   });
 
   // ─── --prompt parameter ──────────────────────────────────────────────────────
@@ -503,6 +511,43 @@ describe('parseOrchestratorCommands', () => {
       // The regex \S+ for name means no spaces in name anyway
       // Path is trimmed via .trim()
       expect(result.projectRegistration?.projectPath).toBe('/path/to/repo');
+    });
+
+    test('strips markdown bold from /register-project and parses correctly', () => {
+      const response = '**/register-project myapp /home/user/projects/myapp**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('myapp');
+      expect(result.projectRegistration?.projectPath).toBe('/home/user/projects/myapp');
+    });
+
+    test('strips markdown bold from /register-project with quoted path', () => {
+      const response =
+        '**/register-project SaberEngine "/.archon/workspaces/b1skit/SaberEngine/source"**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('SaberEngine');
+      // parseOrchestratorCommands captures the path via (.+)$ which preserves the
+      // surrounding double-quotes. Downstream, handleRegisterProject reconstructs
+      // the command string and calls parseCommand(), which strips the quotes before
+      // calling existsSync(). So the path stored here intentionally includes quotes.
+      expect(result.projectRegistration?.projectPath).toBe(
+        '"/.archon/workspaces/b1skit/SaberEngine/source"'
+      );
+    });
+
+    test('strips markdown bold from /register-project in multiline response', () => {
+      const response =
+        'The project has been set up.\n\n**/register-project SaberEngine "/path/to/repo"**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('SaberEngine');
+      // Surrounding quotes are preserved by (.+)$ — see quoted-path test above.
+      expect(result.projectRegistration?.projectPath).toBe('"/path/to/repo"');
+    });
+
+    test('strips single-asterisk italic from /register-project', () => {
+      const response = '*/register-project myapp /path/to/app*';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('myapp');
+      expect(result.projectRegistration?.projectPath).toBe('/path/to/app');
     });
   });
 
@@ -1680,5 +1725,248 @@ describe('stale session ID clearing on error_during_execution', () => {
     await handleMessage(platform, 'conv-1', 'hello');
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+  });
+});
+
+// ─── Multi-chunk command accumulation regression ──────────────────────────────
+
+describe('handleMessage — multi-chunk command accumulation (regression)', () => {
+  beforeEach(() => {
+    mockSendQuery.mockReset();
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+    mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockDispatchBackgroundWorkflow.mockClear();
+    mockExecuteWorkflow.mockClear();
+    mockTransitionSession.mockClear();
+    mockGetRecentWorkflowResultMessages.mockReset();
+    mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
+    mockLoadConfig.mockReset();
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {}, assistant: 'claude' })
+    );
+    mockGetPausedWorkflowRun.mockReset();
+    mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockFindResumableRunByParentConversation.mockReset();
+    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockParseCommand.mockReset();
+    mockCreateCodebase.mockClear();
+  });
+
+  test('stream mode — register-project split across 3 chunks', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: "I'll register the project now.\n\n/register-project " };
+      yield { type: 'assistant', content: 'ExampleProject ' };
+      yield { type: 'assistant', content: '"/.archon/workspaces/owner/repo/source"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'register my project');
+
+    expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
+    expect(mockCreateCodebase).toHaveBeenCalledWith({
+      name: 'ExampleProject',
+      default_cwd: '/.archon/workspaces/owner/repo/source',
+      ai_assistant_type: 'claude',
+    });
+    const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
+      string,
+      string,
+    ][];
+    expect(allCalls.some(([, msg]) => msg.includes('/.archon/workspaces/owner/repo/source'))).toBe(
+      true
+    );
+  });
+
+  test('batch mode — register-project split across 3 chunks', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: "I'll register the project now.\n\n/register-project " };
+      yield { type: 'assistant', content: 'ExampleProject ' };
+      yield { type: 'assistant', content: '"/.archon/workspaces/owner/repo/source"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'register my project');
+
+    expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
+    expect(mockCreateCodebase).toHaveBeenCalledWith({
+      name: 'ExampleProject',
+      default_cwd: '/.archon/workspaces/owner/repo/source',
+      ai_assistant_type: 'claude',
+    });
+    const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
+      string,
+      string,
+    ][];
+    expect(allCalls.some(([, msg]) => msg.includes('/.archon/workspaces/owner/repo/source'))).toBe(
+      true
+    );
+  });
+
+  test('stream mode — invoke-workflow split across 2 chunks', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Running the workflow now.\n\n/invoke-workflow ' };
+      yield { type: 'assistant', content: 'assist --project my-project' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('batch mode — invoke-workflow split across 2 chunks', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Running the workflow now.\n\n/invoke-workflow ' };
+      yield { type: 'assistant', content: 'assist --project my-project' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('stream mode — invoke-workflow with --prompt split into a later chunk', async () => {
+    // Regression: INVOKE_WORKFLOW_FULL_RE must not declare the command complete when
+    // --project <token> arrives without a line terminator, because --prompt may follow
+    // in the next chunk. Without this fix, commandFullyParsed fires early and the
+    // --prompt chunk is never accumulated, causing synthesizedPrompt to be lost.
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+      };
+      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'original user message');
+
+    // Workflow was dispatched with the synthesized prompt, not the original user message.
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ originalMessage: 'synthesized task description' }),
+      expect.anything()
+    );
+  });
+
+  test('batch mode — invoke-workflow with --prompt split into a later chunk', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+      };
+      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'original user message');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ originalMessage: 'synthesized task description' }),
+      expect.anything()
+    );
+  });
+
+  test('stream mode — command in single chunk still works (non-regression)', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['MyApp', '/path/to/app'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: '/register-project MyApp /path/to/app' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'register my app');
+
+    expect(mockCreateCodebase).toHaveBeenCalledWith({
+      name: 'MyApp',
+      default_cwd: '/path/to/app',
+      ai_assistant_type: 'claude',
+    });
+  });
+
+  test('stream mode — pre-command text is streamed, post-command chunks are suppressed', async () => {
+    // The command chunk includes a trailing \n so REGISTER_PROJECT_FULL_RE fires on
+    // that chunk alone (unquoted path + line terminator = fully parsed). commandFullyParsed
+    // becomes true before the third chunk arrives, so " extra trailing" is never
+    // accumulated and cannot corrupt the parsed path.
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['Foo', '/path'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Registering now:\n' };
+      yield { type: 'assistant', content: '/register-project Foo /path\n' };
+      yield { type: 'assistant', content: ' extra trailing' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'register foo');
+
+    const calls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
+      string,
+      string,
+    ][];
+    const sentTexts = calls.map(([, msg]) => msg);
+    // Pre-command text was streamed
+    expect(sentTexts).toContain('Registering now:\n');
+    // Command trigger chunk was NOT streamed
+    expect(sentTexts).not.toContain('/register-project Foo /path\n');
+    // Post-command chunk was NOT streamed (suppressed because commandFullyParsed=true)
+    expect(sentTexts).not.toContain(' extra trailing');
+    // createCodebase was called with the clean parsed path
+    expect(mockCreateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Foo', default_cwd: '/path' })
+    );
   });
 });
