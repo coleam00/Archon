@@ -71,7 +71,18 @@ nodes:
     bash: |
       set -euo pipefail
       BRANCH="wo/release-ce-backport-policy-01"
-      git checkout -b "$BRANCH"
+      # Idempotent checkout: handle retry-into-existing-worktree case + worktree-locked-branch case
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
       git add .github/workflows/ce-backport-check.yml docs/CE-BACKPORT-POLICY.md
       git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport policy check
