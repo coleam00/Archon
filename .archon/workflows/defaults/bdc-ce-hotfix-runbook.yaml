@@ -83,13 +83,18 @@ nodes:
         git checkout -b "$BRANCH"
       fi
       git add docs/superpowers/specs/ce-release-branch/runbooks/CE-HOTFIX-RUNBOOK.md
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "docs(ce): WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — emergency CE hotfix process
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "docs(ce): WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — emergency CE hotfix process
 
-      Adds CE-HOTFIX-RUNBOOK.md. Defines hotfix/ce/* flow to release/ce + backport to main.
-      Lists allowed/disallowed hotfix categories per governance.
+        Adds CE-HOTFIX-RUNBOOK.md. Defines hotfix/ce/* flow to release/ce + backport to main.
+        Lists allowed/disallowed hotfix categories per governance.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"
 

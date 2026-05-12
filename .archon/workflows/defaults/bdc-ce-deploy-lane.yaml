@@ -121,13 +121,18 @@ nodes:
       fi
       git add docs/CE-DEPLOY-LANE.md
       [ -f vercel.json ] && git add vercel.json || true
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "feat(deploy): WO-RELEASE-CE-DEPLOY-LANE-01 — wire CE deploy lane from release/ce
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(deploy): WO-RELEASE-CE-DEPLOY-LANE-01 — wire CE deploy lane from release/ce
 
-      Adds docs/CE-DEPLOY-LANE.md with the CE deployment + rollback runbook.
-      Production CE deploys from release/ce ONLY. main continues current behavior.
+        Adds docs/CE-DEPLOY-LANE.md with the CE deployment + rollback runbook.
+        Production CE deploys from release/ce ONLY. main continues current behavior.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"
 

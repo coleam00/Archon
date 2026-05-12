@@ -101,14 +101,19 @@ nodes:
         git checkout -b "$BRANCH"
       fi
       git add .github/workflows/ce-promotion-gate.yml
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "feat(ci): WO-CI-CE-PROMOTION-GATE-01 — Captain CI gate for main → release/ce
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(ci): WO-CI-CE-PROMOTION-GATE-01 — Captain CI gate for main → release/ce
 
-      Adds .github/workflows/ce-promotion-gate.yml. Runs on PRs targeting release/ce.
-      7 checks: source branch valid, PR body template, CE regression, no PRO/HQ labels,
-      no entitlement drift, no deploy config drift, no forbidden file patterns.
+        Adds .github/workflows/ce-promotion-gate.yml. Runs on PRs targeting release/ce.
+        7 checks: source branch valid, PR body template, CE regression, no PRO/HQ labels,
+        no entitlement drift, no deploy config drift, no forbidden file patterns.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"
 

@@ -80,13 +80,18 @@ nodes:
       fi
       git add docs/superpowers/specs/ce-release-branch/runbooks/CE-PROMOTION-RUNBOOK.md
       git add xo-wiki/ 2>/dev/null || true
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "docs(ce): WO-RELEASE-CE-PROMOTION-RUNBOOK-01 — main → release/ce promotion runbook
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "docs(ce): WO-RELEASE-CE-PROMOTION-RUNBOOK-01 — main → release/ce promotion runbook
 
-      Adds CE-PROMOTION-RUNBOOK.md with step-by-step procedure for promoting commits from main
-      to release/ce. References governance doc + lspro-react PR template.
+        Adds CE-PROMOTION-RUNBOOK.md with step-by-step procedure for promoting commits from main
+        to release/ce. References governance doc + lspro-react PR template.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"
 

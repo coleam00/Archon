@@ -139,16 +139,21 @@ nodes:
         git checkout -b "$BRANCH"
       fi
       git add tests/ce-regression/ .github/workflows/ce-regression.yml package.json
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "feat(ci): WO-CI-CE-REGRESSION-SUITE-01 — CE regression gate for release/ce PRs
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(ci): WO-CI-CE-REGRESSION-SUITE-01 — CE regression gate for release/ce PRs
 
-      Adds 11 .spec.ts files under tests/ce-regression/ covering the CE Regression Matrix:
-      auth/license, sample data import, CLZ/XML/CSV import, AutoFix, cover lookup,
-      missing-cover flag, blocker panel, WhatNot export + sample watermark, no PRO/HQ UI.
+        Adds 11 .spec.ts files under tests/ce-regression/ covering the CE Regression Matrix:
+        auth/license, sample data import, CLZ/XML/CSV import, AutoFix, cover lookup,
+        missing-cover flag, blocker panel, WhatNot export + sample watermark, no PRO/HQ UI.
 
-      Adds .github/workflows/ce-regression.yml — runs on PRs targeting release/ce only.
+        Adds .github/workflows/ce-regression.yml — runs on PRs targeting release/ce only.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"
       echo "BRANCH_SHA=$(git rev-parse HEAD)"

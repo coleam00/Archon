@@ -200,20 +200,25 @@ nodes:
       else
         git checkout -b "$BRANCH"
       fi
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "feat(ce): WO-RELEASE-CE-BRANCH-MODEL-01 — add CE branch policy doc + PR templates
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(ce): WO-RELEASE-CE-BRANCH-MODEL-01 — add CE branch policy doc + PR templates
 
-      Adds .github/PULL_REQUEST_TEMPLATE/ce-promotion.md + ce-hotfix.md (copied verbatim
-      from bdc-xo canonical templates).
+        Adds .github/PULL_REQUEST_TEMPLATE/ce-promotion.md + ce-hotfix.md (copied verbatim
+        from bdc-xo canonical templates).
 
-      Adds docs/CE-BRANCH-POLICY.md as a pointer to bdc-xo authoritative governance.
+        Adds docs/CE-BRANCH-POLICY.md as a pointer to bdc-xo authoritative governance.
 
-      release/ce branch was created at the current main HEAD. GitHub branch protection
-      attempted via API; status recorded in PR body. CI-level enforcement via CE regression
-      check (WO-CI-CE-REGRESSION-SUITE-01) + promotion gate (WO-CI-CE-PROMOTION-GATE-01)
-      is the canonical policy enforcement regardless of GitHub plan.
+        release/ce branch was created at the current main HEAD. GitHub branch protection
+        attempted via API; status recorded in PR body. CI-level enforcement via CE regression
+        check (WO-CI-CE-REGRESSION-SUITE-01) + promotion gate (WO-CI-CE-PROMOTION-GATE-01)
+        is the canonical policy enforcement regardless of GitHub plan.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       BRANCH_SHA=$(git rev-parse HEAD)
       echo "BRANCH=${BRANCH}"

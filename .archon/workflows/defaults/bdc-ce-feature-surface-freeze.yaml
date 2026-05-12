@@ -107,13 +107,18 @@ nodes:
         git checkout -b "$BRANCH"
       fi
       git add -A
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + close higher-tier UI leaks for CE plan
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + close higher-tier UI leaks for CE plan
 
-      Adds docs/CE-FEATURE-SURFACE-AUDIT.md.
-      Applies minimal tier guards to close confirmed leaks where PRO/HQ surfaces would be visible to CE plan.
+        Adds docs/CE-FEATURE-SURFACE-AUDIT.md.
+        Applies minimal tier guards to close confirmed leaks where PRO/HQ surfaces would be visible to CE plan.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"
 

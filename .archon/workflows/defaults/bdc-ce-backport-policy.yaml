@@ -84,14 +84,19 @@ nodes:
         git checkout -b "$BRANCH"
       fi
       git add .github/workflows/ce-backport-check.yml docs/CE-BACKPORT-POLICY.md
-      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-        commit -m "feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport policy check
+      # Idempotent commit: skip if branch already contains the work (retry-safe).
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport policy check
 
-      Adds .github/workflows/ce-backport-check.yml. Runs when a PR is merged into release/ce
-      from a hotfix/ce/* branch. Checks for a backport PR to main, comments instructions if missing.
-      Informational (non-blocking) for v1; can be promoted to required check later.
+        Adds .github/workflows/ce-backport-check.yml. Runs when a PR is merged into release/ce
+        from a hotfix/ce/* branch. Checks for a backport PR to main, comments instructions if missing.
+        Informational (non-blocking) for v1; can be promoted to required check later.
 
-      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+        Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"
 
