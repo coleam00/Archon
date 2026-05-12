@@ -101,7 +101,7 @@ nodes:
       BRANCH="wo/ce-feature-surface-freeze-01"
       git checkout -b "$BRANCH"
       git add -A
-      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + close higher-tier UI leaks for CE plan
 
       Adds docs/CE-FEATURE-SURFACE-AUDIT.md.

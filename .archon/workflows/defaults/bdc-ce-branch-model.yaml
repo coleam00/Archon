@@ -208,7 +208,7 @@ nodes:
       else
         git checkout -b "$BRANCH"
       fi
-      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(ce): WO-RELEASE-CE-BRANCH-MODEL-01 — add CE branch policy doc + PR templates
 
       Adds .github/PULL_REQUEST_TEMPLATE/ce-promotion.md + ce-hotfix.md (copied verbatim

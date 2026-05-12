@@ -115,7 +115,7 @@ nodes:
       git checkout -b "$BRANCH"
       git add docs/CE-DEPLOY-LANE.md
       [ -f vercel.json ] && git add vercel.json || true
-      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(deploy): WO-RELEASE-CE-DEPLOY-LANE-01 — wire CE deploy lane from release/ce
 
       Adds docs/CE-DEPLOY-LANE.md with the CE deployment + rollback runbook.

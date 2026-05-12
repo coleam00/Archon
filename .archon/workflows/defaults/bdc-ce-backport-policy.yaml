@@ -78,7 +78,7 @@ nodes:
       BRANCH="wo/release-ce-backport-policy-01"
       git checkout -b "$BRANCH"
       git add .github/workflows/ce-backport-check.yml docs/CE-BACKPORT-POLICY.md
-      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport policy check
 
       Adds .github/workflows/ce-backport-check.yml. Runs when a PR is merged into release/ce

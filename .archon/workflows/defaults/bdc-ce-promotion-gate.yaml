@@ -95,7 +95,7 @@ nodes:
       BRANCH="wo/ci-ce-promotion-gate-01"
       git checkout -b "$BRANCH"
       git add .github/workflows/ce-promotion-gate.yml
-      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(ci): WO-CI-CE-PROMOTION-GATE-01 — Captain CI gate for main → release/ce
 
       Adds .github/workflows/ce-promotion-gate.yml. Runs on PRs targeting release/ce.

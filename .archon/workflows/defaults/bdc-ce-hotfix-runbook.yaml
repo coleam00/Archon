@@ -77,7 +77,7 @@ nodes:
       BRANCH="wo/release-ce-hotfix-runbook-01"
       git checkout -b "$BRANCH"
       git add docs/superpowers/specs/ce-release-branch/runbooks/CE-HOTFIX-RUNBOOK.md
-      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "docs(ce): WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — emergency CE hotfix process
 
       Adds CE-HOTFIX-RUNBOOK.md. Defines hotfix/ce/* flow to release/ce + backport to main.
