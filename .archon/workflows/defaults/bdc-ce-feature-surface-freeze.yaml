@@ -69,6 +69,8 @@ nodes:
     task_class: medium_work
     loop:
       fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
       prompt: |
         Implement the surface freeze per the audit.
 
