@@ -941,6 +941,7 @@ async function handleStreamMode(
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let commandResponseSnapshot: string | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -949,16 +950,22 @@ async function handleStreamMode(
     requestOptions
   )) {
     if (msg.type === 'assistant' && msg.content) {
+      allMessages.push(msg.content);
+      const accumulated = allMessages.join('');
+      const hasOrchestratorCommand =
+        /^\/invoke-workflow\s/m.test(accumulated) || /^\/register-project\s/m.test(accumulated);
+      if (hasOrchestratorCommand) {
+        const parsedCommands = parseOrchestratorCommands(accumulated, codebases, workflows);
+        if (parsedCommands.workflowInvocation || parsedCommands.projectRegistration) {
+          commandResponseSnapshot = accumulated;
+        }
+      }
       if (!commandDetected) {
-        allMessages.push(msg.content);
-        const accumulated = allMessages.join('');
         // Check for orchestrator commands BEFORE streaming to frontend.
-        // If detected, suppress this chunk and all future chunks — the full
-        // response will be parsed post-loop and the command dispatched there.
-        if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
-        ) {
+        // If detected, suppress this chunk and future chunks from the UI, but
+        // keep accumulating assistant text so providers that split after
+        // "/invoke-workflow " still produce a parseable final command.
+        if (hasOrchestratorCommand) {
           commandDetected = true;
         } else {
           await platform.sendMessage(conversationId, msg.content);
@@ -1027,7 +1034,7 @@ async function handleStreamMode(
     return;
   }
 
-  const fullResponse = allMessages.join('');
+  const fullResponse = commandResponseSnapshot ?? allMessages.join('');
   const commands = parseOrchestratorCommands(fullResponse, codebases, workflows);
 
   if (commands.workflowInvocation) {
@@ -1092,6 +1099,7 @@ async function handleBatchMode(
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
   let commandDetected = false;
+  let commandResponseSnapshot: string | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -1100,19 +1108,24 @@ async function handleBatchMode(
     requestOptions
   )) {
     if (msg.type === 'assistant' && msg.content) {
+      assistantMessages.push(msg.content);
+      const accumulated = assistantMessages.join('');
+      const hasOrchestratorCommand =
+        /^\/invoke-workflow\s/m.test(accumulated) || /^\/register-project\s/m.test(accumulated);
+      if (hasOrchestratorCommand) {
+        const parsedCommands = parseOrchestratorCommands(accumulated, codebases, workflows);
+        if (parsedCommands.workflowInvocation || parsedCommands.projectRegistration) {
+          commandResponseSnapshot = accumulated;
+        }
+      }
       if (!commandDetected) {
-        assistantMessages.push(msg.content);
         allChunks.push({ type: 'assistant', content: msg.content });
 
         if (assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS) {
           assistantMessages.shift();
           assistantChunksTruncated = true;
         }
-        const accumulated = assistantMessages.join('');
-        if (
-          /^\/invoke-workflow\s/m.test(accumulated) ||
-          /^\/register-project\s/m.test(accumulated)
-        ) {
+        if (hasOrchestratorCommand) {
           commandDetected = true;
         }
       }
@@ -1185,8 +1198,11 @@ async function handleBatchMode(
     'batch_mode_chunks_received'
   );
 
-  // Filter tool indicators and build final message
-  const finalMessage = filterToolIndicators(assistantMessages);
+  // Filter tool indicators for normal prose. For orchestrator commands, parse
+  // the raw stream text; batch-mode separators would corrupt split commands.
+  const finalMessage = commandDetected
+    ? (commandResponseSnapshot ?? assistantMessages.join(''))
+    : filterToolIndicators(assistantMessages);
 
   if (!finalMessage) {
     getLog().debug({ conversationId }, 'no_ai_response');
