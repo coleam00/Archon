@@ -131,7 +131,7 @@ nodes:
       BASE_BRANCH="wo/ci-ce-regression-suite-01"
       BRANCH="$BASE_BRANCH"
       if git worktree list --porcelain | grep -qx "branch refs/heads/$BRANCH"; then
-        BRANCH="${BASE_BRANCH}-${WORKFLOW_ID}"
+        BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
       fi
       if git show-ref --quiet "refs/heads/$BRANCH"; then
         git checkout "$BRANCH"
