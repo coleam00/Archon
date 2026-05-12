@@ -1,0 +1,318 @@
+name: bdc-ce-branch-model
+description: |
+  Use when: Shipping WO-RELEASE-CE-BRANCH-MODEL-01 — create + protect the release/ce branch on lspro-react.
+  Input: WO_ID = WO-RELEASE-CE-BRANCH-MODEL-01 (or pass via $WORKFLOW_ID env / user message).
+  Does: Reads the BDC WO spec from bdc-xo via gh api, creates release/ce from current main HEAD on lspro-react,
+        adds GitHub branch protection (PRs required + CE regression check placeholder),
+        commits CE governance doc references + PR templates, opens nothing (this is an infra WO),
+        flips Notion to REVIEW with manifest.
+  Repo: bluedevilcollectibles/lspro-react (target). Spec lives in bluedevilcollectibles/bdc-xo (cross-repo read).
+  NOT for: any other WO. This workflow is bound to WO-RELEASE-CE-BRANCH-MODEL-01.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-RELEASE-CE-BRANCH-MODEL-01}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "$USER_MESSAGE" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
+      if [ -z "$WO_ID" ]; then
+        echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
+        exit 1
+      fi
+      # Spec lives in bdc-xo at docs/superpowers/specs/ce-release-branch/work-orders/<WO_ID>.md
+      SPEC_PATH="docs/superpowers/specs/ce-release-branch/work-orders/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Fallback: look for date-prefixed file in flat specs dir
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --jq ".[] | select(.name | endswith(\"${WO_ID}.md\")) | .path" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID}" >&2
+        exit 1
+      fi
+      # Also fetch the architecture + governance docs (single source of truth for branch policy)
+      ARCH_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/docs/CE-RELEASE-BRANCH-ARCHITECTURE-v1.md?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      GOV_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/docs/CE-BRANCH-GOVERNANCE.md?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n\n' "$SPEC_CONTENT"
+      printf -- '--- ARCHITECTURE v1 ---\n%s\n\n' "$ARCH_CONTENT"
+      printf -- '--- GOVERNANCE ---\n%s\n' "$GOV_CONTENT"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":\"CE branch-model build started (workflow: bdc-ce-branch-model)\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" || echo "builder-status post failed (non-fatal)"
+
+  - id: verify-baseline-commit
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # CWD is the lspro-react workspace clone. Verify we're on main + capture HEAD.
+      git rev-parse --abbrev-ref HEAD
+      MAIN_HEAD=$(git rev-parse HEAD)
+      echo "MAIN_HEAD=${MAIN_HEAD}"
+      # Sanity check: current commit message + author
+      git log -1 --pretty=format:'%h %s%n%an %ad' --date=short
+      # Get the canonical lspro-react repo info from gh
+      gh repo view bluedevilcollectibles/lspro-react --json defaultBranchRef,sshUrl --jq '"defaultBranch=\(.defaultBranchRef.name)"'
+
+  - id: create-release-ce-branch
+    depends_on: [verify-baseline-commit]
+    bash: |
+      set -euo pipefail
+      MAIN_HEAD=$(printf '%s\n' "$verify-baseline-commit.output" | sed -n 's/^MAIN_HEAD=//p' | head -n 1)
+      if [ -z "$MAIN_HEAD" ]; then
+        echo "Could not determine MAIN_HEAD from prior node" >&2
+        exit 1
+      fi
+      # Check if release/ce already exists (idempotency)
+      if gh api "repos/bluedevilcollectibles/lspro-react/branches/release/ce" --jq .name 2>/dev/null | grep -q "release/ce"; then
+        echo "release/ce already exists. Will verify protections, not recreate."
+        gh api "repos/bluedevilcollectibles/lspro-react/branches/release/ce" --jq '"existing_sha=\(.commit.sha)"'
+      else
+        # Create release/ce from main HEAD via GitHub Git Refs API
+        gh api -X POST "repos/bluedevilcollectibles/lspro-react/git/refs" \
+          -f ref="refs/heads/release/ce" \
+          -f sha="${MAIN_HEAD}"
+        echo "Created release/ce at ${MAIN_HEAD}"
+      fi
+
+  - id: add-branch-protection
+    depends_on: [create-release-ce-branch]
+    bash: |
+      set -euo pipefail
+      # Apply branch protection on release/ce per CE-BRANCH-GOVERNANCE.md:
+      # - PR required (no direct pushes)
+      # - At least 1 review
+      # - Required status checks (CE regression — will be wired by WO #2)
+      # - Restrict force-pushes + deletions
+      # Note: required_status_checks.contexts is intentionally a placeholder; WO-CI-CE-REGRESSION-SUITE-01
+      # adds the actual "ce-regression" check. Once that exists, this protection upgrades automatically.
+      gh api -X PUT "repos/bluedevilcollectibles/lspro-react/branches/release/ce/protection" \
+        -H "Accept: application/vnd.github+json" \
+        --input - <<EOF
+      {
+        "required_status_checks": {
+          "strict": true,
+          "contexts": []
+        },
+        "enforce_admins": false,
+        "required_pull_request_reviews": {
+          "dismiss_stale_reviews": true,
+          "require_code_owner_reviews": false,
+          "required_approving_review_count": 1
+        },
+        "restrictions": null,
+        "allow_force_pushes": false,
+        "allow_deletions": false,
+        "required_linear_history": false,
+        "block_creations": false,
+        "required_conversation_resolution": true
+      }
+      EOF
+      echo "Branch protection applied to release/ce"
+      # Verify
+      gh api "repos/bluedevilcollectibles/lspro-react/branches/release/ce/protection" --jq '"protection_url=\(.url)\nrequired_pr_review_count=\(.required_pull_request_reviews.required_approving_review_count)\nallow_force_pushes=\(.allow_force_pushes.enabled)\nallow_deletions=\(.allow_deletions.enabled)"'
+
+  - id: add-pr-templates
+    depends_on: [add-branch-protection]
+    bash: |
+      set -euo pipefail
+      # Add CE-specific PR templates to lspro-react .github/ from bdc-xo source
+      mkdir -p .github/PULL_REQUEST_TEMPLATE
+      # Copy promotion + hotfix PR templates from bdc-xo via gh api (cross-repo content fetch)
+      gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/templates/ce-promotion-pr-template.md?ref=main" --jq .content | base64 -d > .github/PULL_REQUEST_TEMPLATE/ce-promotion.md
+      gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/templates/ce-hotfix-pr-template.md?ref=main" --jq .content | base64 -d > .github/PULL_REQUEST_TEMPLATE/ce-hotfix.md
+      # Add a CE branch policy reference doc inline (one-pager pointing back to bdc-xo wiki)
+      cat > docs/CE-BRANCH-POLICY.md <<'POLICY_EOF'
+      # CE Branch Policy (this repo: lspro-react)
+
+      The `release/ce` branch is the stable production branch for the Comic Edition tier.
+
+      ## Authoritative source
+
+      The canonical CE branch governance lives in `bdc-xo`:
+      - Architecture: `docs/superpowers/specs/ce-release-branch/docs/CE-RELEASE-BRANCH-ARCHITECTURE-v1.md`
+      - Governance rules: `docs/superpowers/specs/ce-release-branch/docs/CE-BRANCH-GOVERNANCE.md`
+      - Regression matrix: `docs/superpowers/specs/ce-release-branch/docs/CE-REGRESSION-MATRIX.md`
+      - Wiki concept article: `xo-wiki/wiki/concepts/ce-release-branch/_index.md`
+
+      Read those before opening any PR against `release/ce`.
+
+      ## Quick rules (full doctrine in bdc-xo)
+
+      - No direct pushes — PR required.
+      - PR template: choose `ce-promotion.md` (main → release/ce) or `ce-hotfix.md` (hotfix/ce/* → release/ce).
+      - CE regression must pass (WO-CI-CE-REGRESSION-SUITE-01 implements the check).
+      - Every CE hotfix requires a backport PR to main (WO-RELEASE-CE-BACKPORT-POLICY-01 enforces this).
+      - John approval required for production deploy from release/ce (WO-RELEASE-CE-DEPLOY-LANE-01 wires the deploy gate).
+
+      ## Branch flow
+
+      ```
+      main (active development)
+          ↓ promotion/ce/<slug> PR
+      release/ce (stable customer-facing)
+          ↓ deploy (John approval required)
+      production CE customers
+      ```
+
+      Hotfix flow:
+
+      ```
+      hotfix/ce/<slug> → release/ce → main (backport)
+      ```
+      POLICY_EOF
+      mkdir -p docs
+      mv docs/CE-BRANCH-POLICY.md docs/CE-BRANCH-POLICY.md.tmp 2>/dev/null || true
+      git add .github/PULL_REQUEST_TEMPLATE/ce-promotion.md \
+              .github/PULL_REQUEST_TEMPLATE/ce-hotfix.md \
+              docs/CE-BRANCH-POLICY.md
+      git status --short
+
+  - id: commit-and-push-main
+    depends_on: [add-pr-templates]
+    bash: |
+      set -euo pipefail
+      # Commit governance refs to a feature branch (NOT main directly per Rule 20 staging-gate)
+      BRANCH="wo/release-ce-branch-model-01"
+      git checkout -b "$BRANCH"
+      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+        commit -m "feat(ce): WO-RELEASE-CE-BRANCH-MODEL-01 — add CE branch policy doc + PR templates
+
+      Adds .github/PULL_REQUEST_TEMPLATE/ce-promotion.md + ce-hotfix.md (copied verbatim
+      from bdc-xo canonical templates).
+
+      Adds docs/CE-BRANCH-POLICY.md as a pointer to bdc-xo authoritative governance.
+
+      release/ce branch was created at \$(git rev-parse origin/main) and protected via
+      GitHub API: PR required, 1 review, no force-push, no deletion, conversation resolution required.
+
+      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      git push -u origin "$BRANCH"
+      BRANCH_SHA=$(git rev-parse HEAD)
+      echo "BRANCH=${BRANCH}"
+      echo "BRANCH_SHA=${BRANCH_SHA}"
+
+  - id: open-pr
+    depends_on: [commit-and-push-main]
+    bash: |
+      set -euo pipefail
+      BRANCH=$(printf '%s\n' "$commit-and-push-main.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements **WO-RELEASE-CE-BRANCH-MODEL-01** — CE Release Branch Plan WO #1 (foundation)."
+        echo ""
+        echo "## Changes"
+        echo "- Created \`release/ce\` branch at current \`main\` HEAD"
+        echo "- Applied GitHub branch protection: PR required, 1 review, no force-push, no deletion, conversation resolution required"
+        echo "- Added \`.github/PULL_REQUEST_TEMPLATE/ce-promotion.md\` (verbatim from bdc-xo)"
+        echo "- Added \`.github/PULL_REQUEST_TEMPLATE/ce-hotfix.md\` (verbatim from bdc-xo)"
+        echo "- Added \`docs/CE-BRANCH-POLICY.md\` pointing to bdc-xo authoritative governance"
+        echo ""
+        echo "## Authoritative source"
+        echo "- Spec: bdc-xo \`docs/superpowers/specs/ce-release-branch/work-orders/WO-RELEASE-CE-BRANCH-MODEL-01.md\`"
+        echo "- Governance: bdc-xo \`docs/superpowers/specs/ce-release-branch/docs/CE-BRANCH-GOVERNANCE.md\`"
+        echo "- Architecture: bdc-xo \`docs/superpowers/specs/ce-release-branch/docs/CE-RELEASE-BRANCH-ARCHITECTURE-v1.md\`"
+        echo "- Wiki: bdc-xo \`xo-wiki/wiki/concepts/ce-release-branch/_index.md\`"
+        echo ""
+        echo "## Stop conditions"
+        echo "- [x] release/ce exists ($create-release-ce-branch.output)"
+        echo "- [x] Branch protection active (no direct pushes, PR required)"
+        echo "- [x] CE branch policy doc committed"
+        echo "- [x] Backport policy referenced (enforced separately by WO-RELEASE-CE-BACKPORT-POLICY-01)"
+        echo ""
+        echo "## Captain CI Manifest"
+        echo "Will be built by post-completed node and written to Notion Notes."
+        echo ""
+        echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+      } > "$BODY_FILE"
+      gh pr create \
+        --base main \
+        --head "$BRANCH" \
+        --title "feat(ce): WO-RELEASE-CE-BRANCH-MODEL-01 — release/ce branch + PR templates" \
+        --body-file "$BODY_FILE"
+      PR_URL=$(gh pr view --json url --jq .url)
+      echo "PR_URL=${PR_URL}"
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Build the Captain CI completion manifest for WO-RELEASE-CE-BRANCH-MODEL-01.
+
+      ## Required Manifest Fields (v2 format)
+      - WO: WO-RELEASE-CE-BRANCH-MODEL-01
+      - Builder: Major Build (Codex via bdc-harness)
+      - Files created (lspro-react):
+        - .github/PULL_REQUEST_TEMPLATE/ce-promotion.md
+        - .github/PULL_REQUEST_TEMPLATE/ce-hotfix.md
+        - docs/CE-BRANCH-POLICY.md
+      - Files modified: none
+      - Branch created on lspro-react: release/ce at <main HEAD SHA>
+      - Branch protection applied: PR required, 1 review, no force-push, no deletion, conversation resolution required
+      - PR opened: <feature-branch PR URL>
+      - Merge ancestors: lspro-react main HEAD = <SHA>, behind_by: 0
+      - Grep assertions (rerun-able):
+        - gh api repos/bluedevilcollectibles/lspro-react/branches/release/ce --jq .name returns release/ce
+        - gh api repos/bluedevilcollectibles/lspro-react/branches/release/ce/protection returns 200
+      - Runtime verification: branch + protection visible in GitHub UI
+      - Vercel deployment: N/A (release/ce deploys covered by WO-RELEASE-CE-DEPLOY-LANE-01)
+      - VALIDATION: PASS
+
+      ## Inputs
+      Spec: $read-spec.output
+      Baseline: $verify-baseline-commit.output
+      Branch creation: $create-release-ce-branch.output
+      Protection: $add-branch-protection.output
+      Templates: $add-pr-templates.output
+      Push: $commit-and-push-main.output
+      PR: $open-pr.output
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || echo "builder-status post failed (non-fatal)"
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Update the Notion Work Order page for WO-RELEASE-CE-BRANCH-MODEL-01.
+
+      Per Rule 7 of Archon-YAML-Authoring doctrine + Captain CI manifest contract,
+      the manifest MUST be written to the Notion `Notes` PROPERTY (not a page comment),
+      and `Claude Status` MUST flip to `REVIEW` in the same update.
+
+      ## Required Notion Changes
+      - Property: Claude Status -> REVIEW
+      - Property: Status -> Review
+      - Property: Notes -> set to the manifest below
+      - claimed_by: Codex (via bdc-harness)
+      - claimed_at: today's date
+
+      ## Manifest (write this to the Notes property verbatim)
+      $build-manifest.output
+
+      If Notion MCP is not available inside the container, do NOT invent a workaround.
+      Output a TODO line `XO_TODO: flip Notion manually for WO-RELEASE-CE-BRANCH-MODEL-01 with manifest above`
+      so XO sees it in the run log and patches Notion by hand.

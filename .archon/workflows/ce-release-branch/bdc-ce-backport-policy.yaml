@@ -1,0 +1,125 @@
+name: bdc-ce-backport-policy
+description: |
+  Use when: Shipping WO-RELEASE-CE-BACKPORT-POLICY-01 — Captain CI enforces every CE hotfix
+  has a backport PR to main.
+  Input: WO_ID = WO-RELEASE-CE-BACKPORT-POLICY-01.
+  Does: Implements a Captain CI check in lspro-react `.github/workflows/ce-backport-check.yml`
+        that runs when a PR merges into release/ce from a hotfix/ce/* branch — verifies a
+        backport PR to main exists or a waiver is recorded. Opens PR.
+  Repo: bluedevilcollectibles/lspro-react. Cross-repo spec from bdc-xo.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-RELEASE-CE-BACKPORT-POLICY-01}"
+      SPEC_PATH="docs/superpowers/specs/ce-release-branch/work-orders/${WO_ID}.md"
+      SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      [ -z "$SPEC" ] && { echo "Spec not found" >&2; exit 1; }
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf -- '%s\n' "$SPEC"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\"}" || true
+
+  - id: implement
+    depends_on: [read-spec]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      prompt: |
+        Implement CE backport policy as a Captain CI GitHub Actions workflow.
+
+        ## Spec
+        $read-spec.output
+
+        ## Required files
+        - `.github/workflows/ce-backport-check.yml`
+          - Triggers: pull_request_target on closed events targeting release/ce
+          - Only runs when the merged branch matches `hotfix/ce/*`
+          - Logic:
+            1. Get the merged commit SHA
+            2. Use `gh pr list --base main --search "<commit-sha-or-cherry-pick-ref>"` to find a backport PR
+            3. If none found AND no `ce-backport-waiver` label on the original PR, fail the check + comment on the merged PR with instructions
+            4. If found, post comment with backport PR URL + pass
+          - Required permissions: `pull-requests: write`, `contents: read`
+        - `docs/CE-BACKPORT-POLICY.md` — short policy doc pointing to bdc-xo governance
+
+        ## Rules
+        - Use only `gh` CLI (preinstalled in GitHub-hosted runners) + standard bash.
+        - The check is INFORMATIONAL (not blocking) for now — comment-only; if we want hard-block later, separate WO.
+        - Do NOT modify any other workflow files.
+
+        Output <promise>COMPLETE</promise> when both files exist + `yamllint .github/workflows/ce-backport-check.yml` passes (or skipped if yamllint not present).
+
+  - id: verify
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls .github/workflows/ce-backport-check.yml
+      ls docs/CE-BACKPORT-POLICY.md
+      grep -E "hotfix/ce" .github/workflows/ce-backport-check.yml >/dev/null || { echo "FAIL: hotfix/ce pattern missing" >&2; exit 1; }
+
+  - id: commit-and-push
+    depends_on: [verify]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/release-ce-backport-policy-01"
+      git checkout -b "$BRANCH"
+      git add .github/workflows/ce-backport-check.yml docs/CE-BACKPORT-POLICY.md
+      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+        commit -m "feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport policy check
+
+      Adds .github/workflows/ce-backport-check.yml. Runs when a PR is merged into release/ce
+      from a hotfix/ce/* branch. Checks for a backport PR to main, comments instructions if missing.
+      Informational (non-blocking) for v1; can be promoted to required check later.
+
+      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      gh pr create --base main --head "$BRANCH" \
+        --title "feat(ci): WO-RELEASE-CE-BACKPORT-POLICY-01 — CE hotfix backport check" \
+        --body "Implements WO-RELEASE-CE-BACKPORT-POLICY-01. CE hotfixes that merge to release/ce without a backport PR to main now get a CI comment with instructions. 🤖 Generated with Claude Code"
+      gh pr view --json url --jq '"PR_URL=\(.url)"'
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Manifest v2 for WO-RELEASE-CE-BACKPORT-POLICY-01.
+      WO, Builder, Files created, PR URL, VALIDATION: PASS.
+      Inputs: $read-spec.output $verify.output $commit-and-push.output $open-pr.output
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || true
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-RELEASE-CE-BACKPORT-POLICY-01 to REVIEW.
+      Page ID: 35def4c9-ce00-81c8-b94e-c2795e439fe7
+      Notes = $build-manifest.output. Claude Status -> REVIEW. Status -> Review.
+      If MCP unavailable: XO_TODO line.

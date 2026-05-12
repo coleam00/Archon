@@ -1,0 +1,121 @@
+name: bdc-ce-hotfix-runbook
+description: |
+  Use when: Shipping WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — emergency CE hotfix process.
+  Input: WO_ID = WO-RELEASE-CE-HOTFIX-RUNBOOK-01.
+  Does: Authors the CE hotfix runbook in bdc-xo. PR template (ce-hotfix.md) already added to
+        lspro-react by WO-RELEASE-CE-BRANCH-MODEL-01.
+  Class: DOCS / RELEASE.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-RELEASE-CE-HOTFIX-RUNBOOK-01}"
+      SPEC_PATH="docs/superpowers/specs/ce-release-branch/work-orders/${WO_ID}.md"
+      SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      GOV=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/docs/CE-BRANCH-GOVERNANCE.md?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      [ -z "$SPEC" ] && { echo "Spec not found" >&2; exit 1; }
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n\n' "$SPEC"
+      printf -- '--- GOVERNANCE ---\n%s\n' "$GOV"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"XO\"}" || true
+
+  - id: implement
+    depends_on: [read-spec]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      prompt: |
+        Author the CE hotfix runbook in bdc-xo.
+
+        ## Required File
+        `docs/superpowers/specs/ce-release-branch/runbooks/CE-HOTFIX-RUNBOOK.md`
+
+        ## Content sections
+        - Trigger: when to use the hotfix path (urgent CE bug, can't wait for main)
+        - Allowed hotfix categories (from governance: CE import/export/auth/license/signup/UX/cover/crash)
+        - NOT allowed (new features, higher-tier work, refactors, multi-category expansion)
+        - Step-by-step:
+          1. Reproduce + minimal fix on `hotfix/ce/<slug>` branched from `release/ce`
+          2. Open PR to `release/ce` using `.github/PULL_REQUEST_TEMPLATE/ce-hotfix.md`
+          3. CE regression must pass
+          4. John approval (production deploy authority)
+          5. Deploy CE from release/ce (per WO-RELEASE-CE-DEPLOY-LANE-01)
+          6. Open backport PR to main (per WO-RELEASE-CE-BACKPORT-POLICY-01)
+        - Rollback procedure: revert release/ce to prior commit, redeploy
+        - Captain CI behavior: recognizes `hotfix/ce/*` branch pattern (separately wired by WO-CI-CE-PROMOTION-GATE-01 if needed)
+
+        ## Out of scope
+        - PR template file (already in lspro-react from WO #1)
+        - Captain CI workflow code (separate WOs)
+
+        Output <promise>COMPLETE</promise> when runbook exists.
+
+  - id: verify
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls docs/superpowers/specs/ce-release-branch/runbooks/CE-HOTFIX-RUNBOOK.md
+
+  - id: commit-and-push
+    depends_on: [verify]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/release-ce-hotfix-runbook-01"
+      git checkout -b "$BRANCH"
+      git add docs/superpowers/specs/ce-release-branch/runbooks/CE-HOTFIX-RUNBOOK.md
+      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+        commit -m "docs(ce): WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — emergency CE hotfix process
+
+      Adds CE-HOTFIX-RUNBOOK.md. Defines hotfix/ce/* flow to release/ce + backport to main.
+      Lists allowed/disallowed hotfix categories per governance.
+
+      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      gh pr create --base main --head "$BRANCH" \
+        --title "docs(ce): WO-RELEASE-CE-HOTFIX-RUNBOOK-01 — CE hotfix runbook" \
+        --body "Implements WO-RELEASE-CE-HOTFIX-RUNBOOK-01. Docs-only. 🤖 Generated with Claude Code"
+      gh pr view --json url --jq '"PR_URL=\(.url)"'
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Manifest v2 for WO-RELEASE-CE-HOTFIX-RUNBOOK-01. Files created, PR URL, VALIDATION: PASS.
+      Inputs: $read-spec.output $verify.output $commit-and-push.output $open-pr.output
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"XO\",\"detail\":${DETAIL}}" || true
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-RELEASE-CE-HOTFIX-RUNBOOK-01 to REVIEW.
+      Page ID: 35def4c9-ce00-81f2-8555-da00f6da97cb
+      Notes = $build-manifest.output.

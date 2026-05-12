@@ -1,0 +1,163 @@
+name: bdc-ce-deploy-lane
+description: |
+  Use when: Shipping WO-RELEASE-CE-DEPLOY-LANE-01 — define + wire CE deployment lane.
+  Input: WO_ID = WO-RELEASE-CE-DEPLOY-LANE-01.
+  Does: Reads spec from bdc-xo, audits current CE deploy target on lspro-react, configures Vercel
+        so production CE deploys from release/ce ONLY (not arbitrary main commits), documents
+        rollback, opens PR with deploy lane config + docs.
+  Repo: bluedevilcollectibles/lspro-react. Cross-repo spec from bdc-xo.
+  Depends on: WO-RELEASE-CE-BRANCH-MODEL-01 (release/ce branch must exist).
+  NOT for: any other WO.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-RELEASE-CE-DEPLOY-LANE-01}"
+      SPEC_PATH="docs/superpowers/specs/ce-release-branch/work-orders/${WO_ID}.md"
+      SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      ARCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs/ce-release-branch/docs/CE-RELEASE-BRANCH-ARCHITECTURE-v1.md?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      [ -z "$SPEC" ] && { echo "Spec not found for $WO_ID" >&2; exit 1; }
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n\n' "$SPEC"
+      printf -- '--- ARCHITECTURE ---\n%s\n' "$ARCH"
+
+  - id: verify-prereq
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # release/ce must exist (created by WO-RELEASE-CE-BRANCH-MODEL-01)
+      if ! gh api "repos/bluedevilcollectibles/lspro-react/branches/release/ce" --jq .name 2>/dev/null | grep -q "release/ce"; then
+        echo "BLOCKER: release/ce branch does not exist. Run WO-RELEASE-CE-BRANCH-MODEL-01 first." >&2
+        exit 1
+      fi
+      echo "release/ce exists. Proceeding."
+
+  - id: post-started
+    depends_on: [verify-prereq]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\"}" || true
+
+  - id: plan
+    depends_on: [verify-prereq]
+    task_class: medium_work
+    prompt: |
+      Plan CE deploy lane config for lspro-react.
+
+      ## Required Output
+      - Deploy platform: identify whether lspro-react uses Vercel (likely) or other
+      - Vercel deploy config: create `vercel.json` snippet OR document Vercel dashboard config that:
+        - Production deploys ONLY from `release/ce` branch (not main)
+        - Preview deploys for any PR targeting release/ce
+        - main branch deploys still go where they currently go (staging — preserve existing behavior)
+      - Files to create:
+        - `docs/CE-DEPLOY-LANE.md` — runbook for deploying CE from release/ce + rollback procedure
+      - Files to modify (if Vercel uses vercel.json): `vercel.json` (add CE production target)
+      - Vercel project: check existing setup; the actual Vercel dashboard config change may need to be a TODO for John (can't do via API without project token)
+      - Rollback procedure documented in CE-DEPLOY-LANE.md:
+        - How to revert release/ce to a known-good commit
+        - How to redeploy from prior commit via Vercel UI / CLI
+        - When to invoke (criteria + who decides)
+      - Verification:
+        - `ls docs/CE-DEPLOY-LANE.md`
+        - If vercel.json modified: `grep -c "release/ce" vercel.json` (>= 1)
+        - `gh api repos/bluedevilcollectibles/lspro-react/branches/release/ce --jq .name` returns release/ce
+      - Commit msg: `feat(deploy): WO-RELEASE-CE-DEPLOY-LANE-01 — wire CE deploy lane from release/ce`
+      - Push: feature branch `wo/release-ce-deploy-lane-01` -> PR against main
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      prompt: |
+        Implement deploy lane config per the plan.
+
+        ## Plan
+        $plan.output
+
+        ## Execution Rules
+        - Create `docs/CE-DEPLOY-LANE.md` with full runbook (deploy + rollback).
+        - If vercel.json exists in repo root, add release/ce as a production branch target (don't break main behavior).
+        - If no vercel.json, document in CE-DEPLOY-LANE.md the Vercel dashboard steps John needs (project settings → Git → production branch).
+        - Do NOT touch any other deploy config (GitHub Actions deploy workflows can stay as-is).
+        - Do NOT trigger any actual deploy. Configuration only.
+        - Do NOT push to main or release/ce.
+
+        Output <promise>COMPLETE</promise> when docs file exists + (if applicable) vercel.json updated + verification commands pass.
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls docs/CE-DEPLOY-LANE.md
+      if [ -f vercel.json ]; then
+        grep -c "release/ce" vercel.json || echo "Note: vercel.json exists but no release/ce ref — dashboard config may be the path"
+      fi
+
+  - id: commit-and-push
+    depends_on: [verify-grep]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/release-ce-deploy-lane-01"
+      git checkout -b "$BRANCH"
+      git add docs/CE-DEPLOY-LANE.md
+      [ -f vercel.json ] && git add vercel.json || true
+      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+        commit -m "feat(deploy): WO-RELEASE-CE-DEPLOY-LANE-01 — wire CE deploy lane from release/ce
+
+      Adds docs/CE-DEPLOY-LANE.md with the CE deployment + rollback runbook.
+      Production CE deploys from release/ce ONLY. main continues current behavior.
+
+      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      gh pr create --base main --head "$BRANCH" \
+        --title "feat(deploy): WO-RELEASE-CE-DEPLOY-LANE-01 — CE deploy lane from release/ce" \
+        --body "Implements WO-RELEASE-CE-DEPLOY-LANE-01. Spec in bdc-xo. Production CE deploys from release/ce only. Rollback procedure in docs/CE-DEPLOY-LANE.md. **If Vercel dashboard config required, see XO_TODO in run log.** 🤖 Generated with Claude Code"
+      gh pr view --json url --jq '"PR_URL=\(.url)"'
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Build Captain CI manifest v2 for WO-RELEASE-CE-DEPLOY-LANE-01.
+      Required: WO, Builder, Files created (CE-DEPLOY-LANE.md), Files modified (vercel.json if applicable),
+      PR URL, dashboard-TODO if applicable, VALIDATION: PASS.
+      Inputs: $read-spec.output $plan.output $verify-grep.output $commit-and-push.output $open-pr.output
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || true
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-RELEASE-CE-DEPLOY-LANE-01 to REVIEW.
+      Page ID: 35eef4c9-ce00-81bb-90b8-d98c31b7bc9d
+      Notes property = $build-manifest.output verbatim.
+      Claude Status -> REVIEW, Status -> Review.
+      If MCP unavailable, output XO_TODO line.

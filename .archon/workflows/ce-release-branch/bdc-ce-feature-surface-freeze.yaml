@@ -1,0 +1,148 @@
+name: bdc-ce-feature-surface-freeze
+description: |
+  Use when: Shipping WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + freeze CE-visible feature surface.
+  Input: WO_ID = WO-CE-FEATURE-SURFACE-FREEZE-01.
+  Does: Audits all routes/components in lspro-react that CE plan users can see, ensures higher-tier
+        features (PRO/HQ/multi-category) are gated, produces audit report + ensures entitlement
+        registry blocks the disallowed surfaces, opens PR.
+  Repo: bluedevilcollectibles/lspro-react. Cross-repo spec from bdc-xo.
+  parallel_ok: true (independent from #1/#2/#3 — surface audit is read-mostly with config edits).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-CE-FEATURE-SURFACE-FREEZE-01}"
+      SPEC_PATH="docs/superpowers/specs/ce-release-branch/work-orders/${WO_ID}.md"
+      SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      [ -z "$SPEC" ] && { echo "Spec not found" >&2; exit 1; }
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n' "$SPEC"
+
+  - id: post-started
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\"}" || true
+
+  - id: audit
+    depends_on: [read-spec]
+    task_class: medium_work
+    prompt: |
+      Audit CE-visible feature surface in lspro-react.
+
+      ## Inputs
+      - CE allowed surfaces: CE import, AutoFix, cover lookup, blocker resolution, price review,
+        WhatNot export, sample data, onboarding walkthrough, license status, help/support
+      - Explicitly hidden: multi-category import, card/toy/vinyl sources, HQ workflows,
+        ShopOps customer management, advanced inventory, team/staff admin, billing mutation UI,
+        experimental AI features
+
+      ## Required Output (Markdown)
+      - WO ID: WO-CE-FEATURE-SURFACE-FREEZE-01
+      - Audit report path: `docs/CE-FEATURE-SURFACE-AUDIT.md`
+      - For each top-level route under `src/pages/` or `app/`:
+        - Route path
+        - Visible to CE plan: yes / no
+        - Source of gating: `tiers.ts`, `<plan>` prop check, route guard, or NONE (leak risk)
+        - Required action: keep, gate, or add explicit hide
+      - Component sweep: `src/components/` — flag any TopNav/Sidebar items that show higher-tier features without a tier guard
+      - Entitlement registry (src/lib/tiers.ts or similar): list current CE allowlist; identify any of the "allowed" list that's missing from CE
+      - Required code changes:
+        - Add tier guards where leak detected
+        - Update entitlement registry if needed
+      - Verification: `grep -rE "plan ===? 'ce'\\|plan ===? 'pro'\\|plan ===? 'hq'" src/ | wc -l` (audit count)
+      - Commit msg: `feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + close higher-tier UI leaks for CE plan`
+      - Push: `wo/ce-feature-surface-freeze-01` -> PR against main
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [audit]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      prompt: |
+        Implement the surface freeze per the audit.
+
+        ## Audit
+        $audit.output
+
+        ## Execution Rules
+        - Create `docs/CE-FEATURE-SURFACE-AUDIT.md` with full audit (route table + flags + remediation).
+        - Apply MINIMAL code changes to close confirmed leaks (add tier guards). Do NOT refactor unrelated tier code.
+        - If entitlement registry needs an update, edit `src/lib/tiers.ts` (or equivalent) to make CE allowlist explicit.
+        - Do NOT touch CE wizard component internals (CEStep01-04). Those are CE-allowed already.
+        - Do NOT add new features. Do NOT delete features that ARE allowed for CE.
+
+        Output <promise>COMPLETE</promise> when audit doc exists + all flagged leaks closed + grep verification passes.
+
+  - id: verify
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls docs/CE-FEATURE-SURFACE-AUDIT.md
+      echo "tier-related code paths (audit count):"
+      grep -rE "plan ===? 'ce'|plan ===? 'pro'|plan ===? 'hq'" src/ 2>/dev/null | wc -l || true
+
+  - id: commit-and-push
+    depends_on: [verify]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/ce-feature-surface-freeze-01"
+      git checkout -b "$BRANCH"
+      git add -A
+      git -c user.name="bdc-harness" -c user.email="harness@bluedevilcollectibles.com" \
+        commit -m "feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + close higher-tier UI leaks for CE plan
+
+      Adds docs/CE-FEATURE-SURFACE-AUDIT.md.
+      Applies minimal tier guards to close confirmed leaks where PRO/HQ surfaces would be visible to CE plan.
+
+      Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      gh pr create --base main --head "$BRANCH" \
+        --title "feat(ce): WO-CE-FEATURE-SURFACE-FREEZE-01 — audit + freeze CE surface" \
+        --body "Implements WO-CE-FEATURE-SURFACE-FREEZE-01. Audit report at docs/CE-FEATURE-SURFACE-AUDIT.md. Tier guards added where leaks confirmed. 🤖 Generated with Claude Code"
+      gh pr view --json url --jq '"PR_URL=\(.url)"'
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Manifest v2 for WO-CE-FEATURE-SURFACE-FREEZE-01.
+      Required: WO, Builder, Audit report path, leaks closed (count), files modified, PR URL,
+      Grep verification, VALIDATION: PASS.
+      Inputs: $read-spec.output $audit.output $verify.output $commit-and-push.output $open-pr.output
+
+  - id: post-completed
+    depends_on: [build-manifest]
+    bash: |
+      set -euo pipefail
+      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      DETAIL=$(printf '%s\n' "$build-manifest.output" | python3 -c "import json,sys; print(json.dumps(sys.stdin.read()))")
+      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
+        -H "Content-Type: application/json" \
+        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}" || true
+
+  - id: flip-notion
+    depends_on: [post-completed]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-CE-FEATURE-SURFACE-FREEZE-01 to REVIEW.
+      Page ID: 35eef4c9-ce00-818f-8e7a-d3ec9fcfd0ee
+      Notes = $build-manifest.output. Claude Status -> REVIEW, Status -> Review.
+      If MCP unavailable: XO_TODO line.
