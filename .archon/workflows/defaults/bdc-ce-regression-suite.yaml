@@ -158,6 +158,9 @@ nodes:
     bash: |
       set -euo pipefail
       BRANCH=$(printf '%s\n' "$commit-and-push.output" | sed -n 's/^BRANCH=//p' | head -n 1)
+      REPO="bluedevilcollectibles/lspro-react"
+      BASE="main"
+      TITLE="feat(ci): WO-CI-CE-REGRESSION-SUITE-01 — CE regression gate"
       BODY_FILE=$(mktemp)
       {
         echo "## Summary"
@@ -184,13 +187,31 @@ nodes:
         echo ""
         echo "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
       } > "$BODY_FILE"
-      gh pr create \
-        --base main \
-        --head "$BRANCH" \
-        --title "feat(ci): WO-CI-CE-REGRESSION-SUITE-01 — CE regression gate" \
-        --body-file "$BODY_FILE"
-      PR_URL=$(gh pr view --json url --jq .url)
-      echo "PR_URL=${PR_URL}"
+      # Idempotent PR creation. See WO-HARNESS-OPEN-PR-GRAPHQL-NO-COMMITS-FIX-01.
+      existing_pr_url() {
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null
+      }
+      PR_URL="$(existing_pr_url)"
+      if [ -n "$PR_URL" ]; then
+        echo "PR_URL=$PR_URL"
+        exit 0
+      fi
+      for attempt in 1 2 3 4 5; do
+        if PR_OUT=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" \
+            --title "$TITLE" --body-file "$BODY_FILE" 2>&1); then
+          echo "PR_URL=$PR_OUT"
+          exit 0
+        fi
+        PR_URL="$(existing_pr_url)"
+        if [ -n "$PR_URL" ]; then
+          echo "PR_URL=$PR_URL"
+          exit 0
+        fi
+        echo "open-pr attempt $attempt failed: $PR_OUT" >&2
+        sleep 10
+      done
+      echo "open-pr failed after retries; branch pushed at $BRANCH but no PR exists" >&2
+      exit 1
 
   - id: build-manifest
     depends_on: [open-pr]
