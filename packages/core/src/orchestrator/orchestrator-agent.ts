@@ -840,14 +840,18 @@ export async function handleMessage(
       }
     }
 
+    // Claude supports the preset object for prompt caching; other providers
+    // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
+    const systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    const systemPrompt =
+      providerKey === 'claude'
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
+        : systemAppend;
+
     const requestOptions: SendQueryOptions = {
       assistantConfig: config.assistants[providerKey] ?? {},
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
-      systemPrompt: {
-        type: 'preset',
-        preset: 'claude_code',
-        append: buildOrchestratorSystemAppend(conversation, codebases, workflows),
-      },
+      systemPrompt,
     };
 
     const mode = platform.getStreamingMode();
