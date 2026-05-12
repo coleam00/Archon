@@ -176,19 +176,22 @@ export function getRepoArchonEnvPath(cwd: string): string {
  * Order:
  * 1. .archon/commands (always - user's custom commands)
  * 2. .archon/commands/defaults (bundled default commands)
- * 3. configuredFolder (if specified in config)
+ * 3. .claude/.archon/commands (additive — for users co-locating Archon assets under .claude/)
+ * 4. .claude/.archon/commands/defaults
+ * 5. configuredFolder (if specified in config)
  *
  * @param configuredFolder - Optional additional folder from config
  */
 export function getCommandFolderSearchPaths(configuredFolder?: string): string[] {
-  const paths = ['.archon/commands', '.archon/commands/defaults'];
+  const paths = [
+    '.archon/commands',
+    '.archon/commands/defaults',
+    '.claude/.archon/commands',
+    '.claude/.archon/commands/defaults',
+  ];
 
   // Add configured folder if specified (and not already in paths)
-  if (
-    configuredFolder &&
-    configuredFolder !== '.archon/commands' &&
-    configuredFolder !== '.archon/commands/defaults'
-  ) {
+  if (configuredFolder && !paths.includes(configuredFolder)) {
     paths.push(configuredFolder);
   }
 
@@ -197,10 +200,12 @@ export function getCommandFolderSearchPaths(configuredFolder?: string): string[]
 
 /**
  * Get workflow folder search paths for a repository
- * Returns folders in priority order (first match wins)
+ * Returns folders in scan order. When multiple paths contain a workflow with
+ * the same filename, the LAST scanned wins — so `.archon/workflows` (root)
+ * overrides `.claude/.archon/workflows` on conflict.
  */
 export function getWorkflowFolderSearchPaths(): string[] {
-  return ['.archon/workflows'];
+  return ['.claude/.archon/workflows', '.archon/workflows'];
 }
 
 /**

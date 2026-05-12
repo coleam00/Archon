@@ -274,69 +274,72 @@ export async function discoverWorkflows(
     }
   }
 
-  // 3. Load from repo's workflow folder (overrides app defaults AND home scope by exact filename)
-  const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
-  const workflowPath = join(cwd, workflowFolder);
+  // 3. Load from repo's workflow folder(s) (overrides app defaults AND home scope by exact filename).
+  // Multiple paths are scanned in order; later scans override earlier ones on filename conflict —
+  // see getWorkflowFolderSearchPaths() for the precedence convention.
+  for (const workflowFolder of archonPaths.getWorkflowFolderSearchPaths()) {
+    const workflowPath = join(cwd, workflowFolder);
 
-  getLog().debug({ workflowPath }, 'searching_repo_workflows');
+    getLog().debug({ workflowPath }, 'searching_repo_workflows');
 
-  try {
-    await access(workflowPath);
-    const repoResult = await loadWorkflowsFromDir(workflowPath);
+    try {
+      await access(workflowPath);
+      const repoResult = await loadWorkflowsFromDir(workflowPath);
 
-    // Repo workflows override bundled AND home scope by exact filename match.
-    // Preserve 'bundled' source for workflows loaded from the defaults/ subdirectory
-    // that were already registered as bundled in step 1.
-    for (const [filename, workflow] of repoResult.workflows) {
-      const existing = workflowsByFile.get(filename);
-      if (existing?.source === 'bundled') {
-        // This file was already loaded as a bundled default — the repo's defaults/
-        // subdirectory is re-discovering it. Keep the bundled source label.
-        getLog().debug({ filename }, 'repo_default_preserves_bundled_source');
-        workflowsByFile.set(filename, { workflow, source: 'bundled' });
-      } else {
-        if (existing) {
-          getLog().debug(
-            { filename, overriddenSource: existing.source },
-            'repo_workflow_overrides_lower_scope'
+      // Repo workflows override bundled AND home scope by exact filename match.
+      // Preserve 'bundled' source for workflows loaded from the defaults/ subdirectory
+      // that were already registered as bundled in step 1.
+      for (const [filename, workflow] of repoResult.workflows) {
+        const existing = workflowsByFile.get(filename);
+        if (existing?.source === 'bundled') {
+          // This file was already loaded as a bundled default — the repo's defaults/
+          // subdirectory is re-discovering it. Keep the bundled source label.
+          getLog().debug({ filename }, 'repo_default_preserves_bundled_source');
+          workflowsByFile.set(filename, { workflow, source: 'bundled' });
+        } else {
+          if (existing) {
+            getLog().debug(
+              { filename, overriddenSource: existing.source },
+              'repo_workflow_overrides_lower_scope'
+            );
+          }
+          workflowsByFile.set(filename, { workflow, source: 'project' });
+        }
+      }
+
+      // Surface repo workflow errors to users (these are actionable)
+      allErrors.push(...repoResult.errors);
+
+      // Warn about deprecated non-prefixed defaults in repo's defaults folder
+      const repoDefaultsPath = join(cwd, workflowFolder, 'defaults');
+      try {
+        await access(repoDefaultsPath);
+        const defaultEntries = await readdir(repoDefaultsPath);
+        const oldDefaults = defaultEntries.filter(
+          f => (f.endsWith('.yaml') || f.endsWith('.yml')) && !f.startsWith('archon-')
+        );
+        if (oldDefaults.length > 0) {
+          getLog().warn(
+            { count: oldDefaults.length, repoDefaultsPath, hint: `rm -rf "${repoDefaultsPath}"` },
+            'deprecated_workflow_defaults_found'
           );
         }
-        workflowsByFile.set(filename, { workflow, source: 'project' });
-      }
-    }
-
-    // Surface repo workflow errors to users (these are actionable)
-    allErrors.push(...repoResult.errors);
-
-    // Warn about deprecated non-prefixed defaults in repo's defaults folder
-    const repoDefaultsPath = join(cwd, workflowFolder, 'defaults');
-    try {
-      await access(repoDefaultsPath);
-      const defaultEntries = await readdir(repoDefaultsPath);
-      const oldDefaults = defaultEntries.filter(
-        f => (f.endsWith('.yaml') || f.endsWith('.yml')) && !f.startsWith('archon-')
-      );
-      if (oldDefaults.length > 0) {
-        getLog().warn(
-          { count: oldDefaults.length, repoDefaultsPath, hint: `rm -rf "${repoDefaultsPath}"` },
-          'deprecated_workflow_defaults_found'
-        );
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, repoDefaultsPath }, 'deprecated_defaults_check_failed');
+        }
+        // ENOENT (not found) is expected - no defaults folder exists
       }
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code !== 'ENOENT') {
-        getLog().warn({ err, repoDefaultsPath }, 'deprecated_defaults_check_failed');
+        throw new Error(
+          `Cannot access workflow folder at ${workflowPath}: ${err.message} (${err.code ?? 'unknown'})`
+        );
       }
-      // ENOENT (not found) is expected - no defaults folder exists
+      getLog().debug({ workflowPath }, 'workflow_folder_not_found');
     }
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code !== 'ENOENT') {
-      throw new Error(
-        `Cannot access workflow folder at ${workflowPath}: ${err.message} (${err.code ?? 'unknown'})`
-      );
-    }
-    getLog().debug({ workflowPath }, 'workflow_folder_not_found');
   }
 
   const workflows = Array.from(workflowsByFile.values());

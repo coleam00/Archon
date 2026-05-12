@@ -177,17 +177,24 @@ describe('archon-paths', () => {
   });
 
   describe('getCommandFolderSearchPaths', () => {
-    test('returns .archon/commands and defaults by default', () => {
+    test('returns .archon and .claude/.archon command paths by default', () => {
       const paths = getCommandFolderSearchPaths();
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
-    });
-
-    test('includes configured folder when provided', () => {
-      const paths = getCommandFolderSearchPaths('.claude/commands/archon');
       expect(paths).toEqual([
         '.archon/commands',
         '.archon/commands/defaults',
-        '.claude/commands/archon',
+        '.claude/.archon/commands',
+        '.claude/.archon/commands/defaults',
+      ]);
+    });
+
+    test('includes configured folder when provided', () => {
+      const paths = getCommandFolderSearchPaths('.custom/commands');
+      expect(paths).toEqual([
+        '.archon/commands',
+        '.archon/commands/defaults',
+        '.claude/.archon/commands',
+        '.claude/.archon/commands/defaults',
+        '.custom/commands',
       ]);
     });
 
@@ -201,21 +208,23 @@ describe('archon-paths', () => {
       expect(paths[1]).toBe('.archon/commands/defaults');
     });
 
-    test('does not duplicate .archon/commands if configured', () => {
-      const paths = getCommandFolderSearchPaths('.archon/commands');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
-    });
-
-    test('does not duplicate .archon/commands/defaults if configured', () => {
-      const paths = getCommandFolderSearchPaths('.archon/commands/defaults');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+    test('does not duplicate any built-in path if configured', () => {
+      for (const builtin of [
+        '.archon/commands',
+        '.archon/commands/defaults',
+        '.claude/.archon/commands',
+        '.claude/.archon/commands/defaults',
+      ]) {
+        const paths = getCommandFolderSearchPaths(builtin);
+        expect(paths.filter(p => p === builtin).length).toBe(1);
+      }
     });
   });
 
   describe('getWorkflowFolderSearchPaths', () => {
-    test('returns .archon/workflows', () => {
+    test('returns .claude/.archon/workflows then .archon/workflows (root wins on conflict)', () => {
       const paths = getWorkflowFolderSearchPaths();
-      expect(paths).toEqual(['.archon/workflows']);
+      expect(paths).toEqual(['.claude/.archon/workflows', '.archon/workflows']);
     });
   });
 

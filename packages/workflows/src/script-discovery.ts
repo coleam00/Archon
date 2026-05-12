@@ -137,24 +137,34 @@ export async function discoverScripts(dir: string): Promise<Map<string, ScriptDe
 /**
  * Discover scripts across all scopes for a given repo cwd.
  *
- * Resolution order (repo wins on same-name collision — matches the
+ * Resolution order (later scope wins on same-name collision — matches the
  * workflows/commands precedence):
- *   1. `<cwd>/.archon/scripts/` — repo-scoped (`source: 'project'` equivalent)
- *   2. `~/.archon/scripts/`    — home-scoped (`source: 'global'` equivalent)
+ *   1. `~/.archon/scripts/`            — home-scoped (`source: 'global'` equivalent)
+ *   2. `<cwd>/.claude/.archon/scripts/` — repo-scoped, additive location for users co-locating
+ *      Archon assets under `.claude/`
+ *   3. `<cwd>/.archon/scripts/`        — repo-scoped (`source: 'project'` equivalent)
  *
  * Within a single scope, duplicate basenames across extensions still throw
- * (matches `discoverScripts` behavior). Across scopes, the repo-level entry
- * silently overrides the home-level one.
+ * (matches `discoverScripts` behavior). Across scopes, later entries silently
+ * override earlier ones, so root `.archon/scripts/` wins over `.claude/.archon/scripts/`
+ * which wins over `~/.archon/scripts/`.
  */
 export async function discoverScriptsForCwd(cwd: string): Promise<Map<string, ScriptDefinition>> {
   const homeScripts = await discoverScripts(getHomeScriptsPath());
+  const claudeScripts = await discoverScripts(join(cwd, '.claude', '.archon', 'scripts'));
   const repoScripts = await discoverScripts(join(cwd, '.archon', 'scripts'));
 
-  // Start with home, overlay repo (repo wins)
+  // Start with home, overlay claude-scoped, then repo (repo wins, claude beats home)
   const merged = new Map<string, ScriptDefinition>(homeScripts);
+  for (const [name, def] of claudeScripts) {
+    if (merged.has(name)) {
+      getLog().debug({ name }, 'script.claude_overrides_home');
+    }
+    merged.set(name, def);
+  }
   for (const [name, def] of repoScripts) {
     if (merged.has(name)) {
-      getLog().debug({ name }, 'script.repo_overrides_home');
+      getLog().debug({ name }, 'script.repo_overrides_lower_scope');
     }
     merged.set(name, def);
   }
