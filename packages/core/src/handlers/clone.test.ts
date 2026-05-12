@@ -249,6 +249,40 @@ describe('cloneRepository', () => {
 
       expect(result.name).toBe('owner/repo');
     });
+
+    test('converts SSH URL with custom host alias to HTTPS', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gh-work/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('git@gh-work:owner/repo.git');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toContain('https://gh-work/owner/repo');
+      expect(cloneCall?.[1]?.[1]).not.toContain('git@');
+    });
+
+    test('converts SSH URL with non-github host to HTTPS', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'team/project',
+          repository_url: 'https://gitlab.example.com/team/project',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('git@gitlab.example.com:team/project.git');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toContain('https://gitlab.example.com/team/project');
+      expect(cloneCall?.[1]?.[1]).not.toContain('git@');
+    });
   });
 
   // ── GH_TOKEN authentication ────────────────────────────────────────────

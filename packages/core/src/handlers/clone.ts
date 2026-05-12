@@ -175,8 +175,9 @@ function normalizeRepoUrl(rawUrl: string): {
   const normalizedUrl = rawUrl.replace(/\/+$/, '');
 
   let workingUrl = normalizedUrl;
-  if (normalizedUrl.startsWith('git@github.com:')) {
-    workingUrl = normalizedUrl.replace('git@github.com:', 'https://github.com/');
+  const sshMatch = /^git@([^:]+):(.+)$/.exec(workingUrl);
+  if (sshMatch) {
+    workingUrl = `https://${sshMatch[1]}/${sshMatch[2]}`;
   }
 
   const urlParts = workingUrl.replace(/\.git$/, '').split('/');
@@ -329,8 +330,9 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   if (remoteUrl) {
     const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
     let workingRemote = cleaned;
-    if (cleaned.startsWith('git@github.com:')) {
-      workingRemote = cleaned.replace('git@github.com:', 'https://github.com/');
+    const sshMatch = /^git@([^:]+):(.+)$/.exec(workingRemote);
+    if (sshMatch) {
+      workingRemote = `https://${sshMatch[1]}/${sshMatch[2]}`;
     }
     const parts = workingRemote.split('/');
     const r = parts.pop();
