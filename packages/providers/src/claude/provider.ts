@@ -223,6 +223,7 @@ function expandEnvVarsInRecord(
       /\$(?:\{([A-Z_][A-Z0-9_]*)\}|([A-Z_][A-Z0-9_]*))/g,
       (_, braced: string | undefined, bare: string | undefined) => {
         const varName = braced ?? bare;
+        // varName is always string — regex alternation guarantees one group matches
         if (varName === undefined) return '';
         const envVal = process.env[varName];
         if (envVal === undefined) {

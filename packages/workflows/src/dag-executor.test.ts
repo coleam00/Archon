@@ -2398,13 +2398,15 @@ describe('loadMcpConfig', () => {
 
   it('does not expand vars in command or args fields', async () => {
     process.env.TEST_CMD_445 = 'should-not-expand';
-    const config = { svc: { command: '$TEST_CMD_445', args: ['$TEST_CMD_445'] } };
+    const config = {
+      svc: { command: '$TEST_CMD_445', args: ['$TEST_CMD_445', '${TEST_CMD_445}'] },
+    };
     await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
 
     const result = await loadMcpConfig('mcp.json', testDir);
     const server = result.servers.svc as Record<string, unknown>;
     expect(server.command).toBe('$TEST_CMD_445');
-    expect(server.args).toEqual(['$TEST_CMD_445']);
+    expect(server.args).toEqual(['$TEST_CMD_445', '${TEST_CMD_445}']);
 
     delete process.env.TEST_CMD_445;
   });

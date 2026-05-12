@@ -128,7 +128,7 @@ expanded from `process.env` at execution time.
     "command": "npx",
     "args": ["-y", "@mcp/server-postgres"],
     "env": {
-      "DATABASE_URL": "$DATABASE_URL",
+      "DATABASE_URL": "${DATABASE_URL}",
       "POOL_SIZE": "$DB_POOL_SIZE"
     }
   }
