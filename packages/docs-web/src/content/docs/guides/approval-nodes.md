@@ -234,8 +234,8 @@ can approve or reject again.
 
 ## Design Notes
 
-Approval nodes reuse the existing resume infrastructure (from workflow lifecycle
-PR #871). When approved, the run transitions through `failed` status briefly so
-that `findResumableRun` picks it up — this avoids duplicating resume logic. The
-`metadata.approval_response` field distinguishes approved-then-resumed from
-genuinely-failed runs.
+Approval nodes reuse the existing resume infrastructure. When approved, the run
+transitions through `failed` status briefly so the orchestrator's explicit
+resume path (via `hydrateResumableRun`) picks it up — this avoids duplicating
+resume logic. The `metadata.approval_response` field distinguishes
+approved-then-resumed from genuinely-failed runs.

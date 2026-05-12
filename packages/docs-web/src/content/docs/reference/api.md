@@ -277,7 +277,7 @@ curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/resume
 ```
 
-Marks the run for auto-resume. The next invocation re-runs the workflow, skipping already-completed nodes.
+Resumes the workflow from where it left off, skipping already-completed nodes. Equivalent to `archon workflow resume <run-id>` from the CLI. Plain `archon workflow run <name>` invocations never resume implicitly.
 
 #### Approve / Reject a Paused Run
 

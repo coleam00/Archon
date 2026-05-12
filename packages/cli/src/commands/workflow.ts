@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import { executeWorkflow } from '@archon/workflows/executor';
+import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
@@ -427,9 +427,10 @@ export async function workflowRunCommand(
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
 
-  // Handle --resume: find the most recent failed run and reuse its worktree.
-  // The executor's implicit findResumableRun will detect the failed run and
-  // skip already-completed nodes automatically.
+  // Handle --resume: locate the prior failed run, reuse its worktree, and hand
+  // the resumed-run handle to executeWorkflow below via opts. The executor no
+  // longer performs implicit resume detection on its own.
+  let resumable: WorkflowRun | null = null;
   if (options.resume) {
     if (!codebase) {
       if (codebaseLookupError) {
@@ -448,7 +449,7 @@ export async function workflowRunCommand(
       );
     }
 
-    const resumable = await workflowDb.findResumableRun(workflowName, cwd);
+    resumable = await workflowDb.findResumableRun(workflowName, cwd);
 
     if (!resumable) {
       throw new Error(`No resumable run found for workflow '${workflowName}' at path '${cwd}'.`);
@@ -704,18 +705,47 @@ export async function workflowRunCommand(
     );
   }
 
+  // When --resume, hand the already-found run (and its completed-node outputs)
+  // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
+  // The lookup-by-(workflowName, cwd) was already done above for worktree-path
+  // resolution; reuse that result rather than querying twice.
+  const deps = createWorkflowDeps();
+  let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
+  if (options.resume && resumable) {
+    try {
+      prepared = await hydrateResumableRun(deps, resumable);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        { err, workflowName, runId: resumable.id },
+        'cli.workflow_hydrate_resume_failed'
+      );
+      throw new Error(
+        `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
+      );
+    }
+    if (!prepared) {
+      throw new Error(
+        `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
+      );
+    }
+  }
+
   // Execute workflow with workingCwd (may be worktree path)
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
+    const opts = prepared
+      ? { codebaseId: codebase?.id, ...prepared }
+      : { codebaseId: codebase?.id };
     result = await executeWorkflow(
-      createWorkflowDeps(),
+      deps,
       adapter,
       conversationId,
       workingCwd,
       workflow,
       userMessage,
       conversation.id,
-      codebase?.id
+      opts
     );
   } finally {
     unsubscribe?.();

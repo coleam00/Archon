@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `archon workflow run` no longer silently auto-resumes the previous failed run for the same `(workflow_name, cwd)` pair. The implicit `findResumableRun` call inside `executeWorkflow` was the cause of cross-invocation state leaks — completed-node outputs from a prior failed run would bleed into the next invocation of the same workflow at the same path. Resume is now an explicit caller-side decision: use `archon workflow run --resume`, `archon workflow resume <id>`, or the web UI resume button. `executeWorkflow`'s trailing positional args are consolidated into an options bag and a new `prepareResumedRun` / `hydrateResumableRun` pair handles resume preparation at call sites. Closes #1392.
 - `archon doctor` and `archon setup` no longer interleave `[archon] loaded N keys` boot lines and Pino info JSON with their checklist output. Set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` to restore the boot lines; pass `--verbose` to re-enable structured Pino logs for those commands (#1606).
 - Docker: `git config --global --add safe.directory` in the entrypoint now de-duplicates entries before adding, preventing unbounded growth of `~/.gitconfig` now that `/home/appuser` is persisted (#1518).
 - Docker: `setup-auth` now warns at startup when `CODEX_*` env vars are absent but a persisted `~/.codex/auth.json` from a previous run still exists, so operators don't accidentally use stale or revoked credentials (#1518).

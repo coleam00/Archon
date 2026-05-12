@@ -629,7 +629,7 @@ const resumeWorkflowRunRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/resume',
   tags: ['Workflows'],
-  summary: 'Resume a failed workflow run (re-run auto-resumes from completed nodes)',
+  summary: 'Resume a failed workflow run (dispatches resume on the parent web conversation)',
   request: { params: z.object({ runId: z.string() }) },
   responses: {
     200: {
@@ -1908,11 +1908,38 @@ export function registerApiRoutes(
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
-      // Run is already failed — the next invocation on the same path auto-resumes
-      const pathInfo = run.working_path ? ` at \`${run.working_path}\`` : '';
+      // Dispatch resume by sending `/workflow run <name>` to the parent web
+      // conversation; the orchestrator's foreground-resume detection (via
+      // findResumableRunByParentConversation) picks up the failed run and
+      // hydrates it. Mirrors the approve/reject auto-resume path.
+      if (!run.parent_conversation_id) {
+        return apiError(
+          c,
+          400,
+          `This run was created outside the web UI. Use \`archon workflow resume ${runId}\` from the CLI to resume it.`
+        );
+      }
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
+        return apiError(
+          c,
+          400,
+          `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
+        );
+      }
+      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
+      getLog().info(
+        {
+          runId,
+          workflowName: run.workflow_name,
+          platformConvId: parentConv.platform_conversation_id,
+        },
+        'api.workflow_run_resume_dispatched'
+      );
       return c.json({
         success: true,
-        message: `Workflow run ready to resume: ${run.workflow_name}${pathInfo}. Re-run the workflow to auto-resume from completed nodes.`,
+        message: `Resuming workflow: ${run.workflow_name}`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');

@@ -326,7 +326,7 @@ nodes:
 
 **Test with simple inputs first.** Before running your full workflow on real data, verify that each branch of a conditional routes correctly. Create a simple test input that's clearly a bug, confirm the BUG path runs. Then test with a clear feature request.
 
-**Let DAG resume handle failures.** If a long workflow fails partway through, run it again. Archon automatically skips nodes that already completed and resumes from where it left off. No `--resume` flag required.
+**Let DAG resume handle failures.** If a long workflow fails partway through, run `archon workflow run <name> --resume` (or `archon workflow resume <id>`) to skip nodes that already completed and continue from where it left off. Plain `archon workflow run` always starts fresh.
 
 ---
 

@@ -31,7 +31,7 @@ import { syncWorkspace, toRepoPath } from '@archon/git';
 import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow } from '@archon/workflows/router';
-import { executeWorkflow } from '@archon/workflows/executor';
+import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import type {
   WorkflowDefinition,
   WorkflowWithSource,
@@ -383,19 +383,46 @@ async function dispatchOrchestratorWorkflow(
         },
         'orchestrator.foreground_resume_detected'
       );
-      await executeWorkflow(
-        createWorkflowDeps(),
-        platform,
-        conversationId,
-        resumableRun.working_path,
-        workflow,
-        userMessage,
-        conversation.id,
-        codebase.id,
-        undefined, // issueContext
-        undefined, // isolationContext
-        conversation.id // parentConversationId — enables approve/reject auto-resume
-      );
+      // Hydrate the already-found candidate. If hydration returns null the
+      // prior run had nothing worth resuming (zero completed nodes, no loop
+      // gate) — surface that to the user and fall through to a fresh run on
+      // the same worktree rather than silently restarting.
+      const deps = createWorkflowDeps();
+      const prepared = await hydrateResumableRun(deps, resumableRun);
+      if (prepared) {
+        await executeWorkflow(
+          deps,
+          platform,
+          conversationId,
+          resumableRun.working_path,
+          workflow,
+          userMessage,
+          conversation.id,
+          {
+            codebaseId: codebase.id,
+            parentConversationId: conversation.id,
+            ...prepared,
+          }
+        );
+      } else {
+        await platform.sendMessage(
+          conversationId,
+          `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
+        );
+        await executeWorkflow(
+          deps,
+          platform,
+          conversationId,
+          resumableRun.working_path,
+          workflow,
+          userMessage,
+          conversation.id,
+          {
+            codebaseId: codebase.id,
+            parentConversationId: conversation.id,
+          }
+        );
+      }
     } else if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation
       await executeWorkflow(
@@ -406,10 +433,10 @@ async function dispatchOrchestratorWorkflow(
         workflow,
         userMessage,
         conversation.id,
-        codebase.id,
-        undefined, // issueContext
-        undefined, // isolationContext
-        conversation.id // parentConversationId — enables approve/reject auto-resume
+        {
+          codebaseId: codebase.id,
+          parentConversationId: conversation.id,
+        }
       );
     } else {
       await dispatchBackgroundWorkflow(
@@ -435,10 +462,10 @@ async function dispatchOrchestratorWorkflow(
       workflow,
       userMessage,
       conversation.id,
-      codebase.id,
-      undefined, // issueContext
-      undefined, // isolationContext
-      conversation.id // parentConversationId — enables approve/reject auto-resume
+      {
+        codebaseId: codebase.id,
+        parentConversationId: conversation.id,
+      }
     );
   }
 }
