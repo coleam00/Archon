@@ -712,7 +712,18 @@ export async function workflowRunCommand(
   const deps = createWorkflowDeps();
   let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
   if (options.resume && resumable) {
-    prepared = await hydrateResumableRun(deps, resumable);
+    try {
+      prepared = await hydrateResumableRun(deps, resumable);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        { err, workflowName, runId: resumable.id },
+        'cli.workflow_hydrate_resume_failed'
+      );
+      throw new Error(
+        `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
+      );
+    }
     if (!prepared) {
       throw new Error(
         `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
@@ -723,6 +734,9 @@ export async function workflowRunCommand(
   // Execute workflow with workingCwd (may be worktree path)
   let result: Awaited<ReturnType<typeof executeWorkflow>>;
   try {
+    const opts = prepared
+      ? { codebaseId: codebase?.id, ...prepared }
+      : { codebaseId: codebase?.id };
     result = await executeWorkflow(
       deps,
       adapter,
@@ -731,11 +745,7 @@ export async function workflowRunCommand(
       workflow,
       userMessage,
       conversation.id,
-      {
-        codebaseId: codebase?.id,
-        preCreatedRun: prepared?.run,
-        priorCompletedNodes: prepared?.priorCompletedNodes,
-      }
+      opts
     );
   } finally {
     unsubscribe?.();

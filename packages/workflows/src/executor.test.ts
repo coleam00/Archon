@@ -60,7 +60,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 // --- Import after mocks ---
-import { executeWorkflow, hydrateResumableRun, prepareResumedRun } from './executor';
+import { executeWorkflow, hydrateResumableRun } from './executor';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import type { WorkflowDefinition, WorkflowRun } from './schemas';
@@ -371,14 +371,9 @@ describe('executeWorkflow', () => {
   // Resume orphan cleanup
   // -------------------------------------------------------------------------
 
-  // The "resume orphan cleanup" suite was removed: with the explicit-resume
-  // refactor (#1392 follow-up) the executor no longer does its own
-  // findResumableRun lookup, so there is no separate pre-created row to
-  // orphan when resume takes over. The caller now hands a single resumed
-  // run via opts.preCreatedRun + opts.priorCompletedNodes (obtained from
-  // prepareResumedRun / hydrateResumableRun). Resume-pipeline coverage now
-  // lives in the "prepareResumedRun" and "hydrateResumableRun" suites at
-  // the bottom of this file.
+  // Resume-pipeline coverage lives in the "hydrateResumableRun" suite at the
+  // bottom of this file (executor no longer queries findResumableRun on its
+  // own, so there is no orphan to clean up).
 
   // -------------------------------------------------------------------------
   // Model/provider resolution
@@ -514,13 +509,10 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('resume logic', () => {
-    it('does NOT call findResumableRun on its own (regression: #1392)', async () => {
+    it('does NOT call findResumableRun on its own', async () => {
       // Two back-to-back executions of the same workflow at the same cwd
-      // must not cross-leak. Before this refactor, the executor's implicit
-      // findResumableRun would silently auto-resume a prior failed run
-      // (including its cached extract-pr-number output) into the next
-      // invocation. With explicit resume, the executor never touches
-      // findResumableRun — that decision lives at the caller.
+      // must not cross-leak. Resume detection lives at the caller; the
+      // executor must never touch findResumableRun on its own.
       const findSpy = mock(async () => makeRun({ id: 'stale-prior', status: 'failed' }));
       const store = makeStore({ findResumableRun: findSpy });
       const deps = makeDeps(store);
@@ -556,8 +548,7 @@ describe('executeWorkflow', () => {
         'db-conv-1',
         { preCreatedRun: resumed, priorCompletedNodes }
       );
-      // dag-executor receives the priorCompletedNodes map (arg index 14 — same
-      // slot the old internal-resume path filled in via dagPriorCompletedNodes).
+      // dag-executor receives the priorCompletedNodes map at arg index 15.
       // dag-executor signature: deps, platform, conversationId, cwd, workflow,
       // workflowRun, provider, model, artifactsDir, logDir, baseBranch,
       // docsDir, config, configuredCommandFolder, issueContext, priorCompletedNodes
@@ -707,12 +698,8 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('lock cleanup on failure paths', () => {
-    // The "cancels pre-created row when resumeWorkflowRun throws" test was
-    // removed alongside the executor-internal resume code. Database errors
-    // during resumeWorkflowRun now surface from prepareResumedRun /
-    // hydrateResumableRun (they throw, with no silent fallback), which the
-    // caller handles before invoking executeWorkflow. Coverage lives in the
-    // hydrateResumableRun suite at the bottom of this file.
+    // resumeWorkflowRun DB-error coverage lives in the hydrateResumableRun
+    // suite — those errors surface at the caller now, not in the executor.
 
     it('cancels workflowRun when guard query throws (no zombie row)', async () => {
       const updateSpy = mock(async () => {});
@@ -873,13 +860,13 @@ describe('finally backstop', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// hydrateResumableRun + prepareResumedRun
+// hydrateResumableRun
 //
-// The executor no longer queries findResumableRun on its own (the cause of
-// the #1392 cross-invocation bug). Resume preparation is a caller-side
-// primitive: callers either look up the run themselves and call
-// hydrateResumableRun, or use prepareResumedRun for the canonical (workflow,
-// cwd) lookup. The executor only consumes what these return.
+// Resume preparation is a caller-side primitive: callers look up the
+// candidate themselves (via findResumableRun or
+// findResumableRunByParentConversation) and call hydrateResumableRun to
+// turn it into the form executeWorkflow expects. The executor only consumes
+// what this returns.
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('hydrateResumableRun', () => {
@@ -894,7 +881,7 @@ describe('hydrateResumableRun', () => {
     const deps = makeDeps(store);
     const result = await hydrateResumableRun(deps, candidate);
     expect(result).not.toBeNull();
-    expect(result?.run).toBe(resumed);
+    expect(result?.preCreatedRun).toBe(resumed);
     expect(result?.priorCompletedNodes).toBe(priorNodes);
     expect(store.resumeWorkflowRun).toHaveBeenCalledWith('prior-failed');
   });
@@ -950,39 +937,5 @@ describe('hydrateResumableRun', () => {
     });
     const deps = makeDeps(store);
     await expect(hydrateResumableRun(deps, candidate)).rejects.toThrow('DB write failed');
-  });
-});
-
-describe('prepareResumedRun', () => {
-  it('returns null when findResumableRun returns null', async () => {
-    const store = makeStore({ findResumableRun: mock(async () => null) });
-    const deps = makeDeps(store);
-    const result = await prepareResumedRun(deps, makeWorkflow(), '/tmp');
-    expect(result).toBeNull();
-  });
-
-  it('hydrates the candidate returned by findResumableRun', async () => {
-    const candidate = makeRun({ id: 'prior', status: 'failed' });
-    const resumed = makeRun({ id: 'prior', status: 'running' });
-    const store = makeStore({
-      findResumableRun: mock(async () => candidate),
-      getCompletedDagNodeOutputs: mock(async () => new Map([['n', 'v']])),
-      resumeWorkflowRun: mock(async () => resumed),
-    });
-    const deps = makeDeps(store);
-    const result = await prepareResumedRun(deps, makeWorkflow(), '/tmp');
-    expect(result).not.toBeNull();
-    expect(result?.run).toBe(resumed);
-    expect(result?.priorCompletedNodes.get('n')).toBe('v');
-  });
-
-  it('propagates findResumableRun errors (no silent fallback)', async () => {
-    const store = makeStore({
-      findResumableRun: mock(async () => {
-        throw new Error('lookup failed');
-      }),
-    });
-    const deps = makeDeps(store);
-    await expect(prepareResumedRun(deps, makeWorkflow(), '/tmp')).rejects.toThrow('lookup failed');
   });
 });

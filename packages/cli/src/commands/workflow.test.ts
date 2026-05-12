@@ -75,6 +75,7 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 }));
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mock(() => Promise.resolve({ success: true, workflowRunId: 'test-run-id' })),
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 
 // Capture the subscription handler so tests can trigger events

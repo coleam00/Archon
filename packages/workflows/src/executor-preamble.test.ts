@@ -318,10 +318,9 @@ describe('executeWorkflow preamble', () => {
 
   describe('workflow resume', () => {
     it('uses caller-supplied preCreatedRun + priorCompletedNodes without re-querying the store', async () => {
-      // The caller has already run prepareResumedRun / hydrateResumableRun and
-      // hands the result to executeWorkflow. The executor must NOT touch
-      // findResumableRun on its own (regression for the #1392 auto-resume
-      // cross-invocation bug).
+      // The caller has already run hydrateResumableRun and hands the result
+      // to executeWorkflow. The executor must NOT touch findResumableRun on
+      // its own — that decision lives at the caller.
       const resumedRun = makeRun({ id: 'prior-run', status: 'running' });
       const priorCompletedNodes = new Map([['node-a', 'output from node-a']]);
 
@@ -341,7 +340,7 @@ describe('executeWorkflow preamble', () => {
         { preCreatedRun: resumedRun, priorCompletedNodes }
       );
 
-      // Executor never queries findResumableRun (caller did it via prepareResumedRun).
+      // Executor never queries findResumableRun (caller did it via hydrateResumableRun).
       expect(findSpy).not.toHaveBeenCalled();
       // No createWorkflowRun — caller supplied the resumed run.
       expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);

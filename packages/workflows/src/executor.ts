@@ -211,15 +211,25 @@ async function resolveProjectPaths(
 }
 
 /**
+ * Resume payload. `priorCompletedNodes` may only appear together with
+ * `preCreatedRun` — passing completed-node outputs without the resumed row
+ * would silently inject node-skip state into a freshly-created run. Lock-token
+ * rows (used by `dispatchBackgroundWorkflow`) supply `preCreatedRun` alone.
+ */
+type ResumePayload =
+  | { preCreatedRun: WorkflowRun; priorCompletedNodes?: Map<string, string> }
+  | { preCreatedRun?: undefined; priorCompletedNodes?: undefined };
+
+/**
  * Optional parameters for {@link executeWorkflow}. All trailing args live here
  * so call sites stay readable as new options accrue.
  *
- * Resume semantics: pass `preCreatedRun` plus `priorCompletedNodes` to resume.
- * Obtain both from {@link prepareResumedRun} — the only supported way to look
- * up a resumable run. The executor never queries the store for a prior run on
+ * To resume a prior run, obtain `preCreatedRun` + `priorCompletedNodes` from
+ * {@link hydrateResumableRun} (or look up via `findResumableRun` and hydrate)
+ * and spread them in. The executor never queries the store for a prior run on
  * its own; that decision belongs at the call site.
  */
-export interface ExecuteWorkflowOptions {
+export type ExecuteWorkflowOptions = ResumePayload & {
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
   /**
@@ -239,36 +249,25 @@ export interface ExecuteWorkflowOptions {
   };
   /** Parent conversation ID — enables approve/reject auto-resume from chat. */
   parentConversationId?: string;
-  /**
-   * Pre-created `WorkflowRun` row. When omitted, the executor creates a fresh
-   * row. When resuming, this must be the row returned by `prepareResumedRun`
-   * (already in `running` status).
-   */
-  preCreatedRun?: WorkflowRun;
-  /**
-   * Completed-node outputs from a prior run, supplied by `prepareResumedRun`
-   * when resuming. When omitted, all nodes run from scratch.
-   */
-  priorCompletedNodes?: Map<string, string>;
-}
+};
 
 /**
  * Hydrate an already-located resumable `WorkflowRun` candidate into the form
  * {@link executeWorkflow} expects. Returns `null` when the candidate has no
  * completed nodes and no interactive-loop gate state — nothing worth resuming.
  *
- * Use this from callers that have already done their own lookup (e.g. the
- * orchestrator's `findResumableRunByParentConversation` path, or the CLI's
- * `--resume` flow which finds the run for worktree-path resolution).
+ * The return shape is spread-compatible with {@link ExecuteWorkflowOptions}
+ * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.
  *
  * Throws on database errors; callers decide whether to surface or fall
- * through. Silent fallback inside the executor was the original #1392 bug,
- * so it stays out.
+ * through. The executor itself never performs this lookup — silent fallback
+ * inside the executor was the cross-invocation auto-resume bug, so it stays
+ * at the call site.
  */
 export async function hydrateResumableRun(
   deps: WorkflowDeps,
   candidate: WorkflowRun
-): Promise<{ run: WorkflowRun; priorCompletedNodes: Map<string, string> } | null> {
+): Promise<{ preCreatedRun: WorkflowRun; priorCompletedNodes: Map<string, string> } | null> {
   const priorCompletedNodes = await deps.store.getCompletedDagNodeOutputs(candidate.id);
   const hasInteractiveLoopState =
     candidate.metadata?.approval !== undefined &&
@@ -280,31 +279,12 @@ export async function hydrateResumableRun(
     );
     return null;
   }
-  const run = await deps.store.resumeWorkflowRun(candidate.id);
+  const preCreatedRun = await deps.store.resumeWorkflowRun(candidate.id);
   getLog().info(
-    { workflowRunId: run.id, priorCompletedCount: priorCompletedNodes.size },
+    { workflowRunId: preCreatedRun.id, priorCompletedCount: priorCompletedNodes.size },
     'workflow.dag_resuming'
   );
-  return { run, priorCompletedNodes };
-}
-
-/**
- * Look up the most recent resumable run for `(workflow.name, cwd)` via
- * `findResumableRun` and hydrate it. Returns `null` when no resumable run
- * exists or when the found run has nothing worth resuming.
- *
- * This is the canonical CLI-style lookup-and-prepare. Callers that already
- * hold a candidate (e.g. via `findResumableRunByParentConversation`) should
- * use {@link hydrateResumableRun} instead to avoid a duplicate query.
- */
-export async function prepareResumedRun(
-  deps: WorkflowDeps,
-  workflow: WorkflowDefinition,
-  cwd: string
-): Promise<{ run: WorkflowRun; priorCompletedNodes: Map<string, string> } | null> {
-  const candidate = await deps.store.findResumableRun(workflow.name, cwd);
-  if (!candidate) return null;
-  return hydrateResumableRun(deps, candidate);
+  return { preCreatedRun, priorCompletedNodes };
 }
 
 /**
@@ -312,9 +292,8 @@ export async function prepareResumedRun(
  *
  * Required positional args carry identity and dependencies. Everything else
  * lives in `opts` ({@link ExecuteWorkflowOptions}). To resume a prior run,
- * call {@link prepareResumedRun} first and pass its result via
- * `opts.preCreatedRun` + `opts.priorCompletedNodes` — the executor does not
- * perform resume detection on its own.
+ * call {@link hydrateResumableRun} first and spread its result into `opts` —
+ * the executor does not perform resume detection on its own.
  */
 export async function executeWorkflow(
   deps: WorkflowDeps,
@@ -395,7 +374,7 @@ export async function executeWorkflow(
   }
 
   // Workflow run + resume state. Caller decides whether to resume by passing
-  // preCreatedRun (from prepareResumedRun) + priorCompletedNodes via opts.
+  // preCreatedRun (from hydrateResumableRun) + priorCompletedNodes via opts.
   // When both are absent the executor creates a fresh row below.
   const dagPriorCompletedNodes = priorCompletedNodes;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;

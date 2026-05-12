@@ -1074,7 +1074,8 @@ describe('orchestrator-agent handleMessage', () => {
 
       await handleMessage(platform, 'chat-456', 'do that analysis thing');
 
-      // Position 5 is userMessage; position 7 is the opts bag with parentConversationId.
+      // userMessage (position 5) carries the synthesized prompt; the opts bag
+      // (trailing arg) carries parentConversationId for approve/reject resume.
       expect(mockExecuteWorkflow).toHaveBeenCalledWith(
         expect.anything(), // deps
         expect.anything(), // platform

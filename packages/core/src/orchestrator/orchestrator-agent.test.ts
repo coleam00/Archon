@@ -109,7 +109,7 @@ mock.module('@archon/workflows/router', () => ({
 const mockHydrateResumableRun = mock(
   async (_deps: unknown, candidate: { id: string }) =>
     ({
-      run: { ...candidate, status: 'running' },
+      preCreatedRun: { ...candidate, status: 'running' },
       priorCompletedNodes: new Map([['n1', 'v1']]),
     }) as unknown
 );
@@ -1117,13 +1117,11 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-    // Regression for the auto-resume plumbing: the interactive web dispatch
-    // must pass the caller conversation's DB id as parentConversationId
-    // (opts.parentConversationId on the options bag at position 7) so the
-    // approve/reject API handlers can dispatch resume back through the
-    // orchestrator.
+    // The interactive web dispatch must pass the caller conversation's DB id
+    // as opts.parentConversationId so the approve/reject API handlers can
+    // dispatch resume back through the orchestrator.
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    const opts = callArgs[7] as { parentConversationId?: string };
+    const opts = callArgs[callArgs.length - 1] as { parentConversationId?: string };
     expect(opts.parentConversationId).toBe('conv-1');
   });
 
@@ -1155,8 +1153,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     // cwd (position 3) should come from the resumable run's working_path.
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
-    // Resume payload lives on the opts bag (position 7).
-    const opts = callArgs[7] as {
+    // Resume payload lives on the opts bag (the trailing arg).
+    const opts = callArgs[callArgs.length - 1] as {
       parentConversationId?: string;
       preCreatedRun?: { id: string };
       priorCompletedNodes?: Map<string, string>;
@@ -1164,6 +1162,44 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(opts.parentConversationId).toBe('conv-1');
     expect(opts.preCreatedRun?.id).toBe('resumable-run-1');
     expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
+  });
+
+  test('foreground_resume_detected: falls through to fresh run when hydration returns null', async () => {
+    // When findResumableRunByParentConversation returns a run but
+    // hydrateResumableRun finds nothing worth resuming (zero completed nodes,
+    // no interactive-loop state), the orchestrator must NOT throw — it sends
+    // a user-visible notice and starts a fresh run on the same worktree.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'empty-prior-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
+
+    const platform = makePlatform(); // getPlatformType returns 'web'
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    // cwd still points at the prior run's worktree.
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
+    // Opts bag carries no resume payload — fresh run.
+    const opts = callArgs[callArgs.length - 1] as {
+      parentConversationId?: string;
+      preCreatedRun?: unknown;
+      priorCompletedNodes?: unknown;
+    };
+    expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.preCreatedRun).toBeUndefined();
+    expect(opts.priorCompletedNodes).toBeUndefined();
   });
 
   test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {
