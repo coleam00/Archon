@@ -35,9 +35,9 @@ export function TopNav(): React.ReactElement {
       {/* Brand logo */}
       <Link to="/chat" className="flex items-center gap-2 mr-4 hover:opacity-80 transition-opacity">
         <div className="flex h-7 w-7 items-center justify-center bg-black text-white">
-          <span className="text-sm font-semibold">A</span>
+          <span className="text-sm font-semibold">K</span>
         </div>
-        <span className="text-sm font-semibold text-black">Archon</span>
+        <span className="text-sm font-semibold text-black">Kairon</span>
       </Link>
 
       {tabs.map(({ to, end, icon: Icon, label }) => (
