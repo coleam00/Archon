@@ -337,6 +337,11 @@ export async function findResumableRun(
  * Find a resumable (failed/paused) run for a workflow by parent conversation ID.
  * Used by the web orchestrator to detect approved runs that need foreground resume
  * (background dispatch would create a new worktree and lose the resumable run).
+ *
+ * The orchestrator wraps the result: `paused` runs auto-resume (approval gate
+ * intent); `failed` runs trigger a user-prompt instead of silent resume so a
+ * fresh /workflow run with new args is not hijacked by the failed run's stale
+ * persisted user_message. See orchestrator-agent.ts dispatchOrchestratorWorkflow.
  */
 export async function findResumableRunByParentConversation(
   workflowName: string,

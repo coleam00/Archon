@@ -221,7 +221,8 @@ async function dispatchOrchestratorWorkflow(
   codebase: Codebase,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  options?: { force?: boolean; resumeRunId?: string }
 ): Promise<void> {
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -272,32 +273,109 @@ async function dispatchOrchestratorWorkflow(
     // Check for a resumable run from a prior dispatch (e.g. approved approval gate).
     // A new background dispatch would create a new worker conversation and never find
     // the prior run's worktree. Execute in foreground to reuse the original working path.
-    const resumableRun = await workflowDb.findResumableRunByParentConversation(
-      workflow.name,
-      conversation.id
-    );
+    //
+    // The `--force` flag (set in command-handler when the user types
+    // `/workflow run X --force "..."`) skips this lookup entirely so a user
+    // who knows about a stale failed run can intentionally start fresh
+    // without abandoning it.
+    const resumableRun = options?.force
+      ? null
+      : await workflowDb.findResumableRunByParentConversation(workflow.name, conversation.id);
     if (resumableRun?.working_path) {
-      getLog().info(
-        {
-          workflowName: workflow.name,
-          resumableRunId: resumableRun.id,
-          workingPath: resumableRun.working_path,
-        },
-        'orchestrator.foreground_resume_detected'
-      );
-      await executeWorkflow(
-        createWorkflowDeps(),
-        platform,
-        conversationId,
-        resumableRun.working_path,
-        workflow,
-        userMessage,
-        conversation.id,
-        codebase.id,
-        undefined, // issueContext
-        undefined, // isolationContext
-        conversation.id // parentConversationId — enables approve/reject auto-resume
-      );
+      // Auto-resume is safe in two cases:
+      //   1. status === 'paused' — awaiting approval; the user's next
+      //      message is a continuation by definition.
+      //   2. options.resumeRunId === resumableRun.id — caller explicitly
+      //      asked to resume this run. Set by `/workflow resume <id>` and
+      //      by the natural-language approval handler so they bypass the
+      //      prompt that would otherwise loop them indefinitely.
+      // For any other failed run we prompt the user instead of silently
+      // resuming with stale args.
+      if (resumableRun.status === 'paused' || resumableRun.id === options?.resumeRunId) {
+        getLog().info(
+          {
+            workflowName: workflow.name,
+            resumableRunId: resumableRun.id,
+            workingPath: resumableRun.working_path,
+          },
+          'orchestrator.foreground_resume_detected'
+        );
+        await executeWorkflow(
+          createWorkflowDeps(),
+          platform,
+          conversationId,
+          resumableRun.working_path,
+          workflow,
+          userMessage,
+          conversation.id,
+          codebase.id,
+          undefined, // issueContext
+          undefined, // isolationContext
+          conversation.id // parentConversationId — enables approve/reject auto-resume
+        );
+      } else {
+        // Failed (or other non-paused unfinished) run — surface four choices.
+        // Escape backslash, double-quote, and backtick so the suggested
+        // command renders cleanly even when the original userMessage
+        // contained any of them — without the backtick escape, three
+        // consecutive backticks would close our Markdown code-fence early.
+        const escapedMsg = userMessage.replace(/[\\"`]/g, '\\$&');
+        const baseCmd = `/workflow run ${workflow.name}`;
+        // Show a preview of the failed run's stored user_message so the user
+        // can tell whether Option 1 (resume) actually matches their current
+        // intent. Without this, Option 1 silently re-runs whatever the prior
+        // run was about — which can be a totally different topic if the
+        // failed run is hours/days old.
+        const PREVIEW_MAX = 160;
+        const priorMessage = (resumableRun.user_message ?? '').replace(/\s+/g, ' ').trim();
+        const priorPreview = priorMessage
+          ? priorMessage.length > PREVIEW_MAX
+            ? `${priorMessage.slice(0, PREVIEW_MAX)}…`
+            : priorMessage
+          : '(no message stored)';
+        const promptText = [
+          '---',
+          '',
+          `Found a prior failed run of **${workflow.name}** (run \`${resumableRun.id}\`).`,
+          '',
+          '**Run prompt was:**',
+          '',
+          `> ${priorPreview}`,
+          '',
+          '---',
+          '',
+          '**Choose how to proceed:**',
+          '',
+          '**1. Resume that run** (re-runs the prompt shown above, not your current message):',
+          '```',
+          `/workflow resume ${resumableRun.id}`,
+          '```',
+          '',
+          '**2. Discard the failed run, then start fresh with your current message:**',
+          '```',
+          `/workflow abandon ${resumableRun.id}`,
+          '```',
+          'then re-run your command:',
+          '```',
+          `${baseCmd} "${escapedMsg}"`,
+          '```',
+          '',
+          '**3. Start fresh with your current message, leave the failed run as-is** (skips the resume check):',
+          '```',
+          `${baseCmd} --force "${escapedMsg}"`,
+          '```',
+        ].join('\n');
+        await platform.sendMessage(conversationId, promptText);
+        getLog().info(
+          {
+            workflowName: workflow.name,
+            failedRunId: resumableRun.id,
+            status: resumableRun.status,
+          },
+          'orchestrator.failed_resume_user_prompted'
+        );
+        return;
+      }
     } else if (workflow.interactive) {
       // Interactive workflows run in foreground so output stays in the user's conversation
       await executeWorkflow(
@@ -665,7 +743,11 @@ export async function handleMessage(
             codebase,
             workflow,
             pausedRun.user_message,
-            isolationHints
+            isolationHints,
+            // approveWorkflow has just transitioned the run to 'failed' so
+            // findResumableRun picks it up here. Pass resumeRunId so the
+            // V2a-prompt branch is bypassed and the run actually resumes.
+            { resumeRunId: pausedRun.id }
           );
           getLog().info(
             { conversationId, workflowRunId: pausedRun.id, workflowName: pausedRun.workflow_name },
@@ -735,7 +817,11 @@ export async function handleMessage(
             conversation,
             result.workflow.definition,
             result.workflow.args ?? message,
-            isolationHints
+            isolationHints,
+            {
+              force: result.workflow.force ?? false,
+              resumeRunId: result.workflow.resumeRunId,
+            }
           );
         }
         return;
@@ -1446,7 +1532,8 @@ async function handleWorkflowRunCommand(
   conversation: Conversation,
   workflow: WorkflowDefinition,
   userMessage: string,
-  isolationHints?: HandleMessageContext['isolationHints']
+  isolationHints?: HandleMessageContext['isolationHints'],
+  options?: { force?: boolean; resumeRunId?: string }
 ): Promise<void> {
   // Check if conversation has a project
   if (conversation.codebase_id) {
@@ -1466,7 +1553,8 @@ async function handleWorkflowRunCommand(
       codebase,
       workflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      options
     );
     return;
   }
@@ -1543,7 +1631,8 @@ async function handleWorkflowRunCommand(
       codebase,
       resolvedWorkflow,
       userMessage,
-      isolationHints
+      isolationHints,
+      options
     );
     return;
   }

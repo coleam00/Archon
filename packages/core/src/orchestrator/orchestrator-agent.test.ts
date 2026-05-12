@@ -1097,6 +1097,11 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockReset();
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
+    // Reset resumable-run lookups so a queued mockReturnValueOnce in one test
+    // doesn't bleed into the next (e.g. --force tests queue a value but skip
+    // the call, leaving the mock primed for the following test).
+    mockFindResumableRunByParentConversation.mockReset();
+    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
   });
 
   test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {
@@ -1117,12 +1122,15 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[10]).toBe('conv-1'); // parentConversationId = conversation.id
   });
 
-  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
-    // Regression for the foreground-resume branch added as part of the
-    // auto-resume fix: when `findResumableRunByParentConversation` returns a
-    // paused run, the orchestrator picks the working_path from that run and
-    // must still carry parentConversationId forward so the API helpers can
-    // keep dispatching resume on subsequent approvals.
+  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a paused run exists', async () => {
+    // Regression for the foreground-resume branch: when
+    // findResumableRunByParentConversation returns a paused run, the
+    // orchestrator picks the working_path from that run and must still
+    // carry parentConversationId forward so the API helpers can keep
+    // dispatching resume on subsequent approvals.
+    //
+    // Only `paused` runs auto-resume; `failed` runs prompt the user
+    // (covered in the next two tests).
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
@@ -1132,7 +1140,7 @@ describe('workflow dispatch routing — interactive flag', () => {
         workflow_name: 'test-workflow',
         working_path: '/repos/test-repo/worktrees/feature',
         parent_conversation_id: 'conv-1',
-        status: 'failed',
+        status: 'paused',
       })
     );
 
@@ -1145,6 +1153,169 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
     // parentConversationId (position 10) should still be the caller conversation id
     expect(callArgs[10]).toBe('conv-1');
+  });
+
+  test('failed_resume_user_prompted: failed runs are NOT auto-resumed, user gets a prompt with three options', async () => {
+    // A prior failed run with the same workflow + parent conversation must
+    // NOT trigger a silent foreground resume. The user is prompted with
+    // three copy-pasteable options (resume / abandon-then-rerun /
+    // force-rerun) and the workflow does not execute until the user makes
+    // a choice.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-42',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+      })
+    );
+
+    const platform = makePlatform(); // getPlatformType returns 'web'
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow do the thing');
+
+    // No execution happens
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+
+    // User is prompted with all three commands using the failed run's id
+    const allSends = sendMessage.mock.calls.map(c => (c as unknown[])[1] as string);
+    const prompt = allSends.find(s => s.includes('/workflow resume failed-run-42'));
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain('/workflow abandon failed-run-42');
+    expect(prompt).toContain('/workflow run test-workflow');
+    expect(prompt).toContain('--force');
+  });
+
+  test('failed_resume_user_prompted: prompt includes a preview of the failed run user_message so users can recognize stale runs', async () => {
+    // Without a preview, Option 1 ("Resume that run") looks like it continues
+    // the user's CURRENT request — but it actually re-runs the failed run's
+    // ORIGINAL stored args, which can be a totally different topic if the
+    // failed run is hours/days old. The preview makes the mismatch visible.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-99',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: 'Edit foo.py: restore editable input fields in `api_key_and_analyse_button`',
+      })
+    );
+
+    const platform = makePlatform();
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow do the new thing');
+
+    const allSends = sendMessage.mock.calls.map(c => (c as unknown[])[1] as string);
+    const prompt = allSends.find(s => s.includes('/workflow resume failed-run-99'));
+    expect(prompt).toBeDefined();
+    // Preview rendered as Markdown blockquote with the failed run's stored message
+    expect(prompt).toContain('> Edit foo.py: restore editable input fields');
+    // Option 1 wording disambiguates resume vs current message
+    expect(prompt).toContain('not your current message');
+  });
+
+  test('failed_resume_user_prompted: long user_message is truncated with ellipsis in the preview', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    const longMsg = 'x'.repeat(500);
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-long',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+        user_message: longMsg,
+      })
+    );
+
+    const platform = makePlatform();
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow do the thing');
+
+    const allSends = sendMessage.mock.calls.map(c => (c as unknown[])[1] as string);
+    const prompt = allSends.find(s => s.includes('/workflow resume failed-run-long'));
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain('…'); // ellipsis present
+    // Truncated preview must not contain the full string
+    expect(prompt).not.toContain(longMsg);
+  });
+
+  test('resumeRunId option: failed run DOES auto-resume when CommandResult.workflow.resumeRunId matches', async () => {
+    // Regression for the `/workflow resume <id>` path (and the natural-language
+    // approval flow that transitions a paused run to 'failed' before
+    // dispatching). Without this bypass, the V2a prompt would fire on every
+    // explicit-resume attempt because failed runs stay 'failed' — the user
+    // would be told to resume a run that they JUST asked to resume, in an
+    // infinite loop.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    const result = makeWorkflowResult(true); // interactive — uses executeWorkflow path
+    (result.workflow as { resumeRunId?: string }).resumeRunId = 'failed-run-7';
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(result));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-7',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+      })
+    );
+
+    const platform = makePlatform();
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    await handleMessage(platform, 'conv-1', '/workflow resume failed-run-7');
+
+    // Auto-resumes via the existing paused-run code path
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
+    expect(callArgs[10]).toBe('conv-1');
+
+    // The V2a prompt MUST NOT have been emitted — that would mean the
+    // explicit-resume request was ignored.
+    const allSends = sendMessage.mock.calls.map(c => (c as unknown[])[1] as string);
+    const promptedAnyway = allSends.some(s => s.includes('Found a prior failed run'));
+    expect(promptedAnyway).toBe(false);
+  });
+
+  test('--force flag: skips resume detection and dispatches a fresh run even if a failed run exists', async () => {
+    // /workflow run X --force "..." must bypass findResumableRun and start
+    // a clean execution, leaving any prior failed run untouched in the DB.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    const result = makeWorkflowResult(undefined); // non-interactive
+    (result.workflow as { force?: boolean }).force = true;
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(result));
+    // Even if a failed run exists, --force must skip the lookup entirely.
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'failed-run-99',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/old',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+      })
+    );
+
+    const platform = makePlatform(); // getPlatformType returns 'web'
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow --force do the thing');
+
+    // findResumable should not even be consulted (skipped by force)
+    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    // Background dispatch fires for the fresh run (non-interactive on web)
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
   });
 
   test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {

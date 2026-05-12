@@ -1335,7 +1335,18 @@ describe('CommandHandler', () => {
     });
 
     describe('/workflow resume', () => {
-      test('should indicate failed run is ready to resume', async () => {
+      // Helper: stub a discovered workflow with the given name so the
+      // resume handler's `workflows.find(w => w.workflow.name === ...)` lookup
+      // resolves. The default mock returns an empty workflows array; tests
+      // that exercise the success path of resume must seed the discovery.
+      function stubDiscoveredWorkflow(name: string): void {
+        spyDiscoverWorkflows.mockResolvedValueOnce({
+          workflows: [makeTestWorkflowWithSource({ name })],
+          errors: [],
+        });
+      }
+
+      test('should indicate failed run is ready to resume and signal dispatch with resumeRunId', async () => {
         const run = {
           id: 'run-123',
           workflow_name: 'implement',
@@ -1351,12 +1362,17 @@ describe('CommandHandler', () => {
           working_path: '/workspace/wt',
         };
         mockGetWorkflowRun.mockResolvedValueOnce(run);
+        stubDiscoveredWorkflow('implement');
 
         const result = await handleCommand(baseConversation, '/workflow resume run-123');
 
         expect(result.success).toBe(true);
-        expect(result.message).toContain('ready to resume');
+        expect(result.message).toContain('Resuming workflow');
         expect(result.message).toContain('implement');
+        // Resume now dispatches directly so the orchestrator doesn't loop
+        // through the V2a prompt — see PR #1551.
+        expect(result.workflow?.resumeRunId).toBe('run-123');
+        expect(result.workflow?.definition.name).toBe('implement');
       });
 
       test('should accept already-failed run without status change', async () => {
@@ -1375,6 +1391,7 @@ describe('CommandHandler', () => {
           working_path: null,
         };
         mockGetWorkflowRun.mockResolvedValueOnce(run);
+        stubDiscoveredWorkflow('plan');
 
         const result = await handleCommand(baseConversation, '/workflow resume run-456');
 
