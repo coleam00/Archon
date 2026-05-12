@@ -128,7 +128,11 @@ nodes:
     depends_on: [verify-grep, verify-tests]
     bash: |
       set -euo pipefail
-      BRANCH="wo/ci-ce-regression-suite-01"
+      BASE_BRANCH="wo/ci-ce-regression-suite-01"
+      BRANCH="$BASE_BRANCH"
+      if git worktree list --porcelain | grep -qx "branch refs/heads/$BRANCH"; then
+        BRANCH="${BASE_BRANCH}-${WORKFLOW_ID}"
+      fi
       if git show-ref --quiet "refs/heads/$BRANCH"; then
         git checkout "$BRANCH"
       else
