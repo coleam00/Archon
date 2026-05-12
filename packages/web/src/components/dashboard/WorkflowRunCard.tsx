@@ -64,7 +64,7 @@ function StepProgress({
   if (!hasProgress && !currentTool) return null;
 
   return (
-    <div className="rounded-md bg-surface-inset px-3 py-2 space-y-1">
+    <div className="rounded-md bg-surface-elevated px-3 py-2 space-y-1">
       {hasProgress && (
         <div className="flex items-center gap-2 text-sm text-text-primary">
           <span className="font-medium">
@@ -81,7 +81,7 @@ function StepProgress({
           <span
             className={cn(
               'text-sm font-mono truncate',
-              currentTool.status === 'running' ? 'text-info' : 'text-text-secondary'
+              currentTool.status === 'running' ? 'text-primary' : 'text-text-secondary'
             )}
           >
             {currentTool.status === 'running'
@@ -170,25 +170,15 @@ export function WorkflowRunCard({
     : null;
 
   return (
-    <div
-      className={cn(
-        'rounded-md border border-border bg-surface p-4 space-y-3',
-        run.status === 'failed' && 'shadow-[0_0_16px_rgba(230,57,70,0.4)]',
-        run.status === 'running' && 'shadow-[0_0_12px_rgba(59,130,246,0.3)]'
-      )}
-    >
+    <div className="rounded-lg border border-border bg-surface p-4 space-y-3">
       {/* Header: status dot + name + badge + elapsed */}
       <div className="flex items-center gap-2">
         <div
           className={cn(
             'h-2.5 w-2.5 shrink-0 rounded-full',
-            run.status === 'running' &&
-              'bg-info animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.6)]',
+            run.status === 'running' && 'bg-primary animate-pulse',
             run.status === 'paused' && 'bg-warning animate-pulse',
-            run.status === 'failed' && 'bg-error',
-            run.status === 'completed' && 'bg-success',
-            run.status === 'pending' && 'bg-text-tertiary',
-            run.status === 'cancelled' && 'bg-text-tertiary'
+            run.status === 'pending' && 'bg-text-tertiary'
           )}
         />
         <span className="font-medium text-sm text-text-primary truncate flex-1">
@@ -196,15 +186,10 @@ export function WorkflowRunCard({
         </span>
         <span
           className={cn(
-            'inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-medium',
-            run.status === 'running' && 'bg-info/20 text-info border border-info/30',
-            run.status === 'paused' && 'bg-warning/20 text-warning border border-warning/30',
-            run.status === 'completed' && 'bg-success/20 text-success border border-success/30',
-            run.status === 'failed' && 'bg-error/20 text-error border border-error/30',
-            run.status === 'pending' &&
-              'bg-surface-elevated text-text-secondary border border-border',
-            run.status === 'cancelled' &&
-              'bg-surface-elevated text-text-secondary border border-border'
+            'inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+            run.status === 'running' && 'bg-primary/10 text-primary',
+            run.status === 'paused' && 'bg-warning/10 text-warning',
+            run.status === 'pending' && 'bg-surface-elevated text-text-secondary'
           )}
         >
           {run.status}
@@ -269,7 +254,7 @@ export function WorkflowRunCard({
 
       {/* Approval request message */}
       {run.status === 'paused' && run.metadata?.approval != null && (
-        <div className="rounded-md bg-warning/10 border border-warning/30 px-3 py-2 flex items-start gap-2 shadow-[0_0_8px_rgba(245,158,11,0.2)]">
+        <div className="rounded-md bg-warning/5 border border-warning/20 px-3 py-2 flex items-start gap-2">
           <Pause className="h-4 w-4 text-warning shrink-0 mt-0.5" />
           <p className="text-xs text-text-secondary">
             {(

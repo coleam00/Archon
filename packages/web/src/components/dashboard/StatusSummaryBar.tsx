@@ -49,16 +49,16 @@ export function StatusSummaryBar({
             onFilterChange(null);
           }}
           className={cn(
-            'rounded-md px-3 py-1.5 text-xs font-medium transition-all',
+            'rounded-full px-3 py-1 text-xs font-medium transition-colors',
             activeFilter === null
-              ? 'bg-primary text-primary-foreground border border-primary'
-              : 'bg-surface-elevated text-text-secondary border border-border hover:border-border-bright'
+              ? 'bg-primary/10 text-primary border border-primary'
+              : 'bg-surface-elevated text-text-secondary border border-border hover:border-text-tertiary'
           )}
         >
           All: {String(counts.all)}
         </button>
         {STATUS_CHIPS.map(status => {
-          const count = counts[status] ?? 0;
+          const count = counts[status];
           const isActive = activeFilter === status;
           return (
             <button
@@ -67,27 +67,10 @@ export function StatusSummaryBar({
                 onFilterChange(isActive ? null : status);
               }}
               className={cn(
-                'rounded-md px-3 py-1.5 text-xs font-medium transition-all',
-                isActive &&
-                  status === 'running' &&
-                  'bg-info/20 text-info border border-info/50 shadow-[0_0_12px_rgba(59,130,246,0.4)]',
-                isActive &&
-                  status === 'paused' &&
-                  'bg-warning/20 text-warning border border-warning/50',
-                isActive &&
-                  status === 'completed' &&
-                  'bg-success/20 text-success border border-success/50',
-                isActive &&
-                  status === 'failed' &&
-                  'bg-error/20 text-error border border-error/50 shadow-[0_0_12px_rgba(230,57,70,0.4)]',
-                isActive &&
-                  status === 'cancelled' &&
-                  'bg-surface-elevated text-text-secondary border border-border',
-                isActive &&
-                  status === 'pending' &&
-                  'bg-surface-elevated text-text-secondary border border-border',
-                !isActive &&
-                  'bg-surface-elevated text-text-secondary border border-border hover:border-border-bright',
+                'rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                isActive
+                  ? 'bg-primary/10 text-primary border border-primary'
+                  : 'bg-surface-elevated text-text-secondary border border-border hover:border-text-tertiary',
                 status === 'running' && count > 0 && !isActive && 'animate-pulse'
               )}
             >

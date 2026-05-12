@@ -37,17 +37,17 @@ export function WorkflowHistoryTable({
   }
 
   return (
-    <div className="overflow-x-auto rounded-md border border-border">
+    <div className="overflow-x-auto rounded-lg border border-border">
       <table className="w-full text-xs">
         <thead>
-          <tr className="border-b border-border bg-surface text-left text-text-tertiary">
-            <th className="px-3 py-2.5 font-medium w-8">Status</th>
-            <th className="px-3 py-2.5 font-medium">Workflow</th>
-            <th className="px-3 py-2.5 font-medium">Project</th>
-            <th className="px-3 py-2.5 font-medium w-16">Source</th>
-            <th className="px-3 py-2.5 font-medium w-20">Duration</th>
-            <th className="px-3 py-2.5 font-medium w-32">Started</th>
-            <th className="px-3 py-2.5 font-medium w-20">Actions</th>
+          <tr className="border-b border-border bg-surface-elevated text-left text-text-tertiary">
+            <th className="px-3 py-2 font-medium w-8">Status</th>
+            <th className="px-3 py-2 font-medium">Workflow</th>
+            <th className="px-3 py-2 font-medium">Project</th>
+            <th className="px-3 py-2 font-medium w-16">Source</th>
+            <th className="px-3 py-2 font-medium w-20">Duration</th>
+            <th className="px-3 py-2 font-medium w-32">Started</th>
+            <th className="px-3 py-2 font-medium w-20">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
@@ -55,8 +55,8 @@ export function WorkflowHistoryTable({
             <tr
               key={run.id}
               className={cn(
-                'bg-surface hover:bg-surface-hover transition-colors',
-                run.status === 'failed' && 'border-l-2 border-l-error'
+                'hover:bg-surface-elevated transition-colors',
+                run.status === 'failed' && 'border-l-2 border-l-destructive'
               )}
             >
               <td className="px-3 py-2">
