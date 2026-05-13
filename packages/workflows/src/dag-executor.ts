@@ -2153,6 +2153,7 @@ async function executeLoopNode(
         );
         await execFileAsync('bash', ['-c', substitutedBash], {
           cwd,
+          timeout: SUBPROCESS_DEFAULT_TIMEOUT,
           env: {
             ...process.env,
             USER_MESSAGE: workflowRun.user_message,
@@ -2173,6 +2174,12 @@ async function executeLoopNode(
           getLog().warn(
             { err: bashErr, nodeId: node.id, iteration: i },
             'loop_node.until_bash_exec_error'
+          );
+        } else if (bashErr.code !== undefined) {
+          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
+          getLog().warn(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_node.until_bash_unexpected_error'
           );
         }
         bashComplete = false; // non-zero exit = not complete
