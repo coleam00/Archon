@@ -247,12 +247,44 @@ Archon ships with workflows for common development tasks:
 | `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
 | `archon-test-loop-dag` | Loop node test workflow - iterative counter until completion |
 | `archon-piv-loop` | Guided Plan-Implement-Validate loop with human review between iterations |
+| `archon-metrics-reconcile` | Daily reconciliation of workflow metrics with GitHub PR outcomes - updates merged/CI status |
 
-Archon ships 17 default workflows - run `archon workflow list` or describe what you want and the router picks the right one.
+Archon ships 18 default workflows - run `archon workflow list` or describe what you want and the router picks the right one.
 
 **Or define your own.** Default workflows are great starting points - copy one from `.archon/workflows/defaults/` and customize it. Workflows are YAML files in `.archon/workflows/`, commands are markdown files in `.archon/commands/`. Same-named files in your repo override the bundled defaults. Commit them - your whole team runs the same process.
 
 See [Authoring Workflows](https://archon.diy/guides/authoring-workflows/) and [Authoring Commands](https://archon.diy/guides/authoring-commands/).
+
+## Workflow Metrics
+
+Every workflow run automatically produces a `metrics.json` file in its artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<run-id>/`). The file captures:
+
+- **Timing** — wall-clock duration in milliseconds
+- **Outcome** — success, failure, or abandonment
+- **Execution stats** — nodes defined/executed/skipped, loop iterations, retries
+- **Cost** — tokens in/out/cache-read/cache-write and USD per node
+- **Human gates** — approval count, wait times, rejections
+- **Quality outcomes** — validation pass/fail, code review findings by severity
+- **Codebase fingerprint** — repo, commit SHA, working path
+
+**Input signals** are captured automatically at workflow start:
+- `size_proxy_emitted` — input word count plus git diff stats (additions, deletions, changed files)
+- `classifier_emitted` — fires when any node's structured output contains classifier fields (`issue_type`, `area`, `scope`, `confidence`)
+
+**Monthly rollup:** every completed run also appends a summary line to `~/.archon/metrics/runs-YYYY-MM.jsonl`. Query your history with `jq`:
+
+```bash
+# Average cost per workflow this month
+jq -s '[.[] | select(.workflow == "archon-fix-github-issue")] | { avg_usd: (map(.cost_usd) | add / length) }' \
+  ~/.archon/metrics/runs-$(date +%Y-%m).jsonl
+
+# All failed runs
+jq 'select(.outcome == "failure")' ~/.archon/metrics/runs-$(date +%Y-%m).jsonl
+```
+
+**PR reconciliation:** the `archon-metrics-reconcile` workflow runs daily, finds `metrics.json` files with unresolved `outcome_followup` fields (null `pr_merged`, `ci_passed`), queries GitHub for current PR status, and writes the results back. Run it on demand with `archon workflow run archon-metrics-reconcile`.
+
+The metrics data is designed to accumulate over time so you can build effort estimation models - correlating input size and complexity signals with actual cost and cycle time across your real workload.
 
 ## Add a Platform
 
