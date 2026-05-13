@@ -70,7 +70,11 @@ export * as isolationOperations from './operations/isolation-operations';
 // Orchestrator
 // =============================================================================
 export { handleMessage } from './orchestrator/orchestrator-agent';
-export { buildOrchestratorPrompt, buildProjectScopedPrompt } from './orchestrator/prompt-builder';
+export {
+  buildOrchestratorPrompt,
+  buildProjectScopedPrompt,
+  buildOrchestratorSystemAppend,
+} from './orchestrator/prompt-builder';
 
 // =============================================================================
 // Handlers

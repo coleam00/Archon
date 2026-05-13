@@ -165,13 +165,27 @@ export type MessageChunk =
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 
 /**
+ * System prompt input accepted by all providers. Mirrors the Claude Agent SDK
+ * preset-with-append shape so callers can opt into cacheable prefix behavior.
+ * Hand-written duplicate of the SDK type — see file-header rule forbidding SDK imports here.
+ */
+export interface SystemPromptPreset {
+  type: 'preset';
+  preset: 'claude_code';
+  append?: string;
+  excludeDynamicSections?: boolean;
+}
+
+export type SystemPromptInput = string | string[] | SystemPromptPreset;
+
+/**
  * Universal request options accepted by all providers.
  * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
  */
 export interface AgentRequestOptions {
   model?: string;
   abortSignal?: AbortSignal;
-  systemPrompt?: string;
+  systemPrompt?: SystemPromptInput;
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   env?: Record<string, string>;
   maxBudgetUsd?: number;
@@ -224,7 +238,7 @@ export interface NodeConfig {
   betas?: string[];
   output_format?: Record<string, unknown>;
   maxBudgetUsd?: number;
-  systemPrompt?: string;
+  systemPrompt?: SystemPromptInput;
   fallbackModel?: string;
   idle_timeout?: number;
   [key: string]: unknown;

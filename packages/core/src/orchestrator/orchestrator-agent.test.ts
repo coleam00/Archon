@@ -174,6 +174,7 @@ mock.module('./orchestrator', () => ({
 mock.module('./prompt-builder', () => ({
   buildOrchestratorPrompt: mock(() => 'orchestrator system prompt'),
   buildProjectScopedPrompt: mock(() => 'project scoped system prompt'),
+  buildOrchestratorSystemAppend: mock(() => 'orchestrator system append'),
   formatWorkflowContextSection: mock((results: unknown[]) =>
     results.length > 0 ? '## Recent Workflow Results\n\n...' : ''
   ),
@@ -1105,6 +1106,38 @@ describe('discoverAllWorkflows — remote sync', () => {
     );
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
     expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
+  });
+
+  test('passes preset systemPrompt for claude provider', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    const sp = requestOptions.systemPrompt as Record<string, unknown>;
+    expect(sp).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: 'orchestrator system append',
+    });
+  });
+
+  test('passes plain string systemPrompt for non-claude provider', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'codex' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(typeof requestOptions.systemPrompt).toBe('string');
+    expect(requestOptions.systemPrompt).toBe('orchestrator system append');
   });
 });
 

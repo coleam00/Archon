@@ -43,11 +43,7 @@ import type { MergedConfig } from '../config/config-types';
 import { generateAndSetTitle } from '../services/title-generator';
 import { validateAndResolveIsolation, dispatchBackgroundWorkflow } from './orchestrator';
 import { IsolationBlockedError } from '@archon/isolation';
-import {
-  buildOrchestratorPrompt,
-  buildProjectScopedPrompt,
-  formatWorkflowContextSection,
-} from './prompt-builder';
+import { buildOrchestratorSystemAppend, formatWorkflowContextSection } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
@@ -599,25 +595,14 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   return { workflows, errors: allErrors, syncResult, syncError, config };
 }
 
-/** Build the full prompt with system prompt, user message, and optional contexts */
+/** Build the user-facing prompt with message and optional contexts */
 function buildFullPrompt(
-  conversation: Conversation,
-  codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[],
   message: string,
   issueContext: string | undefined,
   threadContext: string | undefined,
   attachedFiles?: AttachedFile[],
   workflowContext?: string
 ): string {
-  const scopedCodebase = conversation.codebase_id
-    ? codebases.find(c => c.id === conversation.codebase_id)
-    : undefined;
-
-  const systemPrompt = scopedCodebase
-    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
-    : buildOrchestratorPrompt(codebases, workflows);
-
   const contextSuffix = issueContext ? '\n\n---\n\n## Additional Context\n\n' + issueContext : '';
 
   const fileSuffix =
@@ -632,8 +617,7 @@ function buildFullPrompt(
 
   if (threadContext) {
     return (
-      systemPrompt +
-      '\n\n---\n\n## Thread Context (previous messages)\n\n' +
+      '## Thread Context (previous messages)\n\n' +
       threadContext +
       workflowContextSuffix +
       '\n\n---\n\n## Current Request\n\n' +
@@ -644,12 +628,7 @@ function buildFullPrompt(
   }
 
   return (
-    systemPrompt +
-    workflowContextSuffix +
-    '\n\n---\n\n## User Message\n\n' +
-    message +
-    contextSuffix +
-    fileSuffix
+    workflowContextSuffix + '\n\n---\n\n## User Message\n\n' + message + contextSuffix + fileSuffix
   );
 }
 
@@ -937,9 +916,6 @@ export async function handleMessage(
     }
 
     const fullPrompt = buildFullPrompt(
-      conversation,
-      codebases,
-      workflows,
       message,
       issueContext,
       threadContext,
@@ -989,9 +965,18 @@ export async function handleMessage(
       }
     }
 
+    // Claude supports the preset object for prompt caching; other providers
+    // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
+    const systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    const systemPrompt =
+      providerKey === 'claude'
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
+        : systemAppend;
+
     const requestOptions: SendQueryOptions = {
       assistantConfig: config.assistants[providerKey] ?? {},
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
+      systemPrompt,
     };
 
     const mode = platform.getStreamingMode();
