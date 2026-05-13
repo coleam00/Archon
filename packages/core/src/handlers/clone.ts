@@ -294,8 +294,14 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
     if (branch && branch !== 'HEAD') {
       detectedBranch = branch;
     }
-  } catch {
-    // Non-fatal — leave undefined so DB default applies
+  } catch (err) {
+    const error = err as Error & { stderr?: string };
+    const msg = (error.message + (error.stderr ?? '')).toLowerCase();
+    if (msg.includes('head') || msg.includes('reference')) {
+      getLog().debug({ path: targetPath }, 'branch_detection_detached_head');
+    } else {
+      getLog().debug({ err: error, path: targetPath }, 'branch_detection_failed');
+    }
   }
 
   const result = await registerRepoAtPath(

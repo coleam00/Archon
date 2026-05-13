@@ -111,6 +111,28 @@ This is the full lifecycle close-out. Run it after merging and you're back to a 
 
 ---
 
+## Workspace Sync in Chat Mode
+
+The `source/` clone under `~/.archon/workspaces/<owner>/<repo>/source/` is what Archon reads when you chat without an active worktree (e.g. asking questions, running `archon-assist`). On every chat message Archon refreshes that clone from origin so the assistant sees current code.
+
+This refresh is **non-destructive by default**: it runs a `git fetch` and only fast-forwards if the local branch is strictly behind. Local commits, uncommitted modifications, and non-default branches are preserved — never hard-reset. (Worktree creation still uses a hard-reset against managed clones, since worktrees branch off a known-good base; that path is unchanged.)
+
+After each sync Archon reports one of five states:
+
+| State | Meaning |
+|-------|---------|
+| `in_sync` | Local matches origin. Nothing to do. |
+| `behind` | Origin had new commits; fast-forwarded. |
+| `ahead` | You have local-only commits that haven't been pushed. Surfaced as an SSE advisory. |
+| `diverged` | Local and origin both have unique commits. Sync skipped; resolve manually. |
+| `dirty` | Uncommitted modifications in `source/`. Sync skipped to avoid destroying them. |
+
+If you see a `diverged from origin` message, `source/` has local commits that aren't on origin **and** origin has commits you don't have. Archon won't choose for you — `cd ~/.archon/workspaces/<owner>/<repo>/source` and either `git pull --rebase`, push your branch, or reset deliberately.
+
+The same mechanism surfaces an **unpushed-work advisory** when `source/` has local commits or uncommitted edits, so you don't lose work that you forgot was sitting in the canonical clone.
+
+---
+
 ## Best Practices
 
 **Always use `--branch` for code changes.** Auto-generated branch names work, but descriptive names like `fix/login-crash` or `feat/csv-export` are much easier to track.

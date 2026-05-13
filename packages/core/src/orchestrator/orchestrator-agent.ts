@@ -1400,8 +1400,14 @@ async function handleRegisterProject(
     if (branch && branch !== 'HEAD') {
       detectedBranch = branch;
     }
-  } catch {
-    // non-git directory — leave undefined so DB stores NULL (auto-detect at sync)
+  } catch (err) {
+    const error = err as Error & { stderr?: string };
+    const msg = (error.message + (error.stderr ?? '')).toLowerCase();
+    if (msg.includes('not a git repository') || msg.includes('head') || msg.includes('reference')) {
+      getLog().debug({ path: projectPath }, 'branch_detection_detached_head');
+    } else {
+      getLog().debug({ err: error, path: projectPath }, 'branch_detection_failed');
+    }
   }
   const codebase = await codebaseDb.createCodebase({
     name: projectName,

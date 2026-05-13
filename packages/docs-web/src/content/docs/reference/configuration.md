@@ -208,8 +208,13 @@ worktree:
 
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on remote (no silent fallback).
-2. If omitted: Auto-detects the default branch via `git remote show origin`. Works without any config for standard repos.
-3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
+2. If the codebase row has a `default_branch` (persisted at clone/registration time, see below): Uses that branch.
+3. If neither is set: Auto-detects the default branch via `git remote show origin`. Works without any config for standard repos.
+4. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
+
+`worktree.baseBranch` (YAML, repo-wide) and `default_branch` (codebase DB row, per-clone) serve different paths. `worktree.baseBranch` always wins because it's an explicit user override. The DB-row `default_branch` is the branch Archon detected when the repository was first cloned or registered, and is used by the **chat-mode sync** of `source/` so that a repository whose default branch is `master`/`develop` is fast-forwarded against the right branch on every chat tick — not unconditionally against `main`. If neither is set, both paths fall back to `git remote show origin`.
+
+**Chat-mode workspace sync:** Independently of worktrees, every chat message refreshes `~/.archon/workspaces/<owner>/<repo>/source/` from origin. This sync is **non-destructive by default**: `git fetch` runs, then a fast-forward is attempted only if the local branch is strictly behind. Local commits, uncommitted modifications, and non-default branches are preserved. The sync reports one of five states (`in_sync` / `behind` / `ahead` / `diverged` / `dirty`) — `ahead` and `dirty` surface an SSE advisory so unpushed work isn't silently forgotten, and `diverged` skips the sync entirely (resolve manually with `git pull --rebase` or a push). See [Isolation: Workspace Sync in Chat Mode](/book/isolation/#workspace-sync-in-chat-mode) for the full state table.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
 

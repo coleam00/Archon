@@ -433,9 +433,9 @@ Workflows chain multiple commands as DAG nodes, support parallel execution, cond
 > Commands and workflows are loaded at runtime from the current working directory — not from a fixed global location.
 >
 > - **CLI:** Reads from wherever you run the `archon` command. If you run from your local repo, it picks up uncommitted changes immediately.
-> - **Server (Telegram/Slack/GitHub):** Reads from the workspace clone at `~/.archon/workspaces/owner/repo/`. This clone only syncs from the remote before worktree creation, so you need to **commit and push** changes for the server to see them.
+> - **Server (Telegram/Slack/GitHub):** Reads from the workspace clone at `~/.archon/workspaces/owner/repo/source/`. On every chat message this clone is fast-forwarded from origin if behind, but local commits and uncommitted edits are preserved — so changes you make directly inside `source/` are visible immediately. (Worktree creation still hard-resets `source/` to origin, so commit anything you want to keep first.) If `source/` is ahead of or has uncommitted edits relative to origin, you'll receive an SSE advisory so the local work isn't quietly forgotten.
 >
-> In short: the CLI sees your local files, the server sees what's been pushed.
+> In short: the CLI sees your local files; the server sees what's been pushed *plus* anything you've committed or modified in `source/` itself.
 
 ---
 
