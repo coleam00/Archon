@@ -2515,10 +2515,15 @@ nodes:
 
   describe('discoverWorkflows with null cwd (no project context)', () => {
     it('skips project scope and returns no project-source workflows', async () => {
-      // Issue #1173: when no codebase is registered, the LIST endpoint passes
-      // null so bundled + home scopes still surface. Discovery must not attempt
-      // to read a cwd-derived path and must not produce project-source entries.
+      // When no codebase is registered the LIST endpoint passes null so bundled
+      // + home scopes can still surface. Discovery must not attempt to read a
+      // cwd-derived path and must not produce project-source entries.
       const result = await discoverWorkflows(null, { loadDefaults: false });
+
+      // loadDefaults:false skips bundled and a clean test env has no home-
+      // scoped workflows, so the full result must be empty — without this the
+      // test would pass even if a stray project-path read were silently injected.
+      expect(result.workflows).toHaveLength(0);
 
       const projectSourced = result.workflows.filter(w => w.source === 'project');
       expect(projectSourced).toHaveLength(0);
@@ -2542,9 +2547,9 @@ nodes:
     });
 
     it('discoverWorkflowsWithConfig does not call loadConfig when cwd is null', async () => {
-      // Guards the `if (cwd !== null)` branch in workflow-discovery.ts.
-      // If that guard is removed in a future refactor, the per-project opt-out
-      // would silently start running with no project context.
+      // The per-project config opt-out must not be evaluated when there is no
+      // project context — running loadConfig with no cwd would silently apply
+      // home-dir or working-dir defaults to a request that has neither.
       const mockLoadConfig = mock(async () => ({ defaults: { loadDefaultWorkflows: true } }));
       await discoverWorkflowsWithConfig(null, mockLoadConfig);
       expect(mockLoadConfig).not.toHaveBeenCalled();

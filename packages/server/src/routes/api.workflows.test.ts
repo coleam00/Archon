@@ -126,7 +126,7 @@ describe('GET /api/workflows', () => {
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
 
     // No registered codebases → handler should call discovery with null cwd
-    // so bundled + home-scoped workflows still surface (issue #1173).
+    // so bundled + home-scoped workflows still surface.
     mockListCodebases.mockImplementationOnce(async () => []);
 
     const response = await app.request('/api/workflows');
