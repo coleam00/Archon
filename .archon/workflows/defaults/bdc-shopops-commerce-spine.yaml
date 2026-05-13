@@ -343,27 +343,7 @@ nodes:
         echo "No staged changes; branch already contains requested work"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-SHOPOPS-COMMERCE-SPINE-01 — commerce channel spine tables + connections API
-
-Adds three shared data tables via Supabase migration:
-  - channel_connections (tenant/channel status + credentials ref)
-  - product_channel_map (inventory item <-> external product mapping)
-  - channel_orders (normalized inbound orders from all channels)
-Seeds existing Shopify connections from tenant_config.
-
-Extends routes/channels.js:
-  - GET  /channels/connections        (read all connections for tenant)
-  - PATCH /channels/connections/:channel (upsert connection status/credentials)
-  - GET  /channels/inventory-availability (on_hand - reserved - pull_list_allocated)
-Keeps GET /channels/config unchanged (legacy compat).
-
-Adds services/channelAvailability.js — computeAvailability(tenantId, itemIds).
-Adds tests/test_commerce_channel_spine.js — 5+ bun tests (idempotency, tenant isolation,
-  invalid channel rejection, connections shape).
-
-Blocks: WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01, WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-SHOPOPS-COMMERCE-SPINE-01 — commerce channel spine tables + connections API\n\nAdds three shared data tables via Supabase migration:\n  - channel_connections (tenant/channel status + credentials ref)\n  - product_channel_map (inventory item <-> external product mapping)\n  - channel_orders (normalized inbound orders from all channels)\nSeeds existing Shopify connections from tenant_config.\n\nExtends routes/channels.js:\n  - GET  /channels/connections        (read all connections for tenant)\n  - PATCH /channels/connections/:channel (upsert connection status/credentials)\n  - GET  /channels/inventory-availability (on_hand - reserved - pull_list_allocated)\nKeeps GET /channels/config unchanged (legacy compat).\n\nAdds services/channelAvailability.js — computeAvailability(tenantId, itemIds).\nAdds tests/test_commerce_channel_spine.js — 5+ bun tests (idempotency, tenant isolation,\n  invalid channel rejection, connections shape).\n\nBlocks: WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01, WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
 
       git push -u origin "$BRANCH"

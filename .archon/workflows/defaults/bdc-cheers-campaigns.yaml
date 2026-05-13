@@ -8,7 +8,7 @@
 #   2. WO-CHEERS-DASHBOARD-01 MUST be DONE — this WO consumes /api/customers/intelligence
 #      Verify via: gh pr list --repo bluedevilcollectibles/lspro-react --search 'WO-CHEERS-DASHBOARD-01' --state merged
 #   3. Spec at bdc-xo:docs/work-orders/WO-CHEERS-CAMPAIGNS-01.md
-#   4. Notion page ID — fill in NOTION_PAGE_ID_PLACEHOLDER before firing
+#   4. Notion page ID — fill in 35fef4c9-ce00-81ac-b633-fc72d336123b before firing
 #   5. Migration is part of this WO — verify schema_migrations table exists in staging Supabase
 #   6. A2P 10DLC status — confirm with John before firing (see Q1 below)
 #
@@ -397,16 +397,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(cheers): WO-CHEERS-CAMPAIGNS-01 — campaign builder + send (UI)
-
-CampaignsPage list view + CampaignBuilderPage 5-step wizard at /cheers/campaigns.
-Tier-gated to HQ. Consumes WO-CHEERS-DASHBOARD-01 segments.
-
-Tests: cheers-campaigns.test.tsx (6 Vitest tests).
-
-Companion PR: shopops master wo/cheers-campaigns-01 (routes + migration).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(cheers): WO-CHEERS-CAMPAIGNS-01 — campaign builder + send (UI)\n\nCampaignsPage list view + CampaignBuilderPage 5-step wizard at /cheers/campaigns.\nTier-gated to HQ. Consumes WO-CHEERS-DASHBOARD-01 segments.\n\nTests: cheers-campaigns.test.tsx (6 Vitest tests).\n\nCompanion PR: shopops master wo/cheers-campaigns-01 (routes + migration).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "UI_BRANCH=$BRANCH"
@@ -437,17 +428,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-CHEERS-CAMPAIGNS-01 — campaign send infra
-
-New tables: communication_log + campaigns (migration + rollback paired).
-New routes: POST /api/campaigns, GET, /:id, /:id/preview, /:id/send.
-SMS via Twilio (A2P-blocked when env flag set). Email via existing provider.
-Template render with {{customer.first_name}} variable substitution.
-Send fan-out serial 250ms throttle. Idempotent re-send.
-
-Tests: test_campaigns.js (8 bun tests).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-CHEERS-CAMPAIGNS-01 — campaign send infra\n\nNew tables: communication_log + campaigns (migration + rollback paired).\nNew routes: POST /api/campaigns, GET, /:id, /:id/preview, /:id/send.\nSMS via Twilio (A2P-blocked when env flag set). Email via existing provider.\nTemplate render with {{customer.first_name}} variable substitution.\nSend fan-out serial 250ms throttle. Idempotent re-send.\n\nTests: test_campaigns.js (8 bun tests).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "API_BRANCH=$BRANCH"
@@ -627,9 +608,9 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
     prompt: |
       Flip Notion WO-CHEERS-CAMPAIGNS-01 to REVIEW with manifest in Notes property.
 
-      # OPERATOR: Replace NOTION_PAGE_ID_PLACEHOLDER before firing.
+      # OPERATOR: Replace 35fef4c9-ce00-81ac-b633-fc72d336123b before firing.
       Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
-      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+      Notion page ID: 35fef4c9-ce00-81ac-b633-fc72d336123b
 
       Updates:
       - Claude Status -> REVIEW

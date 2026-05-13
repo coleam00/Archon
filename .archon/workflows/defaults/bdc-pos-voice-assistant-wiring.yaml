@@ -243,15 +243,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-POS-VOICE-ASSISTANT-WIRING-01 — pos-voice routes + SSE + voice-bridge patch
-
-Adds routes/pos-voice.js (customer-context, events SSE, state, log).
-Adds services/voice-events.js (SSE multiplexer).
-Adds migration 20260513_pos_voice_log.sql.
-Adds tests/test_pos_voice.js (5+ tests).
-Includes voice-bridge-patch.diff for John to apply on G10.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-POS-VOICE-ASSISTANT-WIRING-01 — pos-voice routes + SSE + voice-bridge patch\n\nAdds routes/pos-voice.js (customer-context, events SSE, state, log).\nAdds services/voice-events.js (SSE multiplexer).\nAdds migration 20260513_pos_voice_log.sql.\nAdds tests/test_pos_voice.js (5+ tests).\nIncludes voice-bridge-patch.diff for John to apply on G10.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "SHOPOPS_SHA=$(git rev-parse HEAD)"
@@ -294,12 +286,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No lspro changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(pos): WO-POS-VOICE-ASSISTANT-WIRING-01 — VoiceStateIndicator + CustomerTakeoverScreen
-
-Adds src/pos/VoiceStateIndicator.tsx (SSE-subscribed mic state).
-Adds src/pos/CustomerTakeoverScreen.tsx (beacon arrival overlay).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(pos): WO-POS-VOICE-ASSISTANT-WIRING-01 — VoiceStateIndicator + CustomerTakeoverScreen\n\nAdds src/pos/VoiceStateIndicator.tsx (SSE-subscribed mic state).\nAdds src/pos/CustomerTakeoverScreen.tsx (beacon arrival overlay).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       BODY=$(mktemp)

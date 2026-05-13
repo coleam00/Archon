@@ -273,31 +273,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-POS-BEACON-UUID-PER-LOCATION-01 — per-location iBeacon UUID
-
-Adds shopops-api/migrations/20260513_location_beacons.sql:
-  CREATE TABLE location_beacons(location_id PK, beacon_uuid UNIQUE, major, minor, version, ...)
-
-Adds shopops-api/routes/admin-beacons.js with 4 endpoints:
-  POST /admin/locations/:id/beacon            (register)
-  POST /admin/locations/:id/beacon/regenerate (rotate UUID, bump version)
-  GET  /admin/locations/:id/beacon            (read current)
-  GET  /admin/beacons                          (list all for tenant)
-
-Modifies shopops-api/routes/wallet.js:
-  - Adds getBeaconForCustomer(customerId) helper.
-  - POST /wallet/pass now reads per-location UUID from location_beacons,
-    falls back to process.env.WALLET_BEACON_UUID if no row.
-
-Adds shopops-api/tests/test_location_beacons.js with 7+ bun tests covering
-register, regenerate, read, list, cross-tenant isolation, pass-uses-per-location,
-pass-falls-back-to-env.
-
-Mounts router in index.js under /admin.
-
-HQ-grade: Mutant Market install 2026-06-15 depends on this. HIGH polish bar.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-POS-BEACON-UUID-PER-LOCATION-01 — per-location iBeacon UUID\n\nAdds shopops-api/migrations/20260513_location_beacons.sql:\n  CREATE TABLE location_beacons(location_id PK, beacon_uuid UNIQUE, major, minor, version, ...)\n\nAdds shopops-api/routes/admin-beacons.js with 4 endpoints:\n  POST /admin/locations/:id/beacon            (register)\n  POST /admin/locations/:id/beacon/regenerate (rotate UUID, bump version)\n  GET  /admin/locations/:id/beacon            (read current)\n  GET  /admin/beacons                          (list all for tenant)\n\nModifies shopops-api/routes/wallet.js:\n  - Adds getBeaconForCustomer(customerId) helper.\n  - POST /wallet/pass now reads per-location UUID from location_beacons,\n    falls back to process.env.WALLET_BEACON_UUID if no row.\n\nAdds shopops-api/tests/test_location_beacons.js with 7+ bun tests covering\nregister, regenerate, read, list, cross-tenant isolation, pass-uses-per-location,\npass-falls-back-to-env.\n\nMounts router in index.js under /admin.\n\nHQ-grade: Mutant Market install 2026-06-15 depends on this. HIGH polish bar.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"

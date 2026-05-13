@@ -10,7 +10,7 @@
 #   2. bluedevilcollectibles/shopops registered in Archon (this WO touches BOTH repos via /tmp clone)
 #   3. WO spec committed + pushed to bdc-xo main: docs/work-orders/WO-CHEERS-DASHBOARD-01.md
 #   4. GH_TOKEN with push to both lspro-react + shopops in Archon env
-#   5. Notion page ID for WO-CHEERS-DASHBOARD-01 — fill in NOTION_PAGE_ID_PLACEHOLDER before firing
+#   5. Notion page ID for WO-CHEERS-DASHBOARD-01 — fill in 35fef4c9-ce00-81e8-a80d-d32a989e33e6 before firing
 #
 # OPEN QUESTIONS (operator answers before deploy):
 #   Q1: Default location scope for HQ tier — all-locations or location-picker required? Draft assumes all-locations.
@@ -410,20 +410,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(cheers): WO-CHEERS-DASHBOARD-01 — customer-intelligence dashboard
-
-Adds CheersDashboardPage at /cheers (HQ tier gate via meetsTier).
-4-panel layout: KPI strip, at-risk list, activity feed, drill-down sidesheet.
-Pure RFM scoring helper (cheers-scoring.ts) shared with shopops-api rfm-scorer.
-
-Tests:
-- cheers-scoring.test.ts (8 Vitest) — recency/frequency/monetary/health/segment
-- cheers-dashboard-page.test.tsx (4 RTL) — KPI render, at-risk filter, sidesheet, activity sort
-
-Depends on: shopops-api GET /api/customers/intelligence (companion PR).
-Blocks: WO-CHEERS-CAMPAIGNS-01
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(cheers): WO-CHEERS-DASHBOARD-01 — customer-intelligence dashboard\n\nAdds CheersDashboardPage at /cheers (HQ tier gate via meetsTier).\n4-panel layout: KPI strip, at-risk list, activity feed, drill-down sidesheet.\nPure RFM scoring helper (cheers-scoring.ts) shared with shopops-api rfm-scorer.\n\nTests:\n- cheers-scoring.test.ts (8 Vitest) — recency/frequency/monetary/health/segment\n- cheers-dashboard-page.test.tsx (4 RTL) — KPI render, at-risk filter, sidesheet, activity sort\n\nDepends on: shopops-api GET /api/customers/intelligence (companion PR).\nBlocks: WO-CHEERS-CAMPAIGNS-01\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
 
       git push -u origin "$BRANCH"
@@ -453,20 +440,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-CHEERS-DASHBOARD-01 — customer intelligence endpoint
-
-GET /api/customers/intelligence — RFM-scored customer list + KPI rollups
-for the Cheers dashboard. Multi-tenant isolated. Optional location_id filter.
-
-New files:
-- routes/customer-intelligence.js
-- lib/rfm-scorer.js (pure functions)
-- tests/test_customer_intelligence.js (6 bun tests)
-
-Scoring: R<14d=5..60+=1, F purchases/30d 4+=5..0=1, M tenant-wide quintile,
-Health = R*0.40 + F*0.35 + M*0.25.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-CHEERS-DASHBOARD-01 — customer intelligence endpoint\n\nGET /api/customers/intelligence — RFM-scored customer list + KPI rollups\nfor the Cheers dashboard. Multi-tenant isolated. Optional location_id filter.\n\nNew files:\n- routes/customer-intelligence.js\n- lib/rfm-scorer.js (pure functions)\n- tests/test_customer_intelligence.js (6 bun tests)\n\nScoring: R<14d=5..60+=1, F purchases/30d 4+=5..0=1, M tenant-wide quintile,\nHealth = R*0.40 + F*0.35 + M*0.25.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
 
       git push -u origin "$BRANCH"
@@ -665,9 +639,9 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
       Flip Notion WO-CHEERS-DASHBOARD-01 to REVIEW with manifest in Notes property
       (NOT a page comment — Captain CI reads Notes).
 
-      # OPERATOR: Replace NOTION_PAGE_ID_PLACEHOLDER with real Notion page ID before firing.
+      # OPERATOR: Replace 35fef4c9-ce00-81e8-a80d-d32a989e33e6 with real Notion page ID before firing.
       Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
-      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+      Notion page ID: 35fef4c9-ce00-81e8-a80d-d32a989e33e6
 
       Updates (single call):
       - Claude Status -> REVIEW

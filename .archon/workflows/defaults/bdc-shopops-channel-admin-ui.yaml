@@ -508,10 +508,10 @@ nodes:
     prompt: |
       Flip Notion WO-SHOPOPS-CHANNEL-ADMIN-UI-01 to REVIEW with the manifest in Notes property.
 
-      # OPERATOR NOTE: Replace NOTION_PAGE_ID_PLACEHOLDER below with the real Notion page ID
+      # OPERATOR NOTE: Replace 35fef4c9-ce00-81b5-a3ed-c7fc2825ae30 below with the real Notion page ID
       # for WO-SHOPOPS-CHANNEL-ADMIN-UI-01 before deploying this YAML.
       # Find it via: notion search for "WO-SHOPOPS-CHANNEL-ADMIN-UI-01" in the BDC WO database.
-      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+      Notion page ID: 35fef4c9-ce00-81b5-a3ed-c7fc2825ae30
 
       Required Notion changes (Captain CI reads Notes field, NOT comments — per doctrine):
       - Claude Status -> REVIEW

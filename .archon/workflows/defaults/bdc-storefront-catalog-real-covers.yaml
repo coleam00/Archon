@@ -30,7 +30,7 @@
 #
 # OPEN QUESTIONS:
 #   Q1: Notion page ID is UNKNOWN at draft time. Operator must replace
-#       NOTION_PAGE_ID_PLACEHOLDER in flip-notion prompt before firing.
+#       35fef4c9-ce00-8193-9f29-dabf85f07390 in flip-notion prompt before firing.
 #   Q2: shopops-storefront default branch assumed 'master' per battlegroup briefing.
 #       Verify via gh api before fire. If 'main', do a global swap in this file.
 
@@ -474,32 +474,7 @@ nodes:
         echo "No staged changes; branch already contains requested work"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(storefront): WO-STOREFRONT-CATALOG-REAL-COVERS-01 — real cover art in catalog
-
-Plugs the existing AutoFix cover resolution pipeline (POST /covers/lookup/batch)
-into the storefront catalog so real comic art renders instead of placeholder
-colored text plates.
-
-What changed:
-  - scripts/backfill-seed-covers.mjs: one-shot script that calls the cover
-    cascade for every UPC in lib/seed-data/catalog.json and writes resolved
-    URLs back into the JSON. Operator-run; static after that.
-  - lib/seed-data/catalog.json: cover_url populated for items the cascade
-    could resolve (Lunar > comic_covers > PRH-ISBN > fuzzy > ai_pick).
-  - lib/catalog-cover.ts: pure helpers (shouldShowPalette, getCoverImgProps)
-    keep render logic out of the page component and testable from bun.
-  - app/shops/[shopSlug]/catalog/page.tsx: renders <img src={item.cover_url}>
-    when truthy, falls back to existing deterministic-palette colored plate
-    when null. onError hides broken images.
-  - __tests__/lib/catalog-cover-fallback.test.ts: 4+ bun tests on pure helpers.
-
-Polish bar: ROUGH OK (Mutant Market is beta tester, not paying — per plan
-docs/plans/2026-06-15-mutant-market-hq-readiness.md).
-
-Existing fallback (deterministic palette + first-two-words-of-series hero)
-preserved intact for items the cascade can't resolve.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(storefront): WO-STOREFRONT-CATALOG-REAL-COVERS-01 — real cover art in catalog\n\nPlugs the existing AutoFix cover resolution pipeline (POST /covers/lookup/batch)\ninto the storefront catalog so real comic art renders instead of placeholder\ncolored text plates.\n\nWhat changed:\n  - scripts/backfill-seed-covers.mjs: one-shot script that calls the cover\n    cascade for every UPC in lib/seed-data/catalog.json and writes resolved\n    URLs back into the JSON. Operator-run; static after that.\n  - lib/seed-data/catalog.json: cover_url populated for items the cascade\n    could resolve (Lunar > comic_covers > PRH-ISBN > fuzzy > ai_pick).\n  - lib/catalog-cover.ts: pure helpers (shouldShowPalette, getCoverImgProps)\n    keep render logic out of the page component and testable from bun.\n  - app/shops/[shopSlug]/catalog/page.tsx: renders <img src={item.cover_url}>\n    when truthy, falls back to existing deterministic-palette colored plate\n    when null. onError hides broken images.\n  - __tests__/lib/catalog-cover-fallback.test.ts: 4+ bun tests on pure helpers.\n\nPolish bar: ROUGH OK (Mutant Market is beta tester, not paying — per plan\ndocs/plans/2026-06-15-mutant-market-hq-readiness.md).\n\nExisting fallback (deterministic palette + first-two-words-of-series hero)\npreserved intact for items the cascade can'\''t resolve.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
 
       git push -u origin "$BRANCH"
@@ -699,11 +674,11 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
       in the Notes PROPERTY (not as a page comment — Captain CI reads Notes, not comments).
 
       # OPEN QUESTION (Q1): Notion page ID NOT confirmed at draft time.
-      # Operator MUST replace NOTION_PAGE_ID_PLACEHOLDER with the real UUID before firing.
+      # Operator MUST replace 35fef4c9-ce00-8193-9f29-dabf85f07390 with the real UUID before firing.
       # Find it: query Notion database a6df831c-0b52-449f-8ca4-d77be6b70d0a
       # for title containing "WO-STOREFRONT-CATALOG-REAL-COVERS-01".
       Notion database ID: a6df831c-0b52-449f-8ca4-d77be6b70d0a
-      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+      Notion page ID: 35fef4c9-ce00-8193-9f29-dabf85f07390
 
       Required Notion changes (single update call):
       - Claude Status -> REVIEW

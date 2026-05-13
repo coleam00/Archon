@@ -8,7 +8,7 @@
 #      OR Archon CWD is a shopops-storefront-capable repo (verify via remote_agent_codebases query).
 #      If NOT registered as primary, this YAML uses the /tmp-clone pattern from the auth-wire reference.
 #   2. WO spec at bdc-xo:docs/work-orders/WO-STOREFRONT-PORTAL-SIDEBAR-01.md
-#   3. Notion page ID — fill in NOTION_PAGE_ID_PLACEHOLDER before firing
+#   3. Notion page ID — fill in 35fef4c9-ce00-816a-8661-caebf938788c before firing
 #   4. GH_TOKEN in Archon env with push to shopops-storefront
 #
 # OPEN QUESTIONS:
@@ -336,20 +336,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(portal): WO-STOREFRONT-PORTAL-SIDEBAR-01 — portal sidebar nav
-
-PortalSidebar (desktop) + PortalTopNav (mobile) with 6 nav items:
-  Pull list / Orders / Statements / Payment settings / Browse / Sign out.
-
-Wires into layout.tsx (created or modified). Removes 'Pick a section from
-the sidebar' placeholder from page.tsx now that the sidebar is real.
-
-Active link styling via usePathname() from next/navigation.
-Mobile drawer at <768px. Matches existing Cormorant Garamond + dark theme.
-
-Tests: __tests__/portal/PortalSidebar.test.tsx (5 RTL tests).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(portal): WO-STOREFRONT-PORTAL-SIDEBAR-01 — portal sidebar nav\n\nPortalSidebar (desktop) + PortalTopNav (mobile) with 6 nav items:\n  Pull list / Orders / Statements / Payment settings / Browse / Sign out.\n\nWires into layout.tsx (created or modified). Removes '\''Pick a section from\nthe sidebar'\'' placeholder from page.tsx now that the sidebar is real.\n\nActive link styling via usePathname() from next/navigation.\nMobile drawer at <768px. Matches existing Cormorant Garamond + dark theme.\n\nTests: __tests__/portal/PortalSidebar.test.tsx (5 RTL tests).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "BRANCH=$BRANCH"
@@ -475,9 +462,9 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
     prompt: |
       Flip Notion WO-STOREFRONT-PORTAL-SIDEBAR-01 to REVIEW with manifest in Notes property.
 
-      # OPERATOR: Replace NOTION_PAGE_ID_PLACEHOLDER before firing.
+      # OPERATOR: Replace 35fef4c9-ce00-816a-8661-caebf938788c before firing.
       Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
-      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+      Notion page ID: 35fef4c9-ce00-816a-8661-caebf938788c
 
       Updates:
       - Claude Status -> REVIEW

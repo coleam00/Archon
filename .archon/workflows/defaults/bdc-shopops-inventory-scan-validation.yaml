@@ -235,23 +235,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 — shipment exception detection
-
-Adds shipment_exceptions table (migration 20260515).
-Adds services/shipmentValidator.js with three pure detectors
-(detectDuplicateUpcs, detectQtyMismatches, detectUnexpectedItems) +
-validateShipmentLines orchestrator.
-
-Extends routes/shipments.js ingest path: calls validator after line commit,
-emits exceptions array in response body. Does NOT block ingest (informational v1).
-
-6+ bun tests (one per detection scenario + clean shipment + response shape).
-
-Plan: A (P1 extension for Mutant Market 2026-06-15)
-Polish bar: ROUGH OK — v1 detection-only. No auto-resolution, no UI.
-            Staff resolves via SQL until v1.1 exception management UI ships.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 — shipment exception detection\n\nAdds shipment_exceptions table (migration 20260515).\nAdds services/shipmentValidator.js with three pure detectors\n(detectDuplicateUpcs, detectQtyMismatches, detectUnexpectedItems) +\nvalidateShipmentLines orchestrator.\n\nExtends routes/shipments.js ingest path: calls validator after line commit,\nemits exceptions array in response body. Does NOT block ingest (informational v1).\n\n6+ bun tests (one per detection scenario + clean shipment + response shape).\n\nPlan: A (P1 extension for Mutant Market 2026-06-15)\nPolish bar: ROUGH OK — v1 detection-only. No auto-resolution, no UI.\n            Staff resolves via SQL until v1.1 exception management UI ships.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"

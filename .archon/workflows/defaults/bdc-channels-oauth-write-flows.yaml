@@ -238,12 +238,7 @@ nodes:
         6. Commit + push + open PR against staging (Rule 20):
              git add src/pages/Channels/ src/components/Channels/ tests/channels-connect.spec.ts
              git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-               commit -m "feat(ui): WO-CHANNELS-OAUTH-WRITE-FLOWS-01 — Connect/Disconnect buttons on ChannelsConfigPage
-
-Adds StatusPill, ActionButton, ConnectModal, DisconnectConfirm. Wires to
-shopops-api /channels/connect + /channels/disconnect. ROUGH OK polish — toast-only errors.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+               commit -m "$(printf 'feat(ui): WO-CHANNELS-OAUTH-WRITE-FLOWS-01 — Connect/Disconnect buttons on ChannelsConfigPage\n\nAdds StatusPill, ActionButton, ConnectModal, DisconnectConfirm. Wires to\nshopops-api /channels/connect + /channels/disconnect. ROUGH OK polish — toast-only errors.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
              git push -u origin wo/channels-oauth-write-flows-01-ui
              gh pr create --repo bluedevilcollectibles/lspro-react --base staging \
                --head wo/channels-oauth-write-flows-01-ui \
@@ -264,21 +259,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-CHANNELS-OAUTH-WRITE-FLOWS-01 — channel connect/disconnect routes
-
-Extends routes/channels.js (preserves all existing routes):
-  - PATCH /channels/connect/:channel — channel-specific body, upserts channel_connections
-  - DELETE /channels/disconnect/:channel — flips status to not_connected
-  - GET /channels/ebay/oauth-start — returns placeholder OAuth URL
-
-4 bun tests (connect, disconnect, reconnect round-trip, invalid channel, portal disconnect).
-
-Plan: A (P1 extension for Mutant Market 2026-06-15)
-Polish bar: ROUGH OK — v1 limitations: no token refresh, no validation ping, toast-only errors.
-
-UI side: bluedevilcollectibles/lspro-react PR
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-CHANNELS-OAUTH-WRITE-FLOWS-01 — channel connect/disconnect routes\n\nExtends routes/channels.js (preserves all existing routes):\n  - PATCH /channels/connect/:channel — channel-specific body, upserts channel_connections\n  - DELETE /channels/disconnect/:channel — flips status to not_connected\n  - GET /channels/ebay/oauth-start — returns placeholder OAuth URL\n\n4 bun tests (connect, disconnect, reconnect round-trip, invalid channel, portal disconnect).\n\nPlan: A (P1 extension for Mutant Market 2026-06-15)\nPolish bar: ROUGH OK — v1 limitations: no token refresh, no validation ping, toast-only errors.\n\nUI side: bluedevilcollectibles/lspro-react PR\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"

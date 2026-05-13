@@ -194,23 +194,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-WALLET-PASS-PER-LOCATION-01 — per-location wallet passes
-
-Adds migration 20260513_wallet_pass_per_location.sql:
-  - CREATE TABLE store_locations (id, tenant_id, name, color_hex, beacon_uuid, ...)
-  - ALTER TABLE wallet_passes ADD COLUMN location_id
-  - Backfill existing rows + seed default location per tenant
-  - UNIQUE INDEX (customer_id, location_id, tenant_id)
-
-Adds services/store-locations.js (getLocation + getDefaultLocation + 60s cache).
-Modifies routes/wallet.js: POST /wallet/pass takes location_id; NEW POST /wallet/pass/sync-all.
-Modifies services/wallet-google.js to read branding from location.
-Modifies services/wallet-apn.js to add pushAllForCustomer helper.
-Adds tests/test_wallet_per_location.js (8+ bun tests).
-
-PATCH /wallet/pass/:serial interface unchanged (backward compat).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-WALLET-PASS-PER-LOCATION-01 — per-location wallet passes\n\nAdds migration 20260513_wallet_pass_per_location.sql:\n  - CREATE TABLE store_locations (id, tenant_id, name, color_hex, beacon_uuid, ...)\n  - ALTER TABLE wallet_passes ADD COLUMN location_id\n  - Backfill existing rows + seed default location per tenant\n  - UNIQUE INDEX (customer_id, location_id, tenant_id)\n\nAdds services/store-locations.js (getLocation + getDefaultLocation + 60s cache).\nModifies routes/wallet.js: POST /wallet/pass takes location_id; NEW POST /wallet/pass/sync-all.\nModifies services/wallet-google.js to read branding from location.\nModifies services/wallet-apn.js to add pushAllForCustomer helper.\nAdds tests/test_wallet_per_location.js (8+ bun tests).\n\nPATCH /wallet/pass/:serial interface unchanged (backward compat).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "SHA=$(git rev-parse HEAD)"

@@ -261,12 +261,7 @@ nodes:
              git add src/pages/Receiving/ src/components/Receiving/ tests/receiving-intake.spec.ts \
                      <any router file modified>
              git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-               commit -m "feat(ui): WO-SHOPOPS-RECEIVING-INTAKE-01 — ReceivingIntakePage + scan/grid/discrepancy
-
-Adds ReceivingIntakePage with scan input, ExpectedItemsGrid (row-tint by status),
-DiscrepancyPanel. Routes /receiving. Wires to shopops-api receiving-sessions endpoints.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+               commit -m "$(printf 'feat(ui): WO-SHOPOPS-RECEIVING-INTAKE-01 — ReceivingIntakePage + scan/grid/discrepancy\n\nAdds ReceivingIntakePage with scan input, ExpectedItemsGrid (row-tint by status),\nDiscrepancyPanel. Routes /receiving. Wires to shopops-api receiving-sessions endpoints.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
              git push -u origin wo/shopops-receiving-intake-01-ui
 
         6. Open PR on lspro-react against staging (Rule 20):
@@ -300,17 +295,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-SHOPOPS-RECEIVING-INTAKE-01 — receiving session backend
-
-Adds receiving_sessions + receiving_session_lines tables (migration 20260514).
-Adds routes/receiving-sessions.js: POST create, POST scan, POST submit, POST cancel, GET.
-Adds services/receivingSession.js: matchScan + reconcileSession.
-7+ bun tests covering scan, over, unexpected, submit/force flow.
-
-Plan: B (P0 floor, Mutant Market 2026-06-15)
-UI side: bluedevilcollectibles/lspro-react PR
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-SHOPOPS-RECEIVING-INTAKE-01 — receiving session backend\n\nAdds receiving_sessions + receiving_session_lines tables (migration 20260514).\nAdds routes/receiving-sessions.js: POST create, POST scan, POST submit, POST cancel, GET.\nAdds services/receivingSession.js: matchScan + reconcileSession.\n7+ bun tests covering scan, over, unexpected, submit/force flow.\n\nPlan: B (P0 floor, Mutant Market 2026-06-15)\nUI side: bluedevilcollectibles/lspro-react PR\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"

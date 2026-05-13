@@ -26,7 +26,7 @@
 #   Q2: The shopops repo default branch is "master" (confirmed from existing YAML).
 #       shopops-storefront default branch assumed "main" — verify before firing.
 #   Q3: Notion page ID is UNKNOWN in this draft. Operator must fill in
-#       the `NOTION_PAGE_ID_PLACEHOLDER` value in the flip-notion node prompt before deploying.
+#       the `35fef4c9-ce00-811d-bf39-c4dc02a5bdc9` value in the flip-notion node prompt before deploying.
 #
 # Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh bdc-storefront-portal-auth-wire.yaml
 #   (copy this file to bdc-harness/.archon/workflows/defaults/ first)
@@ -648,30 +648,7 @@ nodes:
         echo "No staged changes; branch already contains requested work"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-STOREFRONT-PORTAL-AUTH-WIRE-01 — /me/orders + /me/statements portal routes
-
-Adds four /me/* routes to routes/storefront-portal-data.js behind existing
-requirePortalAuth middleware (req.customerId + req.tenantId already set):
-  GET /me/orders          — enriched orders list (joins shipping_queue for DELIVERED derivation)
-  GET /me/orders/:id      — single order with line_items, 404 on wrong customer/tenant
-  GET /me/statements      — statements list (VOID filtered, status vocab mapped)
-  GET /me/statements/:id  — statement with line_items array from billing_statement_lines
-
-Status vocabulary mapping (backend vocab never leaks to portal):
-  SOLD -> PENDING, PAID -> PROCESSING
-  SHIPPED + tracking_number IS NOT NULL -> DELIVERED, SHIPPED (no tracking) -> SHIPPED
-  DRAFT/APPROVED/GENERATED -> PENDING, SENT/PARTIAL -> OUTSTANDING, PAID -> SETTLED
-  VOID rows filtered at query level
-
-DELIVERED is derived (shipping_queue.status='SHIPPED' AND tracking_number IS NOT NULL).
-No new column added to orders table.
-
-Existing GET /purchases and GET /statements preserved unchanged.
-Adds tests/test_storefront_portal_me_routes.js — 5+ bun tests.
-
-Blocks: WO-STOREFRONT-COMMERCE-SPINE-01
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-STOREFRONT-PORTAL-AUTH-WIRE-01 — /me/orders + /me/statements portal routes\n\nAdds four /me/* routes to routes/storefront-portal-data.js behind existing\nrequirePortalAuth middleware (req.customerId + req.tenantId already set):\n  GET /me/orders          — enriched orders list (joins shipping_queue for DELIVERED derivation)\n  GET /me/orders/:id      — single order with line_items, 404 on wrong customer/tenant\n  GET /me/statements      — statements list (VOID filtered, status vocab mapped)\n  GET /me/statements/:id  — statement with line_items array from billing_statement_lines\n\nStatus vocabulary mapping (backend vocab never leaks to portal):\n  SOLD -> PENDING, PAID -> PROCESSING\n  SHIPPED + tracking_number IS NOT NULL -> DELIVERED, SHIPPED (no tracking) -> SHIPPED\n  DRAFT/APPROVED/GENERATED -> PENDING, SENT/PARTIAL -> OUTSTANDING, PAID -> SETTLED\n  VOID rows filtered at query level\n\nDELIVERED is derived (shipping_queue.status='\''SHIPPED'\'' AND tracking_number IS NOT NULL).\nNo new column added to orders table.\n\nExisting GET /purchases and GET /statements preserved unchanged.\nAdds tests/test_storefront_portal_me_routes.js — 5+ bun tests.\n\nBlocks: WO-STOREFRONT-COMMERCE-SPINE-01\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
 
       git push -u origin "$BRANCH"
@@ -722,19 +699,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No staged changes; branch already contains requested work"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(storefront): WO-STOREFRONT-PORTAL-AUTH-WIRE-01 — portal_jwt cookie forwarding
-
-Wires portal_jwt cookie forwarding in lib/storefront-api.ts so Next.js server
-components forward the httpOnly portal_jwt cookie when calling shopops-api.
-
-Pattern: cookies() from next/headers; conditional Cookie header injection.
-Seed path guard preserved — STOREFRONT_DATA_SOURCE=seed skips API calls entirely.
-URL paths unchanged (already correct: /storefront/portal/me/orders etc).
-
-Adds __tests__/lib/storefront-api.test.ts — 4+ tests covering:
-  cookie forwarding when portal_jwt present, seed bypass, header injection.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(storefront): WO-STOREFRONT-PORTAL-AUTH-WIRE-01 — portal_jwt cookie forwarding\n\nWires portal_jwt cookie forwarding in lib/storefront-api.ts so Next.js server\ncomponents forward the httpOnly portal_jwt cookie when calling shopops-api.\n\nPattern: cookies() from next/headers; conditional Cookie header injection.\nSeed path guard preserved — STOREFRONT_DATA_SOURCE=seed skips API calls entirely.\nURL paths unchanged (already correct: /storefront/portal/me/orders etc).\n\nAdds __tests__/lib/storefront-api.test.ts — 4+ tests covering:\n  cookie forwarding when portal_jwt present, seed bypass, header injection.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
 
       git push -u origin "$BRANCH"
@@ -1011,11 +976,11 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
       in the Notes PROPERTY (not as a page comment — Captain CI reads Notes, not comments).
 
       # OPEN QUESTION (Q3): Notion page ID is NOT confirmed in this draft.
-      # Operator MUST replace NOTION_PAGE_ID_PLACEHOLDER with the real UUID before firing.
+      # Operator MUST replace 35fef4c9-ce00-811d-bf39-c4dc02a5bdc9 with the real UUID before firing.
       # Find it: query Notion database a6df831c-0b52-449f-8ca4-d77be6b70d0a
       # for title containing "WO-STOREFRONT-PORTAL-AUTH-WIRE-01".
       Notion database ID: a6df831c-0b52-449f-8ca4-d77be6b70d0a
-      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+      Notion page ID: 35fef4c9-ce00-811d-bf39-c4dc02a5bdc9
 
       Required Notion changes (single update call):
       - Claude Status -> REVIEW

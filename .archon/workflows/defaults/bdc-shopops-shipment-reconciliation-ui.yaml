@@ -232,15 +232,7 @@ nodes:
         echo "No shopops staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — distributor reconcile endpoint
-
-Adds POST /distributor/reconcile (thin compare endpoint).
-Joins request lines (parsed from owner CSV) with shipment_items in date range
-and returns discrepancy summary + per-row category.
-
-ROUGH-OK polish bar — CSV-only v1, fixed template. See spec §13 for v1 limitations.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — distributor reconcile endpoint\n\nAdds POST /distributor/reconcile (thin compare endpoint).\nJoins request lines (parsed from owner CSV) with shipment_items in date range\nand returns discrepancy summary + per-row category.\n\nROUGH-OK polish bar — CSV-only v1, fixed template. See spec §13 for v1 limitations.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "SHOPOPS_SHA=$(git rev-parse HEAD)"
@@ -275,14 +267,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No lspro staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(admin): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — CSV reconcile page
-
-Adds /admin/receiving/reconcile page (CSV upload + discrepancy table).
-Adds src/lib/csv-parse-distributor.ts pure parser.
-
-ROUGH-OK polish bar.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(admin): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — CSV reconcile page\n\nAdds /admin/receiving/reconcile page (CSV upload + discrepancy table).\nAdds src/lib/csv-parse-distributor.ts pure parser.\n\nROUGH-OK polish bar.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin wo/shopops-shipment-reconciliation-ui-01-ui
       EXIST=$(gh pr list --repo bluedevilcollectibles/lspro-react --head wo/shopops-shipment-reconciliation-ui-01-ui --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)

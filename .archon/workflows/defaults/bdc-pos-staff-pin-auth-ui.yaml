@@ -179,13 +179,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(pos): WO-POS-STAFF-PIN-AUTH-UI-01 — PIN login + RoleGate
-
-Adds src/pos/POSLoginPage.tsx + PinPad.tsx + PosAuthContext.tsx + RoleGate.tsx +
-posApiFetch.ts with 7+ vitest tests.
-Gates POS actions by role (clerk/manager/owner) per WO §6 matrix.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(pos): WO-POS-STAFF-PIN-AUTH-UI-01 — PIN login + RoleGate\n\nAdds src/pos/POSLoginPage.tsx + PinPad.tsx + PosAuthContext.tsx + RoleGate.tsx +\nposApiFetch.ts with 7+ vitest tests.\nGates POS actions by role (clerk/manager/owner) per WO §6 matrix.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "SHA=$(git rev-parse HEAD)"

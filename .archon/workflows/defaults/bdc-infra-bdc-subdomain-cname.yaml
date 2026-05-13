@@ -231,15 +231,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "docs(decision): WO-INFRA-BDC-SUBDOMAIN-CNAME-01 — canonical bdc tenant subdomain
-
-Picks canonical: bluedevilcollectibles.comicstoreos.com (Option A, long form).
-Documents 2 options + rationale. Marketing page footer update lives in a
-separate shopops-storefront PR.
-
-ROUGH-OK polish bar — see WO §13.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'docs(decision): WO-INFRA-BDC-SUBDOMAIN-CNAME-01 — canonical bdc tenant subdomain\n\nPicks canonical: bluedevilcollectibles.comicstoreos.com (Option A, long form).\nDocuments 2 options + rationale. Marketing page footer update lives in a\nseparate shopops-storefront PR.\n\nROUGH-OK polish bar — see WO §13.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "BDCXO_SHA=$(git rev-parse HEAD)"

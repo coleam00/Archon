@@ -197,22 +197,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(infra): WO-POS-TERMINAL-HARDWARE-VALIDATION-01 — hardware validation scaffold
-
-Adds shopops-api/scripts/validate-terminal-hardware.js — one-shot CLI to register a
-physical BBPOS reader against Stripe, run a $1 live test charge, capture evidence,
-and refund. Run by operator on Hetzner after WO-POS-TERMINAL-SDK-01 is live.
-
-Adds tests/test_terminal_hardware_validation.js (5+ bun tests with mocked stripe).
-Documents STRIPE_TERMINAL_MODE + STRIPE_LIVE_* keys in .env.example.
-
-Operator runbook:
-  ssh hetzner-prod 'docker exec shopops-api node /app/scripts/validate-terminal-hardware.js \
-    --pairing-code <code> --tenant <id> --location-name \"Mutant Market HQ\"'
-
-Depends on: WO-POS-TERMINAL-SDK-01 (merged)
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(infra): WO-POS-TERMINAL-HARDWARE-VALIDATION-01 — hardware validation scaffold\n\nAdds shopops-api/scripts/validate-terminal-hardware.js — one-shot CLI to register a\nphysical BBPOS reader against Stripe, run a $1 live test charge, capture evidence,\nand refund. Run by operator on Hetzner after WO-POS-TERMINAL-SDK-01 is live.\n\nAdds tests/test_terminal_hardware_validation.js (5+ bun tests with mocked stripe).\nDocuments STRIPE_TERMINAL_MODE + STRIPE_LIVE_* keys in .env.example.\n\nOperator runbook:\n  ssh hetzner-prod '\''docker exec shopops-api node /app/scripts/validate-terminal-hardware.js \\n    --pairing-code <code> --tenant <id> --location-name \"Mutant Market HQ\"'\''\n\nDepends on: WO-POS-TERMINAL-SDK-01 (merged)\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "SHA=$(git rev-parse HEAD)"

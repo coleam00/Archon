@@ -500,29 +500,7 @@ nodes:
         echo "No staged changes; branch already contains requested work"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 — WooCommerce connector
-
-Adds WooCommerce channel connector to shopops-api (mirrors Shopify connector pattern).
-
-New files:
-- shopops-api/services/woocommerceClient.js (wcGet, wcPost, verifyWcWebhookSignature; Basic Auth)
-- shopops-api/routes/woocommerce-import.js  (POST /woocommerce-import/preview + /commit, GET /batches)
-- shopops-api/routes/woocommerce-push.js    (POST /woocommerce-push/preview + /commit)
-- shopops-api/routes/woocommerce-webhooks.js (POST /woocommerce-webhooks/order + X-WC-Webhook-Signature)
-- shopops-api/tests/woocommerce.test.js     (min 5 bun tests: signature, ingest, idempotency, push preview, env fail-closed)
-
-Modified:
-- shopops-api/index.js  (registers /woocommerce-import, /woocommerce-push, /woocommerce-webhooks routes)
-- .env.example          (adds WOOCOMMERCE_WEBHOOK_SECRET placeholder)
-
-WC order status mapping: pending/on-hold->new, processing->paid, completed->fulfilled,
-  cancelled/failed->cancelled, refunded->refunded
-Idempotent upsert: ON CONFLICT (tenant_id, channel, external_order_id) DO UPDATE
-Auth: Basic base64(consumer_key:consumer_secret), timing-safe webhook signature verification
-
-Depends on: WO-SHOPOPS-COMMERCE-SPINE-01 (channel_connections + product_channel_map + channel_orders)
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 — WooCommerce connector\n\nAdds WooCommerce channel connector to shopops-api (mirrors Shopify connector pattern).\n\nNew files:\n- shopops-api/services/woocommerceClient.js (wcGet, wcPost, verifyWcWebhookSignature; Basic Auth)\n- shopops-api/routes/woocommerce-import.js  (POST /woocommerce-import/preview + /commit, GET /batches)\n- shopops-api/routes/woocommerce-push.js    (POST /woocommerce-push/preview + /commit)\n- shopops-api/routes/woocommerce-webhooks.js (POST /woocommerce-webhooks/order + X-WC-Webhook-Signature)\n- shopops-api/tests/woocommerce.test.js     (min 5 bun tests: signature, ingest, idempotency, push preview, env fail-closed)\n\nModified:\n- shopops-api/index.js  (registers /woocommerce-import, /woocommerce-push, /woocommerce-webhooks routes)\n- .env.example          (adds WOOCOMMERCE_WEBHOOK_SECRET placeholder)\n\nWC order status mapping: pending/on-hold->new, processing->paid, completed->fulfilled,\n  cancelled/failed->cancelled, refunded->refunded\nIdempotent upsert: ON CONFLICT (tenant_id, channel, external_order_id) DO UPDATE\nAuth: Basic base64(consumer_key:consumer_secret), timing-safe webhook signature verification\n\nDepends on: WO-SHOPOPS-COMMERCE-SPINE-01 (channel_connections + product_channel_map + channel_orders)\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
 
       git push -u origin "$BRANCH"

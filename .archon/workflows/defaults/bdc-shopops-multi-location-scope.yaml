@@ -380,29 +380,7 @@ nodes:
         echo "No staged changes — nothing to commit"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-SHOPOPS-MULTI-LOCATION-SCOPE-01 — location_id scope on orders/shipments/inventory/distributor-orders
-
-Adds idempotent migration 20260513_multi_location_scope.sql:
-  - CREATE TABLE store_locations IF NOT EXISTS (with seed primary per tenant)
-  - ALTER TABLE ... ADD COLUMN IF NOT EXISTS location_id uuid FK to store_locations
-    on orders, shipments, inventory_items, distributor_orders, channel_orders (if present)
-  - Backfill location_id to each tenant's is_primary location
-  - CREATE INDEX <table>_location_id_idx
-
-Adds middleware/location.js validateLocationId — uuid + tenant ownership check
-Adds services/locationScope.js applyLocationScope — SQL fragment composer
-
-Extends route handlers (orders/shipments/inventory/distributor-orders/channel-orders):
-  - GET: location_id optional (HQ aggregate when absent)
-  - POST/PATCH: location_id required, FK validated
-
-Adds tests/test_multi_location_scope.js — 6 bun tests covering cross-location filter,
-HQ aggregate, invalid uuid, POST require, tenant isolation, middleware unit.
-
-Plan: B (P0 floor for Mutant Market HQ install 2026-06-15)
-Blocks: WO-SHOPOPS-RECEIVING-INTAKE-01 and POS per-location writes
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-SHOPOPS-MULTI-LOCATION-SCOPE-01 — location_id scope on orders/shipments/inventory/distributor-orders\n\nAdds idempotent migration 20260513_multi_location_scope.sql:\n  - CREATE TABLE store_locations IF NOT EXISTS (with seed primary per tenant)\n  - ALTER TABLE ... ADD COLUMN IF NOT EXISTS location_id uuid FK to store_locations\n    on orders, shipments, inventory_items, distributor_orders, channel_orders (if present)\n  - Backfill location_id to each tenant'\''s is_primary location\n  - CREATE INDEX <table>_location_id_idx\n\nAdds middleware/location.js validateLocationId — uuid + tenant ownership check\nAdds services/locationScope.js applyLocationScope — SQL fragment composer\n\nExtends route handlers (orders/shipments/inventory/distributor-orders/channel-orders):\n  - GET: location_id optional (HQ aggregate when absent)\n  - POST/PATCH: location_id required, FK validated\n\nAdds tests/test_multi_location_scope.js — 6 bun tests covering cross-location filter,\nHQ aggregate, invalid uuid, POST require, tenant isolation, middleware unit.\n\nPlan: B (P0 floor for Mutant Market HQ install 2026-06-15)\nBlocks: WO-SHOPOPS-RECEIVING-INTAKE-01 and POS per-location writes\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "BRANCH=${BRANCH}"

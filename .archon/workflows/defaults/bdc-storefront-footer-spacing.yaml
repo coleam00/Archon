@@ -158,14 +158,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "fix(storefront): WO-STOREFRONT-FOOTER-SPACING-01 — separate footer nav items
-
-Adds gap-* (or divider) between Catalog / Pull List / Live Shows / About
-in the storefront portal footer. No other changes.
-
-ROUGH-OK polish bar — see WO §13 for v1 limitations.
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'fix(storefront): WO-STOREFRONT-FOOTER-SPACING-01 — separate footer nav items\n\nAdds gap-* (or divider) between Catalog / Pull List / Live Shows / About\nin the storefront portal footer. No other changes.\n\nROUGH-OK polish bar — see WO §13 for v1 limitations.\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "SHA=$(git rev-parse HEAD)"

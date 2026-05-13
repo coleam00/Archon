@@ -8,7 +8,7 @@
 #      Verify: gh pr list --repo bluedevilcollectibles/shopops --search 'WO-SHOPOPS-MULTI-LOCATION-SCOPE-01' --state merged
 #      AND ssh hetzner-prod 'docker exec shopops-api psql -c "\d pull_list_allocations"' shows location_id
 #   3. Spec at bdc-xo:docs/work-orders/WO-LSPRO-CHAIN-DEMAND-GRID-01.md
-#   4. Notion page ID — fill in NOTION_PAGE_ID_PLACEHOLDER before firing
+#   4. Notion page ID — fill in 35fef4c9-ce00-81f7-8c60-ebed44513508 before firing
 #
 # OPEN QUESTIONS:
 #   Q1: foc_calendar table existence — schema-verify checks; if absent, workflow aborts.
@@ -359,18 +359,7 @@ nodes:
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(da): WO-LSPRO-CHAIN-DEMAND-GRID-01 — chain FOC demand grid
-
-ChainDemandGridPage at /cheers/chain-demand (HQ tier).
-Sticky first col + horizontal scroll for 13+ locations.
-ReallocationModal with optimistic concurrency on save.
-
-Tests: chain-demand-grid.test.tsx (7 Vitest tests).
-
-Companion PR: shopops master wo/lspro-chain-demand-grid-01 (route + builder).
-Depends on: WO-SHOPOPS-MULTI-LOCATION-SCOPE-01 (location_id column).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(da): WO-LSPRO-CHAIN-DEMAND-GRID-01 — chain FOC demand grid\n\nChainDemandGridPage at /cheers/chain-demand (HQ tier).\nSticky first col + horizontal scroll for 13+ locations.\nReallocationModal with optimistic concurrency on save.\n\nTests: chain-demand-grid.test.tsx (7 Vitest tests).\n\nCompanion PR: shopops master wo/lspro-chain-demand-grid-01 (route + builder).\nDepends on: WO-SHOPOPS-MULTI-LOCATION-SCOPE-01 (location_id column).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "UI_BRANCH=$BRANCH"
@@ -398,17 +387,7 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
         echo "No staged changes"
       else
         git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
-          commit -m "feat(api): WO-LSPRO-CHAIN-DEMAND-GRID-01 — chain demand grid endpoint
-
-GET /api/chain/demand-grid + POST /api/chain/demand-grid/reallocate.
-Aggregates pull_list_allocations across all locations for a tenant + FOC week.
-Reallocate validates sum <= total alloc, optimistic concurrency via updated_at.
-
-Tests: test_chain_demand.js (6 bun tests).
-
-Depends on: WO-SHOPOPS-MULTI-LOCATION-SCOPE-01 (location_id column).
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+          commit -m "$(printf 'feat(api): WO-LSPRO-CHAIN-DEMAND-GRID-01 — chain demand grid endpoint\n\nGET /api/chain/demand-grid + POST /api/chain/demand-grid/reallocate.\nAggregates pull_list_allocations across all locations for a tenant + FOC week.\nReallocate validates sum <= total alloc, optimistic concurrency via updated_at.\n\nTests: test_chain_demand.js (6 bun tests).\n\nDepends on: WO-SHOPOPS-MULTI-LOCATION-SCOPE-01 (location_id column).\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
       fi
       git push -u origin "$BRANCH"
       echo "API_BRANCH=$BRANCH"
@@ -577,9 +556,9 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
     prompt: |
       Flip Notion WO-LSPRO-CHAIN-DEMAND-GRID-01 to REVIEW with manifest in Notes property.
 
-      # OPERATOR: Replace NOTION_PAGE_ID_PLACEHOLDER before firing.
+      # OPERATOR: Replace 35fef4c9-ce00-81f7-8c60-ebed44513508 before firing.
       Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
-      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+      Notion page ID: 35fef4c9-ce00-81f7-8c60-ebed44513508
 
       Updates:
       - Claude Status -> REVIEW
