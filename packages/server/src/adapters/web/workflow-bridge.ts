@@ -152,6 +152,14 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         timestamp: Date.now(),
       });
 
+    // Metrics-only events — captured for instrumentation, not forwarded to SSE clients
+    case 'approval_resolved':
+    case 'retry_attempted':
+    case 'workflow_fingerprint':
+    case 'size_proxy_emitted':
+    case 'classifier_emitted':
+      return null;
+
     default: {
       const exhaustiveCheck: never = event;
       getLog().warn(
