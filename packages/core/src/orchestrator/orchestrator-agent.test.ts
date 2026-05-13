@@ -1814,6 +1814,73 @@ describe('stale session ID clearing on error_during_execution', () => {
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
   });
+
+  test('does NOT surface error to user on stop_sequence success (#1425)', async () => {
+    // Regression test for #1425: stop_sequence terminations carry is_error:
+    // true + subtype: 'success' under the Claude SDK contract. The Claude
+    // provider normalises this so the orchestrator sees a clean MessageChunk
+    // (no isError). This test locks in that contract — if a future change to
+    // the orchestrator starts gating errors on stopReason itself, or if the
+    // provider regresses, direct-chat users would once again see "Error:
+    // success" surfaced via classifyAndFormatError.
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'classified' };
+      // Post-fix shape from claude/provider.ts: isError absent, stopReason set.
+      yield {
+        type: 'result',
+        sessionId: 'sid-ok',
+        stopReason: 'stop_sequence',
+      };
+    });
+    mockTransitionSession.mockResolvedValueOnce({
+      id: 'session-1',
+      assistant_session_id: null,
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    // Session id should persist normally — the error path was not taken.
+    expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'sid-ok');
+    // No user-facing error message should have been sent.
+    const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      (c: unknown[]) => c[1] as string
+    );
+    expect(sentMessages.some((m: string) => m.toLowerCase().includes('error'))).toBe(false);
+  });
+
+  test('does NOT surface error when a provider forwards raw SDK pair (defense-in-depth)', async () => {
+    // Defense-in-depth: a third-party IAgentProvider that does not normalise
+    // the SDK's stop_sequence-success pattern would yield isError: true +
+    // errorSubtype: 'success'. The orchestrator guard must skip the error
+    // path on subtype === 'success' so a non-Claude provider can't surface a
+    // spurious error to the user via direct chat.
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'classified' };
+      yield {
+        type: 'result',
+        sessionId: 'sid-ok',
+        isError: true,
+        errorSubtype: 'success',
+        stopReason: 'stop_sequence',
+      };
+    });
+    mockTransitionSession.mockResolvedValueOnce({
+      id: 'session-1',
+      assistant_session_id: null,
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'sid-ok');
+    const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      (c: unknown[]) => c[1] as string
+    );
+    expect(sentMessages.some((m: string) => m.toLowerCase().includes('error'))).toBe(false);
+  });
 });
 
 // ─── Multi-chunk command accumulation regression ──────────────────────────────

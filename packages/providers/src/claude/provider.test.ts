@@ -1246,6 +1246,44 @@ describe('sendQuery decomposition behaviors', () => {
     );
   });
 
+  test('treats is_error: true + subtype: success as clean success (stop_sequence)', async () => {
+    // Claude Agent SDK's SDKResultSuccess explicitly types is_error as boolean
+    // (not literal false). When a model is configured with stop sequences (e.g.
+    // via output_format / json_schema enforcement) the SDK reports is_error:
+    // true alongside subtype: 'success' and stop_reason: 'stop_sequence' — its
+    // way of signalling "non-default termination, but not a failure".
+    // Regression test for #1425.
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        session_id: 'sid-stop-seq',
+        is_error: true,
+        subtype: 'success',
+        stop_reason: 'stop_sequence',
+      };
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({
+      type: 'result',
+      sessionId: 'sid-stop-seq',
+      stopReason: 'stop_sequence',
+    });
+    expect(chunks[0]).not.toHaveProperty('isError');
+    expect(chunks[0]).not.toHaveProperty('errorSubtype');
+    expect(chunks[0]).not.toHaveProperty('errors');
+    expect(mockLogger.error).not.toHaveBeenCalledWith(expect.anything(), 'claude.result_is_error');
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'sid-stop-seq', stopReason: 'stop_sequence' }),
+      'claude.result_success_validated'
+    );
+  });
+
   describe('inline agents (nodeConfig.agents)', () => {
     test('passes inline agents map through to SDK options.agents', async () => {
       mockQuery.mockImplementation(async function* () {

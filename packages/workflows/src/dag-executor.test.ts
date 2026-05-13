@@ -4329,6 +4329,64 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failedData.error).toContain('Subprocess crashed mid-turn');
     });
 
+    it('loop iteration does NOT fail on isError: true + errorSubtype: success', async () => {
+      // Regression test for #1425 (loop-branch counterpart of the main-path
+      // test). Stop_sequence terminations carry is_error: true + subtype:
+      // 'success' under the Claude SDK contract; previously, the loop branch
+      // threw "SDK returned success" and aborted the iteration even though
+      // the AI had completed its work correctly.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Done. DONE.' };
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'success',
+          stopReason: 'stop_sequence',
+          sessionId: 'sid-loop-stop',
+        };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-success-stop-seq-test',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'Do the work. Say DONE.',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failedEvents = eventCalls.filter((call: unknown[]) => {
+        const evt = (call[0] as Record<string, unknown>).event_type as string;
+        return evt === 'node_failed' || evt === 'loop_iteration_failed';
+      });
+      expect(failedEvents).toHaveLength(0);
+    });
+
     it('non-interactive loop is unaffected (no pause)', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Still working...' };
@@ -5695,6 +5753,57 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     >;
     expect(failedData.error).toContain('error_during_execution');
     expect(failedData.error).toContain('permission denied');
+  });
+
+  it('does NOT fail node when SDK returns isError: true + errorSubtype: success', async () => {
+    // Regression test for #1425: stop_sequence terminations under the Claude
+    // SDK contract carry is_error: true + subtype: 'success'. The provider
+    // normalises this, but the executor keeps an explicit guard so a future
+    // provider regression or a third-party IAgentProvider that forwards the
+    // SDK pair raw cannot reintroduce the "SDK returned success" false-failure.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'classified output' };
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'success',
+        stopReason: 'stop_sequence',
+        sessionId: 'sid-stop',
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'success-stop-seq-test',
+        nodes: [{ id: 'classify', command: 'my-cmd' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents).toHaveLength(0);
+
+    const completeCalls = (store.completeWorkflowRun as ReturnType<typeof mock>).mock.calls;
+    expect(completeCalls.length).toBeGreaterThan(0);
   });
 
   it('forwards workflow-level effort to node when no per-node override', async () => {

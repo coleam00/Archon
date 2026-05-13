@@ -903,8 +903,13 @@ async function executeNodeInternal(
         }
         // Fail loudly on any other SDK error result. Previously we broke out of
         // the stream silently, producing empty/partial output without signaling
-        // failure — which let failed iterations masquerade as successes (#1208).
-        if (msg.isError) {
+        // failure — which let failed iterations masquerade as successes.
+        // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+        // clean stop_sequence termination. The Claude provider already filters
+        // this out, but the guard here keeps a third-party IAgentProvider that
+        // forwards the SDK pair raw from producing a "SDK returned success"
+        // false failure.
+        if (msg.isError && msg.errorSubtype !== 'success') {
           const subtype = msg.errorSubtype ?? 'unknown';
           const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
           getLog().error(
@@ -1928,8 +1933,13 @@ async function executeLoopNode(
           // Fail the iteration loudly on SDK error results. Previously we broke
           // silently, producing empty output and continuing to the next iteration —
           // which made `error_during_execution` on resumed interactive loops look
-          // like a "5-second crash" that kept burning iterations (#1208).
-          if (msg.isError) {
+          // like a "5-second crash" that kept burning iterations.
+          // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+          // clean stop_sequence termination (the SDK sets is_error: true alongside
+          // subtype: 'success' to encode "non-default termination, not a failure").
+          // The Claude provider already filters this; the guard here defends
+          // against a third-party IAgentProvider that forwards the SDK pair raw.
+          if (msg.isError && msg.errorSubtype !== 'success') {
             const subtype = msg.errorSubtype ?? 'unknown';
             const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
             getLog().error(
