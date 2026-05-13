@@ -272,7 +272,8 @@ describe('cloneRepository', () => {
       expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
     });
 
-    test('does NOT inject GH_TOKEN into non-github URLs', async () => {
+    test('does NOT inject GH_TOKEN into non-github URLs when no forge token set', async () => {
+      delete process.env.GITLAB_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({
           name: 'owner/repo',
@@ -280,7 +281,6 @@ describe('cloneRepository', () => {
         }) as ReturnType<typeof makeCodebase>
       );
 
-      // Override getProjectSourcePath for gitlab
       await cloneRepository('https://gitlab.com/owner/repo');
 
       const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
@@ -298,6 +298,141 @@ describe('cloneRepository', () => {
         args => args[0] === 'git' && args[1]?.[0] === 'clone'
       );
       expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+    });
+  });
+
+  // ── Multi-forge authentication ────────────────────────────────────────
+  describe('multi-forge authentication', () => {
+    afterAll(() => {
+      delete process.env.GITLAB_TOKEN;
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('injects GITLAB_TOKEN with oauth2: scheme for gitlab.com URLs', async () => {
+      process.env.GITLAB_TOKEN = 'glpat-testtoken456';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://oauth2:glpat-testtoken456@gitlab.com/owner/repo');
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('injects GITLAB_TOKEN for self-hosted GitLab URLs', async () => {
+      process.env.GITLAB_TOKEN = 'glpat-selfhosted';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitlab.mycompany.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitlab.mycompany.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe(
+        'https://oauth2:glpat-selfhosted@gitlab.mycompany.com/owner/repo'
+      );
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('injects GITEA_TOKEN for Gitea URLs', async () => {
+      process.env.GITEA_TOKEN = 'gitea-token-789';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://gitea.myorg.com/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://gitea.myorg.com/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://gitea-token-789@gitea.myorg.com/owner/repo');
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('injects GITEA_TOKEN for Forgejo URLs', async () => {
+      process.env.GITEA_TOKEN = 'forgejo-token';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://forgejo.example.org/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://forgejo.example.org/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://forgejo-token@forgejo.example.org/owner/repo');
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('does not inject auth for unknown forge without token', async () => {
+      delete process.env.GH_TOKEN;
+      delete process.env.GITLAB_TOKEN;
+      delete process.env.GITEA_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://bitbucket.org/owner/repo',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://bitbucket.org/owner/repo');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).toBe('https://bitbucket.org/owner/repo');
+    });
+  });
+
+  // ── resolveForgeAuth unit tests ──────────────────────────────────────────
+  describe('resolveForgeAuth', () => {
+    const { resolveForgeAuth } = require('./clone');
+
+    test('returns GH_TOKEN for github.com', () => {
+      process.env.GH_TOKEN = 'ghp_abc';
+      const result = resolveForgeAuth('https://github.com/owner/repo');
+      expect(result).toEqual({ token: 'ghp_abc', scheme: '' });
+      delete process.env.GH_TOKEN;
+    });
+
+    test('returns GITLAB_TOKEN with oauth2: scheme for gitlab.com', () => {
+      process.env.GITLAB_TOKEN = 'glpat-xyz';
+      const result = resolveForgeAuth('https://gitlab.com/owner/repo');
+      expect(result).toEqual({ token: 'glpat-xyz', scheme: 'oauth2:' });
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('returns undefined token when env var is not set', () => {
+      delete process.env.GH_TOKEN;
+      const result = resolveForgeAuth('https://github.com/owner/repo');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+    });
+
+    test('returns empty for unknown forge', () => {
+      const result = resolveForgeAuth('https://bitbucket.org/owner/repo');
+      expect(result).toEqual({ token: undefined, scheme: '' });
     });
   });
 
