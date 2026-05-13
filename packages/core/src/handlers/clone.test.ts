@@ -404,6 +404,25 @@ describe('cloneRepository', () => {
       );
       expect(cloneCall?.[1]?.[1]).toBe('https://bitbucket.org/owner/repo');
     });
+
+    test('does not leak token when forge name appears only in URL path', async () => {
+      process.env.GITLAB_TOKEN = 'glpat-shouldnotleak';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          name: 'owner/repo',
+          repository_url: 'https://evil.example.com/gitlab/mirror',
+        }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://evil.example.com/gitlab/mirror');
+
+      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
+        args => args[0] === 'git' && args[1]?.[0] === 'clone'
+      );
+      expect(cloneCall?.[1]?.[1]).not.toContain('glpat-shouldnotleak');
+      delete process.env.GITLAB_TOKEN;
+    });
   });
 
   // ── resolveForgeAuth unit tests ──────────────────────────────────────────
@@ -433,6 +452,13 @@ describe('cloneRepository', () => {
     test('returns empty for unknown forge', () => {
       const result = resolveForgeAuth('https://bitbucket.org/owner/repo');
       expect(result).toEqual({ token: undefined, scheme: '' });
+    });
+
+    test('does not match forge name in URL path (security)', () => {
+      process.env.GITLAB_TOKEN = 'glpat-leaked';
+      const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+      delete process.env.GITLAB_TOKEN;
     });
   });
 
