@@ -1,0 +1,461 @@
+# Drafted for WO-HARNESS-WO-GRADER-WORKFLOW-01.
+# Purpose: close the autonomous WO lifecycle by grading REVIEW WOs against
+# their Notes-field manifest and flipping them to DONE or back to IN_PROGRESS.
+#
+# Fire manually:
+#   WO_PAGE_ID=<notion-page-id> WO_ID=<wo-id> bun run cli workflow run bdc-wo-grader --no-worktree "grade WO"
+#
+# Fire by cron:
+#   scripts/trigger-wo-grader.sh
+
+name: bdc-wo-grader
+description: |
+  Use when: A Blue Devil Work Order is at REVIEW and needs Captain-CI-style closeout.
+  Inputs:
+    WO_PAGE_ID: Notion page id for the Work Order. Preferred.
+    WO_ID: Work Order id. Used to query Notion when WO_PAGE_ID is omitted.
+    NOTION_DB_ID: optional override; defaults to the Blue Devil WO database.
+    DRY_RUN: true means read and grade only; do not mutate Notion.
+  Does: Reads the Notes-field manifest, verifies PR state, grep assertions, runtime evidence,
+        and Vercel evidence, then flips REVIEW to DONE or back to IN_PROGRESS with critique.
+  Repo: normally fired from bluedevilcollectibles/bdc-harness.
+  parallel_ok: true
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-wo
+    bash: |
+      set -euo pipefail
+      NOTION_DB_ID="${NOTION_DB_ID:-a6df831c-0b52-449f-8ca4-d77be6b70d0a}"
+      WO_PAGE_ID="${WO_PAGE_ID:-}"
+      WO_ID="${WO_ID:-}"
+      DRY_RUN="${DRY_RUN:-false}"
+
+      if [ -z "${NOTION_API_KEY:-}" ]; then
+        echo "ERROR: NOTION_API_KEY is required for bdc-wo-grader" >&2
+        exit 1
+      fi
+
+      mkdir -p .archon-wo-grader
+
+      python3 - "$NOTION_DB_ID" "$WO_PAGE_ID" "$WO_ID" "$DRY_RUN" <<'PY'
+      import json, os, sys, urllib.request
+
+      db_id, page_id, wo_id, dry_run = sys.argv[1:5]
+      token = os.environ["NOTION_API_KEY"]
+      headers = {
+          "Authorization": f"Bearer {token}",
+          "Notion-Version": "2022-06-28",
+          "Content-Type": "application/json",
+      }
+
+      def notion(method, url, payload=None):
+          data = json.dumps(payload).encode() if payload is not None else None
+          req = urllib.request.Request(url, data=data, headers=headers, method=method)
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              return json.loads(resp.read().decode())
+
+      if not page_id:
+          if not wo_id:
+              raise SystemExit("ERROR: WO_PAGE_ID or WO_ID is required")
+          payload = {
+              "page_size": 5,
+              "filter": {"property": "WO ID", "rich_text": {"contains": wo_id}},
+          }
+          result = notion("POST", f"https://api.notion.com/v1/databases/{db_id}/query", payload)
+          rows = result.get("results", [])
+          if not rows:
+              raise SystemExit(f"ERROR: No Notion WO found for WO_ID={wo_id}")
+          page_id = rows[0]["id"]
+
+      page = notion("GET", f"https://api.notion.com/v1/pages/{page_id}")
+      props = page.get("properties", {})
+
+      def text_prop(name):
+          prop = props.get(name, {})
+          chunks = prop.get(prop.get("type", ""), []) if prop else []
+          return "".join(c.get("plain_text", "") for c in chunks)
+
+      def select_name(name):
+          prop = props.get(name, {})
+          typ = prop.get("type")
+          val = prop.get(typ) if typ else None
+          return (val or {}).get("name")
+
+      notes = text_prop("Notes")
+      title = text_prop("Task")
+      row_wo_id = text_prop("WO ID") or wo_id or title
+      out = {
+          "page_id": page_id,
+          "wo_id": row_wo_id,
+          "title": title,
+          "claude_status": select_name("Claude Status"),
+          "status": select_name("Status"),
+          "builder": select_name("Builder"),
+          "project": select_name("Project"),
+          "priority": select_name("Priority"),
+          "notes": notes,
+          "dry_run": dry_run,
+      }
+      with open(".archon-wo-grader/wo.json", "w", encoding="utf-8") as f:
+          json.dump(out, f, indent=2)
+      print(f"WO_PAGE_ID={page_id}")
+      print(f"WO_ID={row_wo_id}")
+      print(f"CLAUDE_STATUS={out['claude_status']}")
+      print(f"STATUS={out['status']}")
+      print(f"NOTES_BYTES={len(notes.encode('utf-8'))}")
+      PY
+
+  - id: parse-manifest
+    depends_on: [read-wo]
+    bash: |
+      set -euo pipefail
+      python3 <<'PY'
+      import json, re
+
+      wo = json.load(open(".archon-wo-grader/wo.json", encoding="utf-8"))
+      notes = wo.get("notes", "")
+
+      section_names = [
+          "WO", "Builder", "Files created", "Files modified", "Tests", "PRs",
+          "Merge ancestors", "Grep assertions", "Runtime verification",
+          "Vercel deployment", "VALIDATION", "Git commits"
+      ]
+
+      found = {}
+      current = None
+      for raw in notes.splitlines():
+          line = raw.rstrip()
+          m = re.match(r"^([A-Za-z][A-Za-z ]+):\s*(.*)$", line)
+          if m and m.group(1) in section_names:
+              current = m.group(1)
+              found.setdefault(current, [])
+              if m.group(2):
+                  found[current].append(m.group(2))
+              continue
+          if current:
+              found[current].append(line)
+
+      pr_urls = re.findall(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", notes)
+      required = [
+          "WO", "Builder", "Tests", "PRs", "Merge ancestors", "Grep assertions",
+          "Runtime verification", "Vercel deployment", "VALIDATION"
+      ]
+      missing = [s for s in required if s not in found]
+      v2_ok = not missing
+
+      manifest = {
+          "wo_id": wo.get("wo_id"),
+          "sections": found,
+          "missing_sections": missing,
+          "pr_urls": sorted(set(pr_urls)),
+          "v2_ok": v2_ok,
+      }
+      with open(".archon-wo-grader/manifest.json", "w", encoding="utf-8") as f:
+          json.dump(manifest, f, indent=2)
+
+      print(f"MANIFEST_V2_OK={str(v2_ok).lower()}")
+      print("MISSING_SECTIONS=" + ",".join(missing))
+      print(f"PR_COUNT={len(manifest['pr_urls'])}")
+      for url in manifest["pr_urls"]:
+          print(f"PR_URL={url}")
+      PY
+
+  - id: verify-pr-state
+    depends_on: [parse-manifest]
+    bash: |
+      set -euo pipefail
+      python3 <<'PY' > .archon-wo-grader/pr-urls.txt
+      import json
+      m = json.load(open(".archon-wo-grader/manifest.json", encoding="utf-8"))
+      for url in m.get("pr_urls", []):
+          print(url)
+      PY
+
+      : > .archon-wo-grader/pr-state.txt
+      FAILED=0
+      COUNT=0
+      while IFS= read -r url; do
+        [ -z "$url" ] && continue
+        COUNT=$((COUNT + 1))
+        repo=$(printf '%s\n' "$url" | awk -F/ '{print $4 "/" $5}')
+        num=$(printf '%s\n' "$url" | awk -F/ '{print $7}')
+        echo "Checking PR $repo#$num" | tee -a .archon-wo-grader/pr-state.txt
+        if ! json=$(gh pr view "$num" --repo "$repo" --json state,mergedAt,mergeCommit,headRefName,baseRefName,url 2>&1); then
+          echo "FAIL: gh pr view failed for $url: $json" | tee -a .archon-wo-grader/pr-state.txt
+          FAILED=$((FAILED + 1))
+          continue
+        fi
+        printf '%s\n' "$json" >> .archon-wo-grader/pr-state.txt
+        state=$(printf '%s\n' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))')
+        merged_at=$(printf '%s\n' "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("mergedAt") or "")')
+        if [ "$state" != "MERGED" ] || [ -z "$merged_at" ]; then
+          echo "FAIL: PR not merged: $url state=$state mergedAt=$merged_at" | tee -a .archon-wo-grader/pr-state.txt
+          FAILED=$((FAILED + 1))
+        else
+          echo "PASS: PR merged: $url" | tee -a .archon-wo-grader/pr-state.txt
+        fi
+      done < .archon-wo-grader/pr-urls.txt
+
+      echo "PR_CHECKS=$COUNT FAILED=$FAILED"
+      [ "$FAILED" -eq 0 ] || exit 1
+
+  - id: verify-grep-assertions
+    depends_on: [parse-manifest]
+    bash: |
+      set -euo pipefail
+      python3 <<'PY'
+      import json, re
+      m = json.load(open(".archon-wo-grader/manifest.json", encoding="utf-8"))
+      lines = m.get("sections", {}).get("Grep assertions", [])
+      assertions = []
+      for line in lines:
+          s = line.strip()
+          if not s.startswith("-"):
+              continue
+          assertions.append(s[1:].strip())
+      out = {"count": len(assertions), "assertions": assertions}
+      with open(".archon-wo-grader/grep-assertions.json", "w", encoding="utf-8") as f:
+          json.dump(out, f, indent=2)
+      print(f"GREP_ASSERTION_COUNT={len(assertions)}")
+      for a in assertions:
+          print("ASSERTION=" + a)
+      if not assertions:
+          raise SystemExit("ERROR: Grep assertions section has no executable assertions")
+      PY
+
+      # This first version records all assertions and lets the grader-loop judge
+      # exact command safety. Arbitrary command execution from Notion is not allowed.
+      echo "GREP_ASSERTIONS_CAPTURED=true"
+
+  - id: verify-runtime
+    depends_on: [parse-manifest]
+    bash: |
+      set -euo pipefail
+      python3 <<'PY'
+      import json
+      m = json.load(open(".archon-wo-grader/manifest.json", encoding="utf-8"))
+      runtime = "\n".join(m.get("sections", {}).get("Runtime verification", [])).strip()
+      result = {
+          "runtime_text": runtime,
+          "status": "present" if runtime else "missing",
+          "na": runtime.upper().startswith("N/A"),
+      }
+      with open(".archon-wo-grader/runtime.json", "w", encoding="utf-8") as f:
+          json.dump(result, f, indent=2)
+      print(f"RUNTIME_STATUS={result['status']}")
+      print(f"RUNTIME_NA={str(result['na']).lower()}")
+      PY
+
+  - id: verify-vercel
+    depends_on: [parse-manifest]
+    bash: |
+      set -euo pipefail
+      python3 <<'PY'
+      import json, re
+      m = json.load(open(".archon-wo-grader/manifest.json", encoding="utf-8"))
+      text = "\n".join(m.get("sections", {}).get("Vercel deployment", [])).strip()
+      urls = re.findall(r"https://[^\s)]+", text)
+      result = {
+          "vercel_text": text,
+          "status": "present" if text else "missing",
+          "na": text.upper().startswith("N/A"),
+          "urls": urls,
+      }
+      with open(".archon-wo-grader/vercel.json", "w", encoding="utf-8") as f:
+          json.dump(result, f, indent=2)
+      print(f"VERCEL_STATUS={result['status']}")
+      print(f"VERCEL_NA={str(result['na']).lower()}")
+      print(f"VERCEL_URL_COUNT={len(urls)}")
+      PY
+
+  - id: grader-loop
+    depends_on: [verify-pr-state, verify-grep-assertions, verify-runtime, verify-vercel]
+    task_class: medium_work
+    loop:
+      prompt: |
+        You are the BDC WO Grader. Grade this WO at REVIEW using only the evidence below.
+
+        ## Hard Verdicts
+        Return exactly one verdict:
+        - satisfied: manifest v2 present, PRs merged, required evidence exists, no blocker remains.
+        - needs_revision: builder can fix missing/incorrect manifest evidence or failed stop condition.
+        - failed: evidence is structurally unsafe, contradictory, or cannot be trusted.
+
+        ## Evidence
+        read-wo:
+        $read-wo.output
+
+        parse-manifest:
+        $parse-manifest.output
+
+        verify-pr-state:
+        $verify-pr-state.output
+
+        verify-grep-assertions:
+        $verify-grep-assertions.output
+
+        verify-runtime:
+        $verify-runtime.output
+
+        verify-vercel:
+        $verify-vercel.output
+
+        Previous iteration:
+        $LOOP_PREV_OUTPUT
+
+        ## Rules
+        - Do not mark satisfied if the manifest is missing v2 sections.
+        - Do not mark satisfied if any PR is not merged.
+        - Grep assertions captured but not executed are acceptable only if the manifest explicitly says they were run and other evidence supports the claim; otherwise needs_revision.
+        - Runtime verification and Vercel deployment may be N/A only when the WO class makes them not applicable.
+        - Mention unresolved deploy, secret scan, or review failures as blockers.
+
+        ## Required Output
+        Start with:
+        VERDICT: satisfied|needs_revision|failed
+
+        Then:
+        CRITIQUE:
+        - concise bullet list
+
+        ACTION:
+        - If satisfied: flip DONE.
+        - If needs_revision: flip IN_PROGRESS and dispatch builder with critique.
+        - If failed: flip BLOCKED only if the evidence is unsafe; otherwise needs_revision.
+
+        End with:
+        <promise>GRADE_DECISION</promise>
+      until: GRADE_DECISION
+      max_iterations: 3
+      fresh_context: true
+
+  - id: decide
+    depends_on: [grader-loop]
+    bash: |
+      set -euo pipefail
+      verdict=$(printf '%s\n' "$grader-loop.output" | sed -n 's/^VERDICT:[[:space:]]*//p' | head -n 1 | tr '[:upper:]' '[:lower:]')
+      case "$verdict" in
+        satisfied)
+          echo "OUTCOME=satisfied"
+          echo "CLAUDE_STATUS=DONE"
+          echo "STATUS=Done"
+          echo "BUILDER_ACTION=verified"
+          ;;
+        needs_revision)
+          echo "OUTCOME=needs_revision"
+          echo "CLAUDE_STATUS=IN_PROGRESS"
+          echo "STATUS=In Progress"
+          echo "BUILDER_ACTION=reverified"
+          ;;
+        failed)
+          echo "OUTCOME=failed"
+          echo "CLAUDE_STATUS=BLOCKED"
+          echo "STATUS=Blocked"
+          echo "BUILDER_ACTION=escalate_xo"
+          ;;
+        *)
+          echo "ERROR: Could not parse grader verdict from grader-loop output" >&2
+          printf '%s\n' "$grader-loop.output" >&2
+          exit 1
+          ;;
+      esac
+
+  - id: post-builder-status
+    depends_on: [decide]
+    task_class: clerical
+    prompt: |
+      Prepare and, if HTTP tooling is available, post the builder-status payload.
+      Do not expose secrets. If HTTP tooling is unavailable, output the payload for XO.
+
+      Endpoint: https://n8n.bluedevilcollectibles.com/webhook/builder-status
+
+      Payload:
+      {
+        "builder": "bdc-wo-grader",
+        "wo_id": "[WO_ID from $read-wo.output]",
+        "action": "[BUILDER_ACTION from $decide.output]",
+        "detail": "$grader-loop.output"
+      }
+
+  - id: flip-notion
+    depends_on: [post-builder-status]
+    bash: |
+      set -euo pipefail
+      DRY_RUN="${DRY_RUN:-false}"
+      if [ "$DRY_RUN" = "true" ]; then
+        echo "DRY_RUN=true -- skipping Notion mutation"
+        exit 0
+      fi
+      if [ -z "${NOTION_API_KEY:-}" ]; then
+        echo "ERROR: NOTION_API_KEY is required for Notion update" >&2
+        exit 1
+      fi
+
+      DECIDE_OUTPUT=$(cat <<'EOF_DECIDE'
+      $decide.output
+      EOF_DECIDE
+      )
+      GRADER_OUTPUT=$(cat <<'EOF_GRADER'
+      $grader-loop.output
+      EOF_GRADER
+      )
+      export DECIDE_OUTPUT GRADER_OUTPUT
+
+      python3 <<'PY'
+      import json, os, re, sys, urllib.request
+
+      wo = json.load(open(".archon-wo-grader/wo.json", encoding="utf-8"))
+      page_id = wo["page_id"]
+      token = os.environ["NOTION_API_KEY"]
+      decide = os.environ.get("DECIDE_OUTPUT", "")
+      grade = os.environ.get("GRADER_OUTPUT", "")
+
+      def line_value(name, default=""):
+          m = re.search(rf"^{re.escape(name)}=(.+)$", decide, re.M)
+          return m.group(1).strip() if m else default
+
+      claude_status = line_value("CLAUDE_STATUS", "IN_PROGRESS")
+      status = line_value("STATUS", "In Progress")
+      outcome = line_value("OUTCOME", "needs_revision")
+
+      verdict_block = (
+          wo.get("notes", "").rstrip()
+          + "\n\n---\n"
+          + "BDC WO Grader verdict\n"
+          + f"Outcome: {outcome}\n"
+          + grade.strip()
+          + "\n"
+      )
+
+      chunks = []
+      for i in range(0, len(verdict_block), 1800):
+          chunks.append({"type": "text", "text": {"content": verdict_block[i:i+1800]}})
+
+      payload = {
+          "properties": {
+              "Claude Status": {"select": {"name": claude_status}},
+              "Status": {"status": {"name": status}},
+              "Notes": {"rich_text": chunks},
+          }
+      }
+
+      headers = {
+          "Authorization": f"Bearer {token}",
+          "Notion-Version": "2022-06-28",
+          "Content-Type": "application/json",
+      }
+      req = urllib.request.Request(
+          f"https://api.notion.com/v1/pages/{page_id}",
+          data=json.dumps(payload).encode(),
+          headers=headers,
+          method="PATCH",
+      )
+      with urllib.request.urlopen(req, timeout=30) as resp:
+          result = json.loads(resp.read().decode())
+      print(f"NOTION_UPDATED={result.get('id')}")
+      print(f"CLAUDE_STATUS={claude_status}")
+      print(f"STATUS={status}")
+      PY
