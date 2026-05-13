@@ -1385,6 +1385,52 @@ describe('sendQuery decomposition behaviors', () => {
       );
     });
 
+    test('skills without allowed_tools omits tools field so SDK defaults apply', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: {
+          skills: ['agent-browser'],
+          // no allowed_tools → options.tools is undefined
+        },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      const outAgents = callArgs.options.agents as Record<
+        string,
+        { description: string; tools?: string[] }
+      >;
+      // tools should NOT be set — lets SDK provide all default native tools
+      expect(outAgents['dag-node-skills'].tools).toBeUndefined();
+    });
+
+    test('skills with allowed_tools includes Skill in the tools list', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
+        nodeConfig: {
+          skills: ['agent-browser'],
+          allowed_tools: ['Bash', 'Read'],
+        },
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      const outAgents = callArgs.options.agents as Record<
+        string,
+        { description: string; tools?: string[] }
+      >;
+      // tools should include the explicit list plus Skill
+      expect(outAgents['dag-node-skills'].tools).toEqual(['Bash', 'Read', 'Skill']);
+    });
+
     test('does NOT warn when inline agents do not collide with the skills wrapper', async () => {
       mockQuery.mockImplementation(async function* () {
         yield { type: 'result', session_id: 'sid' };
