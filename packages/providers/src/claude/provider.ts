@@ -436,19 +436,20 @@ async function applyNodeConfig(
   if (nodeConfig.skills) {
     const skills = nodeConfig.skills;
     const agentId = 'dag-node-skills';
-    const agentTools = options.tools ? [...(options.tools as string[]), 'Skill'] : ['Skill'];
     const agentDef: {
       description: string;
       prompt: string;
       skills: string[];
-      tools: string[];
+      tools?: string[];
       model?: string;
     } = {
       description: 'DAG node with skills',
       prompt: `You have preloaded skills: ${skills.join(', ')}. Use them when relevant.`,
       skills,
-      tools: agentTools,
     };
+    if (options.tools) {
+      agentDef.tools = [...(options.tools as string[]), 'Skill'];
+    }
     if (options.model) agentDef.model = options.model;
     options.agents = { [agentId]: agentDef };
     options.agent = agentId;
