@@ -298,6 +298,54 @@ describe('substituteWorkflowVariables', () => {
     );
     expect(prompt).toBe('Plain prompt with no loop variable.');
   });
+
+  it('replaces $WORKFLOW_NAME with the workflow name', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Estimating effort for $WORKFLOW_NAME',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'archon-fix-github-issue'
+    );
+    expect(prompt).toBe('Estimating effort for archon-fix-github-issue');
+  });
+
+  it('replaces all occurrences of $WORKFLOW_NAME', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Workflow: $WORKFLOW_NAME ($WORKFLOW_NAME)',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'archon-plan'
+    );
+    expect(prompt).toBe('Workflow: archon-plan (archon-plan)');
+  });
+
+  it('replaces $WORKFLOW_NAME with empty string when not provided', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Workflow: $WORKFLOW_NAME',
+      'run-1',
+      'msg',
+      '/tmp',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('Workflow: ');
+  });
 });
 
 describe('buildPromptWithContext', () => {

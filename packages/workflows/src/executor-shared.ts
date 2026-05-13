@@ -450,6 +450,8 @@ export async function resolveForgeProvider(
  * - $LOOP_PREV_OUTPUT - Cleaned output of the previous loop iteration. Empty string on the
  *   first iteration (no prior output exists). Useful for fresh_context loops that need
  *   to reference what the previous pass produced or why it failed.
+ * - $WORKFLOW_NAME - The human-readable name of the current workflow (e.g., "archon-fix-github-issue").
+ *   Available in bash/script nodes so estimation and analytics nodes can self-reference their workflow.
  *
  * When issueContext is undefined, context variables are replaced with empty string
  * to avoid sending literal "$CONTEXT" to the AI.
@@ -465,7 +467,8 @@ export function substituteWorkflowVariables(
   loopUserInput?: string,
   rejectionReason?: string,
   loopPrevOutput?: string,
-  forgeProvider?: 'github' | 'gitlab'
+  forgeProvider?: 'github' | 'gitlab',
+  workflowName?: string
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -484,6 +487,7 @@ export function substituteWorkflowVariables(
   // Substitute basic variables
   let result = prompt
     .replace(/\$WORKFLOW_ID/g, workflowId)
+    .replace(/\$WORKFLOW_NAME/g, workflowName ?? '')
     .replace(/\$USER_MESSAGE/g, userMessage)
     .replace(/\$ARGUMENTS/g, userMessage)
     .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
@@ -540,7 +544,8 @@ export function buildPromptWithContext(
   docsDir: string,
   issueContext: string | undefined,
   logLabel: string,
-  forgeProvider?: 'github' | 'gitlab'
+  forgeProvider?: 'github' | 'gitlab',
+  workflowName?: string
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -553,7 +558,8 @@ export function buildPromptWithContext(
     undefined,
     undefined,
     undefined,
-    forgeProvider
+    forgeProvider,
+    workflowName
   );
 
   if (issueContext && !contextSubstituted) {
