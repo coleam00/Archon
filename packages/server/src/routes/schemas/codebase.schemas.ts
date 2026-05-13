@@ -15,6 +15,7 @@ export const codebaseSchema = z
     name: z.string(),
     repository_url: z.string().nullable(),
     default_cwd: z.string(),
+    default_branch: z.string().nullable(),
     ai_assistant_type: z.string(),
     commands: z.record(codebaseCommandSchema),
     created_at: z.string(),

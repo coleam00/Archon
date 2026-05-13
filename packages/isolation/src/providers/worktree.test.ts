@@ -92,6 +92,7 @@ describe('WorktreeProvider', () => {
     syncWorkspaceSpy.mockResolvedValue({
       branch: 'main',
       synced: true,
+      state: 'in_sync',
       previousHead: '',
       newHead: '',
       updated: false,
@@ -2229,7 +2230,14 @@ describe('WorktreeProvider', () => {
 
     test('uses resolved base branch as worktree start-point', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
-      syncWorkspaceSpy.mockResolvedValue({ branch: 'develop', synced: true });
+      syncWorkspaceSpy.mockResolvedValue({
+        branch: 'develop',
+        synced: true,
+        state: 'in_sync',
+        previousHead: '',
+        newHead: '',
+        updated: false,
+      });
 
       const configLoader: RepoConfigLoader = async () => ({ baseBranch: 'develop' });
       provider = new WorktreeProvider(configLoader);
@@ -2257,10 +2265,11 @@ describe('WorktreeProvider', () => {
 
       await provider.create(baseRequest);
 
-      // syncWorkspace called with undefined → triggers auto-detect via getDefaultBranch
-      // resetAfterFetch: false because test path is not a managed clone under ~/.archon/workspaces
+      // syncWorkspace called with undefined → triggers auto-detect via getDefaultBranch.
+      // mode: 'fast-forward' because test path is not a managed clone under ~/.archon/workspaces
+      // (managed clones get mode: 'reset' for known-clean base; locally-registered preserves user work).
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2280,7 +2289,7 @@ describe('WorktreeProvider', () => {
 
       // fromBranch is the start-point for the branch, not for sync — sync auto-detects
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2299,7 +2308,7 @@ describe('WorktreeProvider', () => {
       await provider.create(request);
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'main', {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2318,7 +2327,7 @@ describe('WorktreeProvider', () => {
 
       // fromBranch is ignored for non-task types, so syncWorkspace gets undefined → auto-detect
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', undefined, {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
     });
 
@@ -2332,7 +2341,7 @@ describe('WorktreeProvider', () => {
       await provider.create(baseRequest);
 
       expect(syncWorkspaceSpy).toHaveBeenCalledWith('/workspace/owner/repo', 'develop', {
-        resetAfterFetch: false,
+        mode: 'fast-forward',
       });
       expect(getDefaultBranchSpy).not.toHaveBeenCalled();
     });

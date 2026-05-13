@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_codebases (
   name VARCHAR(255) NOT NULL,
   repository_url VARCHAR(500),
   default_cwd VARCHAR(500) NOT NULL,
+  default_branch TEXT,  -- NULL means "not yet detected" (auto-detect at sync); see migration 022
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
   allow_env_keys BOOLEAN NOT NULL DEFAULT FALSE,
   commands JSONB DEFAULT '{}'::jsonb,

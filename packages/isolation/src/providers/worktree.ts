@@ -24,7 +24,7 @@ import {
   toWorktreePath,
   toBranchName,
 } from '@archon/git';
-import type { WorktreeBaseOverride } from '@archon/git';
+import type { SyncMode, WorktreeBaseOverride } from '@archon/git';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import type { RepoPath, WorktreeInfo } from '@archon/git';
 import { copyWorktreeFiles } from '../worktree-copy';
@@ -775,17 +775,26 @@ export class WorktreeProvider implements IIsolationProvider {
         { repoPath, branch: configuredBaseBranch ?? 'auto-detect' },
         'workspace_sync_starting'
       );
-      // Only hard-reset for Archon-managed clones (under ~/.archon/workspaces/).
-      // Locally-registered repos get fetch-only to avoid destroying uncommitted work.
-      const isManagedClone = repoPath
-        .replace(/\\/g, '/')
-        .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
+      // Worktree creation needs a known-clean base on the canonical clone —
+      // for Archon-managed clones (under ~/.archon/workspaces/) we hard-reset.
+      // Locally-registered repos may contain the user's uncommitted work in
+      // the canonical path, so we use the non-destructive fast-forward mode
+      // there and rely on the worktree-add itself to use origin/<branch>.
+      //
+      // Path comparison normalizes trailing slashes and requires a directory
+      // separator boundary so siblings like `<root>/workspaces-old/...` are
+      // not misclassified as managed.
+      const normalizedRepoPath = repoPath.replace(/\\/g, '/').replace(/\/+$/, '');
+      const managedRoot = getArchonWorkspacesPath().replace(/\\/g, '/').replace(/\/+$/, '');
+      const isManagedClone =
+        normalizedRepoPath === managedRoot || normalizedRepoPath.startsWith(`${managedRoot}/`);
+      const mode: SyncMode = isManagedClone ? 'reset' : 'fast-forward';
       const { branch } = await syncWorkspace(
         repoPath,
         configuredBaseBranch ? toBranchName(configuredBaseBranch) : undefined,
-        { resetAfterFetch: isManagedClone }
+        { mode }
       );
-      getLog().debug({ repoPath, branch }, 'workspace_synced');
+      getLog().debug({ repoPath, branch, mode }, 'workspace_synced');
       return branch;
     } catch (error) {
       const err = error as Error & { code?: string };

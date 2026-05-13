@@ -1,7 +1,7 @@
 import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
-import { getDefaultBranch } from './branch';
-import type { RepoPath, BranchName, GitResult, WorkspaceSyncResult } from './types';
+import { getCurrentBranch, getDefaultBranch } from './branch';
+import type { RepoPath, BranchName, GitResult, SyncMode, WorkspaceSyncResult } from './types';
 import { toRepoPath } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -68,38 +68,47 @@ export async function getRemoteUrl(repoPath: RepoPath): Promise<string | null> {
 
 /**
  * Sync workspace with remote origin.
- * Fetches the base branch from origin, then optionally hard-resets the working tree
- * to match `origin/<baseBranch>`.
  *
- * When `resetAfterFetch` is true (default), the working tree is hard-reset to match
- * the remote. This is safe for Archon-managed clones in `~/.archon/workspaces/` but
- * **destructive for user's local working directories** — callers must check the path
- * before enabling reset.
+ * Always fetches `origin/<baseBranch>` (a non-destructive ref update). What
+ * happens next depends on `mode`:
  *
- * When `resetAfterFetch` is false, only `git fetch` runs — the local working tree is
- * untouched. This is safe for locally-registered repos where the user may have
- * uncommitted changes.
+ * - `mode: 'fast-forward'` (default): if HEAD is strictly behind origin and the
+ *   working tree is clean, `git merge --ff-only` is applied. In every other
+ *   case (in_sync / ahead / diverged / dirty) HEAD and working tree are left
+ *   alone. **Cannot destroy local commits or uncommitted changes.** Suitable
+ *   for any path where local work must be preserved (e.g. chat-tick refresh).
+ *
+ * - `mode: 'reset'`: `git reset --hard origin/<baseBranch>` runs after fetch.
+ *   **Destructive** — discards uncommitted changes and pulls HEAD to origin
+ *   even if local commits exist. Suitable only where a known-clean base state
+ *   is required (e.g. immediately before creating a new worktree).
+ *
+ * Both modes return a `state` field describing the observed relationship of
+ * HEAD to origin **before** the operation, plus `updated` indicating whether
+ * HEAD moved as a result.
  *
  * Branch resolution:
- * - If baseBranch is provided: Uses that branch (from config). Fails with actionable
- *   error if the branch doesn't exist - no silent fallback.
- * - If baseBranch is omitted: Auto-detects the default branch via git.
+ * - If baseBranch is provided: uses that branch. Fails with actionable error
+ *   if the branch doesn't exist on origin — no silent fallback.
+ * - If baseBranch is omitted: auto-detects the default branch via git.
  *
  * @param workspacePath - Path to the workspace (canonical repo, not worktree)
- * @param baseBranch - Optional base branch name (e.g., 'main', 'develop'). If omitted, auto-detects default branch
- * @param options - Optional settings. `resetAfterFetch` (default true) controls whether `git reset --hard` runs after fetch.
- * @returns Branch used plus whether sync was performed
- * @throws Error with actionable message if configured branch doesn't exist
+ * @param baseBranch - Optional base branch name. If omitted, auto-detects.
+ * @param options - Optional. `mode` defaults to `'fast-forward'`.
+ * @returns Branch, observed state, head SHAs before/after, and whether HEAD moved.
+ * @throws Error if fetch fails, configured branch doesn't exist on remote, or
+ *         a `'reset'`/ff-merge fails unexpectedly.
  */
 export async function syncWorkspace(
   workspacePath: RepoPath,
   baseBranch?: BranchName,
-  options?: { resetAfterFetch?: boolean }
+  options?: { mode?: SyncMode }
 ): Promise<WorkspaceSyncResult> {
-  const shouldReset = options?.resetAfterFetch ?? true;
+  const mode: SyncMode = options?.mode ?? 'fast-forward';
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath));
 
-  // Fetch from origin to ensure origin/<branchToSync> is up-to-date
+  // Fetch from origin to ensure origin/<branchToSync> is up-to-date.
+  // This only updates refs/remotes/origin — never HEAD or working tree.
   try {
     await execFileAsync('git', ['-C', workspacePath, 'fetch', 'origin', branchToSync], {
       timeout: 60000,
@@ -115,61 +124,171 @@ export async function syncWorkspace(
     ) {
       throw new Error(
         `Configured base branch '${baseBranch}' not found on remote. ` +
-          'Either create the branch, update worktree.baseBranch in .archon/config.yaml, ' +
+          'Either create the branch, update default_branch on the codebase, ' +
           'or remove the setting to use the auto-detected default branch.'
       );
     }
     throw new Error(`Sync fetch from origin/${branchToSync} failed: ${err.message}`);
   }
 
-  if (!shouldReset) {
-    // Fetch-only mode: safe for locally-registered repos with uncommitted changes
-    return { branch: branchToSync, synced: true, previousHead: '', newHead: '', updated: false };
+  // Observe HEAD vs origin/<branchToSync>
+  const previousHead = await readShortSha(workspacePath, 'HEAD');
+  const originSha = await readShortSha(workspacePath, `origin/${branchToSync}`);
+  const dirty = await isDirty(workspacePath);
+
+  // Compute state. `dirty` is reported as the dominant mode when present —
+  // callers that need both ancestor info and dirty info can re-query the repo.
+  let state: WorkspaceSyncResult['state'];
+  if (dirty) {
+    state = 'dirty';
+  } else if (previousHead && originSha && previousHead === originSha) {
+    state = 'in_sync';
+  } else {
+    const headAncestorOfOrigin = await isAncestor(workspacePath, 'HEAD', `origin/${branchToSync}`);
+    const originAncestorOfHead = await isAncestor(workspacePath, `origin/${branchToSync}`, 'HEAD');
+    if (headAncestorOfOrigin && !originAncestorOfHead) state = 'behind';
+    else if (originAncestorOfHead && !headAncestorOfOrigin) state = 'ahead';
+    else state = 'diverged';
   }
 
-  // Capture HEAD before reset so we can report whether anything changed
-  let previousHead = '';
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', workspacePath, 'rev-parse', '--short=8', 'HEAD'],
-      { timeout: 10000 }
-    );
-    previousHead = stdout.trim();
-  } catch {
-    // Non-fatal — fresh clone or detached HEAD edge case
+  if (mode === 'reset') {
+    // Hard-reset working tree and HEAD to origin/<branch>. Destructive —
+    // legitimate only for known-clean-base contexts (worktree creation).
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', workspacePath, 'reset', '--hard', `origin/${branchToSync}`],
+        { timeout: 30000 }
+      );
+    } catch (error) {
+      const err = error as Error;
+      throw new Error(`Reset to origin/${branchToSync} failed: ${err.message}`);
+    }
+    const newHead = await readShortSha(workspacePath, 'HEAD');
+    return {
+      branch: branchToSync,
+      synced: true,
+      state,
+      previousHead,
+      newHead,
+      updated: previousHead !== newHead && previousHead !== '',
+    };
   }
 
-  // Hard-reset local working tree to match origin — only safe for Archon-managed
-  // clones, never for a user's local working directory.
-  try {
-    await execFileAsync('git', ['-C', workspacePath, 'reset', '--hard', `origin/${branchToSync}`], {
-      timeout: 30000,
-    });
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Reset to origin/${branchToSync} failed: ${err.message}`);
+  // mode === 'fast-forward': only safe if behind, tree clean, AND HEAD is on
+  // the target branch. Without the branch check, a topic branch that happens
+  // to be an ancestor of `origin/<branchToSync>` would silently advance to
+  // origin's tip — violating the "non-default branches are preserved" guarantee.
+  if (state === 'behind') {
+    let currentBranch: string | undefined;
+    try {
+      currentBranch = await getCurrentBranch(workspacePath);
+    } catch {
+      // Detached HEAD or unreadable — treat as "not on target branch", noop.
+    }
+
+    if (currentBranch !== branchToSync) {
+      // HEAD is on a different branch (or detached). Skip the merge to
+      // preserve user state; the agent still sees fresh remote refs via fetch.
+      return {
+        branch: branchToSync,
+        synced: true,
+        state,
+        previousHead,
+        newHead: previousHead,
+        updated: false,
+      };
+    }
+
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', workspacePath, 'merge', '--ff-only', `origin/${branchToSync}`],
+        { timeout: 30000 }
+      );
+    } catch (error) {
+      const err = error as Error;
+      throw new Error(`Fast-forward merge to origin/${branchToSync} failed: ${err.message}`);
+    }
+    const newHead = await readShortSha(workspacePath, 'HEAD');
+    return {
+      branch: branchToSync,
+      synced: true,
+      state,
+      previousHead,
+      newHead,
+      updated: previousHead !== newHead && previousHead !== '',
+    };
   }
 
-  let newHead = '';
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', workspacePath, 'rev-parse', '--short=8', 'HEAD'],
-      { timeout: 10000 }
-    );
-    newHead = stdout.trim();
-  } catch {
-    // Non-fatal
-  }
-
+  // No-op for in_sync, ahead, diverged, dirty — local state preserved.
   return {
     branch: branchToSync,
     synced: true,
+    state,
     previousHead,
-    newHead,
-    updated: previousHead !== newHead && previousHead !== '',
+    newHead: previousHead,
+    updated: false,
   };
+}
+
+/** Read short HEAD SHA, return '' on failure (fresh-clone / detached-HEAD edge cases) */
+async function readShortSha(workspacePath: RepoPath, ref: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'rev-parse', '--short=8', ref],
+      { timeout: 10000 }
+    );
+    return stdout.trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Working tree has uncommitted modifications to **tracked** files.
+ *
+ * Untracked files are explicitly excluded (`--untracked-files=no`): they are
+ * safe across all `syncWorkspace` paths, because neither `git merge --ff-only`
+ * nor `git reset --hard origin/<branch>` ever touch untracked files. Treating
+ * untracked files as "dirty" would block fast-forward sync on every macOS
+ * checkout (`.DS_Store`) or every claude/skill cache write — false positives
+ * with no destructive risk to defend against.
+ *
+ * (Distinct from `branch.ts:hasUncommittedChanges`, which keeps the broader
+ * default for worktree-cleanup safety and intentionally refuses to delete
+ * worktrees that have any local files at all.)
+ */
+async function isDirty(workspacePath: RepoPath): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'status', '--porcelain', '--untracked-files=no'],
+      { timeout: 10000 }
+    );
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Ancestor check via `git merge-base --is-ancestor` (true if `ancestor` is reachable from `descendant`) */
+async function isAncestor(
+  workspacePath: RepoPath,
+  ancestor: string,
+  descendant: string
+): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'git',
+      ['-C', workspacePath, 'merge-base', '--is-ancestor', ancestor, descendant],
+      { timeout: 10000 }
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
