@@ -299,6 +299,26 @@ export function substituteNodeOutputRefs(
       if (!field) {
         return escapedForBash ? shellQuote(nodeOutput.output) : nodeOutput.output;
       }
+      // Prefer the provider-supplied structured payload when present. Providers that emit
+      // fence-wrapped or preamble-prefixed JSON (Pi/Minimax) parse it onto the result chunk
+      // via tryParseStructuredOutput; consuming that object directly avoids re-parsing prose
+      // here. Falls back to JSON.parse on output for providers that don't normalize
+      // (or for older NodeOutput rows from before this field existed).
+      const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
+      if (
+        structured !== undefined &&
+        structured !== null &&
+        typeof structured === 'object' &&
+        !Array.isArray(structured)
+      ) {
+        const value = (structured as Record<string, unknown>)[field];
+        if (typeof value === 'string') return escapedForBash ? shellQuote(value) : value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        if (Array.isArray(value) || typeof value === 'object') {
+          return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
+        }
+        return escapedForBash ? "''" : '';
+      }
       try {
         const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
         const value = parsed[field];
@@ -1210,6 +1230,7 @@ async function executeNodeInternal(
       output: nodeOutputText,
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
     };
   } catch (error) {
     const err = error as Error;
@@ -1780,6 +1801,7 @@ async function executeLoopNode(
     : '';
 
   let lastIterationOutput = '';
+  let lastIterationStructuredOutput: unknown;
   let loopTotalCostUsd: number | undefined;
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
@@ -1929,6 +1951,9 @@ async function executeLoopNode(
           if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
           if (msg.numTurns !== undefined) {
             loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
+          }
+          if (msg.structuredOutput !== undefined) {
+            lastIterationStructuredOutput = msg.structuredOutput;
           }
           // Fail the iteration loudly on SDK error results. Previously we broke
           // silently, producing empty output and continuing to the next iteration —
@@ -2235,6 +2260,9 @@ async function executeLoopNode(
         output: lastIterationOutput,
         sessionId: currentSessionId,
         costUsd: loopTotalCostUsd,
+        ...(lastIterationStructuredOutput !== undefined
+          ? { structuredOutput: lastIterationStructuredOutput }
+          : {}),
       };
     }
 

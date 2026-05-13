@@ -21,12 +21,23 @@ mock.module('@archon/paths', () => ({
 import { evaluateCondition } from './condition-evaluator';
 import type { NodeOutput } from './schemas';
 
+/**
+ * Build a NodeOutput fixture for condition tests.
+ * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
+ * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
+ * paths populate it; older providers leave it off).
+ */
 function makeOutput(
   output: string,
-  state: 'completed' | 'failed' | 'skipped' = 'completed'
+  state: 'completed' | 'failed' | 'skipped' = 'completed',
+  structuredOutput?: unknown
 ): NodeOutput {
-  if (state === 'failed') return { state, output, error: 'error' };
-  return { state, output };
+  if (state === 'failed')
+    return structuredOutput !== undefined
+      ? { state, output, error: 'error', structuredOutput }
+      : { state, output, error: 'error' };
+  if (state === 'skipped') return { state, output };
+  return structuredOutput !== undefined ? { state, output, structuredOutput } : { state, output };
 }
 
 describe('evaluateCondition', () => {
@@ -357,5 +368,110 @@ describe('evaluateCondition', () => {
     const res = evaluateCondition("$n.output == 'A||B'", outputs);
     expect(res.result).toBe(true);
     expect(res.parsed).toBe(true);
+  });
+
+  // --- structuredOutput preference (Pi/Minimax fence-wrapped JSON, Codex/Claude output_format) ---
+
+  it('structuredOutput: prefers structuredOutput.field over JSON.parse(output)', () => {
+    // Pi-shape: prose output with structuredOutput populated by tryParseStructuredOutput.
+    // If we fell back to JSON.parse(output) we would read 'WRONG'; structuredOutput says 'BUG'.
+    const outputs = new Map([
+      [
+        'classify',
+        makeOutput('Here is the classification: {"type":"WRONG"}', 'completed', {
+          type: 'BUG',
+          confidence: 0.9,
+        }),
+      ],
+    ]);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
+    expect(evaluateCondition("$classify.output.type == 'WRONG'", outputs).result).toBe(false);
+  });
+
+  it('structuredOutput: falls back to JSON.parse(output) when structuredOutput is absent', () => {
+    // Claude/Codex backward-compat: no structuredOutput on the NodeOutput, JSON in `output`.
+    const outputs = new Map([['classify', makeOutput(JSON.stringify({ type: 'BUG' }))]]);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: coerces numeric field to string', () => {
+    const outputs = new Map([['score', makeOutput('', 'completed', { confidence: 0.95 })]]);
+    expect(evaluateCondition("$score.output.confidence == '0.95'", outputs).result).toBe(true);
+    expect(evaluateCondition("$score.output.confidence >= '0.9'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: coerces boolean field to string', () => {
+    const outputs = new Map([['n', makeOutput('', 'completed', { valid: true })]]);
+    expect(evaluateCondition("$n.output.valid == 'true'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: JSON-stringifies object/array fields', () => {
+    const outputs = new Map([
+      ['n', makeOutput('', 'completed', { items: ['a', 'b'], nested: { x: 1 } })],
+    ]);
+    const expectedItems = JSON.stringify(['a', 'b']);
+    expect(evaluateCondition("$n.output.items == '" + expectedItems + "'", outputs).result).toBe(
+      true
+    );
+    const expectedNested = JSON.stringify({ x: 1 });
+    expect(evaluateCondition("$n.output.nested == '" + expectedNested + "'", outputs).result).toBe(
+      true
+    );
+  });
+
+  it('structuredOutput: null field value JSON-stringifies to "null"', () => {
+    // Matches existing JSON.parse-path behavior: typeof null === 'object' so null → "null".
+    const outputs = new Map([['n', makeOutput('', 'completed', { type: null })]]);
+    expect(evaluateCondition("$n.output.type == 'null'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: works with empty output text (Pi-only-structured case)', () => {
+    // structuredOutput populated, output text empty — dot-access should still work.
+    const outputs = new Map([['classify', makeOutput('', 'completed', { type: 'BUG' })]]);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: null at top level falls through to JSON.parse fallback', () => {
+    // structuredOutput === null is not an object → must skip the preference branch and use output.
+    const outputs = new Map([
+      ['n', makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', null)],
+    ]);
+    expect(evaluateCondition("$n.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: top-level array falls through to JSON.parse fallback', () => {
+    // structuredOutput is array → ambiguous semantics for `.field` access, fall through.
+    const outputs = new Map([
+      ['n', makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', [1, 2, 3])],
+    ]);
+    expect(evaluateCondition("$n.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: primitive at top level falls through to JSON.parse fallback', () => {
+    const outputs = new Map([
+      ['n', makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', 'just-a-string')],
+    ]);
+    expect(evaluateCondition("$n.output.type == 'BUG'", outputs).result).toBe(true);
+  });
+
+  it('structuredOutput: missing field resolves to empty string (no JSON.parse retry)', () => {
+    // When structuredOutput is a usable object but the field is missing, we do NOT retry
+    // JSON.parse(output) — the structuredOutput is authoritative.
+    const outputs = new Map([
+      [
+        'classify',
+        makeOutput(JSON.stringify({ type: 'BUG' }), 'completed', {
+          /* no `type` key */ confidence: 0.9,
+        }),
+      ],
+    ]);
+    expect(evaluateCondition("$classify.output.type == ''", outputs).result).toBe(true);
+    expect(evaluateCondition("$classify.output.type == 'BUG'", outputs).result).toBe(false);
+  });
+
+  it('structuredOutput: unfielded $node.output reference still uses output text', () => {
+    // The preference applies to dot-notation only. Bare `$n.output` falls back to output text.
+    const outputs = new Map([['n', makeOutput('prose text', 'completed', { type: 'BUG' })]]);
+    expect(evaluateCondition("$n.output == 'prose text'", outputs).result).toBe(true);
   });
 });

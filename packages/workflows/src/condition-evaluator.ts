@@ -38,11 +38,33 @@ function resolveOutputRef(
     getLog().warn({ nodeId }, 'condition_output_ref_unknown_node');
     return '';
   }
+  if (!field) {
+    // For unfielded ref, structuredOutput shape is opaque — defer to output text (which is
+    // empty for failed nodes, matching the historical fail-closed contract).
+    if (!nodeOutput.output) return '';
+    return nodeOutput.output;
+  }
+
+  // Dot notation: prefer the provider-supplied parsed object when present. This avoids
+  // JSON.parse on fence-wrapped/preamble-prefixed payloads (Pi/Minimax) and on output text
+  // that has already been overridden by structuredOutput (Claude/Codex with output_format).
+  const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
+  if (
+    structured !== undefined &&
+    structured !== null &&
+    typeof structured === 'object' &&
+    !Array.isArray(structured)
+  ) {
+    const value = (structured as Record<string, unknown>)[field];
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+    return ''; // null, undefined, symbol, bigint → empty
+  }
+
+  // Fallback: parse output text. Backward-compatible path for older NodeOutput rows or
+  // providers that don't emit a structured payload on the result chunk.
   if (!nodeOutput.output) return '';
-
-  if (!field) return nodeOutput.output;
-
-  // Dot notation: parse JSON and access field
   try {
     const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
     const value = parsed[field];
