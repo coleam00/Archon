@@ -904,7 +904,12 @@ async function executeNodeInternal(
         // Fail loudly on any other SDK error result. Previously we broke out of
         // the stream silently, producing empty/partial output without signaling
         // failure — which let failed iterations masquerade as successes (#1208).
-        if (msg.isError) {
+        // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+        // clean stop_sequence termination. The provider already filters this
+        // out, but the guard here keeps a third-party IAgentProvider that
+        // forwards the SDK pair raw from producing a "SDK returned success"
+        // false failure (#1425).
+        if (msg.isError && msg.errorSubtype !== 'success') {
           const subtype = msg.errorSubtype ?? 'unknown';
           const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
           getLog().error(
@@ -1929,7 +1934,10 @@ async function executeLoopNode(
           // silently, producing empty output and continuing to the next iteration —
           // which made `error_during_execution` on resumed interactive loops look
           // like a "5-second crash" that kept burning iterations (#1208).
-          if (msg.isError) {
+          // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+          // clean stop_sequence termination — see the corresponding guard in the
+          // main node path above (#1425).
+          if (msg.isError && msg.errorSubtype !== 'success') {
             const subtype = msg.errorSubtype ?? 'unknown';
             const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
             getLog().error(
