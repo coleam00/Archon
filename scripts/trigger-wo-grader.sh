@@ -125,11 +125,25 @@ while IFS=$'\t' read -r page_id wo_id; do
   if [ "$DRY_RUN" = "true" ]; then
     continue
   fi
-  (
-    cd "$ARCHON_DIR"
-    WO_PAGE_ID="$page_id" \
-    WO_ID="$wo_id" \
-    NOTION_DB_ID="$NOTION_DB_ID" \
-    bun run cli workflow run bdc-wo-grader --no-worktree "Grade ${wo_id} at REVIEW"
-  )
+  if command -v bun >/dev/null 2>&1; then
+    (
+      cd "$ARCHON_DIR"
+      WO_PAGE_ID="$page_id" \
+      WO_ID="$wo_id" \
+      NOTION_DB_ID="$NOTION_DB_ID" \
+      bun run cli workflow run bdc-wo-grader --no-worktree "Grade ${wo_id} at REVIEW"
+    )
+  elif command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -qx 'archon-app-1'; then
+    docker exec \
+      -e "WO_PAGE_ID=$page_id" \
+      -e "WO_ID=$wo_id" \
+      -e "NOTION_DB_ID=$NOTION_DB_ID" \
+      -e "NOTION_API_KEY=$NOTION_API_KEY" \
+      -e "GITHUB_TOKEN=${GITHUB_TOKEN:-}" \
+      archon-app-1 \
+      sh -lc "cd /app && bun run cli workflow run bdc-wo-grader --no-worktree \"Grade ${wo_id} at REVIEW\""
+  else
+    echo "ERROR: neither host bun nor archon-app-1 docker runtime is available" >&2
+    exit 1
+  fi
 done < "$TMP_DIR/review-wos.tsv"
