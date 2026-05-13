@@ -706,6 +706,32 @@ describe('registerRepository', () => {
     expect(createArg.name).toBe('acme/backend');
   });
 
+  test('builds owner/repo name from non-GitHub SSH remote URL without colon in name', async () => {
+    // GitLab / self-hosted SSH URLs: git@host:org/repo — the host must NOT appear in
+    // the codebase name or worktree path because colons break Java classpaths on Unix.
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({
+          stdout: 'git@gitlab.example.com:myorg/myproject.git',
+          stderr: '',
+        });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    mockCreateCodebase.mockResolvedValueOnce(
+      makeCodebase({ name: 'myorg/myproject' }) as ReturnType<typeof makeCodebase>
+    );
+
+    await registerRepository('/home/user/myproject');
+
+    const createArg = mockCreateCodebase.mock.calls[0]?.[0] as { name: string };
+    // Must be plain owner/repo — no SSH host, no colon
+    expect(createArg.name).toBe('myorg/myproject');
+    expect(createArg.name).not.toContain(':');
+    expect(createArg.name).not.toContain('@');
+  });
+
   // ── Command auto-loading ───────────────────────────────────────────────
   test('auto-loads markdown commands found in .archon/commands', async () => {
     spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {

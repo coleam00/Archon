@@ -328,16 +328,20 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   let ownerName = '_local';
   if (remoteUrl) {
     const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
-    let workingRemote = cleaned;
-    if (cleaned.startsWith('git@github.com:')) {
-      workingRemote = cleaned.replace('git@github.com:', 'https://github.com/');
-    }
-    const parts = workingRemote.split('/');
-    const r = parts.pop();
-    const o = parts.pop();
-    if (o && r) {
-      name = `${o}/${r}`;
-      ownerName = o;
+    // Handle any SSH git URL (git@host:owner/repo) by extracting just owner/repo.
+    // This avoids colons in worktree paths, which break Java classpaths on Unix.
+    const sshMatch = /^git@[^:]+:([^/]+)\/(.+)$/.exec(cleaned);
+    if (sshMatch) {
+      name = `${sshMatch[1]}/${sshMatch[2]}`;
+      ownerName = sshMatch[1];
+    } else {
+      const parts = cleaned.split('/');
+      const r = parts.pop();
+      const o = parts.pop();
+      if (o && r) {
+        name = `${o}/${r}`;
+        ownerName = o;
+      }
     }
   }
 
