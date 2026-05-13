@@ -561,6 +561,62 @@ export function buildTopologicalLayers(nodes: readonly DagNode[]): DagNode[][] {
   return layers;
 }
 
+/** Issue-type enum values — used to distinguish `type: "bug"` from other generic `type` fields. */
+const ISSUE_TYPE_VALUES = new Set([
+  'bug',
+  'feature',
+  'enhancement',
+  'refactor',
+  'chore',
+  'documentation',
+]);
+
+/**
+ * Returns true when a structured output object contains at least one recognised
+ * classifier field. Used to auto-emit `classifier_emitted` from any node whose
+ * `output_format` produces classification data without explicit YAML wiring.
+ */
+function isClassifierOutput(output: unknown): output is Record<string, unknown> {
+  if (typeof output !== 'object' || output === null || Array.isArray(output)) return false;
+  const obj = output as Record<string, unknown>;
+  return (
+    'issue_type' in obj ||
+    'area' in obj ||
+    'complexity' in obj ||
+    'confidence' in obj ||
+    // 'scope' alone is too generic; require it alongside at least one other classifier-leaning field
+    ('scope' in obj && ('issue_type' in obj || 'area' in obj || 'complexity' in obj)) ||
+    // 'type' only counts when its value is a known issue-type enum (avoids false positives like { type: "pr" })
+    ('type' in obj && typeof obj.type === 'string' && ISSUE_TYPE_VALUES.has(obj.type))
+  );
+}
+
+/**
+ * Extract the standard classifier fields from a structured output object.
+ */
+function extractClassifierFields(output: Record<string, unknown>): {
+  issueType?: string;
+  area?: string;
+  scope?: string;
+  confidence?: string;
+  rawFields: Record<string, unknown>;
+} {
+  const issueTypeRaw =
+    output.issue_type ??
+    (typeof output.type === 'string' && ISSUE_TYPE_VALUES.has(output.type)
+      ? output.type
+      : undefined);
+  const scopeRaw = output.scope ?? output.complexity;
+
+  return {
+    ...(typeof issueTypeRaw === 'string' ? { issueType: issueTypeRaw } : {}),
+    ...(typeof output.area === 'string' ? { area: output.area } : {}),
+    ...(typeof scopeRaw === 'string' ? { scope: scopeRaw } : {}),
+    ...(typeof output.confidence === 'string' ? { confidence: output.confidence } : {}),
+    rawFields: output,
+  };
+}
+
 /**
  * Execute a single DAG node. Returns NodeExecutionResult regardless of success/failure.
  * Always accumulates assistant text output (for $node_id.output substitution).
@@ -1197,7 +1253,23 @@ async function executeNodeInternal(
       ...(nodeCostUsd !== undefined ? { costUsd: nodeCostUsd } : {}),
       ...(nodeStopReason ? { stopReason: nodeStopReason } : {}),
       ...(nodeNumTurns !== undefined ? { numTurns: nodeNumTurns } : {}),
+      ...(nodeTokens?.input !== undefined ? { tokensIn: nodeTokens.input } : {}),
+      ...(nodeTokens?.output !== undefined ? { tokensOut: nodeTokens.output } : {}),
+      ...(nodeTokens?.cacheRead !== undefined ? { cacheRead: nodeTokens.cacheRead } : {}),
+      ...(nodeTokens?.cacheWrite !== undefined ? { cacheWrite: nodeTokens.cacheWrite } : {}),
     });
+
+    // Auto-emit classifier_emitted when this node's structured output carries
+    // recognised classification fields. Fully automatic — any workflow using
+    // `output_format: object` with issue_type/area/scope/etc. emits without YAML changes.
+    if (structuredOutput !== undefined && isClassifierOutput(structuredOutput)) {
+      emitter.emit({
+        type: 'classifier_emitted',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        ...extractClassifierFields(structuredOutput),
+      });
+    }
 
     // Clean up throttle entries on completion
     lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
@@ -3195,6 +3267,7 @@ export async function executeDagWorkflow(
     runId: workflowRun.id,
     workflowName: workflow.name,
     duration,
+    ...(totalCostUsd > 0 ? { totalCostUsd } : {}),
   });
   deps.store
     .createWorkflowEvent({

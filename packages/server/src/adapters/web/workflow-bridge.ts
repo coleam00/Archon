@@ -156,6 +156,8 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
     case 'approval_resolved':
     case 'retry_attempted':
     case 'workflow_fingerprint':
+    case 'size_proxy_emitted':
+    case 'classifier_emitted':
       return null;
 
     default: {

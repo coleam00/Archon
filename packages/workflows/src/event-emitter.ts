@@ -29,6 +29,8 @@ interface WorkflowStartedEvent {
   runId: string;
   workflowName: string;
   conversationId: string;
+  /** Total number of nodes defined in the workflow (for metrics). */
+  nodesTotal?: number;
 }
 
 interface WorkflowCompletedEvent {
@@ -36,6 +38,8 @@ interface WorkflowCompletedEvent {
   runId: string;
   workflowName: string;
   duration: number;
+  /** Sum of all per-node cost in USD, when at least one node reported cost. */
+  totalCostUsd?: number;
 }
 
 interface WorkflowFailedEvent {
@@ -97,6 +101,14 @@ interface NodeCompletedEvent {
   costUsd?: number;
   stopReason?: string;
   numTurns?: number;
+  /** Input tokens used by this node (for metrics). */
+  tokensIn?: number;
+  /** Output tokens used by this node (for metrics). */
+  tokensOut?: number;
+  /** Cache read tokens (for metrics). */
+  cacheRead?: number;
+  /** Cache write tokens (for metrics). */
+  cacheWrite?: number;
 }
 
 interface NodeFailedEvent {
@@ -178,6 +190,36 @@ interface WorkflowFingerprintEvent {
   claudeMdHash?: string;
 }
 
+interface SizeProxyEmittedEvent {
+  type: 'size_proxy_emitted';
+  runId: string;
+  /** Word count of the workflow's input message (userMessage / $ARGUMENTS). */
+  inputWordCount?: number;
+  /** Lines added vs. base branch (git diff --shortstat). */
+  gitAdditions?: number;
+  /** Lines deleted vs. base branch (git diff --shortstat). */
+  gitDeletions?: number;
+  /** Number of files changed vs. base branch (git diff --shortstat). */
+  gitChangedFiles?: number;
+}
+
+interface ClassifierEmittedEvent {
+  type: 'classifier_emitted';
+  runId: string;
+  /** The node ID whose structured output contained classifier fields. */
+  nodeId: string;
+  /** issue_type or type field value (bug/feature/enhancement/refactor/chore/documentation). */
+  issueType?: string;
+  /** Area of the codebase (web-ui/api/cli/db/etc). */
+  area?: string;
+  /** Scope or complexity (small/medium/large/trivial). */
+  scope?: string;
+  /** Confidence level (high/medium/low). */
+  confidence?: string;
+  /** All fields from the structured output for extensibility. */
+  rawFields: Record<string, unknown>;
+}
+
 export type WorkflowEmitterEvent =
   | WorkflowStartedEvent
   | WorkflowCompletedEvent
@@ -196,6 +238,8 @@ export type WorkflowEmitterEvent =
   | ApprovalResolvedEvent
   | RetryAttemptedEvent
   | WorkflowFingerprintEvent
+  | SizeProxyEmittedEvent
+  | ClassifierEmittedEvent
   | WorkflowCancelledEvent;
 
 // ---------------------------------------------------------------------------

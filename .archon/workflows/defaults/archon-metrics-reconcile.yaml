@@ -1,0 +1,134 @@
+name: archon-metrics-reconcile
+description: |
+  Use when: Daily reconciliation of workflow metrics with GitHub PR outcomes.
+  Triggers: "reconcile metrics", "update metrics outcomes", "metrics reconcile".
+  Does: Finds metrics.json files with null outcome_followup fields -> queries GitHub for
+        PR status -> updates metrics.json files with merged/CI results -> reports summary.
+  NOT for: Viewing metrics (use jq directly on runs.jsonl), or first-time metrics setup.
+
+nodes:
+  - id: find-pending
+    bash: |
+      set -euo pipefail
+      ARTIFACTS_DIR_BASE="$HOME/.archon/workspaces"
+
+      echo "Scanning for metrics.json files with pending outcome_followup..."
+
+      # Find metrics.json files modified in the last 30 days where pr_merged is still null.
+      find "$ARTIFACTS_DIR_BASE" -name "metrics.json" -mtime -30 2>/dev/null | while read -r f; do
+        PR_MERGED=$(jq -r '.outcome_followup.pr_merged // "null"' "$f" 2>/dev/null)
+        if [ "$PR_MERGED" = "null" ]; then
+          echo "$f"
+        fi
+      done | tee /tmp/pending-metrics-files.txt
+
+      COUNT=$(wc -l < /tmp/pending-metrics-files.txt | tr -d ' ')
+      echo "Found $COUNT metrics files with pending outcome_followup"
+
+  - id: reconcile-outcomes
+    depends_on: [find-pending]
+    bash: |
+      set -euo pipefail
+
+      if [ ! -s /tmp/pending-metrics-files.txt ]; then
+        echo "No pending metrics files to reconcile."
+        exit 0
+      fi
+
+      UPDATED=0
+      SKIPPED=0
+      ERRORS=0
+
+      while IFS= read -r metrics_file; do
+        ARTIFACTS_DIR=$(dirname "$metrics_file")
+        PR_NUMBER_FILE="$ARTIFACTS_DIR/.pr-number"
+        PR_URL_FILE="$ARTIFACTS_DIR/.pr-url"
+
+        PR_NUMBER=""
+        if [ -f "$PR_NUMBER_FILE" ]; then
+          PR_NUMBER=$(cat "$PR_NUMBER_FILE" | tr -d '[:space:]')
+        fi
+
+        if [ -z "$PR_NUMBER" ] && [ -f "$PR_URL_FILE" ]; then
+          # Extract PR number from a URL like https://github.com/owner/repo/pull/123
+          PR_NUMBER=$(grep -oE '/pull/[0-9]+' "$PR_URL_FILE" | grep -oE '[0-9]+' | head -1)
+        fi
+
+        if [ -z "$PR_NUMBER" ]; then
+          SKIPPED=$((SKIPPED + 1))
+          echo "SKIP (no PR number): $metrics_file"
+          continue
+        fi
+
+        REPO=$(jq -r '.codebase_fingerprint.repo // empty' "$metrics_file" 2>/dev/null)
+        if [ -z "$REPO" ]; then
+          SKIPPED=$((SKIPPED + 1))
+          echo "SKIP (no repo fingerprint): $metrics_file"
+          continue
+        fi
+
+        PR_DATA=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+          --json number,state,mergedAt,statusCheckRollup 2>/dev/null || echo "")
+
+        if [ -z "$PR_DATA" ]; then
+          ERRORS=$((ERRORS + 1))
+          echo "ERROR (gh query failed): PR #$PR_NUMBER in $REPO"
+          continue
+        fi
+
+        PR_STATE=$(echo "$PR_DATA" | jq -r '.state // empty')
+        MERGED_AT=$(echo "$PR_DATA" | jq -r '.mergedAt // empty')
+        CI_STATE=$(echo "$PR_DATA" | jq -r '.statusCheckRollup[0].state // empty')
+
+        PR_MERGED_BOOL="false"
+        MERGED_AT_ARG="null"
+        CI_PASSED_ARG="null"
+
+        if [ "$PR_STATE" = "MERGED" ]; then
+          PR_MERGED_BOOL="true"
+          if [ -n "$MERGED_AT" ]; then
+            MERGED_AT_ARG="\"$MERGED_AT\""
+          fi
+        fi
+
+        if [ "$CI_STATE" = "SUCCESS" ]; then
+          CI_PASSED_ARG="true"
+        elif [ "$CI_STATE" = "FAILURE" ] || [ "$CI_STATE" = "ERROR" ]; then
+          CI_PASSED_ARG="false"
+        fi
+
+        UPDATED_JSON=$(jq \
+          --argjson prNumber "$PR_NUMBER" \
+          --argjson prMerged "$PR_MERGED_BOOL" \
+          --argjson prMergedAt "$MERGED_AT_ARG" \
+          --argjson ciPassed "$CI_PASSED_ARG" \
+          '.outcome_followup.pr_number = $prNumber
+           | .outcome_followup.pr_merged = $prMerged
+           | .outcome_followup.pr_merged_at = $prMergedAt
+           | .outcome_followup.ci_passed = $ciPassed' \
+          "$metrics_file" 2>/dev/null)
+
+        if [ -n "$UPDATED_JSON" ]; then
+          echo "$UPDATED_JSON" > "$metrics_file"
+          UPDATED=$((UPDATED + 1))
+          echo "UPDATED: PR #$PR_NUMBER ($PR_STATE) -> $metrics_file"
+        else
+          ERRORS=$((ERRORS + 1))
+          echo "ERROR (jq update failed): $metrics_file"
+        fi
+
+      done < /tmp/pending-metrics-files.txt
+
+      echo ""
+      echo "Reconciliation complete: updated=$UPDATED skipped=$SKIPPED errors=$ERRORS"
+
+  - id: report
+    depends_on: [reconcile-outcomes]
+    bash: |
+      echo "## Metrics Reconciliation Complete"
+      echo ""
+      echo "Updated outcome_followup in metrics.json files where GitHub PR status was available."
+      echo ""
+      echo "To analyze results:"
+      echo "  ls ~/.archon/metrics/runs-*.jsonl"
+      echo "  cat ~/.archon/metrics/runs-$(date +%Y-%m).jsonl | jq -s 'group_by(.workflow) | map({workflow: .[0].workflow, runs: length, avg_usd: (map(.total_usd) | add/length)})'"
