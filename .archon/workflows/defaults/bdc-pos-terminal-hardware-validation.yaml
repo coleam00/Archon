@@ -1,0 +1,343 @@
+# Drafted by yaml-author for WO-POS-TERMINAL-HARDWARE-VALIDATION-01 on 2026-05-13
+# Source pattern: WO-SHOPOPS-COMMERCE-SPINE-01.yaml (single-repo) + INFRA wrapper
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring
+#
+# Pre-flight: codebase bluedevilcollectibles/shopops registered in Archon.
+# Pre-flight: WO-POS-TERMINAL-SDK-01 must be MERGED + DEPLOYED before this fires.
+#   Operator verifies: curl https://api.livesellerpro.app/pos/terminal/mode -> 200.
+# Pre-flight (4-block): YAML exists, spec exists, CWD = shopops single-repo, codebase registered.
+# parallel_ok: false (operator-gated hardware validation).
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-POS-TERMINAL-HARDWARE-VALIDATION-01.yaml
+# REVIEW BEFORE DEPLOY — confirm Stripe LIVE keys received from John, reader hardware on-site.
+# This workflow builds the validation script + tests + env example. The actual
+# live $1 charge is OPERATOR-GATED — Archon does not run live Stripe charges.
+
+name: bdc-pos-terminal-hardware-validation
+description: |
+  Use when: Executing WO-POS-TERMINAL-HARDWARE-VALIDATION-01 — real-hardware validation
+            scaffolding for Stripe Terminal.
+  Input: WO_ID = WO-POS-TERMINAL-HARDWARE-VALIDATION-01.
+  Does: Reads spec from bdc-xo. Verifies WO-POS-TERMINAL-SDK-01 is merged. Implements
+        shopops-api/scripts/validate-terminal-hardware.js + 5 bun tests. Updates
+        .env.example with LIVE keys + STRIPE_TERMINAL_MODE. PR + build INFRA manifest
+        with the operator runbook (script invocation + ssh evidence capture). Flips
+        Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops.
+  parallel_ok: false (operator hardware gate).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-POS-TERMINAL-HARDWARE-VALIDATION-01}"
+      SPEC=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC" ]; then
+        GLOB=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB" ] && [ "$GLOB" != "null" ]; then
+          SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC" ]; then echo "ERROR: spec not found" >&2; exit 1; fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' "$WO_ID" "$WORKFLOW_ID" "$SPEC"
+
+  - id: verify-prerequisite
+    depends_on: [read-spec]
+    bash: |
+      # best-effort: WO-POS-TERMINAL-SDK-01 must be merged
+      EXISTS=$(gh api \
+        "repos/bluedevilcollectibles/shopops/contents/shopops-api/routes/pos-terminal.js?ref=master" \
+        --jq .name 2>/dev/null || echo "")
+      if [ -n "$EXISTS" ] && [ "$EXISTS" != "null" ]; then
+        echo "STATUS=ok"
+        echo "PREREQUISITE_MERGED=true"
+      else
+        echo "STATUS=blocked_prereq_missing"
+        echo "DETAIL=WO-POS-TERMINAL-SDK-01 not merged. pos-terminal.js missing on master. Operator must complete prerequisite first."
+        exit 1
+      fi
+      exit 0
+
+  - id: fresh-branch
+    depends_on: [verify-prerequisite]
+    bash: |
+      set -euo pipefail
+      git fetch origin master --depth=50
+      git checkout master
+      git reset --hard origin/master
+      BASE="wo/pos-terminal-hardware-validation-01"
+      BRANCH="$BASE"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/master
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=$BRANCH"
+
+  - id: plan
+    depends_on: [read-spec, fresh-branch]
+    task_class: medium_work
+    prompt: |
+      Plan WO-POS-TERMINAL-HARDWARE-VALIDATION-01 (INFRA).
+
+      ## Files
+      Create:
+        - shopops-api/scripts/validate-terminal-hardware.js
+        - shopops-api/tests/test_terminal_hardware_validation.js
+      Modify:
+        - shopops-api/.env.example (add LIVE keys + STRIPE_TERMINAL_MODE comments)
+
+      Branch: wo/pos-terminal-hardware-validation-01
+      PR base: master
+
+      Operator runbook output (manifest artifact):
+        1. Install LIVE Stripe keys in Hetzner shopops-api env
+        2. ssh hetzner-prod 'docker exec shopops-api node /app/scripts/validate-terminal-hardware.js --pairing-code <code> --tenant <id>'
+        3. Tap real card on physical reader
+        4. Capture PI id + refund id evidence
+        5. Flip STRIPE_TERMINAL_MODE=live + restart shopops-api
+        6. Verify GET /pos/terminal/mode returns mode=live
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement WO-POS-TERMINAL-HARDWARE-VALIDATION-01.
+
+        ## Plan
+        $plan.output
+        ## Spec
+        $read-spec.output
+
+        Rules:
+        1. Create shopops-api/scripts/validate-terminal-hardware.js as a node CLI script:
+           - Reads CLI flags: --pairing-code, --tenant, --location-name (default 'Mutant Market HQ'),
+             --amount-cents (default 100)
+           - Uses services/stripe-terminal.js getStripeClient() (already exists from prerequisite)
+           - createOrFindLocation -> registerReader -> createValidationPaymentIntent ->
+             poll until succeeded (max 5min) -> refundValidationCharge -> emitRunLog
+           - On failure, writes failure reason to stderr + exits non-zero
+        2. Create tests/test_terminal_hardware_validation.js with >= 5 bun tests
+           per WO §11 (all using mocked stripe client; NO live calls in CI):
+             a. createOrFindLocation calls stripe.terminal.locations.create
+             b. registerReader inserts into stripe_terminal_readers
+             c. createValidationPaymentIntent uses card_present + automatic capture
+             d. refundValidationCharge calls stripe.refunds.create full amount
+             e. emitRunLog produces valid JSON with required keys
+        3. Update .env.example with comments documenting:
+             STRIPE_TERMINAL_MODE=simulator  # simulator | test_hardware | live
+             STRIPE_LIVE_SECRET_KEY=
+             STRIPE_LIVE_PUBLISHABLE_KEY=
+             MUTANT_MARKET_TENANT_ID=
+        4. Do NOT make live Stripe API calls. Do NOT push.
+
+        Output <promise>COMPLETE</promise> when script + tests + env example exist
+        and bun test passes.
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls shopops-api/scripts/validate-terminal-hardware.js
+      grep -q "createOrFindLocation\|locations.create" shopops-api/scripts/validate-terminal-hardware.js
+      grep -q "registerReader\|readers.create" shopops-api/scripts/validate-terminal-hardware.js
+      grep -q "card_present" shopops-api/scripts/validate-terminal-hardware.js
+      grep -q "refunds.create" shopops-api/scripts/validate-terminal-hardware.js
+      ls shopops-api/tests/test_terminal_hardware_validation.js
+      TC=$(grep -c "it(\|test(" shopops-api/tests/test_terminal_hardware_validation.js || echo 0)
+      [ "$TC" -ge 5 ] || (echo "FAIL test count $TC" >&2; exit 1)
+      grep -q "STRIPE_TERMINAL_MODE" shopops-api/.env.example
+      grep -q "STRIPE_LIVE_SECRET_KEY" shopops-api/.env.example
+      echo "verify-grep PASS"
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd shopops-api
+      bun test tests/test_terminal_hardware_validation.js
+
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-terminal-hardware-validation-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add \
+        shopops-api/scripts/validate-terminal-hardware.js \
+        shopops-api/tests/test_terminal_hardware_validation.js \
+        shopops-api/.env.example
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(infra): WO-POS-TERMINAL-HARDWARE-VALIDATION-01 — hardware validation scaffold
+
+Adds shopops-api/scripts/validate-terminal-hardware.js — one-shot CLI to register a
+physical BBPOS reader against Stripe, run a $1 live test charge, capture evidence,
+and refund. Run by operator on Hetzner after WO-POS-TERMINAL-SDK-01 is live.
+
+Adds tests/test_terminal_hardware_validation.js (5+ bun tests with mocked stripe).
+Documents STRIPE_TERMINAL_MODE + STRIPE_LIVE_* keys in .env.example.
+
+Operator runbook:
+  ssh hetzner-prod 'docker exec shopops-api node /app/scripts/validate-terminal-hardware.js \
+    --pairing-code <code> --tenant <id> --location-name \"Mutant Market HQ\"'
+
+Depends on: WO-POS-TERMINAL-SDK-01 (merged)
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-terminal-hardware-validation-01"
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements WO-POS-TERMINAL-HARDWARE-VALIDATION-01 — Stripe Terminal hardware validation scaffold."
+        echo ""
+        echo "## What this PR ships"
+        echo "- scripts/validate-terminal-hardware.js (operator-run CLI)"
+        echo "- tests/test_terminal_hardware_validation.js (5+ mocked tests)"
+        echo "- .env.example documents LIVE keys + STRIPE_TERMINAL_MODE"
+        echo ""
+        echo "## What this PR does NOT do"
+        echo "- No live Stripe API calls in CI."
+        echo "- No env flip to mode=live (operator-gated)."
+        echo "- No physical reader registration (operator runs the script on Hetzner)."
+        echo ""
+        echo "## Operator runbook (post-merge)"
+        echo "1. Install LIVE Stripe keys in Hetzner shopops-api env (Stripe Dashboard -> Developers)"
+        echo "2. ssh hetzner-prod 'docker exec shopops-api node /app/scripts/validate-terminal-hardware.js --pairing-code <CODE> --tenant <ID>'"
+        echo "3. Tap real card on physical reader when prompted"
+        echo "4. Capture PI id + refund id (script outputs JSON)"
+        echo "5. Flip STRIPE_TERMINAL_MODE=live; restart shopops-api"
+        echo "6. Verify: curl https://api.livesellerpro.app/pos/terminal/mode -> {mode:'live'}"
+        echo ""
+        echo "## Depends on"
+        echo "- WO-POS-TERMINAL-SDK-01 (merged + deployed)"
+      } > "$BODY"
+      EXIST=$(gh pr list --repo bluedevilcollectibles/shopops --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "PR_URL=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo bluedevilcollectibles/shopops --base master --head "$BRANCH" \
+            --title "feat(infra): WO-POS-TERMINAL-HARDWARE-VALIDATION-01 — hardware validation scaffold" \
+            --body-file "$BODY" 2>&1); then
+          echo "PR_URL=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      exit 1
+
+  - id: runtime-verify
+    depends_on: [open-pr]
+    bash: |
+      # Runtime verify of the SCRIPT presence (not the live charge — that is operator-gated)
+      RESULT=$(docker exec shopops-api ls /app/scripts/validate-terminal-hardware.js 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "RULE19=script present in container: ${RESULT}"
+      elif echo "$RESULT" | grep -qiE 'No such (container|file)|not found'; then
+        echo "STATUS=skipped_container_not_rebuilt"
+        echo "RERUN=docker exec shopops-api ls /app/scripts/validate-terminal-hardware.js"
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${RESULT}"
+      fi
+      exit 0
+
+  - id: build-manifest
+    depends_on: [runtime-verify]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 (INFRA) for WO-POS-TERMINAL-HARDWARE-VALIDATION-01.
+
+      WO: WO-POS-TERMINAL-HARDWARE-VALIDATION-01
+      Builder: Codex (Archon bdc-pos-terminal-hardware-validation)
+      Files created: shopops-api/scripts/validate-terminal-hardware.js,
+                     shopops-api/tests/test_terminal_hardware_validation.js
+      Files modified: shopops-api/.env.example
+      Tests: from $verify-tests.output | bun test shopops-api/tests/test_terminal_hardware_validation.js
+      PRs: from $open-pr.output PR_URL — base: master
+      Merge ancestors: shopops master HEAD from $commit-and-push.output SHA, behind_by: 0
+      Grep assertions:
+        - grep -q 'card_present' shopops-api/scripts/validate-terminal-hardware.js
+        - grep -q 'refunds.create' shopops-api/scripts/validate-terminal-hardware.js
+        - grep -q 'STRIPE_TERMINAL_MODE' shopops-api/.env.example
+      Runtime verification:
+        - docker exec shopops-api ls /app/scripts/validate-terminal-hardware.js
+        - from $runtime-verify.output
+        - Live $1 charge evidence: OPERATOR-GATED. Manifest must include PI id + refund id
+          BEFORE Captain CI closes the WO.
+      Operator runbook checklist (must be filled in by operator post-deploy):
+        [ ] Stripe LIVE keys installed in Hetzner env
+        [ ] Reader paired (pairing_code recorded)
+        [ ] Validation script run (PI id captured)
+        [ ] Refund issued (refund_id captured)
+        [ ] STRIPE_TERMINAL_MODE flipped to 'live'
+        [ ] GET /pos/terminal/mode returns mode=live
+        [ ] stripe_terminal_readers row exists with reader id starting tmr_live_
+      Vercel deployment: N/A — shopops-api is Hetzner Docker
+      VALIDATION: PASS (scaffolding ships; live $1 evidence pending operator hardware run)
+
+      Inputs:
+      $read-spec.output
+      $verify-prerequisite.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-and-push.output
+      $open-pr.output
+      $runtime-verify.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-POS-TERMINAL-HARDWARE-VALIDATION-01 to REVIEW. Manifest in Notes property.
+      Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # OPEN QUESTION: Notion page ID not confirmed. Operator searches by exact WO ID.
+
+      IMPORTANT: This WO is a HYBRID — scaffolding ships now, but the live $1 charge
+      evidence must be appended to the manifest by the operator after hardware arrives
+      at Mutant Market. Captain CI will not auto-close until operator pastes PI + refund ids.
+
+      Update: Claude Status -> REVIEW, Status -> Review, Notes -> $build-manifest.output,
+      claimed_by: Codex, claimed_at: today.
+
+      If Notion MCP unavailable:
+        XO_TODO: Flip WO-POS-TERMINAL-HARDWARE-VALIDATION-01 to REVIEW; paste manifest into Notes.
+
+      Manifest:
+      $build-manifest.output

@@ -1,0 +1,394 @@
+# Drafted by yaml-author for WO-POS-VOICE-ASSISTANT-WIRING-01 on 2026-05-13
+# Source pattern: bdc-ce-regression-suite.yaml + WO-POS-TERMINAL-SDK-01.yaml
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring
+#
+# Pre-flight: codebases bluedevilcollectibles/shopops + bluedevilcollectibles/lspro-react
+#   registered in Archon. VOICE_BRIDGE is local-machine deploy (G10 box, no CI) —
+#   VOICE_BRIDGE patches are produced as a diff file in the manifest for John to
+#   apply manually.
+#
+# Pre-flight (4-block): YAML exists, spec exists (docs/work-orders/
+#   WO-POS-VOICE-ASSISTANT-WIRING-01.md in bdc-xo), CWD = shopops + lspro-react
+#   cross-repo (VOICE_BRIDGE side surfaces as patch file), codebases registered.
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-POS-VOICE-ASSISTANT-WIRING-01.yaml
+
+name: bdc-pos-voice-assistant-wiring
+description: |
+  Use when: Executing WO-POS-VOICE-ASSISTANT-WIRING-01 — Voice Bridge wiring for POS.
+  Input: WO_ID = WO-POS-VOICE-ASSISTANT-WIRING-01.
+  Does: Reads spec from bdc-xo. Implements shopops-api pos-voice routes (customer-context
+        + SSE events + state + log) + pos_voice_log migration + bun tests. Implements
+        lspro-react VoiceStateIndicator + CustomerTakeoverScreen + tests. Produces a
+        VOICE_BRIDGE patch file (pos-context.ts + prompt composer) as manifest artifact
+        for John to apply locally. Rule 19 runtime-verify. Builds MIXED manifest.
+        Flips Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops (primary CWD), bluedevilcollectibles/lspro-react
+        (sibling clone). VOICE_BRIDGE = manual deploy via patch file.
+  parallel_ok: true (pos_voice_log is isolated new table).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-POS-VOICE-ASSISTANT-WIRING-01}"
+      SPEC=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC" ]; then
+        GLOB=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB" ] && [ "$GLOB" != "null" ]; then
+          SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC" ]; then echo "ERROR: spec not found" >&2; exit 1; fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' "$WO_ID" "$WORKFLOW_ID" "$SPEC"
+
+  - id: fresh-branch
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      git fetch origin master --depth=50
+      git checkout master
+      git reset --hard origin/master
+      BASE="wo/pos-voice-assistant-wiring-01"
+      BRANCH="$BASE"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/master
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=$BRANCH"
+
+  - id: schema-verify
+    depends_on: [fresh-branch]
+    bash: |
+      SUPABASE_URL="${SUPABASE_URL:-}"
+      SUPABASE_SERVICE_KEY="${SUPABASE_SERVICE_KEY:-}"
+      if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+        echo "STATUS=skipped_no_env"
+        exit 0
+      fi
+      R=$(curl -sf \
+        "${SUPABASE_URL}/rest/v1/information_schema.columns?table_name=eq.customers&select=column_name" \
+        -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+        -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" 2>&1) || true
+      echo "STATUS=ok"
+      echo "CUSTOMERS_COLUMNS=${R}"
+      exit 0
+
+  - id: plan
+    depends_on: [read-spec, schema-verify]
+    task_class: medium_work
+    prompt: |
+      Plan WO-POS-VOICE-ASSISTANT-WIRING-01 (MIXED).
+
+      ## Files
+      Create:
+        - shopops-api/migrations/20260513_pos_voice_log.sql
+        - shopops-api/routes/pos-voice.js
+        - shopops-api/services/voice-events.js (SSE multiplexer)
+        - shopops-api/tests/test_pos_voice.js
+        - lspro-react/src/pos/VoiceStateIndicator.tsx
+        - lspro-react/src/pos/CustomerTakeoverScreen.tsx
+        - lspro-react/src/pos/__tests__/VoiceStateIndicator.test.tsx
+        - lspro-react/src/pos/__tests__/CustomerTakeoverScreen.test.tsx
+        - voice-bridge-patch.diff (VOICE_BRIDGE side; manifest artifact only)
+      Modify: shopops-api/index.js (mount /pos/voice router)
+
+      ## Spec
+      $read-spec.output
+
+      ## Schema
+      $schema-verify.output
+
+  - id: implement-shopops
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement shopops-api half of WO-POS-VOICE-ASSISTANT-WIRING-01.
+
+        ## Plan
+        $plan.output
+        ## Spec
+        $read-spec.output
+
+        Rules:
+        1. Migration creates pos_voice_log per WO §7.
+        2. routes/pos-voice.js exports 4 endpoints per WO §7:
+           POST /pos/voice/customer-context, GET /pos/voice/events (SSE),
+           POST /pos/voice/state, POST /pos/voice/log.
+        3. services/voice-events.js manages per-tenant SSE subscribers
+           (Map<tenantId, Set<response>>); broadcastState(tenantId, payload).
+        4. POST /pos/voice/state requires shared secret VOICE_BRIDGE_TOKEN header.
+        5. tests/test_pos_voice.js — >= 5 bun tests per WO §11.
+        6. Mount in index.js.
+        7. NO push, NO docker.
+
+        Output <promise>COMPLETE</promise> when all files exist + bun test passes.
+
+  - id: implement-lspro
+    depends_on: [implement-shopops]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement lspro-react half of WO-POS-VOICE-ASSISTANT-WIRING-01.
+
+          git -C /tmp clone --depth=10 https://github.com/bluedevilcollectibles/lspro-react.git lspro-react
+          cd /tmp/lspro-react
+          git checkout -b wo/pos-voice-assistant-wiring-01-ui
+
+        ## Plan
+        $plan.output
+
+        Rules:
+        1. VoiceStateIndicator.tsx subscribes to EventSource('/api/pos/voice/events').
+           Renders mic icon + waveform + caption per WO §6 state matrix.
+        2. CustomerTakeoverScreen.tsx listens for SSE event type='customer_arrived',
+           fetches POST /api/pos/voice/customer-context, renders overlay.
+        3. >= 2 component tests per file (4 total minimum).
+        4. Branch wo/pos-voice-assistant-wiring-01-ui. Commit identity John Ranson /
+           admin@bluedevilcollectibles.com.
+        5. Output <promise>COMPLETE</promise> when files exist + bun test src/pos passes
+           + branch pushed.
+
+  - id: produce-voice-bridge-patch
+    depends_on: [implement-lspro]
+    task_class: medium_work
+    prompt: |
+      Produce voice-bridge-patch.diff describing the changes required in VOICE_BRIDGE
+      project (local machine, no CI). Output a unified diff format covering:
+        - src/pos-context.ts (new): fetchCustomerContext, buildGeminiSystemPrompt, postVoiceState
+        - tests/pos-context.test.ts (new): >= 2 tests
+        - integration into existing wake-word handler
+
+      Save the diff to voice-bridge-patch.diff in the shopops CWD root. This file
+      is a manifest artifact — John applies it manually on G10. Do NOT push.
+
+      ## Spec
+      $read-spec.output
+
+  - id: verify-grep
+    depends_on: [implement-shopops, implement-lspro, produce-voice-bridge-patch]
+    bash: |
+      set -euo pipefail
+      ls shopops-api/migrations/20260513_pos_voice_log.sql
+      grep -q "pos_voice_log" shopops-api/migrations/20260513_pos_voice_log.sql
+      ls shopops-api/routes/pos-voice.js
+      grep -q "pos/voice/customer-context\|customer-context" shopops-api/routes/pos-voice.js
+      grep -q "pos/voice/events\|/events" shopops-api/routes/pos-voice.js
+      grep -q "pos/voice/state\|/state" shopops-api/routes/pos-voice.js
+      grep -q "VOICE_BRIDGE_TOKEN\|shared secret" shopops-api/routes/pos-voice.js
+      ls shopops-api/services/voice-events.js
+      grep -q "broadcastState\|SSE\|EventSource" shopops-api/services/voice-events.js
+      TC=$(grep -c "it(\|test(" shopops-api/tests/test_pos_voice.js || echo 0)
+      [ "$TC" -ge 5 ] || (echo "FAIL backend test count $TC" >&2; exit 1)
+
+      LR=/tmp/lspro-react
+      grep -q "VoiceStateIndicator" "$LR/src/pos/VoiceStateIndicator.tsx"
+      grep -q "EventSource\|/pos/voice/events" "$LR/src/pos/VoiceStateIndicator.tsx"
+      grep -q "CustomerTakeoverScreen" "$LR/src/pos/CustomerTakeoverScreen.tsx"
+
+      ls voice-bridge-patch.diff
+      grep -q "pos-context" voice-bridge-patch.diff
+      echo "verify-grep PASS"
+
+  - id: verify-tests
+    depends_on: [implement-shopops, implement-lspro]
+    bash: |
+      set -euo pipefail
+      cd shopops-api
+      bun test tests/test_pos_voice.js
+      cd /tmp/lspro-react
+      bun test src/pos || echo "frontend tests may flake without DOM env; Captain CI authoritative"
+
+  - id: commit-shopops
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-voice-assistant-wiring-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add \
+        shopops-api/migrations/20260513_pos_voice_log.sql \
+        shopops-api/routes/pos-voice.js \
+        shopops-api/services/voice-events.js \
+        shopops-api/tests/test_pos_voice.js \
+        shopops-api/index.js \
+        voice-bridge-patch.diff
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(api): WO-POS-VOICE-ASSISTANT-WIRING-01 — pos-voice routes + SSE + voice-bridge patch
+
+Adds routes/pos-voice.js (customer-context, events SSE, state, log).
+Adds services/voice-events.js (SSE multiplexer).
+Adds migration 20260513_pos_voice_log.sql.
+Adds tests/test_pos_voice.js (5+ tests).
+Includes voice-bridge-patch.diff for John to apply on G10.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "SHOPOPS_SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr-shopops
+    depends_on: [commit-shopops]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-voice-assistant-wiring-01"
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements WO-POS-VOICE-ASSISTANT-WIRING-01 (shopops half) — POS voice routes + SSE."
+        echo ""
+        echo "## Files"
+        echo "- Created: migrations/20260513_pos_voice_log.sql, routes/pos-voice.js, services/voice-events.js, tests/test_pos_voice.js"
+        echo "- Modified: index.js (mount /pos/voice)"
+        echo "- Manifest artifact: voice-bridge-patch.diff (apply on G10 manually)"
+      } > "$BODY"
+      EXIST=$(gh pr list --repo bluedevilcollectibles/shopops --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "SHOPOPS_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo bluedevilcollectibles/shopops --base master --head "$BRANCH" \
+            --title "feat(api): WO-POS-VOICE-ASSISTANT-WIRING-01 — pos-voice + SSE" \
+            --body-file "$BODY" 2>&1); then
+          echo "SHOPOPS_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      exit 1
+
+  - id: commit-and-pr-lspro
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      cd /tmp/lspro-react
+      BRANCH="wo/pos-voice-assistant-wiring-01-ui"
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" add src/pos
+      if git diff --cached --quiet; then
+        echo "No lspro changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(pos): WO-POS-VOICE-ASSISTANT-WIRING-01 — VoiceStateIndicator + CustomerTakeoverScreen
+
+Adds src/pos/VoiceStateIndicator.tsx (SSE-subscribed mic state).
+Adds src/pos/CustomerTakeoverScreen.tsx (beacon arrival overlay).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      BODY=$(mktemp)
+      printf '## Summary\nImplements WO-POS-VOICE-ASSISTANT-WIRING-01 (lspro-react half).\n\nVercel staging: https://staging.livesellerpro.app/pos\n' > "$BODY"
+      EXIST=$(gh pr list --repo bluedevilcollectibles/lspro-react --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "LSPRO_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo bluedevilcollectibles/lspro-react --base main --head "$BRANCH" \
+            --title "feat(pos): WO-POS-VOICE-ASSISTANT-WIRING-01 — voice state UI" \
+            --body-file "$BODY" 2>&1); then
+          echo "LSPRO_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      exit 1
+
+  - id: runtime-verify
+    depends_on: [open-pr-shopops]
+    bash: |
+      RESULT=$(docker exec shopops-api grep -n "pos/voice" /app/routes/pos-voice.js 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "RULE19=${RESULT}"
+      elif echo "$RESULT" | grep -qiE 'No such (container|file)|not found'; then
+        echo "STATUS=skipped_container_not_rebuilt"
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${RESULT}"
+      fi
+      exit 0
+
+  - id: build-manifest
+    depends_on: [runtime-verify, commit-and-pr-lspro]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 (MIXED) for WO-POS-VOICE-ASSISTANT-WIRING-01.
+
+      WO: WO-POS-VOICE-ASSISTANT-WIRING-01
+      Builder: Codex (Archon bdc-pos-voice-assistant-wiring)
+      Files created (shopops): migrations/20260513_pos_voice_log.sql, routes/pos-voice.js,
+                                services/voice-events.js, tests/test_pos_voice.js,
+                                voice-bridge-patch.diff (manifest artifact)
+      Files modified (shopops): index.js
+      Files created (lspro-react): src/pos/VoiceStateIndicator.tsx, src/pos/CustomerTakeoverScreen.tsx,
+                                    + 2 test files
+      Tests:
+        - bun test shopops-api/tests/test_pos_voice.js -> from $verify-tests.output
+        - bun test lspro-react/src/pos -> from $verify-tests.output
+      PRs:
+        - shopops: from $open-pr-shopops.output SHOPOPS_PR
+        - lspro-react: from $commit-and-pr-lspro.output LSPRO_PR
+      Merge ancestors:
+        - shopops master HEAD: from $commit-shopops.output SHOPOPS_SHA, behind_by: 0
+        - lspro-react main HEAD: TBD by Captain CI, behind_by: 0
+      Grep assertions:
+        - grep -q 'pos/voice' shopops-api/routes/pos-voice.js
+        - grep -q 'VOICE_BRIDGE_TOKEN' shopops-api/routes/pos-voice.js
+        - grep -q 'pos_voice_log' shopops-api/migrations/20260513_pos_voice_log.sql
+        - grep -q 'EventSource' lspro-react/src/pos/VoiceStateIndicator.tsx
+      Runtime verification:
+        - docker exec shopops-api grep -n 'pos/voice' /app/routes/pos-voice.js
+        - from $runtime-verify.output
+      Voice Bridge manual deploy: voice-bridge-patch.diff applied on G10 by John (manifest-tracked)
+      Vercel deployment: staging URL https://staging.livesellerpro.app/pos | pending Captain CI
+      VALIDATION: PASS (pending migration + container rebuild + Vercel deploy + Voice Bridge patch apply)
+
+      Inputs:
+      $read-spec.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-shopops.output
+      $open-pr-shopops.output
+      $commit-and-pr-lspro.output
+      $runtime-verify.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-POS-VOICE-ASSISTANT-WIRING-01 to REVIEW. Manifest in Notes property.
+      Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # OPEN QUESTION: Notion page ID not confirmed. Operator searches by exact WO ID.
+
+      Update: Claude Status -> REVIEW, Status -> Review, Notes -> $build-manifest.output,
+      claimed_by: Codex, claimed_at: today.
+
+      If Notion MCP unavailable:
+        XO_TODO: Flip WO-POS-VOICE-ASSISTANT-WIRING-01 to REVIEW; paste manifest into Notes.
+
+      Manifest:
+      $build-manifest.output

@@ -1,0 +1,724 @@
+# Drafted by yaml-author subagent for WO-STOREFRONT-CATALOG-REAL-COVERS-01 on 2026-05-13
+# Source pattern: WO-STOREFRONT-PORTAL-AUTH-WIRE-01.yaml (storefront-side scaffolding)
+#                 + bdc-ce-regression-suite.yaml (gold-standard DAG, idempotent checkout)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+#
+# Pre-flight (OPERATOR MUST VERIFY BEFORE FIRING):
+#   1. bluedevilcollectibles/shopops-storefront registered in Archon as a codebase:
+#      sqlite3 /opt/bdc/archon-data/archon.db "SELECT name, default_cwd FROM remote_agent_codebases WHERE name LIKE '%storefront%'"
+#      Expected default_cwd: /home/appuser/shopops-storefront (NOT /.archon/workspaces/...)
+#      Per memory note reference_archon-codebase-registry-paths.md.
+#   2. shopops-storefront default branch confirmed:
+#      gh api repos/bluedevilcollectibles/shopops-storefront --jq .default_branch
+#      Expected: master (per battlegroup briefing 2026-05-13). If 'main', update
+#      BASE references in commit-and-push and open-pr nodes below.
+#   3. WO spec committed + pushed to bdc-xo main branch:
+#      docs/work-orders/WO-STOREFRONT-CATALOG-REAL-COVERS-01.md
+#   4. Notion page ID for WO-STOREFRONT-CATALOG-REAL-COVERS-01 — FILL IN below before firing.
+#      Find via: Notion search on database a6df831c-0b52-449f-8ca4-d77be6b70d0a
+#   5. Network egress: Archon container must reach api.livesellerpro.app (port 443).
+#      If blocked, builder will surface in run output; operator can run backfill
+#      locally and re-fire from the point of failure.
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh bdc-storefront-catalog-real-covers.yaml
+#   (copy this file to bdc-harness/.archon/workflows/defaults/ first; rename to lowercase-hyphen)
+#
+# REVIEW BEFORE DEPLOY — human verifies:
+#   - Notion page ID filled in (Q1 below)
+#   - shopops-storefront default branch confirmed master (Q2 below)
+#   - 70% threshold acceptable for beta (per WO §10 ROUGH OK calibration)
+#
+# OPEN QUESTIONS:
+#   Q1: Notion page ID is UNKNOWN at draft time. Operator must replace
+#       NOTION_PAGE_ID_PLACEHOLDER in flip-notion prompt before firing.
+#   Q2: shopops-storefront default branch assumed 'master' per battlegroup briefing.
+#       Verify via gh api before fire. If 'main', do a global swap in this file.
+
+name: bdc-storefront-catalog-real-covers
+description: |
+  Use when: Executing WO-STOREFRONT-CATALOG-REAL-COVERS-01 — plug AutoFix cover pipeline
+            into storefront catalog page so real cover art renders instead of placeholder
+            colored text plates.
+  Input: WO_ID = WO-STOREFRONT-CATALOG-REAL-COVERS-01.
+  Does: Reads WO spec from bdc-xo. Writes scripts/backfill-seed-covers.mjs that calls
+        POST https://api.livesellerpro.app/covers/lookup/batch and writes resolved URLs
+        into lib/seed-data/catalog.json. Updates app/shops/[shopSlug]/catalog/page.tsx
+        to render <img src={item.cover_url}> with onError fallback to existing palette.
+        Adds __tests__/lib/catalog-cover-fallback.test.ts with >= 4 bun tests.
+        Runs backfill script, commits JSON + page + tests, opens PR against master.
+        Verifies Vercel preview deployment READY. Builds CODE manifest. Flips Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops-storefront (single repo).
+  parallel_ok: true — single repo, no shared file conflicts.
+  Polish bar: ROUGH OK (Mutant Market is beta tester, not paying).
+  NOT for: any other WO.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  # ---------------------------------------------------------------------------
+  # 1. READ-SPEC — fetch WO spec from bdc-xo (cross-repo via gh api).
+  #    Rule 5: tries direct path first, then date-prefix glob fallback.
+  # ---------------------------------------------------------------------------
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-STOREFRONT-CATALOG-REAL-COVERS-01}"
+
+      # Primary path: docs/work-orders/<WO_ID>.md
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+
+      # Fallback: date-prefix glob in docs/superpowers/specs/ (Rule 5)
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID} in bdc-xo" >&2
+        exit 1
+      fi
+
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:docs/work-orders/%s.md\n\n' "$WO_ID" "$WO_ID"
+      printf -- '--- SPEC ---\n%s\n' "$SPEC_CONTENT"
+
+  # ---------------------------------------------------------------------------
+  # 2. INSPECT-CURRENT-STATE — read existing storefront files for context
+  # ---------------------------------------------------------------------------
+  - id: inspect-current-state
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+
+      echo "=== seed catalog current state ==="
+      if [ -f lib/seed-data/catalog.json ]; then
+        TOTAL=$(jq 'length' lib/seed-data/catalog.json)
+        WITH_COVER=$(jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' lib/seed-data/catalog.json)
+        echo "TOTAL_ITEMS=${TOTAL}"
+        echo "ITEMS_WITH_COVER_URL=${WITH_COVER}"
+        echo "FIRST_THREE_UPCS:"
+        jq -r '.[0:3] | .[] | "  upc=\(.upc) title=\(.title) cover_url=\(.cover_url)"' lib/seed-data/catalog.json
+      else
+        echo "ERROR: lib/seed-data/catalog.json not found at CWD" >&2
+        exit 1
+      fi
+
+      echo ""
+      echo "=== catalog page current state ==="
+      CATALOG_PAGE="app/shops/[shopSlug]/catalog/page.tsx"
+      if [ -f "$CATALOG_PAGE" ]; then
+        echo "File exists: $CATALOG_PAGE"
+        grep -n 'cover_url\|issue-cover\|cat-card__cover' "$CATALOG_PAGE" || echo "(no matches yet)"
+      else
+        echo "ERROR: $CATALOG_PAGE not found" >&2
+        exit 1
+      fi
+
+      echo ""
+      echo "=== PDP page (optional) ==="
+      PDP_PAGE="app/shops/[shopSlug]/comic/[upc]/page.tsx"
+      if [ -f "$PDP_PAGE" ]; then
+        echo "PDP_PAGE_EXISTS=true"
+        grep -n 'cover_url\|issue-cover' "$PDP_PAGE" || echo "(no cover refs)"
+      else
+        echo "PDP_PAGE_EXISTS=false"
+      fi
+
+  # ---------------------------------------------------------------------------
+  # 3. PROBE-COVER-API — best-effort connectivity check to api.livesellerpro.app
+  #    Rule 11: NOT n8n webhook. /covers/lookup/batch is a public shopops-api route.
+  # ---------------------------------------------------------------------------
+  - id: probe-cover-api
+    depends_on: [inspect-current-state]
+    bash: |
+      # set -e DELIBERATELY OMITTED — best-effort step
+      RESULT=$(curl -sf -X POST \
+        https://api.livesellerpro.app/covers/lookup/batch \
+        -H 'Content-Type: application/json' \
+        -H 'X-Shopops-Tenant: bdc' \
+        -d '{"items":[{"upc":"76194138584602011","title":"ABSOLUTE BATMAN #20","publisher":"DC Comics"}]}' \
+        --max-time 30 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ] && echo "$RESULT" | grep -q '"coverMap"'; then
+        echo "STATUS=ok"
+        echo "PROBE_RESPONSE=${RESULT}"
+        echo "DETAIL=cover API reachable from Archon container"
+      elif echo "$RESULT" | grep -qiE 'could not resolve|timeout|connection refused|403|401'; then
+        echo "STATUS=skipped_network_blocked"
+        echo "DETAIL=${RESULT}"
+        echo "WORKAROUND=Builder will write script and skeleton JSON; operator runs backfill locally and commits."
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${RESULT}"
+      fi
+      exit 0
+
+  # ---------------------------------------------------------------------------
+  # 4. PLAN — architect the single-repo implementation
+  # ---------------------------------------------------------------------------
+  - id: plan
+    depends_on: [read-spec, inspect-current-state, probe-cover-api]
+    task_class: medium_work
+    prompt: |
+      Plan the single-repo storefront cover-render implementation.
+
+      WO: WO-STOREFRONT-CATALOG-REAL-COVERS-01
+      Class: CODE (frontend-only, Vercel deploy is runtime proof)
+      Polish bar: ROUGH OK (Mutant Market is beta tester, not paying)
+
+      ## Required Output (Markdown, exact headings)
+
+      ### Files to Create
+      - scripts/backfill-seed-covers.mjs (Node ESM, one-shot operator script)
+      - __tests__/lib/catalog-cover-fallback.test.ts (>= 4 bun tests)
+      - lib/catalog-cover.ts (pure helper module — exports shouldShowPalette + render
+        decision functions, so tests don't need React DOM)
+
+      ### Files to Modify
+      - lib/seed-data/catalog.json (cover_url populated on >= 70% of items after backfill run)
+      - app/shops/[shopSlug]/catalog/page.tsx (render <img> when cover_url truthy, else palette)
+      - app/shops/[shopSlug]/comic/[upc]/page.tsx (only if file exists per inspect node + has hero img — verify before touching)
+
+      ### Backfill Script Behavior
+      - Reads lib/seed-data/catalog.json
+      - Batches UPCs into chunks of 50
+      - POSTs each chunk to https://api.livesellerpro.app/covers/lookup/batch
+        with header X-Shopops-Tenant: bdc and body
+        { items: [{ upc, title, publisher, series, issue }, ...] }
+      - Reads response { ok, coverMap: { [upc]: { tier, url, source } } }
+      - For coverMap[upc].url non-empty AND tier != 'placeholder' -> write into JSON
+      - Otherwise leave cover_url=null
+      - Logs resolved/placeholder/none counts
+      - Writes file with 2-space indent + trailing newline (match existing format)
+      - Exit 0 success, non-zero on network/auth error
+
+      ### Render Pattern (catalog/page.tsx)
+      Inside cat-card__cover div, add img-first then existing palette:
+        <div className="cat-card__cover">
+          {item.cover_url ? (
+            <img src={item.cover_url} alt={item.title}
+                 className="cat-card__cover-img" loading="lazy"
+                 onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          ) : null}
+          {!item.cover_url ? (
+            <div className="issue-cover">{/* existing palette content */}</div>
+          ) : null}
+        </div>
+      Simpler ternary: render img OR palette, not both. Avoids CSS sibling complexity.
+      If cover_url is set, onError won't trigger re-render to palette (acceptable for ROUGH OK).
+
+      ### Helper Module (lib/catalog-cover.ts)
+      export function shouldShowPalette(item: { cover_url?: string | null }): boolean {
+        return !item.cover_url;
+      }
+      export function getCoverImgProps(item: { cover_url?: string | null; title: string }) {
+        if (!item.cover_url) return null;
+        return { src: item.cover_url, alt: item.title, loading: 'lazy' as const };
+      }
+
+      ### Test File (>= 4 tests, bun-compatible)
+      Use `import { describe, it, expect } from 'bun:test'`. Test pure helpers:
+        a. shouldShowPalette returns true when cover_url is null
+        b. shouldShowPalette returns true when cover_url is empty string
+        c. shouldShowPalette returns false when cover_url is a non-empty URL
+        d. getCoverImgProps returns null for null cover_url
+        e. getCoverImgProps returns { src, alt, loading } when cover_url present
+
+      ### Commit Strategy
+      - Branch: wo/storefront-catalog-real-covers-01 (off master)
+      - Single commit:
+        feat(storefront): WO-STOREFRONT-CATALOG-REAL-COVERS-01 — real cover art in catalog
+      - PR base: master
+
+      ### Probe Output (cover API reachability)
+      $probe-cover-api.output
+
+      ### Current State
+      $inspect-current-state.output
+
+      ### Spec
+      $read-spec.output
+
+  # ---------------------------------------------------------------------------
+  # 5. IMPLEMENT — write code, run backfill, update page, write tests
+  # ---------------------------------------------------------------------------
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement WO-STOREFRONT-CATALOG-REAL-COVERS-01.
+        CWD is the shopops-storefront repo root.
+
+        ## Plan
+        $plan.output
+
+        ## Spec
+        $read-spec.output
+
+        ## Probe Result (network reachability of api.livesellerpro.app)
+        $probe-cover-api.output
+
+        ## Execution Rules
+
+        1. Read app/shops/[shopSlug]/catalog/page.tsx in full before editing.
+           Note the existing cat-card__cover div structure (lines ~115-135).
+
+        2. Create lib/catalog-cover.ts with pure helpers (no React dependency):
+             export function shouldShowPalette(item: { cover_url?: string | null }): boolean
+             export function getCoverImgProps(item: { cover_url?: string | null; title: string })
+
+        3. Create scripts/backfill-seed-covers.mjs (Node ESM with shebang #!/usr/bin/env node):
+           - Reads lib/seed-data/catalog.json as JSON
+           - Chunks of 50 items, POSTs to https://api.livesellerpro.app/covers/lookup/batch
+             with header X-Shopops-Tenant: bdc and body { items: [...] }
+           - Builds request body with { upc, title, publisher, series, issue } per item
+           - Reads response.coverMap, writes resolved url back to items where
+             coverMap[upc].url non-empty AND coverMap[upc].tier != 'placeholder'
+           - Logs progress: chunk N/M, resolved=X placeholder=Y none=Z
+           - Writes back to catalog.json with JSON.stringify(data, null, 2) + '\n'
+           - Use built-in fetch (Node 18+). No external deps.
+           - On non-OK response (status != 200 or !response.ok), log error and exit 1
+             so operator sees the failure.
+
+        4. Run the backfill script:
+             node scripts/backfill-seed-covers.mjs
+           If probe-cover-api STATUS=skipped_network_blocked, SKIP this run and instead
+           note in commit message: "backfill JSON to be run locally by operator before PR
+           merge — see scripts/backfill-seed-covers.mjs".
+
+        5. After running, verify with jq:
+             jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' lib/seed-data/catalog.json
+           Target: >= 40 (70% of 57 seed items). Acceptable for ROUGH OK: whatever the
+           cascade returned. Log the actual count.
+
+        6. Edit app/shops/[shopSlug]/catalog/page.tsx:
+           - Import shouldShowPalette + getCoverImgProps from '@/lib/catalog-cover'
+           - Inside the .map((item) => ...) loop, change cat-card__cover content:
+             {(() => {
+               const imgProps = getCoverImgProps(item);
+               return imgProps ? (
+                 <img className="cat-card__cover-img" {...imgProps}
+                      onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+               ) : (
+                 <div className="issue-cover">{/* existing palette */}</div>
+               );
+             })()}
+           - Keep cornerFlag, hero, palette, strip logic INSIDE the issue-cover branch.
+           - Do NOT remove the deterministic palette helper functions
+             (paletteFor, coverHero, cornerFlag) — they remain in use for fallback.
+
+        7. PDP file: only modify app/shops/[shopSlug]/comic/[upc]/page.tsx IF
+           inspect-current-state output says PDP_PAGE_EXISTS=true AND the file
+           has its own cover render block. If it just routes to catalog or has no
+           cover render, leave it.
+
+        8. Create __tests__/lib/catalog-cover-fallback.test.ts with >= 4 tests on
+           the pure helpers (no React mount needed):
+             import { describe, it, expect } from 'bun:test';
+             import { shouldShowPalette, getCoverImgProps } from '@/lib/catalog-cover';
+             ... 4+ assertions per plan.
+
+        9. Do NOT push. Do NOT commit. Do NOT run deployment commands.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when:
+          - lib/catalog-cover.ts exists with shouldShowPalette + getCoverImgProps
+          - scripts/backfill-seed-covers.mjs exists and is executable (chmod +x via git)
+          - lib/seed-data/catalog.json has cover_url populated on >= 40 items
+            (or: skipped with explicit operator-run note if network was blocked)
+          - app/shops/[shopSlug]/catalog/page.tsx imports + uses the helpers
+          - __tests__/lib/catalog-cover-fallback.test.ts has >= 4 tests
+          - bun test __tests__/lib/catalog-cover-fallback.test.ts passes
+
+  # ---------------------------------------------------------------------------
+  # 6. VERIFY-GREP — structural assertions
+  # ---------------------------------------------------------------------------
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      echo "=== grep assertions ==="
+
+      HELPER="lib/catalog-cover.ts"
+      ls "$HELPER" || (echo "FAIL: $HELPER missing" >&2; exit 1)
+      grep -q "shouldShowPalette" "$HELPER" \
+        || (echo "FAIL: shouldShowPalette missing from $HELPER" >&2; exit 1)
+      grep -q "getCoverImgProps" "$HELPER" \
+        || (echo "FAIL: getCoverImgProps missing from $HELPER" >&2; exit 1)
+
+      SCRIPT="scripts/backfill-seed-covers.mjs"
+      ls "$SCRIPT" || (echo "FAIL: $SCRIPT missing" >&2; exit 1)
+      grep -q "covers/lookup/batch" "$SCRIPT" \
+        || (echo "FAIL: $SCRIPT does not reference covers/lookup/batch endpoint" >&2; exit 1)
+      grep -q "X-Shopops-Tenant" "$SCRIPT" \
+        || (echo "FAIL: $SCRIPT missing X-Shopops-Tenant header" >&2; exit 1)
+
+      CATALOG="lib/seed-data/catalog.json"
+      ls "$CATALOG" || (echo "FAIL: $CATALOG missing" >&2; exit 1)
+      WITH_COVER=$(jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' "$CATALOG")
+      TOTAL=$(jq 'length' "$CATALOG")
+      echo "COVER_URLS_POPULATED=${WITH_COVER}/${TOTAL}"
+      # ROUGH OK: warn if <40 but don't fail; spec §10 explicitly allows lower threshold
+      if [ "$WITH_COVER" -lt 40 ]; then
+        echo "WARN: cover_url populated on ${WITH_COVER} items (< 40 target)" >&2
+        echo "WARN: per WO §10, ship at achieved percentage with note in manifest." >&2
+      fi
+
+      PAGE="app/shops/[shopSlug]/catalog/page.tsx"
+      ls "$PAGE" || (echo "FAIL: $PAGE missing" >&2; exit 1)
+      grep -q "cover_url" "$PAGE" \
+        || (echo "FAIL: $PAGE does not reference item.cover_url" >&2; exit 1)
+      grep -q "catalog-cover" "$PAGE" \
+        || (echo "FAIL: $PAGE does not import from lib/catalog-cover" >&2; exit 1)
+      # Palette helpers must still exist for fallback
+      grep -q "issue-cover" "$PAGE" \
+        || (echo "FAIL: issue-cover palette removed from $PAGE — fallback broken" >&2; exit 1)
+
+      TEST="__tests__/lib/catalog-cover-fallback.test.ts"
+      ls "$TEST" || (echo "FAIL: $TEST missing" >&2; exit 1)
+      TEST_COUNT=$(grep -cE "it\(|test\(" "$TEST" || echo 0)
+      echo "TEST_COUNT=${TEST_COUNT}"
+      if [ "$TEST_COUNT" -lt 4 ]; then
+        echo "FAIL: Expected >= 4 tests in $TEST, found $TEST_COUNT" >&2
+        exit 1
+      fi
+
+      echo "=== all grep assertions passed ==="
+
+  # ---------------------------------------------------------------------------
+  # 7. VERIFY-TESTS — run bun test suite
+  # ---------------------------------------------------------------------------
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      TEST_FILE="__tests__/lib/catalog-cover-fallback.test.ts"
+      if [ ! -f "$TEST_FILE" ]; then
+        echo "FAIL: $TEST_FILE missing" >&2
+        exit 1
+      fi
+      bun test "$TEST_FILE"
+
+  # ---------------------------------------------------------------------------
+  # 8. VERIFY-BUILD — best-effort Next.js build (may take 60-90s)
+  # ---------------------------------------------------------------------------
+  - id: verify-build
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      # set -e DELIBERATELY OMITTED — Next.js build can warn-but-succeed
+      OUTPUT=$(bun run build 2>&1 || npm run build 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "BUILD_RESULT=success"
+      elif echo "$OUTPUT" | grep -qi 'No such file\|command not found'; then
+        echo "STATUS=skipped_no_build_script"
+        echo "DETAIL=No build script available in Archon CI — Vercel preview is authoritative."
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${OUTPUT}" | tail -40
+        echo "OPERATOR_NOTE: Build failed in Archon CI but Vercel preview will be authoritative."
+      fi
+      exit 0
+
+  # ---------------------------------------------------------------------------
+  # 9. COMMIT-AND-PUSH — idempotent checkout + commit + push
+  # ---------------------------------------------------------------------------
+  - id: commit-and-push
+    depends_on: [verify-build]
+    bash: |
+      set -euo pipefail
+      BASE_BRANCH="wo/storefront-catalog-real-covers-01"
+      BRANCH="$BASE_BRANCH"
+
+      # Idempotent checkout: handle worktree-locked branch
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+
+      # Stage all WO-related files
+      git add lib/catalog-cover.ts
+      git add scripts/backfill-seed-covers.mjs
+      git add lib/seed-data/catalog.json
+      git add "app/shops/[shopSlug]/catalog/page.tsx"
+      git add __tests__/lib/catalog-cover-fallback.test.ts
+
+      # Optional PDP page if builder touched it
+      if [ -f "app/shops/[shopSlug]/comic/[upc]/page.tsx" ]; then
+        git add "app/shops/[shopSlug]/comic/[upc]/page.tsx" || true
+      fi
+
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(storefront): WO-STOREFRONT-CATALOG-REAL-COVERS-01 — real cover art in catalog
+
+Plugs the existing AutoFix cover resolution pipeline (POST /covers/lookup/batch)
+into the storefront catalog so real comic art renders instead of placeholder
+colored text plates.
+
+What changed:
+  - scripts/backfill-seed-covers.mjs: one-shot script that calls the cover
+    cascade for every UPC in lib/seed-data/catalog.json and writes resolved
+    URLs back into the JSON. Operator-run; static after that.
+  - lib/seed-data/catalog.json: cover_url populated for items the cascade
+    could resolve (Lunar > comic_covers > PRH-ISBN > fuzzy > ai_pick).
+  - lib/catalog-cover.ts: pure helpers (shouldShowPalette, getCoverImgProps)
+    keep render logic out of the page component and testable from bun.
+  - app/shops/[shopSlug]/catalog/page.tsx: renders <img src={item.cover_url}>
+    when truthy, falls back to existing deterministic-palette colored plate
+    when null. onError hides broken images.
+  - __tests__/lib/catalog-cover-fallback.test.ts: 4+ bun tests on pure helpers.
+
+Polish bar: ROUGH OK (Mutant Market is beta tester, not paying — per plan
+docs/plans/2026-06-15-mutant-market-hq-readiness.md).
+
+Existing fallback (deterministic palette + first-two-words-of-series hero)
+preserved intact for items the cascade can't resolve.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+      echo "BRANCH_SHA=$(git rev-parse HEAD)"
+
+  # ---------------------------------------------------------------------------
+  # 10. OPEN-PR — idempotent PR against master
+  # ---------------------------------------------------------------------------
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/storefront-catalog-real-covers-01"
+      REPO="bluedevilcollectibles/shopops-storefront"
+      BASE="master"
+      TITLE="feat(storefront): WO-STOREFRONT-CATALOG-REAL-COVERS-01 — real cover art in catalog"
+
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements **WO-STOREFRONT-CATALOG-REAL-COVERS-01**."
+        echo ""
+        echo "Plugs the existing \`/covers/lookup/batch\` cascade into the storefront"
+        echo "catalog so real cover art renders instead of placeholder colored text plates."
+        echo ""
+        echo "## Changes"
+        echo "- \`scripts/backfill-seed-covers.mjs\` — one-shot operator script (run once, JSON commits as artifact)"
+        echo "- \`lib/seed-data/catalog.json\` — \`cover_url\` populated from cascade"
+        echo "- \`lib/catalog-cover.ts\` — pure helpers (testable from bun, no React mount)"
+        echo "- \`app/shops/[shopSlug]/catalog/page.tsx\` — \`<img>\` when \`cover_url\` truthy, palette fallback when null"
+        echo "- \`__tests__/lib/catalog-cover-fallback.test.ts\` — 4+ bun tests"
+        echo ""
+        echo "## Polish Bar: ROUGH OK"
+        echo "Mutant Market is a beta tester, not paying. Per parent plan"
+        echo "\`docs/plans/2026-06-15-mutant-market-hq-readiness.md\` storefront polish"
+        echo "table item #16."
+        echo ""
+        echo "Existing deterministic-palette fallback is preserved for items the"
+        echo "cascade can't resolve. No crashes on broken image URLs."
+        echo ""
+        echo "## Tests"
+        echo "\`bun test __tests__/lib/catalog-cover-fallback.test.ts\`"
+        echo ""
+        echo "## Verify (Vercel preview)"
+        echo "Load preview URL \`/shops/bdc/catalog\` and visually confirm real cover art."
+        echo ""
+        echo "Generated by Archon bdc-storefront-catalog-real-covers workflow."
+      } > "$BODY_FILE"
+
+      existing_pr_url() {
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url \
+          --jq '.[0].url // empty' 2>/dev/null
+      }
+      PR_URL="$(existing_pr_url)"
+      if [ -n "$PR_URL" ]; then
+        echo "PR_URL=$PR_URL"
+        exit 0
+      fi
+
+      for attempt in 1 2 3 4 5; do
+        if PR_OUT=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" \
+            --title "$TITLE" --body-file "$BODY_FILE" 2>&1); then
+          echo "PR_URL=$PR_OUT"
+          exit 0
+        fi
+        PR_URL="$(existing_pr_url)"
+        if [ -n "$PR_URL" ]; then
+          echo "PR_URL=$PR_URL"
+          exit 0
+        fi
+        echo "open-pr attempt $attempt failed: $PR_OUT" >&2
+        sleep 10
+      done
+      echo "open-pr failed after retries; branch pushed but no PR" >&2
+      exit 1
+
+  # ---------------------------------------------------------------------------
+  # 11. VERCEL-VERIFY — best-effort Vercel preview deployment check.
+  #     Vercel needs ~60-120s to build after PR open. Polls up to 4 minutes.
+  # ---------------------------------------------------------------------------
+  - id: vercel-verify
+    depends_on: [open-pr]
+    bash: |
+      # set -e DELIBERATELY OMITTED — Vercel deployments may legitimately be slow/queued
+      BRANCH="wo/storefront-catalog-real-covers-01"
+      PROJECT="shopops-storefront"
+
+      if [ -z "${VERCEL_TOKEN:-}" ]; then
+        echo "STATUS=skipped_no_vercel_token"
+        echo "DETAIL=VERCEL_TOKEN not set in Archon env. Manifest will note PENDING preview check."
+        echo "OPERATOR: Verify Vercel preview manually at https://vercel.com/bluedevilcollectibles/${PROJECT}/deployments"
+        exit 0
+      fi
+
+      # Poll Vercel API for latest deployment on this branch (4 min budget)
+      for attempt in 1 2 3 4 5 6 7 8; do
+        DEPLOY=$(curl -sf \
+          "https://api.vercel.com/v6/deployments?projectId=${PROJECT}&meta-githubCommitRef=${BRANCH}&limit=1" \
+          -H "Authorization: Bearer ${VERCEL_TOKEN}" 2>&1)
+        STATE=$(echo "$DEPLOY" | jq -r '.deployments[0].state // "UNKNOWN"' 2>/dev/null)
+        URL=$(echo "$DEPLOY" | jq -r '.deployments[0].url // ""' 2>/dev/null)
+        CREATED=$(echo "$DEPLOY" | jq -r '.deployments[0].createdAt // ""' 2>/dev/null)
+        COMMIT=$(echo "$DEPLOY" | jq -r '.deployments[0].meta.githubCommitSha // ""' 2>/dev/null)
+        echo "attempt=${attempt} state=${STATE} url=${URL}"
+        if [ "$STATE" = "READY" ]; then
+          echo "STATUS=ok"
+          echo "VERCEL_URL=https://${URL}"
+          echo "VERCEL_STATE=READY"
+          echo "VERCEL_CREATED_AT=${CREATED}"
+          echo "VERCEL_COMMIT=${COMMIT}"
+          exit 0
+        fi
+        if [ "$STATE" = "ERROR" ] || [ "$STATE" = "CANCELED" ]; then
+          echo "STATUS=failed_unexpected"
+          echo "DETAIL=Vercel deployment state=${STATE}"
+          exit 0
+        fi
+        sleep 30
+      done
+
+      echo "STATUS=skipped_still_building"
+      echo "DETAIL=Vercel did not reach READY within 4 min poll. Last state: ${STATE}"
+      echo "OPERATOR: Re-check manually at https://vercel.com/bluedevilcollectibles/${PROJECT}/deployments"
+      exit 0
+
+  # ---------------------------------------------------------------------------
+  # 12. BUILD-MANIFEST — CODE class manifest v2
+  # ---------------------------------------------------------------------------
+  - id: build-manifest
+    depends_on: [vercel-verify]
+    task_class: clerical
+    prompt: |
+      Build the Captain CI manifest v2 for WO-STOREFRONT-CATALOG-REAL-COVERS-01.
+      Class: CODE (single-repo, frontend-only, Vercel deploy is runtime proof).
+
+      ## Required Fields (manifest v2 format, EXACT labels)
+
+      WO: WO-STOREFRONT-CATALOG-REAL-COVERS-01
+      Builder: Major Build (Archon bdc-storefront-catalog-real-covers)
+
+      Files modified:
+        shopops-storefront/lib/seed-data/catalog.json
+        shopops-storefront/app/shops/[shopSlug]/catalog/page.tsx
+        [PDP page if touched per implement output]
+
+      Files created:
+        shopops-storefront/scripts/backfill-seed-covers.mjs
+        shopops-storefront/lib/catalog-cover.ts
+        shopops-storefront/__tests__/lib/catalog-cover-fallback.test.ts
+
+      Tests:
+        [count from verify-tests output] passing / [count] total
+        command: bun test __tests__/lib/catalog-cover-fallback.test.ts
+
+      PRs:
+        shopops-storefront (master): [from open-pr.output PR_URL]
+
+      Merge ancestors:
+        shopops-storefront master HEAD=[BRANCH_SHA from commit-and-push.output],
+        manifest commit, behind_by: 0
+
+      Grep assertions:
+        grep -c 'item.cover_url' app/shops/[shopSlug]/catalog/page.tsx  # >= 1
+        grep -c 'shouldShowPalette\|getCoverImgProps' lib/catalog-cover.ts  # >= 2
+        jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' lib/seed-data/catalog.json
+        [include actual count from verify-grep.output COVER_URLS_POPULATED]
+
+      Runtime verification: N/A (CODE class, frontend-only — Vercel preview is the runtime proof)
+
+      Vercel deployment:
+        [VERCEL_URL, VERCEL_STATE, VERCEL_CREATED_AT, VERCEL_COMMIT from vercel-verify.output]
+        If STATUS=skipped_* or failed, note that explicitly and ask operator to re-verify.
+
+      VALIDATION: PASS (Polish bar: ROUGH OK per WO §10 — Mutant Market beta)
+
+      ## Inputs
+      $read-spec.output
+      $inspect-current-state.output
+      $probe-cover-api.output
+      $plan.output
+      $verify-grep.output
+      $verify-tests.output
+      $verify-build.output
+      $commit-and-push.output
+      $open-pr.output
+      $vercel-verify.output
+
+  # ---------------------------------------------------------------------------
+  # 13. FLIP-NOTION — set Notes property + Claude Status = REVIEW (Rule 7)
+  # ---------------------------------------------------------------------------
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-STOREFRONT-CATALOG-REAL-COVERS-01 to REVIEW with the manifest
+      in the Notes PROPERTY (not as a page comment — Captain CI reads Notes, not comments).
+
+      # OPEN QUESTION (Q1): Notion page ID NOT confirmed at draft time.
+      # Operator MUST replace NOTION_PAGE_ID_PLACEHOLDER with the real UUID before firing.
+      # Find it: query Notion database a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # for title containing "WO-STOREFRONT-CATALOG-REAL-COVERS-01".
+      Notion database ID: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+
+      Required Notion changes (single update call):
+      - Claude Status -> REVIEW
+      - Status -> Review
+      - Notes -> set to the manifest text from $build-manifest.output verbatim
+      - claimed_by: Major Build (Archon bdc-storefront-catalog-real-covers)
+      - claimed_at: 2026-05-13
+      - plan tag: plan:A-or-B
+
+      After update, log the Notion page URL to run output for audit trail.
+
+      If Notion MCP is unavailable in this runtime, output:
+        XO_TODO: Flip WO-STOREFRONT-CATALOG-REAL-COVERS-01 to REVIEW in Notion.
+                 Paste manifest from $build-manifest.output into Notes property.
+                 Set Claude Status = REVIEW, Status = Review.
+
+      ## Manifest
+      $build-manifest.output

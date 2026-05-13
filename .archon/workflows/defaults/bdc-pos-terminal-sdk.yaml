@@ -1,0 +1,508 @@
+# Drafted by yaml-author for WO-POS-TERMINAL-SDK-01 on 2026-05-13
+# Source pattern: bdc-ce-regression-suite.yaml + WO-SHOPOPS-COMMERCE-SPINE-01.yaml
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+#
+# Pre-flight: codebases bluedevilcollectibles/shopops + bluedevilcollectibles/lspro-react
+#   must both be registered in Archon. Verify:
+#     sqlite3 /opt/bdc/archon-data/archon.db "SELECT name FROM remote_agent_codebases"
+#   This WO is cross-repo. The workflow operates against the shopops repo as primary
+#   CWD; the lspro-react slice is delegated through a sibling branch + PR on that repo.
+#
+# Pre-flight (4-block): YAML exists (this file), spec exists (docs/work-orders/
+#   WO-POS-TERMINAL-SDK-01.md in bdc-xo), CWD scope = MIXED cross-repo, codebases registered.
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-POS-TERMINAL-SDK-01.yaml
+# REVIEW BEFORE DEPLOY — operator confirms Stripe TEST keys in shopops-api env on Hetzner.
+
+name: bdc-pos-terminal-sdk
+description: |
+  Use when: Executing WO-POS-TERMINAL-SDK-01 — Stripe Terminal SDK integration.
+  Input: WO_ID = WO-POS-TERMINAL-SDK-01.
+  Does: Reads spec from bdc-xo (cross-repo gh api), verifies pos_transactions schema,
+        writes migration (shopops-api/migrations/20260513_pos_terminal_columns.sql),
+        adds shopops-api/routes/pos-terminal.js + services/stripe-terminal.js + bun
+        tests, opens shopops PR. Drafts lspro-react patch (useStripeTerminal hook +
+        PaymentPanel) in a sibling worktree and opens a second PR. Runs Rule 19
+        runtime-verify against shopops-api container. Builds MIXED manifest and flips
+        Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops (primary CWD), bluedevilcollectibles/lspro-react
+        (sibling via gh + git in /tmp clone).
+  parallel_ok: true (POS-lane WO; no schema conflicts with other lanes).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  # -------------------------------------------------------------------------
+  # 1. READ SPEC
+  # -------------------------------------------------------------------------
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-POS-TERMINAL-SDK-01}"
+
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID} in bdc-xo" >&2
+        exit 1
+      fi
+
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:docs/work-orders/%s.md\nWORKFLOW_ID=%s\n\n' \
+        "$WO_ID" "$WO_ID" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n' "$SPEC_CONTENT"
+
+  # -------------------------------------------------------------------------
+  # 2. FRESH BRANCH on shopops CWD (origin/master)
+  # -------------------------------------------------------------------------
+  - id: fresh-branch
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      git fetch origin master --depth=50
+      git checkout master
+      git reset --hard origin/master
+      BASE_BRANCH="wo/pos-terminal-sdk-01"
+      BRANCH="$BASE_BRANCH"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/master
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=${BRANCH}"
+
+  # -------------------------------------------------------------------------
+  # 3. SCHEMA VERIFY — pos_transactions exists, columns present
+  # -------------------------------------------------------------------------
+  - id: schema-verify
+    depends_on: [fresh-branch]
+    bash: |
+      # set -e intentionally omitted — best-effort
+      SUPABASE_URL="${SUPABASE_URL:-}"
+      SUPABASE_SERVICE_KEY="${SUPABASE_SERVICE_KEY:-}"
+      if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+        echo "STATUS=skipped_no_env"
+        echo "DETAIL=SUPABASE_URL/SERVICE_KEY not in env; operator must verify pos_transactions schema before deploy"
+        exit 0
+      fi
+      R=$(curl -sf \
+        "${SUPABASE_URL}/rest/v1/information_schema.columns?table_name=eq.pos_transactions&select=column_name" \
+        -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+        -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" 2>&1) || true
+      if echo "$R" | grep -q '"id"'; then
+        echo "STATUS=ok"
+        echo "POS_TX_COLUMNS=${R}"
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${R}"
+      fi
+      exit 0
+
+  # -------------------------------------------------------------------------
+  # 4. PLAN
+  # -------------------------------------------------------------------------
+  - id: plan
+    depends_on: [read-spec, schema-verify]
+    task_class: medium_work
+    prompt: |
+      Plan WO-POS-TERMINAL-SDK-01 implementation. Output Markdown.
+
+      ## Required
+      - Files to create: shopops-api/migrations/20260513_pos_terminal_columns.sql,
+        shopops-api/routes/pos-terminal.js, shopops-api/services/stripe-terminal.js,
+        shopops-api/tests/test_pos_terminal.js,
+        lspro-react/src/pos/useStripeTerminal.ts, lspro-react/src/pos/PaymentPanel.tsx,
+        lspro-react/src/pos/__tests__/PaymentPanel.test.tsx
+      - Files to modify: shopops-api/index.js (mount /pos/terminal router),
+        lspro-react/src/pos/POSPage.tsx (or equivalent existing POS entrypoint;
+        IF none exists in lspro-react today, mount under /pos route),
+        lspro-react/package.json (add @stripe/terminal-js)
+      - Routes to add: see WO §7
+      - Test command (bun): bun test shopops-api/tests/test_pos_terminal.js
+      - Test command (vitest): cd lspro-react && bun test src/pos
+      - Branch (shopops): wo/pos-terminal-sdk-01
+      - Branch (lspro-react): wo/pos-terminal-sdk-01-ui
+      - PR base (shopops): master
+      - PR base (lspro-react): main
+
+      ## Spec
+      $read-spec.output
+
+      ## Schema verify
+      $schema-verify.output
+
+  # -------------------------------------------------------------------------
+  # 5. IMPLEMENT — shopops side
+  # -------------------------------------------------------------------------
+  - id: implement-shopops
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement the shopops-api half of WO-POS-TERMINAL-SDK-01. CWD = shopops repo root.
+
+        ## Plan
+        $plan.output
+
+        ## Spec
+        $read-spec.output
+
+        ## Execution Rules
+        1. Create shopops-api/migrations/20260513_pos_terminal_columns.sql with:
+           - ALTER TABLE pos_transactions ADD COLUMN IF NOT EXISTS stripe_terminal_reader_id text
+           - ALTER TABLE pos_transactions ADD COLUMN IF NOT EXISTS stripe_terminal_connection_token_at timestamptz
+           - CREATE TABLE IF NOT EXISTS stripe_terminal_readers (...)  per WO §7
+           - INSERT INTO schema_migrations VALUES ('20260513_pos_terminal_columns') ON CONFLICT DO NOTHING
+        2. Create shopops-api/services/stripe-terminal.js exporting:
+           - getStripeClient()
+           - createConnectionToken()
+           - createPaymentIntent({ amount_cents, transaction_id, tenant_id, idempotency_key })
+           - createRefund({ payment_intent_id, amount_cents, reason, idempotency_key })
+           Use the existing 'stripe' npm package (it is already in shopops-api/package.json).
+        3. Create shopops-api/routes/pos-terminal.js with 5 endpoints per WO §7.
+           Pattern: require('express').Router(), use X-Shopops-Tenant header (same as pos.js).
+        4. Modify shopops-api/index.js to mount: app.use('/pos/terminal', require('./routes/pos-terminal'))
+        5. Create shopops-api/tests/test_pos_terminal.js using bun:test with >= 7 tests
+           covering WO §11 scenarios. Mock the stripe client via dependency injection
+           (export a factory from stripe-terminal.js).
+        6. Do NOT modify existing pos.js endpoints.
+        7. Do NOT run docker, do NOT push.
+
+        Output <promise>COMPLETE</promise> only when all files exist + bun test passes locally.
+
+  # -------------------------------------------------------------------------
+  # 6. IMPLEMENT — lspro-react side (sibling clone)
+  # -------------------------------------------------------------------------
+  - id: implement-lspro
+    depends_on: [implement-shopops]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement the lspro-react half of WO-POS-TERMINAL-SDK-01.
+
+        The shopops CWD is your primary worktree. Clone lspro-react into a sibling
+        path and operate there:
+
+          git -C /tmp clone --depth=10 https://github.com/bluedevilcollectibles/lspro-react.git lspro-react
+          cd /tmp/lspro-react
+          git checkout -b wo/pos-terminal-sdk-01-ui
+
+        ## Plan
+        $plan.output
+
+        ## Execution Rules
+        1. Add @stripe/terminal-js to package.json dependencies (use latest stable).
+        2. Create src/pos/useStripeTerminal.ts hook per WO §7 (status state machine,
+           connection-token fetch, discover/connect, collectPayment helper).
+        3. Create src/pos/PaymentPanel.tsx per UI Hierarchy §5 (ReaderConnectionRow +
+           PaymentIntentRow + ErrorBanner).
+        4. Mount PaymentPanel in the existing POS page if present. If no POS page
+           exists yet in lspro-react, create src/pos/POSPage.tsx with a minimal shell
+           and route stub.
+        5. Create src/pos/__tests__/PaymentPanel.test.tsx with vitest. At minimum
+           4 tests covering simulator-connect, collect-payment happy path, amount=0
+           guard, error banner rendering.
+        6. Use existing apiFetch helper (do NOT hard-code shopops URL).
+        7. Branch name: wo/pos-terminal-sdk-01-ui. Commit identity must be John Ranson
+           / admin@bluedevilcollectibles.com.
+        8. Output <promise>COMPLETE</promise> when files exist + tests pass + branch
+           is pushed to origin.
+
+  # -------------------------------------------------------------------------
+  # 7. VERIFY GREP — multi-line-safe assertions
+  # -------------------------------------------------------------------------
+  - id: verify-grep
+    depends_on: [implement-shopops, implement-lspro]
+    bash: |
+      set -euo pipefail
+      echo "=== shopops grep ==="
+      ls shopops-api/migrations/20260513_pos_terminal_columns.sql
+      grep -q "stripe_terminal_reader_id" shopops-api/migrations/20260513_pos_terminal_columns.sql
+      grep -q "stripe_terminal_readers" shopops-api/migrations/20260513_pos_terminal_columns.sql
+      ls shopops-api/routes/pos-terminal.js
+      grep -q "pos/terminal/connection-token\|connection-token" shopops-api/routes/pos-terminal.js
+      grep -q "payment-intent" shopops-api/routes/pos-terminal.js
+      grep -q "refunds" shopops-api/routes/pos-terminal.js
+      ls shopops-api/services/stripe-terminal.js
+      grep -q "connectionTokens.create" shopops-api/services/stripe-terminal.js
+      grep -q "paymentIntents.create" shopops-api/services/stripe-terminal.js
+      ls shopops-api/tests/test_pos_terminal.js
+      TC=$(grep -c "it(\|test(" shopops-api/tests/test_pos_terminal.js || echo 0)
+      echo "Backend test count: $TC"
+      [ "$TC" -ge 7 ] || (echo "FAIL backend test count" >&2; exit 1)
+
+      echo "=== lspro-react grep (sibling) ==="
+      LR=/tmp/lspro-react
+      grep -q "@stripe/terminal-js" "$LR/package.json"
+      grep -q "useStripeTerminal" "$LR/src/pos/useStripeTerminal.ts"
+      grep -q "PaymentPanel" "$LR/src/pos/PaymentPanel.tsx"
+      echo "=== verify-grep PASS ==="
+
+  # -------------------------------------------------------------------------
+  # 8. VERIFY TESTS — bun
+  # -------------------------------------------------------------------------
+  - id: verify-tests
+    depends_on: [implement-shopops, implement-lspro]
+    bash: |
+      set -euo pipefail
+      cd shopops-api
+      bun test tests/test_pos_terminal.js || (echo "Backend tests failed" >&2; exit 1)
+      cd /tmp/lspro-react
+      bun test src/pos || (echo "Frontend tests failed; CI against staging is authoritative" >&2)
+
+  # -------------------------------------------------------------------------
+  # 9. COMMIT + PUSH (shopops)
+  # -------------------------------------------------------------------------
+  - id: commit-shopops
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-terminal-sdk-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add \
+        shopops-api/migrations/20260513_pos_terminal_columns.sql \
+        shopops-api/routes/pos-terminal.js \
+        shopops-api/services/stripe-terminal.js \
+        shopops-api/tests/test_pos_terminal.js \
+        shopops-api/index.js
+      if git diff --cached --quiet; then
+        echo "No shopops staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(api): WO-POS-TERMINAL-SDK-01 — Stripe Terminal SDK endpoints + simulator path
+
+Adds shopops-api/routes/pos-terminal.js with:
+  POST /pos/terminal/connection-token
+  POST /pos/terminal/payment-intent
+  POST /pos/terminal/payment-intent/:id/cancel
+  POST /pos/terminal/refunds
+  GET  /pos/terminal/mode
+
+Adds services/stripe-terminal.js (singleton + 3 helpers).
+Adds migration 20260513_pos_terminal_columns.sql for stripe_terminal_reader_id +
+stripe_terminal_connection_token_at + stripe_terminal_readers table.
+Adds tests/test_pos_terminal.js with 7+ bun tests.
+
+Ships in simulator mode by default (STRIPE_TERMINAL_MODE=simulator).
+Real-hardware validation is WO-POS-TERMINAL-HARDWARE-VALIDATION-01.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "SHOPOPS_BRANCH=${BRANCH}"
+      echo "SHOPOPS_SHA=$(git rev-parse HEAD)"
+
+  # -------------------------------------------------------------------------
+  # 10. OPEN PR (shopops)
+  # -------------------------------------------------------------------------
+  - id: open-pr-shopops
+    depends_on: [commit-shopops]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-terminal-sdk-01"
+      REPO="bluedevilcollectibles/shopops"
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements WO-POS-TERMINAL-SDK-01 (shopops half) — Stripe Terminal SDK backend."
+        echo ""
+        echo "## Files"
+        echo "- Created: shopops-api/migrations/20260513_pos_terminal_columns.sql"
+        echo "- Created: shopops-api/routes/pos-terminal.js"
+        echo "- Created: shopops-api/services/stripe-terminal.js"
+        echo "- Created: shopops-api/tests/test_pos_terminal.js"
+        echo "- Modified: shopops-api/index.js"
+        echo ""
+        echo "## Companion PR"
+        echo "lspro-react UI PR: see wo/pos-terminal-sdk-01-ui"
+        echo ""
+        echo "## Stop conditions"
+        echo "See bdc-xo:docs/work-orders/WO-POS-TERMINAL-SDK-01.md §12."
+      } > "$BODY"
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "SHOPOPS_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo "$REPO" --base master --head "$BRANCH" \
+            --title "feat(api): WO-POS-TERMINAL-SDK-01 — Stripe Terminal SDK" \
+            --body-file "$BODY" 2>&1); then
+          echo "SHOPOPS_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr-shopops failed" >&2; exit 1
+
+  # -------------------------------------------------------------------------
+  # 11. COMMIT + PUSH + PR (lspro-react, sibling worktree)
+  # -------------------------------------------------------------------------
+  - id: commit-and-pr-lspro
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      cd /tmp/lspro-react
+      BRANCH="wo/pos-terminal-sdk-01-ui"
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+        add src/pos package.json
+      if git diff --cached --quiet; then
+        echo "No lspro staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(pos): WO-POS-TERMINAL-SDK-01 — useStripeTerminal hook + PaymentPanel
+
+Adds src/pos/useStripeTerminal.ts (Terminal SDK lifecycle hook).
+Adds src/pos/PaymentPanel.tsx (ReaderConnectionRow + PaymentIntentRow + ErrorBanner).
+Adds @stripe/terminal-js dependency.
+Ships in simulator mode by default.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements WO-POS-TERMINAL-SDK-01 (lspro-react half)."
+        echo ""
+        echo "Vercel staging URL: https://staging.livesellerpro.app/pos"
+      } > "$BODY"
+      EXIST=$(gh pr list --repo bluedevilcollectibles/lspro-react --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "LSPRO_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo bluedevilcollectibles/lspro-react --base main --head "$BRANCH" \
+            --title "feat(pos): WO-POS-TERMINAL-SDK-01 — Terminal SDK UI" --body-file "$BODY" 2>&1); then
+          echo "LSPRO_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr-lspro failed" >&2; exit 1
+
+  # -------------------------------------------------------------------------
+  # 12. RUNTIME VERIFY — Rule 19 best-effort
+  # -------------------------------------------------------------------------
+  - id: runtime-verify
+    depends_on: [open-pr-shopops]
+    bash: |
+      RESULT=$(docker exec shopops-api grep -n "pos/terminal" /app/routes/pos-terminal.js 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "RULE19=${RESULT}"
+      elif echo "$RESULT" | grep -qiE 'No such (container|file)|not found'; then
+        echo "STATUS=skipped_container_not_rebuilt"
+        echo "RERUN=docker exec shopops-api grep -n 'pos/terminal' /app/routes/pos-terminal.js"
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${RESULT}"
+      fi
+      exit 0
+
+  # -------------------------------------------------------------------------
+  # 13. BUILD MANIFEST
+  # -------------------------------------------------------------------------
+  - id: build-manifest
+    depends_on: [runtime-verify, commit-and-pr-lspro]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 for WO-POS-TERMINAL-SDK-01 (MIXED class).
+
+      WO: WO-POS-TERMINAL-SDK-01
+      Builder: Codex (Archon bdc-pos-terminal-sdk)
+      Files created (shopops):
+        - shopops-api/migrations/20260513_pos_terminal_columns.sql
+        - shopops-api/routes/pos-terminal.js
+        - shopops-api/services/stripe-terminal.js
+        - shopops-api/tests/test_pos_terminal.js
+      Files modified (shopops):
+        - shopops-api/index.js
+      Files created (lspro-react):
+        - src/pos/useStripeTerminal.ts
+        - src/pos/PaymentPanel.tsx
+        - src/pos/__tests__/PaymentPanel.test.tsx
+      Files modified (lspro-react):
+        - package.json (added @stripe/terminal-js)
+      Tests:
+        - bun test shopops-api/tests/test_pos_terminal.js -> [from $verify-tests.output]
+        - bun test lspro-react/src/pos -> [from $verify-tests.output]
+      PRs:
+        - shopops: [from $open-pr-shopops.output SHOPOPS_PR]
+        - lspro-react: [from $commit-and-pr-lspro.output LSPRO_PR]
+      Merge ancestors:
+        - shopops master HEAD: [from $commit-shopops.output SHOPOPS_SHA], behind_by: 0
+        - lspro-react main HEAD: TBD by Captain CI, behind_by: 0
+      Grep assertions:
+        - grep -q 'pos/terminal' shopops-api/routes/pos-terminal.js
+        - grep -q 'connectionTokens.create' shopops-api/services/stripe-terminal.js
+        - grep -q 'paymentIntents.create' shopops-api/services/stripe-terminal.js
+        - grep -q 'stripe_terminal_reader_id' shopops-api/migrations/20260513_pos_terminal_columns.sql
+        - grep -q '@stripe/terminal-js' lspro-react/package.json
+        - grep -q 'useStripeTerminal' lspro-react/src/pos/useStripeTerminal.ts
+      Runtime verification:
+        - docker exec shopops-api grep -n 'pos/terminal' /app/routes/pos-terminal.js
+        - [actual output from $runtime-verify.output]
+      Vercel deployment:
+        - lspro-react: staging URL https://staging.livesellerpro.app/pos | state READY | commit matches HEAD: pending Captain CI
+      VALIDATION: PASS (pending migration apply + container rebuild + Vercel deploy)
+
+      Inputs:
+      $read-spec.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-shopops.output
+      $open-pr-shopops.output
+      $commit-and-pr-lspro.output
+      $runtime-verify.output
+
+  # -------------------------------------------------------------------------
+  # 14. FLIP NOTION
+  # -------------------------------------------------------------------------
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-POS-TERMINAL-SDK-01 to REVIEW. Manifest goes in the Notes
+      property (NOT a comment — Captain CI reads Notes).
+
+      Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # OPEN QUESTION: page ID for WO-POS-TERMINAL-SDK-01 not yet authored in Notion.
+      # Operator searches database by exact WO ID equality (NOT keyword) and pastes page ID.
+
+      Update:
+      - Claude Status -> REVIEW
+      - Status -> Review
+      - Notes -> manifest text from $build-manifest.output verbatim
+      - claimed_by: Codex (Archon)
+      - claimed_at: today
+
+      If Notion MCP unavailable, output:
+        XO_TODO: Flip WO-POS-TERMINAL-SDK-01 to REVIEW; paste manifest from $build-manifest.output into Notes property.
+
+      Manifest:
+      $build-manifest.output

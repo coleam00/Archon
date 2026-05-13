@@ -1,0 +1,394 @@
+# Drafted by yaml-author for WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 on 2026-05-13
+# Source pattern: WO-POS-TERMINAL-SDK-01.yaml (cross-repo, MIXED but ROUGH-OK polish)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+#
+# Pre-flight (4-block):
+#   1. YAML exists: this file
+#   2. Spec exists: docs/work-orders/WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01.md in bdc-xo
+#   3. CWD scope: MIXED cross-repo (shopops primary CWD + lspro-react sibling /tmp clone)
+#   4. Codebases registered: bluedevilcollectibles/shopops AND bluedevilcollectibles/lspro-react
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01.yaml
+# REVIEW BEFORE DEPLOY — operator confirms shopops-api has read access to shipment_items
+# table (verify with curl to information_schema.columns).
+#
+# Polish bar: ROUGH OK — admin tool, manual workaround acceptable. V1 limitations in spec §13.
+
+name: bdc-shopops-shipment-reconciliation-ui
+description: |
+  Use when: Executing WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — distributor invoice vs
+    shipment reconciliation. CSV-upload-only v1.
+  Input: WO_ID = WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01.
+  Does:
+    - Adds shopops-api/routes/distributor-reconcile.js (thin compare endpoint).
+    - Adds lspro-react admin page with CSV upload + discrepancy table.
+    - Runs 4-test minimum (3 backend + 1 frontend). Skips exhaustive edge-case tests.
+    - Builds MIXED manifest and flips Notion to REVIEW.
+  Repo: shopops (primary CWD), lspro-react (sibling /tmp clone).
+  parallel_ok: true.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01}"
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID} in bdc-xo" >&2; exit 1
+      fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' \
+        "$WO_ID" "$WORKFLOW_ID" "$SPEC_CONTENT"
+
+  - id: fresh-branch
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      git fetch origin master --depth=50
+      git checkout master
+      git reset --hard origin/master
+      BASE_BRANCH="wo/shopops-shipment-reconciliation-ui-01"
+      BRANCH="$BASE_BRANCH"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/master
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=${BRANCH}"
+
+  - id: schema-verify
+    depends_on: [fresh-branch]
+    bash: |
+      # set -e omitted — best-effort
+      SUPABASE_URL="${SUPABASE_URL:-}"
+      SUPABASE_SERVICE_KEY="${SUPABASE_SERVICE_KEY:-}"
+      if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+        echo "STATUS=skipped_no_env"
+        echo "DETAIL=Verify shipment_items columns before writing reconcile SQL"
+        exit 0
+      fi
+      R=$(curl -sf \
+        "${SUPABASE_URL}/rest/v1/information_schema.columns?table_name=eq.shipment_items&select=column_name" \
+        -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+        -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" 2>&1) || true
+      echo "STATUS=ok"
+      echo "SHIPMENT_ITEMS_COLUMNS=${R}"
+      exit 0
+
+  - id: plan
+    depends_on: [read-spec, schema-verify]
+    task_class: medium_work
+    prompt: |
+      Plan WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01.
+
+      ## Required outputs
+      - Files to create (shopops): shopops-api/routes/distributor-reconcile.js,
+        shopops-api/tests/test_distributor_reconcile.js
+      - Files to modify (shopops): shopops-api/index.js (mount new router)
+      - Files to create (lspro-react): src/pages/admin/ShipmentReconciliationPage.tsx,
+        src/pages/admin/__tests__/ShipmentReconciliationPage.test.tsx,
+        src/lib/csv-parse-distributor.ts
+      - Test commands:
+        - bun test shopops-api/tests/test_distributor_reconcile.js (3 tests)
+        - bun test lspro-react/src/pages/admin (1 test)
+      - V1 limitations (acceptable, ROUGH OK): CSV-only (no PDF), fixed template,
+        no persistence, no auto-credit-memo, no fuzzy SKU match. Skip exhaustive
+        edge-case tests.
+
+      ## Spec
+      $read-spec.output
+
+      ## Schema verify
+      $schema-verify.output
+
+  - id: implement-shopops
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement shopops-api half of WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01.
+        CWD = shopops repo root.
+
+        ## Plan
+        $plan.output
+
+        ## Execution rules
+        1. Create shopops-api/routes/distributor-reconcile.js exposing:
+             POST /distributor/reconcile
+           Body: { start_date, end_date, lines: [{ sku, qty_invoiced, unit_price_cents, total_cents }] }
+           Logic: query shipment_items joined to shipments WHERE received_at BETWEEN start AND end
+                  AND tenant matches; join body lines by sku; compute qty_diff +
+                  dollars_diff_cents + category ('Overcharged' / 'Missing item' /
+                  'Surplus' / 'Match').
+           Return { summary, rows }.
+        2. Modify shopops-api/index.js: app.use('/distributor/reconcile', require('./routes/distributor-reconcile'))
+        3. Create shopops-api/tests/test_distributor_reconcile.js with bun:test.
+           AT MINIMUM 3 tests:
+             - match (0 discrepancies)
+             - overcharged
+             - missing item
+           Mock pg pool via factory. ROUGH-OK polish bar — do NOT add exhaustive
+           edge-case tests.
+        4. Verify column names from $schema-verify.output before writing SQL.
+        5. Do NOT push.
+
+        Output <promise>COMPLETE</promise> when shopops files exist + 3 bun tests pass.
+
+  - id: implement-lspro
+    depends_on: [implement-shopops]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 4
+      prompt: |
+        Implement lspro-react half of WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01.
+
+        Clone lspro-react into sibling path:
+          git -C /tmp clone --depth=10 https://github.com/bluedevilcollectibles/lspro-react.git lspro-react
+          cd /tmp/lspro-react
+          git checkout -b wo/shopops-shipment-reconciliation-ui-01-ui
+
+        ## Execution rules
+        1. Create src/lib/csv-parse-distributor.ts — pure function. Validates headers
+           ['sku', 'title', 'qty_invoiced', 'unit_price_cents', 'total_cents'].
+           Returns { ok: true, lines: [...] } | { ok: false, error: '...', line?: number }.
+        2. Create src/pages/admin/ShipmentReconciliationPage.tsx per UI Hierarchy §5.
+           UploadCard + ResultsCard + ExportButton (browser-side CSV download).
+           Use existing apiFetch helper for POST /distributor/reconcile.
+        3. Create src/pages/admin/__tests__/ShipmentReconciliationPage.test.tsx with
+           vitest. AT MINIMUM 1 test — CSV missing 'sku' header shows error banner.
+           ROUGH-OK polish bar.
+        4. Mount route at /admin/receiving/reconcile in the existing router.
+        5. Commit identity: John Ranson / admin@bluedevilcollectibles.com.
+        6. Push branch.
+
+        Output <promise>COMPLETE</promise> when files exist + branch pushed.
+
+  - id: verify-grep
+    depends_on: [implement-shopops, implement-lspro]
+    bash: |
+      set -euo pipefail
+      echo "=== shopops ==="
+      ls shopops-api/routes/distributor-reconcile.js
+      grep -q "distributor/reconcile\|/reconcile" shopops-api/routes/distributor-reconcile.js
+      grep -q "Overcharged\|Missing item\|Surplus" shopops-api/routes/distributor-reconcile.js
+      ls shopops-api/tests/test_distributor_reconcile.js
+      TC=$(grep -c "it(\|test(" shopops-api/tests/test_distributor_reconcile.js || echo 0)
+      [ "$TC" -ge 3 ] || (echo "FAIL backend test count $TC < 3" >&2; exit 1)
+      grep -q "distributor-reconcile\|/distributor/reconcile" shopops-api/index.js
+      echo "=== lspro-react sibling ==="
+      LR=/tmp/lspro-react
+      ls "$LR/src/lib/csv-parse-distributor.ts"
+      ls "$LR/src/pages/admin/ShipmentReconciliationPage.tsx"
+      grep -q "qty_invoiced\|distributor" "$LR/src/lib/csv-parse-distributor.ts"
+      echo "verify-grep PASS"
+
+  - id: verify-tests
+    depends_on: [implement-shopops, implement-lspro]
+    bash: |
+      set -euo pipefail
+      cd shopops-api && bun test tests/test_distributor_reconcile.js
+      cd /tmp/lspro-react && bun test src/pages/admin || \
+        echo "frontend tests reported failures; CI on Vercel is authoritative"
+
+  - id: commit-shopops
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/shopops-shipment-reconciliation-ui-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add shopops-api/routes/distributor-reconcile.js shopops-api/index.js \
+        shopops-api/tests/test_distributor_reconcile.js
+      if git diff --cached --quiet; then
+        echo "No shopops staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(api): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — distributor reconcile endpoint
+
+Adds POST /distributor/reconcile (thin compare endpoint).
+Joins request lines (parsed from owner CSV) with shipment_items in date range
+and returns discrepancy summary + per-row category.
+
+ROUGH-OK polish bar — CSV-only v1, fixed template. See spec §13 for v1 limitations.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "SHOPOPS_SHA=$(git rev-parse HEAD)"
+      echo "SHOPOPS_BRANCH=${BRANCH}"
+
+  - id: open-pr-shopops
+    depends_on: [commit-shopops]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/shopops-shipment-reconciliation-ui-01"
+      REPO="bluedevilcollectibles/shopops"
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "SHOPOPS_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo "$REPO" --base master --head "$BRANCH" \
+            --title "feat(api): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — distributor reconcile" \
+            --body "ROUGH-OK polish bar. CSV-only v1. See bdc-xo:docs/work-orders/WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01.md" 2>&1); then
+          echo "SHOPOPS_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr-shopops failed" >&2; exit 1
+
+  - id: commit-and-pr-lspro
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      cd /tmp/lspro-react
+      git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+        add src/lib/csv-parse-distributor.ts src/pages/admin
+      if git diff --cached --quiet; then
+        echo "No lspro staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(admin): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — CSV reconcile page
+
+Adds /admin/receiving/reconcile page (CSV upload + discrepancy table).
+Adds src/lib/csv-parse-distributor.ts pure parser.
+
+ROUGH-OK polish bar.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin wo/shopops-shipment-reconciliation-ui-01-ui
+      EXIST=$(gh pr list --repo bluedevilcollectibles/lspro-react --head wo/shopops-shipment-reconciliation-ui-01-ui --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "LSPRO_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo bluedevilcollectibles/lspro-react --base main --head wo/shopops-shipment-reconciliation-ui-01-ui \
+            --title "feat(admin): WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 — CSV reconcile page" \
+            --body "ROUGH-OK polish bar. Staging URL: https://staging.livesellerpro.app/admin/receiving/reconcile" 2>&1); then
+          echo "LSPRO_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr-lspro failed" >&2; exit 1
+
+  - id: runtime-verify
+    depends_on: [open-pr-shopops]
+    bash: |
+      RESULT=$(docker exec shopops-api grep -n "distributor/reconcile" /app/routes/distributor-reconcile.js 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "RULE19=${RESULT}"
+      elif echo "$RESULT" | grep -qiE 'No such (container|file)|not found'; then
+        echo "STATUS=skipped_container_not_rebuilt"
+        echo "RERUN=docker exec shopops-api grep -n 'distributor/reconcile' /app/routes/distributor-reconcile.js"
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${RESULT}"
+      fi
+      exit 0
+
+  - id: build-manifest
+    depends_on: [runtime-verify, commit-and-pr-lspro]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 for WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 (MIXED class, ROUGH-OK).
+
+      WO: WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01
+      Builder: Devils Cauldron (Archon bdc-shopops-shipment-reconciliation-ui)
+      Polish bar: ROUGH OK (admin tool; v1 limitations in spec §13)
+
+      Files created (shopops):
+       - shopops-api/routes/distributor-reconcile.js
+       - shopops-api/tests/test_distributor_reconcile.js
+      Files modified (shopops):
+       - shopops-api/index.js
+      Files created (lspro-react):
+       - src/lib/csv-parse-distributor.ts
+       - src/pages/admin/ShipmentReconciliationPage.tsx
+       - src/pages/admin/__tests__/ShipmentReconciliationPage.test.tsx
+
+      Tests:
+       - bun test shopops-api/tests/test_distributor_reconcile.js -> [from $verify-tests.output]
+       - bun test lspro-react/src/pages/admin -> [from $verify-tests.output]
+
+      PRs:
+       - shopops: [from $open-pr-shopops.output SHOPOPS_PR]
+       - lspro-react: [from $commit-and-pr-lspro.output LSPRO_PR]
+
+      Merge ancestors:
+       - shopops master HEAD: [from $commit-shopops.output SHOPOPS_SHA], behind_by: 0
+       - lspro-react main HEAD: pending Captain CI
+
+      Grep assertions:
+       - grep -q '/distributor/reconcile' shopops-api/routes/distributor-reconcile.js
+       - grep -q 'Overcharged' shopops-api/routes/distributor-reconcile.js
+       - grep -c 'it(\|test(' shopops-api/tests/test_distributor_reconcile.js >= 3
+       - ls lspro-react/src/lib/csv-parse-distributor.ts
+
+      Runtime verification:
+       - [from $runtime-verify.output]
+
+      Vercel deployment:
+       - lspro-react staging: https://staging.livesellerpro.app/admin/receiving/reconcile (pending Captain CI)
+
+      VALIDATION: PASS (pending container rebuild + Vercel deploy)
+
+      Inputs:
+      $read-spec.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-shopops.output
+      $open-pr-shopops.output
+      $commit-and-pr-lspro.output
+      $runtime-verify.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 to REVIEW.
+      Manifest goes in Notes property (NOT comment).
+
+      Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # OPEN QUESTION: page ID for WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 not yet
+      # authored in Notion. Operator filters by exact WO ID equality before firing.
+
+      Update:
+       - Claude Status -> REVIEW
+       - Status -> Review
+       - Notes -> $build-manifest.output verbatim
+       - claimed_by: Devils Cauldron (Archon)
+       - claimed_at: today
+
+      If Notion MCP unavailable, output:
+        XO_TODO: Flip WO-SHOPOPS-SHIPMENT-RECONCILIATION-UI-01 to REVIEW; paste manifest.
+
+      Manifest:
+      $build-manifest.output

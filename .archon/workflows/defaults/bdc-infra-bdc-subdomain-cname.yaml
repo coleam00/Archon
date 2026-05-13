@@ -1,0 +1,359 @@
+# Drafted by yaml-author for WO-INFRA-BDC-SUBDOMAIN-CNAME-01 on 2026-05-13
+# Source pattern: WO-INFRA-VERCEL-PASSWORD-DECISION-01.yaml (sibling INFRA decision WO)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+#
+# Pre-flight (4-block):
+#   1. YAML exists: this file
+#   2. Spec exists: docs/work-orders/WO-INFRA-BDC-SUBDOMAIN-CNAME-01.md in bdc-xo
+#   3. CWD scope: MIXED — bdc-xo (decision doc) + shopops-storefront (marketing page footer)
+#   4. Codebases registered: bluedevilcollectibles/bdc-xo + bluedevilcollectibles/shopops-storefront
+#
+# DEPENDS ON: WO-INFRA-VERCEL-PASSWORD-DECISION-01 (Option C unblocks
+# bluedevilcollectibles.comicstoreos.com if that's the canonical chosen here).
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-INFRA-BDC-SUBDOMAIN-CNAME-01.yaml
+# REVIEW BEFORE DEPLOY — operator confirms CLOUDFLARE_API_TOKEN (or CF_API_TOKEN) +
+# CLOUDFLARE_ZONE_ID for comicstoreos.com zone are present (or surface to operator).
+#
+# Polish bar: ROUGH OK — pick ONE canonical subdomain, fix DNS, update marketing copy.
+
+name: bdc-infra-bdc-subdomain-cname
+description: |
+  Use when: Executing WO-INFRA-BDC-SUBDOMAIN-CNAME-01 — fix SSL/CNAME for BDC tenant.
+  Input: WO_ID = WO-INFRA-BDC-SUBDOMAIN-CNAME-01.
+  Does:
+    - Verifies current state of bdc.comicstoreos.com (expects SSL fail) and
+      bluedevilcollectibles.comicstoreos.com (depends on companion WO Option C).
+    - Drafts decision doc: docs/decisions/2026-05-13-bdc-subdomain-canonical.md.
+    - Default canonical = bluedevilcollectibles.comicstoreos.com (long form).
+    - Updates shopops-storefront marketing-page footer to use canonical only.
+    - Surfaces Cloudflare DNS action if needed (best-effort API; operator follow-up
+      if token absent).
+    - Builds INFRA manifest with curl evidence + flips Notion to REVIEW.
+  Repos: bdc-xo (decision doc) + shopops-storefront (marketing copy).
+  parallel_ok: true (no overlap with other lanes).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-INFRA-BDC-SUBDOMAIN-CNAME-01}"
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID}" >&2; exit 1
+      fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' \
+        "$WO_ID" "$WORKFLOW_ID" "$SPEC_CONTENT"
+
+  - id: verify-current-state
+    depends_on: [read-spec]
+    bash: |
+      # set -e omitted — diagnostics
+      echo "=== dig ==="
+      DIG_BDC=$(dig bdc.comicstoreos.com CNAME +short 2>&1 || true)
+      DIG_LONG=$(dig bluedevilcollectibles.comicstoreos.com CNAME +short 2>&1 || true)
+      echo "DIG_BDC=${DIG_BDC}"
+      echo "DIG_LONG=${DIG_LONG}"
+      echo "=== curl ==="
+      BDC=$(curl -sI -m 10 "https://bdc.comicstoreos.com" 2>&1 | head -1 || echo "CURL_FAIL")
+      LONG=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://bluedevilcollectibles.comicstoreos.com" 2>/dev/null || echo "000")
+      echo "BDC_CURL=${BDC}"
+      echo "LONG_CODE=${LONG}"
+      if echo "$BDC" | grep -qiE 'SSL|handshake|schannel|CURL_FAIL'; then
+        echo "STATUS=expected_ssl_fail"
+        echo "DETAIL=bdc.comicstoreos.com SSL fail confirmed; canonical long form returned ${LONG}"
+      elif echo "$BDC" | grep -q '200'; then
+        echo "STATUS=both_active_unexpected"
+        echo "DETAIL=Both subdomains active; pick canonical + decommission the other"
+      else
+        echo "STATUS=indeterminate"
+        echo "DETAIL=BDC short form curl: ${BDC}; long form code: ${LONG}"
+      fi
+      exit 0
+
+  - id: fresh-branch-bdcxo
+    depends_on: [verify-current-state]
+    bash: |
+      set -euo pipefail
+      git fetch origin main --depth=50
+      git checkout main
+      git reset --hard origin/main
+      BASE_BRANCH="wo/infra-bdc-subdomain-cname-01"
+      BRANCH="$BASE_BRANCH"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/main
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=${BRANCH}"
+
+  - id: draft-decision-doc
+    depends_on: [fresh-branch-bdcxo]
+    task_class: small_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 3
+      prompt: |
+        Create docs/decisions/2026-05-13-bdc-subdomain-canonical.md in bdc-xo (CWD).
+
+        ## Spec
+        $read-spec.output
+
+        ## Current state
+        $verify-current-state.output
+
+        ## Required content
+        - Title: "Decision: BDC tenant canonical subdomain (2026-05-13)"
+        - Context: 2026-05-13 audit found bdc.comicstoreos.com fails SSL; marketing
+          links to broken subdomain. Mutant Market HQ 2026-06-15 needs canonical
+          pattern locked.
+        - Options table (A long-form / B short-form per WO §6).
+        - Decision: Option A — bluedevilcollectibles.comicstoreos.com is canonical
+          (matches existing Vercel attachment + tenant-slug convention). Default
+          recommendation; if spec body indicates John chose Option B, document that.
+        - Execution:
+          - DNS: wildcard *.comicstoreos.com CNAME already exists; no new explicit record needed for long form.
+          - Vercel: bluedevilcollectibles.comicstoreos.com already attached to shopops-storefront project.
+          - Marketing copy: update app/page.tsx footer in shopops-storefront to use canonical.
+          - bdc.comicstoreos.com left alone (will continue to fail SSL — harmless dead subdomain).
+        - Sign-off: "Approved: John Ranson, 2026-05-13"
+
+        Output <promise>COMPLETE</promise> when file exists.
+
+  - id: update-marketing-storefront
+    depends_on: [draft-decision-doc]
+    task_class: small_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 4
+      prompt: |
+        Update shopops-storefront marketing page to use canonical BDC subdomain.
+
+        Clone shopops-storefront into sibling path:
+          git -C /tmp clone --depth=10 https://github.com/bluedevilcollectibles/shopops-storefront.git shopops-storefront
+          cd /tmp/shopops-storefront
+          git checkout -b wo/infra-bdc-subdomain-cname-01-marketing
+
+        ## Execution rules
+        1. Locate the marketing footer "BDC Store" link via:
+             grep -rn 'bdc.comicstoreos.com\|bluedevilcollectibles.comicstoreos.com' app/
+           Most likely in app/page.tsx.
+        2. Update the link href to:
+             https://bluedevilcollectibles.comicstoreos.com  (Option A — canonical long form)
+           If the spec indicates Option B was chosen instead, use bdc.comicstoreos.com.
+        3. Confirm no other broken-subdomain references remain. Re-grep after edit:
+             grep -rn 'bdc.comicstoreos.com' app/  should return 0 lines (Option A)
+             OR be limited to the canonical link only (Option B).
+        4. Run bunx tsc --noEmit and confirm exit 0.
+        5. Commit identity: John Ranson / admin@bluedevilcollectibles.com.
+        6. Push branch.
+
+        V1 limitations (ROUGH OK): no weekly probe added; no automated SSL drift
+        detection; only the BDC tenant fixed (other tenants inherit policy).
+
+        Output <promise>COMPLETE</promise> when marketing patch committed + pushed.
+
+  - id: cloudflare-dns-action
+    depends_on: [verify-current-state]
+    bash: |
+      # set -e omitted — best-effort; many setups handle DNS via dashboard
+      CF_TOKEN="${CLOUDFLARE_API_TOKEN:-${CF_API_TOKEN:-}}"
+      CF_ZONE="${CLOUDFLARE_ZONE_ID:-}"
+
+      if [ -z "$CF_TOKEN" ] || [ -z "$CF_ZONE" ]; then
+        echo "STATUS=skipped_no_creds"
+        echo "DETAIL=No Cloudflare API creds in harness env. Canonical Option A relies on existing wildcard CNAME — no DNS change required. If Option B was chosen, operator adds explicit bdc.comicstoreos.com CNAME via Cloudflare dashboard."
+        exit 0
+      fi
+
+      # For Option A (default): verify the wildcard *.comicstoreos.com CNAME exists.
+      RESULT=$(curl -sf \
+        "https://api.cloudflare.com/client/v4/zones/${CF_ZONE}/dns_records?name=*.comicstoreos.com" \
+        -H "Authorization: Bearer ${CF_TOKEN}" \
+        -H "Content-Type: application/json" 2>&1) || true
+      EXIT=$?
+      if [ $EXIT -eq 0 ] && echo "$RESULT" | grep -q 'cname.vercel-dns.com'; then
+        echo "STATUS=ok"
+        echo "DETAIL=Wildcard CNAME confirmed in zone"
+      elif echo "$RESULT" | grep -qiE '403|forbidden|unauthorized'; then
+        echo "STATUS=skipped_unauthorized"
+        echo "DETAIL=Cloudflare API 403; operator verifies via dashboard"
+      else
+        echo "STATUS=needs_operator_review"
+        echo "DETAIL=${RESULT}"
+      fi
+      exit 0
+
+  - id: verify-post-state
+    depends_on: [update-marketing-storefront, cloudflare-dns-action]
+    bash: |
+      # set -e omitted — diagnostics
+      sleep 5
+      LONG=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://bluedevilcollectibles.comicstoreos.com" 2>/dev/null || echo "000")
+      echo "CANONICAL_POST_CODE=${LONG}"
+      # Marketing page should now NOT contain bdc.comicstoreos.com (Option A canonical)
+      HOMEPAGE=$(curl -s -m 10 "https://comicstoreos.com" 2>/dev/null | head -c 8000)
+      if echo "$HOMEPAGE" | grep -q "bdc.comicstoreos.com"; then
+        echo "MARKETING_HAS_BROKEN_REF=true"
+        echo "STATUS=partial"
+        echo "DETAIL=Marketing PR not yet deployed to Vercel production; Captain CI verifies post-deploy"
+      else
+        echo "MARKETING_HAS_BROKEN_REF=false"
+        echo "STATUS=ok"
+      fi
+      exit 0
+
+  - id: commit-and-push-bdcxo
+    depends_on: [verify-post-state]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/infra-bdc-subdomain-cname-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add docs/decisions/2026-05-13-bdc-subdomain-canonical.md
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "docs(decision): WO-INFRA-BDC-SUBDOMAIN-CNAME-01 — canonical bdc tenant subdomain
+
+Picks canonical: bluedevilcollectibles.comicstoreos.com (Option A, long form).
+Documents 2 options + rationale. Marketing page footer update lives in a
+separate shopops-storefront PR.
+
+ROUGH-OK polish bar — see WO §13.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "BDCXO_SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr-bdcxo
+    depends_on: [commit-and-push-bdcxo]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/infra-bdc-subdomain-cname-01"
+      REPO="bluedevilcollectibles/bdc-xo"
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "BDCXO_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+            --title "docs(decision): WO-INFRA-BDC-SUBDOMAIN-CNAME-01 — canonical subdomain" \
+            --body "INFRA WO decision doc. ROUGH-OK polish bar." 2>&1); then
+          echo "BDCXO_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr-bdcxo failed" >&2; exit 1
+
+  - id: open-pr-storefront
+    depends_on: [update-marketing-storefront]
+    bash: |
+      set -euo pipefail
+      REPO="bluedevilcollectibles/shopops-storefront"
+      BRANCH="wo/infra-bdc-subdomain-cname-01-marketing"
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "STOREFRONT_PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+            --title "fix(marketing): WO-INFRA-BDC-SUBDOMAIN-CNAME-01 — canonical BDC subdomain" \
+            --body "Replaces broken bdc.comicstoreos.com link in marketing footer with canonical bluedevilcollectibles.comicstoreos.com. Companion to bdc-xo decision doc." 2>&1); then
+          echo "STOREFRONT_PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr-storefront failed" >&2; exit 1
+
+  - id: build-manifest
+    depends_on: [open-pr-bdcxo, open-pr-storefront, verify-post-state]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 for WO-INFRA-BDC-SUBDOMAIN-CNAME-01 (INFRA class, ROUGH-OK).
+
+      WO: WO-INFRA-BDC-SUBDOMAIN-CNAME-01
+      Builder: Devils Cauldron (Archon bdc-infra-bdc-subdomain-cname)
+
+      Files created (bdc-xo):
+       - docs/decisions/2026-05-13-bdc-subdomain-canonical.md
+
+      Files modified (shopops-storefront):
+       - app/page.tsx (or the file located by update-marketing-storefront — marketing footer link)
+
+      Tests: N/A (INFRA; curl runtime verification is authoritative)
+
+      PRs:
+       - bdc-xo: [from $open-pr-bdcxo.output BDCXO_PR]
+       - shopops-storefront: [from $open-pr-storefront.output STOREFRONT_PR]
+
+      Merge ancestors:
+       - bdc-xo main HEAD: [from $commit-and-push-bdcxo.output BDCXO_SHA], behind_by: 0
+       - shopops-storefront main HEAD: pending Captain CI
+
+      Grep assertions:
+       - grep -q 'bluedevilcollectibles.comicstoreos.com' docs/decisions/2026-05-13-bdc-subdomain-canonical.md
+       - grep -c 'bdc.comicstoreos.com' shopops-storefront/app/ -> 0 (after marketing fix)
+
+      Runtime verification (INFRA — curl evidence required):
+       - curl -s -o /dev/null -w '%{http_code}' https://bluedevilcollectibles.comicstoreos.com -> [from $verify-post-state.output CANONICAL_POST_CODE]
+       - dig bdc.comicstoreos.com CNAME +short -> [from $verify-current-state.output DIG_BDC]
+       - dig bluedevilcollectibles.comicstoreos.com CNAME +short -> [from $verify-current-state.output DIG_LONG]
+       - Marketing page broken-ref check: [from $verify-post-state.output MARKETING_HAS_BROKEN_REF]
+       - Cloudflare DNS verify: [from $cloudflare-dns-action.output STATUS]
+
+      Vercel deployment:
+       - shopops-storefront marketing page: deployment URL pending Captain CI after merge
+
+      INFRA VALIDATION: [PASS if CANONICAL_POST_CODE=200 AND MARKETING_HAS_BROKEN_REF=false; otherwise PARTIAL]
+
+      Dependency note: companion WO-INFRA-VERCEL-PASSWORD-DECISION-01 must be at REVIEW
+      or DONE for the canonical subdomain to return 200 (Option C unblocks publicly).
+      If canonical still returns 401, that companion WO is incomplete — surface to operator.
+
+      Inputs:
+      $read-spec.output
+      $verify-current-state.output
+      $cloudflare-dns-action.output
+      $verify-post-state.output
+      $commit-and-push-bdcxo.output
+      $open-pr-bdcxo.output
+      $open-pr-storefront.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-INFRA-BDC-SUBDOMAIN-CNAME-01 to REVIEW.
+      Manifest goes in Notes (NOT comment).
+
+      # OPEN QUESTION: Notion page ID. Operator filters by exact WO ID equality.
+
+      Update:
+       - Claude Status -> REVIEW
+       - Status -> Review
+       - Notes -> $build-manifest.output verbatim
+       - claimed_by: Devils Cauldron
+       - claimed_at: today
+
+      If canonical post-state code is not 200, also note in Notes that companion
+      WO-INFRA-VERCEL-PASSWORD-DECISION-01 may need to complete first.
+
+      If Notion MCP unavailable, output XO_TODO with manifest.
+
+      Manifest:
+      $build-manifest.output

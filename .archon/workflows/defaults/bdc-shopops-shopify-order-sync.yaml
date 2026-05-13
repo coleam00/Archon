@@ -1,0 +1,523 @@
+# Drafted by yaml-author subagent for WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 on 2026-05-13
+# Source pattern: bdc-feature-development.yaml + bdc-ce-regression-suite.yaml (gold standard)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+# Pre-flight: codebase bluedevilcollectibles/shopops must be registered in Archon
+#   Verify: sqlite3 /opt/bdc/archon-data/archon.db "SELECT name FROM remote_agent_codebases"
+#   If missing: POST {"path":"/.archon/workspaces/bluedevilcollectibles/shopops/source"} to Archon API
+# Pre-flight: WO-SHOPOPS-COMMERCE-SPINE-01 must be DONE (channel_orders table must exist)
+#   Verify: docker exec shopops-api psql $DATABASE_URL -c "\d channel_orders" (must not error)
+# Pre-flight: spec committed + pushed to origin on bdc-xo repo before firing
+#   Spec lives at: docs/work-orders/WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01.md
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01.yaml
+# REVIEW BEFORE DEPLOY — human verifies schema-audit tables, test thresholds, WO-specific prompts.
+#
+# Rule 19 note: shopops-api uses COPY . /app at build time — source changes need rebuild+restart.
+# Runtime verification grep is included in verify-runtime node and in the manifest.
+#
+# OPEN QUESTION: The spec at docs/work-orders/ is a non-standard path vs the usual
+# docs/superpowers/specs/ convention. This YAML handles BOTH paths in read-spec.
+# If this WO's spec is later moved to docs/superpowers/specs/, no YAML change needed.
+#
+# OPEN QUESTION: Notion page ID for WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 is unknown at draft time.
+# The flip-notion node will search by WO ID via Notion MCP. Operator should paste the
+# canonical Notion page ID into the flip-notion prompt before deploy, replacing the
+# search-by-title fallback.
+
+name: bdc-shopops-shopify-order-sync
+description: |
+  Use when: Executing WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 — Shopify order webhook ingestion.
+  Input: WO_ID = WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01.
+  Does: Reads spec from bdc-xo, reads prior art (routes/shopify-import.js + routes/webhooks.js),
+        verifies channel_orders table exists (SPINE WO dependency), implements
+        routes/shopify-webhooks.js + services/shopifyWebhookAuth.js + registers route in index.js,
+        writes 5+ bun tests, opens PR against main (shopops staging gate), builds manifest
+        with Rule 19 runtime verification, flips Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops (working path: shopops-api/ subdirectory).
+  Depends on: WO-SHOPOPS-COMMERCE-SPINE-01 (channel_orders table prerequisite).
+  parallel_ok: true (single repo, no schema migration, independent from other SHOPOPS WOs).
+  NOT for: any other WO.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01"
+
+      # Try docs/work-orders/ path first (new convention for SHOPOPS WOs)
+      SPEC_PATH="docs/work-orders/${WO_ID}.md"
+      if [ ! -f "$SPEC_PATH" ]; then
+        # Fall back to date-prefix glob in docs/superpowers/specs/ (standard BDC convention)
+        SPEC_PATH=$(ls docs/superpowers/specs/*${WO_ID}.md 2>/dev/null | head -n 1 || true)
+      fi
+      if [ -z "$SPEC_PATH" ] || [ ! -f "$SPEC_PATH" ]; then
+        # Also try bare filename in docs/superpowers/specs/
+        SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+      fi
+      if [ ! -f "$SPEC_PATH" ]; then
+        echo "Spec not found for WO_ID=${WO_ID}" >&2
+        echo "Tried: docs/work-orders/${WO_ID}.md, docs/superpowers/specs/*${WO_ID}.md" >&2
+        exit 1
+      fi
+
+      printf 'WO_ID=%s\nSPEC_PATH=%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
+      cat "$SPEC_PATH"
+
+  - id: read-prior-art
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # CWD is shopops repo root; shopops-api/ is a subdirectory.
+      # Read existing Shopify patterns before implementing to reuse proven patterns.
+      echo "=== routes/shopify-import.js (lines 1-60: shopifyGet client pattern) ==="
+      head -60 shopops-api/routes/shopify-import.js 2>/dev/null || echo "FILE NOT FOUND: shopops-api/routes/shopify-import.js"
+      echo ""
+      echo "=== routes/webhooks.js (if exists — existing webhook handler patterns) ==="
+      cat shopops-api/routes/webhooks.js 2>/dev/null || echo "FILE NOT FOUND: shopops-api/routes/webhooks.js (no prior webhook handler)"
+      echo ""
+      echo "=== index.js route registration block ==="
+      grep -n "require\|app\.use\|router" shopops-api/index.js 2>/dev/null | head -40 || echo "FILE NOT FOUND: shopops-api/index.js"
+
+  - id: verify-schema
+    depends_on: [read-spec]
+    bash: |
+      # set -e DELIBERATELY OMITTED — best-effort step (DB may not be reachable from harness)
+      echo "=== Schema verification: channel_orders table (prerequisite from WO-SHOPOPS-COMMERCE-SPINE-01) ==="
+      RESULT=$(docker exec shopops-api psql "$DATABASE_URL" -c "
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = 'channel_orders' AND table_schema = 'public'
+        ORDER BY ordinal_position;" 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "DETAIL=$RESULT"
+        echo ""
+        echo "=== Required columns check ==="
+        for col in tenant_id channel external_order_id status total_cents raw_payload customer_id; do
+          if echo "$RESULT" | grep -q "$col"; then
+            echo "PRESENT: $col"
+          else
+            echo "MISSING: $col"
+          fi
+        done
+      elif echo "$RESULT" | grep -qiE 'does not exist|relation.*not found'; then
+        echo "STATUS=failed_prerequisite"
+        echo "DETAIL=channel_orders table does not exist. WO-SHOPOPS-COMMERCE-SPINE-01 must be completed first."
+        echo ""
+        echo "BLOCKER: Cannot proceed without channel_orders table."
+        exit 1
+      else
+        echo "STATUS=skipped_db_unreachable"
+        echo "DETAIL=$RESULT"
+        echo "NOTE: DB not reachable from harness; schema verification deferred to runtime verify step."
+      fi
+      exit 0
+
+  - id: plan
+    depends_on: [read-spec, read-prior-art, verify-schema]
+    task_class: medium_work
+    prompt: |
+      Plan the Shopify order webhook ingestion implementation for shopops-api.
+
+      ## Context
+      - Repo: bluedevilcollectibles/shopops, working directory: shopops-api/
+      - Codebase is Node.js (Express, CommonJS modules), NOT TypeScript
+      - Tests use bun (not npm/node) — Archon container is bun-only
+      - This WO is CODE class, single repo, no schema migration
+
+      ## Required Plan Output (Markdown with these headings)
+      - WO ID: WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01
+      - Files to create (exact paths relative to shopops-api/ subdir)
+      - Files to modify (exact paths, what changes)
+      - Files explicitly out of scope
+      - Implementation notes per file
+      - Test file structure (min 5 test functions asserting real behavior)
+      - Env var requirements (.env.example entry)
+      - Verification commands (bun-based, not npm)
+      - Commit message
+      - Push policy: feature branch wo/shopops-shopify-order-sync-01, PR against main, staging gate required
+
+      ## Key Implementation Requirements from Spec
+      1. NEW routes/shopify-webhooks.js: POST /shopify-webhooks/orders/create and POST /shopify-webhooks/orders/updated
+      2. NEW services/shopifyWebhookAuth.js: verifyShopifyHmac(req) using X-Shopify-Hmac-Sha256 header + SHOPIFY_WEBHOOK_SECRET env
+      3. Status mapping: pending->new, paid->paid, fulfilled->fulfilled, refunded->refunded, cancelled->cancelled
+      4. Idempotent INSERT ON CONFLICT (tenant_id, channel, external_order_id) DO UPDATE
+      5. Route registered in index.js
+      6. Fail-closed on missing SHOPIFY_WEBHOOK_SECRET (500, not 401)
+      7. Extract tenant_id from X-Shopops-Tenant header
+      8. Customer match attempt: SELECT id FROM customers WHERE email = shopify_email AND tenant_id
+
+      ## Prior Art
+      $read-prior-art.output
+
+      ## Schema Verification
+      $verify-schema.output
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement the Shopify order webhook ingestion for shopops-api per the plan.
+
+        ## Plan
+        $plan.output
+
+        ## Spec
+        $read-spec.output
+
+        ## Prior Art
+        $read-prior-art.output
+
+        ## Execution Rules
+        - Working directory context: the shopops repo root. All file paths start with shopops-api/
+        - Language: Node.js (CommonJS, require/module.exports), NOT TypeScript
+        - Do NOT modify routes/shopify-import.js or routes/shopify-push.js
+        - Do NOT reformat unrelated code
+        - Do NOT deploy or rebuild Docker containers
+        - Do NOT push directly to main
+        - Fail-closed pattern for SHOPIFY_WEBHOOK_SECRET (500 on missing, not 401)
+        - HMAC validation: use crypto.createHmac('sha256', secret).update(rawBody).digest('base64')
+          Compare to X-Shopify-Hmac-Sha256 header value using crypto.timingSafeEqual
+          IMPORTANT: body must be read as raw bytes (Buffer) before JSON.parse — use express.raw() or rawBody middleware
+        - Idempotency: INSERT INTO channel_orders ... ON CONFLICT (tenant_id, channel, external_order_id) DO UPDATE SET status=EXCLUDED.status, raw_payload=EXCLUDED.raw_payload, updated_at=NOW()
+        - Tests in shopops-api/tests/shopify-webhooks.test.js using bun test (not jest/vitest/mocha)
+        - Tests must assert actual behavior: HTTP status codes, DB row existence, idempotency count, HMAC rejection, customer linkage
+        - .env.example must get SHOPIFY_WEBHOOK_SECRET=your-shopify-webhook-secret-here entry
+
+        ## Test Requirements (min 5 test functions, each asserting real behavior)
+        Write tests for ALL of:
+        1. HMAC validation rejects wrong signature (expects 401)
+        2. Missing SHOPIFY_WEBHOOK_SECRET returns 500 (fail-closed)
+        3. Valid order create ingests row into channel_orders with correct status and total_cents
+        4. Duplicate webhook delivery is idempotent (COUNT = 1, not 2)
+        5. Customer email match populates channel_orders.customer_id (not NULL when customer exists)
+
+        ## Doctrine Baseline Tests
+        Write at least 5 test functions each asserting actual behavior (not "did not throw").
+        This is a backend route + HMAC service — target 6-8 tests total covering the happy path,
+        security boundary (HMAC), idempotency contract, and customer linkage.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when:
+        - shopops-api/routes/shopify-webhooks.js exists with both POST handlers
+        - shopops-api/services/shopifyWebhookAuth.js exists with verifyShopifyHmac()
+        - shopops-api/index.js has require + app.use for shopify-webhooks route
+        - shopops-api/tests/shopify-webhooks.test.js exists with min 5 real assertions
+        - shopops-api/.env.example has SHOPIFY_WEBHOOK_SECRET entry (or .env.example at repo root)
+        - All stop conditions from spec §12 are satisfied
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      echo "=== Grep assertions ==="
+
+      echo "--- routes/shopify-webhooks.js exists ---"
+      ls shopops-api/routes/shopify-webhooks.js
+
+      echo "--- services/shopifyWebhookAuth.js exists ---"
+      ls shopops-api/services/shopifyWebhookAuth.js
+
+      echo "--- tests/shopify-webhooks.test.js exists ---"
+      ls shopops-api/tests/shopify-webhooks.test.js
+
+      echo "--- verifyShopifyHmac present in auth service ---"
+      grep -n "verifyShopifyHmac" shopops-api/services/shopifyWebhookAuth.js
+
+      echo "--- shopify-webhooks route registered in index.js ---"
+      grep -n "shopify-webhooks" shopops-api/index.js
+
+      echo "--- HMAC header reference in webhook handler ---"
+      grep -q "X-Shopify-Hmac-Sha256" shopops-api/routes/shopify-webhooks.js || \
+        grep -q "X-Shopify-Hmac-Sha256" shopops-api/services/shopifyWebhookAuth.js || \
+        (echo "FAIL: X-Shopify-Hmac-Sha256 header not referenced" >&2; exit 1)
+
+      echo "--- SHOPIFY_WEBHOOK_SECRET env var referenced ---"
+      grep -q "SHOPIFY_WEBHOOK_SECRET" shopops-api/services/shopifyWebhookAuth.js || \
+        grep -q "SHOPIFY_WEBHOOK_SECRET" shopops-api/routes/shopify-webhooks.js || \
+        (echo "FAIL: SHOPIFY_WEBHOOK_SECRET not referenced" >&2; exit 1)
+
+      echo "--- .env.example has SHOPIFY_WEBHOOK_SECRET entry ---"
+      ENV_EXAMPLE=$(find shopops-api -name ".env.example" -maxdepth 2 2>/dev/null | head -1)
+      if [ -z "$ENV_EXAMPLE" ]; then
+        ENV_EXAMPLE=".env.example"
+      fi
+      grep -q "SHOPIFY_WEBHOOK_SECRET" "$ENV_EXAMPLE" || \
+        (echo "FAIL: SHOPIFY_WEBHOOK_SECRET missing from $ENV_EXAMPLE" >&2; exit 1)
+
+      echo "--- ON CONFLICT idempotent upsert present ---"
+      grep -q "ON CONFLICT" shopops-api/routes/shopify-webhooks.js || \
+        (echo "FAIL: ON CONFLICT upsert not found in webhook handler" >&2; exit 1)
+
+      echo "--- Test function count (min 5) ---"
+      TEST_COUNT=$(grep -c "test\|it(" shopops-api/tests/shopify-webhooks.test.js 2>/dev/null || echo 0)
+      echo "Test functions found: $TEST_COUNT"
+      if [ "$TEST_COUNT" -lt 5 ]; then
+        echo "FAIL: fewer than 5 test functions in shopify-webhooks.test.js" >&2
+        exit 1
+      fi
+
+      echo "=== All grep assertions passed ==="
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd shopops-api
+      echo "=== Running bun test on shopify-webhooks test suite ==="
+      # Archon container is bun-only — no npm/node fallback
+      if [ -f tests/shopify-webhooks.test.js ]; then
+        bun test tests/shopify-webhooks.test.js || {
+          echo "Tests failed. Check test output above for failures." >&2
+          echo "NOTE: If DB is required but unavailable in harness, tests may fail here."
+          echo "In that case, operator must verify tests pass in local/staging environment."
+          exit 1
+        }
+      else
+        echo "FAIL: tests/shopify-webhooks.test.js not found" >&2
+        exit 1
+      fi
+
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BASE_BRANCH="wo/shopops-shopify-order-sync-01"
+      BRANCH="$BASE_BRANCH"
+
+      # Idempotent checkout pattern (gold standard from bdc-ce-regression-suite.yaml)
+      if git worktree list --porcelain | grep -qx "branch refs/heads/$BRANCH"; then
+        # Branch is locked to another worktree — generate a timestamped variant
+        BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+        git checkout -b "$BRANCH"
+      elif git show-ref --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH"
+      else
+        git checkout -b "$BRANCH"
+      fi
+
+      # Stage only the WO-scoped files
+      git add shopops-api/routes/shopify-webhooks.js \
+               shopops-api/services/shopifyWebhookAuth.js \
+               shopops-api/index.js \
+               shopops-api/tests/shopify-webhooks.test.js
+
+      # Stage .env.example wherever it lives
+      find shopops-api -name ".env.example" -maxdepth 2 | xargs git add 2>/dev/null || true
+      find . -maxdepth 1 -name ".env.example" | xargs git add 2>/dev/null || true
+
+      # Idempotent commit: skip if branch already contains the work
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(shopops): WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 — Shopify order webhook ingestion
+
+        Adds Shopify order webhook handler with HMAC signature validation.
+
+        New files:
+        - shopops-api/routes/shopify-webhooks.js (POST /shopify-webhooks/orders/create + /updated)
+        - shopops-api/services/shopifyWebhookAuth.js (verifyShopifyHmac using timing-safe comparison)
+        - shopops-api/tests/shopify-webhooks.test.js (min 5 tests: HMAC, ingest, idempotency, customer linkage)
+
+        Modified:
+        - shopops-api/index.js (registers /shopify-webhooks route)
+        - .env.example (adds SHOPIFY_WEBHOOK_SECRET placeholder)
+
+        Status mapping: pending->new, paid->paid, fulfilled->fulfilled, refunded->refunded, cancelled->cancelled
+        Idempotent upsert: ON CONFLICT (tenant_id, channel, external_order_id) DO UPDATE
+        Depends on: WO-SHOPOPS-COMMERCE-SPINE-01 (channel_orders table)"
+      fi
+
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+      echo "BRANCH_SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      # Hardcoded branch name — must match commit-and-push BASE_BRANCH literal
+      BRANCH="wo/shopops-shopify-order-sync-01"
+      REPO="bluedevilcollectibles/shopops"
+      BASE="main"
+      TITLE="feat(shopops): WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 — Shopify order webhook ingestion"
+
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements **WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01** — Shopify order webhook ingest."
+        echo ""
+        echo "Orders placed on a connected Shopify store flow into the \`channel_orders\` table"
+        echo "via HMAC-validated webhooks. Idempotent upsert prevents duplicate rows on retry."
+        echo ""
+        echo "## Files"
+        echo "- NEW \`shopops-api/routes/shopify-webhooks.js\` — POST /shopify-webhooks/orders/create + /updated"
+        echo "- NEW \`shopops-api/services/shopifyWebhookAuth.js\` — verifyShopifyHmac() (timing-safe)"
+        echo "- NEW \`shopops-api/tests/shopify-webhooks.test.js\` — min 5 bun tests"
+        echo "- MOD \`shopops-api/index.js\` — route registration"
+        echo "- MOD \`.env.example\` — SHOPIFY_WEBHOOK_SECRET placeholder"
+        echo ""
+        echo "## Status Mapping"
+        echo "| Shopify financial_status | channel_orders.status |"
+        echo "|---|---|"
+        echo "| pending | new |"
+        echo "| paid | paid |"
+        echo "| refunded | refunded |"
+        echo "| fulfilled (fulfillment_status) | fulfilled |"
+        echo "| cancelled | cancelled |"
+        echo ""
+        echo "## Prerequisite"
+        echo "Depends on WO-SHOPOPS-COMMERCE-SPINE-01 (channel_orders table)."
+        echo ""
+        echo "## Security"
+        echo "- HMAC-SHA256 via X-Shopify-Hmac-Sha256 header + SHOPIFY_WEBHOOK_SECRET env"
+        echo "- Fail-closed: 500 on missing secret, 401 on invalid HMAC"
+        echo "- Timing-safe comparison (crypto.timingSafeEqual)"
+        echo ""
+        echo "## Env Var"
+        echo "\`SHOPIFY_WEBHOOK_SECRET\` must be added to Hetzner .env before first webhook delivery."
+      } > "$BODY_FILE"
+
+      # Idempotent PR creation
+      existing_pr_url() {
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null
+      }
+      PR_URL="$(existing_pr_url)"
+      if [ -n "$PR_URL" ]; then
+        echo "PR_URL=$PR_URL"
+        exit 0
+      fi
+      for attempt in 1 2 3 4 5; do
+        if PR_OUT=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" \
+            --title "$TITLE" --body-file "$BODY_FILE" 2>&1); then
+          echo "PR_URL=$PR_OUT"
+          exit 0
+        fi
+        PR_URL="$(existing_pr_url)"
+        if [ -n "$PR_URL" ]; then
+          echo "PR_URL=$PR_URL"
+          exit 0
+        fi
+        echo "open-pr attempt $attempt failed: $PR_OUT" >&2
+        sleep 10
+      done
+      echo "open-pr failed after retries; branch pushed at $BRANCH but no PR exists" >&2
+      exit 1
+
+  - id: verify-runtime
+    depends_on: [open-pr]
+    bash: |
+      # set -e DELIBERATELY OMITTED — best-effort step (container may need rebuild first)
+      # Rule 19: shopops-api uses COPY . /app at build — source changes need rebuild+restart.
+      # This step provides best-effort evidence; operator must rebuild container before it passes.
+      echo "=== Rule 19: Runtime verification (shopops-api) ==="
+      echo "NOTE: This will fail until operator rebuilds + restarts shopops-api container."
+      echo "Command for operator: ssh hetzner-prod 'cd /opt/bdc/shopops && docker compose build shopops-api && docker compose up -d shopops-api'"
+      echo ""
+
+      RESULT1=$(docker exec shopops-api grep -n "shopify-webhooks" /app/index.js 2>&1)
+      EXIT1=$?
+      if [ $EXIT1 -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "ROUTE_REGISTRATION: $RESULT1"
+      else
+        echo "STATUS=pending_rebuild"
+        echo "DETAIL=shopify-webhooks not yet live in /app/index.js (container needs rebuild)"
+        echo "EXPECTED_COMMAND: docker exec shopops-api grep -n 'shopify-webhooks' /app/index.js"
+        echo "EXPECTED_OUTPUT: line with require('routes/shopify-webhooks') or similar"
+      fi
+
+      echo ""
+      RESULT2=$(docker exec shopops-api grep -n "verifyShopifyHmac" /app/routes/shopify-webhooks.js 2>&1)
+      EXIT2=$?
+      if [ $EXIT2 -eq 0 ]; then
+        echo "HMAC_FUNCTION: $RESULT2"
+      else
+        echo "HMAC_STATUS=pending_rebuild"
+        echo "EXPECTED_COMMAND: docker exec shopops-api grep -n 'verifyShopifyHmac' /app/routes/shopify-webhooks.js"
+      fi
+
+      exit 0
+
+  - id: build-manifest
+    depends_on: [open-pr, verify-runtime]
+    task_class: clerical
+    prompt: |
+      Build Captain CI manifest v2 for WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01.
+
+      ## Required manifest v2 fields (CLAUDE.md Rule 2)
+      WO: WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01
+      Builder: Major Build (bdc-harness)
+      Files modified: [exact list from implement output]
+      Files created: [exact list from implement output]
+      Tests: [count passing / count total — from verify-tests output, command: bun test shopops-api/tests/shopify-webhooks.test.js]
+      PRs: [PR URL from open-pr output, not yet merged]
+      Merge ancestors: [shopops main HEAD at time of branch creation, manifest commit, behind_by]
+      Grep assertions:
+        docker exec shopops-api grep -n 'shopify-webhooks' /app/index.js
+        docker exec shopops-api grep -n 'verifyShopifyHmac' /app/routes/shopify-webhooks.js
+        grep -c 'ON CONFLICT' shopops-api/routes/shopify-webhooks.js
+      Runtime verification: [from verify-runtime output — STATUS=ok if container rebuilt, STATUS=pending_rebuild if not yet]
+      Vercel deployment: N/A (shopops-api is Hetzner Docker, not Vercel)
+      VALIDATION: PASS
+
+      ## Rule 19 note
+      shopops-api runtime verification requires container rebuild + restart after PR merge.
+      Include rebuild command: ssh hetzner-prod 'cd /opt/bdc/shopops && docker compose build shopops-api && docker compose up -d shopops-api'
+      Post-rebuild verification: docker exec shopops-api grep -n 'shopify-webhooks' /app/index.js
+
+      ## Inputs
+      $read-spec.output
+      $plan.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-and-push.output
+      $open-pr.output
+      $verify-runtime.output
+
+  # post-started and post-completed webhook nodes OMITTED — Rule 11:
+  # curl to n8n.bluedevilcollectibles.com from Archon executor subprocess hangs >=120s.
+  # flip-notion is the canonical close action.
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 to REVIEW with the manifest in the Notes property.
+
+      IMPORTANT: The manifest goes in the Notes PROPERTY, NOT as a page comment.
+      Captain CI reads the Notes property. Page comments are invisible to CI.
+
+      ## Steps
+      1. Find the Notion page for WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01.
+         Search the WO database (a6df831c-0b52-449f-8ca4-d77be6b70d0a) by title.
+         If you have a page ID, use it directly; if not, search by WO ID in the title.
+
+      2. In a SINGLE Notion update call, set ALL of:
+         - Claude Status property -> REVIEW
+         - Status property -> Review
+         - Notes property -> paste $build-manifest.output verbatim (the full manifest v2 block)
+         - claimed_by: Major Build (bdc-harness)
+         - claimed_at: 2026-05-13
+
+      3. Confirm the update succeeded.
+
+      ## Manifest
+      $build-manifest.output
+
+      ## Fallback
+      If Notion MCP is unavailable in this runtime, output the following for XO to action:
+      XO_TODO: Flip WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 to REVIEW in Notion.
+      Set Notes property (NOT comment) to the manifest above.
+      Set Claude Status = REVIEW, Status = Review.

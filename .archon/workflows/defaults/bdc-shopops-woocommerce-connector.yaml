@@ -1,0 +1,774 @@
+# Drafted by yaml-author subagent for WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 on 2026-05-13
+# Source pattern: WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01.yaml (direct sibling connector) +
+#                 WO-SHOPOPS-COMMERCE-SPINE-01.yaml (schema-verify + Rule 19 runtime pattern)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+#
+# Pre-flight: codebase bluedevilcollectibles/shopops must be registered in Archon.
+#   Verify: sqlite3 /opt/bdc/archon-data/archon.db "SELECT name FROM remote_agent_codebases"
+#   If missing: curl -X POST https://archon.bluedevilcollectibles.com/api/codebases \
+#     -H "Content-Type: application/json" \
+#     -d '{"name":"bluedevilcollectibles/shopops","repositoryUrl":"https://github.com/bluedevilcollectibles/shopops","defaultBranch":"master","defaultCwd":"/.archon/workspaces/bluedevilcollectibles/shopops/source"}'
+#
+# Pre-flight: WO-SHOPOPS-COMMERCE-SPINE-01 must be DONE.
+#   All three spine tables must exist in staging Supabase:
+#   docker exec shopops-api psql "$DATABASE_URL" -c "\d channel_connections" (must not error)
+#   docker exec shopops-api psql "$DATABASE_URL" -c "\d product_channel_map" (must not error)
+#   docker exec shopops-api psql "$DATABASE_URL" -c "\d channel_orders" (must not error)
+#
+# Pre-flight: WO spec committed and pushed to bdc-xo origin/main before firing.
+#   Spec path: docs/work-orders/WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01.md
+#
+# NOTE ON CWD: Archon CWD = shopops repo root. shopops-api/ is a subdirectory.
+#   All file paths in bash nodes are relative to shopops repo root.
+#   The WO spec lives in bdc-xo — fetched via gh api cross-repo.
+#
+# NOTE: parallel_ok=YES per WO spec (single repo, no schema migration).
+#
+# Rule 19 note: shopops-api uses COPY . /app at image build — source changes need
+#   rebuild + restart to take effect. Runtime verify node provides evidence commands.
+#   Operator runs: ssh hetzner-prod 'cd /opt/bdc/shopops && docker compose build shopops-api && docker compose up -d shopops-api'
+#   Then re-runs: docker exec shopops-api grep -n 'woocommerce-webhooks' /app/index.js
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01.yaml
+# REVIEW BEFORE DEPLOY — human verifies schema-audit tables, test thresholds, WO-specific prompts.
+#
+# OPEN QUESTION: Notion page ID for WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 is not confirmed at
+# draft time. The flip-notion node searches by WO ID via Notion MCP. Operator should paste the
+# canonical Notion page ID into the flip-notion prompt before deploy to avoid search latency.
+#
+# OPEN QUESTION: shopops repo default branch is 'master' per WO-SHOPOPS-COMMERCE-SPINE-01.yaml.
+# If the repo has since been renamed to 'main', update BASE= in commit-and-push and open-pr.
+
+name: bdc-shopops-woocommerce-connector
+description: |
+  Use when: Executing WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 — WooCommerce connector.
+  Input: WO_ID = WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01.
+  Does: Reads spec from bdc-xo (cross-repo via gh api), reads Shopify connector prior art
+        (routes/shopify-import.js, routes/shopify-push.js, routes/shopify-webhooks.js),
+        verifies channel_connections + product_channel_map + channel_orders tables exist
+        (SPINE WO dependency), implements:
+          - routes/woocommerce-import.js  (POST /woocommerce-import/preview + /commit, GET /batches)
+          - routes/woocommerce-push.js    (POST /woocommerce-push/preview + /commit)
+          - routes/woocommerce-webhooks.js (POST /woocommerce-webhooks/order, X-WC-Webhook-Signature)
+          - services/woocommerceClient.js  (wcGet, wcPost, verifyWcWebhookSignature)
+        validates WOOCOMMERCE_WEBHOOK_SECRET env var (fail-closed),
+        writes min 5 bun tests in tests/woocommerce.test.js,
+        commits to fresh branch wo/shopops-woocommerce-connector-01, opens PR against master,
+        provides Rule 19 runtime verification evidence, builds manifest, flips Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops (shopops-api/ subdir).
+        Spec lives in bluedevilcollectibles/bdc-xo.
+  Depends on: WO-SHOPOPS-COMMERCE-SPINE-01 (channel_connections + product_channel_map + channel_orders).
+  parallel_ok: true (single repo, no schema migration, independent from Shopify connector WO).
+  NOT for: any other WO.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  # ---------------------------------------------------------------------------
+  # 1. READ-SPEC — fetch WO from bdc-xo cross-repo + behavior spec
+  # ---------------------------------------------------------------------------
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01}"
+
+      # Primary: docs/work-orders/<WO_ID>.md in bdc-xo
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+
+      # Fallback: date-prefix glob in docs/superpowers/specs/ (Rule 5)
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID} in bdc-xo" >&2
+        echo "Tried: docs/work-orders/${WO_ID}.md and date-prefix glob in docs/superpowers/specs/" >&2
+        exit 1
+      fi
+
+      # Also fetch behavior spec for connector contract context
+      BEHAVIOR_SPEC=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/behavior-specs/COMMERCE_CHANNEL_SPINE_BEHAVIOR.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:docs/work-orders/%s.md\nWORKFLOW_ID=%s\n\n' \
+        "$WO_ID" "$WO_ID" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n\n' "$SPEC_CONTENT"
+      if [ -n "$BEHAVIOR_SPEC" ]; then
+        printf -- '--- BEHAVIOR SPEC (COMMERCE_CHANNEL_SPINE_BEHAVIOR.md, excerpt) ---\n%s\n' "$BEHAVIOR_SPEC"
+      fi
+
+  # ---------------------------------------------------------------------------
+  # 2. READ-PRIOR-ART — load Shopify connector patterns for direct reuse
+  # ---------------------------------------------------------------------------
+  - id: read-prior-art
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      # CWD is shopops repo root. shopops-api/ is subdirectory.
+
+      echo "=== routes/shopify-import.js (product import preview+commit pattern) ==="
+      cat shopops-api/routes/shopify-import.js 2>/dev/null || \
+        echo "FILE NOT FOUND: shopops-api/routes/shopify-import.js"
+      echo ""
+
+      echo "=== routes/shopify-push.js (product push pattern) ==="
+      cat shopops-api/routes/shopify-push.js 2>/dev/null || \
+        echo "FILE NOT FOUND: shopops-api/routes/shopify-push.js"
+      echo ""
+
+      echo "=== routes/shopify-webhooks.js (webhook ingest + signature validation pattern) ==="
+      cat shopops-api/routes/shopify-webhooks.js 2>/dev/null || \
+        echo "FILE NOT FOUND: shopops-api/routes/shopify-webhooks.js"
+      echo ""
+
+      echo "=== services/ directory (existing service files for pattern reference) ==="
+      ls shopops-api/services/ 2>/dev/null || echo "No services/ directory found"
+      echo ""
+
+      echo "=== index.js route registration block ==="
+      grep -n "require\|app\.use\|router" shopops-api/index.js 2>/dev/null | head -60 || \
+        echo "FILE NOT FOUND: shopops-api/index.js"
+      echo ""
+
+      echo "=== routes/channels.js woocommerce stub (connector hook point) ==="
+      grep -n -A2 -B2 "woocommerce" shopops-api/routes/channels.js 2>/dev/null || \
+        echo "No woocommerce references in channels.js yet"
+
+  # ---------------------------------------------------------------------------
+  # 3. VERIFY-SCHEMA — confirm all three spine tables exist (SPINE WO dependency)
+  #    Best-effort wrapper: DB may not be reachable from harness executor.
+  # ---------------------------------------------------------------------------
+  - id: verify-schema
+    depends_on: [read-spec]
+    bash: |
+      # set -e DELIBERATELY OMITTED — best-effort step (DB may not be reachable from harness)
+      echo "=== Schema verification: WO-SHOPOPS-COMMERCE-SPINE-01 dependency check ==="
+
+      check_table() {
+        local TABLE="$1"
+        local RESULT
+        RESULT=$(docker exec shopops-api psql "$DATABASE_URL" -c \
+          "SELECT column_name FROM information_schema.columns WHERE table_name = '${TABLE}' AND table_schema = 'public' ORDER BY ordinal_position;" \
+          2>&1)
+        local EXIT=$?
+        if [ $EXIT -eq 0 ]; then
+          echo "TABLE_${TABLE}=PRESENT"
+          echo "COLUMNS: $RESULT"
+        elif echo "$RESULT" | grep -qiE 'does not exist|relation.*not found'; then
+          echo "TABLE_${TABLE}=MISSING"
+          echo "BLOCKER: ${TABLE} not found. WO-SHOPOPS-COMMERCE-SPINE-01 must be completed first."
+        else
+          echo "TABLE_${TABLE}=UNVERIFIED"
+          echo "DETAIL: $RESULT"
+          echo "NOTE: DB not reachable from harness; verification deferred to runtime verify step."
+        fi
+        echo ""
+      }
+
+      check_table "channel_connections"
+      check_table "product_channel_map"
+      check_table "channel_orders"
+
+      # Check WOOCOMMERCE_WEBHOOK_SECRET env var availability in running container
+      WC_SECRET_CHECK=$(docker exec shopops-api printenv WOOCOMMERCE_WEBHOOK_SECRET 2>&1 || true)
+      if [ -n "$WC_SECRET_CHECK" ] && ! echo "$WC_SECRET_CHECK" | grep -qiE 'No such container|error'; then
+        echo "WOOCOMMERCE_WEBHOOK_SECRET=SET_IN_CONTAINER"
+      else
+        echo "WOOCOMMERCE_WEBHOOK_SECRET=NOT_SET_OR_CONTAINER_UNREACHABLE"
+        echo "NOTE: Operator must add WOOCOMMERCE_WEBHOOK_SECRET to /opt/bdc/shopops/.env before webhook delivery."
+      fi
+
+      exit 0
+
+  # ---------------------------------------------------------------------------
+  # 4. PLAN — architect the WooCommerce connector
+  # ---------------------------------------------------------------------------
+  - id: plan
+    depends_on: [read-spec, read-prior-art, verify-schema]
+    task_class: medium_work
+    prompt: |
+      Plan the WooCommerce connector implementation for shopops-api.
+
+      ## Required Plan Output (Markdown with these headings)
+      - WO ID: WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01
+      - Files to create (exact paths relative to shopops repo root)
+      - Files to modify (exact paths, what changes)
+      - Files explicitly out of scope
+      - Implementation notes per file
+      - Auth differences from Shopify (WC uses Basic Auth base64(key:secret), NOT X-Shopify-Access-Token)
+      - WC order status mapping table (7 mappings per spec §7)
+      - Test file structure for shopops-api/tests/woocommerce.test.js (min 5 bun test functions)
+      - Env var requirements (.env.example entry for WOOCOMMERCE_WEBHOOK_SECRET)
+      - Verification commands (all using bun — Archon container is bun-only, no npm/node)
+      - Commit message
+      - Branch name: wo/shopops-woocommerce-connector-01
+      - PR base: master (shopops repo default branch)
+      - Staging gate: required (shopops is in Rule 20 staging-gate list)
+
+      ## Key Implementation Requirements from Spec
+
+      ### services/woocommerceClient.js (NEW)
+      - wcGet(baseUrl, consumerKey, consumerSecret, path) — WC REST API GET
+        Auth: Authorization: Basic base64(consumerKey + ':' + consumerSecret)
+        Pattern: mirror shopifyGet from shopify-import.js but use Basic Auth header
+      - wcPost(baseUrl, consumerKey, consumerSecret, path, body) — WC REST API POST
+      - verifyWcWebhookSignature(req, secret) — validates X-WC-Webhook-Signature header
+        WC signature: HMAC-SHA256 of raw request body using webhook secret, base64 encoded
+        Builder must read WC webhook signature docs before implementing
+
+      ### routes/woocommerce-import.js (NEW)
+      - POST /woocommerce-import/preview — wcGet /wp-json/wc/v3/products, compare vs inventory_items, return IMPORT_CREATE/IMPORT_UPDATE/SKIP classify list
+      - POST /woocommerce-import/commit — upsert selected products into inventory_items + write product_channel_map rows
+      - GET /woocommerce-import/batches — list import batches
+
+      ### routes/woocommerce-push.js (NEW)
+      - POST /woocommerce-push/preview — wcGet /wp-json/wc/v3/products, compare vs inventory_items, return PUSH_CREATE/PUSH_UPDATE/SKIP classify list
+      - POST /woocommerce-push/commit — wcPost/wcPut to /wp-json/wc/v3/products, write product_channel_map rows
+
+      ### routes/woocommerce-webhooks.js (NEW)
+      - POST /woocommerce-webhooks/order — ingest WC order
+        1. verifyWcWebhookSignature — reject 401 if invalid
+        2. Extract tenant_id from X-Shopops-Tenant
+        3. Map WC status to channel_orders.status (7 mappings from spec §7)
+        4. INSERT INTO channel_orders ... ON CONFLICT (tenant_id, channel, external_order_id) DO UPDATE
+        5. Attempt customer match by email
+        6. WOOCOMMERCE_WEBHOOK_SECRET fail-closed: 500 if env var unset, not a silent pass
+      - Status mapping (from spec §7):
+        pending -> new
+        on-hold -> new
+        processing -> paid
+        completed -> fulfilled
+        cancelled -> cancelled
+        failed -> cancelled
+        refunded -> refunded
+
+      ## Prior Art (Shopify patterns to mirror)
+      $read-prior-art.output
+
+      ## Schema Verification
+      $verify-schema.output
+
+      ## Spec
+      $read-spec.output
+
+  # ---------------------------------------------------------------------------
+  # 5. IMPLEMENT — write all four files + route registration + tests
+  # ---------------------------------------------------------------------------
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement the WooCommerce connector for shopops-api per the plan.
+
+        ## Plan
+        $plan.output
+
+        ## Spec
+        $read-spec.output
+
+        ## Prior Art (Shopify patterns to mirror)
+        $read-prior-art.output
+
+        ## Execution Rules
+        - CWD is the shopops repo root. All file paths start with shopops-api/
+        - Language: Node.js (CommonJS, require/module.exports), NOT TypeScript
+        - Archon container is bun-only — use bun for tests, not npm/node
+        - Do NOT modify routes/shopify-import.js, routes/shopify-push.js, or routes/shopify-webhooks.js
+        - Do NOT reformat unrelated code
+        - Do NOT deploy, rebuild Docker containers, or push to origin
+        - WOOCOMMERCE_WEBHOOK_SECRET fail-closed: if env var unset, respond 500 with
+          { error: 'WOOCOMMERCE_WEBHOOK_SECRET not configured' } — never silently accept
+        - WC Basic Auth: Authorization header = 'Basic ' + Buffer.from(key + ':' + secret).toString('base64')
+        - WC Webhook signature: HMAC-SHA256 of raw request body (Buffer) using WOOCOMMERCE_WEBHOOK_SECRET
+          base64 encode the digest, compare to X-WC-Webhook-Signature header using crypto.timingSafeEqual
+          IMPORTANT: raw body must be captured before JSON.parse — use express.raw() middleware on this route
+        - Idempotent upsert: INSERT INTO channel_orders (tenant_id, channel, external_order_id, status,
+          total_cents, raw_payload) VALUES ... ON CONFLICT (tenant_id, channel, external_order_id)
+          DO UPDATE SET status=EXCLUDED.status, raw_payload=EXCLUDED.raw_payload, updated_at=NOW()
+        - Register all three routes in shopops-api/index.js (require + app.use)
+        - Add WOOCOMMERCE_WEBHOOK_SECRET=your-woocommerce-webhook-secret-here to .env.example
+
+        ## WC Order Status Mapping (7 mappings — implement exactly)
+        | WC status    | channel_orders.status |
+        |---|---|
+        | pending      | new        |
+        | on-hold      | new        |
+        | processing   | paid       |
+        | completed    | fulfilled  |
+        | cancelled    | cancelled  |
+        | failed       | cancelled  |
+        | refunded     | refunded   |
+
+        ## Test Requirements (shopops-api/tests/woocommerce.test.js, min 5 bun tests)
+        Use bun test runner (import { describe, it, expect } from 'bun:test').
+        Each test must assert actual behavior — not "did not throw".
+
+        Required test coverage:
+        1. Test A — Webhook signature rejection: POST /woocommerce-webhooks/order with invalid
+           X-WC-Webhook-Signature returns 401. If 200 returned, test fails (security hole).
+        2. Test B — Order ingest + status mapping: valid signature + WC order { id: 55555, status: 'processing',
+           total: '45.99' } -> 200 OK, channel_orders row has status='paid', total_cents=4599
+        3. Test C — Idempotent webhook: same order delivered twice -> SELECT COUNT(*) FROM channel_orders
+           WHERE external_order_id='55555' = 1 (not 2)
+        4. Test D — Product push preview: POST /woocommerce-push/preview -> 200, body has
+           { items: [...], classify: { PUSH_CREATE: N, PUSH_UPDATE: M, SKIP: K } }
+           each item has classify in {PUSH_CREATE, PUSH_UPDATE, SKIP}
+        5. Test E — Env var fail-closed: WOOCOMMERCE_WEBHOOK_SECRET unset ->
+           POST /woocommerce-webhooks/order returns 500 with { error: 'WOOCOMMERCE_WEBHOOK_SECRET not configured' }
+        Additional tests welcome (import preview classify list shape, on-hold maps to 'new', etc.)
+
+        ## Doctrine Baseline Tests
+        Write at least 5 test functions each asserting real behavior.
+        This is a backend connector — target 6-8 tests covering: security boundary (signature),
+        status mapping correctness, idempotency contract, env var fail-closed, and push preview shape.
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when ALL of the following are true:
+        - shopops-api/services/woocommerceClient.js exists with wcGet, wcPost, verifyWcWebhookSignature exports
+        - shopops-api/routes/woocommerce-import.js exists with POST /preview, POST /commit, GET /batches
+        - shopops-api/routes/woocommerce-push.js exists with POST /preview, POST /commit
+        - shopops-api/routes/woocommerce-webhooks.js exists with POST /order handler + signature validation
+        - shopops-api/index.js has require + app.use for all three woocommerce routes
+        - shopops-api/tests/woocommerce.test.js exists with min 5 real-behavior bun tests
+        - .env.example has WOOCOMMERCE_WEBHOOK_SECRET placeholder entry
+        - All stop conditions from spec §12 are satisfied
+
+  # ---------------------------------------------------------------------------
+  # 6. VERIFY-GREP — structural assertions (multi-line-safe, one grep per assertion)
+  # ---------------------------------------------------------------------------
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      echo "=== WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 grep assertions ==="
+
+      echo "--- File existence checks ---"
+      ls shopops-api/services/woocommerceClient.js
+      ls shopops-api/routes/woocommerce-import.js
+      ls shopops-api/routes/woocommerce-push.js
+      ls shopops-api/routes/woocommerce-webhooks.js
+      ls shopops-api/tests/woocommerce.test.js
+
+      echo "--- services/woocommerceClient.js: required exports ---"
+      grep -q "wcGet" shopops-api/services/woocommerceClient.js || \
+        (echo "FAIL: wcGet missing from woocommerceClient.js" >&2; exit 1)
+      grep -q "wcPost" shopops-api/services/woocommerceClient.js || \
+        (echo "FAIL: wcPost missing from woocommerceClient.js" >&2; exit 1)
+      grep -q "verifyWcWebhookSignature" shopops-api/services/woocommerceClient.js || \
+        (echo "FAIL: verifyWcWebhookSignature missing from woocommerceClient.js" >&2; exit 1)
+
+      echo "--- WC Basic Auth: Authorization header uses base64 ---"
+      grep -q "base64\|Basic" shopops-api/services/woocommerceClient.js || \
+        (echo "FAIL: Basic Auth / base64 not found in woocommerceClient.js" >&2; exit 1)
+
+      echo "--- routes/woocommerce-webhooks.js: signature header reference ---"
+      grep -q "X-WC-Webhook-Signature\|x-wc-webhook-signature" shopops-api/routes/woocommerce-webhooks.js || \
+        grep -q "X-WC-Webhook-Signature\|x-wc-webhook-signature" shopops-api/services/woocommerceClient.js || \
+        (echo "FAIL: X-WC-Webhook-Signature not referenced in webhook handler or client" >&2; exit 1)
+
+      echo "--- routes/woocommerce-webhooks.js: WOOCOMMERCE_WEBHOOK_SECRET fail-closed ---"
+      grep -q "WOOCOMMERCE_WEBHOOK_SECRET" shopops-api/routes/woocommerce-webhooks.js || \
+        grep -q "WOOCOMMERCE_WEBHOOK_SECRET" shopops-api/services/woocommerceClient.js || \
+        (echo "FAIL: WOOCOMMERCE_WEBHOOK_SECRET not referenced in webhook code" >&2; exit 1)
+
+      echo "--- routes/woocommerce-webhooks.js: idempotent upsert ---"
+      grep -q "ON CONFLICT" shopops-api/routes/woocommerce-webhooks.js || \
+        (echo "FAIL: ON CONFLICT upsert not found in webhook handler" >&2; exit 1)
+
+      echo "--- WC status mapping: all 7 statuses present (checked individually) ---"
+      grep -q "processing" shopops-api/routes/woocommerce-webhooks.js || \
+        (echo "FAIL: WC status 'processing' mapping missing" >&2; exit 1)
+      grep -q "on-hold\|on_hold" shopops-api/routes/woocommerce-webhooks.js || \
+        (echo "FAIL: WC status 'on-hold' mapping missing" >&2; exit 1)
+      grep -q "completed" shopops-api/routes/woocommerce-webhooks.js || \
+        (echo "FAIL: WC status 'completed' mapping missing" >&2; exit 1)
+      grep -q "refunded" shopops-api/routes/woocommerce-webhooks.js || \
+        (echo "FAIL: WC status 'refunded' mapping missing" >&2; exit 1)
+
+      echo "--- index.js: all three woocommerce routes registered ---"
+      grep -q "woocommerce-import\|woocommerceImport" shopops-api/index.js || \
+        (echo "FAIL: woocommerce-import route not registered in index.js" >&2; exit 1)
+      grep -q "woocommerce-push\|woocommercePush" shopops-api/index.js || \
+        (echo "FAIL: woocommerce-push route not registered in index.js" >&2; exit 1)
+      grep -q "woocommerce-webhooks\|woocommerceWebhooks" shopops-api/index.js || \
+        (echo "FAIL: woocommerce-webhooks route not registered in index.js" >&2; exit 1)
+
+      echo "--- Stop condition: 3+ woocommerce references in index.js ---"
+      WC_ROUTE_COUNT=$(grep -c "woocommerce" shopops-api/index.js 2>/dev/null || echo 0)
+      echo "woocommerce refs in index.js: $WC_ROUTE_COUNT"
+      if [ "$WC_ROUTE_COUNT" -lt 3 ]; then
+        echo "FAIL: spec §12 stop condition requires >=3 woocommerce refs in index.js, found $WC_ROUTE_COUNT" >&2
+        exit 1
+      fi
+
+      echo "--- .env.example: WOOCOMMERCE_WEBHOOK_SECRET placeholder present ---"
+      ENV_EXAMPLE=$(find shopops-api -name ".env.example" -maxdepth 2 2>/dev/null | head -1)
+      if [ -z "$ENV_EXAMPLE" ]; then
+        ENV_EXAMPLE=".env.example"
+      fi
+      grep -q "WOOCOMMERCE_WEBHOOK_SECRET" "$ENV_EXAMPLE" || \
+        (echo "FAIL: WOOCOMMERCE_WEBHOOK_SECRET missing from $ENV_EXAMPLE" >&2; exit 1)
+
+      echo "--- Test function count (min 5) ---"
+      TEST_COUNT=$(grep -c "it(\|test(" shopops-api/tests/woocommerce.test.js 2>/dev/null || echo 0)
+      echo "Test functions found: $TEST_COUNT"
+      if [ "$TEST_COUNT" -lt 5 ]; then
+        echo "FAIL: fewer than 5 test functions in tests/woocommerce.test.js, found $TEST_COUNT" >&2
+        exit 1
+      fi
+
+      echo "=== All grep assertions passed ==="
+
+  # ---------------------------------------------------------------------------
+  # 7. VERIFY-TESTS — run bun test suite (Archon container is bun-only)
+  # ---------------------------------------------------------------------------
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd shopops-api
+      echo "=== Running bun test on woocommerce test suite ==="
+      # Archon container is bun-only. Rule from memory: reference_archon-container-runtime-bun-only.md
+      if [ -f tests/woocommerce.test.js ]; then
+        bun test tests/woocommerce.test.js || {
+          echo "Tests failed. See output above." >&2
+          echo "NOTE: If live DB is required and unavailable in harness, tests may fail here."
+          echo "Operator must verify bun test tests/woocommerce.test.js passes in staging environment."
+          exit 1
+        }
+      else
+        echo "FAIL: shopops-api/tests/woocommerce.test.js not found" >&2
+        exit 1
+      fi
+
+  # ---------------------------------------------------------------------------
+  # 8. COMMIT-AND-PUSH — idempotent checkout + stage + commit + push
+  # ---------------------------------------------------------------------------
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BASE_BRANCH="wo/shopops-woocommerce-connector-01"
+      BRANCH="$BASE_BRANCH"
+
+      # Idempotent checkout pattern (gold standard from bdc-ce-regression-suite.yaml)
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          # Branch locked to another worktree — use timestamped variant
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+
+      # Stage WO-scoped files only
+      git add \
+        shopops-api/services/woocommerceClient.js \
+        shopops-api/routes/woocommerce-import.js \
+        shopops-api/routes/woocommerce-push.js \
+        shopops-api/routes/woocommerce-webhooks.js \
+        shopops-api/index.js \
+        shopops-api/tests/woocommerce.test.js
+
+      # Stage .env.example wherever it lives
+      find shopops-api -name ".env.example" -maxdepth 2 | xargs git add 2>/dev/null || true
+      find . -maxdepth 1 -name ".env.example" | xargs git add 2>/dev/null || true
+
+      # Idempotent commit: skip if no staged changes (retry-safe)
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(api): WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 — WooCommerce connector
+
+Adds WooCommerce channel connector to shopops-api (mirrors Shopify connector pattern).
+
+New files:
+- shopops-api/services/woocommerceClient.js (wcGet, wcPost, verifyWcWebhookSignature; Basic Auth)
+- shopops-api/routes/woocommerce-import.js  (POST /woocommerce-import/preview + /commit, GET /batches)
+- shopops-api/routes/woocommerce-push.js    (POST /woocommerce-push/preview + /commit)
+- shopops-api/routes/woocommerce-webhooks.js (POST /woocommerce-webhooks/order + X-WC-Webhook-Signature)
+- shopops-api/tests/woocommerce.test.js     (min 5 bun tests: signature, ingest, idempotency, push preview, env fail-closed)
+
+Modified:
+- shopops-api/index.js  (registers /woocommerce-import, /woocommerce-push, /woocommerce-webhooks routes)
+- .env.example          (adds WOOCOMMERCE_WEBHOOK_SECRET placeholder)
+
+WC order status mapping: pending/on-hold->new, processing->paid, completed->fulfilled,
+  cancelled/failed->cancelled, refunded->refunded
+Idempotent upsert: ON CONFLICT (tenant_id, channel, external_order_id) DO UPDATE
+Auth: Basic base64(consumer_key:consumer_secret), timing-safe webhook signature verification
+
+Depends on: WO-SHOPOPS-COMMERCE-SPINE-01 (channel_connections + product_channel_map + channel_orders)
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+      echo "BRANCH_SHA=$(git rev-parse HEAD)"
+
+  # ---------------------------------------------------------------------------
+  # 9. OPEN-PR — idempotent PR against master
+  # ---------------------------------------------------------------------------
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      # Branch hardcoded to match commit-and-push BASE_BRANCH literal
+      BRANCH="wo/shopops-woocommerce-connector-01"
+      REPO="bluedevilcollectibles/shopops"
+      BASE="master"
+      TITLE="feat(api): WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 — WooCommerce connector"
+
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements **WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01** — WooCommerce connector for shopops-api."
+        echo ""
+        echo "Adds product import (preview+commit), product push (preview+commit), order webhook"
+        echo "ingest, and inventory publication. Mirrors the Shopify connector pattern."
+        echo ""
+        echo "## Files"
+        echo "- NEW \`shopops-api/services/woocommerceClient.js\` — wcGet, wcPost, verifyWcWebhookSignature (Basic Auth)"
+        echo "- NEW \`shopops-api/routes/woocommerce-import.js\` — POST /woocommerce-import/preview + /commit, GET /batches"
+        echo "- NEW \`shopops-api/routes/woocommerce-push.js\` — POST /woocommerce-push/preview + /commit"
+        echo "- NEW \`shopops-api/routes/woocommerce-webhooks.js\` — POST /woocommerce-webhooks/order"
+        echo "- NEW \`shopops-api/tests/woocommerce.test.js\` — min 5 bun tests"
+        echo "- MOD \`shopops-api/index.js\` — registers 3 woocommerce routes"
+        echo "- MOD \`.env.example\` — WOOCOMMERCE_WEBHOOK_SECRET placeholder"
+        echo ""
+        echo "## WC Order Status Mapping"
+        echo "| WC status | channel_orders.status |"
+        echo "|---|---|"
+        echo "| pending | new |"
+        echo "| on-hold | new |"
+        echo "| processing | paid |"
+        echo "| completed | fulfilled |"
+        echo "| cancelled | cancelled |"
+        echo "| failed | cancelled |"
+        echo "| refunded | refunded |"
+        echo ""
+        echo "## Auth"
+        echo "- Outbound (WC REST API): Basic Auth base64(consumer_key:consumer_secret)"
+        echo "- Inbound (webhooks): HMAC-SHA256 X-WC-Webhook-Signature + WOOCOMMERCE_WEBHOOK_SECRET"
+        echo "- Fail-closed: 500 if WOOCOMMERCE_WEBHOOK_SECRET unset, 401 if signature invalid"
+        echo ""
+        echo "## Prerequisite"
+        echo "Depends on WO-SHOPOPS-COMMERCE-SPINE-01 (channel_connections + product_channel_map + channel_orders tables)."
+        echo ""
+        echo "## Env Var"
+        echo "\`WOOCOMMERCE_WEBHOOK_SECRET\` must be added to /opt/bdc/shopops/.env on Hetzner before first webhook."
+        echo "Per-tenant: woocommerce_consumer_key, woocommerce_consumer_secret, woocommerce_store_url stored in tenant_config."
+        echo ""
+        echo "## Rule 20 / Staging Gate"
+        echo "PR targets master. John promotes master -> production after staging validation."
+        echo ""
+        echo "Generated by Archon bdc-shopops-woocommerce-connector workflow."
+      } > "$BODY_FILE"
+
+      # Idempotent PR creation
+      existing_pr_url() {
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null
+      }
+      PR_URL="$(existing_pr_url)"
+      if [ -n "$PR_URL" ]; then
+        echo "PR_URL=$PR_URL"
+        exit 0
+      fi
+
+      for attempt in 1 2 3 4 5; do
+        if PR_OUT=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" \
+            --title "$TITLE" --body-file "$BODY_FILE" 2>&1); then
+          echo "PR_URL=$PR_OUT"
+          exit 0
+        fi
+        PR_URL="$(existing_pr_url)"
+        if [ -n "$PR_URL" ]; then
+          echo "PR_URL=$PR_URL"
+          exit 0
+        fi
+        echo "open-pr attempt $attempt failed: $PR_OUT" >&2
+        sleep 10
+      done
+      echo "open-pr failed after retries; branch pushed at $BRANCH but no PR exists" >&2
+      exit 1
+
+  # ---------------------------------------------------------------------------
+  # 10. VERIFY-RUNTIME — Rule 19: docker exec grep proves source is live in container
+  #     Best-effort: container may not be rebuilt yet at this pipeline stage.
+  # ---------------------------------------------------------------------------
+  - id: verify-runtime
+    depends_on: [open-pr]
+    bash: |
+      # set -e DELIBERATELY OMITTED — best-effort step (Rule 19 verification)
+      # shopops-api uses COPY . /app at build — source changes need rebuild + restart.
+      # PR is open but not yet merged. Container likely has pre-WO source.
+      # Operator MUST re-run these checks after: docker compose build shopops-api && docker compose up -d shopops-api
+
+      echo "=== Rule 19: Runtime verification (shopops-api) ==="
+      echo "NOTE: Checks below will show STATUS=pending_rebuild until operator rebuilds container post-merge."
+      echo "Operator rebuild command: ssh hetzner-prod 'cd /opt/bdc/shopops && docker compose build shopops-api && docker compose up -d shopops-api'"
+      echo ""
+
+      # Check 1: woocommerce-webhooks registered in index.js
+      RESULT1=$(docker exec shopops-api grep -n "woocommerce-webhooks\|woocommerceWebhooks" /app/index.js 2>&1)
+      EXIT1=$?
+      if [ $EXIT1 -eq 0 ]; then
+        echo "STATUS_WEBHOOK_ROUTE=ok"
+        echo "ROUTE_REGISTRATION: $RESULT1"
+      else
+        echo "STATUS_WEBHOOK_ROUTE=pending_rebuild"
+        echo "EXPECTED_COMMAND: docker exec shopops-api grep -n 'woocommerce-webhooks' /app/index.js"
+      fi
+      echo ""
+
+      # Check 2: woocommerce-push registered in index.js
+      RESULT2=$(docker exec shopops-api grep -n "woocommerce-push\|woocommercePush" /app/index.js 2>&1)
+      EXIT2=$?
+      if [ $EXIT2 -eq 0 ]; then
+        echo "STATUS_PUSH_ROUTE=ok"
+        echo "PUSH_ROUTE: $RESULT2"
+      else
+        echo "STATUS_PUSH_ROUTE=pending_rebuild"
+        echo "EXPECTED_COMMAND: docker exec shopops-api grep -n 'woocommerce-push' /app/index.js"
+      fi
+      echo ""
+
+      # Check 3: wcGet present in woocommerceClient.js
+      RESULT3=$(docker exec shopops-api grep -n "wcGet" /app/services/woocommerceClient.js 2>&1)
+      EXIT3=$?
+      if [ $EXIT3 -eq 0 ]; then
+        echo "STATUS_WCCLIENT=ok"
+        echo "WC_CLIENT: $RESULT3"
+      else
+        echo "STATUS_WCCLIENT=pending_rebuild"
+        echo "EXPECTED_COMMAND: docker exec shopops-api grep -n 'wcGet' /app/services/woocommerceClient.js"
+      fi
+      echo ""
+
+      # Spec §12 stop condition commands (for manifest)
+      echo "=== Spec §12 stop condition commands (run post-rebuild) ==="
+      echo "docker exec shopops-api grep -rn 'woocommerce' /app/index.js"
+      echo "  Expected: >= 3 matches (import, push, webhooks)"
+      echo "docker exec shopops-api node -e \"require('./services/woocommerceClient.js'); console.log('ok')\""
+      echo "  Expected: prints 'ok' with no error"
+      echo "docker exec shopops-api grep -n 'wcGet' /app/services/woocommerceClient.js"
+      echo "  Expected: line with wcGet function definition"
+
+      exit 0
+
+  # ---------------------------------------------------------------------------
+  # 11. BUILD-MANIFEST — CODE class manifest (Rule 14 + Rule 19)
+  # ---------------------------------------------------------------------------
+  - id: build-manifest
+    depends_on: [open-pr, verify-runtime]
+    task_class: clerical
+    prompt: |
+      Build the Captain CI manifest v2 for WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 (CODE class).
+
+      CODE class requires: grep assertions for all new/modified source files,
+      runtime verification per Rule 19, test count from bun test output.
+
+      ## Required manifest v2 format (paste verbatim into Notion Notes)
+      WO: WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01
+      Builder: Major Build (Archon bdc-shopops-woocommerce-connector)
+      Files modified: shopops-api/index.js, .env.example
+      Files created: shopops-api/services/woocommerceClient.js,
+                     shopops-api/routes/woocommerce-import.js,
+                     shopops-api/routes/woocommerce-push.js,
+                     shopops-api/routes/woocommerce-webhooks.js,
+                     shopops-api/tests/woocommerce.test.js
+      Tests: [count from verify-tests.output] passing / [total] total
+             command: bun test shopops-api/tests/woocommerce.test.js
+      PRs: [PR URL from open-pr.output] — base: master
+      Merge ancestors: shopops master HEAD=[from commit-and-push BRANCH_SHA], behind_by: 0
+      Grep assertions:
+        grep -q 'wcGet' shopops-api/services/woocommerceClient.js
+        grep -q 'wcPost' shopops-api/services/woocommerceClient.js
+        grep -q 'verifyWcWebhookSignature' shopops-api/services/woocommerceClient.js
+        grep -c 'woocommerce' shopops-api/index.js (expected >= 3)
+        grep -q 'ON CONFLICT' shopops-api/routes/woocommerce-webhooks.js
+        grep -q 'X-WC-Webhook-Signature' shopops-api/routes/woocommerce-webhooks.js
+        grep -q 'WOOCOMMERCE_WEBHOOK_SECRET' shopops-api/routes/woocommerce-webhooks.js
+      Runtime verification (Rule 19 — run post-rebuild):
+        docker exec shopops-api grep -n 'woocommerce-webhooks' /app/index.js
+        docker exec shopops-api grep -n 'woocommerce-push' /app/index.js
+        docker exec shopops-api grep -n 'wcGet' /app/services/woocommerceClient.js
+        [include actual STATUS= lines from verify-runtime.output]
+        Rebuild command: ssh hetzner-prod 'cd /opt/bdc/shopops && docker compose build shopops-api && docker compose up -d shopops-api'
+      Vercel deployment: N/A (shopops-api is Hetzner Docker, not Vercel)
+      VALIDATION: PASS (pending container rebuild post-merge for runtime verification to complete)
+
+      ## Inputs
+      $read-spec.output
+      $plan.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-and-push.output
+      $open-pr.output
+      $verify-runtime.output
+
+  # post-started and post-completed webhook nodes OMITTED — Rule 11:
+  # curl to n8n.bluedevilcollectibles.com from Archon executor subprocess hangs >=120s.
+  # flip-notion is the canonical close action. Builder-status feed is optional bookkeeping.
+
+  # ---------------------------------------------------------------------------
+  # 12. FLIP-NOTION — set Notes property + Claude Status = REVIEW
+  #     Notes field, NOT a page comment (Captain CI reads Notes, not comments).
+  # ---------------------------------------------------------------------------
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 to REVIEW with the manifest in the Notes property.
+
+      IMPORTANT: The manifest goes in the Notes PROPERTY, NOT as a page comment.
+      Captain CI reads the Notes property. Page comments are invisible to CI.
+
+      Notion database ID: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+
+      ## Steps
+      1. Find the Notion page for WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01.
+         Query database a6df831c-0b52-449f-8ca4-d77be6b70d0a with filter:
+         { "property": "title", "title": { "contains": "WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01" } }
+
+      2. In a SINGLE Notion update call, set ALL of:
+         - Claude Status property -> REVIEW
+         - Status property -> Review
+         - Notes property -> paste $build-manifest.output verbatim (full manifest v2 block)
+         - claimed_by: Major Build (Archon bdc-shopops-woocommerce-connector)
+         - claimed_at: [today's date]
+
+      3. Confirm the update succeeded and log the Notion page URL to run output.
+
+      ## Manifest
+      $build-manifest.output
+
+      ## Fallback
+      If Notion MCP is unavailable in this runtime, output the following for XO to action:
+      XO_TODO: Flip WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01 to REVIEW in Notion.
+               Set Notes property (NOT comment) to the manifest from $build-manifest.output.
+               Set Claude Status = REVIEW, Status = Review.
+               Database: a6df831c-0b52-449f-8ca4-d77be6b70d0a

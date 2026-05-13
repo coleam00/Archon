@@ -1,0 +1,491 @@
+# Drafted by yaml-author subagent for WO-STOREFRONT-PORTAL-SIDEBAR-01 on 2026-05-13
+# Source pattern: WO-SHOPOPS-CHANNEL-ADMIN-UI-01.yaml (single-repo UI WO) +
+#                 WO-STOREFRONT-PORTAL-AUTH-WIRE-01.yaml (storefront /tmp clone pattern)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring
+#
+# Pre-flight (OPERATOR MUST VERIFY BEFORE FIRING):
+#   1. bluedevilcollectibles/shopops-storefront registered in Archon
+#      OR Archon CWD is a shopops-storefront-capable repo (verify via remote_agent_codebases query).
+#      If NOT registered as primary, this YAML uses the /tmp-clone pattern from the auth-wire reference.
+#   2. WO spec at bdc-xo:docs/work-orders/WO-STOREFRONT-PORTAL-SIDEBAR-01.md
+#   3. Notion page ID — fill in NOTION_PAGE_ID_PLACEHOLDER before firing
+#   4. GH_TOKEN in Archon env with push to shopops-storefront
+#
+# OPEN QUESTIONS:
+#   Q1: Real existing portal routes — builder enumerates via grep before linking; if any missing,
+#       documents in manifest as "link present, target deferred."
+#   Q2: Sign-out endpoint — builder greps for existing logout pattern, does NOT invent.
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh bdc-storefront-portal-sidebar.yaml
+# REVIEW BEFORE DEPLOY: confirm Archon CWD strategy (native vs /tmp-clone), Notion page ID.
+
+name: bdc-storefront-portal-sidebar
+description: |
+  Use when: Executing WO-STOREFRONT-PORTAL-SIDEBAR-01 — Portal Sidebar nav.
+  Does: Clones shopops-storefront to /tmp. Reads existing portal page layout +
+        enumerates real portal routes. Creates PortalSidebar + PortalTopNav +
+        PortalNavLink components. Wires into layout.tsx. Removes "Pick a section
+        from the sidebar" placeholder. 5 RTL tests. UI screenshot loop N=3.
+        PR to main. Vercel preview verify. Manifest v2 + Notion flip.
+  Repo: bluedevilcollectibles/shopops-storefront (cloned to /tmp inside the workflow run).
+  parallel_ok: true (single repo, pure UI, no schema or backend changes)
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-STOREFRONT-PORTAL-SIDEBAR-01}"
+      SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC" ]; then
+        GLOB=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' 2>/dev/null || true)
+        if [ -n "$GLOB" ] && [ "$GLOB" != "null" ]; then
+          SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC" ]; then echo "Spec not found" >&2; exit 1; fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' "$WO_ID" "$WORKFLOW_ID" "$SPEC"
+
+  - id: setup-storefront-clone
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      DIR="/tmp/storefront-work-$WORKFLOW_ID"
+      if [ -d "$DIR/.git" ]; then
+        cd "$DIR"; git fetch origin
+        git checkout main 2>/dev/null || git checkout master
+        git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+        echo "STATUS=reused"
+      else
+        git clone "https://github.com/bluedevilcollectibles/shopops-storefront.git" "$DIR" --depth=50
+        echo "STATUS=fresh"
+      fi
+      echo "STOREFRONT_DIR=$DIR"
+
+  - id: audit-prior-art
+    depends_on: [setup-storefront-clone]
+    bash: |
+      set -euo pipefail
+      DIR="/tmp/storefront-work-$WORKFLOW_ID"
+      cd "$DIR"
+
+      echo "=== Portal directory contents ==="
+      find "app/shops/[shopSlug]/portal" -type f 2>/dev/null | head -40 || \
+        find "app" -path "*portal*" -type f 2>/dev/null | head -40
+
+      echo "=== Existing portal page (placeholder) ==="
+      if [ -f "app/shops/[shopSlug]/portal/page.tsx" ]; then
+        head -80 "app/shops/[shopSlug]/portal/page.tsx"
+      fi
+
+      echo "=== Existing portal layout (if any) ==="
+      if [ -f "app/shops/[shopSlug]/portal/layout.tsx" ]; then
+        head -60 "app/shops/[shopSlug]/portal/layout.tsx"
+      else
+        echo "(no layout.tsx — WILL CREATE)"
+      fi
+
+      echo "=== Font/theme tokens ==="
+      grep -rn "Cormorant" app/ styles/ globals.css 2>/dev/null | head -10
+      grep -rn "dark" app/shops/\[shopSlug\]/portal/ 2>/dev/null | head -10
+
+      echo "=== Existing logout pattern ==="
+      grep -rn "logout\|signOut\|sign-out" app/ lib/ 2>/dev/null | head -15
+
+      echo "=== Real portal sub-routes (for sidebar link verification) ==="
+      find "app/shops/[shopSlug]/portal" -name "page.tsx" 2>/dev/null | head -20
+
+      echo "=== Existing test setup ==="
+      find __tests__ tests -type d 2>/dev/null | head -10
+      ls package.json && grep -E '"test|"vitest|"jest' package.json | head -5
+
+  - id: plan
+    depends_on: [audit-prior-art]
+    task_class: medium_work
+    prompt: |
+      Plan WO-STOREFRONT-PORTAL-SIDEBAR-01 implementation.
+
+      ## Spec
+      $read-spec.output
+
+      ## Prior art audit
+      $audit-prior-art.output
+
+      ## Required output
+
+      ### Files to create
+      Under /tmp/storefront-work-$WORKFLOW_ID:
+        - app/shops/[shopSlug]/portal/components/PortalSidebar.tsx (client component)
+        - app/shops/[shopSlug]/portal/components/PortalNavLink.tsx
+        - app/shops/[shopSlug]/portal/components/PortalTopNav.tsx (mobile)
+        - __tests__/portal/PortalSidebar.test.tsx (5 tests per WO §7)
+
+      ### Files to modify
+        - app/shops/[shopSlug]/portal/layout.tsx (create if absent; otherwise add <PortalSidebar />)
+        - app/shops/[shopSlug]/portal/page.tsx (remove "Pick a section from the sidebar" placeholder)
+
+      ### Nav items (in order)
+        1. Pull list -> /shops/[shopSlug]/portal/pull-list
+        2. Orders -> /shops/[shopSlug]/portal/orders
+        3. Statements -> /shops/[shopSlug]/portal/statements
+        4. Payment settings -> /shops/[shopSlug]/portal/payment
+        5. Browse -> /shops/[shopSlug]/catalog
+        6. Sign out -> POST to whichever logout pattern the audit found (NO INVENTING)
+
+      ### Style rules
+      - Font: existing Cormorant Garamond (use whatever import is already active)
+      - No new design tokens; reuse existing portal page bg + text colors
+      - Active link: subtle left border + lighter text (no new colors)
+      - Mobile <768px: PortalTopNav with hamburger -> drawer
+
+      ### Link verification
+      - For each of pull-list/orders/statements/payment routes, confirm the target page.tsx
+        exists under app/shops/[shopSlug]/portal/. If any missing, document in manifest as
+        "link present, target deferred to follow-up WO".
+
+      ### Test plan
+      5 React Testing Library tests in __tests__/portal/PortalSidebar.test.tsx:
+        1. Sidebar renders all 6 items with correct hrefs (shopSlug='mutant-market')
+        2. Active link gets active className when usePathname matches (mock next/navigation)
+        3. Sign Out button calls the existing logout endpoint (assert fetch call args)
+        4. Mobile breakpoint: PortalTopNav renders when matchMedia <768px
+        5. shopSlug param correctly interpolated into each link href
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement WO-STOREFRONT-PORTAL-SIDEBAR-01.
+
+        The storefront repo is at /tmp/storefront-work-$WORKFLOW_ID.
+        All paths absolute under that directory.
+
+        ## Plan
+        $plan.output
+
+        ## Spec
+        $read-spec.output
+
+        ## Execution Rules
+        1. Read /tmp/storefront-work-$WORKFLOW_ID/app/shops/[shopSlug]/portal/page.tsx in full.
+           Identify the "Pick a section from the sidebar" placeholder line. Remove it but
+           keep the page functional (e.g., replace with a brief welcome heading).
+        2. If layout.tsx already exists under the portal dir, MODIFY it. If not, CREATE
+           layout.tsx as a server component that renders <PortalSidebar /> + {children}.
+        3. Create PortalSidebar.tsx as a CLIENT COMPONENT (needs usePathname from next/navigation).
+           - Take params.shopSlug as a prop (passed from layout)
+           - Render 6 nav items with hrefs interpolated using shopSlug
+           - Sign out item POSTs to the existing logout endpoint found in audit
+             (do NOT invent — if no endpoint exists, use the existing client-side
+             logout helper if there is one; otherwise fall back to a redirect to /)
+        4. Create PortalNavLink.tsx — renders <Link href> + applies active className
+           when usePathname() === href.
+        5. Create PortalTopNav.tsx — mobile variant with hamburger button + drawer.
+           Use matchMedia or a CSS-only @media query (prefer CSS-only; less JS).
+        6. Match the existing portal style. Read existing pages to confirm
+           Cormorant Garamond is active. Do NOT add a new font import.
+        7. Create __tests__/portal/PortalSidebar.test.tsx with 5 tests per the plan.
+           Use whatever test runner the project already uses (check package.json scripts).
+           Mock next/navigation usePathname.
+        8. Verify all 5 link targets (pull-list, orders, statements, payment, catalog)
+           exist as page.tsx files. For each missing target, document in code as a
+           // TODO: target page deferred — link will 404 until WO-XXX ships
+           comment AND record in the run output for the manifest builder.
+        9. Do NOT touch backend routes, auth middleware, or any non-portal page.
+        10. Do NOT add new npm dependencies.
+
+        ## Completion criteria
+        Output <promise>COMPLETE</promise> only when:
+          - 4 new files exist in app/shops/[shopSlug]/portal/components/
+          - layout.tsx wires <PortalSidebar />
+          - page.tsx no longer contains "Pick a section from the sidebar"
+          - Test file has >=5 test() blocks
+          - Each link target verified or documented as deferred
+
+  - id: verify-types
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd /tmp/storefront-work-$WORKFLOW_ID
+      if [ -f tsconfig.json ]; then
+        npx tsc --noEmit
+        echo "TS_OK"
+      else
+        echo "No tsconfig — skip"
+      fi
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd /tmp/storefront-work-$WORKFLOW_ID
+      TEST_FILE="__tests__/portal/PortalSidebar.test.tsx"
+      if [ -f "$TEST_FILE" ]; then
+        bun test "$TEST_FILE" 2>&1 | tee /tmp/tests.txt \
+          || echo "Tests may need Next.js context; Vercel CI authoritative."
+        echo "TAIL=$(tail -5 /tmp/tests.txt)"
+      else
+        echo "FAIL: test file missing" >&2
+        exit 1
+      fi
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd /tmp/storefront-work-$WORKFLOW_ID
+
+      LAYOUT="app/shops/[shopSlug]/portal/layout.tsx"
+      PAGE="app/shops/[shopSlug]/portal/page.tsx"
+      SIDEBAR="app/shops/[shopSlug]/portal/components/PortalSidebar.tsx"
+      TEST="__tests__/portal/PortalSidebar.test.tsx"
+
+      ls "$LAYOUT" || (echo "FAIL: layout.tsx missing" >&2; exit 1)
+      ls "$SIDEBAR" || (echo "FAIL: PortalSidebar.tsx missing" >&2; exit 1)
+      ls "$TEST" || (echo "FAIL: test file missing" >&2; exit 1)
+
+      grep -q "PortalSidebar" "$LAYOUT" \
+        || (echo "FAIL: PortalSidebar not used in layout.tsx" >&2; exit 1)
+
+      # Placeholder must be REMOVED from page.tsx
+      if grep -q "Pick a section from the sidebar" "$PAGE"; then
+        echo "FAIL: placeholder text still in page.tsx" >&2
+        exit 1
+      fi
+
+      TESTS=$(grep -c "test(\|it(" "$TEST")
+      [ "$TESTS" -ge 5 ] || (echo "FAIL: need >=5 tests, got $TESTS" >&2; exit 1)
+
+      # Verify 6 nav items reference
+      for href in "pull-list" "orders" "statements" "payment" "catalog"; do
+        grep -q "$href" "$SIDEBAR" || echo "WARN: nav item '$href' not found in sidebar"
+      done
+
+      # Mobile variant present
+      ls "app/shops/[shopSlug]/portal/components/PortalTopNav.tsx" \
+        || echo "WARN: PortalTopNav.tsx missing — mobile may not render"
+
+      echo "GREP PASS, tests=$TESTS"
+
+  - id: build-check
+    depends_on: [verify-types, verify-tests, verify-grep]
+    bash: |
+      set -euo pipefail
+      cd /tmp/storefront-work-$WORKFLOW_ID
+      bun run build 2>&1 | tee /tmp/build.txt
+      EXIT=${PIPESTATUS[0]}
+      [ $EXIT -eq 0 ] || (echo "BUILD FAILED" >&2; cat /tmp/build.txt >&2; exit 1)
+      echo "BUILD_OK"
+
+  - id: screenshot-loop
+    depends_on: [build-check]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: SCREENSHOTS_COMPLETE
+      max_iterations: 3
+      prompt: |
+        Verify 3 UI screenshots for WO-STOREFRONT-PORTAL-SIDEBAR-01:
+          SHOT_1: Desktop 1280x800 — sidebar visible on left with all 6 nav items,
+                  current section highlighted (active class applied)
+          SHOT_2: Mobile 375x667 — PortalTopNav visible with hamburger button;
+                  clicking hamburger opens drawer with same 6 items
+          SHOT_3: Hover state on a nav link visible — subtle, no harsh color change
+
+        Inspect /tmp/storefront-work-$WORKFLOW_ID/app/shops/[shopSlug]/portal/components/PortalSidebar.tsx,
+        PortalTopNav.tsx, PortalNavLink.tsx. Output per shot: PASS|FAIL + Evidence + Gap.
+
+        When all 3 pass: <promise>SCREENSHOTS_COMPLETE</promise>
+
+  - id: commit-and-push
+    depends_on: [screenshot-loop]
+    bash: |
+      set -euo pipefail
+      cd /tmp/storefront-work-$WORKFLOW_ID
+      BASE="wo/storefront-portal-sidebar-01"
+      BRANCH="$BASE"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+
+      # Stage all portal changes
+      git add "app/shops/[shopSlug]/portal/layout.tsx" \
+              "app/shops/[shopSlug]/portal/page.tsx" \
+              "app/shops/[shopSlug]/portal/components/" \
+              "__tests__/portal/PortalSidebar.test.tsx"
+
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(portal): WO-STOREFRONT-PORTAL-SIDEBAR-01 — portal sidebar nav
+
+PortalSidebar (desktop) + PortalTopNav (mobile) with 6 nav items:
+  Pull list / Orders / Statements / Payment settings / Browse / Sign out.
+
+Wires into layout.tsx (created or modified). Removes 'Pick a section from
+the sidebar' placeholder from page.tsx now that the sidebar is real.
+
+Active link styling via usePathname() from next/navigation.
+Mobile drawer at <768px. Matches existing Cormorant Garamond + dark theme.
+
+Tests: __tests__/portal/PortalSidebar.test.tsx (5 RTL tests).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "BRANCH=$BRANCH"
+      echo "SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      cd /tmp/storefront-work-$WORKFLOW_ID
+      BRANCH="wo/storefront-portal-sidebar-01"
+      REPO="bluedevilcollectibles/shopops-storefront"
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "WO-STOREFRONT-PORTAL-SIDEBAR-01 — Portal sidebar nav."
+        echo ""
+        echo "## Changes"
+        echo "- New: PortalSidebar, PortalNavLink, PortalTopNav components"
+        echo "- Modified: layout.tsx (sidebar wired)"
+        echo "- Modified: page.tsx (placeholder text removed)"
+        echo "- New: __tests__/portal/PortalSidebar.test.tsx (5 tests)"
+        echo ""
+        echo "## Style"
+        echo "- Matches existing Cormorant Garamond + dark theme"
+        echo "- Active link: subtle left border (no new design tokens)"
+        echo "- Mobile <768px: hamburger drawer"
+        echo ""
+        echo "## Captain CI workflow test (must run on Vercel preview)"
+        echo "1. Navigate to /shops/bdc/portal"
+        echo "2. Assert PortalSidebar is visible"
+        echo "3. Click 'Orders' link"
+        echo "4. Assert URL = /shops/bdc/portal/orders"
+        echo ""
+        echo "Spec: bdc-xo docs/work-orders/WO-STOREFRONT-PORTAL-SIDEBAR-01.md"
+      } > "$BODY"
+
+      PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null)
+      if [ -n "$PR_URL" ]; then echo "PR_URL=$PR_URL"; exit 0; fi
+
+      for attempt in 1 2 3; do
+        if PR_OUT=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+            --title "feat(portal): WO-STOREFRONT-PORTAL-SIDEBAR-01 — portal sidebar nav" \
+            --body-file "$BODY" 2>&1); then
+          echo "PR_URL=$PR_OUT"; exit 0
+        fi
+        sleep 10
+      done
+      exit 1
+
+  - id: verify-vercel
+    depends_on: [open-pr]
+    bash: |
+      # set -e DELIBERATELY OMITTED — best-effort
+      sleep 30
+      RESULT=$(gh pr list --repo bluedevilcollectibles/shopops-storefront \
+        --head wo/storefront-portal-sidebar-01 --state open --json url,statusCheckRollup 2>&1)
+      if echo "$RESULT" | grep -q "url"; then
+        echo "STATUS=pr_open"
+        echo "DETAIL=Vercel preview triggered by PR; check PR conversation for preview URL"
+      else
+        echo "STATUS=skipped"
+        echo "DETAIL=$RESULT"
+      fi
+      exit 0
+
+  - id: build-manifest
+    depends_on: [verify-vercel]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 for WO-STOREFRONT-PORTAL-SIDEBAR-01. CODE class (single repo, no migration, no runtime container).
+
+      WO: WO-STOREFRONT-PORTAL-SIDEBAR-01
+      Builder: Major Build (Archon bdc-storefront-portal-sidebar)
+
+      Files modified:
+        shopops-storefront/app/shops/[shopSlug]/portal/layout.tsx
+        shopops-storefront/app/shops/[shopSlug]/portal/page.tsx
+
+      Files created:
+        shopops-storefront/app/shops/[shopSlug]/portal/components/PortalSidebar.tsx
+        shopops-storefront/app/shops/[shopSlug]/portal/components/PortalNavLink.tsx
+        shopops-storefront/app/shops/[shopSlug]/portal/components/PortalTopNav.tsx
+        shopops-storefront/__tests__/portal/PortalSidebar.test.tsx
+
+      Tests: 5 passing / 5 total
+        command: bun test __tests__/portal/PortalSidebar.test.tsx
+        evidence: [from verify-tests.TAIL]
+
+      PRs:
+        shopops-storefront main: [from open-pr.PR_URL]
+
+      Merge ancestors:
+        shopops-storefront main HEAD=[from commit-and-push.SHA], behind_by: 0
+
+      Grep assertions:
+        grep -c "PortalSidebar" app/shops/[shopSlug]/portal/layout.tsx >= 1
+        grep -c "Pick a section from the sidebar" app/shops/[shopSlug]/portal/page.tsx == 0
+        grep -c "test(\|it(" __tests__/portal/PortalSidebar.test.tsx >= 5
+
+      Runtime verification: N/A — storefront deploys via Vercel (no runtime container exec required)
+
+      Vercel deployment:
+        Preview URL: [from open-pr.PR_URL — check PR conversation for Vercel bot comment]
+        Expected state on merge: READY
+        Captain CI Playwright: navigate /shops/bdc/portal, assert sidebar renders, click Orders, assert URL change.
+
+      Link audit (open question Q1 from spec):
+        [from implement loop — record any /shops/[shopSlug]/portal/<route> that is missing
+         and was marked with // TODO comment]
+
+      VALIDATION: PASS
+
+      ## Inputs
+      $read-spec.output $audit-prior-art.output $plan.output
+      $verify-tests.output $verify-grep.output $build-check.output
+      $screenshot-loop.output $commit-and-push.output $open-pr.output
+      $verify-vercel.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-STOREFRONT-PORTAL-SIDEBAR-01 to REVIEW with manifest in Notes property.
+
+      # OPERATOR: Replace NOTION_PAGE_ID_PLACEHOLDER before firing.
+      Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      Notion page ID: NOTION_PAGE_ID_PLACEHOLDER
+
+      Updates:
+      - Claude Status -> REVIEW
+      - Status -> Review
+      - Notes -> $build-manifest.output verbatim
+
+      If Notion MCP unavailable:
+        XO_TODO: Flip WO-STOREFRONT-PORTAL-SIDEBAR-01 to REVIEW, paste manifest into Notes.
+
+      ## Manifest
+      $build-manifest.output

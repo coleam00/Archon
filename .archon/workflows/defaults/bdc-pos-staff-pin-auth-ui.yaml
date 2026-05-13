@@ -1,0 +1,269 @@
+# Drafted by yaml-author for WO-POS-STAFF-PIN-AUTH-UI-01 on 2026-05-13
+# Source pattern: bdc-ce-regression-suite.yaml + WO-POS-TERMINAL-SDK-01.yaml
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring
+#
+# Pre-flight: codebase bluedevilcollectibles/lspro-react must be registered in Archon.
+#   Verify: sqlite3 /opt/bdc/archon-data/archon.db "SELECT name FROM remote_agent_codebases"
+#
+# Pre-flight (4-block): YAML exists (this file), spec exists (docs/work-orders/
+#   WO-POS-STAFF-PIN-AUTH-UI-01.md in bdc-xo), CWD scope = CODE single-repo
+#   (lspro-react), codebase registered. Open Question: if store_staff.pin_hash
+#   missing OR /staff/pin-login route missing in shopops-api, WO grows MIXED —
+#   operator surfaces to XO before re-firing.
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-POS-STAFF-PIN-AUTH-UI-01.yaml
+
+name: bdc-pos-staff-pin-auth-ui
+description: |
+  Use when: Executing WO-POS-STAFF-PIN-AUTH-UI-01 — Staff PIN login UI for POS.
+  Input: WO_ID = WO-POS-STAFF-PIN-AUTH-UI-01.
+  Does: Reads spec from bdc-xo, audits shopops-api for existing /staff/pin-login
+        + store_staff.pin_hash (Open Question gate), implements lspro-react
+        POSLoginPage + PinPad + PosAuthContext + RoleGate + posApiFetch + tests,
+        opens PR, builds CODE manifest, flips Notion.
+  Repo: bluedevilcollectibles/lspro-react.
+  parallel_ok: true.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-POS-STAFF-PIN-AUTH-UI-01}"
+      SPEC=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC" ]; then
+        GLOB=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB" ] && [ "$GLOB" != "null" ]; then
+          SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC" ]; then echo "ERROR: spec not found for $WO_ID" >&2; exit 1; fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' "$WO_ID" "$WORKFLOW_ID" "$SPEC"
+
+  - id: fresh-branch
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      git fetch origin main --depth=50
+      git checkout main
+      git reset --hard origin/main
+      BASE="wo/pos-staff-pin-auth-ui-01"
+      BRANCH="$BASE"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/main
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=$BRANCH"
+
+  - id: audit-backend
+    depends_on: [fresh-branch]
+    bash: |
+      # best-effort backend audit — surfaces Open Question gate
+      EXISTS=$(gh api \
+        "repos/bluedevilcollectibles/shopops/contents/shopops-api/routes/staff.js?ref=master" \
+        --jq .name 2>/dev/null || echo "")
+      if [ -n "$EXISTS" ] && [ "$EXISTS" != "null" ]; then
+        echo "STATUS=ok"
+        echo "BACKEND_STAFF_ROUTES=present"
+      else
+        echo "STATUS=open_question"
+        echo "DETAIL=shopops-api/routes/staff.js not found; WO may need a MIXED companion. Surface to operator."
+      fi
+      exit 0
+
+  - id: plan
+    depends_on: [read-spec, audit-backend]
+    task_class: medium_work
+    prompt: |
+      Plan WO-POS-STAFF-PIN-AUTH-UI-01 (lspro-react only by default).
+
+      ## Required
+      - Files to create:
+        src/pos/POSLoginPage.tsx, src/pos/PinPad.tsx, src/pos/PosAuthContext.tsx,
+        src/pos/RoleGate.tsx, src/pos/posApiFetch.ts,
+        src/pos/__tests__/POSLoginPage.test.tsx,
+        src/pos/__tests__/RoleGate.test.tsx,
+        src/pos/__tests__/PosAuthContext.test.tsx
+      - Files to modify: src/pos/POSHeader.tsx (StaffBadge + LogoutButton), routing config
+      - Branch: wo/pos-staff-pin-auth-ui-01
+      - PR base: main
+      - Test command: bun test src/pos
+
+      ## Open Question gate
+      $audit-backend.output
+      If backend routes missing, output PLAN_BLOCKED_OPEN_QUESTION and stop.
+
+      ## Spec
+      $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement WO-POS-STAFF-PIN-AUTH-UI-01. CWD = lspro-react repo root.
+
+        ## Plan
+        $plan.output
+        ## Spec
+        $read-spec.output
+
+        ## Execution Rules
+        1. Create the 5 source files per WO §7 + 3 test files.
+        2. PIN flow: 4-digit input, auto-submit on 4th digit, POST to /api/staff/pin-login.
+        3. PosAuthContext stores JWT in sessionStorage.pos_jwt, exposes { staff, login, logout, token }.
+        4. RoleGate: disabled children + overlay when staff.role not in props.roles.
+        5. posApiFetch: wraps existing apiFetch, injects Authorization Bearer + X-Shopops-Tenant.
+        6. On 401: clear sessionStorage + navigate('/pos/login').
+        7. Tests: >= 7 vitest tests asserting real behavior per WO §11.
+        8. Use existing styling utilities (Tailwind or styled if that is the repo convention).
+        9. Do NOT push, do NOT modify auth0 code.
+
+        Output <promise>COMPLETE</promise> when all files exist + bun test src/pos passes.
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls src/pos/POSLoginPage.tsx
+      ls src/pos/PinPad.tsx
+      ls src/pos/PosAuthContext.tsx
+      ls src/pos/RoleGate.tsx
+      ls src/pos/posApiFetch.ts
+      grep -q "POSLoginPage" src/pos/POSLoginPage.tsx
+      grep -q "PinPad" src/pos/PinPad.tsx
+      grep -q "PosAuthContext\|usePosAuth\|createContext" src/pos/PosAuthContext.tsx
+      grep -q "RoleGate" src/pos/RoleGate.tsx
+      grep -q "pin-login" src/pos/posApiFetch.ts
+      grep -q "Authorization" src/pos/posApiFetch.ts
+      TC=$(grep -rc "it(\|test(" src/pos/__tests__ || echo 0)
+      echo "Test count: $TC"
+      [ "$TC" -ge 7 ] || (echo "FAIL test count" >&2; exit 1)
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      bun test src/pos || (echo "Tests failed" >&2; exit 1)
+
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-staff-pin-auth-ui-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add src/pos
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(pos): WO-POS-STAFF-PIN-AUTH-UI-01 — PIN login + RoleGate
+
+Adds src/pos/POSLoginPage.tsx + PinPad.tsx + PosAuthContext.tsx + RoleGate.tsx +
+posApiFetch.ts with 7+ vitest tests.
+Gates POS actions by role (clerk/manager/owner) per WO §6 matrix.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/pos-staff-pin-auth-ui-01"
+      REPO="bluedevilcollectibles/lspro-react"
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements WO-POS-STAFF-PIN-AUTH-UI-01 — Staff PIN login UI for POS."
+        echo ""
+        echo "## Files created"
+        echo "- src/pos/POSLoginPage.tsx, PinPad.tsx, PosAuthContext.tsx, RoleGate.tsx, posApiFetch.ts"
+        echo ""
+        echo "## Vercel staging URL"
+        echo "https://staging.livesellerpro.app/pos/login"
+      } > "$BODY"
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "PR_URL=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+            --title "feat(pos): WO-POS-STAFF-PIN-AUTH-UI-01 — PIN login + RoleGate" \
+            --body-file "$BODY" 2>&1); then
+          echo "PR_URL=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr failed" >&2; exit 1
+
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 (CODE class) for WO-POS-STAFF-PIN-AUTH-UI-01.
+
+      WO: WO-POS-STAFF-PIN-AUTH-UI-01
+      Builder: Codex (Archon bdc-pos-staff-pin-auth-ui)
+      Files created: src/pos/POSLoginPage.tsx, PinPad.tsx, PosAuthContext.tsx,
+                     RoleGate.tsx, posApiFetch.ts + 3 test files
+      Files modified: src/pos/POSHeader.tsx, src/pos routing
+      Tests: [count from $verify-tests.output] passing | bun test src/pos
+      PRs: [from $open-pr.output PR_URL] — base: main
+      Merge ancestors: lspro-react main HEAD: [from $commit-and-push.output SHA], behind_by: 0
+      Grep assertions:
+        - grep -q 'PosAuthContext' src/pos/PosAuthContext.tsx
+        - grep -q 'RoleGate' src/pos/RoleGate.tsx
+        - grep -q 'pin-login' src/pos/posApiFetch.ts
+        - grep -q 'Authorization' src/pos/posApiFetch.ts
+      Runtime verification: N/A (frontend-only WO)
+      Vercel deployment: staging URL https://staging.livesellerpro.app/pos/login | state READY | commit matches HEAD: pending Captain CI
+      VALIDATION: PASS
+
+      Inputs:
+      $read-spec.output
+      $audit-backend.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-and-push.output
+      $open-pr.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-POS-STAFF-PIN-AUTH-UI-01 to REVIEW. Manifest in Notes property.
+      Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # OPEN QUESTION: Notion page ID for WO-POS-STAFF-PIN-AUTH-UI-01 not confirmed.
+      # Operator searches database by exact WO ID equality.
+
+      Update: Claude Status -> REVIEW, Status -> Review, Notes -> $build-manifest.output verbatim,
+      claimed_by: Codex, claimed_at: today.
+
+      If Notion MCP unavailable, output:
+        XO_TODO: Flip WO-POS-STAFF-PIN-AUTH-UI-01 to REVIEW; paste manifest into Notes property.
+
+      Manifest:
+      $build-manifest.output

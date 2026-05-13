@@ -1,0 +1,273 @@
+# Drafted by yaml-author for WO-STOREFRONT-FOOTER-SPACING-01 on 2026-05-13
+# Source pattern: WO-STOREFRONT-PORTAL-AUTH-WIRE-01.yaml (storefront single-repo)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+#
+# Pre-flight (4-block):
+#   1. YAML exists: this file
+#   2. Spec exists: docs/work-orders/WO-STOREFRONT-FOOTER-SPACING-01.md in bdc-xo
+#   3. CWD scope: SINGLE-REPO (shopops-storefront only)
+#   4. Codebase registered: bluedevilcollectibles/shopops-storefront
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-STOREFRONT-FOOTER-SPACING-01.yaml
+#
+# Polish bar: ROUGH OK — ~30 minute cosmetic fix. Skip exhaustive cross-browser tests.
+
+name: bdc-storefront-footer-spacing
+description: |
+  Use when: Executing WO-STOREFRONT-FOOTER-SPACING-01 — fix run-together footer nav text.
+  Input: WO_ID = WO-STOREFRONT-FOOTER-SPACING-01.
+  Does:
+    - Locates the footer component via grep on Catalog + Pull List + Live Shows + About strings.
+    - Adds spacing (Tailwind gap-X or visible divider) between nav items.
+    - Verifies no TypeScript regressions.
+    - Builds CODE manifest and flips Notion to REVIEW.
+  Repo: bluedevilcollectibles/shopops-storefront.
+  parallel_ok: true.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-STOREFRONT-FOOTER-SPACING-01}"
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID}" >&2; exit 1
+      fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' \
+        "$WO_ID" "$WORKFLOW_ID" "$SPEC_CONTENT"
+
+  - id: fresh-branch
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      git fetch origin main --depth=50
+      git checkout main
+      git reset --hard origin/main
+      BASE_BRANCH="wo/storefront-footer-spacing-01"
+      BRANCH="$BASE_BRANCH"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/main
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=${BRANCH}"
+
+  - id: locate-footer
+    depends_on: [fresh-branch]
+    bash: |
+      set -euo pipefail
+      echo "=== grep for footer-component candidates ==="
+      grep -rln "Pull List" app/ 2>/dev/null | head -20 || true
+      echo "---"
+      grep -rln "Catalog.*Pull List\|footer\|<footer" app/ 2>/dev/null | head -20 || true
+      echo "---"
+      # Also surface shared layouts:
+      ls -la app/shops/\[shopSlug\]/portal/ 2>/dev/null || true
+      ls -la app/shops/\[shopSlug\]/ 2>/dev/null || true
+
+  - id: implement
+    depends_on: [locate-footer]
+    task_class: small_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 4
+      prompt: |
+        Implement WO-STOREFRONT-FOOTER-SPACING-01. CWD = shopops-storefront repo root.
+
+        ## Spec
+        $read-spec.output
+
+        ## Footer location hints
+        $locate-footer.output
+
+        ## Execution rules
+        1. Locate the file rendering the run-together "CatalogPull ListLive ShowsAbout"
+           footer. It is in one of:
+             - app/shops/[shopSlug]/portal/page.tsx
+             - app/shops/[shopSlug]/portal/layout.tsx
+             - app/shops/[shopSlug]/layout.tsx
+             - a shared component imported from app/components/ or similar
+           Confirm via additional grep if the locate-footer node didn't surface it.
+        2. Fix the spacing. Two acceptable patterns:
+           (a) Tailwind: wrap the nav in `<nav className="flex gap-6 ...">`
+           (b) Visible divider: each item suffixed with `<span className="px-2">|</span>`
+           Pick (a) (gap utility) unless the existing design language already uses
+           visible dividers somewhere on the page.
+        3. DO NOT redesign the footer. Same links, same text, same order. Only fix spacing.
+        4. Verify the markup renders each link as a SEPARATE <a> or <Link> element
+           (not concatenated into a single text node).
+        5. Run `bunx tsc --noEmit` and confirm exit 0.
+        6. Run `bun test` and confirm no new failures.
+        7. Do NOT push.
+
+        V1 limitations (ROUGH OK): no cross-browser screenshot loop, no a11y audit,
+        no mobile-specific design pass beyond "doesn't break existing responsive
+        pattern."
+
+        Output <promise>COMPLETE</promise> when fix applied + tsc clean + tests pass.
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      # Confirm 4 link texts still present and are separately rendered
+      FILES=$(grep -rl "Pull List" app/ 2>/dev/null | head -5)
+      echo "Files containing 'Pull List': $FILES"
+      [ -n "$FILES" ] || (echo "FAIL: no file references 'Pull List'" >&2; exit 1)
+      # Confirm gap-* class OR explicit divider added in at least one of the candidate files
+      MATCH=0
+      for f in $FILES; do
+        if grep -qE "gap-[0-9]+|px-[0-9]+|className=.*flex.*gap|<span[^>]*>\s*\|" "$f"; then
+          echo "Spacing found in $f"
+          MATCH=1
+        fi
+      done
+      [ "$MATCH" -eq 1 ] || (echo "FAIL: no gap-* or divider in any footer candidate" >&2; exit 1)
+      echo "verify-grep PASS"
+
+  - id: verify-tsc
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      bunx tsc --noEmit
+
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-tsc]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/storefront-footer-spacing-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add -A
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "fix(storefront): WO-STOREFRONT-FOOTER-SPACING-01 — separate footer nav items
+
+Adds gap-* (or divider) between Catalog / Pull List / Live Shows / About
+in the storefront portal footer. No other changes.
+
+ROUGH-OK polish bar — see WO §13 for v1 limitations.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "SHA=$(git rev-parse HEAD)"
+      echo "BRANCH=${BRANCH}"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/storefront-footer-spacing-01"
+      REPO="bluedevilcollectibles/shopops-storefront"
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "PR=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
+            --title "fix(storefront): WO-STOREFRONT-FOOTER-SPACING-01 — separate footer nav items" \
+            --body "ROUGH-OK polish bar. Staging URL: https://staging.comicstoreos.com/shops/bdc/portal/statements" 2>&1); then
+          echo "PR=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      echo "open-pr failed" >&2; exit 1
+
+  - id: runtime-verify
+    depends_on: [open-pr]
+    bash: |
+      # Verify staging shows separated items (best-effort — Vercel may not have deployed yet)
+      R=$(curl -s "https://staging.comicstoreos.com/shops/bdc/portal/statements" 2>&1 | head -c 4000)
+      EXIT=$?
+      if [ $EXIT -eq 0 ] && echo "$R" | grep -q "Pull List"; then
+        if echo "$R" | grep -qE "gap-[0-9]+|px-[0-9]+|<span[^>]*>\s*\|"; then
+          echo "STATUS=ok"
+          echo "STAGING_HAS_SPACING=true"
+        else
+          echo "STATUS=skipped_vercel_not_deployed"
+          echo "DETAIL=Staging fetched but spacing markup not present; awaiting Vercel deploy"
+        fi
+      else
+        echo "STATUS=skipped_no_response"
+        echo "DETAIL=Staging unreachable; Captain CI verifies post-Vercel-deploy"
+      fi
+      exit 0
+
+  - id: build-manifest
+    depends_on: [runtime-verify]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 for WO-STOREFRONT-FOOTER-SPACING-01 (CODE class, ROUGH-OK).
+
+      WO: WO-STOREFRONT-FOOTER-SPACING-01
+      Builder: Devils Cauldron (Archon bdc-storefront-footer-spacing)
+      Polish bar: ROUGH OK — ~30 min cosmetic fix.
+
+      Files modified:
+       - [actual file from $verify-grep.output]
+
+      Tests:
+       - bunx tsc --noEmit -> exit 0
+       - bun test -> no new failures
+
+      PRs:
+       - shopops-storefront: [from $open-pr.output PR]
+
+      Merge ancestors:
+       - shopops-storefront main HEAD: [from $commit-and-push.output SHA], behind_by: 0
+
+      Grep assertions:
+       - grep -E 'gap-[0-9]+|px-[0-9]+|<span[^>]*>\s*\|' on footer file returns >= 1 match
+       - 4 link texts still present (Catalog, Pull List, Live Shows, About)
+
+      Runtime verification:
+       - curl -s https://staging.comicstoreos.com/shops/bdc/portal/statements
+       - [from $runtime-verify.output]
+
+      Vercel deployment:
+       - staging.comicstoreos.com/shops/bdc/portal/statements (pending Captain CI verify after merge)
+
+      VALIDATION: PASS (pending Vercel deploy + visual verify)
+
+      Inputs:
+      $verify-grep.output
+      $commit-and-push.output
+      $open-pr.output
+      $runtime-verify.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-STOREFRONT-FOOTER-SPACING-01 to REVIEW.
+      Manifest goes in Notes property (NOT comment).
+
+      # OPEN QUESTION: Notion page ID. Operator filters by exact WO ID equality.
+
+      Update:
+       - Claude Status -> REVIEW
+       - Status -> Review
+       - Notes -> $build-manifest.output verbatim
+       - claimed_by: Devils Cauldron
+       - claimed_at: today
+
+      If Notion MCP unavailable, output XO_TODO with the manifest.
+
+      Manifest:
+      $build-manifest.output

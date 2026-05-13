@@ -1,0 +1,350 @@
+# Drafted by yaml-author for WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 on 2026-05-13
+# Source pattern: WO-SHOPOPS-COMMERCE-SPINE-01.yaml (single-repo MIXED + schema migration)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring (verified at draft time)
+#
+# Pre-flight (4-block):
+#   1. YAML exists.
+#   2. Spec: bdc-xo:docs/work-orders/WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01.md
+#   3. CWD scope = shopops repo (subdir shopops-api/) — single-repo MIXED, no UI.
+#   4. Codebase bluedevilcollectibles/shopops registered.
+#
+# parallel_ok: YES (new table only; no shared-table writes; no FK to multi-location migration).
+# Polish bar: ROUGH OK (P1; detection-only v1; manual SQL resolution acceptable).
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01.yaml
+
+name: bdc-shopops-inventory-scan-validation
+description: |
+  Use when: Executing WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 — duplicate/qty/unexpected
+            detection on shipment ingest.
+  Input: WO_ID = WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01.
+  Does: Adds shipment_exceptions table (migration 20260515). Adds
+        shopops-api/services/shipmentValidator.js with 3 pure detectors
+        (detectDuplicateUpcs, detectQtyMismatches, detectUnexpectedItems) +
+        validateShipmentLines orchestrator. Extends shipments.js ingest path
+        to call validator and emit exceptions array in response. 6+ bun tests.
+        Commits, opens PR, Rule 19 docker exec verify, MIXED manifest, flip-notion REVIEW.
+  Repo: bluedevilcollectibles/shopops (single-repo, no UI).
+  parallel_ok: true — new table only.
+  Polish bar: ROUGH OK — detection-only v1; no auto-resolution; no UI; manual SQL fix
+              by staff is acceptable.
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01}"
+
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID}" >&2; exit 1
+      fi
+
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n' "$SPEC_CONTENT"
+
+  - id: schema-verify
+    depends_on: [read-spec]
+    bash: |
+      # Best-effort: confirm shipments + distributor_order_lines exist; verify
+      # shipment_exceptions does NOT yet exist (idempotency check).
+      SUPABASE_URL="${SUPABASE_URL:-}"
+      SUPABASE_SERVICE_KEY="${SUPABASE_SERVICE_KEY:-}"
+      if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+        echo "STATUS=skipped_no_env"; exit 0
+      fi
+
+      check_table_exists() {
+        local TABLE="$1"
+        R=$(curl -sf "${SUPABASE_URL}/rest/v1/${TABLE}?limit=0" \
+          -H "apikey: ${SUPABASE_SERVICE_KEY}" -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" 2>&1) || true
+        if echo "$R" | grep -qiE '"error"|"message"|relation .* does not exist'; then
+          echo "TABLE_${TABLE}=ABSENT"
+        else
+          echo "TABLE_${TABLE}=PRESENT"
+        fi
+      }
+      check_table_exists "shipments"
+      check_table_exists "shipment_lines"
+      check_table_exists "distributor_orders"
+      check_table_exists "distributor_order_lines"
+      check_table_exists "shipment_exceptions"
+      echo "STATUS=ok"
+      exit 0
+
+  - id: fresh-branch
+    depends_on: [schema-verify]
+    bash: |
+      set -euo pipefail
+      git fetch origin master --depth=50
+      git checkout master
+      git reset --hard origin/master
+      BASE_BRANCH="wo/shopops-inventory-scan-validation-01"
+      BRANCH="$BASE_BRANCH"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/master
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=${BRANCH}"
+
+  - id: plan
+    depends_on: [fresh-branch]
+    task_class: medium_work
+    prompt: |
+      Plan inventory scan validation (ROUGH OK, detection-only v1).
+
+      Backend (shopops-api):
+      - migrations/20260515_shipment_exceptions.sql (single new table + 2 indexes)
+      - services/shipmentValidator.js:
+          * detectDuplicateUpcs(lines) — pure
+          * detectQtyMismatches(lines, distributorOrderLines) — pure
+          * detectUnexpectedItems(lines, distributorOrderLines) — pure
+          * validateShipmentLines(shipmentId) — orchestrator + DB writes
+      - Modify routes/shipments.js — invoke validateShipmentLines after commit; add exceptions to response
+      - tests/test_shipment_validator.js — 6 unit tests (one per scenario A-F in WO spec)
+
+      v1 NOT in scope: auto-resolution, exception management UI, alerts, batch resolve endpoints.
+
+      Schema-verify: $schema-verify.output
+      Spec: $read-spec.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement inventory scan validation in shopops-api.
+
+        Plan: $plan.output
+        Spec: $read-spec.output
+
+        Requirements:
+        1. shopops-api/migrations/20260515_shipment_exceptions.sql:
+           CREATE TABLE IF NOT EXISTS shipment_exceptions (
+             id uuid PK default gen_random_uuid(),
+             tenant_id text NOT NULL,
+             shipment_id uuid NOT NULL,
+             line_id uuid,
+             category text NOT NULL CHECK (category IN ('duplicate_upc','qty_mismatch','unexpected_item')),
+             detail jsonb,
+             created_at timestamptz NOT NULL DEFAULT now(),
+             resolved_at timestamptz, resolved_by text, resolution_note text
+           );
+           CREATE INDEX IF NOT EXISTS shipment_exceptions_shipment_idx ON shipment_exceptions(shipment_id);
+           CREATE INDEX IF NOT EXISTS shipment_exceptions_open_idx ON shipment_exceptions(tenant_id) WHERE resolved_at IS NULL;
+
+        2. shopops-api/services/shipmentValidator.js — three pure detectors + orchestrator:
+           - detectDuplicateUpcs(lines): returns [{ upc, line_ids: [...] }]
+           - detectQtyMismatches(lines, distributorOrderLines): [{ line_id, scanned, expected }]
+           - detectUnexpectedItems(lines, distributorOrderLines): [{ line_id, upc }]
+           - validateShipmentLines(shipmentId):
+               fetch shipment lines + distributor_order_lines
+               call 3 detectors
+               INSERT INTO shipment_exceptions for each finding
+               return array of inserted rows
+
+        3. Modify shopops-api/routes/shipments.js:
+           After existing ingest commits lines (do NOT change commit logic):
+             const exceptions = await validateShipmentLines(shipmentId);
+             res.json({ ...existing_body, exceptions });
+           Do NOT block ingest on exceptions — informational only in v1.
+
+        4. shopops-api/tests/test_shipment_validator.js (bun, >= 6 tests):
+           - duplicate_upc detected (scenario A)
+           - qty_mismatch detected (scenario B)
+           - unexpected_item detected (scenario C)
+           - clean shipment returns [] (scenario D)
+           - multi-category on one line (scenario E)
+           - response body includes exceptions array (scenario F)
+           Use pure detector unit tests for fast feedback (no DB needed).
+
+        Do NOT add auto-resolution, no resolve endpoints, no UI, no alerts.
+
+        Output <promise>COMPLETE</promise> when migration + validator + shipments.js edit + tests all present.
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls shopops-api/migrations/20260515_shipment_exceptions.sql
+      grep -q "shipment_exceptions" shopops-api/migrations/20260515_shipment_exceptions.sql
+      grep -q "duplicate_upc" shopops-api/migrations/20260515_shipment_exceptions.sql
+      grep -q "qty_mismatch" shopops-api/migrations/20260515_shipment_exceptions.sql
+      grep -q "unexpected_item" shopops-api/migrations/20260515_shipment_exceptions.sql
+
+      ls shopops-api/services/shipmentValidator.js
+      grep -q "detectDuplicateUpcs" shopops-api/services/shipmentValidator.js
+      grep -q "detectQtyMismatches" shopops-api/services/shipmentValidator.js
+      grep -q "detectUnexpectedItems" shopops-api/services/shipmentValidator.js
+      grep -q "validateShipmentLines" shopops-api/services/shipmentValidator.js
+
+      grep -q "validateShipmentLines" shopops-api/routes/shipments.js
+
+      ls shopops-api/tests/test_shipment_validator.js
+      TEST_COUNT=$(grep -c "it(" shopops-api/tests/test_shipment_validator.js || echo 0)
+      if [ "$TEST_COUNT" -lt 6 ]; then echo "FAIL: <6 tests ($TEST_COUNT)" >&2; exit 1; fi
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd shopops-api
+      bun test tests/test_shipment_validator.js
+
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/shopops-inventory-scan-validation-01"
+      git add \
+        shopops-api/migrations/20260515_shipment_exceptions.sql \
+        shopops-api/services/shipmentValidator.js \
+        shopops-api/routes/shipments.js \
+        shopops-api/tests/test_shipment_validator.js
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(api): WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 — shipment exception detection
+
+Adds shipment_exceptions table (migration 20260515).
+Adds services/shipmentValidator.js with three pure detectors
+(detectDuplicateUpcs, detectQtyMismatches, detectUnexpectedItems) +
+validateShipmentLines orchestrator.
+
+Extends routes/shipments.js ingest path: calls validator after line commit,
+emits exceptions array in response body. Does NOT block ingest (informational v1).
+
+6+ bun tests (one per detection scenario + clean shipment + response shape).
+
+Plan: A (P1 extension for Mutant Market 2026-06-15)
+Polish bar: ROUGH OK — v1 detection-only. No auto-resolution, no UI.
+            Staff resolves via SQL until v1.1 exception management UI ships.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+      echo "BRANCH_SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/shopops-inventory-scan-validation-01"
+      REPO="bluedevilcollectibles/shopops"
+      BASE="master"
+      TITLE="feat(api): WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 — shipment exception detection"
+      BODY_FILE=$(mktemp)
+      printf '## Summary\nImplements WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 — detection-only v1.\n\n## Plan: A (P1)\n## Polish bar: ROUGH OK — staff resolves via SQL in v1.\nv1 NOT in scope: auto-resolution, resolve endpoints, exception management UI, alerts.\n\n## Apply migration 20260515_shipment_exceptions.sql to staging Supabase BEFORE merging.\n' > "$BODY_FILE"
+      existing_pr_url() { gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null; }
+      PR_URL="$(existing_pr_url)"
+      if [ -n "$PR_URL" ]; then echo "PR_URL=$PR_URL"; exit 0; fi
+      for attempt in 1 2 3 4 5; do
+        if PR_OUT=$(gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE" 2>&1); then
+          echo "PR_URL=$PR_OUT"; exit 0
+        fi
+        PR_URL="$(existing_pr_url)"
+        if [ -n "$PR_URL" ]; then echo "PR_URL=$PR_URL"; exit 0; fi
+        sleep 10
+      done
+      exit 1
+
+  - id: runtime-verify
+    depends_on: [open-pr]
+    bash: |
+      RESULT=$(docker exec shopops-api grep -n 'validateShipmentLines' /app/services/shipmentValidator.js 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"; echo "RULE19_GREP_RESULT=${RESULT}"
+      elif echo "$RESULT" | grep -qiE 'No such container|not found'; then
+        echo "STATUS=skipped_container_not_rebuilt"
+      else
+        echo "STATUS=failed_unexpected"; echo "DETAIL=${RESULT}"
+      fi
+      echo ""
+      echo "=== RULE 19 RE-RUN COMMANDS (post-deploy) ==="
+      echo "docker exec shopops-api grep -n 'detectDuplicateUpcs' /app/services/shipmentValidator.js"
+      echo "docker exec shopops-api node -e \"const p=require('./db/pool'); p.query('SELECT COUNT(*) FROM shipment_exceptions').then(r=>console.log('OK',r.rows[0].count)).catch(e=>console.error('FAIL',e.message))\""
+      exit 0
+
+  - id: build-manifest
+    depends_on: [runtime-verify]
+    task_class: clerical
+    prompt: |
+      Build Captain CI manifest v2 for WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 (MIXED, ROUGH OK).
+
+      WO: WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01
+      Builder: Devils Cauldron (Archon bdc-shopops-inventory-scan-validation)
+      Files modified: shopops-api/routes/shipments.js
+      Files created: shopops-api/migrations/20260515_shipment_exceptions.sql,
+                     services/shipmentValidator.js, tests/test_shipment_validator.js
+      Tests: 6+/total via bun test
+      PRs: [from open-pr.output PR_URL]
+      Merge ancestors: shopops master HEAD, behind_by: 0
+      Grep assertions:
+        grep -q 'shipment_exceptions' shopops-api/migrations/20260515_shipment_exceptions.sql
+        grep -q 'detectDuplicateUpcs' shopops-api/services/shipmentValidator.js
+        grep -q 'validateShipmentLines' shopops-api/routes/shipments.js
+      Runtime verification:
+        docker exec shopops-api grep -n 'validateShipmentLines' /app/services/shipmentValidator.js
+        docker exec shopops-api node -e "<count shipment_exceptions>"
+      Schema migration: apply 20260515 to staging Supabase before container rebuild.
+        Post-apply: SELECT table_name FROM information_schema.tables WHERE table_name='shipment_exceptions' -- expect 1
+      Vercel deployment: N/A — Hetzner Docker
+      v1 limitations explicit:
+        - detection only; no auto-resolution
+        - no exception management UI
+        - no email/Slack alerts
+        - staff resolves via direct SQL
+        - performance not tested for shipments >1000 lines
+      VALIDATION: PASS (ROUGH OK polish; v1 limitations stated)
+
+      ## Inputs
+      $read-spec.output / $schema-verify.output / $plan.output /
+      $verify-grep.output / $verify-tests.output /
+      $commit-and-push.output / $open-pr.output / $runtime-verify.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-SHOPOPS-INVENTORY-SCAN-VALIDATION-01 to REVIEW with manifest in Notes property.
+      Database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # OPEN QUESTION: operator confirms Notion page ID before deploy.
+
+      Claude Status=REVIEW + Status=Review + Notes=manifest verbatim + claimed_by=Devils Cauldron + plan=A.
+      If Notion MCP unavailable, emit XO_TODO line.
+
+      ## Manifest
+      $build-manifest.output

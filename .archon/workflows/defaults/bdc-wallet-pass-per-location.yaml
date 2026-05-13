@@ -1,0 +1,324 @@
+# Drafted by yaml-author for WO-WALLET-PASS-PER-LOCATION-01 on 2026-05-13
+# Source pattern: WO-SHOPOPS-COMMERCE-SPINE-01.yaml (single-repo schema migration)
+# Doctrine compliance: 13 hard rules of archon-yaml-authoring
+#
+# Pre-flight: codebase bluedevilcollectibles/shopops registered in Archon.
+# Pre-flight (4-block): YAML exists, spec exists, CWD = shopops single-repo, codebase registered.
+# parallel_ok: false — schema migration. Do NOT fire alongside other shopops schema WOs.
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-WALLET-PASS-PER-LOCATION-01.yaml
+# REVIEW BEFORE DEPLOY — verify wallet_passes existing rows backfill plan with operator.
+
+name: bdc-wallet-pass-per-location
+description: |
+  Use when: Executing WO-WALLET-PASS-PER-LOCATION-01 — per-location wallet pass.
+  Input: WO_ID = WO-WALLET-PASS-PER-LOCATION-01.
+  Does: Reads spec from bdc-xo. Verifies wallet_passes schema. Writes migration
+        20260513_wallet_pass_per_location.sql (store_locations table + location_id
+        column + backfill + unique constraint). Modifies routes/wallet.js +
+        services/wallet-google.js + services/wallet-apn.js. Adds services/store-locations.js.
+        Adds POST /wallet/pass/sync-all. Bun tests (>= 8). PR + Rule 19 runtime-verify.
+        MIXED manifest (CODE + schema). Flips Notion.
+  Repo: bluedevilcollectibles/shopops.
+  parallel_ok: false (schema migration, serial only).
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-WALLET-PASS-PER-LOCATION-01}"
+      SPEC=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC" ]; then
+        GLOB=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB" ] && [ "$GLOB" != "null" ]; then
+          SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+      if [ -z "$SPEC" ]; then echo "ERROR: spec not found" >&2; exit 1; fi
+      printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' "$WO_ID" "$WORKFLOW_ID" "$SPEC"
+
+  - id: fresh-branch
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      git fetch origin master --depth=50
+      git checkout master
+      git reset --hard origin/master
+      BASE="wo/wallet-pass-per-location-01"
+      BRANCH="$BASE"
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+          git reset --hard origin/master
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+      echo "BRANCH=$BRANCH"
+
+  - id: schema-verify
+    depends_on: [fresh-branch]
+    bash: |
+      SUPABASE_URL="${SUPABASE_URL:-}"
+      SUPABASE_SERVICE_KEY="${SUPABASE_SERVICE_KEY:-}"
+      if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_KEY" ]; then
+        echo "STATUS=skipped_no_env"
+        echo "DETAIL=Operator must verify wallet_passes columns + row count before migration apply"
+        exit 0
+      fi
+      WP=$(curl -sf \
+        "${SUPABASE_URL}/rest/v1/information_schema.columns?table_name=eq.wallet_passes&select=column_name" \
+        -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+        -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" 2>&1) || true
+      SL=$(curl -sf \
+        "${SUPABASE_URL}/rest/v1/information_schema.tables?table_name=eq.store_locations&select=table_name" \
+        -H "apikey: ${SUPABASE_SERVICE_KEY}" \
+        -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" 2>&1) || true
+      echo "STATUS=ok"
+      echo "WALLET_PASSES_COLUMNS=${WP}"
+      echo "STORE_LOCATIONS_EXISTS=${SL}"
+      exit 0
+
+  - id: plan
+    depends_on: [read-spec, schema-verify]
+    task_class: medium_work
+    prompt: |
+      Plan WO-WALLET-PASS-PER-LOCATION-01.
+
+      ## Files
+      Create:
+        - shopops-api/migrations/20260513_wallet_pass_per_location.sql
+        - shopops-api/services/store-locations.js
+        - shopops-api/tests/test_wallet_per_location.js
+      Modify:
+        - shopops-api/routes/wallet.js (location_id required, add sync-all endpoint)
+        - shopops-api/services/wallet-google.js (read branding from location)
+        - shopops-api/services/wallet-apn.js (pushAllForCustomer helper)
+
+      Branch: wo/wallet-pass-per-location-01
+      PR base: master
+
+      ## Spec
+      $read-spec.output
+
+      ## Schema
+      $schema-verify.output
+
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement WO-WALLET-PASS-PER-LOCATION-01 in shopops-api.
+
+        ## Plan
+        $plan.output
+        ## Spec
+        $read-spec.output
+
+        Rules:
+        1. Migration per WO §7 (store_locations table, location_id column on wallet_passes,
+           backfill UPDATE, default-location seed for every tenant, UNIQUE INDEX).
+        2. services/store-locations.js exports getLocation(tenantId, locationId) +
+           getDefaultLocation(tenantId), with 60s in-memory cache.
+        3. routes/wallet.js POST /wallet/pass now accepts/requires location_id (with
+           auto-resolve to default for single-location tenants). NEW POST /wallet/pass/sync-all.
+           Existing PATCH /wallet/pass/:serial unchanged.
+        4. services/wallet-google.js buildPassPayload reads from location.
+        5. services/wallet-apn.js pushAllForCustomer iterates serials.
+        6. tests/test_wallet_per_location.js — >= 8 bun tests per WO §11.
+        7. Keep existing /wallet/pass behavior backward compatible (single-location tenants).
+        8. NO push, NO docker, NO migration apply.
+
+        Output <promise>COMPLETE</promise> when files exist + bun tests pass.
+
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      ls shopops-api/migrations/20260513_wallet_pass_per_location.sql
+      grep -q "store_locations" shopops-api/migrations/20260513_wallet_pass_per_location.sql
+      grep -q "location_id" shopops-api/migrations/20260513_wallet_pass_per_location.sql
+      grep -q "beacon_uuid" shopops-api/migrations/20260513_wallet_pass_per_location.sql
+      grep -q "ADD COLUMN IF NOT EXISTS location_id" shopops-api/migrations/20260513_wallet_pass_per_location.sql
+      ls shopops-api/services/store-locations.js
+      grep -q "getLocation" shopops-api/services/store-locations.js
+      grep -q "getDefaultLocation" shopops-api/services/store-locations.js
+      grep -q "location_id" shopops-api/routes/wallet.js
+      grep -q "sync-all\|pushAllForCustomer" shopops-api/routes/wallet.js
+      grep -q "pushAllForCustomer" shopops-api/services/wallet-apn.js
+      TC=$(grep -c "it(\|test(" shopops-api/tests/test_wallet_per_location.js || echo 0)
+      [ "$TC" -ge 8 ] || (echo "FAIL test count $TC" >&2; exit 1)
+      echo "verify-grep PASS"
+
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      cd shopops-api
+      bun test tests/test_wallet_per_location.js
+
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-tests]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/wallet-pass-per-location-01"
+      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+      fi
+      git add \
+        shopops-api/migrations/20260513_wallet_pass_per_location.sql \
+        shopops-api/services/store-locations.js \
+        shopops-api/services/wallet-google.js \
+        shopops-api/services/wallet-apn.js \
+        shopops-api/routes/wallet.js \
+        shopops-api/tests/test_wallet_per_location.js
+      if git diff --cached --quiet; then
+        echo "No staged changes"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "feat(api): WO-WALLET-PASS-PER-LOCATION-01 — per-location wallet passes
+
+Adds migration 20260513_wallet_pass_per_location.sql:
+  - CREATE TABLE store_locations (id, tenant_id, name, color_hex, beacon_uuid, ...)
+  - ALTER TABLE wallet_passes ADD COLUMN location_id
+  - Backfill existing rows + seed default location per tenant
+  - UNIQUE INDEX (customer_id, location_id, tenant_id)
+
+Adds services/store-locations.js (getLocation + getDefaultLocation + 60s cache).
+Modifies routes/wallet.js: POST /wallet/pass takes location_id; NEW POST /wallet/pass/sync-all.
+Modifies services/wallet-google.js to read branding from location.
+Modifies services/wallet-apn.js to add pushAllForCustomer helper.
+Adds tests/test_wallet_per_location.js (8+ bun tests).
+
+PATCH /wallet/pass/:serial interface unchanged (backward compat).
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      fi
+      git push -u origin "$BRANCH"
+      echo "SHA=$(git rev-parse HEAD)"
+
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      BRANCH="wo/wallet-pass-per-location-01"
+      BODY=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements WO-WALLET-PASS-PER-LOCATION-01 — wallet pass keyed by (customer, location)."
+        echo ""
+        echo "## Migration"
+        echo "shopops-api/migrations/20260513_wallet_pass_per_location.sql"
+        echo "- Creates store_locations table"
+        echo "- Adds location_id to wallet_passes + backfills existing rows + seeds default per tenant"
+        echo "- Must be applied to staging Supabase before container rebuild"
+        echo ""
+        echo "## API"
+        echo "- POST /wallet/pass — now takes location_id (auto-resolves for single-location)"
+        echo "- POST /wallet/pass/sync-all — pushes APN update to every pass for a customer"
+        echo "- PATCH /wallet/pass/:serial — UNCHANGED"
+      } > "$BODY"
+      EXIST=$(gh pr list --repo bluedevilcollectibles/shopops --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      if [ -n "$EXIST" ]; then echo "PR_URL=$EXIST"; exit 0; fi
+      for i in 1 2 3; do
+        if URL=$(gh pr create --repo bluedevilcollectibles/shopops --base master --head "$BRANCH" \
+            --title "feat(api): WO-WALLET-PASS-PER-LOCATION-01 — per-location wallet passes" \
+            --body-file "$BODY" 2>&1); then
+          echo "PR_URL=$URL"; exit 0
+        fi
+        sleep 5
+      done
+      exit 1
+
+  - id: runtime-verify
+    depends_on: [open-pr]
+    bash: |
+      RESULT=$(docker exec shopops-api grep -n "location_id" /app/routes/wallet.js 2>&1)
+      EXIT=$?
+      if [ $EXIT -eq 0 ]; then
+        echo "STATUS=ok"
+        echo "RULE19=${RESULT}"
+      elif echo "$RESULT" | grep -qiE 'No such (container|file)|not found'; then
+        echo "STATUS=skipped_container_not_rebuilt"
+      else
+        echo "STATUS=failed_unexpected"
+        echo "DETAIL=${RESULT}"
+      fi
+      exit 0
+
+  - id: build-manifest
+    depends_on: [runtime-verify]
+    task_class: clerical
+    prompt: |
+      Build manifest v2 (MIXED) for WO-WALLET-PASS-PER-LOCATION-01.
+
+      WO: WO-WALLET-PASS-PER-LOCATION-01
+      Builder: Codex (Archon bdc-wallet-pass-per-location)
+      Files created: shopops-api/migrations/20260513_wallet_pass_per_location.sql,
+                     shopops-api/services/store-locations.js,
+                     shopops-api/tests/test_wallet_per_location.js
+      Files modified: shopops-api/routes/wallet.js, services/wallet-google.js,
+                       services/wallet-apn.js
+      Tests: from $verify-tests.output | bun test shopops-api/tests/test_wallet_per_location.js
+      PRs: from $open-pr.output PR_URL — base: master
+      Merge ancestors: shopops master HEAD from $commit-and-push.output SHA, behind_by: 0
+      Grep assertions:
+        - grep -q 'store_locations' shopops-api/migrations/20260513_wallet_pass_per_location.sql
+        - grep -q 'location_id' shopops-api/routes/wallet.js
+        - grep -q 'getLocation' shopops-api/services/store-locations.js
+        - grep -q 'pushAllForCustomer' shopops-api/services/wallet-apn.js
+      Runtime verification:
+        - docker exec shopops-api grep -n 'location_id' /app/routes/wallet.js
+        - from $runtime-verify.output
+      Schema migration:
+        - File: shopops-api/migrations/20260513_wallet_pass_per_location.sql
+        - Apply to staging Supabase BEFORE container rebuild.
+        - Post-apply verify: SELECT column_name FROM information_schema.columns
+          WHERE table_name='wallet_passes' AND column_name='location_id' (expected 1)
+        - Backfill verify: SELECT COUNT(*) FROM wallet_passes WHERE location_id IS NULL (expected 0)
+        - Seed verify: SELECT COUNT(*) FROM store_locations (expected >= active tenant count)
+      Vercel deployment: N/A — shopops-api is Hetzner Docker
+      VALIDATION: PASS (pending migration apply + container rebuild)
+
+      Inputs:
+      $read-spec.output
+      $verify-grep.output
+      $verify-tests.output
+      $commit-and-push.output
+      $open-pr.output
+      $runtime-verify.output
+
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Flip Notion WO-WALLET-PASS-PER-LOCATION-01 to REVIEW. Manifest in Notes property.
+      Notion database: a6df831c-0b52-449f-8ca4-d77be6b70d0a
+      # OPEN QUESTION: Notion page ID not confirmed. Operator searches by exact WO ID.
+
+      Update: Claude Status -> REVIEW, Status -> Review, Notes -> $build-manifest.output,
+      claimed_by: Codex, claimed_at: today.
+
+      If Notion MCP unavailable:
+        XO_TODO: Flip WO-WALLET-PASS-PER-LOCATION-01 to REVIEW; paste manifest into Notes.
+
+      Manifest:
+      $build-manifest.output
