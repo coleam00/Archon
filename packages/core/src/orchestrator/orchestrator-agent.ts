@@ -1124,7 +1124,14 @@ async function handleStreamMode(
       } else if (msg.sessionId) {
         newSessionId = msg.sessionId;
       }
-      if (msg.isError) {
+      // Defense-in-depth: errorSubtype === 'success' is the Claude SDK's marker
+      // for a clean stop_sequence termination (the SDK sets is_error: true
+      // alongside subtype: 'success' to encode "non-default termination, not a
+      // failure"). The Claude provider already filters this; the guard here
+      // defends against a third-party IAgentProvider that forwards the SDK
+      // pair raw — without it, direct chat would surface a spurious error to
+      // the user and drop the actual conversation output.
+      if (msg.isError && msg.errorSubtype !== 'success') {
         getLog().warn(
           {
             conversationId,
@@ -1295,7 +1302,14 @@ async function handleBatchMode(
       } else if (msg.sessionId) {
         newSessionId = msg.sessionId;
       }
-      if (msg.isError) {
+      // Defense-in-depth: errorSubtype === 'success' is the Claude SDK's marker
+      // for a clean stop_sequence termination (the SDK sets is_error: true
+      // alongside subtype: 'success' to encode "non-default termination, not a
+      // failure"). The Claude provider already filters this; the guard here
+      // defends against a third-party IAgentProvider that forwards the SDK
+      // pair raw — without it, direct chat would surface a spurious error to
+      // the user and drop the actual conversation output.
+      if (msg.isError && msg.errorSubtype !== 'success') {
         getLog().warn(
           {
             conversationId,

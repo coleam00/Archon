@@ -800,9 +800,8 @@ async function* streamClaudeMessages(
       // model terminates via a configured stop sequence (stop_reason ===
       // 'stop_sequence') the SDK can set is_error: true while keeping
       // subtype: 'success' — its encoding of "non-default termination, not a
-      // failure". Treat that pair as a clean success so dag-executor and
-      // orchestrator-agent (which gate failure on isError) don't misclassify
-      // it (#1425).
+      // failure". Treat that pair as a clean success so downstream consumers
+      // (which gate failure on isError) don't misclassify it.
       const isRealError = resultMsg.is_error === true && resultMsg.subtype !== 'success';
       if (isRealError) {
         getLog().error(
@@ -820,7 +819,7 @@ async function* streamClaudeMessages(
             sessionId: resultMsg.session_id,
             stopReason: resultMsg.stop_reason,
           },
-          'claude.result_success_stop_sequence'
+          'claude.result_success_validated'
         );
       }
       yield {

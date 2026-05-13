@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude `stop_sequence` terminations no longer fail as "SDK returned success"**: the Claude Agent SDK's `SDKResultSuccess` declares `is_error: boolean` (not literal `false`), and stop-sequence terminations carry `is_error: true` alongside `subtype: 'success'` — its encoding of "non-default termination, not a failure". The Claude provider now normalises this pair to a clean success at the provider boundary, with defense-in-depth guards in `dag-executor` (main + loop branches) and `orchestrator-agent` (direct chat) so a third-party `IAgentProvider` forwarding the raw SDK pair can't reintroduce the bug. Workflows using `output_format` (which implies a stop sequence) — including the `archon-fix-github-issue` `classify` → `synthesize` pipeline — now complete cleanly instead of throwing `Node 'X' failed: SDK returned success`. Closes #1425.
+
 ## [0.3.11] - 2026-05-12
 
 Workflow marketplace, expanded setup wizard, and broad Pi/workflow engine fixes.

@@ -1278,6 +1278,10 @@ describe('sendQuery decomposition behaviors', () => {
     expect(chunks[0]).not.toHaveProperty('errorSubtype');
     expect(chunks[0]).not.toHaveProperty('errors');
     expect(mockLogger.error).not.toHaveBeenCalledWith(expect.anything(), 'claude.result_is_error');
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'sid-stop-seq', stopReason: 'stop_sequence' }),
+      'claude.result_success_validated'
+    );
   });
 
   describe('inline agents (nodeConfig.agents)', () => {
