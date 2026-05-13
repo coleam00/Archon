@@ -21,6 +21,9 @@ Set these in your shell or `.env` file:
 | `CODEX_BIN_PATH` | No | Absolute path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. |
 | `CODEX_ACCESS_TOKEN` | Yes (for Codex) | Codex access token (see [AI Assistants](/getting-started/ai-assistants/)) |
 | `DATABASE_URL` | No | PostgreSQL connection string (default: SQLite) |
+| `GH_TOKEN` | No | GitHub personal access token — used to authenticate when cloning private GitHub repos |
+| `GITLAB_TOKEN` | No | GitLab personal/project access token — used to authenticate when cloning private GitLab repos (also used by the GitLab adapter) |
+| `GITEA_TOKEN` | No | Gitea/Forgejo access token — used to authenticate when cloning private Gitea/Forgejo repos (also used by the Gitea adapter) |
 | `LOG_LEVEL` | No | `debug`, `info` (default), `warn`, `error` |
 | `PORT` | No | Server port (default: 3090, Docker: 3000) |
 
