@@ -76,13 +76,13 @@ nodes:
 
       # Validate JSON and extract WO IDs
       WO_SUMMARY=$(echo "$WO_CONCEPTS" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print(f'WO_COUNT={len(data)}')
-print('WO_IDS=' + ','.join(d['wo_id'] for d in data))
-for d in data:
-    print(f\"  {d['wo_id']} | {d.get('polish_bar','?')} | {d.get('builder','Major Build')} | {d.get('summary','')[:60]}\")
-" 2>&1) || { echo "ERROR: WO_CONCEPTS_FILE is not valid JSON array of {wo_id,...} objects" >&2; exit 1; }
+      import sys, json
+      data = json.load(sys.stdin)
+      print(f'WO_COUNT={len(data)}')
+      print('WO_IDS=' + ','.join(d['wo_id'] for d in data))
+      for d in data:
+          print(f\"  {d['wo_id']} | {d.get('polish_bar','?')} | {d.get('builder','Major Build')} | {d.get('summary','')[:60]}\")
+      " 2>&1) || { echo "ERROR: WO_CONCEPTS_FILE is not valid JSON array of {wo_id,...} objects" >&2; exit 1; }
 
       # Read calibration doc if provided
       CALIBRATION="(none)"
@@ -266,19 +266,19 @@ for d in data:
       # Get WO IDs from concepts file
       if [ -f "$WO_CONCEPTS_FILE" ]; then
         WO_IDS=$(python3 -c "
-import json, sys
-data = json.load(open('$WO_CONCEPTS_FILE'))
-print(' '.join(d['wo_id'] for d in data))
-")
+      import json, sys
+      data = json.load(open('$WO_CONCEPTS_FILE'))
+      print(' '.join(d['wo_id'] for d in data))
+      ")
       else
         CONCEPTS_JSON=$(gh api \
           "repos/bluedevilcollectibles/bdc-xo/contents/${WO_CONCEPTS_FILE}?ref=main" \
           --jq .content 2>/dev/null | base64 -d 2>/dev/null || echo "[]")
         WO_IDS=$(echo "$CONCEPTS_JSON" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-print(' '.join(d['wo_id'] for d in data))
-")
+      import json, sys
+      data = json.load(sys.stdin)
+      print(' '.join(d['wo_id'] for d in data))
+      ")
       fi
 
       echo "=== verify-files: checking WO artifacts ==="
@@ -336,10 +336,10 @@ print(' '.join(d['wo_id'] for d in data))
       git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
         commit -m "feat(wo-batch): WO-HARNESS-AUTHOR-WO-BATCH-META-01 -- batch author ${FILE_COUNT} WO artifacts
 
-Each WO spec + YAML adversarially reviewed (WO-Lifecycle:Validate 12-check gate) before commit.
-Workflow: bdc-author-wo-batch. Operator reviews files then promotes to queue.
+      Each WO spec + YAML adversarially reviewed (WO-Lifecycle:Validate 12-check gate) before commit.
+      Workflow: bdc-author-wo-batch. Operator reviews files then promotes to queue.
 
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+      Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 
       if [ "$DRY_RUN" = "true" ]; then
         echo "DRY_RUN=true -- skipping push"
