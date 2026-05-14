@@ -62,9 +62,9 @@ defaultAssistant: claude # must match a registered provider (e.g. claude, codex)
 assistants:
   claude:
     model: sonnet
-    settingSources:   # Which CLAUDE.md files the SDK loads (default: ['project'])
-      - project       # Project-level CLAUDE.md (always recommended)
-      - user          # Also load ~/.claude/CLAUDE.md (global preferences)
+    settingSources:   # Which sources the Claude SDK loads (default: ['project', 'user'])
+      - project       # Project-level <cwd>/.claude/ (CLAUDE.md, skills, commands, agents)
+      - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
     # Optional: absolute path to the Claude Code executable.
     # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
     # Accepts the native binary (~/.local/bin/claude from the curl installer)
@@ -153,25 +153,25 @@ defaults:
 
 ### Claude settingSources
 
-Controls which `CLAUDE.md` files the Claude Agent SDK loads during sessions:
+Controls which sources the Claude Agent SDK loads during sessions — `CLAUDE.md`, skills, commands, agents, and hooks:
 
 | Value | Description |
 |-------|-------------|
-| `project` | Load the project's `CLAUDE.md` (default, always included) |
-| `user` | Also load `~/.claude/CLAUDE.md` (user's global preferences) |
+| `project` | Load project-level `<cwd>/.claude/` (CLAUDE.md, skills, commands, agents) |
+| `user` | Load user-level `~/.claude/` (CLAUDE.md, skills, commands, agents) |
 
-**Default**: `['project']` -- only project-level instructions are loaded.
+**Default**: `['project', 'user']` — both project-level and user-level sources are loaded.
 
-Set in global or repo config:
+To restrict a project to project-level resources only (e.g. CI, shared environments, or when `~/.claude/` contains personal commands you don't want surfacing in workflows):
+
 ```yaml
 assistants:
   claude:
     settingSources:
       - project
-      - user
 ```
 
-This is useful when you maintain coding style or identity preferences in `~/.claude/CLAUDE.md` and want Archon sessions to respect them.
+Set in `~/.archon/config.yaml` (global) or `.archon/config.yaml` (repo-specific).
 
 ### Worktree file copying (`worktree.copyFiles`)
 
@@ -223,7 +223,7 @@ Environment variables override all other configuration. They are organized by ca
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `ARCHON_HOME` | Base directory for all Archon-managed files | `~/.archon` |
+| `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
@@ -231,6 +231,7 @@ Environment variables override all other configuration. They are organized by ca
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |
+| `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
 
 ### AI Providers -- Claude
 
@@ -323,7 +324,8 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `ARCHON_DATA` | Host path for Archon data (workspaces, worktrees, artifacts) | Docker-managed volume |
+| `ARCHON_DATA` | Host path for Archon data (workspaces, worktrees, artifacts). Compose-only — read by `docker-compose.yml` to choose the bind-mount source for `/.archon`; not read by Archon source code. | Docker-managed volume |
+| `ARCHON_USER_HOME` | Host path for `/home/appuser` (Claude/Codex/Pi config, `~/.gitconfig`, shell history). Compose-only — read by `docker-compose.yml` to choose the bind-mount source for `/home/appuser`; not read by Archon source code. Persisted by default to a Docker-managed volume so user state survives rebuilds. | Docker-managed volume |
 | `DOMAIN` | Public domain for Caddy reverse proxy (TLS auto-provisioned) | -- |
 | `CADDY_BASIC_AUTH` | Caddy basicauth directive to protect Web UI and API | Disabled |
 | `AUTH_USERNAME` | Username for form-based auth (Caddy forward_auth) | -- |
@@ -352,6 +354,11 @@ Archon keys env loading on **directory ownership, not filename**. `.archon/` (at
 
 ```
 [archon] stripped 2 keys from /path/to/target-repo (.env, .env.local) to prevent target repo env from leaking into Archon processes
+```
+
+The `[archon] loaded N keys from …` lines are suppressed by default (they would otherwise interleave with `archon setup`/`archon doctor` checklist output). To enable them, set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` before running:
+
+```
 [archon] loaded 3 keys from ~/.archon/.env
 [archon] loaded 2 keys from /path/to/target-repo/.archon/.env (repo scope, overrides user scope)
 ```

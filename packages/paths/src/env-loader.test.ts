@@ -21,10 +21,10 @@ const repoDir = join(tmpRoot, 'repo');
 const TEST_KEYS = ['TEST_EL_HOME_ONLY', 'TEST_EL_REPO_ONLY', 'TEST_EL_OVERLAP', 'TEST_EL_OTHER'];
 
 let originalArchonHome: string | undefined;
+let originalArchonVerboseBoot: string | undefined;
+let originalLogLevel: string | undefined;
 let stderrSpy: ReturnType<typeof spyOn>;
 let stderrWrites: string[];
-let consoleErrorSpy: ReturnType<typeof spyOn>;
-let consoleErrorMessages: string[];
 
 beforeEach(() => {
   mkdirSync(archonHomeDir, { recursive: true });
@@ -33,6 +33,12 @@ beforeEach(() => {
   originalArchonHome = process.env.ARCHON_HOME;
   process.env.ARCHON_HOME = archonHomeDir;
 
+  // Clear verbose-boot toggles so each test starts suppressed and can opt in explicitly.
+  originalArchonVerboseBoot = process.env.ARCHON_VERBOSE_BOOT;
+  originalLogLevel = process.env.LOG_LEVEL;
+  delete process.env.ARCHON_VERBOSE_BOOT;
+  delete process.env.LOG_LEVEL;
+
   for (const k of TEST_KEYS) delete process.env[k];
 
   stderrWrites = [];
@@ -40,26 +46,27 @@ beforeEach(() => {
     stderrWrites.push(typeof chunk === 'string' ? chunk : String(chunk));
     return true;
   });
-
-  consoleErrorMessages = [];
-  consoleErrorSpy = spyOn(console, 'error').mockImplementation((msg: unknown) => {
-    consoleErrorMessages.push(String(msg));
-  });
 });
 
 afterEach(() => {
   stderrSpy.mockRestore();
-  consoleErrorSpy.mockRestore();
   rmSync(tmpRoot, { recursive: true, force: true });
 
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalArchonHome;
 
+  if (originalArchonVerboseBoot === undefined) delete process.env.ARCHON_VERBOSE_BOOT;
+  else process.env.ARCHON_VERBOSE_BOOT = originalArchonVerboseBoot;
+
+  if (originalLogLevel === undefined) delete process.env.LOG_LEVEL;
+  else process.env.LOG_LEVEL = originalLogLevel;
+
   for (const k of TEST_KEYS) delete process.env[k];
 });
 
 describe('loadArchonEnv', () => {
-  it('loads keys from ~/.archon/.env and emits a [archon] loaded line', () => {
+  it('loads keys from ~/.archon/.env and emits a [archon] loaded line when verbose-boot is set', () => {
+    process.env.ARCHON_VERBOSE_BOOT = '1';
     writeFileSync(join(archonHomeDir, '.env'), 'TEST_EL_HOME_ONLY=from-home\nTEST_EL_OTHER=keep\n');
 
     loadArchonEnv(repoDir);
@@ -76,7 +83,8 @@ describe('loadArchonEnv', () => {
     expect(line).toContain(join('archon-home', '.env'));
   });
 
-  it('loads keys from <cwd>/.archon/.env and marks it as repo scope', () => {
+  it('loads keys from <cwd>/.archon/.env and marks it as repo scope when verbose-boot is set', () => {
+    process.env.ARCHON_VERBOSE_BOOT = '1';
     writeFileSync(join(repoDir, '.archon', '.env'), 'TEST_EL_REPO_ONLY=from-repo\n');
 
     loadArchonEnv(repoDir);
@@ -89,6 +97,29 @@ describe('loadArchonEnv', () => {
     // on the suffix (the `.archon/.env` segment) rather than the full path,
     // because the tmpdir may or may not live under $HOME on CI.
     expect(line).toContain(join('.archon', '.env'));
+  });
+
+  it('does not emit loaded lines by default even when keys are present', () => {
+    writeFileSync(join(archonHomeDir, '.env'), 'TEST_EL_HOME_ONLY=from-home\n');
+    writeFileSync(join(repoDir, '.archon', '.env'), 'TEST_EL_REPO_ONLY=from-repo\n');
+
+    loadArchonEnv(repoDir);
+
+    // Keys are still loaded into process.env — only the stderr line is gated.
+    expect(process.env.TEST_EL_HOME_ONLY).toBe('from-home');
+    expect(process.env.TEST_EL_REPO_ONLY).toBe('from-repo');
+    const anyLoaded = stderrWrites.find(s => s.includes('[archon] loaded'));
+    expect(anyLoaded).toBeUndefined();
+  });
+
+  it('emits loaded lines when LOG_LEVEL=debug', () => {
+    process.env.LOG_LEVEL = 'debug';
+    writeFileSync(join(archonHomeDir, '.env'), 'TEST_EL_HOME_ONLY=from-home\n');
+
+    loadArchonEnv(repoDir);
+
+    const line = stderrWrites.find(s => s.includes('[archon] loaded') && !s.includes('repo scope'));
+    expect(line).toBeDefined();
   });
 
   it('repo scope overrides home scope on overlapping keys', () => {
@@ -125,6 +156,10 @@ describe('loadArchonEnv', () => {
     rmSync(join(archonHomeDir, '.env'), { force: true });
     mkdirSync(join(archonHomeDir, '.env'), { recursive: true }); // directory at .env path
 
+    const consoleErrorMessages: string[] = [];
+    const consoleErrorSpy = spyOn(console, 'error').mockImplementation((msg: unknown) => {
+      consoleErrorMessages.push(String(msg));
+    });
     const exitSpy = spyOn(process, 'exit').mockImplementation((() => {
       throw new Error('process.exit called');
     }) as never);
@@ -134,7 +169,28 @@ describe('loadArchonEnv', () => {
       const msg = consoleErrorMessages.find(s => s.startsWith('Error loading .env'));
       expect(msg).toBeDefined();
     } finally {
+      consoleErrorSpy.mockRestore();
       exitSpy.mockRestore();
     }
+  });
+
+  it('emits loaded lines when LOG_LEVEL=trace', () => {
+    process.env.LOG_LEVEL = 'trace';
+    writeFileSync(join(archonHomeDir, '.env'), 'TEST_EL_HOME_ONLY=from-home\n');
+
+    loadArchonEnv(repoDir);
+
+    const line = stderrWrites.find(s => s.includes('[archon] loaded') && !s.includes('repo scope'));
+    expect(line).toBeDefined();
+  });
+
+  it('does not emit loaded lines when ARCHON_VERBOSE_BOOT is set to a non-"1" value', () => {
+    process.env.ARCHON_VERBOSE_BOOT = 'true';
+    writeFileSync(join(archonHomeDir, '.env'), 'TEST_EL_HOME_ONLY=from-home\n');
+
+    loadArchonEnv(repoDir);
+
+    const anyLoaded = stderrWrites.find(s => s.includes('[archon] loaded'));
+    expect(anyLoaded).toBeUndefined();
   });
 });

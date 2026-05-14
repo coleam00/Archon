@@ -1,0 +1,54 @@
+name: Marketplace Auto-Review
+
+on:
+  pull_request_target:
+    paths:
+      - "packages/docs-web/src/data/marketplace.ts"
+    types: [opened, synchronize, reopened]
+
+jobs:
+  auto-review:
+    name: Run marketplace auto-review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Pin Claude binary to glibc variant
+        # Bun installs both glibc and musl optional-dep variants; the SDK resolver
+        # picks musl first, which fails on glibc Ubuntu runners. Mirror the docker
+        # entrypoint fix (PR #1521) by pointing CLAUDE_BIN_PATH at the glibc binary.
+        run: |
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64)  SUFFIX="linux-x64" ;;
+            aarch64) SUFFIX="linux-arm64" ;;
+            *) echo "ERROR: Unsupported arch $ARCH for Claude binary pinning" >&2; exit 1 ;;
+          esac
+          CLAUDE_BIN=$(find node_modules -type f -name claude -path "*claude-agent-sdk-${SUFFIX}/*" -not -path "*musl*" 2>/dev/null | head -1)
+          if [ -x "$CLAUDE_BIN" ]; then
+            ABS_PATH=$(realpath "$CLAUDE_BIN")
+            echo "CLAUDE_BIN_PATH=$ABS_PATH" >> "$GITHUB_ENV"
+            echo "Pinned Claude binary: $ABS_PATH"
+          else
+            echo "ERROR: glibc Claude binary not found under node_modules for $SUFFIX" >&2
+            find node_modules -type d -name "claude-agent-sdk-*" 2>/dev/null | head -10 >&2
+            exit 1
+          fi
+
+      - name: Run marketplace auto-review workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          bun run cli workflow run marketplace-pr-review-and-merge --no-worktree \
+            "${{ github.event.pull_request.number }}"

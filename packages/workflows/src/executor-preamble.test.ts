@@ -94,6 +94,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     updateWorkflowRun: mock(async () => {}),
     failWorkflowRun: mock(async () => {}),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
+    getWorkflowRunStatus: mock(async () => 'completed' as const),
     createWorkflowEvent: mock(async () => {}),
     findResumableRun: mock(async () => null),
     getCompletedDagNodeOutputs: mock(async () => new Map<string, string>()),
@@ -316,16 +317,15 @@ describe('executeWorkflow preamble', () => {
   // -------------------------------------------------------------------------
 
   describe('workflow resume', () => {
-    it('resumes a prior failed DAG run when completed nodes exist', async () => {
-      const failedRun = makeRun({ id: 'prior-run', status: 'failed' });
-      const priorNodes = new Map([['node-a', 'output from node-a']]);
+    it('uses caller-supplied preCreatedRun + priorCompletedNodes without re-querying the store', async () => {
+      // The caller has already run hydrateResumableRun and hands the result
+      // to executeWorkflow. The executor must NOT touch findResumableRun on
+      // its own — that decision lives at the caller.
       const resumedRun = makeRun({ id: 'prior-run', status: 'running' });
+      const priorCompletedNodes = new Map([['node-a', 'output from node-a']]);
 
-      const store = makeStore({
-        findResumableRun: mock(async () => failedRun),
-        getCompletedDagNodeOutputs: mock(async () => priorNodes),
-        resumeWorkflowRun: mock(async () => resumedRun),
-      });
+      const findSpy = mock(async () => null);
+      const store = makeStore({ findResumableRun: findSpy });
       const deps = makeDeps(store);
       const platform = makePlatform();
 
@@ -336,36 +336,27 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        { preCreatedRun: resumedRun, priorCompletedNodes }
       );
 
-      // No createWorkflowRun — resume used existing run
+      // Executor never queries findResumableRun (caller did it via hydrateResumableRun).
+      expect(findSpy).not.toHaveBeenCalled();
+      // No createWorkflowRun — caller supplied the resumed run.
       expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-
-      // resumeWorkflowRun was called with the prior run ID
-      const resumeCalls = (store.resumeWorkflowRun as ReturnType<typeof mock>).mock.calls;
-      expect(resumeCalls.length).toBe(1);
-      expect(resumeCalls[0][0]).toBe('prior-run');
-
-      // Resume notification was sent to user
+      // Resume notification was sent to user with the completed-node count.
       const resumeMsg = findMessage(platform, 'Resuming');
       expect(resumeMsg).toBeDefined();
       expect((resumeMsg as unknown[])[1]).toContain('1 already-completed node(s)');
-
-      // Workflow run ID should be from the resumed run
+      // Workflow run ID is the resumed run.
       expect(result.workflowRunId).toBe('prior-run');
     });
 
-    it('auto-resumes a prior failed DAG run when completed nodes exist (second test)', async () => {
-      const interruptedRun = makeRun({ id: 'prior-int', status: 'failed' });
-      const priorNodes = new Map([['node-a', 'output from node-a']]);
-      const resumedRun = makeRun({ id: 'prior-int', status: 'running' });
+    it('sends interactive-loop notification when priorCompletedNodes is empty (paused approval gate)', async () => {
+      const resumedRun = makeRun({ id: 'paused-loop-run', status: 'running' });
+      const priorCompletedNodes = new Map<string, string>();
 
-      const store = makeStore({
-        findResumableRun: mock(async () => interruptedRun),
-        getCompletedDagNodeOutputs: mock(async () => priorNodes),
-        resumeWorkflowRun: mock(async () => resumedRun),
-      });
+      const store = makeStore();
       const deps = makeDeps(store);
       const platform = makePlatform();
 
@@ -376,39 +367,21 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        'db-conv-id',
+        { preCreatedRun: resumedRun, priorCompletedNodes }
       );
 
-      // No createWorkflowRun — resume used existing run
-      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
-
-      // resumeWorkflowRun was called with the prior run ID
-      const resumeCalls = (store.resumeWorkflowRun as ReturnType<typeof mock>).mock.calls;
-      expect(resumeCalls.length).toBe(1);
-      expect(resumeCalls[0][0]).toBe('prior-int');
-
-      // Resume notification was sent to user
-      const resumeMsg = findMessage(platform, 'Resuming');
+      const resumeMsg = findMessage(platform, 'continuing interactive loop');
       expect(resumeMsg).toBeDefined();
-
-      // Workflow run ID should be from the resumed run
-      expect(result.workflowRunId).toBe('prior-int');
+      expect(result.workflowRunId).toBe('paused-loop-run');
     });
 
-    it('returns error when DAG resumeWorkflowRun throws', async () => {
-      const failedRun = makeRun({ id: 'prior-run', status: 'failed' });
-      const priorNodes = new Map([['node1', 'output1']]);
-      const store = makeStore({
-        findResumableRun: mock(async () => failedRun),
-        getCompletedDagNodeOutputs: mock(async () => priorNodes),
-        resumeWorkflowRun: mock(async () => {
-          throw new Error('Resume DB error');
-        }),
-      });
+    it('does NOT send a Resuming notification on a fresh run (no preCreatedRun)', async () => {
+      const store = makeStore();
       const deps = makeDeps(store);
       const platform = makePlatform();
 
-      const result = await executeWorkflow(
+      await executeWorkflow(
         deps,
         platform,
         'conv-123',
@@ -418,15 +391,11 @@ describe('executeWorkflow preamble', () => {
         'db-conv-id'
       );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Database error resuming');
-
-      // Error message sent to user
-      const errorMsg = findMessage(platform, 'could not activate it');
-      expect(errorMsg).toBeDefined();
-
-      // No new run was created
-      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+      // Fresh runs must not trigger the resume copy.
+      const resumeMsg = findMessage(platform, 'Resuming');
+      expect(resumeMsg).toBeUndefined();
+      // A fresh run is created.
+      expect((store.createWorkflowRun as ReturnType<typeof mock>).mock.calls.length).toBe(1);
     });
   });
 });

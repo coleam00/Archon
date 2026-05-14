@@ -26,6 +26,7 @@ const mockCreateCodebase = mock(() => Promise.resolve(null));
 const mockGetCodebaseCommands = mock(() => Promise.resolve({}));
 const mockUpdateCodebaseCommands = mock(() => Promise.resolve());
 const mockDeleteCodebase = mock(() => Promise.resolve());
+const mockListCodebases = mock(() => Promise.resolve([]));
 const mockGetActiveSession = mock(() => Promise.resolve(null));
 const mockDeactivateSession = mock(() => Promise.resolve());
 
@@ -73,6 +74,7 @@ mock.module('../db/codebases', () => ({
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   deleteCodebase: mockDeleteCodebase,
+  listCodebases: mockListCodebases,
 }));
 
 mock.module('../db/sessions', () => ({
@@ -218,6 +220,7 @@ function clearAllMocks(): void {
   mockGetCodebaseCommands.mockClear();
   mockUpdateCodebaseCommands.mockClear();
   mockDeleteCodebase.mockClear();
+  mockListCodebases.mockClear();
   mockGetActiveSession.mockClear();
   mockDeactivateSession.mockClear();
   // Workflow db mocks

@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 
+import type { MessageChunk } from '../../types';
 import {
   AsyncQueue,
+  bridgeSession,
   buildResultChunk,
   mapPiEvent,
   serializeToolResult,
@@ -176,13 +179,33 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('flags isError for stopReason=error', () => {
+  test('flags isError for stopReason=error and surfaces errorMessage', () => {
     const chunk = buildResultChunk([
       { role: 'assistant', usage, stopReason: 'error', errorMessage: 'auth', content: [] },
     ]);
     if (chunk.type === 'result') {
       expect(chunk.isError).toBe(true);
       expect(chunk.errorSubtype).toBe('error');
+      expect(chunk.errors).toEqual(['auth']);
+    }
+  });
+
+  test('does not populate errors when errorMessage is absent or empty', () => {
+    // undefined errorMessage
+    const chunk1 = buildResultChunk([
+      { role: 'assistant', usage, stopReason: 'error', content: [] },
+    ]);
+    if (chunk1.type === 'result') {
+      expect(chunk1.isError).toBe(true);
+      expect(chunk1.errors).toBeUndefined();
+    }
+    // empty string — also falsy, also excluded from errors[]
+    const chunk2 = buildResultChunk([
+      { role: 'assistant', usage, stopReason: 'error', errorMessage: '', content: [] },
+    ]);
+    if (chunk2.type === 'result') {
+      expect(chunk2.isError).toBe(true);
+      expect(chunk2.errors).toBeUndefined();
     }
   });
 
@@ -467,5 +490,315 @@ describe('tryParseStructuredOutput', () => {
     // Fence stripper matches only at start/end; inner backticks must survive.
     const withBackticks = '{"code":"run `npm test`"}';
     expect(tryParseStructuredOutput(withBackticks)).toEqual({ code: 'run `npm test`' });
+  });
+});
+
+// ─── bridgeSession cleanup ─────────────────────────────────────────────────
+
+describe('bridgeSession cleanup', () => {
+  // Regression for #1561: when the consumer throws mid-iteration, bridgeSession's
+  // finally block calls session.dispose() and used to await the prompt promise
+  // for a "settle so callers see no dangling work" guarantee. That guarantee
+  // was illusory — the queue is closed before the await, so a settled prompt
+  // pushes into a closed queue (no-op). The await only existed to suppress
+  // unhandled rejections, and it caused #1561: when Pi's prompt() hung after
+  // dispose(), the await blocked forever, the consumer's catch never ran, and
+  // Bun drained its event loop and exited with code 0 mid-workflow.
+  //
+  // The fix is to not await at all — attach a fire-and-forget .catch() so a
+  // late rejection doesn't crash the process. Cleanup is non-blocking
+  // regardless of whether prompt() settles.
+  test('cleanup does not block when session.prompt() hangs forever after dispose()', async () => {
+    const neverSettles = new Promise<void>(() => {
+      /* intentionally never resolves */
+    });
+    let listenerRef: ((e: AgentSessionEvent) => void) | undefined;
+
+    const mockSession = {
+      sessionId: 'test-session-id',
+      prompt: () => neverSettles,
+      dispose: () => {
+        /* synchronous noop — does NOT settle prompt() */
+      },
+      subscribe: (l: (e: AgentSessionEvent) => void) => {
+        listenerRef = l;
+        return () => {
+          listenerRef = undefined;
+        };
+      },
+      abort: async () => {
+        /* noop */
+      },
+    } as unknown as AgentSession;
+
+    const gen = bridgeSession(mockSession, 'test prompt');
+
+    // Push an event after the generator subscribes so the for-await unblocks
+    // with a chunk. Then the test consumer throws to simulate the dag-executor
+    // throwing on `isError: true`.
+    queueMicrotask(() => {
+      listenerRef?.({
+        type: 'tool_execution_start',
+        toolName: 'echo',
+        toolCallId: 'tc1',
+        args: {},
+      } as unknown as AgentSessionEvent);
+    });
+
+    const start = Date.now();
+    let receivedChunk = false;
+    let caught: Error | undefined;
+    try {
+      for await (const _chunk of gen) {
+        receivedChunk = true;
+        throw new Error('simulated consumer abort');
+      }
+    } catch (err) {
+      caught = err as Error;
+    }
+    const elapsed = Date.now() - start;
+
+    expect(receivedChunk).toBe(true);
+    expect(caught?.message).toBe('simulated consumer abort');
+    // Cleanup must return immediately — no timer, no waiting on prompt().
+    // 200ms is generous for scheduling overhead while still catching any
+    // future regression that re-introduces an await on promptPromise.
+    expect(elapsed).toBeLessThan(200);
+  }, 5_000);
+
+  test('a late prompt() rejection does not become an unhandled rejection', async () => {
+    // The .then() handlers in bridgeSession should preclude promptPromise
+    // ever rejecting (both fulfillment and rejection paths convert to queue
+    // pushes). The fire-and-forget .catch() is belt-and-suspenders in case
+    // of a synchronous throw inside the handlers. This test verifies that
+    // belt holds: a late rejection doesn't crash the test process.
+    let rejectPrompt!: (err: Error) => void;
+    let listenerRef: ((e: AgentSessionEvent) => void) | undefined;
+
+    const mockSession = {
+      sessionId: 'test-session-id',
+      prompt: () =>
+        new Promise<void>((_, reject) => {
+          rejectPrompt = reject;
+        }),
+      dispose: () => {
+        /* noop */
+      },
+      subscribe: (l: (e: AgentSessionEvent) => void) => {
+        listenerRef = l;
+        return () => {
+          listenerRef = undefined;
+        };
+      },
+      abort: async () => {},
+    } as unknown as AgentSession;
+
+    const gen = bridgeSession(mockSession, 'test prompt');
+
+    queueMicrotask(() => {
+      listenerRef?.({
+        type: 'tool_execution_start',
+        toolName: 'echo',
+        toolCallId: 'tc1',
+        args: {},
+      } as unknown as AgentSessionEvent);
+    });
+
+    try {
+      for await (const _chunk of gen) {
+        throw new Error('simulated consumer abort');
+      }
+    } catch {}
+
+    // Reject prompt() AFTER cleanup has run. If the .catch() weren't
+    // attached, this would propagate as an unhandled rejection. Bun would
+    // log it; we can't assert on the absence directly, but the test simply
+    // continuing to completion (and not failing the suite) is the assertion.
+    rejectPrompt(new Error('late pi error'));
+    // Yield to let the microtask queue drain so the .catch() runs.
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }, 5_000);
+});
+
+// ─── streaming tail completion ────────────────────────────────────────────────────────────────────
+
+describe('streaming tail completion', () => {
+  const usage = { input: 1, output: 1, totalTokens: 2, cost: { total: 0 } };
+
+  function makeTextDeltaEvent(delta: string): AgentSessionEvent {
+    return {
+      type: 'message_update',
+      message: { role: 'assistant' },
+      assistantMessageEvent: {
+        type: 'text_delta',
+        contentIndex: 0,
+        delta,
+        partial: { role: 'assistant' },
+      },
+    } as unknown as AgentSessionEvent;
+  }
+
+  function makeAgentEndEvent(fullText: string): AgentSessionEvent {
+    return {
+      type: 'agent_end',
+      messages: [
+        {
+          role: 'assistant',
+          usage,
+          stopReason: 'stop',
+          content: [{ type: 'text', text: fullText }],
+        },
+      ],
+    } as unknown as AgentSessionEvent;
+  }
+
+  test('emits corrective assistant chunk when streaming truncated', async () => {
+    const streamed = 'The repo is cloned. Let me register it.\n\n/register-project';
+    const full =
+      'The repo is cloned. Let me register it.\n\n/register-project SaberEngine "/path/to/repo"';
+    const tail = full.slice(streamed.length);
+
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent(streamed));
+        listener?.(makeAgentEndEvent(full));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(2);
+    expect(assistantChunks[0].content).toBe(streamed);
+    expect(assistantChunks[1].content).toBe(tail);
+    expect(chunks[chunks.length - 1].type).toBe('result');
+  });
+
+  test('does not emit corrective chunk when streaming is complete', async () => {
+    const full = 'complete text no truncation';
+
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent(full));
+        listener?.(makeAgentEndEvent(full));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(1);
+    expect(assistantChunks[0].content).toBe(full);
+  });
+
+  test('does not emit corrective chunk when assembled text does not start with streamed (mismatch)', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('different content'));
+        listener?.(makeAgentEndEvent('assembled is completely different'));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(1);
+    expect(assistantChunks[0].content).toBe('different content');
+  });
+
+  test('resets per-turn text on turn_start so only final turn is checked', async () => {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('turn one text'));
+        listener?.({ type: 'turn_start' } as AgentSessionEvent); // second turn resets counter
+        listener?.(makeTextDeltaEvent('turn two'));
+        listener?.(makeAgentEndEvent('turn two')); // last assistant msg matches turn 2
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) {
+      chunks.push(chunk);
+    }
+
+    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    expect(assistantChunks).toHaveLength(2);
+    expect(assistantChunks[0].content).toBe('turn one text');
+    expect(assistantChunks[1].content).toBe('turn two');
+  });
+
+  test('corrective chunk is added to assistantBuffer when wantsStructured', async () => {
+    const streamed = '{"partial":';
+    const full = '{"partial":true}';
+
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent(streamed));
+        listener?.(makeAgentEndEvent(full));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    const schema = { type: 'object' };
+    for await (const chunk of bridgeSession(mockSession, 'prompt', undefined, schema)) {
+      chunks.push(chunk);
+    }
+
+    const resultChunk = chunks.find(c => c.type === 'result');
+    expect((resultChunk as Record<string, unknown>)?.structuredOutput).toEqual({ partial: true });
   });
 });

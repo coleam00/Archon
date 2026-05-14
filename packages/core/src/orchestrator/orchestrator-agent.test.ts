@@ -51,9 +51,11 @@ const mockLoadConfig = mock(() =>
 
 const mockLogger = createMockLogger();
 
+const mockEnsureArchonWorkspacesPath = mock(() => Promise.resolve('/home/test/.archon/workspaces'));
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
+  ensureArchonWorkspacesPath: mockEnsureArchonWorkspacesPath,
   getArchonHome: mock(() => '/home/test/.archon'),
 }));
 
@@ -66,10 +68,11 @@ mock.module('../db/conversations', () => ({
 }));
 
 const mockListCodebases = mock(() => Promise.resolve([] as unknown[]));
+const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
-  createCodebase: mock(() => Promise.resolve({ id: 'new-codebase-id' })),
+  createCodebase: mockCreateCodebase,
 }));
 
 const mockUpdateSession = mock(() => Promise.resolve());
@@ -104,8 +107,16 @@ mock.module('@archon/workflows/router', () => ({
     workflows.find(w => w.name === name)
   ),
 }));
+const mockHydrateResumableRun = mock(
+  async (_deps: unknown, candidate: { id: string }) =>
+    ({
+      preCreatedRun: { ...candidate, status: 'running' },
+      priorCompletedNodes: new Map([['n1', 'v1']]),
+    }) as unknown
+);
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+  hydrateResumableRun: mockHydrateResumableRun,
 }));
 
 mock.module('@archon/providers', () => ({
@@ -163,6 +174,7 @@ mock.module('./orchestrator', () => ({
 mock.module('./prompt-builder', () => ({
   buildOrchestratorPrompt: mock(() => 'orchestrator system prompt'),
   buildProjectScopedPrompt: mock(() => 'project scoped system prompt'),
+  buildOrchestratorSystemAppend: mock(() => 'orchestrator system append'),
   formatWorkflowContextSection: mock((results: unknown[]) =>
     results.length > 0 ? '## Recent Workflow Results\n\n...' : ''
   ),
@@ -285,6 +297,13 @@ describe('parseOrchestratorCommands', () => {
 
       // Should still match since "my-project" is parsed as non-whitespace token
       expect(result.workflowInvocation).not.toBeNull();
+      expect(result.workflowInvocation?.projectName).toBe('my-project');
+    });
+
+    test('strips markdown bold from /invoke-workflow and parses correctly', () => {
+      const response = '**/invoke-workflow assist --project my-project**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.workflowInvocation?.workflowName).toBe('assist');
       expect(result.workflowInvocation?.projectName).toBe('my-project');
     });
   });
@@ -501,6 +520,43 @@ describe('parseOrchestratorCommands', () => {
       // The regex \S+ for name means no spaces in name anyway
       // Path is trimmed via .trim()
       expect(result.projectRegistration?.projectPath).toBe('/path/to/repo');
+    });
+
+    test('strips markdown bold from /register-project and parses correctly', () => {
+      const response = '**/register-project myapp /home/user/projects/myapp**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('myapp');
+      expect(result.projectRegistration?.projectPath).toBe('/home/user/projects/myapp');
+    });
+
+    test('strips markdown bold from /register-project with quoted path', () => {
+      const response =
+        '**/register-project SaberEngine "/.archon/workspaces/b1skit/SaberEngine/source"**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('SaberEngine');
+      // parseOrchestratorCommands captures the path via (.+)$ which preserves the
+      // surrounding double-quotes. Downstream, handleRegisterProject reconstructs
+      // the command string and calls parseCommand(), which strips the quotes before
+      // calling existsSync(). So the path stored here intentionally includes quotes.
+      expect(result.projectRegistration?.projectPath).toBe(
+        '"/.archon/workspaces/b1skit/SaberEngine/source"'
+      );
+    });
+
+    test('strips markdown bold from /register-project in multiline response', () => {
+      const response =
+        'The project has been set up.\n\n**/register-project SaberEngine "/path/to/repo"**';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('SaberEngine');
+      // Surrounding quotes are preserved by (.+)$ — see quoted-path test above.
+      expect(result.projectRegistration?.projectPath).toBe('"/path/to/repo"');
+    });
+
+    test('strips single-asterisk italic from /register-project', () => {
+      const response = '*/register-project myapp /path/to/app*';
+      const result = parseOrchestratorCommands(response, codebases, workflows);
+      expect(result.projectRegistration?.projectName).toBe('myapp');
+      expect(result.projectRegistration?.projectPath).toBe('/path/to/app');
     });
   });
 
@@ -906,6 +962,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockSendQuery.mockClear();
     mockGetCodebaseEnvVars.mockReset();
     mockLoadConfig.mockReset();
+    mockEnsureArchonWorkspacesPath.mockClear();
     // Reset mocks between tests in this suite and restore safe defaults
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(null));
     mockGetCodebase.mockImplementation(() => Promise.resolve(null));
@@ -931,6 +988,9 @@ describe('discoverAllWorkflows — remote sync', () => {
     expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
       resetAfterFetch: false,
     });
+    // Regression guard: orchestrator must resolve cwd through the ensure variant
+    // so the workspaces dir is created before the AI provider spawn (issue #1528).
+    expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
   });
 
   test('passes resetAfterFetch=true for managed clones', async () => {
@@ -1047,6 +1107,38 @@ describe('discoverAllWorkflows — remote sync', () => {
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
     expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
   });
+
+  test('passes preset systemPrompt for claude provider', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'claude' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    const sp = requestOptions.systemPrompt as Record<string, unknown>;
+    expect(sp).toEqual({
+      type: 'preset',
+      preset: 'claude_code',
+      append: 'orchestrator system append',
+    });
+  });
+
+  test('passes plain string systemPrompt for non-claude provider', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ ai_assistant_type: 'codex' }))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'Hello');
+
+    expect(mockSendQuery).toHaveBeenCalled();
+    const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
+    expect(typeof requestOptions.systemPrompt).toBe('string');
+    expect(requestOptions.systemPrompt).toBe('orchestrator system append');
+  });
 });
 
 // ─── Workflow dispatch routing — interactive flag ─────────────────────────────
@@ -1103,20 +1195,21 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-    // Regression for the auto-resume plumbing: the interactive web dispatch
-    // must pass the caller conversation's DB id as parentConversationId
-    // (11th positional arg) so the approve/reject API handlers can dispatch
-    // resume back through the orchestrator.
+    // The interactive web dispatch must pass the caller conversation's DB id
+    // as opts.parentConversationId so the approve/reject API handlers can
+    // dispatch resume back through the orchestrator.
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    expect(callArgs[10]).toBe('conv-1'); // parentConversationId = conversation.id
+    const opts = callArgs[callArgs.length - 1] as { parentConversationId?: string };
+    expect(opts.parentConversationId).toBe('conv-1');
   });
 
   test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a resumable run exists', async () => {
-    // Regression for the foreground-resume branch added as part of the
-    // auto-resume fix: when `findResumableRunByParentConversation` returns a
-    // paused run, the orchestrator picks the working_path from that run and
-    // must still carry parentConversationId forward so the API helpers can
-    // keep dispatching resume on subsequent approvals.
+    // Regression for the foreground-resume branch: when
+    // findResumableRunByParentConversation returns a paused run, the
+    // orchestrator must hydrate it (single DB roundtrip — no second
+    // findResumableRun) and hand the resumed run + priorCompletedNodes to
+    // executeWorkflow via opts. parentConversationId still flows so the API
+    // helpers keep dispatching resume on subsequent approvals.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
@@ -1133,12 +1226,58 @@ describe('workflow dispatch routing — interactive flag', () => {
     const platform = makePlatform(); // getPlatformType returns 'web'
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
 
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    // cwd (position 3) should come from the resumable run's working_path
+    // cwd (position 3) should come from the resumable run's working_path.
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
-    // parentConversationId (position 10) should still be the caller conversation id
-    expect(callArgs[10]).toBe('conv-1');
+    // Resume payload lives on the opts bag (the trailing arg).
+    const opts = callArgs[callArgs.length - 1] as {
+      parentConversationId?: string;
+      preCreatedRun?: { id: string };
+      priorCompletedNodes?: Map<string, string>;
+    };
+    expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.preCreatedRun?.id).toBe('resumable-run-1');
+    expect(opts.priorCompletedNodes?.size).toBeGreaterThan(0);
+  });
+
+  test('foreground_resume_detected: falls through to fresh run when hydration returns null', async () => {
+    // When findResumableRunByParentConversation returns a run but
+    // hydrateResumableRun finds nothing worth resuming (zero completed nodes,
+    // no interactive-loop state), the orchestrator must NOT throw — it sends
+    // a user-visible notice and starts a fresh run on the same worktree.
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeDispatchCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve({
+        id: 'empty-prior-run',
+        workflow_name: 'test-workflow',
+        working_path: '/repos/test-repo/worktrees/feature',
+        parent_conversation_id: 'conv-1',
+        status: 'failed',
+      })
+    );
+    mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
+
+    const platform = makePlatform(); // getPlatformType returns 'web'
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    // cwd still points at the prior run's worktree.
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
+    // Opts bag carries no resume payload — fresh run.
+    const opts = callArgs[callArgs.length - 1] as {
+      parentConversationId?: string;
+      preCreatedRun?: unknown;
+      priorCompletedNodes?: unknown;
+    };
+    expect(opts.parentConversationId).toBe('conv-1');
+    expect(opts.preCreatedRun).toBeUndefined();
+    expect(opts.priorCompletedNodes).toBeUndefined();
   });
 
   test('calls dispatchBackgroundWorkflow for non-interactive workflow on web', async () => {
@@ -1674,5 +1813,315 @@ describe('stale session ID clearing on error_during_execution', () => {
     await handleMessage(platform, 'conv-1', 'hello');
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+  });
+
+  test('does NOT surface error to user on stop_sequence success (#1425)', async () => {
+    // Regression test for #1425: stop_sequence terminations carry is_error:
+    // true + subtype: 'success' under the Claude SDK contract. The Claude
+    // provider normalises this so the orchestrator sees a clean MessageChunk
+    // (no isError). This test locks in that contract — if a future change to
+    // the orchestrator starts gating errors on stopReason itself, or if the
+    // provider regresses, direct-chat users would once again see "Error:
+    // success" surfaced via classifyAndFormatError.
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'classified' };
+      // Post-fix shape from claude/provider.ts: isError absent, stopReason set.
+      yield {
+        type: 'result',
+        sessionId: 'sid-ok',
+        stopReason: 'stop_sequence',
+      };
+    });
+    mockTransitionSession.mockResolvedValueOnce({
+      id: 'session-1',
+      assistant_session_id: null,
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    // Session id should persist normally — the error path was not taken.
+    expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'sid-ok');
+    // No user-facing error message should have been sent.
+    const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      (c: unknown[]) => c[1] as string
+    );
+    expect(sentMessages.some((m: string) => m.toLowerCase().includes('error'))).toBe(false);
+  });
+
+  test('does NOT surface error when a provider forwards raw SDK pair (defense-in-depth)', async () => {
+    // Defense-in-depth: a third-party IAgentProvider that does not normalise
+    // the SDK's stop_sequence-success pattern would yield isError: true +
+    // errorSubtype: 'success'. The orchestrator guard must skip the error
+    // path on subtype === 'success' so a non-Claude provider can't surface a
+    // spurious error to the user via direct chat.
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'classified' };
+      yield {
+        type: 'result',
+        sessionId: 'sid-ok',
+        isError: true,
+        errorSubtype: 'success',
+        stopReason: 'stop_sequence',
+      };
+    });
+    mockTransitionSession.mockResolvedValueOnce({
+      id: 'session-1',
+      assistant_session_id: null,
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'hello');
+
+    expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'sid-ok');
+    const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      (c: unknown[]) => c[1] as string
+    );
+    expect(sentMessages.some((m: string) => m.toLowerCase().includes('error'))).toBe(false);
+  });
+});
+
+// ─── Multi-chunk command accumulation regression ──────────────────────────────
+
+describe('handleMessage — multi-chunk command accumulation (regression)', () => {
+  beforeEach(() => {
+    mockSendQuery.mockReset();
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+    mockGetCodebase.mockReset();
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockDispatchBackgroundWorkflow.mockClear();
+    mockExecuteWorkflow.mockClear();
+    mockTransitionSession.mockClear();
+    mockGetRecentWorkflowResultMessages.mockReset();
+    mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
+    mockLoadConfig.mockReset();
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve({ assistants: { claude: {}, codex: {} }, envVars: {}, assistant: 'claude' })
+    );
+    mockGetPausedWorkflowRun.mockReset();
+    mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
+    mockFindResumableRunByParentConversation.mockReset();
+    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockParseCommand.mockReset();
+    mockCreateCodebase.mockClear();
+  });
+
+  test('stream mode — register-project split across 3 chunks', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: "I'll register the project now.\n\n/register-project " };
+      yield { type: 'assistant', content: 'ExampleProject ' };
+      yield { type: 'assistant', content: '"/.archon/workspaces/owner/repo/source"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'register my project');
+
+    expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
+    expect(mockCreateCodebase).toHaveBeenCalledWith({
+      name: 'ExampleProject',
+      default_cwd: '/.archon/workspaces/owner/repo/source',
+      ai_assistant_type: 'claude',
+    });
+    const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
+      string,
+      string,
+    ][];
+    expect(allCalls.some(([, msg]) => msg.includes('/.archon/workspaces/owner/repo/source'))).toBe(
+      true
+    );
+  });
+
+  test('batch mode — register-project split across 3 chunks', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: "I'll register the project now.\n\n/register-project " };
+      yield { type: 'assistant', content: 'ExampleProject ' };
+      yield { type: 'assistant', content: '"/.archon/workspaces/owner/repo/source"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'register my project');
+
+    expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
+    expect(mockCreateCodebase).toHaveBeenCalledWith({
+      name: 'ExampleProject',
+      default_cwd: '/.archon/workspaces/owner/repo/source',
+      ai_assistant_type: 'claude',
+    });
+    const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
+      string,
+      string,
+    ][];
+    expect(allCalls.some(([, msg]) => msg.includes('/.archon/workspaces/owner/repo/source'))).toBe(
+      true
+    );
+  });
+
+  test('stream mode — invoke-workflow split across 2 chunks', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Running the workflow now.\n\n/invoke-workflow ' };
+      yield { type: 'assistant', content: 'assist --project my-project' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('batch mode — invoke-workflow split across 2 chunks', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Running the workflow now.\n\n/invoke-workflow ' };
+      yield { type: 'assistant', content: 'assist --project my-project' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('stream mode — invoke-workflow with --prompt split into a later chunk', async () => {
+    // Regression: INVOKE_WORKFLOW_FULL_RE must not declare the command complete when
+    // --project <token> arrives without a line terminator, because --prompt may follow
+    // in the next chunk. Without this fix, commandFullyParsed fires early and the
+    // --prompt chunk is never accumulated, causing synthesizedPrompt to be lost.
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+      };
+      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'original user message');
+
+    // Workflow was dispatched with the synthesized prompt, not the original user message.
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ originalMessage: 'synthesized task description' }),
+      expect.anything()
+    );
+  });
+
+  test('batch mode — invoke-workflow with --prompt split into a later chunk', async () => {
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+      };
+      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'original user message');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ originalMessage: 'synthesized task description' }),
+      expect.anything()
+    );
+  });
+
+  test('stream mode — command in single chunk still works (non-regression)', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['MyApp', '/path/to/app'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: '/register-project MyApp /path/to/app' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'register my app');
+
+    expect(mockCreateCodebase).toHaveBeenCalledWith({
+      name: 'MyApp',
+      default_cwd: '/path/to/app',
+      ai_assistant_type: 'claude',
+    });
+  });
+
+  test('stream mode — pre-command text is streamed, post-command chunks are suppressed', async () => {
+    // The command chunk includes a trailing \n so REGISTER_PROJECT_FULL_RE fires on
+    // that chunk alone (unquoted path + line terminator = fully parsed). commandFullyParsed
+    // becomes true before the third chunk arrives, so " extra trailing" is never
+    // accumulated and cannot corrupt the parsed path.
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['Foo', '/path'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Registering now:\n' };
+      yield { type: 'assistant', content: '/register-project Foo /path\n' };
+      yield { type: 'assistant', content: ' extra trailing' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+    await handleMessage(platform, 'conv-1', 'register foo');
+
+    const calls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
+      string,
+      string,
+    ][];
+    const sentTexts = calls.map(([, msg]) => msg);
+    // Pre-command text was streamed
+    expect(sentTexts).toContain('Registering now:\n');
+    // Command trigger chunk was NOT streamed
+    expect(sentTexts).not.toContain('/register-project Foo /path\n');
+    // Post-command chunk was NOT streamed (suppressed because commandFullyParsed=true)
+    expect(sentTexts).not.toContain(' extra trailing');
+    // createCodebase was called with the clean parsed path
+    expect(mockCreateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Foo', default_cwd: '/path' })
+    );
   });
 });

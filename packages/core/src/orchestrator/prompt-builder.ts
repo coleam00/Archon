@@ -3,7 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
-import type { Codebase } from '../types';
+import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
 /**
@@ -210,4 +210,23 @@ ${formatProjectSection(scopedCodebase)}
   prompt += buildRoutingRulesWithProject(scopedCodebase.name);
 
   return prompt;
+}
+
+/**
+ * Build the static orchestrator context string for use as a cacheable system prompt append.
+ * Returns the same content as buildOrchestratorPrompt/buildProjectScopedPrompt depending
+ * on whether the conversation is scoped to a project.
+ */
+export function buildOrchestratorSystemAppend(
+  conversation: Conversation,
+  codebases: readonly Codebase[],
+  workflows: readonly WorkflowDefinition[]
+): string {
+  const scopedCodebase = conversation.codebase_id
+    ? codebases.find(c => c.id === conversation.codebase_id)
+    : undefined;
+
+  return scopedCodebase
+    ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows)
+    : buildOrchestratorPrompt(codebases, workflows);
 }

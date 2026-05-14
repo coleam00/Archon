@@ -100,7 +100,7 @@ async function safeSendMessage(
       unknownErrorTracker.count++;
       if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
         throw new Error(
-          `${String(UNKNOWN_ERROR_THRESHOLD)} consecutive unrecognized errors - aborting workflow: ${err.message}`
+          `${UNKNOWN_ERROR_THRESHOLD} consecutive unrecognized errors - aborting workflow: ${err.message}`
         );
       }
     }
@@ -211,21 +211,89 @@ async function resolveProjectPaths(
 }
 
 /**
+ * Resume payload. `priorCompletedNodes` may only appear together with
+ * `preCreatedRun` — passing completed-node outputs without the resumed row
+ * would silently inject node-skip state into a freshly-created run. Lock-token
+ * rows (used by `dispatchBackgroundWorkflow`) supply `preCreatedRun` alone.
+ */
+type ResumePayload =
+  | { preCreatedRun: WorkflowRun; priorCompletedNodes?: Map<string, string> }
+  | { preCreatedRun?: undefined; priorCompletedNodes?: undefined };
+
+/**
+ * Optional parameters for {@link executeWorkflow}. All trailing args live here
+ * so call sites stay readable as new options accrue.
+ *
+ * To resume a prior run, obtain `preCreatedRun` + `priorCompletedNodes` from
+ * {@link hydrateResumableRun} (or look up via `findResumableRun` and hydrate)
+ * and spread them in. The executor never queries the store for a prior run on
+ * its own; that decision belongs at the call site.
+ */
+export type ExecuteWorkflowOptions = ResumePayload & {
+  /** Codebase ID for env vars + isolation context. */
+  codebaseId?: string;
+  /**
+   * GitHub issue/PR context. When provided:
+   * - Stored in `WorkflowRun.metadata` as `{ github_context }`
+   * - Substituted into `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` variables
+   * - Appended to prompts that reference none of those variables
+   * Expected format: Markdown with title, author, labels, and body.
+   */
+  issueContext?: string;
+  /** Worktree / branch metadata for isolation-aware nodes. */
+  isolationContext?: {
+    branchName?: string;
+    isPrReview?: boolean;
+    prSha?: string;
+    prBranch?: string;
+  };
+  /** Parent conversation ID — enables approve/reject auto-resume from chat. */
+  parentConversationId?: string;
+};
+
+/**
+ * Hydrate an already-located resumable `WorkflowRun` candidate into the form
+ * {@link executeWorkflow} expects. Returns `null` when the candidate has no
+ * completed nodes and no interactive-loop gate state — nothing worth resuming.
+ *
+ * The return shape is spread-compatible with {@link ExecuteWorkflowOptions}
+ * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.
+ *
+ * Throws on database errors; callers decide whether to surface or fall
+ * through. The executor itself never performs this lookup — silent fallback
+ * inside the executor was the cross-invocation auto-resume bug, so it stays
+ * at the call site.
+ */
+export async function hydrateResumableRun(
+  deps: WorkflowDeps,
+  candidate: WorkflowRun
+): Promise<{ preCreatedRun: WorkflowRun; priorCompletedNodes: Map<string, string> } | null> {
+  const priorCompletedNodes = await deps.store.getCompletedDagNodeOutputs(candidate.id);
+  const hasInteractiveLoopState =
+    candidate.metadata?.approval !== undefined &&
+    (candidate.metadata.approval as Record<string, unknown>).type === 'interactive_loop';
+  if (priorCompletedNodes.size === 0 && !hasInteractiveLoopState) {
+    getLog().info(
+      { resumableRunId: candidate.id },
+      'workflow.dag_resume_skipped_no_completed_nodes'
+    );
+    return null;
+  }
+  const preCreatedRun = await deps.store.resumeWorkflowRun(candidate.id);
+  getLog().info(
+    { workflowRunId: preCreatedRun.id, priorCompletedCount: priorCompletedNodes.size },
+    'workflow.dag_resuming'
+  );
+  return { preCreatedRun, priorCompletedNodes };
+}
+
+/**
  * Execute a complete DAG-based workflow.
  *
- * @param deps - Workflow dependencies (store, assistant client factory, config loader)
- * @param platform - The platform adapter for sending messages
- * @param conversationId - The platform-specific conversation ID
- * @param cwd - The working directory for command execution
- * @param workflow - The workflow definition to execute
- * @param userMessage - The user's trigger message
- * @param conversationDbId - The database conversation ID
- * @param codebaseId - Optional codebase ID for context
- * @param issueContext - Optional GitHub issue/PR context. When provided:
- *   - Stored in WorkflowRun.metadata as { github_context: issueContext }
- *   - Used to substitute $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT variables in prompts
- *   - Appended to prompts if no context variables are present (to ensure AI receives context)
- *   Expected format: Markdown with issue title, author, labels, and body
+ * Required positional args carry identity and dependencies. Everything else
+ * lives in `opts` ({@link ExecuteWorkflowOptions}). To resume a prior run,
+ * call {@link hydrateResumableRun} first and spread its result into `opts` —
+ * the executor does not perform resume detection on its own.
  */
 export async function executeWorkflow(
   deps: WorkflowDeps,
@@ -235,17 +303,16 @@ export async function executeWorkflow(
   workflow: WorkflowDefinition,
   userMessage: string,
   conversationDbId: string,
-  codebaseId?: string,
-  issueContext?: string,
-  isolationContext?: {
-    branchName?: string;
-    isPrReview?: boolean;
-    prSha?: string;
-    prBranch?: string;
-  },
-  parentConversationId?: string,
-  preCreatedRun?: WorkflowRun
+  opts: ExecuteWorkflowOptions = {}
 ): Promise<WorkflowExecutionResult> {
+  const {
+    codebaseId,
+    issueContext,
+    isolationContext,
+    parentConversationId,
+    preCreatedRun,
+    priorCompletedNodes,
+  } = opts;
   // Load config once for the entire workflow execution
   const fileConfig = await deps.loadConfig(cwd);
   const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
@@ -306,138 +373,18 @@ export async function executeWorkflow(
     getLog().debug({ configuredCommandFolder }, 'command_folder_configured');
   }
 
-  // Resume detection and concurrent-run checks
-  let dagPriorCompletedNodes: Map<string, string> | undefined;
+  // Workflow run + resume state. Caller decides whether to resume by passing
+  // preCreatedRun (from hydrateResumableRun) + priorCompletedNodes via opts.
+  // When both are absent the executor creates a fresh row below.
+  const dagPriorCompletedNodes = priorCompletedNodes;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
 
-  // Resume detection: check for prior failed run on same workflow + worktree
-  {
-    // Step 1: Find prior failed run — non-critical, fall through on DB error
-    let resumableRun: Awaited<ReturnType<typeof deps.store.findResumableRun>> = null;
-    try {
-      resumableRun = await deps.store.findResumableRun(workflow.name, cwd);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error(
-        { err, workflowName: workflow.name, cwd, errorType: err.constructor.name },
-        'workflow_resume_check_failed'
-      );
-      // Non-critical: fall through to create a new run; notify user so they know resume was skipped
-      // (workflowName is already captured in the warn log above for correlation)
-      await safeSendMessage(
-        platform,
-        conversationId,
-        '⚠️ Could not check for a prior run to resume (database error). Starting a fresh run instead.'
-      );
-    }
-
-    // Step 2: Activate the resume — propagate as error if this fails
-    if (resumableRun) {
-      // Load completed node outputs from the prior run's events.
-      let priorNodes: Map<string, string>;
-      try {
-        priorNodes = await deps.store.getCompletedDagNodeOutputs(resumableRun.id);
-      } catch (error) {
-        const err = error as Error;
-        getLog().warn(
-          {
-            err,
-            workflowName: workflow.name,
-            resumableRunId: resumableRun.id,
-            errorType: err.constructor.name,
-          },
-          'workflow.dag_resume_node_outputs_failed'
-        );
-        // Intentional: fall back to empty map (fresh start) if prior node outputs can't be loaded.
-        // getCompletedDagNodeOutputs threw unexpectedly — safe to degrade rather than abort the run.
-        priorNodes = new Map();
-        await safeSendMessage(
-          platform,
-          conversationId,
-          '⚠️ Could not load prior node outputs for resume (database error). Starting a fresh run instead.'
-        );
-      }
-      // Resume if there are completed nodes OR if the run has interactive loop state
-      // (a paused interactive loop may have no completed nodes yet — just the loop itself pausing)
-      const hasInteractiveLoopState =
-        resumableRun.metadata?.approval &&
-        (resumableRun.metadata.approval as Record<string, unknown>).type === 'interactive_loop';
-      if (priorNodes.size > 0 || hasInteractiveLoopState) {
-        try {
-          // Capture the orphan BEFORE replacing workflowRun. The orchestrator's
-          // pre-created row was a lock-token claim on this path; once resume
-          // takes over, that claim is redundant. Without releasing it, a
-          // back-to-back resume would block on its own ghost lock until the
-          // 5-minute stale-pending window in getActiveWorkflowRunByPath.
-          const orphanPreCreated =
-            preCreatedRun && preCreatedRun.id !== resumableRun.id ? preCreatedRun : null;
-
-          workflowRun = await deps.store.resumeWorkflowRun(resumableRun.id);
-          dagPriorCompletedNodes = priorNodes;
-
-          if (orphanPreCreated) {
-            await deps.store
-              .updateWorkflowRun(orphanPreCreated.id, { status: 'cancelled' })
-              .catch((cleanupErr: Error) => {
-                // Best-effort: log and continue. The 5-min stale-pending
-                // window is the safety net if this fails.
-                getLog().warn(
-                  {
-                    err: cleanupErr,
-                    orphanId: orphanPreCreated.id,
-                    resumedRunId: workflowRun?.id,
-                  },
-                  'workflow.resume_orphan_cleanup_failed'
-                );
-              });
-          }
-
-          getLog().info(
-            {
-              workflowRunId: workflowRun.id,
-              priorCompletedCount: priorNodes.size,
-            },
-            'workflow.dag_resuming'
-          );
-          const resumeMsg =
-            priorNodes.size > 0
-              ? `▶️ **Resuming** workflow \`${workflow.name}\` — skipping ${String(priorNodes.size)} already-completed node(s).\n\nNote: AI session context from prior nodes is not restored. Nodes that depend on prior context may need to re-read artifacts.`
-              : `▶️ **Resuming** workflow \`${workflow.name}\` — continuing interactive loop.`;
-          await safeSendMessage(platform, conversationId, resumeMsg);
-        } catch (error) {
-          const err = error as Error;
-          getLog().error(
-            { err, workflowName: workflow.name, resumableRunId: resumableRun.id },
-            'workflow_resume_activate_failed'
-          );
-          // Release the pre-created lock token. Without this, preCreatedRun
-          // sits as `pending` and blocks the path until the 5-min stale
-          // window — the user would see "in use by self" on retry.
-          if (preCreatedRun) {
-            await deps.store
-              .updateWorkflowRun(preCreatedRun.id, { status: 'cancelled' })
-              .catch((cleanupErr: Error) => {
-                getLog().warn(
-                  { err: cleanupErr, preCreatedRunId: preCreatedRun.id },
-                  'workflow.resume_failure_cleanup_failed'
-                );
-              });
-          }
-          await sendCriticalMessage(
-            platform,
-            conversationId,
-            '❌ **Workflow failed**: Found a prior run to resume but could not activate it (database error). Please try again later.'
-          );
-          return { success: false, error: 'Database error resuming workflow run' };
-        }
-      } else {
-        // Found prior failed DAG run but no nodes completed — not worth resuming
-        getLog().info(
-          { workflowRunId: resumableRun.id },
-          'workflow.dag_resume_skipped_no_completed_nodes'
-        );
-      }
-    }
+  if (preCreatedRun && priorCompletedNodes !== undefined) {
+    const resumeMsg =
+      priorCompletedNodes.size > 0
+        ? `▶️ **Resuming** workflow \`${workflow.name}\` — skipping ${String(priorCompletedNodes.size)} already-completed node(s).\n\nNote: AI session context from prior nodes is not restored. Nodes that depend on prior context may need to re-read artifacts.`
+        : `▶️ **Resuming** workflow \`${workflow.name}\` — continuing interactive loop.`;
+    await safeSendMessage(platform, conversationId, resumeMsg);
   }
 
   if (!workflowRun) {
@@ -827,5 +774,24 @@ export async function executeWorkflow(
     }
     // Return failure result instead of re-throwing
     return { success: false, workflowRunId: workflowRun.id, error: err.message };
+  } finally {
+    // Defensive backstop: if the workflow run is still 'running' after all
+    // normal and exceptional code paths, flip it to 'failed' to prevent zombie
+    // accumulation. Guards against any future code path that exits without
+    // calling failWorkflowRun (e.g. a generator cleanup that exits without
+    // throwing). Only fires when the process stays alive long enough to run
+    // this finally — see #1561 for the originating zombie-state incident.
+    if (workflowRun) {
+      const runId = workflowRun.id;
+      const backstopStatus = await deps.store.getWorkflowRunStatus(runId).catch(() => null);
+      if (backstopStatus === 'running') {
+        getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
+        await deps.store
+          .failWorkflowRun(runId, 'Workflow exited without finalizing — see logs')
+          .catch((err: unknown) => {
+            getLog().error({ err, workflowRunId: runId }, 'executor.backstop_fail_failed');
+          });
+      }
+    }
   }
 }

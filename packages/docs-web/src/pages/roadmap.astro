@@ -1,0 +1,580 @@
+---
+import { roadmapItems, statusConfig } from '../data/roadmap.ts';
+
+const isSecondary = (i: typeof roadmapItems[number]) => i.tier === 'secondary';
+const activeItems = roadmapItems.filter(i => i.status !== 'shipped' && !isSecondary(i));
+const futureItems = roadmapItems.filter(i => i.status !== 'shipped' && isSecondary(i));
+const shippedItems = roadmapItems.filter(i => i.status === 'shipped');
+---
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Roadmap — Archon</title>
+  <meta name="description" content="What we're building next — Archon's public development roadmap." />
+  <link rel="icon" href="/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script is:inline>
+    if(!localStorage.getItem('archon-theme-init')){localStorage.setItem('archon-theme-init','1');localStorage.setItem('starlight-theme','dark');document.documentElement.dataset.theme='dark';}
+  </script>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">
+      <img src="/favicon.png" alt="Archon" width="28" height="28" />
+      <span>Archon</span>
+    </a>
+    <div class="nav-links">
+      <a href="/">Docs</a>
+      <a href="/roadmap/" class="active">Roadmap</a>
+      <a href="https://github.com/coleam00/Archon" target="_blank" rel="noopener" class="nav-github">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+        </svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <section class="hero">
+    <h1 class="hero-title">
+      Road<span class="gradient-text">map</span>
+    </h1>
+    <p class="hero-sub">What we're building next.</p>
+  </section>
+
+  <div class="content">
+    <!-- Active timeline -->
+    <div class="timeline">
+      {activeItems.map((item) => {
+        const cfg = statusConfig[item.status];
+        return (
+          <div class="timeline-item" data-status={item.status}>
+            <div class="timeline-dot" style={`background: ${cfg.color}; box-shadow: 0 0 12px ${cfg.color}80;`}></div>
+            <div class="timeline-card" style={`border-left-color: ${cfg.color}; background: ${cfg.bg};`}>
+              <div class="card-header">
+                <span class="status-badge" style={`color: ${cfg.color}; background: ${cfg.bg}; border-color: ${cfg.border};`}>
+                  {cfg.symbol} {cfg.label}
+                </span>
+                {item.version && (
+                  <span class="version-tag">{item.version}</span>
+                )}
+              </div>
+              <h2 class="card-title">{item.title}</h2>
+              <p class="card-desc">{item.description}</p>
+              <ul class="card-bullets">
+                {item.bullets.map(b => <li>{b}</li>)}
+              </ul>
+              <div class="card-tags">
+                {item.tags.map(t => <span class="tag">{t}</span>)}
+              </div>
+              {item.issues && item.issues.length > 0 && (
+                <div class="card-issues">
+                  <span class="card-issues-label">Tracked issues</span>
+                  <div class="card-issues-list">
+                    {item.issues.map(n => (
+                      <a class="issue-ref" href={`https://github.com/coleam00/Archon/issues/${n}`} target="_blank" rel="noopener">#{n}</a>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+
+    {futureItems.length > 0 && (
+      <div class="future-section">
+        <div class="future-header">
+          <span class="future-line"></span>
+          <h2 class="future-title">
+            <span style="color: #a855f7;">◇</span> Future
+          </h2>
+          <span class="future-line"></span>
+        </div>
+        <div class="future-grid">
+          {futureItems.map((item) => {
+            const cfg = statusConfig[item.status];
+            return (
+              <div class="future-card" style={`border-left-color: ${cfg.color}; background: ${cfg.bg};`}>
+                <h3 class="future-card-title">{item.title}</h3>
+                <p class="future-card-desc">{item.description}</p>
+                <div class="card-tags">
+                  {item.tags.map(t => <span class="tag">{t}</span>)}
+                </div>
+                {item.issues && item.issues.length > 0 && (
+                  <div class="card-issues">
+                    <div class="card-issues-list">
+                      {item.issues.map(n => (
+                        <a class="issue-ref" href={`https://github.com/coleam00/Archon/issues/${n}`} target="_blank" rel="noopener">#{n}</a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
+    <!-- Shipped section -->
+    <div class="shipped-section">
+      <div class="shipped-header">
+        <span class="shipped-line"></span>
+        <h2 class="shipped-title">
+          <span style="color: #22c55e;">✓</span> Shipped
+        </h2>
+        <span class="shipped-line"></span>
+      </div>
+      <div class="shipped-grid">
+        {shippedItems.map((item) => {
+          const cfg = statusConfig[item.status];
+          return (
+            <div class="shipped-card" style={`border-left-color: ${cfg.color}; background: ${cfg.bg};`}>
+              <div class="card-header">
+                <span class="status-badge" style={`color: ${cfg.color}; background: ${cfg.bg}; border-color: ${cfg.border};`}>
+                  {cfg.symbol} {cfg.label}
+                </span>
+                {item.version && (
+                  <span class="version-tag">{item.version}</span>
+                )}
+              </div>
+              <h3 class="shipped-card-title">{item.title}</h3>
+              <p class="card-desc">{item.description}</p>
+              <ul class="card-bullets">
+                {item.bullets.map(b => <li>{b}</li>)}
+              </ul>
+              <div class="card-tags">
+                {item.tags.map(t => <span class="tag">{t}</span>)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <p>
+      Have a feature request?{' '}
+      <a href="https://github.com/coleam00/Archon/issues" target="_blank" rel="noopener">
+        Open an issue on GitHub →
+      </a>
+    </p>
+  </footer>
+</main>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #0f1219; }
+  ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2d3f5c; }
+
+  html, body {
+    background: #0f1219;
+    color: #e2e8f0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* NAV */
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(15, 18, 25, 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid #1e293b;
+  }
+  .nav-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .nav-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    text-decoration: none;
+    letter-spacing: -0.02em;
+  }
+  .nav-logo img { border-radius: 6px; }
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .nav-links a {
+    color: #94a3b8;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 0.35rem 0.75rem;
+    border-radius: 6px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .nav-links a:hover { color: #f1f5f9; background: rgba(255,255,255,0.05); }
+  .nav-links a.active { color: #f1f5f9; background: rgba(59,130,246,0.12); }
+  .nav-github {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: 0.5rem;
+  }
+
+  /* HERO */
+  .hero {
+    text-align: center;
+    padding: 5rem 1.5rem 3rem;
+  }
+  .hero-title {
+    font-size: clamp(3rem, 8vw, 5.5rem);
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    color: #f1f5f9;
+    margin-bottom: 1rem;
+  }
+  .gradient-text {
+    background: linear-gradient(135deg, #3b82f6, #a855f7);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero-sub {
+    font-size: 1.2rem;
+    color: #64748b;
+    font-weight: 400;
+  }
+
+  /* CONTENT */
+  .content {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 1.5rem 4rem;
+  }
+
+  /* TIMELINE */
+  .timeline {
+    position: relative;
+    padding-left: 2.5rem;
+  }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, #3b82f640, #a855f740, #1e293b);
+    border-radius: 2px;
+  }
+  .timeline-item {
+    position: relative;
+    margin-bottom: 2.5rem;
+  }
+  .timeline-dot {
+    position: absolute;
+    left: -2.5rem;
+    top: 1.5rem;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 3px solid #0f1219;
+    transform: translateX(1px);
+    z-index: 1;
+  }
+  .timeline-card {
+    border: 1px solid #1e293b;
+    border-left-width: 4px;
+    border-radius: 12px;
+    padding: 1.5rem 1.75rem;
+    background: #131825;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: default;
+  }
+  .timeline-card:hover {
+    transform: translateX(4px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  }
+
+  /* CARD INTERNALS */
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.65rem;
+    border-radius: 20px;
+    border: 1px solid;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .version-tag {
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    color: #64748b;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: 0.2rem 0.5rem;
+    letter-spacing: 0.05em;
+  }
+  .card-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.6rem;
+    line-height: 1.3;
+  }
+  .card-desc {
+    font-size: 0.92rem;
+    color: #94a3b8;
+    margin-bottom: 1rem;
+    line-height: 1.65;
+  }
+  .card-bullets {
+    list-style: none;
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .card-bullets li {
+    font-size: 0.88rem;
+    color: #cbd5e1;
+    padding-left: 1.1rem;
+    position: relative;
+  }
+  .card-bullets li::before {
+    content: '—';
+    position: absolute;
+    left: 0;
+    color: #334155;
+  }
+  .card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .tag {
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: #475569;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid #1e293b;
+    border-radius: 4px;
+    padding: 0.15rem 0.5rem;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    letter-spacing: 0.03em;
+  }
+
+  /* CARD ISSUES (linked refs to GitHub issues) */
+  .card-issues {
+    margin-top: 0.85rem;
+    padding-top: 0.85rem;
+    border-top: 1px dashed #1e293b;
+  }
+  .card-issues-label {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.5rem;
+  }
+  .card-issues-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+  .issue-ref {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: #94a3b8;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid #1e293b;
+    border-radius: 4px;
+    padding: 0.15rem 0.45rem;
+    text-decoration: none;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+  .issue-ref:hover {
+    color: #f1f5f9;
+    background: rgba(59,130,246,0.12);
+    border-color: rgba(59,130,246,0.35);
+  }
+
+  /* FUTURE SECTION (lower-priority planned items) */
+  .future-section {
+    margin-top: 4rem;
+  }
+  .future-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .future-line {
+    flex: 1;
+    height: 1px;
+    background: #1e293b;
+  }
+  .future-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #475569;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .future-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+  .future-card {
+    border: 1px solid #1e293b;
+    border-left-width: 4px;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: default;
+  }
+  .future-card:hover {
+    transform: translateX(4px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  }
+  .future-card-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    letter-spacing: -0.01em;
+    margin-bottom: 0.5rem;
+    line-height: 1.3;
+  }
+  .future-card-desc {
+    font-size: 0.88rem;
+    color: #94a3b8;
+    margin-bottom: 0.85rem;
+    line-height: 1.6;
+  }
+
+  /* SHIPPED SECTION */
+  .shipped-section {
+    margin-top: 4rem;
+  }
+  .shipped-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .shipped-line {
+    flex: 1;
+    height: 1px;
+    background: #1e293b;
+  }
+  .shipped-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #475569;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .shipped-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.25rem;
+  }
+  .shipped-card {
+    border: 1px solid #1e293b;
+    border-left-width: 4px;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: default;
+  }
+  .shipped-card:hover {
+    transform: translateX(4px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  }
+  .shipped-card-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    letter-spacing: -0.01em;
+    margin-bottom: 0.5rem;
+    line-height: 1.3;
+  }
+
+  /* FOOTER */
+  .footer {
+    text-align: center;
+    padding: 2rem 1.5rem 3rem;
+    font-size: 0.875rem;
+    color: #475569;
+    border-top: 1px solid #1e293b;
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  .footer a {
+    color: #3b82f6;
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+  .footer a:hover { color: #60a5fa; }
+
+  /* RESPONSIVE */
+  @media (max-width: 640px) {
+    .nav-links { gap: 0; }
+    .nav-links a { padding: 0.35rem 0.5rem; font-size: 0.82rem; }
+    .nav-github span { display: none; }
+    .hero { padding: 3rem 1rem 2rem; }
+    .timeline { padding-left: 1.75rem; }
+    .timeline-dot { left: -1.75rem; width: 16px; height: 16px; }
+    .timeline::before { left: 7px; }
+    .shipped-grid { grid-template-columns: 1fr; }
+    .future-grid { grid-template-columns: 1fr; }
+    .timeline-card, .shipped-card, .future-card { padding: 1.25rem; }
+  }
+</style>
+
+</body>
+</html>

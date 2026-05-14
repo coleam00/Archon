@@ -26,6 +26,7 @@ import {
   stripCompletionTags,
   isInlineScript,
   formatSubprocessFailure,
+  classifyError,
 } from './executor-shared';
 
 describe('substituteWorkflowVariables', () => {
@@ -563,5 +564,31 @@ describe('formatSubprocessFailure', () => {
     const { userMessage } = formatSubprocessFailure({ stderr: 'diagnostic' }, "Script node 'n1'");
     expect(userMessage).not.toContain('[exit');
     expect(userMessage).toContain('diagnostic');
+  });
+});
+
+describe('classifyError', () => {
+  it('classifies 429 as TRANSIENT', () => {
+    expect(classifyError(new Error('rate limit: 429 too many requests'))).toBe('TRANSIENT');
+  });
+
+  it('classifies 529 as TRANSIENT', () => {
+    expect(classifyError(new Error('HTTP 529 service overloaded'))).toBe('TRANSIENT');
+  });
+
+  it('classifies overloaded messages as TRANSIENT', () => {
+    expect(classifyError(new Error('Minimax: overloaded, try again later'))).toBe('TRANSIENT');
+  });
+
+  it('classifies 401 as FATAL', () => {
+    expect(classifyError(new Error('401 unauthorized'))).toBe('FATAL');
+  });
+
+  it('FATAL takes priority over TRANSIENT when both match', () => {
+    expect(classifyError(new Error('unauthorized: exited with code 1'))).toBe('FATAL');
+  });
+
+  it('classifies unknown errors as UNKNOWN', () => {
+    expect(classifyError(new Error('something completely unexpected happened'))).toBe('UNKNOWN');
   });
 });

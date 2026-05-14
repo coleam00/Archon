@@ -294,10 +294,18 @@ Execute any manual verification steps from the artifact.
 
 ### 7.1 Stage Changes
 
+Stage **only** the files you actually edited — never `git add -A`, `git add .`, or `git add -u`. List them by name:
+
 ```bash
-git add -A
-git status  # Review what's being committed
+git add path/to/file1 path/to/file2 ...
+git status --porcelain  # verify nothing scratch/review/PR-body is staged
 ```
+
+**Never stage**:
+
+- `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
+- `review/`, `*-report.md` at the repo root
+- Anything under `$ARTIFACTS_DIR`
 
 ### 7.2 Write Commit Message
 

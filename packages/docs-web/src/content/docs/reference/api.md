@@ -204,6 +204,8 @@ curl http://localhost:3090/api/workflows
 Query parameters:
 - `cwd` (optional) -- Working directory to discover project-specific workflows
 
+When `cwd` is omitted, Archon returns bundled default workflows and any from `~/.archon/workflows/` (home-scoped). Project-specific workflows require either the `cwd` query param or a registered codebase, so the endpoint is useful on first launch before any project is registered.
+
 Returns `{ workflows: [...], errors?: [...] }`. The `errors` array contains any YAML parsing failures encountered during discovery.
 
 #### Get a Workflow
@@ -277,7 +279,7 @@ curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
 curl -X POST http://localhost:3090/api/workflows/runs/{runId}/resume
 ```
 
-Marks the run for auto-resume. The next invocation re-runs the workflow, skipping already-completed nodes.
+Resumes the workflow from where it left off, skipping already-completed nodes. Equivalent to `archon workflow resume <run-id>` from the CLI. Plain `archon workflow run <name>` invocations never resume implicitly.
 
 #### Approve / Reject a Paused Run
 

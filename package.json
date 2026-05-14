@@ -1,6 +1,6 @@
 {
   "name": "archon",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -16,6 +16,7 @@
     "build:checksums": "bash scripts/checksums.sh",
     "generate:bundled": "bun run scripts/generate-bundled-defaults.ts",
     "check:bundled": "bun run scripts/generate-bundled-defaults.ts --check",
+    "check:bundled-skill": "bun run scripts/check-bundled-skill.ts --check",
     "test": "bun --filter '*' --parallel test",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json",
@@ -27,7 +28,7 @@
     "build:web": "bun --filter @archon/web build",
     "dev:docs": "bun --filter @archon/docs-web dev",
     "build:docs": "bun --filter @archon/docs-web build",
-    "validate": "bun run check:bundled && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test",
+    "validate": "bun run check:bundled && bun run check:bundled-skill && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth"
   },
@@ -53,7 +54,8 @@
     "follow-redirects": "^1.16.0",
     "path-to-regexp": "^8.4.2",
     "qs": "^6.15.1",
-    "flatted": "^3.4.2"
+    "flatted": "^3.4.2",
+    "@hono/node-server": "^1.19.13"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.121"

@@ -1,0 +1,327 @@
+name: marketplace-pr-review-and-merge
+description: |
+  Automatically reviews a marketplace submission PR. Verifies scope (only
+  marketplace.ts changed), fetches source at pinned SHA, validates schema,
+  runs a deterministic security scan, runs a Haiku AI review, then decides:
+  auto-merge / auto-approve / request-changes / reject.
+  Clean submissions (scan severity none, AI approval) are auto-merged.
+  Triggers: "marketplace review", "review marketplace PR <n>",
+            "marketplace-pr-review-and-merge <n>".
+  Arguments: PR number (integer).
+
+provider: claude
+model: claude-haiku-4-5-20251001
+
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 1: FETCH PR METADATA
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-pr-metadata
+    bash: |
+      PR_NUM=$(echo "$ARGUMENTS" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      if [ -z "$PR_NUM" ]; then
+        echo "ERROR: Could not extract PR number from arguments: $ARGUMENTS" >&2
+        exit 1
+      fi
+      echo "$PR_NUM" > "$ARTIFACTS_DIR/.pr-number"
+
+      # Fetch full PR metadata as JSON
+      gh pr view "$PR_NUM" \
+        --json number,title,body,author,state,isDraft,additions,deletions,changedFiles,files,baseRefName,headRefName \
+        > "$ARTIFACTS_DIR/pr-meta.json"
+
+      cat "$ARTIFACTS_DIR/pr-meta.json"
+    timeout: 30000
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 2: VERIFY SCOPE — diff must only touch marketplace.ts
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: verify-scope
+    bash: |
+      PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
+
+      # Get list of changed files (already in pr-meta.json)
+      FILES=$(jq -r '.files[].path' "$ARTIFACTS_DIR/pr-meta.json")
+      NON_MARKETPLACE=$(echo "$FILES" | grep -v '^packages/docs-web/src/data/marketplace\.ts$' || true)
+
+      if [ -n "$NON_MARKETPLACE" ]; then
+        echo "SCOPE_VIOLATION" > "$ARTIFACTS_DIR/.scope-result"
+        echo "PR touches files outside marketplace.ts:" >&2
+        echo "$NON_MARKETPLACE" >&2
+        echo '{"scope_ok": false, "extra_files": '"$(echo "$NON_MARKETPLACE" | jq -R . | jq -s .)"'}'
+        exit 0  # Non-fatal exit — decide node handles rejection
+      fi
+
+      # Fetch diff (capped at 3000 lines)
+      gh pr diff "$PR_NUM" | head -3000 > "$ARTIFACTS_DIR/pr-diff.txt"
+
+      echo "SCOPE_OK" > "$ARTIFACTS_DIR/.scope-result"
+      echo '{"scope_ok": true, "extra_files": []}'
+    depends_on: [fetch-pr-metadata]
+    timeout: 30000
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 3: PARSE ENTRY — extract new MarketplaceEntry from diff
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: parse-entry
+    runtime: bun
+    timeout: 15000
+    depends_on: [verify-scope]
+    script: |
+      import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+      import { resolve } from 'node:path';
+
+      const artifactsDir = process.env['ARTIFACTS_DIR'] ?? '';
+      const scopeResult = readFileSync(resolve(artifactsDir, '.scope-result'), 'utf8').trim();
+
+      if (scopeResult !== 'SCOPE_OK') {
+        const out = JSON.stringify({ skipped: true, reason: 'scope violation' });
+        writeFileSync(resolve(artifactsDir, 'entry.json'), out);
+        console.log(out);
+        process.exit(0);
+      }
+
+      const diff = readFileSync(resolve(artifactsDir, 'pr-diff.txt'), 'utf8');
+      // Only look at added lines (+ prefix, not +++ file header). Strip the leading
+      // '+' so multi-line values (Prettier wraps long strings) match across newlines —
+      // \s* skips whitespace including \n, but cannot skip the '+' diff prefix.
+      const addedLines = diff
+        .split('\n')
+        .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+        .map((l) => l.slice(1))
+        .join('\n');
+
+      const slug = addedLines.match(/slug:\s*'([^']+)'/)?.[1] ?? '';
+      const name = addedLines.match(/name:\s*'([^']+)'/)?.[1] ?? '';
+      const author = addedLines.match(/author:\s*'([^']+)'/)?.[1] ?? '';
+      const sourceUrl = addedLines.match(/sourceUrl:\s*'(https:\/\/[^']+)'/)?.[1] ?? '';
+      const sha = addedLines.match(/sha:\s*'([a-f0-9]{40})'/)?.[1] ?? '';
+
+      if (!slug || !sourceUrl || !sha) {
+        process.stderr.write(`Could not parse required fields from diff (slug=${slug} sha=${sha} sourceUrl=${sourceUrl})\n`);
+        const out = JSON.stringify({ parse_error: true, slug: '', sourceUrl: '', sha: '' });
+        writeFileSync(resolve(artifactsDir, 'entry.json'), out);
+        process.exit(1);
+      }
+
+      const entry = { slug, name, author, sourceUrl, sha };
+      writeFileSync(resolve(artifactsDir, 'entry.json'), JSON.stringify(entry, null, 2));
+      console.log(JSON.stringify(entry));
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 4: FETCH SOURCE — download files at pinned SHA
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-source
+    script: marketplace-fetch-source
+    runtime: bun
+    timeout: 60000
+    depends_on: [parse-entry]
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODES 5+6: VALIDATE SCHEMA + SECURITY SCAN (parallel)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate-schema
+    script: marketplace-validate-schema
+    runtime: bun
+    timeout: 30000
+    depends_on: [fetch-source]
+
+  - id: security-scan
+    script: marketplace-security-scan
+    runtime: bun
+    timeout: 30000
+    depends_on: [fetch-source]
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 7: AI REVIEW — Haiku reads scan results + source content
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: ai-review
+    prompt: |
+      You are reviewing a community marketplace submission for the Archon workflow platform.
+      Your job is to assess whether the submission is safe and useful enough to publish.
+
+      ## PR Metadata
+      $fetch-pr-metadata.output
+
+      ## Schema Validation Result
+      $validate-schema.output
+
+      ## Security Scan Result
+      $security-scan.output
+
+      ## Submitted Entry Details
+      $parse-entry.output
+
+      ## Instructions
+
+      Read all of the above carefully. Then provide a structured assessment.
+
+      - If the security scan has `severity: "critical"` or `severity: "high"`, recommendation MUST be "reject".
+      - If schema validation failed (`valid: false`), recommendation MUST be "request_changes".
+      - If the PR is a draft (`isDraft: true`), recommendation should be "request_changes".
+      - For clean submissions with no issues (scan severity "none", schema valid), recommend "auto_merge".
+      - For clean submissions where you have minor uncertainty but no concrete issues, recommend "auto_approve".
+      - For suspicious but not definitively malicious submissions, recommend "request_changes".
+
+      Be concise. Flag genuine risks only — don't nitpick style.
+    depends_on: [validate-schema, security-scan]
+    idle_timeout: 60000
+    output_format:
+      type: object
+      properties:
+        risk_level:
+          type: string
+          enum: [low, medium, high, critical]
+        schema_assessment:
+          type: string
+          enum: [valid, invalid, not_applicable]
+        security_assessment:
+          type: string
+          enum: [clean, suspicious, dangerous]
+        concerns:
+          type: array
+          items:
+            type: string
+        recommendation:
+          type: string
+          enum: [auto_merge, auto_approve, request_changes, reject]
+        reasoning:
+          type: string
+      required:
+        - risk_level
+        - schema_assessment
+        - security_assessment
+        - concerns
+        - recommendation
+        - reasoning
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 8: DECIDE — deterministic decision logic (inline Bun script)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: decide
+    runtime: bun
+    timeout: 10000
+    depends_on: [ai-review, fetch-pr-metadata]
+    script: |
+      import { readFileSync, writeFileSync } from 'node:fs';
+      import { resolve } from 'node:path';
+
+      const artifactsDir = process.env['ARTIFACTS_DIR'] ?? '';
+      const prMeta = JSON.parse(readFileSync(resolve(artifactsDir, 'pr-meta.json'), 'utf8')) as {
+        author: { login: string };
+        isDraft: boolean;
+      };
+      const scopeResult = readFileSync(resolve(artifactsDir, '.scope-result'), 'utf8').trim();
+
+      const scanResult = $security-scan.output;
+      const aiReview = $ai-review.output;
+      const schemaResult = $validate-schema.output;
+
+      const author = prMeta.author.login;
+      const isDraft = prMeta.isDraft;
+
+      // Read slug from entry.json for merge commit subject
+      let slug = '';
+      try {
+        const entry = JSON.parse(readFileSync(resolve(artifactsDir, 'entry.json'), 'utf8')) as { slug?: string };
+        slug = entry.slug ?? '';
+      } catch {}
+
+      let decision: 'auto_merge' | 'auto_approve' | 'request_changes' | 'reject';
+      let reason: string;
+
+      if (scopeResult !== 'SCOPE_OK') {
+        decision = 'reject';
+        reason = 'PR modifies files outside packages/docs-web/src/data/marketplace.ts. Only marketplace.ts additions are accepted.';
+      } else if (isDraft) {
+        decision = 'request_changes';
+        reason = 'PR is in draft state. Mark as ready for review when complete.';
+      } else if (scanResult.severity === 'critical' || scanResult.severity === 'high') {
+        decision = 'reject';
+        reason = `Security scan found ${String(scanResult.severity)} severity issues: ${scanResult.findings.map((f: { category: string; context: string }) => `${f.category} in ${f.context}`).join('; ')}`;
+      } else if (aiReview.recommendation === 'reject') {
+        decision = 'reject';
+        reason = aiReview.reasoning;
+      } else if (!schemaResult.valid && schemaResult.files && (schemaResult.files as Array<{valid: boolean}>).length > 0) {
+        decision = 'request_changes';
+        reason = 'Workflow YAML failed schema validation. Fix structural errors before merging.';
+      } else if (scanResult.severity === 'medium' || aiReview.recommendation === 'request_changes') {
+        decision = 'request_changes';
+        reason = aiReview.reasoning;
+      } else if (scanResult.severity === 'none' && (aiReview.recommendation === 'auto_merge' || aiReview.recommendation === 'auto_approve')) {
+        decision = 'auto_merge';
+        reason = aiReview.reasoning;
+      } else {
+        decision = 'auto_approve';
+        reason = aiReview.reasoning;
+      }
+
+      const output = { decision, reason, author, slug };
+      writeFileSync(resolve(artifactsDir, 'decision.json'), JSON.stringify(output, null, 2));
+      console.log(JSON.stringify(output));
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 9: ACT — post GitHub review + optional merge
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: act
+    bash: |
+      PR_NUM=$(cat "$ARTIFACTS_DIR/.pr-number")
+      DECISION=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.decision')
+      REASON=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.reason')
+      SLUG=$(cat "$ARTIFACTS_DIR/decision.json" | jq -r '.slug // empty')
+
+      case "$DECISION" in
+        auto_merge)
+          echo "Decision: AUTO_MERGE — approving and merging PR #$PR_NUM"
+          gh pr review "$PR_NUM" --approve --body "**Marketplace Auto-Review: Approved & Merging**
+
+      $REASON
+
+      *Reviewed and auto-merged by Archon marketplace-pr-review-and-merge workflow.*"
+          gh pr merge "$PR_NUM" --squash --delete-branch --subject "feat(marketplace): add ${SLUG:-marketplace-entry}"
+          ;;
+        auto_approve)
+          echo "Decision: AUTO_APPROVE — approving PR #$PR_NUM (manual merge required)"
+          gh pr review "$PR_NUM" --approve --body "**Marketplace Auto-Review: Approved**
+
+      $REASON
+
+      *Reviewed by Archon marketplace-pr-review-and-merge workflow. A maintainer will merge.*"
+          ;;
+        request_changes)
+          echo "Decision: REQUEST_CHANGES — requesting changes on PR #$PR_NUM"
+          gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Changes Requested**
+
+      $REASON
+
+      *Reviewed by Archon marketplace-pr-review-and-merge workflow.*"
+          ;;
+        reject)
+          echo "Decision: REJECT — closing PR #$PR_NUM as out of scope or unsafe"
+          gh pr review "$PR_NUM" --request-changes --body "**Marketplace Auto-Review: Rejected**
+
+      $REASON
+
+      *Reviewed by Archon marketplace-pr-review-and-merge workflow.*"
+          gh pr close "$PR_NUM" --comment "Closing this PR per the automated review above." 2>/dev/null || true
+          ;;
+        *)
+          echo "ERROR: Unexpected decision value: $DECISION" >&2
+          exit 1
+          ;;
+      esac
+    depends_on: [decide]
+    timeout: 60000

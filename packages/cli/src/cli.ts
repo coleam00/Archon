@@ -50,6 +50,8 @@ import {
   workflowRejectCommand,
   workflowCleanupCommand,
   workflowEventEmitCommand,
+  workflowSearchCommand,
+  workflowInstallCommand,
   isValidEventType,
 } from './commands/workflow';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
@@ -62,8 +64,10 @@ import {
 import { continueCommand } from './commands/continue';
 import { chatCommand } from './commands/chat';
 import { setupCommand } from './commands/setup';
+import { skillInstallCommand } from './commands/skill';
 import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
 import { serveCommand } from './commands/serve';
+import { doctorCommand } from './commands/doctor';
 import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
@@ -72,6 +76,7 @@ import {
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
+  isVerboseBoot,
 } from '@archon/paths';
 import * as git from '@archon/git';
 
@@ -98,15 +103,19 @@ Commands:
   workflow list              List available workflows in current directory
   workflow run <name> [msg]  Run a workflow with optional message
   workflow status            Show status of running workflows
+  workflow search [query]    Search the workflow marketplace
+  workflow install <slug>    Install a workflow from the marketplace
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into main
   continue <branch> [msg]    Continue work on an existing worktree with prior context
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (downloads web UI on first run)
+  skill install [path]       Install the bundled Archon skill into .claude/skills/archon
+  doctor                     Verify your Archon setup (Claude binary, gh auth, DB, adapters)
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
-  version                    Show version info
+  version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
 Options:
@@ -123,6 +132,7 @@ Options:
   --no-context               Skip context injection for 'continue'
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
+  --force                    Overwrite existing file (for workflow install)
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -132,6 +142,10 @@ Examples:
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
   archon continue fix/issue-42 --workflow archon-smart-pr-review "Review the changes"
+  archon skill install
+  archon skill install /path/to/project
+  archon workflow search "pr review"
+  archon workflow install archon-piv-loop
 `);
 }
 
@@ -166,6 +180,18 @@ async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
  * Main CLI entry point
  * Returns exit code (0 = success, non-zero = failure)
  */
+/**
+ * Detect a request for version output. Treats `--version`, `-V`, and the
+ * single-dash typo `-version` as version flags anywhere in argv. `-v` keeps
+ * its role as the short alias for `--verbose`, except when used alone — then
+ * it falls back to version output to match the convention used by node, npm,
+ * bun, and most other CLIs.
+ */
+function isVersionRequest(args: string[]): boolean {
+  if (args.length === 1 && args[0] === '-v') return true;
+  return args.some(arg => arg === '--version' || arg === '-V' || arg === '-version');
+}
+
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
@@ -173,6 +199,18 @@ async function main(): Promise<number> {
   if (args.length === 0) {
     printUsage();
     return 0;
+  }
+
+  // Version flag aliases bypass option parsing and the git-repo check so
+  // `archon --version` works the same as `archon version` from any directory.
+  if (isVersionRequest(args)) {
+    try {
+      await versionCommand();
+      return 0;
+    } finally {
+      await shutdownTelemetry();
+      await closeDb();
+    }
   }
 
   // Parse global options
@@ -236,12 +274,23 @@ async function main(): Promise<number> {
   const subcommand = positionals[1];
 
   // Commands that don't require git repo validation
-  const noGitCommands = ['version', 'help', 'setup', 'chat', 'continue', 'serve'];
+  const noGitCommands = [
+    'version',
+    'help',
+    'setup',
+    'chat',
+    'continue',
+    'serve',
+    'skill',
+    'doctor',
+  ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    // Set log level from flags (quiet > verbose > default)
-    if (values.quiet) {
+    // setup/doctor default to warn to avoid Pino info JSON interleaving with ○/✓ output; lazy loggers pick up this level at first creation
+    const isInteractiveCommand = command === 'setup' || command === 'doctor';
+    const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+    if (values.quiet || suppressByDefault) {
       setLogLevel('warn');
     } else if (values.verbose) {
       setLogLevel('debug');
@@ -250,6 +299,19 @@ async function main(): Promise<number> {
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).
+
+    // Marketplace search doesn't need a git repo — handle before git validation
+    if (command === 'workflow' && subcommand === 'search') {
+      const query = positionals[2];
+      try {
+        await workflowSearchCommand(query, jsonFlag);
+      } catch (error) {
+        const err = error as Error;
+        console.error(`Error: ${err.message}`);
+        return 1;
+      }
+      return 0;
+    }
 
     // Validate working directory exists
     let effectiveCwd = cwd;
@@ -471,6 +533,17 @@ async function main(): Promise<number> {
             break;
           }
 
+          case 'install': {
+            const installSlug = positionals[2];
+            if (!installSlug) {
+              console.error('Usage: archon workflow install <slug> [--force]');
+              return 1;
+            }
+            const forceFlag = values.force as boolean | undefined;
+            await workflowInstallCommand(installSlug, effectiveCwd, forceFlag);
+            break;
+          }
+
           default:
             if (subcommand === undefined) {
               console.error('Missing workflow subcommand');
@@ -478,7 +551,7 @@ async function main(): Promise<number> {
               console.error(`Unknown workflow subcommand: ${subcommand}`);
             }
             console.error(
-              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event'
+              'Available: list, run, status, resume, abandon, approve, reject, cleanup, event, search, install'
             );
             return 1;
         }
@@ -567,6 +640,30 @@ async function main(): Promise<number> {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
         return await serveCommand({ port: servePort, downloadOnly });
+      }
+
+      case 'doctor': {
+        return await doctorCommand();
+      }
+
+      case 'skill': {
+        switch (subcommand) {
+          case 'install': {
+            // Optional positional path; otherwise install into the resolved cwd.
+            const targetArg = positionals[2];
+            const targetPath = targetArg ? resolve(targetArg) : cwd;
+            return await skillInstallCommand(targetPath);
+          }
+
+          default:
+            if (subcommand === undefined) {
+              console.error('Missing skill subcommand');
+            } else {
+              console.error(`Unknown skill subcommand: ${subcommand}`);
+            }
+            console.error('Available: install');
+            return 1;
+        }
       }
 
       default:

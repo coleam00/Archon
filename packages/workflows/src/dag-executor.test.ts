@@ -182,9 +182,28 @@ function node(id: string, depends_on?: string[], opts?: Partial<DagNode>): DagNo
   return { id, command: id, ...(depends_on?.length ? { depends_on } : {}), ...opts };
 }
 
-function makeOutput(state: NodeOutput['state'], output = ''): NodeOutput {
-  if (state === 'failed') return { state, output, error: 'error' };
-  return { state, output } as NodeOutput;
+/**
+ * Build a NodeOutput fixture for substitution tests.
+ * Omits `structuredOutput` when undefined so the `'structuredOutput' in nodeOutput` presence
+ * check in substituteNodeOutputRefs matches real producer behavior (Pi/Codex/Claude populate
+ * it; older providers and the pending/skipped states leave it off).
+ */
+function makeOutput(
+  state: NodeOutput['state'],
+  output = '',
+  structuredOutput?: unknown
+): NodeOutput {
+  if (state === 'failed') {
+    return structuredOutput !== undefined
+      ? { state, output, error: 'error', structuredOutput }
+      : { state, output, error: 'error' };
+  }
+  if (state === 'pending' || state === 'skipped') {
+    return { state, output } as NodeOutput;
+  }
+  return structuredOutput !== undefined
+    ? ({ state, output, structuredOutput } as NodeOutput)
+    : ({ state, output } as NodeOutput);
 }
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
@@ -751,14 +770,151 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
     expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo 'hello\nworld'");
   });
 
-  it('object JSON field becomes quoted empty string when escapedForBash=true', () => {
+  it('object JSON field becomes JSON stringified when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ nested: { x: 1 } }))]]);
-    expect(substituteNodeOutputRefs('echo $a.output.nested', outputs, true)).toBe("echo ''");
+    expect(substituteNodeOutputRefs('echo $a.output.nested', outputs, true)).toBe(
+      'echo \'{"x":1}\''
+    );
+  });
+
+  it('array JSON field becomes JSON stringified', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', JSON.stringify({ items: ['todo', 'fix'] }))],
+    ]);
+    expect(substituteNodeOutputRefs('$a.output.items', outputs)).toBe('["todo","fix"]');
+  });
+
+  it('array JSON field is shell-quoted when escapedForBash=true', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', JSON.stringify({ items: ['todo', 'fix'] }))],
+    ]);
+    expect(substituteNodeOutputRefs('echo $a.output.items', outputs, true)).toBe(
+      'echo \'["todo","fix"]\''
+    );
+  });
+
+  it('nested object in array field becomes JSON stringified', () => {
+    const outputs = new Map([
+      [
+        'a',
+        makeOutput('completed', JSON.stringify({ files: [{ name: 'a.ts', status: 'modified' }] })),
+      ],
+    ]);
+    expect(substituteNodeOutputRefs('$a.output.files', outputs)).toBe(
+      '[{"name":"a.ts","status":"modified"}]'
+    );
+  });
+
+  it('null values in arrays stringify to "null"', () => {
+    const outputs = new Map([
+      ['a', makeOutput('completed', JSON.stringify({ items: [null, 'ok'] }))],
+    ]);
+    expect(substituteNodeOutputRefs('$a.output.items', outputs)).toBe('[null,"ok"]');
+  });
+
+  it('null object field becomes JSON stringified "null"', () => {
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ config: null }))]]);
+    expect(substituteNodeOutputRefs('$a.output.config', outputs)).toBe('null');
   });
 
   it('dot notation on invalid JSON returns quoted empty string when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', 'not-json')]]);
     expect(substituteNodeOutputRefs('$a.output.field', outputs, true)).toBe("''");
+  });
+});
+
+describe('substituteNodeOutputRefs -- structuredOutput preference', () => {
+  it('prefers structuredOutput.field over JSON.parse(output)', () => {
+    // Pi-shape: prose output text with structuredOutput populated by tryParseStructuredOutput.
+    const outputs = new Map([
+      [
+        'classify',
+        makeOutput('completed', 'Here is the classification: {"type":"WRONG"}', {
+          type: 'BUG',
+          confidence: 0.9,
+        }),
+      ],
+    ]);
+    expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe(
+      'Fix BUG issue'
+    );
+  });
+
+  it('falls back to JSON.parse(output) when structuredOutput is absent', () => {
+    // Claude/Codex backward-compat regression: no structuredOutput, JSON in `output`.
+    const outputs = new Map([
+      ['classify', makeOutput('completed', JSON.stringify({ type: 'BUG' }))],
+    ]);
+    expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe(
+      'Fix BUG issue'
+    );
+  });
+
+  it('coerces structuredOutput numeric field to string', () => {
+    const outputs = new Map([['score', makeOutput('completed', '', { confidence: 0.95 })]]);
+    expect(substituteNodeOutputRefs('score=$score.output.confidence', outputs)).toBe('score=0.95');
+  });
+
+  it('coerces structuredOutput boolean field to string', () => {
+    const outputs = new Map([['n', makeOutput('completed', '', { ok: true })]]);
+    expect(substituteNodeOutputRefs('[ $n.output.ok ]', outputs)).toBe('[ true ]');
+  });
+
+  it('JSON-stringifies object structuredOutput field', () => {
+    const outputs = new Map([['n', makeOutput('completed', '', { nested: { x: 1 } })]]);
+    expect(substituteNodeOutputRefs('$n.output.nested', outputs)).toBe('{"x":1}');
+  });
+
+  it('JSON-stringifies array structuredOutput field', () => {
+    const outputs = new Map([['n', makeOutput('completed', '', { items: ['todo', 'fix'] })]]);
+    expect(substituteNodeOutputRefs('$n.output.items', outputs)).toBe('["todo","fix"]');
+  });
+
+  it('works with empty output text (Pi-only-structured case)', () => {
+    // structuredOutput populated, output text empty → dot-access still works.
+    const outputs = new Map([['classify', makeOutput('completed', '', { type: 'BUG' })]]);
+    expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe(
+      'Fix BUG issue'
+    );
+  });
+
+  it('null structuredOutput falls through to JSON.parse fallback', () => {
+    const outputs = new Map([
+      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), null)],
+    ]);
+    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
+  });
+
+  it('top-level-array structuredOutput falls through to JSON.parse fallback', () => {
+    const outputs = new Map([
+      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), [1, 2, 3])],
+    ]);
+    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
+  });
+
+  it('primitive structuredOutput falls through to JSON.parse fallback', () => {
+    const outputs = new Map([
+      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), 'just-a-string')],
+    ]);
+    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
+  });
+
+  it('missing field in structuredOutput resolves to empty string (no JSON.parse retry)', () => {
+    // structuredOutput is authoritative; if the field is missing, do not retry output.
+    const outputs = new Map([
+      ['classify', makeOutput('completed', JSON.stringify({ type: 'BUG' }), { confidence: 0.9 })],
+    ]);
+    expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe('Fix  issue');
+  });
+
+  it('bare $node.output reference (no field) uses output text, not structuredOutput', () => {
+    const outputs = new Map([['n', makeOutput('completed', 'prose text', { type: 'BUG' })]]);
+    expect(substituteNodeOutputRefs('Got: $n.output', outputs)).toBe('Got: prose text');
+  });
+
+  it('structuredOutput field is shell-quoted when escapedForBash=true', () => {
+    const outputs = new Map([['n', makeOutput('completed', '', { cmd: 'foo; bar' })]]);
+    expect(substituteNodeOutputRefs('echo $n.output.cmd', outputs, true)).toBe("echo 'foo; bar'");
   });
 });
 
@@ -4294,6 +4450,64 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failedData.error).toContain('Subprocess crashed mid-turn');
     });
 
+    it('loop iteration does NOT fail on isError: true + errorSubtype: success', async () => {
+      // Regression test for #1425 (loop-branch counterpart of the main-path
+      // test). Stop_sequence terminations carry is_error: true + subtype:
+      // 'success' under the Claude SDK contract; previously, the loop branch
+      // threw "SDK returned success" and aborted the iteration even though
+      // the AI had completed its work correctly.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Done. DONE.' };
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'success',
+          stopReason: 'stop_sequence',
+          sessionId: 'sid-loop-stop',
+        };
+      });
+
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'loop-success-stop-seq-test',
+          nodes: [
+            {
+              id: 'work',
+              loop: {
+                prompt: 'Do the work. Say DONE.',
+                until: 'DONE',
+                max_iterations: 3,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+      const failedEvents = eventCalls.filter((call: unknown[]) => {
+        const evt = (call[0] as Record<string, unknown>).event_type as string;
+        return evt === 'node_failed' || evt === 'loop_iteration_failed';
+      });
+      expect(failedEvents).toHaveLength(0);
+    });
+
     it('non-interactive loop is unaffected (no pause)', async () => {
       mockSendQueryDag.mockImplementation(function* () {
         yield { type: 'assistant', content: 'Still working...' };
@@ -5662,6 +5876,57 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     expect(failedData.error).toContain('permission denied');
   });
 
+  it('does NOT fail node when SDK returns isError: true + errorSubtype: success', async () => {
+    // Regression test for #1425: stop_sequence terminations under the Claude
+    // SDK contract carry is_error: true + subtype: 'success'. The provider
+    // normalises this, but the executor keeps an explicit guard so a future
+    // provider regression or a third-party IAgentProvider that forwards the
+    // SDK pair raw cannot reintroduce the "SDK returned success" false-failure.
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'classified output' };
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'success',
+        stopReason: 'stop_sequence',
+        sessionId: 'sid-stop',
+      };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'success-stop-seq-test',
+        nodes: [{ id: 'classify', command: 'my-cmd' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const nodeFailedEvents = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(nodeFailedEvents).toHaveLength(0);
+
+    const completeCalls = (store.completeWorkflowRun as ReturnType<typeof mock>).mock.calls;
+    expect(completeCalls.length).toBeGreaterThan(0);
+  });
+
   it('forwards workflow-level effort to node when no per-node override', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -6190,13 +6455,14 @@ describe('executeDagWorkflow -- script nodes', () => {
       user_message: 'test',
     });
 
-    // 200 × 16 chars ≈ 3.2 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
-    // so any leak of the script body via err.message would violate the length
-    // assertion below. Bun's stderr echoes only a few lines of context.
-    const paddingAboveMax = '// padding line '.repeat(200);
+    // 500 × 7 chars = 3.5 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
+    // so any leak of the full script body via err.message would violate the length
+    // assertion below. Block-comment padding (no newlines) avoids Windows execFile
+    // arg truncation at \n that would cause bun to exit 0 on the comment-only prefix.
+    const paddingAboveMax = '/* p */'.repeat(500);
     const scriptNode: ScriptNode = {
       id: 'fail-script-1389',
-      script: `${paddingAboveMax}\nconst x = "marker"; this is not valid javascript`,
+      script: `${paddingAboveMax} this is not valid javascript`,
       runtime: 'bun',
     };
 
@@ -6899,5 +7165,153 @@ describe('executeDagWorkflow -- final status derivation', () => {
       expect.anything(),
       expect.stringContaining('b')
     );
+  });
+});
+
+describe('provider resolution -- regression for #1610', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-provider-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'my-cmd.md'), 'My command prompt for $USER_MESSAGE');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'response' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('node with no provider annotation routes to workflowProvider (codex), not to model-implied provider', async () => {
+    // Regression: a node with model: opus[1m] but no provider: must route to
+    // workflowProvider ('codex' when defaultAssistant: codex), not to 'claude'.
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: mockCodexCapabilities,
+    }));
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-provider',
+      testDir,
+      // Node has model: opus[1m] but NO provider: — must inherit workflowProvider
+      {
+        name: 'provider-regression',
+        nodes: [{ id: 'implement', command: 'my-cmd', model: 'opus[1m]' }],
+      },
+      workflowRun,
+      'codex', // workflowProvider (simulates defaultAssistant: codex)
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    // getAgentProvider must have been called with 'codex', not 'claude'
+    expect(mockGetAgentProviderDag).toHaveBeenCalledWith('codex');
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalledWith('claude');
+  });
+
+  it('node with explicit provider: claude routes to claude even when workflowProvider is codex', async () => {
+    // When provider: claude is set on the node, it must override workflowProvider.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-provider',
+      testDir,
+      // Node has both model: opus[1m] AND provider: claude
+      {
+        name: 'provider-explicit',
+        nodes: [{ id: 'implement', command: 'my-cmd', model: 'opus[1m]', provider: 'claude' }],
+      },
+      workflowRun,
+      'codex', // workflowProvider
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      { ...minimalConfig, assistant: 'codex' }
+    );
+
+    // getAgentProvider must have been called with 'claude'
+    expect(mockGetAgentProviderDag).toHaveBeenCalledWith('claude');
+  });
+});
+
+describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
+  it('every bundled node with an opus model has provider: claude at the node or workflow level', async () => {
+    // Resolve the defaults directory relative to this package (same logic as getAppArchonBasePath).
+    // import.meta.dir = packages/workflows/src → go up 3 levels to repo root → .archon/workflows/defaults
+    const repoRoot = join(import.meta.dir, '..', '..', '..');
+    const defaultsDir = join(repoRoot, '.archon', 'workflows', 'defaults');
+
+    const { readdir, readFile: readFileFs } = await import('fs/promises');
+    const files = (await readdir(defaultsDir)).filter(f => f.endsWith('.yaml'));
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const file of files) {
+      const src = await readFileFs(join(defaultsDir, file), 'utf-8');
+      const result = parseWorkflow(src, file);
+      if (!('workflow' in result)) continue; // skip load errors
+
+      const wf = result.workflow;
+      if (!('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows
+
+      const workflowProvider: string | undefined = (wf as { provider?: string }).provider;
+
+      for (const n of wf.nodes) {
+        const nodeModel: string | undefined = (n as { model?: string }).model;
+        if (!nodeModel || !nodeModel.toLowerCase().includes('opus')) continue;
+
+        const nodeProvider: string | undefined = (n as { provider?: string }).provider;
+        const hasExplicitClaude = nodeProvider === 'claude' || workflowProvider === 'claude';
+
+        expect(hasExplicitClaude).toBe(true);
+        if (!hasExplicitClaude) {
+          // Surface which file+node is missing the annotation
+          throw new Error(
+            `${file}: node '${(n as { id?: string }).id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
+          );
+        }
+      }
+    }
   });
 });

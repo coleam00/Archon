@@ -512,32 +512,39 @@ SDK subprocess retry (claude.ts)  — 3 total attempts, 2 s base backoff
     ↓ only if all SDK retries exhausted
 Node retry (dag-executor)  — default 2 retries, 3 s base backoff
     ↓ only if all node retries exhausted
-Workflow fails → next invocation auto-resumes completed nodes
+Workflow fails → user opts in to resume on next invocation
 ```
 
 This means a single transient crash may trigger up to **3 SDK retries** before a single node retry attempt is consumed.
 
-> **DAG resume**: For `nodes:` (DAG) workflows, resume is automatic — the next invocation detects the prior failed run and skips already-completed nodes. No `--resume` flag is needed. See [DAG Resume on Failure](#dag-resume-on-failure) below.
+> **DAG resume**: For `nodes:` (DAG) workflows, resume is opt-in — pass `--resume` to `archon workflow run`, run `archon workflow resume <id>`, or use the web UI resume button. Plain `archon workflow run <name>` always starts a fresh run. See [DAG Resume on Failure](#dag-resume-on-failure) below.
 
 ---
 
 ## DAG Resume on Failure
 
-When a `nodes:` (DAG) workflow fails, the next invocation automatically resumes from where it left off — no `--resume` flag required.
+When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a candidate for resume. Resume is **explicit**: you opt in by flag or button.
 
-**How it works:**
+**How to resume:**
 
-1. On each invocation, Archon checks for a prior failed run of the same workflow at the same working path.
-2. If found, it loads the `node_completed` events from that run to determine which nodes finished successfully.
-3. Completed nodes are skipped; only failed and not-yet-run nodes are executed.
-4. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
+- **CLI**: `archon workflow run <name> --resume` resumes the most recent failed run for `(workflow_name, cwd)`. Or `archon workflow resume <run-id>` to target a specific run.
+- **Chat (web)**: Approving or rejecting a paused workflow auto-resumes from where it left off (the platform already knows the run id).
+- **Web UI**: Resume button on the workflow card.
+
+**What happens on resume:**
+
+1. The CLI / orchestrator looks up the resumable run, loads its `node_completed` events to determine which nodes finished successfully, and transitions the row back to `running`.
+2. Completed nodes are skipped; only failed and not-yet-run nodes are executed.
+3. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
+
+> **Why opt-in?** Earlier versions silently auto-resumed on plain `archon workflow run`, which caused state from prior failed runs (e.g. cached node outputs with stale inputs) to bleed into new invocations of the same workflow at the same path. See #1392 for the bug; now resume is always a user-driven decision.
 
 **Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup — that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the dashboard (the Dashboard nav tab shows a count of running workflows). Transition it to a terminal status explicitly:
 
 - **Web UI**: click the Abandon or Cancel button on the workflow card. Abandon marks the run `cancelled` and keeps completed-node history. Cancel also terminates any in-flight subprocess.
 - **CLI**: `archon workflow abandon <run-id>` (equivalent to the dashboard Abandon button). Run IDs are listed by `archon workflow status`.
 
-Once the row reaches a terminal status, the next invocation of the same workflow at the same path auto-resumes from completed nodes via the mechanism above.
+Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
 
 > Not to be confused with `archon workflow cleanup [days]`, which **deletes** old terminal runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. It does not transition `running` rows.
 
@@ -611,6 +618,8 @@ Common shapes you'll see in practice:
 - **Pi (community):** `<backend>/<model-id>` refs — e.g. `google/gemini-2.5-pro`, `openrouter/qwen/qwen3-coder`.
 
 If the SDK rejects the string at request time, the node fails loudly with the SDK's error message — Archon never silently re-routes a model from one provider to another based on the string.
+
+**Provider selection is independent of the model string** — a `model: opus[1m]` node with no `provider:` field will route to your `defaultAssistant` regardless of the model name. Always pair a provider-specific model string with an explicit `provider:` on the node.
 
 ### Codex-Specific Options
 
@@ -968,7 +977,7 @@ nodes:
 
 ### Pattern: Checkpoint and Resume
 
-For long workflows, DAG resume handles this automatically — completed nodes are skipped on re-invocation:
+For long workflows, DAG resume lets you skip already-completed nodes — opt in with `--resume`:
 
 ```yaml
 name: large-migration
@@ -994,7 +1003,7 @@ nodes:
     context: fresh
 ```
 
-If the workflow fails at `batch-2`, the next invocation skips `plan` and `batch-1` automatically.
+If the workflow fails at `batch-2`, run `archon workflow run large-migration --resume` to skip `plan` and `batch-1`. Plain `archon workflow run large-migration` (without `--resume`) starts fresh.
 
 ### Pattern: Human-in-the-Loop
 

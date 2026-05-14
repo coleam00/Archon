@@ -152,7 +152,7 @@ bun run format:check
 bun run validate
 ```
 
-This runs `check:bundled`, type-check, lint, format check, and tests. All five must pass for CI to succeed.
+This runs `check:bundled`, `check:bundled-skill`, type-check, lint, format check, and tests. All six must pass for CI to succeed.
 
 ### ESLint Guidelines
 
@@ -252,6 +252,13 @@ bun run cli complete <branch-name> --force  # Skip uncommitted-changes check
 bun run cli serve
 bun run cli serve --port 4000
 bun run cli serve --download-only  # Download without starting
+
+# Install the bundled Archon skill into a project
+bun run cli skill install
+bun run cli skill install /path/to/project
+
+# Verify your Archon setup (Claude binary, gh auth, DB, adapters)
+bun run cli doctor
 
 # Show version
 bun run cli version
@@ -475,9 +482,9 @@ The system supports configuring default models and options per assistant in `.ar
 assistants:
   claude:
     model: sonnet  # or 'opus', 'haiku', 'claude-*', 'inherit'
-    settingSources:  # Controls which CLAUDE.md files Claude SDK loads
-      - project      # Default: only project-level CLAUDE.md
-      - user         # Optional: also load ~/.claude/CLAUDE.md
+    settingSources:  # Controls which CLAUDE.md, skills, commands, and agents the SDK loads
+      - project      # Project-level <cwd>/.claude/ (included in default)
+      - user         # User-level ~/.claude/ (included in default; omit both to restrict to project-only)
     claudeBinaryPath: /absolute/path/to/claude  # Optional: Claude Code executable.
                                                 # Native binary (curl installer at
                                                 # ~/.local/bin/claude) or npm cli.js.
@@ -719,7 +726,7 @@ async function createSession(conversationId: string, codebaseId: string) {
 - Source builds: Loaded from filesystem at runtime
 - Merged with repo-specific commands/workflows (repo overrides defaults by name)
 - Opt-out: Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` in `.archon/config.yaml`
-- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and will fail loudly if the generated file is stale.
+- **After adding, removing, or editing a default file, run `bun run generate:bundled`** to refresh the embedded bundle. `bun run validate` (and CI) run `check:bundled` and `check:bundled-skill` and will fail loudly if either generated file is stale.
 
 **Home-scoped ("global") workflows, commands, and scripts** (user-level, applies to every project):
 - Workflows: `~/.archon/workflows/` (or `$ARCHON_HOME/workflows/`)
@@ -781,7 +788,7 @@ Pattern: Use `classifyIsolationError()` (from `@archon/isolation`) to map git er
 - `DELETE /api/workflows/:name` - Delete a user-defined workflow; bundled defaults cannot be deleted
 
 **Workflow Run Lifecycle:**
-- `POST /api/workflows/runs/{runId}/resume` - Mark a failed run as ready for auto-resume on next invocation
+- `POST /api/workflows/runs/{runId}/resume` - Resume a failed run from where it left off (skips already-completed DAG nodes; AI session context is not restored).
 - `POST /api/workflows/runs/{runId}/abandon` - Abandon a non-terminal run (marks as cancelled)
 - `DELETE /api/workflows/runs/{runId}` - Delete a terminal workflow run and its events
 
