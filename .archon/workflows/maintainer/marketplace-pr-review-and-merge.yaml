@@ -286,20 +286,28 @@ nodes:
       case "$DECISION" in
         auto_merge)
           echo "Decision: AUTO_MERGE — approving and merging PR #$PR_NUM"
-          gh pr review "$PR_NUM" --approve --body "**Marketplace Auto-Review: Approved & Merging**
+          APPROVE_BODY="**Marketplace Auto-Review: Approved & Merging**
 
       $REASON
 
       *Reviewed and auto-merged by Archon marketplace-pr-review-and-merge workflow.*"
+          # Best-effort approval — GITHUB_TOKEN can't approve unless the repo
+          # has "Allow GitHub Actions to create and approve pull requests"
+          # enabled in Settings → Actions → General. The comment below always
+          # lands so the PR author still gets notified.
+          gh pr review "$PR_NUM" --approve --body "$APPROVE_BODY" \
+            || gh pr comment "$PR_NUM" --body "$APPROVE_BODY"
           gh pr merge "$PR_NUM" --squash --delete-branch --subject "feat(marketplace): add ${SLUG:-marketplace-entry}"
           ;;
         auto_approve)
           echo "Decision: AUTO_APPROVE — approving PR #$PR_NUM (manual merge required)"
-          gh pr review "$PR_NUM" --approve --body "**Marketplace Auto-Review: Approved**
+          APPROVE_BODY="**Marketplace Auto-Review: Approved**
 
       $REASON
 
       *Reviewed by Archon marketplace-pr-review-and-merge workflow. A maintainer will merge.*"
+          gh pr review "$PR_NUM" --approve --body "$APPROVE_BODY" \
+            || gh pr comment "$PR_NUM" --body "$APPROVE_BODY"
           ;;
         request_changes)
           echo "Decision: REQUEST_CHANGES — requesting changes on PR #$PR_NUM"
