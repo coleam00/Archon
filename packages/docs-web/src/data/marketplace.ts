@@ -107,4 +107,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'archon-idea-to-wo',
+    name: 'Idea to Work Orders',
+    author: 'lamachine',
+    description:
+      'Interactive 8-node workflow that turns a raw idea into BKM-format Work Orders through four AI phases with approval gates between each: understand the idea, scope and approach, risk and decomposition, generate WOs. Output is a directory of self-contained WO files ready to hand to archon-piv-loop.',
+    sourceUrl:
+      'https://github.com/coleam00/archon-idea-to-wo/tree/3b0d5d828a4cb375d50bb1252f5e016c44242d01/.archon',
+    sha: '3b0d5d828a4cb375d50bb1252f5e016c44242d01',
+    tags: ['planning', 'development'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];
