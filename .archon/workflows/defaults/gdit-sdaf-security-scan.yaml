@@ -1,0 +1,117 @@
+name: gdit-sdaf-security-scan
+description: |
+  Use when: Running a security scan sweep before committing or as a standalone audit.
+  Does: Runs gitleaks, semgrep, trivy, checkov on the project.
+        Writes .scan-manifest.json (required by opt-in pre-commit-check hook).
+  Output: Findings summary + .scan-manifest.json artifact.
+  Requires: gdit-sdaf-setup completed.
+
+nodes:
+  - id: guard-setup
+    bash: |
+      if [ ! -f "$HOME/.kiro/scripts/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at ~/.kiro/scripts/."
+        echo "Run 'gdit-sdaf-setup' workflow first, then retry."
+        exit 1
+      fi
+      echo "GDIT setup verified."
+
+  - id: run-gitleaks
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      gitleaks detect --source . --report-format json \
+        --report-path .security-scans/gitleaks-report.json 2>&1 || true
+      SECRETS=$(python3 -c "
+import json
+try:
+    r = json.load(open('.security-scans/gitleaks-report.json'))
+    print(len(r) if isinstance(r, list) else 0)
+except:
+    print(0)
+")
+      echo "gitleaks: $SECRETS secrets found"
+      echo "$SECRETS" > .security-scans/gitleaks-count.txt
+    depends_on: [guard-setup]
+
+  - id: run-semgrep
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      semgrep --config auto --json --output .security-scans/semgrep-report.json . 2>/dev/null || true
+      FINDINGS=$(python3 -c "
+import json
+try:
+    r = json.load(open('.security-scans/semgrep-report.json'))
+    print(len(r.get('results', [])))
+except:
+    print(0)
+")
+      echo "semgrep: $FINDINGS findings"
+      echo "$FINDINGS" > .security-scans/semgrep-count.txt
+    depends_on: [guard-setup]
+
+  - id: run-trivy
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      trivy fs --format json --output .security-scans/trivy-report.json . 2>/dev/null || true
+      VULNS=$(python3 -c "
+import json
+try:
+    r = json.load(open('.security-scans/trivy-report.json'))
+    total = sum(len(res.get('Vulnerabilities', []) or []) for res in (r.get('Results') or []))
+    print(total)
+except:
+    print(0)
+")
+      echo "trivy: $VULNS vulnerabilities found"
+      echo "$VULNS" > .security-scans/trivy-count.txt
+    depends_on: [guard-setup]
+
+  - id: run-checkov
+    bash: |
+      set -uo pipefail
+      mkdir -p .security-scans
+      IAC_FILES=$(find . \( -name "*.tf" -o -name "*.yaml" -o -name "*.yml" \) 2>/dev/null | grep -v ".git" | wc -l | tr -d ' ')
+      if [ "$IAC_FILES" -gt 0 ]; then
+        checkov -d . --output json --output-file-path .security-scans/ 2>/dev/null || true
+        echo "checkov: scanned $IAC_FILES IaC files"
+      else
+        echo "checkov: no IaC files found, skipping"
+      fi
+    depends_on: [guard-setup]
+
+  - id: write-manifest
+    bash: |
+      set -euo pipefail
+      GITLEAKS=$(cat .security-scans/gitleaks-count.txt 2>/dev/null || echo "0")
+      SEMGREP=$(cat .security-scans/semgrep-count.txt 2>/dev/null || echo "0")
+      TRIVY=$(cat .security-scans/trivy-count.txt 2>/dev/null || echo "0")
+      python3 -c "
+import json, datetime
+manifest = {
+    'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    'scanners': {
+        'gitleaks': {'findings': int('$GITLEAKS')},
+        'semgrep': {'findings': int('$SEMGREP')},
+        'trivy': {'findings': int('$TRIVY')}
+    }
+}
+with open('.scan-manifest.json', 'w') as f:
+    json.dump(manifest, f, indent=2)
+print('.scan-manifest.json written')
+"
+    depends_on: [run-gitleaks, run-semgrep, run-trivy, run-checkov]
+    trigger_rule: all_done
+
+  - id: report
+    prompt: |
+      Read the scanner output files in `.security-scans/` and `.scan-manifest.json`.
+      Generate a concise security scan summary with:
+      - Overall pass/fail status (fail = any secrets found OR CRITICAL/HIGH severity vulns)
+      - Per-scanner finding counts
+      - Top 3 most important findings to fix (if any)
+      - Evidence string suitable for a git commit `Evidence:` field
+    depends_on: [write-manifest]
+    context: fresh
