@@ -2158,7 +2158,7 @@ async function executeLoopNode(
             ...process.env,
             USER_MESSAGE: workflowRun.user_message,
             ARGUMENTS: workflowRun.user_message,
-            LOOP_USER_INPUT: loopUserInput ?? '',
+            LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
             LOOP_PREV_OUTPUT: prevIterationOutput,
             REJECTION_REASON: '',
             CONTEXT: issueContext ?? '',

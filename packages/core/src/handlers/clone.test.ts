@@ -7,7 +7,7 @@
  *   to avoid process-global mock.module pollution that would break git.test.ts
  * - Lazy logger pattern means @archon/paths mock must be set up before the module import
  */
-import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import { createMockLogger } from '../test/mocks/logger';
@@ -154,6 +154,8 @@ describe('cloneRepository', () => {
     restoreSpies();
     setupSpies();
     delete process.env.GH_TOKEN;
+    delete process.env.GITLAB_TOKEN;
+    delete process.env.GITEA_TOKEN;
   });
 
   // ── URL normalization / happy-path cloning ─────────────────────────────
@@ -303,7 +305,7 @@ describe('cloneRepository', () => {
 
   // ── Multi-forge authentication ────────────────────────────────────────
   describe('multi-forge authentication', () => {
-    afterAll(() => {
+    afterEach(() => {
       delete process.env.GITLAB_TOKEN;
       delete process.env.GITEA_TOKEN;
     });
