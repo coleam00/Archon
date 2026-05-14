@@ -2027,7 +2027,7 @@ export function registerApiRoutes(
         success: true,
         message: autoResumed
           ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
-          : `Workflow approved: ${run.workflow_name}. Send a message to continue.`,
+          : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or send a new message in the originating conversation.`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
@@ -2082,7 +2082,7 @@ export function registerApiRoutes(
           success: true,
           message: autoResumed
             ? `Workflow rejected: ${run.workflow_name}. Running on-reject prompt.`
-            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run on resume.`,
+            : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — run \`archon workflow resume ${runId}\` from the CLI to trigger it.`,
         });
       }
 
