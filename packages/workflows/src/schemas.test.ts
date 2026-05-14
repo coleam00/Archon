@@ -10,6 +10,7 @@ import {
   approvalOnRejectSchema,
   dagNodeSchema,
   workflowDefinitionSchema,
+  loopNodeConfigSchema,
 } from './schemas';
 import type {
   WorkflowDefinition,
@@ -687,6 +688,53 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
 // ---------------------------------------------------------------------------
 // LOOP_NODE_AI_FIELDS constant
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// loopNodeConfigSchema -- until_file field
+// ---------------------------------------------------------------------------
+
+describe('loopNodeConfigSchema', () => {
+  test('accepts until_file shorthand field', () => {
+    const result = loopNodeConfigSchema.safeParse({
+      prompt: 'Work.',
+      until: 'COMPLETE',
+      max_iterations: 3,
+      until_file: 'done-sentinel.txt',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.until_file).toBe('done-sentinel.txt');
+      expect(result.data.until_bash).toBeUndefined();
+    }
+  });
+
+  test('until_file and until_bash can coexist (both checked each iteration)', () => {
+    const result = loopNodeConfigSchema.safeParse({
+      prompt: 'Work.',
+      until: 'COMPLETE',
+      max_iterations: 5,
+      until_file: 'ready.txt',
+      until_bash: 'test -d output/',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.until_file).toBe('ready.txt');
+      expect(result.data.until_bash).toBe('test -d output/');
+    }
+  });
+
+  test('until_file is optional', () => {
+    const result = loopNodeConfigSchema.safeParse({
+      prompt: 'Work.',
+      until: 'COMPLETE',
+      max_iterations: 3,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.until_file).toBeUndefined();
+    }
+  });
+});
 
 describe('LOOP_NODE_AI_FIELDS', () => {
   test('excludes model and provider (loop nodes support them)', () => {

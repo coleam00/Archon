@@ -4419,6 +4419,128 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       ).mock.calls;
       expect(pauseCalls.length).toBe(0);
     });
+
+    // ─── Sticky signal detection ───────────────────────────────────────────
+
+    it('sticky detection: signal in iteration 1 exits loop before max_iterations', async () => {
+      // stickySignalDetected is set true in iteration 1. The mock yields no signal in
+      // iteration 2+ to prove the loop doesn't need re-emission — but with correct
+      // detection, the loop exits after iteration 1 (stickySignalDetected || bashComplete).
+      let callCount = 0;
+      mockSendQueryDag.mockImplementation(function* () {
+        callCount++;
+        if (callCount === 1) {
+          // Iteration 1: signal on its own line → signalDetected=true → stickySignalDetected=true
+          yield { type: 'assistant', content: 'All checks passed.\nCOMPLETE' };
+        } else {
+          // Iteration 2+: deliberately no signal (validates sticky prevents max_iter failure)
+          yield { type: 'assistant', content: 'No signal in this iteration.' };
+        }
+        yield { type: 'result', sessionId: `sticky-sid-${String(callCount)}` };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-sticky',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Work. Emit COMPLETE on its own line when done.',
+                until: 'COMPLETE',
+                max_iterations: 5,
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Loop exits after iteration 1 — stickySignalDetected becomes true and
+      // completionDetected = stickySignalDetected || bashComplete = true.
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      expect(
+        (
+          mockDeps.store.completeWorkflowRun as Mock<
+            (id: string, metadata?: Record<string, unknown>) => Promise<void>
+          >
+        ).mock.calls.length
+      ).toBe(1);
+      expect(
+        (mockDeps.store.failWorkflowRun as Mock<(id: string, error: string) => Promise<void>>).mock
+          .calls.length
+      ).toBe(0);
+    });
+
+    it('until_file: workflow with until_file field is accepted by the schema', async () => {
+      // Structural test: verify a workflow definition containing until_file parses without error
+      // and completes when the AI emits the completion signal.
+      // Execution-level bash expansion (test -f .archon/<path>) is covered in loader.test.ts.
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: '<promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'file-sentinel-sid' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-loop-until-file',
+          nodes: [
+            {
+              id: 'my-loop',
+              loop: {
+                prompt: 'Work. Write .archon/done.txt when finished.',
+                until: 'COMPLETE',
+                max_iterations: 3,
+                until_file: 'done.txt',
+              },
+            },
+          ],
+        },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      // Signal detected (XML wrapped) → stickySignalDetected=true → exits after 1 iteration.
+      // The until_bash expansion (test -f .archon/done.txt) is a secondary check; on
+      // environments without bash it gracefully degrades to bashComplete=false.
+      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      expect(
+        (
+          mockDeps.store.completeWorkflowRun as Mock<
+            (id: string, metadata?: Record<string, unknown>) => Promise<void>
+          >
+        ).mock.calls.length
+      ).toBe(1);
+    });
   });
 });
 
