@@ -131,4 +131,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['review', 'automation'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'archon-comprehensive-mr-review',
+    name: 'Comprehensive GitLab MR Review',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-comprehensive-pr-review. Full code review of a GitLab MR — all 5 review agents (code-review, error-handling, test-coverage, comment-quality, docs-impact) run in parallel, posts resolvable Discussion threads, auto-approves on 0 critical findings.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/6e39b359e1b02329ebf63f7d1699e6bbc8cb001f/archon-comprehensive-mr-review',
+    sha: '6e39b359e1b02329ebf63f7d1699e6bbc8cb001f',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];
