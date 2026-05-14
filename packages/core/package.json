@@ -1,6 +1,6 @@
 {
   "name": "@archon/core",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
