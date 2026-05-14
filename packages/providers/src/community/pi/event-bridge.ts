@@ -159,9 +159,12 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
       : {}),
   };
   if (isError) {
+    // Intentional design: error chunks are yielded, not thrown. isError:true in the chunk
+    // is the signal — callers (bridgeSession, dag-executor) check result.isError to classify
+    // failures and still receive full token/stopReason context from the same chunk.
     getLog().error(
-      { stopReason: last.stopReason, errorMessage: last.errorMessage, model: last.model },
-      'pi.event-bridge.result_error'
+      { stopReason: last.stopReason, errorMessage: last.errorMessage },
+      'pi.result_chunk_error'
     );
   }
   return chunk;

@@ -88,7 +88,7 @@ const mockModelRegistryFind = mock((provider: string, modelId: string) => {
   if (provider === 'nonexistent') return undefined;
   return { id: modelId, provider, name: `${provider}/${modelId}` };
 });
-const mockModelRegistryInMemory = mock(() => ({
+const mockModelRegistryCreate = mock(() => ({
   find: mockModelRegistryFind,
 }));
 
@@ -132,7 +132,7 @@ const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 mock.module('@mariozechner/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
-  ModelRegistry: { inMemory: mockModelRegistryInMemory },
+  ModelRegistry: { create: mockModelRegistryCreate },
   SessionManager: {
     create: mockSessionCreate,
     open: mockSessionOpen,
@@ -195,7 +195,7 @@ describe('PiProvider', () => {
     mockResourceLoaderReload.mockClear();
     mockCreateAgentSession.mockClear();
     mockAuthCreate.mockClear();
-    mockModelRegistryInMemory.mockClear();
+    mockModelRegistryCreate.mockClear();
     mockModelRegistryFind.mockClear();
     mockSetRuntimeApiKey.mockClear();
     mockGetApiKey.mockClear();
@@ -283,8 +283,8 @@ describe('PiProvider', () => {
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
   });
 
-  test('ModelRegistry.inMemory receives the AuthStorage instance', async () => {
-    // ModelRegistry.inMemory must receive the same AuthStorage instance
+  test('ModelRegistry.create receives the AuthStorage instance', async () => {
+    // ModelRegistry.create must receive the same AuthStorage instance
     // returned by AuthStorage.create(), so extension providers can resolve
     // credentials and register models during bindExtensions().
     process.env.GEMINI_API_KEY = 'sk-test';
@@ -297,9 +297,9 @@ describe('PiProvider', () => {
     );
 
     expect(mockAuthCreate).toHaveBeenCalledTimes(1);
-    expect(mockModelRegistryInMemory).toHaveBeenCalledTimes(1);
+    expect(mockModelRegistryCreate).toHaveBeenCalledTimes(1);
     const authInstance = mockAuthCreate.mock.results[0]?.value;
-    expect(mockModelRegistryInMemory).toHaveBeenCalledWith(authInstance);
+    expect(mockModelRegistryCreate).toHaveBeenCalledWith(authInstance);
   });
 
   test('AuthStorage.create() throwing surfaces a contextualized error', async () => {
@@ -328,16 +328,12 @@ describe('PiProvider', () => {
   });
 
   test('Pi model not found includes models.json load error when registry reports one', async () => {
-    // ModelRegistry swallows models.json parse/validation errors into an
-    // internal loadError. When find() returns undefined at step 3, we log
-    // the warning and defer to extension resolution. If still not found
-    // after bindExtensions(), the provider throws.
     process.env.GEMINI_API_KEY = 'sk-test';
-    // find() is called twice: step 3 (static catalog) and step 4g (after
-    // bindExtensions). Both must return undefined to trigger the error.
+    // find() is called twice — first on the static catalog, then again after bindExtensions()
+    // resolves extension providers. Both must return undefined to trigger the error.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
-    mockModelRegistryInMemory.mockImplementationOnce(() => ({
+    mockModelRegistryCreate.mockImplementationOnce(() => ({
       find: mockModelRegistryFind,
       getError: () => 'Provider lm-studio: "baseUrl" is required when defining custom models.',
     }));
@@ -411,8 +407,8 @@ describe('PiProvider', () => {
 
   test('throws when ModelRegistry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
-    // find() is called twice: step 3 (static catalog) and step 4g (after
-    // bindExtensions). Both must return undefined to trigger the error.
+    // find() is called twice — first on the static catalog, then again after bindExtensions()
+    // resolves extension providers. Both must return undefined to trigger the error.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     resetScript(scriptedAgentEnd());
