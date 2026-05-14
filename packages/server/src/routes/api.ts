@@ -1074,7 +1074,8 @@ export function registerApiRoutes(
    */
   async function tryAutoResumeAfterGate(
     run: WorkflowRun,
-    action: 'approve' | 'reject'
+    action: 'approve' | 'reject',
+    resumeRunId?: string
   ): Promise<boolean> {
     if (!run.parent_conversation_id) return false;
     // Literal event names per action — greppable for ops tooling. Keeping the
@@ -1128,7 +1129,12 @@ export function registerApiRoutes(
         );
         return false;
       }
-      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      // For interactive_loop, resume the specific run so the executor sees the
+      // updated loop_user_input in metadata. Plain /workflow run would start a
+      // new run instead of re-entering the paused loop.
+      const resumeMessage = resumeRunId
+        ? `/workflow resume ${resumeRunId}`
+        : `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
       await dispatchToOrchestrator(platformConvId, resumeMessage);
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
@@ -2043,7 +2049,11 @@ export function registerApiRoutes(
       // `parent_conversation_id` on the run (set by orchestrator-agent for any
       // web-dispatched workflow — foreground, interactive, and background via
       // the pre-created run) and a web-platform parent (guarded in the helper).
-      const autoResumed = await tryAutoResumeAfterGate(run, 'approve');
+      const autoResumed = await tryAutoResumeAfterGate(
+        run,
+        'approve',
+        approval.type === 'interactive_loop' ? runId : undefined
+      );
 
       return c.json({
         success: true,

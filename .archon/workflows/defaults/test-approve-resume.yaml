@@ -1,0 +1,39 @@
+name: test-approve-resume
+description: |
+  Harness fixture for bdc-xo#86. Verifies interactive_loop approve → resume path end-to-end.
+  Three nodes: bash setup → interactive loop gate → bash emit RESUME_SUCCESS.
+  NOT for production workflows. Invoke by name: "test-approve-resume".
+
+model: sonnet
+policyFile: harness/policies/agent-behavior.md
+interactive: true
+
+nodes:
+  - id: phase-one
+    bash: |
+      echo "PHASE_ONE_COMPLETE"
+
+  - id: approve-gate
+    depends_on: [phase-one]
+    loop:
+      prompt: |
+        ## Interactive Gate — bdc-xo#86 Resume Test
+
+        User response: "$LOOP_USER_INPUT"
+
+        If the user response is non-empty (i.e., "$LOOP_USER_INPUT" is not blank),
+        the approval has been received. Output exactly:
+        APPROVE_GATE_PASSED
+
+        If the user response is empty (first iteration — no approval yet), output:
+        WAITING_FOR_INPUT
+      until: APPROVE_GATE_PASSED
+      max_iterations: 5
+      fresh_context: true
+      interactive: true
+      gate_message: "Approve this gate to verify interactive_loop resume [bdc-xo#86]."
+
+  - id: emit-success
+    depends_on: [approve-gate]
+    bash: |
+      echo "RESUME_SUCCESS"
