@@ -131,4 +131,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['review', 'automation'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'archon-resolve-mr-conflicts',
+    name: 'Resolve GitLab MR Conflicts',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-resolve-conflicts. Rebases an MR onto its target branch, auto-resolves simple conflicts (additions, imports, formatting, dependency-list merges), presents options for complex conflicts, validates the resolution (ruff/pytest/tsc/go), and force-pushes with --force-with-lease.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/6e39b359e1b02329ebf63f7d1699e6bbc8cb001f/archon-resolve-mr-conflicts',
+    sha: '6e39b359e1b02329ebf63f7d1699e6bbc8cb001f',
+    tags: ['automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];
