@@ -577,6 +577,42 @@ describe('OmpProvider', () => {
     expect(sessionOptions?.systemPrompt).toEqual(['request-level wins']);
   });
 
+  test('passes system prompt string array without nesting', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      systemPrompt: ['block one', 'block two'],
+    });
+
+    expect(sessionOptions?.systemPrompt).toEqual(['block one', 'block two']);
+  });
+
+  test('drops non-string system prompt presets because OMP only accepts prompt blocks', async () => {
+    let sessionOptions: OmpCreateAgentSessionOptions | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession(options) {
+          sessionOptions = options;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: 'extra' },
+    });
+
+    expect(sessionOptions?.systemPrompt).toBeUndefined();
+  });
+
   test('preserves OMP SDK discovery default when config omits disableExtensionDiscovery', async () => {
     let sessionOptions: OmpCreateAgentSessionOptions | undefined;
     const provider = new OmpProvider(async () =>

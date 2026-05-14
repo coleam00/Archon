@@ -127,6 +127,21 @@ Schema:
 ${JSON.stringify(schema, null, 2)}`;
 }
 
+function toOmpSystemPromptBlocks(
+  systemPrompt: SendQueryOptions['systemPrompt']
+): string[] | undefined {
+  if (typeof systemPrompt === 'string') return [systemPrompt];
+  if (Array.isArray(systemPrompt) && systemPrompt.every(block => typeof block === 'string')) {
+    return systemPrompt;
+  }
+  if (systemPrompt !== undefined) {
+    getLog().warn(
+      { systemPromptType: Array.isArray(systemPrompt) ? 'array' : typeof systemPrompt },
+      'omp.system_prompt_dropped_non_string'
+    );
+  }
+  return undefined;
+}
 type ParsedModelRef = NonNullable<ReturnType<typeof parseOmpModelRef>>;
 
 function requireParsedModelRef(modelRef: string | undefined): ParsedModelRef {
@@ -318,7 +333,9 @@ export class OmpProvider implements IAgentProvider {
       };
     }
 
-    const systemPrompt = requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt;
+    const systemPromptBlocks = toOmpSystemPromptBlocks(
+      requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt
+    );
     const settingsOverrides = buildOmpSettingsOverrides(ompConfig);
     const settings = sdk.Settings.isolated(settingsOverrides);
     const interactive = ompConfig.interactive !== false;
@@ -398,7 +415,7 @@ export class OmpProvider implements IAgentProvider {
           ? { additionalExtensionPaths: ompConfig.additionalExtensionPaths }
           : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
-        ...(systemPrompt !== undefined ? { systemPrompt: [systemPrompt] } : {}),
+        ...(systemPromptBlocks !== undefined ? { systemPrompt: systemPromptBlocks } : {}),
         ...(resolvedMcp ? { mcpManager: resolvedMcp.manager } : {}),
         ...(effectiveMcpTools ? { customTools: effectiveMcpTools.customTools } : {}),
         toolNames: effectiveToolNames,
