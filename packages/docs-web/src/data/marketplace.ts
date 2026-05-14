@@ -119,4 +119,16 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['planning', 'development'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'archon-smart-mr-review',
+    name: 'Smart GitLab MR Review',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-smart-pr-review. Adaptive code review of a GitLab MR — Haiku classifies which review agents are relevant, runs them in parallel, posts resolvable Discussion threads, and auto-approves on 0 critical findings.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/55ca73498f0ead87d86c22ef0efa67482b311700/archon-smart-mr-review',
+    sha: '55ca73498f0ead87d86c22ef0efa67482b311700',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];
