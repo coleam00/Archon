@@ -1,0 +1,507 @@
+---
+import { marketplaceEntries, tagConfig } from '../../data/marketplace';
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Workflows — Archon</title>
+    <meta
+      name="description"
+      content="Community-built Archon workflows. Browse, install, run."
+    />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script is:inline>
+      (function () {
+        const theme = localStorage.getItem('starlight-theme') || 'dark';
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-logo">
+          <img src="/favicon.png" alt="Archon" width="28" height="28" />
+          <span>Archon</span>
+        </a>
+        <div class="nav-links">
+          <a href="/">Docs</a>
+          <a href="/roadmap/">Roadmap</a>
+          <a href="/workflows/" class="active">Workflows</a>
+          <a
+            href="https://github.com/coleam00/Archon"
+            target="_blank"
+            rel="noopener">GitHub</a
+          >
+        </div>
+      </div>
+    </nav>
+
+    <main>
+      <section class="hero">
+        <h1 class="hero-title">
+          Work<span class="gradient-text">flows</span>
+        </h1>
+        <p class="hero-sub">
+          Community-built Archon workflows. Browse, install, run.
+        </p>
+      </section>
+
+      <div class="warning-banner">
+        ⚠ Community-submitted. Archon hasn't audited every workflow — review
+        source before installing.
+      </div>
+
+      <div class="filter-bar">
+        <input
+          id="search-input"
+          type="text"
+          placeholder="Search workflows..."
+        />
+        <div id="tag-filters">
+          {
+            Object.entries(tagConfig).map(([key, cfg]) => (
+              <button
+                class="tag-filter-btn"
+                data-tag={key}
+                style={`--tag-color: ${cfg.color}; --tag-bg: ${cfg.bg}; --tag-border: ${cfg.border};`}
+              >
+                {cfg.label}
+              </button>
+            ))
+          }
+        </div>
+      </div>
+
+      <div id="cards-grid" class="cards-grid">
+        {
+          marketplaceEntries.map((entry) => (
+            <a
+              class="card"
+              href={`/workflows/${entry.slug}/`}
+              data-name={entry.name.toLowerCase()}
+              data-author={entry.author.toLowerCase()}
+              data-description={entry.description.toLowerCase()}
+              data-tags={entry.tags.join(',')}
+              data-featured={entry.featured ? 'true' : 'false'}
+            >
+              <div class="card-header">
+                <h3 class="card-title">{entry.name}</h3>
+                {entry.featured && <span class="featured-badge">Featured</span>}
+              </div>
+              <p class="card-author">@{entry.author}</p>
+              <p class="card-desc">{entry.description}</p>
+              <div class="card-tags">
+                {entry.tags.map((tag) => (
+                  <span
+                    class="tag"
+                    style={`color: ${tagConfig[tag]?.color ?? '#94a3b8'}; background: ${tagConfig[tag]?.bg ?? 'transparent'}; border-color: ${tagConfig[tag]?.border ?? '#1e293b'};`}
+                  >
+                    {tagConfig[tag]?.label ?? tag}
+                  </span>
+                ))}
+              </div>
+              <code class="install-preview">
+                archon workflow install {entry.slug}
+              </code>
+            </a>
+          ))
+        }
+      </div>
+
+      <div id="no-results" class="no-results" style="display: none;">
+        No workflows match your search.
+      </div>
+
+      <footer class="footer">
+        <p>
+          Want to share a workflow? <a
+            href="https://github.com/coleam00/Archon/blob/main/CONTRIBUTING.md"
+            >See our contributing guide →</a
+          >
+        </p>
+      </footer>
+    </main>
+
+    <script is:inline>
+      (function () {
+        var searchInput = document.getElementById('search-input');
+        var tagButtons = document.querySelectorAll('.tag-filter-btn');
+        var cards = document.querySelectorAll('.card');
+        var noResults = document.getElementById('no-results');
+        var activeTag = null;
+
+        function applyFilter() {
+          var query = searchInput.value.toLowerCase();
+          var visibleCount = 0;
+          cards.forEach(function (card) {
+            var matchesSearch =
+              !query ||
+              card.dataset.name.includes(query) ||
+              card.dataset.author.includes(query) ||
+              card.dataset.description.includes(query) ||
+              card.dataset.tags.includes(query);
+            var matchesTag =
+              !activeTag || card.dataset.tags.split(',').includes(activeTag);
+            var visible = matchesSearch && matchesTag;
+            card.style.display = visible ? '' : 'none';
+            if (visible) visibleCount++;
+          });
+          noResults.style.display = visibleCount === 0 ? '' : 'none';
+        }
+
+        searchInput.addEventListener('input', applyFilter);
+        tagButtons.forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var tag = btn.dataset.tag;
+            activeTag = activeTag === tag ? null : tag;
+            tagButtons.forEach(function (b) {
+              b.classList.toggle('active', b.dataset.tag === activeTag);
+            });
+            applyFilter();
+          });
+        });
+      })();
+    </script>
+
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html {
+        background: #0f1219;
+        color: #e2e8f0;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        scroll-behavior: smooth;
+      }
+
+      body {
+        min-height: 100vh;
+        background: #0f1219;
+      }
+
+      a {
+        text-decoration: none;
+        color: inherit;
+      }
+
+      /* Nav */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background: rgba(15, 18, 25, 0.85);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid #1e293b;
+      }
+
+      .nav-inner {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0.75rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .nav-logo {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 600;
+        font-size: 1.1rem;
+        color: #f1f5f9;
+      }
+
+      .nav-logo img {
+        border-radius: 6px;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 1.5rem;
+        font-size: 0.9rem;
+      }
+
+      .nav-links a {
+        color: #94a3b8;
+        transition: color 0.2s;
+      }
+
+      .nav-links a:hover,
+      .nav-links a.active {
+        color: #f1f5f9;
+      }
+
+      /* Hero */
+      .hero {
+        text-align: center;
+        padding: 4rem 1.5rem 2rem;
+      }
+
+      .hero-title {
+        font-size: 3rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: #f1f5f9;
+      }
+
+      .gradient-text {
+        background: linear-gradient(135deg, #3b82f6, #a855f7);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+
+      .hero-sub {
+        margin-top: 0.75rem;
+        font-size: 1.15rem;
+        color: #94a3b8;
+      }
+
+      /* Warning banner */
+      .warning-banner {
+        max-width: 760px;
+        margin: 0 auto 2rem;
+        padding: 0.75rem 1.25rem;
+        background: rgba(245, 158, 11, 0.08);
+        border: 1px solid rgba(245, 158, 11, 0.3);
+        border-radius: 8px;
+        color: #fbbf24;
+        font-size: 0.875rem;
+      }
+
+      /* Filter bar */
+      .filter-bar {
+        max-width: 760px;
+        margin: 0 auto 2rem;
+        padding: 0 1.5rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+      }
+
+      #search-input {
+        flex: 1;
+        min-width: 200px;
+        padding: 0.6rem 1rem;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        color: #e2e8f0;
+        font-size: 0.9rem;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+
+      #search-input:focus {
+        border-color: rgba(59, 130, 246, 0.5);
+      }
+
+      #search-input::placeholder {
+        color: #475569;
+      }
+
+      #tag-filters {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      .tag-filter-btn {
+        padding: 0.35rem 0.75rem;
+        border: 1px solid var(--tag-border);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--tag-color);
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      .tag-filter-btn:hover,
+      .tag-filter-btn.active {
+        background: var(--tag-bg);
+      }
+
+      /* Cards grid */
+      .cards-grid {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 0 1.5rem;
+        display: grid;
+        gap: 1rem;
+      }
+
+      .card {
+        display: block;
+        padding: 1.25rem 1.5rem;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid #1e293b;
+        border-left-width: 4px;
+        border-left-color: #3b82f6;
+        border-radius: 12px;
+        transition:
+          transform 0.2s,
+          border-color 0.2s;
+        cursor: pointer;
+      }
+
+      .card:hover {
+        transform: translateX(4px);
+        border-color: #334155;
+        border-left-color: #a855f7;
+      }
+
+      .card-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.25rem;
+      }
+
+      .card-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #f1f5f9;
+      }
+
+      .featured-badge {
+        font-size: 0.65rem;
+        font-family: 'JetBrains Mono', monospace;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        background: rgba(59, 130, 246, 0.12);
+        color: #60a5fa;
+        border: 1px solid rgba(59, 130, 246, 0.25);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .card-author {
+        font-size: 0.8rem;
+        color: #64748b;
+        margin-bottom: 0.5rem;
+      }
+
+      .card-desc {
+        font-size: 0.875rem;
+        color: #94a3b8;
+        line-height: 1.5;
+        margin-bottom: 0.75rem;
+      }
+
+      .card-tags {
+        display: flex;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.75rem;
+      }
+
+      .tag {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        border: 1px solid;
+      }
+
+      .install-preview {
+        display: block;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.75rem;
+        color: #475569;
+        padding: 0.4rem 0.6rem;
+        background: rgba(255, 255, 255, 0.02);
+        border-radius: 4px;
+        border: 1px solid rgba(30, 41, 59, 0.5);
+      }
+
+      .no-results {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 2rem 1.5rem;
+        text-align: center;
+        color: #64748b;
+        font-size: 0.95rem;
+      }
+
+      /* Footer */
+      .footer {
+        max-width: 760px;
+        margin: 3rem auto 0;
+        padding: 2rem 1.5rem;
+        text-align: center;
+        border-top: 1px solid #1e293b;
+        color: #475569;
+        font-size: 0.875rem;
+      }
+
+      .footer a {
+        color: #3b82f6;
+        transition: color 0.2s;
+      }
+
+      .footer a:hover {
+        color: #60a5fa;
+      }
+
+      /* Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: #0f1219;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: #1e293b;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: #334155;
+      }
+
+      /* Responsive */
+      @media (max-width: 640px) {
+        .hero-title {
+          font-size: 2rem;
+        }
+
+        .hero-sub {
+          font-size: 1rem;
+        }
+
+        .filter-bar {
+          flex-direction: column;
+        }
+
+        #search-input {
+          width: 100%;
+        }
+
+        .nav-links {
+          gap: 1rem;
+          font-size: 0.8rem;
+        }
+      }
+    </style>
+  </body>
+</html>

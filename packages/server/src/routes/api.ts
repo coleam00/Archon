@@ -37,6 +37,7 @@ import {
   getDefaultWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
+  getHomeWorkflowsPath,
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
@@ -628,7 +629,7 @@ const resumeWorkflowRunRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/resume',
   tags: ['Workflows'],
-  summary: 'Resume a failed workflow run (re-run auto-resumes from completed nodes)',
+  summary: 'Resume a failed workflow run (dispatches resume on the parent web conversation)',
   request: { params: z.object({ runId: z.string() }) },
   responses: {
     200: {
@@ -1759,7 +1760,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(getWorkflowsRoute, async c => {
     try {
       const cwd = c.req.query('cwd');
-      let workingDir = cwd;
+      let workingDir: string | undefined = cwd;
 
       // Validate caller-supplied cwd against registered codebase paths
       if (cwd) {
@@ -1774,11 +1775,11 @@ export function registerApiRoutes(
         }
       }
 
-      if (!workingDir) {
-        return c.json({ workflows: [] });
-      }
-
-      const result = await discoverWorkflowsWithConfig(workingDir, loadConfig);
+      // No project context (no cwd query param and no registered codebases) —
+      // pass null to discovery so it returns bundled + home-scoped workflows.
+      // This avoids a misleading empty state on first run, before any project
+      // is registered, when bundled defaults are present
+      const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
         errors: result.errors.length > 0 ? result.errors : undefined,
@@ -1907,11 +1908,38 @@ export function registerApiRoutes(
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
-      // Run is already failed — the next invocation on the same path auto-resumes
-      const pathInfo = run.working_path ? ` at \`${run.working_path}\`` : '';
+      // Dispatch resume by sending `/workflow run <name>` to the parent web
+      // conversation; the orchestrator's foreground-resume detection (via
+      // findResumableRunByParentConversation) picks up the failed run and
+      // hydrates it. Mirrors the approve/reject auto-resume path.
+      if (!run.parent_conversation_id) {
+        return apiError(
+          c,
+          400,
+          `This run was created outside the web UI. Use \`archon workflow resume ${runId}\` from the CLI to resume it.`
+        );
+      }
+      const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
+      if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
+        return apiError(
+          c,
+          400,
+          `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
+        );
+      }
+      const resumeMessage = `/workflow run ${run.workflow_name} ${run.user_message ?? ''}`.trim();
+      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage);
+      getLog().info(
+        {
+          runId,
+          workflowName: run.workflow_name,
+          platformConvId: parentConv.platform_conversation_id,
+        },
+        'api.workflow_run_resume_dispatched'
+      );
       return c.json({
         success: true,
-        message: `Workflow run ready to resume: ${run.workflow_name}${pathInfo}. Re-run the workflow to auto-resume from completed nodes.`,
+        message: `Resuming workflow: ${run.workflow_name}`,
       });
     } catch (error) {
       getLog().error({ err: error, runId }, 'api.workflow_run_resume_failed');
@@ -2237,7 +2265,7 @@ export function registerApiRoutes(
 
       const filename = `${name}.yaml`;
 
-      // 1. Try user-defined workflow in cwd
+      // 1. Try user-defined workflow in cwd.
       if (workingDir) {
         const [workflowFolder] = getWorkflowFolderSearchPaths();
         const filePath = join(workingDir, workflowFolder, filename);
@@ -2260,7 +2288,30 @@ export function registerApiRoutes(
         }
       }
 
-      // 2. Fall back to bundled defaults (binary: embedded map; dev: also check filesystem)
+      // 2. Fall back to home-scoped workflow (`~/.archon/workflows/`).
+      // Mirrors the discovery order in `discoverWorkflowsWithConfig`.
+      {
+        const homeFilePath = join(getHomeWorkflowsPath(), filename);
+        try {
+          const content = await readFile(homeFilePath, 'utf-8');
+          const result = parseWorkflow(content, filename);
+          if (result.error) {
+            return apiError(c, 500, `Home workflow file is invalid: ${result.error.error}`);
+          }
+          return c.json({
+            workflow: result.workflow,
+            filename,
+            source: 'global' as WorkflowSource,
+          });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            getLog().error({ err, name }, 'workflow.fetch_home_failed');
+            return apiError(c, 500, 'Failed to read home-scoped workflow');
+          }
+        }
+      }
+
+      // 3. Fall back to bundled defaults.
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
         const bundledContent = BUNDLED_WORKFLOWS[name];
         const result = parseWorkflow(bundledContent, filename);

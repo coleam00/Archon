@@ -1029,6 +1029,8 @@ describe('GET /api/workflows/runs/by-worker/:platformId', () => {
 describe('POST /api/workflows/runs/:runId/resume', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
   });
 
   test('returns 404 when run not found', async () => {
@@ -1051,16 +1053,90 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(body.error).toContain('Cannot resume');
   });
 
-  test('returns 200 with message when run is failed', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+  test('returns 400 with CLI hint when run has no parent_conversation_id', async () => {
+    // CLI-created runs cannot be resumed from the web dashboard — the API
+    // surfaces the equivalent CLI command rather than silently doing nothing.
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_FAILED_RUN,
+      parent_conversation_id: null,
+    });
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-4/resume', {
       method: 'POST',
     });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('archon workflow resume run-uuid-4');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when parent conversation no longer exists', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_FAILED_RUN,
+      parent_conversation_id: 'deleted-conv-uuid',
+    });
+    mockGetConversationById.mockResolvedValueOnce(null);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-4/resume', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 when parent conversation is non-web', async () => {
+    // Slack/Telegram/GitHub-sourced runs cannot route through the web
+    // adapter — the dispatcher is wired to webAdapter + lockManager.
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_FAILED_RUN,
+      parent_conversation_id: 'slack-parent-uuid',
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'slack-parent-uuid',
+      platform_conversation_id: '1234567890.123456',
+      platform_type: 'slack',
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-4/resume', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('archon workflow resume run-uuid-4');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 200 and dispatches resume when parent is a web conversation', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_FAILED_RUN,
+      parent_conversation_id: 'parent-conv-uuid',
+      user_message: 'Run the deploy',
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-abc',
+      platform_type: 'web',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-4/resume', {
+      method: 'POST',
+    });
+
     expect(response.status).toBe(200);
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
-    expect(body.message).toContain('ready to resume');
+    expect(body.message).toContain('Resuming workflow');
+
+    // dispatchToOrchestrator → lockManager → handleMessage
+    expect(mockHandleMessage).toHaveBeenCalled();
+    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
+      unknown,
+      string,
+      string,
+    ];
+    expect(platformConvId).toBe('web-plat-abc');
+    expect(dispatchedMessage).toBe('/workflow run deploy Run the deploy');
   });
 });
 

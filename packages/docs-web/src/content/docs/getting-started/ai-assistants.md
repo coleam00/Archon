@@ -239,6 +239,10 @@ Pi is registered as `builtIn: false` — it validates the community-provider sea
 
 Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
 
+### Quick setup via wizard
+
+Run `archon setup` and select **Pi (community)** in the AI assistant multiselect. The wizard prompts for your preferred backend and API key, writes the key to `~/.archon/.env`, and writes the model ref to `~/.archon/config.yaml` automatically.
+
 ### Authenticate
 
 Pi supports both OAuth subscriptions and API keys. Archon's adapter reads your existing Pi credentials from `~/.pi/agent/auth.json` (written by running `pi` → `/login`) AND from env vars — env vars take priority per-request so codebase-scoped overrides work.

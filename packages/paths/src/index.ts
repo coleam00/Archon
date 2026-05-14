@@ -35,6 +35,9 @@ export {
   getWebDistDir,
 } from './archon-paths';
 
+// Env loader
+export { loadArchonEnv, isVerboseBoot } from './env-loader';
+
 // Logger
 export { createLogger, setLogLevel, getLogLevel, rootLogger } from './logger';
 export type { Logger } from './logger';

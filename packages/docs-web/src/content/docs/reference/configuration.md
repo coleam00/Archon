@@ -231,6 +231,7 @@ Environment variables override all other configuration. They are organized by ca
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_SUPPRESS_NESTED_CLAUDE_WARNING` | When set to `1`, suppresses the stderr warning emitted when `archon` is run inside a Claude Code session | -- |
+| `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
 
 ### AI Providers -- Claude
 
@@ -353,6 +354,11 @@ Archon keys env loading on **directory ownership, not filename**. `.archon/` (at
 
 ```
 [archon] stripped 2 keys from /path/to/target-repo (.env, .env.local) to prevent target repo env from leaking into Archon processes
+```
+
+The `[archon] loaded N keys from …` lines are suppressed by default (they would otherwise interleave with `archon setup`/`archon doctor` checklist output). To enable them, set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` before running:
+
+```
 [archon] loaded 3 keys from ~/.archon/.env
 [archon] loaded 2 keys from /path/to/target-repo/.archon/.env (repo scope, overrides user scope)
 ```

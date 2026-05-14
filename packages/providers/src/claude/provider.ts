@@ -436,19 +436,20 @@ async function applyNodeConfig(
   if (nodeConfig.skills) {
     const skills = nodeConfig.skills;
     const agentId = 'dag-node-skills';
-    const agentTools = options.tools ? [...(options.tools as string[]), 'Skill'] : ['Skill'];
     const agentDef: {
       description: string;
       prompt: string;
       skills: string[];
-      tools: string[];
+      tools?: string[];
       model?: string;
     } = {
       description: 'DAG node with skills',
       prompt: `You have preloaded skills: ${skills.join(', ')}. Use them when relevant.`,
       skills,
-      tools: agentTools,
     };
+    if (options.tools) {
+      agentDef.tools = [...(options.tools as string[]), 'Skill'];
+    }
     if (options.model) agentDef.model = options.model;
     options.agents = { [agentId]: agentDef };
     options.agent = agentId;
@@ -796,7 +797,14 @@ async function* streamClaudeMessages(
       };
       const tokens = normalizeClaudeUsage(resultMsg.usage);
       const sdkErrors = Array.isArray(resultMsg.errors) ? resultMsg.errors : undefined;
-      if (resultMsg.is_error) {
+      // SDKResultSuccess declares `is_error: boolean` (not literal false). When a
+      // model terminates via a configured stop sequence (stop_reason ===
+      // 'stop_sequence') the SDK can set is_error: true while keeping
+      // subtype: 'success' — its encoding of "non-default termination, not a
+      // failure". Treat that pair as a clean success so downstream consumers
+      // (which gate failure on isError) don't misclassify it.
+      const isRealError = resultMsg.is_error === true && resultMsg.subtype !== 'success';
+      if (isRealError) {
         getLog().error(
           {
             sessionId: resultMsg.session_id,
@@ -806,6 +814,14 @@ async function* streamClaudeMessages(
           },
           'claude.result_is_error'
         );
+      } else if (resultMsg.is_error === true && resultMsg.subtype === 'success') {
+        getLog().debug(
+          {
+            sessionId: resultMsg.session_id,
+            stopReason: resultMsg.stop_reason,
+          },
+          'claude.result_success_validated'
+        );
       }
       yield {
         type: 'result',
@@ -814,8 +830,8 @@ async function* streamClaudeMessages(
         ...(resultMsg.structured_output !== undefined
           ? { structuredOutput: resultMsg.structured_output }
           : {}),
-        ...(resultMsg.is_error ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
-        ...(resultMsg.is_error && sdkErrors?.length ? { errors: sdkErrors } : {}),
+        ...(isRealError ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
+        ...(isRealError && sdkErrors?.length ? { errors: sdkErrors } : {}),
         ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
         ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
         ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),

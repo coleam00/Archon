@@ -1034,6 +1034,32 @@ describe('PiProvider', () => {
     expect(loaderArgs?.systemPrompt).toBe('request-level wins');
   });
 
+  test('preset object systemPrompt is dropped with warning', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        systemPrompt: {
+          type: 'preset',
+          preset: 'claude_code',
+          append: 'extra',
+        } as unknown as string,
+      })
+    );
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ systemPromptType: 'object' }),
+      'pi.system_prompt_dropped_non_string'
+    );
+
+    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(loaderArgs?.systemPrompt).toBeUndefined();
+  });
+
   test('capabilities reflect v2 wiring', () => {
     const caps = new PiProvider().getCapabilities();
     expect(caps.thinkingControl).toBe(true);

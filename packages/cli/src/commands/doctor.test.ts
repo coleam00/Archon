@@ -16,6 +16,7 @@ import {
   checkClaudeBinary,
   checkDatabase,
   checkGhAuth,
+  checkPi,
   checkWorkspaceWritable,
   checkBundledDefaults,
   checkSlack,
@@ -23,6 +24,7 @@ import {
   doctorCommand,
   type DatabaseDeps,
 } from './doctor';
+import * as doctorModule from './doctor';
 
 describe('checkClaudeBinary', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
@@ -103,6 +105,69 @@ describe('checkGhAuth', () => {
     const result = await checkGhAuth({ GH_TOKEN: 'ghp_y' });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('not logged in');
+  });
+});
+
+describe('checkPi', () => {
+  // Spy on the exported `probeAuthJsonExists` wrapper rather than `fsModule.existsSync`.
+  // Named imports from 'fs' cannot be intercepted by spying on the namespace object
+  // due to ESM rebinding — the wrapper pattern (same as `probeFileExists` in setup.ts)
+  // is the correct way to make this testable.
+  let authJsonSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probeAuthJsonExists'>>;
+
+  beforeEach(() => {
+    authJsonSpy = spyOn(doctorModule, 'probeAuthJsonExists');
+  });
+
+  afterEach(() => {
+    authJsonSpy.mockRestore();
+  });
+
+  it('returns skip when Pi is not configured', async () => {
+    const result = await checkPi({});
+    expect(result.status).toBe('skip');
+    expect(result.label).toBe('Pi provider');
+    expect(result.message).toContain('not configured');
+  });
+
+  it('returns pass when ~/.pi/agent/auth.json exists', async () => {
+    authJsonSpy.mockReturnValue(true);
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('auth.json');
+  });
+
+  it('returns pass when a Pi API key env var is set', async () => {
+    authJsonSpy.mockReturnValue(false);
+    const result = await checkPi({
+      DEFAULT_AI_ASSISTANT: 'pi',
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+    });
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
+    authJsonSpy.mockReturnValue(false);
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('pi /login');
+  });
+
+  it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
+    // Regression guard for M2: shared keys like ANTHROPIC_API_KEY must not be treated
+    // as Pi evidence unless DEFAULT_AI_ASSISTANT=pi.
+    authJsonSpy.mockReturnValue(false);
+    const result = await checkPi({ ANTHROPIC_API_KEY: 'sk-ant-test' });
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('not configured');
+  });
+
+  it('returns skip for users with OPENROUTER_API_KEY set but Pi not configured as default', async () => {
+    authJsonSpy.mockReturnValue(false);
+    const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('not configured');
   });
 });
 
