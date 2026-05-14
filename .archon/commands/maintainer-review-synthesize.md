@@ -32,13 +32,6 @@ Then read each one:
 
 Some files may be missing — that's expected. Don't error.
 
-### Read the gate decision (for context)
-```bash
-cat $ARTIFACTS_DIR/gate-decision.md
-```
-
-The gate may have noted things ("template was empty — nudge in synthesis"). Carry those notes forward.
-
 ---
 
 ## Phase 2: AGGREGATE + DEDUPLICATE
@@ -87,9 +80,6 @@ Write `$ARTIFACTS_DIR/review/synthesis.md`:
 
 ## CLAUDE.md compliance
 <bullet list of any violations carried forward from code-review.>
-
-## Gate-decision notes
-<any non-review notes the gate flagged for synthesis — e.g. "template was empty, nudge contributor".>
 
 ## Aspects run
 - code-review: <yes/no, summary line>
