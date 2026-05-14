@@ -21,8 +21,8 @@ if (!existsSync(entryPath)) {
 }
 
 interface MarketplaceEntry {
-  sourceUrl: string;
-  sha: string;
+  sourceUrl?: string;
+  sha?: string;
 }
 
 const entry = JSON.parse(readFileSync(entryPath, 'utf8')) as MarketplaceEntry;
@@ -33,6 +33,22 @@ mkdirSync(sourceDir, { recursive: true });
 
 const errors: string[] = [];
 const files: string[] = [];
+
+// Guard: sourceUrl and sha are required for fetching source files.
+// If either is missing (e.g., PR doesn't add a marketplace entry),
+// output an empty result so downstream nodes can proceed gracefully.
+if (!sourceUrl || !sha) {
+  const missing: string[] = [];
+  if (!sourceUrl) missing.push('sourceUrl');
+  if (!sha) missing.push('sha');
+  const msg = `entry.json is missing required field(s): ${missing.join(', ')}. ` +
+    'This PR likely does not add a marketplace entry with source files. ' +
+    'Skipping source fetch.';
+  process.stderr.write(msg + '\n');
+  errors.push(msg);
+  console.log(JSON.stringify({ files, errors }));
+  process.exit(0);
+}
 
 // Parse GitHub blob/tree URL into owner/repo/path
 const blobMatch = sourceUrl.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/[^/]+\/(.+)$/);
