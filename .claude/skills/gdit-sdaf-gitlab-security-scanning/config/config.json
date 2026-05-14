@@ -1,0 +1,20 @@
+{
+  "active_project": "47",
+  "gitlab_url": "https://ridgeline.emergelabs-gdit.com",
+  "projects": [
+    {
+      "id": "239",
+      "name": "ssdf-cloud-native-pipeline",
+      "gitlab_url": "https://ridgeline.emergelabs-gdit.com",
+      "local_path": "/home/tom.moore/dev/ssdf-cloud-native-pipeline",
+      "last_used": "2026-03-16T09:17:36.798467"
+    },
+    {
+      "id": "47",
+      "name": "HCOM",
+      "gitlab_url": "https://ridgeline.emergelabs-gdit.com",
+      "local_path": "/home/tom.moore/dev/hcom",
+      "last_used": "2026-03-17T09:47:13.388739"
+    }
+  ]
+}

@@ -1,0 +1,226 @@
+---
+skill_name: value-reporting
+menu_version: "1.0"
+description: AI-assisted development value reporting — savings, velocity, ROI, and sprint metrics.
+
+workflows:
+  - id: getting-started
+    label: "Getting Started"
+    description: "First-time setup — scan your data and see what's available"
+    instructions: |
+      Scan the project's specs to assess data maturity:
+
+      Step 1 — Run status to see what exists:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --status --format json
+
+      Step 2 — Run project summary to check for effort data:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --scope project --format json
+
+      Step 3 — Interpret and guide the user based on results:
+
+      If NO specs found:
+        "No specs found in .kiro/specs/. Value reporting needs tasks.md files with effort tracking tables. Create specs using the framework workflow (requirements → design → tasks) and the framework will track value automatically."
+
+      If specs exist but NO effort tables:
+        "Found {N} specs but none have effort tracking tables yet. Add effort rows to your tasks.md files (Story Points, Traditional Human LOE, AI-Assisted Estimate). The getting-started skill can walk you through this."
+
+      If effort tables exist but NO completed tasks:
+        "Found {N} specs with effort data, but no tasks are completed yet. As you complete tasks, the framework records actuals and timestamps. Once you have completed tasks, Quick Status and Sprint Report will show your savings."
+
+      If completed tasks exist:
+        "Your project has {completed} completed tasks across {specs} specs. Here's what's available:
+        - Quick Status (workflow 2) — your most useful daily view
+        - Update My Specs (workflow 3) — generate Value Summary tables
+        - Sprint Report (workflow 4) — savings for a date range
+        All 9 workflows are available. Try Quick Status to see your current metrics."
+    interactive: true
+
+  - id: quick-status
+    label: "Quick Status"
+    description: "Dashboard + task status — the daily go-to for any role"
+    instructions: |
+      Run two reports and present a combined view:
+
+      Step 1 — Dashboard (health metrics):
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --dashboard
+
+      Step 2 — Task status (completion breakdown):
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --status
+
+      Present both together: savings/velocity at the top, per-spec task status below.
+    interactive: true
+
+  - id: update-my-specs
+    label: "Update My Specs"
+    description: "Developer tool — generate Value Summary tables for completed specs"
+    instructions: |
+      Step 1 — Find specs that need Value Summary updates:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --status --format json
+
+      Step 2 — From the JSON output, identify specs with completed tasks.
+      For each spec with completed tasks, check if its tasks.md already has a "## Value Summary" section.
+      Read each spec's tasks.md to check.
+
+      Step 3 — List specs needing updates and ask the user:
+      "These specs have completed tasks but no Value Summary table:
+        1. feature-auth (4 tasks completed)
+        2. data-export (3 tasks completed)
+      Update all, or pick specific ones?"
+
+      Step 4 — For each selected spec, run:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --update-summary --spec <spec-name>
+
+      Show the generated summary for each.
+    interactive: true
+
+  - id: sprint-report
+    label: "Sprint Report"
+    description: "Feature savings and weekly trend for a sprint window"
+    instructions: |
+      Offer smart date defaults:
+      "Which time window?
+        1. Last 2 weeks (calculated automatically)
+        2. This month
+        3. Custom dates"
+
+      For option 1: calculate dates as today minus 14 days to today.
+      For option 2: first day of current month to today.
+      For option 3: ask for start and end dates.
+
+      Run the sprint report:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --scope feature --trend --period weekly --since <start> --until <end>
+
+      Present the results showing per-feature savings and weekly velocity.
+
+      Then ask: "Export as markdown for the retro doc?"
+      If yes:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --scope feature --trend --period weekly --since <start> --until <end> --format markdown --output temp/sprint-report.md
+    parameters:
+      - name: date_option
+        required: false
+        prompt: "Time window (1=Last 2 weeks, 2=This month, 3=Custom):"
+        default: "1"
+    interactive: true
+
+  - id: compare-sprints
+    label: "Compare Sprints"
+    description: "Side-by-side sprint comparison — track improvement over time"
+    instructions: |
+      Step 1 — Auto-detect sprint windows from completion data:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --scope project --format json
+
+      From the JSON output, find the date range of all completed tasks (earliest and latest Complete timestamps). Divide into the two most recent 2-week windows.
+
+      Step 2 — Offer detected defaults:
+      "Based on your completion data, I suggest comparing:
+        Sprint A: <detected-start-1> to <detected-end-1>
+        Sprint B: <detected-start-2> to <detected-end-2>
+      Use these dates, or enter custom ranges?"
+
+      Step 3 — Run comparison:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --compare <start1>:<end1>,<start2>:<end2>
+
+      Highlight key findings:
+      - Did savings percentage improve? (↑/↓)
+      - Did velocity increase?
+      - Are estimates getting more accurate?
+    parameters:
+      - name: use_defaults
+        required: false
+        prompt: "Use auto-detected sprint windows? (yes/no):"
+        default: "yes"
+    interactive: true
+
+  - id: estimation-review
+    label: "Estimation Review"
+    description: "How accurate are your estimates? Actionable calibration advice"
+    instructions: |
+      Run the accuracy report:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --accuracy
+
+      Then interpret the results for the user with actionable advice:
+
+      If weighted_avg_time_ratio > 1.2:
+        "Your team underestimates AI-assisted time by {ratio}x on average. Consider adding {(ratio-1)*100}% buffer to future estimates. Worst spec: {spec_name} at {worst_ratio}x."
+
+      If weighted_avg_time_ratio < 0.8:
+        "Your team overestimates AI-assisted time by {(1-ratio)*100}%. You can plan more ambitiously — estimates have {(1-ratio)*100}% slack built in."
+
+      If weighted_avg_time_ratio between 0.8 and 1.2:
+        "Your estimates are well-calibrated (accuracy ratio: {ratio}). Keep using your current estimation approach."
+
+      If no data:
+        "Not enough completed tasks with both estimates and actuals to assess accuracy. Complete more tasks with effort tracking to unlock this."
+    interactive: true
+
+  - id: stakeholder-export
+    label: "Stakeholder Export"
+    description: "Generate reports for specific audiences — manager, wiki, or CI pipeline"
+    instructions: |
+      Ask the user who the report is for:
+      "Who is this report for?
+        1. For my manager — compact dashboard summary (markdown)
+        2. For the team wiki — full project report with tables (HTML)
+        3. For CI/analytics — machine-readable data export (JSON)
+        4. Custom format and output"
+
+      For option 1:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --dashboard --format markdown --output temp/exec-summary.md
+      "Executive summary written to temp/exec-summary.md — paste into Slack or email."
+
+      For option 2:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --scope project --format html --output temp/project-report.html
+      "Project report written to temp/project-report.html — open in browser or attach to wiki."
+
+      For option 3:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --scope project --format json --output temp/value-report.json
+      "Data export written to temp/value-report.json — feed into dashboards or CI pipelines."
+
+      For option 4: ask for format and output path, then run with those flags.
+    parameters:
+      - name: audience
+        required: false
+        prompt: "Audience (1=Manager, 2=Wiki, 3=CI, 4=Custom):"
+        default: "1"
+    interactive: true
+
+  - id: cross-project
+    label: "Cross-Project Review"
+    description: "Aggregate metrics across multiple repositories for program-level reporting"
+    instructions: |
+      Collect project directory paths from the user:
+      "Enter the paths to your project directories (each should contain .kiro/specs/)."
+
+      Run cross-project aggregation:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --projects <dir1> <dir2> <dir3>
+
+      Present per-project subtotals and grand total.
+      Note which projects had missing data or parse errors.
+
+      Ask if the user wants to export:
+      "Export this report? (markdown/html/json/csv)"
+      If yes:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py --projects <dirs> --format <format> --output <path>
+    parameters:
+      - name: project_dirs
+        required: true
+        prompt: "Project directory paths (space-separated):"
+    interactive: true
+
+  - id: custom-report
+    label: "Custom Report"
+    description: "Power-user mode — build any report with full CLI flag access"
+    instructions: |
+      Ask the user what they want to see. Available dimensions:
+
+      Scopes: --scope project | --scope feature [--detail] [--spec <pattern>]
+      Modes:  --trend [--period weekly|monthly|quarterly] [--since DATE] [--until DATE]
+              --accuracy | --dashboard | --status
+              --compare <range1>,<range2>
+              --projects <dir1> <dir2>
+              --update-summary --spec <name>
+      Output: --format terminal|markdown|csv|json|html [--output <path>]
+
+      Construct the appropriate command from the user's description:
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py <flags>
+    interactive: true

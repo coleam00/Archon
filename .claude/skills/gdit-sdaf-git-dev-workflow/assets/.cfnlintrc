@@ -1,0 +1,44 @@
+# cfn-lint Configuration
+# CloudFormation template validation
+
+# Regions to validate against
+regions:
+  - us-east-1
+  - us-west-2
+
+# Rules to ignore (with justification)
+ignore_checks:
+  - E3006  # AWS::S3Files::* types GA April 2026, not yet in cfn-lint spec
+  - E3051  # False positive: SSM Document Content with iCalendar format
+  - E3012  # Type coercion: CloudFormation auto-converts strings/integers
+  - E1020  # Ref validation: Template customizer adds parameters dynamically
+  - E3024  # GetAtt validation: Template customizer adds resources dynamically
+
+# Include experimental rules (removed - invalid config key)
+
+# Configure rules
+configure_rules:
+  E2001:
+    strict: false
+  E3012:
+    strict: true
+
+# Override spec file (optional)
+# override_spec: custom-spec.json
+
+# Append rules directory (optional)
+# append_rules:
+#   - custom-rules/
+
+# Ignore templates
+ignore_templates:
+  - "**/node_modules/**"
+  - "**/.git/**"
+  - "**/test/**"
+  - "**/tests/**"
+
+# Mandatory checks (always fail)
+mandatory_checks:
+  - E1001  # Basic CloudFormation errors
+  - E2001  # Parameter errors
+  - E3001  # Resource errors

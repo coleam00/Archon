@@ -1,0 +1,50 @@
+# Gitleaks Configuration
+# Secret detection patterns
+
+title = "Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist for false positives"
+
+# Allow documentation, specs, and IDE artifacts
+paths = [
+  '''docs/.*''',
+  '''examples/.*''',
+  '''\.kiro/specs/.*''',
+  '''\.kiro/steering/.*''',
+  '''CUsers.*\.json''',
+  '''.*\.amazonq.*\.json''',
+  '''\.hive-framework-old/.*''',
+  '''gitleaks-.*\.json''',
+  '''\.security-scans/.*''',
+  '''.*python/cryptography/.*''',
+  '''.*python/jwt/.*''',
+]
+
+# Allow test fixtures and documentation placeholders
+regexes = [
+  '''<.*>''',                    # Placeholder text like <GITLAB_TOKEN>, <access-key-id>
+  '''AKIA[0-9A-Z]{16}EXAMPLE''', # Example AWS keys
+  '''glpat-x+''',                # Example GitLab PAT patterns (glpat-xxxxxxxxxxxxxxxxxxxx)
+  '''example\.com''',            # Example domains
+  '''test.*password''',          # Test passwords
+  '''something/something''',     # Placeholder webhook URLs
+  '''replace/replace''',         # Placeholder webhook URLs
+  '''mrk-[a-f0-9]{32}''',        # KMS multi-region key IDs (not secrets)
+]
+
+# Custom rules (optional - extends default)
+[[rules]]
+id = "custom-api-key"
+description = "Custom API key pattern"
+regex = '''(?i)(api[_-]?key|apikey)["\s:=]+([a-zA-Z0-9_\-]{32,})'''
+tags = ["key", "API"]
+
+[[rules]]
+id = "custom-token"
+description = "Custom token pattern"
+regex = '''(?i)(token|auth)["\s:=]+([a-zA-Z0-9_\-]{32,})'''
+tags = ["token", "auth"]

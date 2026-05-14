@@ -1,0 +1,39 @@
+# Trivy Configuration
+# Vulnerability and misconfiguration scanning
+
+# Severity levels to scan
+severity:
+  - CRITICAL
+  - HIGH
+  - MEDIUM
+
+# Scanners to enable
+scanners:
+  - vuln          # Vulnerabilities in dependencies
+  - config        # Misconfigurations
+  - secret        # Secrets (backup to gitleaks)
+
+# Vulnerability database
+db:
+  repository: ghcr.io/aquasecurity/trivy-db
+
+# Skip files/directories
+skip-files:
+  - "**/*.md"
+  - "**/test/**"
+  - "**/tests/**"
+  - "**/node_modules/**"
+  - "**/.git/**"
+
+# Skip specific vulnerabilities (with justification)
+# Format: CVE-YYYY-NNNNN
+ignorefile: .trivyignore
+
+# Output format
+format: table
+
+# Exit code
+exit-code: 1  # Fail on findings
+
+# Timeout
+timeout: 5m

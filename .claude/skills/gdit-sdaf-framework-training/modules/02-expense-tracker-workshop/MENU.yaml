@@ -1,0 +1,211 @@
+name: Expense Tracker Workshop
+description: 90-minute hands-on workshop using the GDIT spec-driven workflow
+version: "1.0"
+
+steps:
+  - id: intro
+    title: "1. Intro — What the GDIT Framework Adds (10 min)"
+    variations:
+      - label: Concise
+        prompt: |
+          Introduce the GDIT Spec-Driven AI Framework — what it adds on top of Kiro, the
+          steering files, compliance automation, and measured results.
+      - label: Minimal
+        prompt: |
+          What is the GDIT framework and how does it extend Kiro?
+    prompt: |
+      Give a concise 10-minute introduction to the GDIT Spec-Driven AI Framework for workshop
+      participants who have completed the Kiro IDE workshop (or have equivalent
+      familiarity with Kiro specs, hooks, and agents).
+
+      Key points to cover:
+      - "Kiro gives you specs, hooks, and agents. The GDIT framework is a behavioral layer on
+        top of Kiro that enforces standards automatically."
+      - 9 steering files (security, naming, cost, compliance, workflow, etc.)
+      - Compliance as a byproduct: NIST 800-218 tags in every commit
+      - Anti-theater enforcement: the audit script verifies evidence, not claims
+      - Value tracking: every task measures human LOE vs AI actual
+      - Measured results: 91.3% time savings across 129 tasks in 7 projects
+
+      End with: "Now let's see this in action. We'll build a Python CLI expense
+      tracker from pre-built specs, following the full GDIT framework workflow."
+
+  - id: spec-review
+    title: "2. Spec Review — Walk Through the Specs (15 min)"
+    variations:
+      - label: Concise
+        prompt: |
+          Walk me through the expense-tracker specs — requirements, design,
+          and tasks. Explain how they connect.
+      - label: Minimal
+        prompt: |
+          Review the expense-tracker specs at .kiro/specs/expense-tracker/.
+    prompt: |
+      The exercise specs should already be at .kiro/specs/expense-tracker/.
+      If not, tell the participant to copy them:
+        cp -r docs/training/framework-training-workshop/specs/expense-tracker .kiro/specs/
+
+      Read all three spec files and walk the participant through them:
+
+      1. requirements.md — 3 user stories (add, list, summary) with acceptance criteria
+         Point out: "These acceptance criteria become your test cases automatically."
+
+      2. design.md — Technical approach with correctness properties
+         Point out: "Correctness properties are assertions the code must satisfy.
+         Not documentation — contracts."
+
+      3. tasks.md — 3 implementation tasks with effort estimates and traceability
+         Point out: "Each task traces to requirements and design. The effort table
+         tracks human vs AI time — this is the ROI data."
+
+      Ask: "Any questions about the specs before we validate them?"
+
+  - id: validate
+    title: "3. Validate Spec (5 min)"
+    variations:
+      - label: Concise
+        prompt: |
+          Validate the expense-tracker spec and explain the results.
+      - label: Minimal
+        prompt: |
+          Run validate-spec.py on expense-tracker.
+    prompt: |
+      Run the spec validator:
+        python3 ~/.kiro/scripts/validate-spec.py .kiro/specs/expense-tracker/
+
+      Walk through the output line by line. All checks should pass (✅).
+
+      Explain what the validator checks:
+      - File completeness (all 3 spec files exist)
+      - Acceptance criteria on every requirement
+      - Correctness properties in design
+      - Bidirectional traceability (requirements ↔ design ↔ tasks)
+      - REQ coverage (every requirement has an implementing task)
+
+      Key message: "This gate must pass before any code is written. It's the
+      Definition of Ready — automated, not ceremonial."
+
+  - id: generate-tests
+    title: "4. Generate Tests (10 min)"
+    variations:
+      - label: Concise
+        prompt: |
+          Generate test-driven tests for the expense-tracker spec and run them.
+          They should fail — no implementation yet.
+      - label: Minimal
+        prompt: |
+          Generate tests for expense-tracker from the spec.
+    prompt: |
+      Generate tests for the expense-tracker spec in test-driven mode.
+
+      Read acceptance criteria from requirements.md → functional test cases.
+      Read correctness properties from design.md → unit test cases.
+      One test function per acceptance criterion.
+
+      Create tests/test_expense_tracker.py following pytest conventions.
+
+      After generating, run the tests:
+        pytest tests/test_expense_tracker.py -v
+
+      Tests should FAIL — there's no implementation yet. Explain:
+      "This is test-driven development. We write tests first from the spec,
+      then write code to make them pass. The spec drives everything."
+
+  - id: implement
+    title: "5. Implement Tasks 1-3 (30 min)"
+    variations:
+      - label: Concise
+        prompt: |
+          Implement all 3 expense-tracker tasks one at a time. Full protocol
+          for each — scans, checkpoints, audit after Task 3.
+      - label: Minimal
+        prompt: |
+          Implement all expense-tracker tasks.
+    prompt: |
+      Implement all 3 tasks from the expense-tracker spec, one at a time.
+      Follow the full GDIT framework implementation protocol for each task.
+
+      TASK 1 (10 min): Data model and JSON storage
+      - Show the protocol header (spec discovery, task identification)
+      - Create src/expense_tracker.py with load/save/create_expense functions
+      - Run security scans (semgrep, gitleaks)
+      - Create git checkpoint with Compliance: and Evidence: fields
+      - Run tests — some should now pass
+
+      TASK 2 (10 min): Add command with input validation
+      - Show OWASP compliance: input validation on amount
+      - Error handling: stderr for errors, stdout for output
+      - Git checkpoint, security scans
+
+      TASK 3 (10 min): List and summary commands
+      - Multiple requirements in one task (REQ-2 + REQ-3)
+      - Run steering compliance audit after this task
+      - Update value tracking timestamps in tasks.md
+      - All tests should now pass
+
+      After Task 3, run:
+        python3 ~/.kiro/scripts/audit-steering-compliance.py .kiro/specs/expense-tracker/
+      All 7 checks should pass.
+
+  - id: verify
+    title: "6. Verify Implementation (10 min)"
+    variations:
+      - label: Concise
+        prompt: |
+          Verify the expense-tracker implementation against the spec and
+          generate VERIFICATION.md.
+      - label: Minimal
+        prompt: |
+          Verify expense-tracker.
+    prompt: |
+      Run two-layer verification:
+        python3 ~/.kiro/scripts/validate-spec.py --verify .kiro/specs/expense-tracker/
+
+      Then perform the semantic verification pass:
+      - Read every acceptance criterion from completed REQs
+      - Read every correctness property from design.md
+      - Read the implementation files
+      - For each criterion, verify the code implements it with file:line evidence
+      - Produce per-requirement verdict: IMPLEMENTED / PARTIAL / NOT IMPLEMENTED
+
+      Generate .kiro/specs/expense-tracker/VERIFICATION.md with:
+      - Script Results section
+      - Criterion Checklist table (one row per acceptance criterion)
+      - Coverage Summary
+
+      Explain: "Every acceptance criterion has traced evidence. This is
+      anti-theater — you can't claim 'it works' without proof."
+
+  - id: wrapup
+    title: "7. Wrap-Up (10 min)"
+    variations:
+      - label: Concise
+        prompt: |
+          Show the expense-tracker effort table and calculate savings.
+      - label: Minimal
+        prompt: |
+          Show the value tracking results.
+    prompt: |
+      Show the completed effort table in tasks.md with actual values.
+
+      Calculate and present the savings:
+      - Traditional Human LOE total vs AI-Assisted Actual total
+      - Percentage savings
+      - "This data feeds sprint planning and ROI reports via the
+        value-reporting skill."
+
+      Let the participant try the expense tracker:
+        python3 src/expense_tracker.py add --amount 12.50 --category food --description "Lunch"
+        python3 src/expense_tracker.py add --amount 8.00 --category transport --description "Bus"
+        python3 src/expense_tracker.py list
+        python3 src/expense_tracker.py summary
+
+      Reinforce the 5 key takeaways:
+      1. Specs before code
+      2. Compliance as byproduct
+      3. Anti-theater enforcement
+      4. Value tracking
+      5. Consistency across sessions and developers
+
+      End with: "You've completed the full GDIT framework workflow. Type 'back' to
+      return to the training hub."

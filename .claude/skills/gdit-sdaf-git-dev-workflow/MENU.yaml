@@ -1,0 +1,142 @@
+---
+skill_name: git-dev-workflow
+menu_version: "1.0"
+description: Simplified Git workflow that handles branching, syncing, security checks, and code submission for you
+python_version: ">=3.12"
+
+workflows:
+  - id: pre-commit-validate
+    label: "Run Security Checks (pre-commit validation)"
+    description: "Scan your code changes for security issues, secrets, and common errors before saving them (runs linters and SAST on staged changes)"
+    instructions: |
+      Scans all your pending code changes for problems before you commit.
+      Automatically installs any missing scanning tools.
+
+      What it checks:
+      - Accidentally committed passwords or API keys
+      - Common security vulnerabilities in your code
+      - Python code quality and type errors
+      - Infrastructure template errors (CloudFormation, Terraform)
+
+      If problems are found, it tells you exactly what to fix.
+
+      Run: python3 scripts/pre-commit-validate.py --install-missing
+    parameters: []
+
+  - id: commit-and-mr
+    label: "Save and Submit Changes (commit, push, and open merge/pull request)"
+    description: "Save your code changes and submit them for review (git add -A, git commit, git push, create MR/PR to main)"
+    instructions: |
+      Takes all your local changes and submits them for team review.
+
+      CRITICAL: ALWAYS use the script below to commit. NEVER run raw
+      git add/commit/push commands directly. The script uses `git add -A`
+      which correctly stages all changes including file deletions and
+      renames. Running `git add` on individual files misses deletes and
+      causes the IDE to show phantom uncommitted changes.
+
+      What it does:
+      1. Runs security checks on your changes first
+      2. Saves all your changes (new files, edits, and deletions)
+      3. Uploads them to the remote repository
+      4. Opens a review request so your team can approve the changes
+      5. Gives you a link to the review
+
+      If no commit message is provided, one is generated automatically.
+      The review request title defaults to the commit message.
+
+      Requires: A Git repository with a remote (GitHub, GitLab, Bitbucket, etc.)
+      Run: python3 scripts/commit-and-mr.py
+    parameters:
+      - name: commit_message
+        required: false
+        prompt: "Briefly describe what you changed (or press Enter to auto-generate):"
+
+  - id: install-scanners
+    label: "Install Security Tools (SAST, SCA, and linting scanners)"
+    description: "Install all the scanning tools needed for security checks — one-time setup (gitleaks, semgrep, trivy, cfn-lint, checkov, ruff, pyright)"
+    instructions: |
+      One-time setup that installs all the tools used by the security
+      checks workflow. You only need to run this once, or if tools
+      are missing.
+
+      Tools installed:
+      - gitleaks (finds accidentally committed secrets)
+      - semgrep (finds security vulnerabilities in code)
+      - trivy (finds vulnerable dependencies)
+      - cfn-lint (validates CloudFormation templates)
+      - cfn-guard (checks CloudFormation against policies)
+      - checkov (checks infrastructure-as-code security)
+      - ruff (Python code quality)
+      - pyright (Python type checking)
+      - KICS (infrastructure scanning - optional)
+
+      Run: python3 scripts/install-scanners.py
+    parameters: []
+
+  - id: sync-with-main
+    label: "Get Latest Changes (git fetch, pull, and rebase on main)"
+    description: "Update your local branch with the latest code from your team — run this at the start of each day (git fetch, git pull, git rebase main)"
+    instructions: |
+      Start-of-day routine that makes sure you're working with the
+      latest code. Pulls any updates your teammates have pushed and
+      brings in the latest approved changes from the main branch.
+
+      What it does:
+      1. Downloads the latest code from the remote repository
+      2. Updates your branch with your team's recent changes
+      3. Safely sets aside any work-in-progress if needed
+      4. Brings in the latest approved code from the main branch
+      5. Restores your work-in-progress
+      6. Uploads the updated branch
+
+      If there are conflicting changes, it will stop and tell you
+      what needs to be resolved.
+
+      Run: python3 scripts/sync-with-main.py
+    parameters: []
+
+  - id: cleanup-branches
+    label: "Clean Up Old Branches (delete merged branches)"
+    description: "Remove branches that have already been reviewed and merged — keeps your local repository tidy (git branch -d on merged branches)"
+    instructions: |
+      When you submit code for review and it gets approved and merged,
+      the branch you worked on is no longer needed. Over time these
+      old branches pile up. This cleans them out.
+
+      By default, this does a preview first (no actual deletions) so
+      you can see what would be removed. The script will list the
+      branches and ask before deleting anything.
+
+      What it does:
+      1. Finds branches whose changes have already been merged
+      2. Skips your current branch and the main branch (never touches those)
+      3. Shows you the list of branches that can be safely removed
+      4. Removes them after confirmation
+
+      Run: python3 scripts/cleanup-merged-branches.py --dry-run
+    parameters: []
+
+  - id: manage-credentials
+    label: "Set Up Git Login (git credential management)"
+    description: "Configure or fix your Git authentication so pushing and pulling works (HTTPS credential store)"
+    instructions: |
+      Manages your Git login credentials for connecting to remote
+      repositories over HTTPS. Use this if pushing or pulling fails
+      with an authentication error, or for first-time setup.
+
+      Common operations:
+      - setup: Guided first-time configuration (start here)
+      - test: Check if your current credentials work
+      - list: See which credentials are stored (tokens are hidden)
+
+      If the agent encounters a push authentication failure:
+      1. Ask the user for their git provider token
+      2. Run: python3 scripts/manage-credentials.py set <remote-url> --username <user> --token <provided-token>
+      3. Retry the push
+
+      Run: python3 scripts/manage-credentials.py setup
+    parameters:
+      - name: operation
+        required: false
+        prompt: "What do you need? (setup / test / list — default: setup):"

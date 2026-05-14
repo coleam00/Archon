@@ -1,0 +1,53 @@
+{
+  "timestamp": "2025-10-16T16:35:28.976062",
+  "account_id": "562239682396",
+  "region": "us-east-1",
+  "total_users": 6,
+  "users_with_mfa": 2,
+  "users_without_mfa": 4,
+  "users": [
+    {
+      "username": "araza",
+      "has_mfa": false,
+      "mfa_count": 0,
+      "has_console_access": true,
+      "compliant": false
+    },
+    {
+      "username": "bwhitenight",
+      "has_mfa": false,
+      "mfa_count": 0,
+      "has_console_access": true,
+      "compliant": false
+    },
+    {
+      "username": "jdill",
+      "has_mfa": false,
+      "mfa_count": 0,
+      "has_console_access": true,
+      "compliant": false
+    },
+    {
+      "username": "mmcfadden",
+      "has_mfa": false,
+      "mfa_count": 0,
+      "has_console_access": true,
+      "compliant": false
+    },
+    {
+      "username": "tmoore",
+      "has_mfa": true,
+      "mfa_count": 2,
+      "has_console_access": true,
+      "compliant": true
+    },
+    {
+      "username": "tperson",
+      "has_mfa": true,
+      "mfa_count": 1,
+      "has_console_access": true,
+      "compliant": true
+    }
+  ],
+  "compliance_rate": 33.33333333333333
+}

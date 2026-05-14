@@ -1,0 +1,424 @@
+# Pipeline Profile: AWS CodePipeline — Full SSDF (Auto-Resolution + Deploy-and-Test)
+# A comprehensive 9–10 stage release pipeline with 7 security scanners,
+# Security Hub integration with automated finding resolution, conditional
+# deploy-and-test stage, DigiCert X.509 code signing, SBOM, and manual
+# approval gate.
+# Based on the SSDF Cloud-Native Pipeline reference implementation.
+# Variation of codepipeline-full-35a62: added finding auto-resolution,
+# conditional deploy-and-test stage, S3CrossAccount/CodeCommit source modes,
+# consolidated security report with SNS email delivery.
+
+profile:
+  id: codepipeline-full-c675d
+  name: "AWS CodePipeline — Full SSDF (Auto-Resolution + Deploy-and-Test)"
+  description: "9–10 stage CodePipeline with 7 scanners, Security Hub auto-resolution, conditional deploy-and-test, DigiCert signing, SBOM, approval gate"
+  ci_platform: codepipeline
+  iac_type: cloudformation
+  ssdf_coverage: "23 of 25 applicable technical sub-practices (92%). Deploy-and-test stage available but disabled by default — PW.8.1/PW.8.2 remain gaps until enabled."
+  base_profile: codepipeline-full-35a62
+  change_summary: |
+    From 35a62:
+    - Added finding auto-resolution: manifest tracking, BatchUpdateFindings RESOLVED,
+      CloudWatch audit log, resolution details in email report
+    - Added conditional deploy-and-test stage (Stage 6, default disabled):
+      CFN stack deploy to test env, pytest execution, JUnit reporting,
+      test results in compliance attestation
+    - Added S3CrossAccount source mode (IAM Roles Anywhere) and CodeCommit direct mode
+    - Added consolidated security report (Markdown) and SNS email delivery in Stage 2
+    - Stage renumbering when deploy-and-test enabled: ComplianceDocs→7, Approval→8, Finalization→9
+
+pipeline_stages:
+  - name: "Source Ingestion"
+    stage_number: 0
+    purpose: "Feature-switched source sync to CodeCommit (GitLabSync, S3CrossAccount, or CodeCommit direct)"
+    tools: ["git"]
+    source_modes:
+      - mode: "GitLabSync"
+        description: "Clone GitLab repo via HTTPS, push to CodeCommit mirror"
+        tools: ["git", "secrets-manager"]
+        parameters: ["GitLabURL", "GitLabUsername", "GitLabSecretName"]
+      - mode: "S3CrossAccount"
+        description: "Download ZIP from cross-account/cross-partition S3 via IAM Roles Anywhere, push to CodeCommit"
+        tools: ["iam-rolesanywhere-session", "git"]
+        parameters: ["SourceS3Bucket", "SourceS3Key", "RolesAnywhereRoleArn", "RolesAnywhereTrustAnchorArn", "RolesAnywhereProfileArn", "RolesAnywhereCertSecretName", "RolesAnywhereKeySecretName"]
+      - mode: "CodeCommit"
+        description: "No Stage 0 resources — code pushed directly to CodeCommit"
+        tools: []
+        parameters: []
+    artifacts:
+      - file: "CodeCommit push logs"
+        tool: "git"
+        description: "Git sync audit trail"
+    blocks_on_failure: true
+    nist_mapping: ["PO.3.1", "PS.1.1"]
+
+  - name: "Source"
+    stage_number: 1
+    purpose: "CodeCommit source with S3 versioned artifacts"
+    tools: ["codecommit"]
+    artifacts:
+      - file: "S3 source artifact"
+        tool: "codecommit"
+        description: "Versioned source snapshot with S3 version ID"
+    blocks_on_failure: true
+    nist_mapping: ["PS.1.1", "PS.3.1"]
+
+  - name: "SecurityValidation"
+    stage_number: 2
+    purpose: "7-tool security and code quality scanning with fail-fast control gate, Security Hub publishing with auto-resolution, consolidated report with SNS email"
+    tools: ["gitleaks", "semgrep", "trivy", "checkov", "kics", "cfn-lint", "ruff", "security-hub-publisher-lambda"]
+    artifacts:
+      - file: "gitleaks-report.json"
+        tool: "gitleaks"
+        description: "Secret detection results"
+      - file: "semgrep-report.json"
+        tool: "semgrep"
+        description: "SAST findings for OWASP Top 10, CWE Top 25"
+      - file: "trivy-report.json"
+        tool: "trivy"
+        description: "SCA vulnerability scan results (HIGH/CRITICAL)"
+      - file: "checkov-report.json"
+        tool: "checkov"
+        description: "IaC security scan results"
+      - file: "kics-report.json"
+        tool: "kics"
+        description: "IaC security scan results"
+      - file: "cfn-lint-report.json"
+        tool: "cfn-lint"
+        description: "CloudFormation syntax validation"
+      - file: "ruff-report.json"
+        tool: "ruff"
+        description: "Code quality findings (Pyflakes, bugbear, pyupgrade, comprehensions, isort, pycodestyle). MEDIUM severity, non-blocking."
+      - file: "control-gate-decision.json"
+        tool: "pipeline-logic"
+        description: "Pass/fail decision aggregating all scanner results with Security Hub status correlation"
+      - file: "consolidated-security-report.md"
+        tool: "pipeline-logic"
+        description: "Single Markdown report consolidating all 7 scanner findings with severity breakdown, control gate decision, and resolved findings section"
+      - file: "security-hub-manifest/active-findings.json"
+        tool: "security-hub-publisher-lambda"
+        description: "Active findings manifest in S3 for resolution tracking"
+    blocks_on_failure: true
+    nist_mapping: ["PO.1.1", "PW.4.2", "PW.4.4", "PW.5.1", "PW.6.1", "PW.6.2", "PW.7.1", "PW.7.2", "RV.1.1", "RV.1.2", "RV.3.1", "RV.3.2"]
+
+  - name: "SecurityHubQuery"
+    stage_number: 3
+    purpose: "Query Security Hub for existing findings, trend analysis"
+    tools: ["security-hub-api"]
+    artifacts:
+      - file: "security-hub-report.md"
+        tool: "security-hub-api"
+        description: "Security Hub findings and trend analysis"
+    blocks_on_failure: false
+    nist_mapping: ["RV.1.1", "RV.2.1", "RV.2.2", "RV.3.1"]
+
+  - name: "LambdaPackaging"
+    stage_number: 4
+    purpose: "Compile bytecode, package functions and layers, generate SBOM"
+    tools: ["python-compile", "syft"]
+    artifacts:
+      - file: "lambda-packages/*.zip"
+        tool: "python-compile"
+        description: "Compiled and packaged Lambda functions"
+      - file: "sbom-{version}.json"
+        tool: "syft"
+        description: "Software Bill of Materials in SPDX format"
+    blocks_on_failure: true
+    nist_mapping: ["PW.1.3", "PW.4.1", "PW.6.1", "PS.3.2"]
+
+  - name: "S3Upload"
+    stage_number: 5
+    purpose: "Upload artifacts with DigiCert X.509 signatures (production) and SHA-256 checksums"
+    tools: ["digicert", "sha256sum"]
+    artifacts:
+      - file: "release-manifest.json"
+        tool: "pipeline-logic"
+        description: "Release manifest listing all packaged artifacts"
+      - file: "release-manifest.json.sig"
+        tool: "digicert"
+        description: "DigiCert X.509 detached signature for release manifest (production)"
+      - file: "checksums.txt"
+        tool: "sha256sum"
+        description: "SHA-256 checksums for all artifacts"
+    blocks_on_failure: true
+    nist_mapping: ["PS.2.1", "PS.3.1"]
+
+  - name: "DeployAndTest"
+    stage_number: 6
+    purpose: "Deploy application CFN stack to test environment, run automated test suite as toll gate"
+    conditional: true
+    condition_parameter: "EnableDeployAndTest"
+    condition_default: "false"
+    tools: ["cloudformation", "pytest"]
+    actions:
+      - name: "DeployTestStack"
+        purpose: "aws cloudformation deploy to ${PipelineName}-test-stack"
+        tools: ["cloudformation"]
+        artifacts:
+          - file: "stack-outputs.json"
+            tool: "cloudformation"
+            description: "Stack outputs (endpoints, ARNs) for test runner"
+      - name: "RunTestSuite"
+        purpose: "pytest tests/pipeline/ -m pipeline with JUnit XML output"
+        tools: ["pytest"]
+        artifacts:
+          - file: "test-results/results.xml"
+            tool: "pytest"
+            description: "JUnit XML test results"
+          - file: "test-results/report.json"
+            tool: "pytest-json-report"
+            description: "JSON test report with detailed results"
+    artifacts:
+      - file: "test-results/results.xml"
+        tool: "pytest"
+        description: "JUnit XML test results uploaded to S3 and CodeBuild test report group"
+      - file: "stack-outputs.json"
+        tool: "cloudformation"
+        description: "Deployed test stack outputs"
+    blocks_on_failure: true
+    nist_mapping: ["PW.8.1", "PW.8.2", "PW.6.2"]
+    compliance_note: "This stage is conditional (EnableDeployAndTest=false by default). PW.8.1 and PW.8.2 compliance requires this stage to be enabled. When disabled, these sub-practices remain gaps."
+
+  - name: "ComplianceDocs"
+    stage_number: "7 (6 when deploy-and-test disabled)"
+    purpose: "Generate compliance attestation and security reports, including test results when available"
+    tools: ["python-inline"]
+    artifacts:
+      - file: "compliance-attestation.md"
+        tool: "python-inline"
+        description: "Formal compliance attestation document, includes PW.8 test results section when deploy-and-test enabled"
+      - file: "security-scan-report.md"
+        tool: "python-inline"
+        description: "Aggregated security scan summary"
+      - file: "release-notes.md"
+        tool: "python-inline"
+        description: "Release notes with security findings summary"
+    blocks_on_failure: true
+    nist_mapping: ["PO.1.3", "PW.9.2"]
+
+  - name: "Approval"
+    stage_number: "8 (7 when deploy-and-test disabled)"
+    purpose: "Manual approval gate with SNS notification"
+    tools: ["codepipeline-approval", "sns"]
+    artifacts:
+      - file: "approval-record"
+        tool: "codepipeline-approval"
+        description: "Manual approval decision with approver identity and timestamp"
+    blocks_on_failure: true
+    nist_mapping: ["PO.3.2", "PW.2.1"]
+
+  - name: "Finalization"
+    stage_number: "9 (8 when deploy-and-test disabled)"
+    purpose: "Archive release metadata and finalize"
+    tools: ["s3-sync"]
+    artifacts:
+      - file: "release-metadata.json"
+        tool: "s3-sync"
+        description: "Final release metadata with version, timestamps, artifact inventory"
+    blocks_on_failure: true
+    nist_mapping: ["PS.3.1", "PS.3.2"]
+
+security_scanning:
+  sast:
+    enabled: true
+    tool: "semgrep"
+    rulesets: ["security-audit", "owasp-top-ten", "cwe-top-25", "best-practices"]
+    severity_threshold: "ERROR"
+    report_format: "json"
+    command: "semgrep --config=p/security-audit --config=p/owasp-top-ten --config=p/cwe-top-25 --config=p/best-practices --severity=ERROR --json --output=semgrep-report.json src/ infrastructure/"
+
+  secrets_detection:
+    enabled: true
+    tool: "gitleaks"
+    blocks_pipeline: true
+    command: "gitleaks detect --source=. --no-git --report-path=gitleaks-report.json"
+
+  sca:
+    enabled: true
+    tool: "trivy"
+    severity_threshold: "HIGH,CRITICAL"
+    command: "trivy fs --security-checks vuln,config --severity HIGH,CRITICAL --format json --output trivy-report.json src/ infrastructure/"
+
+  iac_scanning:
+    enabled: true
+    tools:
+      - name: "checkov"
+        command: "checkov -d infrastructure/ --framework cloudformation --framework dockerfile --check-severity HIGH,CRITICAL --quiet --output json --output-file checkov-report.json"
+      - name: "kics"
+        command: "docker run --rm -v $CODEBUILD_SRC_DIR:/path ${KICS_IMAGE_URI} scan -p /path/infrastructure/cloudformation --report-formats json --output-path /path --output-name kics-report"
+      - name: "cfn-lint"
+        command: "cfn-lint infrastructure/cloudformation/*.yml --format json"
+      - name: "cfn-guard"
+        command: "cfn-guard validate --data infrastructure/cloudformation/*.yml --rules .kiro/config/cfn-guard-rules.guard"
+
+  code_quality:
+    enabled: true
+    tool: "ruff"
+    version: "0.11.6"
+    rule_categories: "F,B,UP,C4,I,E"
+    severity: "MEDIUM"
+    blocks_pipeline: false
+    report_format: "json"
+    command: "ruff check --select F,B,UP,C4,I,E --output-format json src/ infrastructure/ > ruff-report.json || true"
+
+  dast:
+    enabled: false
+
+  container_scanning:
+    enabled: false
+
+infrastructure:
+  encryption_at_rest: true
+  encryption_in_transit: true
+  vpc_isolation: true
+  least_privilege_iam: true
+  secrets_management:
+    enabled: true
+    service: "aws-secrets-manager"
+  logging:
+    enabled: true
+    service: "cloudwatch"
+    retention_days: 90
+
+integrity:
+  code_signing:
+    enabled: true
+    production:
+      method: "digicert"
+      certificate_type: "X.509"
+      description: "DigiCert third-party CA code signing certificate for production releases"
+    non_production:
+      methods: ["gpg", "none"]
+      description: "GPG signing or no signing for non-production environments"
+  checksums:
+    enabled: true
+    algorithm: "sha256"
+  sbom:
+    enabled: true
+    format: "spdx"
+    tool: "syft"
+  release_manifest:
+    enabled: true
+
+vulnerability_management:
+  tracking_system: "security-hub"
+  severity_scoring: "normalized"
+  auto_resolution:
+    enabled: true
+    mechanism: "lambda"
+    description: "SecurityHubPublisherFunction compares current scan findings against active manifest, auto-resolves findings no longer detected via BatchUpdateFindings(Workflow=RESOLVED)"
+    manifest:
+      location: "s3://${ArtifactBucket}/security-hub-manifest/active-findings.json"
+      format: "json"
+      description: "Persistent manifest tracking all active Security Hub findings with metadata (tool, rule, file, severity, first_seen, pipeline_runs_active)"
+    audit_log:
+      log_group: "/aws/security-hub/${PipelineName}/auto-resolution"
+      retention_days: 365
+      event_format: "structured-json"
+      description: "Dedicated CloudWatch log group for resolution audit trail — one stream per Lambda invocation"
+    email_integration:
+      enabled: true
+      description: "Resolved findings included in consolidated security report and SNS email. Subject line includes resolved count."
+    verification:
+      enabled: true
+      description: "GetFindings called after BatchUpdateFindings to confirm resolution. Only confirmed resolutions removed from manifest."
+    batching:
+      max_per_call: 100
+      backoff: "exponential (1s, 2s, 4s, max 3 retries)"
+  sla_defined: false
+
+notification:
+  consolidated_report:
+    enabled: true
+    format: "markdown"
+    artifact: "consolidated-security-report.md"
+    description: "Single report consolidating all 7 scanner findings with severity breakdown, control gate decision, and resolved findings section"
+  sns_email:
+    enabled: true
+    description: "Consolidated report published to SNS topic as message body. Subject includes pipeline name, version, gate decision, and resolved count."
+    condition: "NotificationEmail parameter is set"
+
+testing:
+  deploy_and_test:
+    enabled: false
+    description: "Conditional pipeline stage (EnableDeployAndTest parameter, default false). When enabled, deploys application CFN stack to isolated test environment and runs pytest suite as toll gate."
+    deploy_action:
+      tool: "cloudformation"
+      stack_name: "${PipelineName}-test-stack"
+      description: "aws cloudformation deploy with --no-fail-on-empty-changeset, exports stack outputs as artifact"
+    test_action:
+      tool: "pytest"
+      test_path: "tests/pipeline/"
+      marker: "@pytest.mark.pipeline"
+      output_format: "junitxml"
+      report_group: "CodeBuild test report group (JUnit XML)"
+      description: "pytest tests/pipeline/ -v -m pipeline --junitxml=test-results/results.xml"
+    test_environment_isolation:
+      stack_suffix: "-test-stack"
+      resource_tagging: "Environment=test, PipelineName=${PipelineName}"
+      iam_scoping: "DeployTestStackRole scoped to test stack, RunTestsRole scoped to test-tagged resources"
+    compliance_integration:
+      enabled: true
+      description: "Test results (JUnit XML) passed to ComplianceDocs stage as TestResults artifact. Compliance attestation includes PW.8 test summary and requirement traceability."
+    parameters:
+      - name: "EnableDeployAndTest"
+        default: "false"
+        description: "Controls whether deploy-and-test stage is created"
+      - name: "TestStackTemplatePath"
+        description: "S3 key for application CFN template"
+      - name: "TestStackParameters"
+        default: "{}"
+        description: "JSON string of stack parameter overrides"
+      - name: "TestTimeout"
+        default: 30
+        description: "Test execution timeout in minutes"
+      - name: "TeardownTestStack"
+        default: "false"
+        description: "Delete test stack after tests pass"
+
+processes:
+  peer_code_review:
+    enabled: false
+  design_review:
+    enabled: false
+  secure_coding_guidelines:
+    enabled: true
+    document_path: ".kiro/steering/security-compliance.md"
+  threat_modeling:
+    enabled: false
+  security_training:
+    enabled: false
+  change_advisory_board:
+    enabled: false
+  incident_response:
+    enabled: false
+
+approval:
+  manual_approval_required: true
+  approval_mechanism: "codepipeline-approval"
+  notification_method: "sns"
+
+known_gaps:
+  - sub_practice: "PW.8.1"
+    description: "Deploy-and-test stage exists but is disabled by default (EnableDeployAndTest=false). No DAST or fuzzing. When enabled, pytest suite runs against deployed stack. Compliance requires enabling the stage."
+    conditional_closure: "Enable deploy-and-test stage (EnableDeployAndTest=true) to partially close. DAST/fuzzing still not covered."
+  - sub_practice: "PW.8.2"
+    description: "Deploy-and-test stage exists but is disabled by default (EnableDeployAndTest=false). When enabled, pipeline deploys CFN stack and runs executable tests against live infrastructure. Compliance requires enabling the stage."
+    conditional_closure: "Enable deploy-and-test stage (EnableDeployAndTest=true) to close."
+  - sub_practice: "PW.1.1"
+    description: "No formal threat model"
+  - sub_practice: "PW.1.2"
+    description: "No formal risk register"
+  - sub_practice: "PW.2.1"
+    description: "No peer design review (automated only)"
+  - sub_practice: "PW.7.1"
+    description: "No peer code review (automated only)"
+
+pipeline_docs:
+  requirements: "requirements.md"
+  tasks: "tasks.md"
+  architecture: "ARCHITECTURE.md"
+steering_rules:
+  - ".kiro/steering/security-compliance.md"
+  - ".kiro/steering/infrastructure-standards.md"
+  - ".kiro/steering/naming-conventions.md"

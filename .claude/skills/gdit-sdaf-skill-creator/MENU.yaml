@@ -1,0 +1,197 @@
+---
+skill_name: skill-creator
+menu_version: "1.0"
+description: Create and validate skills with guided workflows
+python_version: ">=3.12"
+
+workflows:
+  - id: create-skill
+    label: "Create New Skill"
+    description: "Initialize a new skill with templates"
+    instructions: |
+      Create a new skill directory with templates.
+      
+      Steps:
+      1. Prompt for skill name (will be normalized to hyphen-case)
+      2. Prompt for output path (e.g., .kiro/skills)
+      3. Ask if MENU.yaml is needed (for multi-workflow skills)
+      4. Ask which resources to create (scripts, references, assets)
+      5. Ask if example files should be included
+      6. Run init_skill.py with collected parameters
+      7. Display next steps for customization
+      
+      Run: python3 scripts/init_skill.py <skill-name> --path <path> [--menu] [--resources <list>] [--examples]
+    parameters:
+      - name: skill_name
+        required: true
+        prompt: "Skill name (will be normalized to hyphen-case)"
+      - name: output_path
+        required: true
+        prompt: "Output directory path"
+        default: ".kiro/skills"
+      - name: include_menu
+        required: false
+        prompt: "Include MENU.yaml template? (y/n)"
+      - name: resources
+        required: false
+        prompt: "Resources to create (comma-separated: scripts,references,assets)"
+      - name: include_examples
+        required: false
+        prompt: "Include example files? (y/n)"
+  
+  - id: validate-skill
+    label: "Validate Skill"
+    description: "Check skill structure and frontmatter"
+    instructions: |
+      Validate a skill directory for common issues.
+      
+      Steps:
+      1. List all subdirectories in .kiro/skills/
+      2. Present as numbered menu
+      3. User selects skill by number
+      4. Run validation on selected skill
+      
+      Checks:
+      - SKILL.md exists
+      - Valid YAML frontmatter format
+      - Required fields present (name, description)
+      - Name follows hyphen-case convention
+      - Name length within limits (64 chars)
+      - Description length within limits (1024 chars)
+      - No unexpected frontmatter fields
+      
+      Run: python3 scripts/quick_validate.py .kiro/skills/<selected-skill>
+    parameters: []
+  
+  - id: understand-skill
+    label: "Understand Skill Requirements"
+    description: "Gather concrete examples before creating skill"
+    instructions: |
+      Before creating a skill, understand its usage with concrete examples.
+      
+      Questions to ask:
+      1. What functionality should this skill support?
+      2. Can you give examples of how this skill would be used?
+      3. What would a user say that should trigger this skill?
+      4. What workflows or procedures should be included?
+      
+      Avoid overwhelming users - ask most important questions first.
+      
+      Conclude when there's clear sense of functionality needed.
+      
+      This is Step 1 of the skill creation process.
+    parameters: []
+  
+  - id: plan-resources
+    label: "Plan Skill Resources"
+    description: "Identify scripts, references, and assets needed"
+    instructions: |
+      Analyze concrete examples to identify reusable resources.
+      
+      For each example, consider:
+      1. What code gets rewritten repeatedly? -> scripts/
+      2. What documentation should be referenced? -> references/
+      3. What templates/assets are used in output? -> assets/
+      
+      Create list of resources to include in skill.
+      
+      This is Step 2 of the skill creation process.
+    parameters: []
+
+  - id: update-skill
+    label: "Update Existing Skill"
+    description: "Guided update of an existing skill's content and resources"
+    instructions: |
+      Update an existing skill with guided workflow.
+      
+      Steps:
+      1. List all subdirectories in ~/.kiro/skills/ as numbered menu
+      2. User selects skill by number
+      3. Read selected skill's SKILL.md, MENU.yaml (if exists), and list resource directories
+      4. Present structure summary: name, description length, workflow count, resource dirs
+      5. Offer update categories:
+         - Frontmatter (name, description, metadata fields)
+         - SKILL.md body (instructions, examples, progressive disclosure)
+         - MENU.yaml workflows (add/modify/remove workflows)
+         - Scripts (add/modify/remove in scripts/)
+         - References (add/modify/remove in references/)
+         - Assets (add/modify/remove in assets/)
+      6. User selects category (or multiple)
+      7. Perform updates based on user guidance
+      8. Run validation after updates: python3 scripts/quick_validate.py ~/.kiro/skills/<selected-skill>
+      
+      Rules:
+      - Preserve existing content not targeted for update
+      - Never change the skill name (breaks cache references)
+      - Retain existing workflow IDs when adding new workflows to MENU.yaml
+      - Only create/remove resource directories when explicitly requested
+    parameters: []
+
+  - id: review-skill
+    label: "Review Skill Quality"
+    description: "Agent-driven quality review beyond structural validation"
+    interactive: false
+    instructions: |
+      Perform a quality review of an existing skill.
+      
+      Steps:
+      1. List all subdirectories in ~/.kiro/skills/ as numbered menu
+      2. User selects skill by number
+      3. Read the skill's SKILL.md, MENU.yaml, and list scripts/references/assets
+      4. Evaluate against quality checklist:
+      
+      Description Quality:
+      - Is description specific enough to trigger correctly?
+      - Does it include "when to use" scenarios?
+      - Is it between 50-1024 characters?
+      
+      Progressive Disclosure:
+      - Is SKILL.md body under 500 lines?
+      - Are large reference files structured with TOC?
+      - Is information split appropriately between SKILL.md and references?
+      
+      Script Quality:
+      - Do scripts support --help flag?
+      - Do scripts support non-interactive mode (CLI flags)?
+      - Do scripts use emoji output + stderr for errors?
+      - Do scripts handle KeyboardInterrupt?
+      
+      Completeness:
+      - Are there remaining [TODO markers?
+      - Do all script references in MENU.yaml point to existing files?
+      - Does the skill have metadata (author, version)?
+      
+      5. Present findings as actionable feedback with specific suggestions
+      6. Run quick_validate.py for structural confirmation:
+         python3 scripts/quick_validate.py ~/.kiro/skills/<selected-skill>
+    parameters: []
+
+  - id: tutorial
+    label: "End-to-End Tutorial (~30 min)"
+    description: "Guided tutorial: create a skill using the full GDIT spec-driven workflow"
+    interactive: false
+    instructions: |
+      Run the end-to-end skill creation tutorial.
+
+      This tutorial walks through creating a complete skill using the framework
+      spec-driven development workflow (requirements → design → tasks → implement → validate).
+      It takes ~30 minutes and produces a real, functional greeting-skill.
+
+      Steps:
+      1. Read references/tutorial.md for the full walkthrough
+      2. Guide the user through each phase, pausing for their input
+      3. At Phase 5, run: python3 ~/.kiro/scripts/validate-spec.py .kiro/specs/greeting-skill/
+      4. At Phase 6, run: python3 scripts/init_skill.py greeting-skill --path ~/.kiro/skills --resources scripts,references --menu
+      5. At Phase 6, run security scans on the created script (ruff, gitleaks)
+      6. At Phase 7, run: python3 scripts/quick_validate.py ~/.kiro/skills/greeting-skill
+
+      The tutorial creates a real skill (greeting-skill) that the user keeps.
+      After completion, suggest they delete it or customize it further.
+    parameters: []
+
+# AI Usage Instructions:
+# When user says "load skill-creator skill":
+# 1. Present 7 workflows as numbered menu
+# 2. When user selects workflow, show instructions
+# 3. Prompt for required parameters
+# 4. Execute via specified command

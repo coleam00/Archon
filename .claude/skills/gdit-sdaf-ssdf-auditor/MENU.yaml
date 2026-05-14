@@ -1,0 +1,27 @@
+name: ssdf-auditor
+description: Query and report SSDF compliance evidence
+workflows:
+  - id: coverage-matrix
+    name: Coverage Matrix
+    description: Full T1/T2 compliance coverage matrix (start here)
+    steps:
+      - action: "Run: python3 ~/.kiro/skills/ssdf-auditor/scripts/coverage_matrix.py --specs-dir .kiro/specs/"
+
+  - id: gap-report
+    name: Gap Report
+    description: Practices with missing or incomplete evidence
+    steps:
+      - action: "Run: python3 ~/.kiro/skills/ssdf-auditor/scripts/gap_report.py --specs-dir .kiro/specs/"
+
+  - id: query-practice
+    name: Query Practice
+    description: Deep-dive into evidence for a specific sub-practice
+    steps:
+      - prompt: "Which SSDF sub-practice do you want to query? (e.g., PW.1.1)"
+        action: "Run: python3 ~/.kiro/skills/ssdf-auditor/scripts/query_practice.py {input} --specs-dir .kiro/specs/"
+
+  - id: attestation-check
+    name: Attestation Check
+    description: Verify readiness to sign CISA SSDF attestation form
+    steps:
+      - action: "Run: python3 ~/.kiro/skills/ssdf-auditor/scripts/attestation_check.py --specs-dir .kiro/specs/"
