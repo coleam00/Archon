@@ -2132,6 +2132,36 @@ nodes:
       }
     });
 
+    it('should parse loop node with until_file shorthand', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'loop-until-file.yaml'),
+        `
+name: loop-until-file
+description: Loop with file sentinel
+nodes:
+  - id: my-loop
+    loop:
+      prompt: "Work until .archon/done.txt exists."
+      until: COMPLETE
+      max_iterations: 5
+      until_file: "done.txt"
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+      const wf = result.workflows[0].workflow;
+      expect(isLoopNode(wf.nodes[0])).toBe(true);
+      if (isLoopNode(wf.nodes[0])) {
+        expect(wf.nodes[0].loop.until_file).toBe('done.txt');
+        expect(wf.nodes[0].loop.until_bash).toBeUndefined();
+      }
+    });
+
     it('should parse minimal loop node (only required fields)', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });
@@ -2158,6 +2188,7 @@ nodes:
       if (isLoopNode(wf.nodes[0])) {
         expect(wf.nodes[0].loop.fresh_context).toBe(true);
         expect(wf.nodes[0].loop.until_bash).toBeUndefined();
+        expect(wf.nodes[0].loop.until_file).toBeUndefined();
       }
     });
 

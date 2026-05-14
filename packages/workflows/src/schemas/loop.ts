@@ -15,6 +15,13 @@ export const loopNodeConfigSchema = z
     fresh_context: z.boolean().default(true),
     /** Optional bash script run after each iteration; exit 0 = complete. */
     until_bash: z.string().optional(),
+    /**
+     * Shorthand file-sentinel: loop completes when `.archon/<path>` exists.
+     * Expands to `until_bash: "test -f .archon/<path>"` at execution time.
+     * Prefer this over plain `until:` tokens when the agent may embed the
+     * token mid-line (where plain-text detection would miss it).
+     */
+    until_file: z.string().optional(),
     /** When true, pause between iterations for user input via /workflow approve. */
     interactive: z.boolean().optional(),
     /** Message shown to user when paused (required when interactive is true). */

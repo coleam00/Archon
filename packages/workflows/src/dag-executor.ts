@@ -1788,6 +1788,11 @@ async function executeLoopNode(
     getLog().error({ err, nodeId: node.id, iteration }, 'loop_node.iteration_event_failed');
   };
 
+  // Sticky signal detection: once the completion token appears in any iteration's
+  // output it stays true, so a resumed interactive loop or a reset fullOutput on the
+  // next iteration cannot "un-detect" a signal the agent already emitted.
+  let stickySignalDetected = false;
+
   for (let i = startIteration; i <= loop.max_iterations; i++) {
     const iterationStart = Date.now();
 
@@ -2113,13 +2118,18 @@ async function executeLoopNode(
     // For interactive loops, the AI emits the signal when the user explicitly approves
     // (e.g., "approved", "looks good"). The prompt instructs the AI on when to emit it.
     const signalDetected = detectCompletionSignal(fullOutput, loop.until);
+    if (signalDetected) stickySignalDetected = true;
 
-    // Check deterministic bash condition (if configured)
+    // Check deterministic bash condition (if configured).
+    // `until_file` is a shorthand that expands to a `test -f` check.
+    const effectiveUntilBash = loop.until_file
+      ? `test -f .archon/${loop.until_file}`
+      : loop.until_bash;
     let bashComplete = false;
-    if (loop.until_bash) {
+    if (effectiveUntilBash) {
       try {
         const { prompt: bashPrompt } = substituteWorkflowVariables(
-          loop.until_bash,
+          effectiveUntilBash,
           workflowRun.id,
           workflowRun.user_message,
           artifactsDir,
@@ -2148,7 +2158,7 @@ async function executeLoopNode(
     }
 
     const duration = Date.now() - iterationStart;
-    const completionDetected = signalDetected || bashComplete;
+    const completionDetected = stickySignalDetected || bashComplete;
 
     // Emit iteration completed
     getWorkflowEventEmitter().emit({
