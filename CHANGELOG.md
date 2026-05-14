@@ -38,6 +38,7 @@ Workflow marketplace, expanded setup wizard, and broad Pi/workflow engine fixes.
 - **Pi concurrency + error surfacing**: SDK error messages now surface to the user instead of being masked, and Pi concurrency is capped to prevent cascade failures (#1572).
 - Chat hydration shows newest messages instead of oldest (#1532).
 - `GET /api/workflows/:name` now resolves home-scoped (`~/.archon/workflows/`) workflows that were previously invisible to the Web UI builder (#1405).
+- `GET /api/workflows` no longer returns an empty array when no `cwd` query param is provided and no codebases are registered — bundled and home-scoped workflows now surface correctly on first run, making the workflow picker functional on first launch before any project is registered (#1173).
 - `archon workflow run` propagates `$ARTIFACTS_DIR`, `$LOG_DIR`, `$BASE_BRANCH` to script-node subprocesses (#1640).
 - `archon-assist` now runs in the live checkout (`worktree.enabled: false`) — closes #1546 (#1555).
 - Bundled `opus[1m]` implement nodes now set `provider: claude` explicitly (#1622).
