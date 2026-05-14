@@ -1380,6 +1380,111 @@ describe('executeDagWorkflow -- bash nodes', () => {
     const injectedMessage = messages.find((m: string) => m === 'INJECTED');
     expect(injectedMessage).toBeUndefined();
   });
+
+  it('${input.X} tokens are substituted in bash script before exec', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'bar\n', stderr: '' });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-input-subst-run-id');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-input-subst',
+      testDir,
+      {
+        name: 'bash-input-subst-test',
+        nodes: [{ id: 'greet', bash: 'echo ${input.foo}' }],
+        inputs: { foo: { default: 'bar' } },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // The bash script passed to execFileAsync must have the token replaced with the value
+    expect(execSpy).toHaveBeenCalledWith('bash', ['-c', 'echo bar'], expect.anything());
+    execSpy.mockRestore();
+  });
+
+  it('WORKTREE_PATH and INPUT_* env vars are injected into bash subprocess', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-input-env-run-id');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-input-env',
+      testDir,
+      {
+        name: 'bash-input-env-test',
+        nodes: [{ id: 'step', bash: 'echo ok' }],
+        inputs: { branch: { default: 'feat/test-branch' } },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(execSpy).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'echo ok'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          WORKTREE_PATH: testDir,
+          INPUT_BRANCH: 'feat/test-branch',
+        }),
+      })
+    );
+    execSpy.mockRestore();
+  });
+
+  it('undefined ${input.X} token is left unchanged in bash script', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-input-undef-run-id');
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-input-undef',
+      testDir,
+      {
+        name: 'bash-input-undef-test',
+        nodes: [{ id: 'step', bash: 'echo ${input.undefined_key}' }],
+        inputs: { other: { default: 'irrelevant' } },
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // Token for 'undefined_key' must remain verbatim (not replaced with empty string or crashed)
+    expect(execSpy).toHaveBeenCalledWith(
+      'bash',
+      ['-c', 'echo ${input.undefined_key}'],
+      expect.anything()
+    );
+    execSpy.mockRestore();
+  });
 });
 
 describe('executeDagWorkflow -- output_format structured output', () => {

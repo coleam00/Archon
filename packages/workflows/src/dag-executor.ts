@@ -69,6 +69,7 @@ import {
   detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
+  substituteInputRefs,
   buildPromptWithContext,
   detectCompletionSignal,
   stripCompletionTags,
@@ -1274,7 +1275,8 @@ async function executeBashNode(
   docsDir: string,
   nodeOutputs: Map<string, NodeOutput>,
   issueContext?: string,
-  envVars?: Record<string, string>
+  envVars?: Record<string, string>,
+  resolvedInputs?: Record<string, string>
 ): Promise<NodeOutput> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1314,14 +1316,29 @@ async function executeBashNode(
     docsDir,
     issueContext
   );
-  const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
+  const nodeRefResolved = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
+  // Substitute ${input.X} references from workflow inputs (safe: '.' is not a valid bash
+  // identifier character, so these patterns can never collide with real bash expansions).
+  const finalScript = resolvedInputs
+    ? substituteInputRefs(nodeRefResolved, resolvedInputs)
+    : nodeRefResolved;
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
+  // Inject workflow inputs as INPUT_<NAME> env vars (belt-and-suspenders alongside template substitution).
+  const inputEnvVars: Record<string, string> = resolvedInputs
+    ? Object.fromEntries(
+        Object.entries(resolvedInputs).map(([k, v]) => [`INPUT_${k.toUpperCase()}`, v])
+      )
+    : {};
   const subprocessEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
+    // WORKFLOW_ID and WORKTREE_PATH as actual env vars (complement the $WORKFLOW_ID template token).
+    WORKFLOW_ID: workflowRun.id,
+    WORKTREE_PATH: cwd,
+    ...inputEnvVars,
     ...(envVars ?? {}),
   };
 
@@ -2501,7 +2518,11 @@ export async function executeDagWorkflow(
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
-  workflow: { name: string; nodes: readonly DagNode[] } & WorkflowLevelOptions,
+  workflow: {
+    name: string;
+    nodes: readonly DagNode[];
+    inputs?: Record<string, { default: string }>;
+  } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -2515,6 +2536,12 @@ export async function executeDagWorkflow(
   priorCompletedNodes?: Map<string, string>
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+
+  // Resolve workflow inputs: extract defaults from the `inputs:` section.
+  // These are substituted into bash node scripts as ${input.name} before execution.
+  const resolvedInputs: Record<string, string> = workflow.inputs
+    ? Object.fromEntries(Object.entries(workflow.inputs).map(([k, v]) => [k, v.default]))
+    : {};
   const workflowLevelOptions = {
     effort: workflow.effort,
     thinking: workflow.thinking,
@@ -2733,7 +2760,8 @@ export async function executeDagWorkflow(
               docsDir,
               nodeOutputs,
               issueContext,
-              config.envVars
+              config.envVars,
+              resolvedInputs
             );
             return { nodeId: node.id, output };
           }

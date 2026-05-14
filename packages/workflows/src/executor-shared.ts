@@ -420,6 +420,24 @@ export function substituteWorkflowVariables(
 }
 
 /**
+ * Substitute `${input.name}` references in bash scripts with resolved workflow
+ * input values.
+ *
+ * Safe in bash: '.' is not a valid bash identifier character, so `${input.name}`
+ * can never be a real bash variable expansion — no false positives exist.
+ * Any reference whose name is not in resolvedInputs is left unchanged so the
+ * shell's own `bad substitution` surfaces the misconfiguration clearly.
+ */
+export function substituteInputRefs(
+  script: string,
+  resolvedInputs: Record<string, string>
+): string {
+  return script.replace(/\$\{input\.([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (match, name) =>
+    name in resolvedInputs ? resolvedInputs[name] : match
+  );
+}
+
+/**
  * Apply variable substitution and optionally append issue context.
  * Appends context only if it wasn't already substituted via $CONTEXT variables.
  * This prevents duplicate context being sent to the AI.

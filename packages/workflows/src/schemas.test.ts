@@ -56,6 +56,52 @@ describe('workflowDefinitionSchema', () => {
       expect(result.data.policyFile).toBe('/tmp/test-policy.md');
     }
   });
+
+  test('accepts inputs field with default values', () => {
+    const result = workflowDefinitionSchema.safeParse({
+      name: 'input-workflow',
+      description: 'Workflow with inputs',
+      nodes: [{ id: 'step', bash: 'echo ${input.branch}' }],
+      inputs: {
+        branch: { default: 'feat/my-feature' },
+        issue: { default: '42' },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.inputs).toEqual({
+        branch: { default: 'feat/my-feature' },
+        issue: { default: '42' },
+      });
+    }
+  });
+
+  test('inputs field is optional — workflow without it still validates', () => {
+    const result = workflowDefinitionSchema.safeParse({
+      name: 'no-input-workflow',
+      description: 'Workflow without inputs',
+      nodes: [{ id: 'step', bash: 'echo hello' }],
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.inputs).toBeUndefined();
+    }
+  });
+
+  test('inputs with non-string default is rejected', () => {
+    const result = workflowDefinitionSchema.safeParse({
+      name: 'bad-input-workflow',
+      description: 'Workflow with bad inputs',
+      nodes: [{ id: 'step', bash: 'echo ok' }],
+      inputs: {
+        count: { default: 42 },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

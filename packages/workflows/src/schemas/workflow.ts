@@ -92,6 +92,16 @@ export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
  */
 export const workflowDefinitionSchema = workflowBaseSchema.extend({
   nodes: z.array(dagNodeSchema),
+  /**
+   * Workflow-level input declarations with default values.
+   * In bash nodes, reference as `${input.name}` — the executor substitutes these
+   * before passing the script to the shell (`.` is not valid in bash identifiers,
+   * so no collision with real bash parameter expansion exists).
+   * In prompt nodes, reference as `${input.name}` — the AI sees the literal token
+   * inside its system prompt, so prompt-level input interpolation is intentionally
+   * left to the AI rather than the executor.
+   */
+  inputs: z.record(z.string(), z.object({ default: z.string() })).optional(),
 });
 
 /** Workflow definition with fully typed nodes (DagNode[]) derived from the schema. */
