@@ -421,6 +421,31 @@ describe('PiProvider', () => {
     expect(error?.message).toContain('provider extension');
   });
 
+  test('deferred resolution: calls session.setModel when find() resolves after bindExtensions', async () => {
+    // Phase 1: model not in static catalog (extension provider path).
+    // Phase 2: extension registers the model during bindExtensions() and find() succeeds.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() => ({
+      id: 'custom-model',
+      provider: 'extension-provider',
+      name: 'extension-provider/custom-model',
+    }));
+    resetScript(scriptedAgentEnd());
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'extension-provider/custom-model',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(mockModelRegistryFind).toHaveBeenCalledTimes(2);
+    expect(mockSetModel).toHaveBeenCalledTimes(1);
+    expect(mockSetModel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'custom-model', provider: 'extension-provider' })
+    );
+  });
+
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
     process.env.GEMINI_API_KEY = 'from-process-env';
     resetScript([
