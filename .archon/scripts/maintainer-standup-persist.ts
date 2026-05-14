@@ -33,13 +33,15 @@ let source: 'delimiter' | 'json-wrapper' | null = null;
 // ── Tier 1: delimiter-based extraction ──
 const BEGIN = 'ARCHON_STATE_JSON_BEGIN';
 const END = 'ARCHON_STATE_JSON_END';
-const beginIdx = raw.indexOf(BEGIN);
-const endIdx = raw.indexOf(END);
+const beginIdx = raw.lastIndexOf(BEGIN);
+const endIdx = raw.indexOf(END, beginIdx);
 if (beginIdx !== -1 && endIdx !== -1 && endIdx > beginIdx) {
   const stateText = raw.slice(beginIdx + BEGIN.length, endIdx).trim();
   try {
     state = JSON.parse(stateText) as State;
-    brief = raw.slice(0, beginIdx).trim();
+    // Brief is everything before the first BEGIN marker (includes any
+    // truncated earlier emission, which we strip via the heading filter below).
+    brief = raw.slice(0, raw.indexOf(BEGIN)).trim();
     source = 'delimiter';
   } catch (err) {
     process.stderr.write(
