@@ -1506,7 +1506,7 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    expect(body.message).toContain('Send a message to continue');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
     expect(mockHandleMessage).not.toHaveBeenCalled();
     expect(mockGetConversationById).not.toHaveBeenCalled();
   });
@@ -1527,7 +1527,7 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    expect(body.message).toContain('Send a message to continue');
+    expect(body.message).toContain('archon workflow resume run-paused-1');
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
@@ -1555,8 +1555,8 @@ describe('approve/reject auto-resume', () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
-    // Same fallback text as no-parent case — user re-runs from the originating platform.
-    expect(body.message).toContain('Send a message to continue');
+    // Surfaces the exact CLI command so the web-UI user has a concrete next step.
+    expect(body.message).toContain('archon workflow resume run-paused-1');
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
@@ -1601,6 +1601,41 @@ describe('approve/reject auto-resume', () => {
     ];
     expect(platformConvId).toBe('web-plat-xyz');
     expect(dispatchedMessage).toBe('/workflow run deploy Review PR');
+  });
+
+  test('reject: surfaces CLI resume hint when on_reject configured but parent is non-web', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'run-reject-non-web',
+      parent_conversation_id: 'slack-parent-conv-uuid',
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review-gate',
+          message: 'Approve?',
+          onRejectPrompt: 'Fix: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_count: 0,
+      },
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'slack-parent-conv-uuid',
+      platform_conversation_id: '1234567890.123456',
+      platform_type: 'slack',
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-reject-non-web/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'tests missing' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('archon workflow resume run-reject-non-web');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
   test('reject: does NOT dispatch when the run is being cancelled (no on_reject configured)', async () => {
