@@ -3,7 +3,10 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
-import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import {
+  mockAllWorkflowModules,
+  mockDiscoverWorkflowsWithConfig,
+} from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports of mocked modules
@@ -49,6 +52,11 @@ const mockAddMessage = mock(async () => ({
   created_at: new Date().toISOString(),
 }));
 const mockGenerateAndSetTitle = mock(async () => {});
+const mockExecuteWorkflow = mock(async () => ({
+  success: true,
+  workflowRunId: 'run-uuid-approval',
+}));
+const mockCreateWorkflowDeps = mock(() => ({ store: {} }));
 
 // Type aliases for clarity in tests
 type MockWorkflowRun = {
@@ -129,6 +137,14 @@ mock.module('@archon/paths', () => ({
 }));
 
 mockAllWorkflowModules();
+
+mock.module('@archon/workflows/executor', () => ({
+  executeWorkflow: mockExecuteWorkflow,
+}));
+
+mock.module('@archon/core/workflows', () => ({
+  createWorkflowDeps: mockCreateWorkflowDeps,
+}));
 
 mock.module('@archon/git', () => ({
   removeWorktree: mock(async () => {}),
@@ -232,6 +248,25 @@ const MOCK_FAILED_RUN: MockWorkflowRun = {
   completed_at: NOW,
 };
 
+const MOCK_PAUSED_INTERACTIVE_RUN: MockWorkflowRun = {
+  ...MOCK_RUNNING_RUN,
+  id: 'run-uuid-approval',
+  workflow_name: 'build-portal-login-phone-pin',
+  conversation_id: 'worker-conv-uuid',
+  parent_conversation_id: 'parent-conv-uuid',
+  status: 'paused',
+  completed_at: null,
+  user_message: 'Build the portal login',
+  working_path: '/tmp/worktrees/portal-login',
+  metadata: {
+    approval: {
+      nodeId: 'human-approve',
+      message: 'Approve PR creation?',
+      type: 'interactive_loop',
+    },
+  },
+};
+
 const MOCK_PENDING_RUN: MockWorkflowRun = {
   ...MOCK_RUNNING_RUN,
   id: 'run-uuid-3',
@@ -286,6 +321,8 @@ function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
     emitSSE: mock(async () => {}),
     emitLockEvent: mock(async () => {}),
+    setupEventBridge: mock((_workerId: string, _parentId: string) => mock(() => {})),
+    sendMessage: mock(async () => {}),
   } as unknown as WebAdapter;
   const mockLockManager = {
     acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
@@ -588,6 +625,141 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
 
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Failed to cancel');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/workflows/runs/:runId/approve
+// ---------------------------------------------------------------------------
+
+describe('POST /api/workflows/runs/:runId/approve', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockUpdateWorkflowRun.mockReset();
+    mockCreateWorkflowEvent.mockReset();
+    mockGetConversationById.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockExecuteWorkflow.mockReset();
+    mockCreateWorkflowDeps.mockReset();
+    mockCreateWorkflowDeps.mockImplementation(() => ({ store: {} }));
+    mockExecuteWorkflow.mockImplementation(async () => ({
+      success: true,
+      workflowRunId: 'run-uuid-approval',
+    }));
+  });
+
+  test('stores interactive_loop input and starts executor resume directly', async () => {
+    const workflow = {
+      name: 'build-portal-login-phone-pin',
+      description: 'fixture workflow',
+      nodes: [],
+    };
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_PAUSED_INTERACTIVE_RUN);
+    mockGetConversationById.mockImplementation(async (id: string) => {
+      if (id === 'parent-conv-uuid') {
+        return {
+          id: 'parent-conv-uuid',
+          platform_conversation_id: 'web-parent-abc',
+          platform_type: 'web',
+        };
+      }
+      if (id === 'worker-conv-uuid') {
+        return {
+          id: 'worker-conv-uuid',
+          platform_conversation_id: 'web-worker-xyz',
+          platform_type: 'web',
+        };
+      }
+      return null;
+    });
+    mockDiscoverWorkflowsWithConfig.mockImplementationOnce(async () => ({
+      workflows: [{ workflow: workflow as never, source: 'project' }],
+      errors: [],
+    }));
+
+    const { app, mockWebAdapter } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-approval/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: 'approved' }),
+    });
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Resuming workflow');
+
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-uuid-approval', {
+      status: 'failed',
+      metadata: { loop_user_input: 'approved' },
+    });
+    expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
+      '/tmp/worktrees/portal-login',
+      expect.any(Function)
+    );
+    expect(mockWebAdapter.setConversationDbId).toHaveBeenCalledWith(
+      'web-worker-xyz',
+      'worker-conv-uuid'
+    );
+    expect(mockWebAdapter.setupEventBridge).toHaveBeenCalledWith(
+      'web-worker-xyz',
+      'web-parent-abc'
+    );
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.anything(),
+      mockWebAdapter,
+      'web-worker-xyz',
+      '/tmp/worktrees/portal-login',
+      workflow,
+      'Build the portal login',
+      'worker-conv-uuid',
+      'cb-uuid-1',
+      undefined,
+      undefined,
+      'parent-conv-uuid'
+    );
+  });
+
+  test('records gate decision but does not resume when workflow definition is missing', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_PAUSED_INTERACTIVE_RUN);
+    mockGetConversationById.mockImplementation(async (id: string) => {
+      if (id === 'parent-conv-uuid') {
+        return {
+          id: 'parent-conv-uuid',
+          platform_conversation_id: 'web-parent-abc',
+          platform_type: 'web',
+        };
+      }
+      if (id === 'worker-conv-uuid') {
+        return {
+          id: 'worker-conv-uuid',
+          platform_conversation_id: 'web-worker-xyz',
+          platform_type: 'web',
+        };
+      }
+      return null;
+    });
+    mockDiscoverWorkflowsWithConfig.mockImplementationOnce(async () => ({
+      workflows: [],
+      errors: [],
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-approval/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: 'approved' }),
+    });
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Send a message to continue');
+    expect(mockUpdateWorkflowRun).toHaveBeenCalledWith('run-uuid-approval', {
+      status: 'failed',
+      metadata: { loop_user_input: 'approved' },
+    });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 });
 
@@ -1365,9 +1537,10 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Auto-resume: approve/reject endpoints dispatch to orchestrator when the run
-// has parent_conversation_id set (web-dispatched foreground/interactive
-// workflows). Mirrors what the CLI does in workflowApproveCommand/RejectCommand.
+// Auto-resume: approve/reject endpoints resume the executor directly when the
+// run has parent_conversation_id set (web-dispatched foreground/interactive
+// workflows). This avoids routing approval through a second natural-language
+// `/workflow run ...` command.
 // ---------------------------------------------------------------------------
 
 describe('approve/reject auto-resume', () => {
@@ -1378,22 +1551,44 @@ describe('approve/reject auto-resume', () => {
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
     mockCancelWorkflowRun.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockExecuteWorkflow.mockReset();
+    mockCreateWorkflowDeps.mockReset();
+    mockCreateWorkflowDeps.mockImplementation(() => ({ store: {} }));
+    mockExecuteWorkflow.mockImplementation(async () => ({ success: true, workflowRunId: 'run' }));
   });
 
-  test('approve: dispatches resume when parent_conversation_id is set', async () => {
+  test('approve: starts direct executor resume when parent_conversation_id is set', async () => {
+    const workflow = { name: 'deploy', description: 'fixture workflow', nodes: [] };
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
       id: 'run-auto-resume-approve',
       parent_conversation_id: 'parent-conv-uuid',
       user_message: 'Deploy feature X',
     });
-    mockGetConversationById.mockResolvedValueOnce({
-      id: 'parent-conv-uuid',
-      platform_conversation_id: 'web-plat-abc',
-      platform_type: 'web',
+    mockGetConversationById.mockImplementation(async (id: string) => {
+      if (id === 'parent-conv-uuid') {
+        return {
+          id: 'parent-conv-uuid',
+          platform_conversation_id: 'web-plat-abc',
+          platform_type: 'web',
+        };
+      }
+      if (id === 'conv-uuid-1') {
+        return {
+          id: 'conv-uuid-1',
+          platform_conversation_id: 'web-worker-abc',
+          platform_type: 'web',
+        };
+      }
+      return null;
+    });
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [{ workflow: workflow as never, source: 'project' }],
+      errors: [],
     });
 
-    const { app } = makeApp();
+    const { app, mockWebAdapter } = makeApp();
     const response = await app.request('/api/workflows/runs/run-auto-resume-approve/approve', {
       method: 'POST',
       body: JSON.stringify({ comment: 'LGTM' }),
@@ -1405,14 +1600,20 @@ describe('approve/reject auto-resume', () => {
     expect(body.message).toContain('Resuming workflow');
 
     // dispatchToOrchestrator → lockManager → handleMessage
-    expect(mockHandleMessage).toHaveBeenCalled();
-    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
-      unknown,
-      string,
-      string,
-    ];
-    expect(platformConvId).toBe('web-plat-abc');
-    expect(dispatchedMessage).toBe('/workflow run deploy Deploy feature X');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.anything(),
+      mockWebAdapter,
+      'web-worker-abc',
+      '/tmp/worktrees/feature',
+      workflow,
+      'Deploy feature X',
+      'conv-uuid-1',
+      'cb-uuid-1',
+      undefined,
+      undefined,
+      'parent-conv-uuid'
+    );
   });
 
   test('approve: skips dispatch when parent_conversation_id is null (CLI-dispatched run)', async () => {
@@ -1484,7 +1685,8 @@ describe('approve/reject auto-resume', () => {
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
-  test('reject: dispatches resume for on_reject flows when parent is set', async () => {
+  test('reject: starts direct executor resume for on_reject flows when parent is set', async () => {
+    const workflow = { name: 'deploy', description: 'fixture workflow', nodes: [] };
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
       id: 'run-auto-resume-reject',
@@ -1501,13 +1703,29 @@ describe('approve/reject auto-resume', () => {
         rejection_count: 0,
       },
     });
-    mockGetConversationById.mockResolvedValueOnce({
-      id: 'parent-conv-uuid',
-      platform_conversation_id: 'web-plat-xyz',
-      platform_type: 'web',
+    mockGetConversationById.mockImplementation(async (id: string) => {
+      if (id === 'parent-conv-uuid') {
+        return {
+          id: 'parent-conv-uuid',
+          platform_conversation_id: 'web-plat-xyz',
+          platform_type: 'web',
+        };
+      }
+      if (id === 'conv-uuid-1') {
+        return {
+          id: 'conv-uuid-1',
+          platform_conversation_id: 'web-worker-xyz',
+          platform_type: 'web',
+        };
+      }
+      return null;
+    });
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [{ workflow: workflow as never, source: 'project' }],
+      errors: [],
     });
 
-    const { app } = makeApp();
+    const { app, mockWebAdapter } = makeApp();
     const response = await app.request('/api/workflows/runs/run-auto-resume-reject/reject', {
       method: 'POST',
       body: JSON.stringify({ reason: 'tests missing' }),
@@ -1517,14 +1735,20 @@ describe('approve/reject auto-resume', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { message: string };
     expect(body.message).toContain('Running on-reject prompt');
-    expect(mockHandleMessage).toHaveBeenCalled();
-    const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] as [
-      unknown,
-      string,
-      string,
-    ];
-    expect(platformConvId).toBe('web-plat-xyz');
-    expect(dispatchedMessage).toBe('/workflow run deploy Review PR');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalledWith(
+      expect.anything(),
+      mockWebAdapter,
+      'web-worker-xyz',
+      '/tmp/worktrees/feature',
+      workflow,
+      'Review PR',
+      'conv-uuid-1',
+      'cb-uuid-1',
+      undefined,
+      undefined,
+      'parent-conv-uuid'
+    );
   });
 
   test('reject: does NOT dispatch when the run is being cancelled (no on_reject configured)', async () => {

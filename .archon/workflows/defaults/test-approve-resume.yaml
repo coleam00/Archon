@@ -1,39 +1,37 @@
 name: test-approve-resume
 description: |
-  Harness fixture for bdc-xo#86. Verifies interactive_loop approve → resume path end-to-end.
-  Three nodes: bash setup → interactive loop gate → bash emit RESUME_SUCCESS.
-  NOT for production workflows. Invoke by name: "test-approve-resume".
+  Harness-only regression fixture for bdc-xo#86.
+  Verifies an interactive approval loop resumes into the next node after Approve.
 
-model: sonnet
-policyFile: harness/policies/agent-behavior.md
+provider: codex
 interactive: true
+worktree:
+  enabled: false
 
 nodes:
-  - id: phase-one
+  - id: implement
     bash: |
-      echo "PHASE_ONE_COMPLETE"
+      echo "IMPLEMENT_OK"
 
-  - id: approve-gate
-    depends_on: [phase-one]
+  - id: approve
+    depends_on: [implement]
     loop:
       prompt: |
-        ## Interactive Gate — bdc-xo#86 Resume Test
+        This is a harness regression fixture.
 
-        User response: "$LOOP_USER_INPUT"
+        Latest operator input: $LOOP_USER_INPUT
 
-        If the user response is non-empty (i.e., "$LOOP_USER_INPUT" is not blank),
-        the approval has been received. Output exactly:
-        APPROVE_GATE_PASSED
+        If the operator says "approved", output exactly:
+        <promise>APPROVED</promise>
 
-        If the user response is empty (first iteration — no approval yet), output:
-        WAITING_FOR_INPUT
-      until: APPROVE_GATE_PASSED
-      max_iterations: 5
-      fresh_context: true
+        Otherwise ask the operator to approve the fixture.
+      until: APPROVED
+      max_iterations: 2
       interactive: true
-      gate_message: "Approve this gate to verify interactive_loop resume [bdc-xo#86]."
+      gate_message: |
+        Approve to verify the API auto-resumes and reaches the pr node.
 
-  - id: emit-success
-    depends_on: [approve-gate]
+  - id: pr
+    depends_on: [approve]
     bash: |
       echo "RESUME_SUCCESS"

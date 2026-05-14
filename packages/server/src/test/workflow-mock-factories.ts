@@ -3,6 +3,18 @@ import { mock } from 'bun:test';
 import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import type { ParseResult } from '@archon/workflows/loader';
 
+export const mockDiscoverWorkflowsWithConfig = mock(
+  async (): Promise<WorkflowLoadResult> => ({ workflows: [], errors: [] })
+);
+export const mockParseWorkflow = mock(
+  (): ParseResult => ({
+    workflow: null,
+    error: { filename: '', error: 'stub', errorType: 'parse_error' },
+  })
+);
+export const mockIsValidCommandName = mock(() => true);
+export const mockIsBinaryBuild = mock(() => false);
+
 /**
  * Register all 4 @archon/workflows mock.module() calls at once.
  * Must be called before importing the module under test.
@@ -18,9 +30,7 @@ export function makeDiscoverWorkflowsMock(): {
   discoverWorkflowsWithConfig: Mock<() => Promise<WorkflowLoadResult>>;
 } {
   return {
-    discoverWorkflowsWithConfig: mock(
-      async (): Promise<WorkflowLoadResult> => ({ workflows: [], errors: [] })
-    ),
+    discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
   };
 }
 
@@ -28,12 +38,7 @@ export function makeLoaderMock(): {
   parseWorkflow: Mock<() => ParseResult>;
 } {
   return {
-    parseWorkflow: mock(
-      (): ParseResult => ({
-        workflow: null,
-        error: { filename: '', error: 'stub', errorType: 'parse_error' },
-      })
-    ),
+    parseWorkflow: mockParseWorkflow,
   };
 }
 
@@ -45,7 +50,7 @@ export function makeCommandValidationMock(): {
   isValidCommandName: Mock<() => boolean>;
 } {
   return {
-    isValidCommandName: mock(() => true),
+    isValidCommandName: mockIsValidCommandName,
   };
 }
 
@@ -57,6 +62,6 @@ export function makeDefaultsMock(): {
   return {
     BUNDLED_WORKFLOWS: {},
     BUNDLED_COMMANDS: {},
-    isBinaryBuild: mock(() => false),
+    isBinaryBuild: mockIsBinaryBuild,
   };
 }
