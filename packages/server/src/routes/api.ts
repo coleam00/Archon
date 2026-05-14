@@ -45,7 +45,7 @@ import {
   BUNDLED_VERSION,
 } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { parseWorkflow } from '@archon/workflows/loader';
+import { getLoaderErrors, parseWorkflow } from '@archon/workflows/loader';
 import { isValidCommandName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
@@ -72,6 +72,7 @@ import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
   workflowListResponseSchema,
+  workflowErrorsResponseSchema,
   validateWorkflowBodySchema,
   validateWorkflowResponseSchema,
   getWorkflowResponseSchema,
@@ -166,6 +167,22 @@ const getWorkflowsRoute = createRoute({
     200: {
       content: { 'application/json': { schema: workflowListResponseSchema } },
       description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getWorkflowErrorsRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/errors',
+  tags: ['Workflows'],
+  summary: 'List workflow loader validation errors',
+  request: { query: cwdQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowErrorsResponseSchema } },
+      description: 'Workflow loader errors',
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
@@ -1775,19 +1792,55 @@ export function registerApiRoutes(
       }
 
       if (!workingDir) {
-        return c.json({ workflows: [] });
+        return c.json({
+          workflows: [],
+          validation_errors: { count: 0, endpoint: '/api/workflows/errors' },
+        });
       }
 
       const result = await discoverWorkflowsWithConfig(workingDir, loadConfig);
+      const loaderErrors = getLoaderErrors();
       return c.json({
         workflows: result.workflows.map(ws => ({ workflow: ws.workflow, source: ws.source })),
         errors: result.errors.length > 0 ? result.errors : undefined,
+        validation_errors: { count: loaderErrors.length, endpoint: '/api/workflows/errors' },
       });
     } catch (error) {
       // Workflow discovery can fail if cwd is stale or deleted — return empty with warning
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err }, 'workflow_discovery_failed');
       return apiError(c, 500, `Workflow discovery failed: ${err.message}`);
+    }
+  });
+
+  // GET /api/workflows/errors - Discover workflow loader errors
+  registerOpenApiRoute(getWorkflowErrorsRoute, async c => {
+    try {
+      const cwd = c.req.query('cwd');
+      let workingDir = cwd;
+
+      if (cwd) {
+        if (!(await validateCwd(cwd))) {
+          return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
+        }
+      } else {
+        const codebases = await codebaseDb.listCodebases();
+        if (codebases.length > 0) {
+          workingDir = codebases[0].default_cwd;
+        }
+      }
+
+      if (!workingDir) {
+        return c.json({ errors: [], count: 0 });
+      }
+
+      await discoverWorkflowsWithConfig(workingDir, loadConfig);
+      const errors = getLoaderErrors();
+      return c.json({ errors, count: errors.length });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ err }, 'workflow_errors_discovery_failed');
+      return apiError(c, 500, `Workflow error discovery failed: ${err.message}`);
     }
   });
 

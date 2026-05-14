@@ -12,10 +12,31 @@ export const workflowDefinitionSchema =
 export const workflowLoadErrorSchema = z
   .object({
     filename: z.string(),
+    path: z.string().optional(),
     error: z.string(),
     errorType: z.enum(['read_error', 'parse_error', 'validation_error']),
+    error_type: z
+      .enum(['parse_error', 'dag_invalid', 'missing_required_field', 'schema_violation'])
+      .optional(),
+    message: z.string().optional(),
+    last_attempt_at: z.string().optional(),
   })
   .openapi('WorkflowLoadError');
+
+export const workflowValidationErrorSchema = z
+  .object({
+    filename: z.string(),
+    path: z.string().optional(),
+    error_type: z.enum([
+      'parse_error',
+      'dag_invalid',
+      'missing_required_field',
+      'schema_violation',
+    ]),
+    message: z.string(),
+    last_attempt_at: z.string(),
+  })
+  .openapi('WorkflowValidationError');
 
 /**
  * Workflow source — project-defined, bundled default, or home-scoped (global).
@@ -38,8 +59,19 @@ export const workflowListResponseSchema = z
   .object({
     workflows: z.array(workflowListEntrySchema),
     errors: z.array(workflowLoadErrorSchema).optional(),
+    validation_errors: z.object({
+      count: z.number(),
+      endpoint: z.string(),
+    }),
   })
   .openapi('WorkflowListResponse');
+
+export const workflowErrorsResponseSchema = z
+  .object({
+    errors: z.array(workflowValidationErrorSchema),
+    count: z.number(),
+  })
+  .openapi('WorkflowErrorsResponse');
 
 /** GET /api/workflows/:name response. */
 export const getWorkflowResponseSchema = z

@@ -34,6 +34,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 import { discoverWorkflows } from './workflow-discovery';
+import { getLoaderErrors } from './loader';
 import { isBashNode, isCancelNode, isLoopNode } from './schemas';
 import * as bundledDefaults from './defaults/bundled-defaults';
 
@@ -2155,7 +2156,7 @@ nodes:
       expect(wf.nodes).toBeDefined();
       expect(isLoopNode(wf.nodes[0])).toBe(true);
       if (isLoopNode(wf.nodes[0])) {
-        expect(wf.nodes[0].loop.fresh_context).toBe(false);
+        expect(wf.nodes[0].loop.fresh_context).toBe(true);
         expect(wf.nodes[0].loop.until_bash).toBeUndefined();
       }
     });
@@ -2510,6 +2511,74 @@ nodes:
       expect(result.errors).toHaveLength(0);
       // AI fields should produce a warning log
       expect(mockLogger.warn).toHaveBeenCalled();
+    });
+  });
+
+  describe('loader error registry', () => {
+    it('captures malformed YAML as parse_error', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'bad-syntax.yaml'), 'name: bad\nnodes:\n  - id: [\n');
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const errors = getLoaderErrors();
+
+      expect(result.errors).toHaveLength(1);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].filename).toBe('bad-syntax.yaml');
+      expect(errors[0].error_type).toBe('parse_error');
+      expect(errors[0].message).toContain('YAML parse error');
+    });
+
+    it('captures loop missing until as dag_invalid', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'missing-until.yaml'),
+        `
+name: missing-until
+description: Loop missing required field
+nodes:
+  - id: implement
+    loop:
+      prompt: Build it.
+      max_iterations: 3
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const errors = getLoaderErrors();
+
+      expect(result.errors).toHaveLength(1);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].filename).toBe('missing-until.yaml');
+      expect(errors[0].error_type).toBe('dag_invalid');
+      expect(errors[0].message).toContain('loop.until');
+    });
+
+    it('returns all current load failures from getLoaderErrors()', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'bad-syntax.yaml'), 'name: bad\nnodes:\n  - id: [\n');
+      await writeFile(
+        join(workflowDir, 'missing-until.yaml'),
+        `
+name: missing-until
+description: Loop missing required field
+nodes:
+  - id: implement
+    loop:
+      prompt: Build it.
+      max_iterations: 3
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const errors = getLoaderErrors();
+
+      expect(result.errors).toHaveLength(2);
+      expect(errors.map(e => e.filename).sort()).toEqual(['bad-syntax.yaml', 'missing-until.yaml']);
+      expect(errors.map(e => e.error_type).sort()).toEqual(['dag_invalid', 'parse_error']);
     });
   });
 });

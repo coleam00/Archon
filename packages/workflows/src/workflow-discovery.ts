@@ -27,7 +27,7 @@ import type {
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
 import { createLogger } from '@archon/paths';
-import { parseWorkflow } from './loader';
+import { clearLoaderErrors, parseWorkflow, recordLoaderError } from './loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -124,17 +124,21 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
             workflows.set(entry, result.workflow);
             getLog().debug({ workflowName: result.workflow.name, dirPath }, 'workflow_loaded');
           } else {
+            recordLoaderError(result.error, entryPath);
             errors.push(result.error);
           }
         }
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
         getLog().warn({ err, entryPath }, 'workflow_file_read_error');
-        errors.push({
+        const loadError: WorkflowLoadError = {
           filename: entry,
+          path: entryPath,
           error: `File read error: ${err.message} (${err.code ?? 'unknown'})`,
           errorType: 'read_error',
-        });
+        };
+        recordLoaderError(loadError, entryPath);
+        errors.push(loadError);
       }
     }
   } catch (error) {
@@ -143,11 +147,14 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
       getLog().debug({ dirPath }, 'workflow_directory_not_found');
     } else {
       getLog().warn({ err, dirPath }, 'workflow_directory_read_error');
-      errors.push({
+      const loadError: WorkflowLoadError = {
         filename: dirPath,
+        path: dirPath,
         error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
         errorType: 'read_error',
-      });
+      };
+      recordLoaderError(loadError, dirPath);
+      errors.push(loadError);
     }
   }
 
@@ -177,6 +184,7 @@ function loadBundledWorkflows(): DirLoadResult {
         { filename, contentPreview: content.slice(0, 200) + '...' },
         'bundled_workflow_parse_failed'
       );
+      recordLoaderError(result.error, filename);
       errors.push(result.error);
     }
   }
@@ -204,6 +212,8 @@ export async function discoverWorkflows(
   cwd: string,
   options?: { loadDefaults?: boolean }
 ): Promise<WorkflowLoadResult> {
+  clearLoaderErrors();
+
   // Map of filename -> workflow+source for deduplication
   const workflowsByFile = new Map<string, WorkflowWithSource>();
   const allErrors: WorkflowLoadError[] = [];

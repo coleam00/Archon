@@ -26,6 +26,16 @@ const mockParseWorkflow = mock((_content: string, _filename: string) => ({
   error: null,
 }));
 
+const mockGetLoaderErrors = mock(() => [
+  {
+    filename: 'bad.yaml',
+    path: '/tmp/project/.archon/workflows/bad.yaml',
+    error_type: 'dag_invalid',
+    message: "Node 'implement': 'loop.until' Required",
+    last_attempt_at: '2026-05-13T18:22:11.000Z',
+  },
+]);
+
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
@@ -60,6 +70,7 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 }));
 mock.module('@archon/workflows/loader', () => ({
   parseWorkflow: mockParseWorkflow,
+  getLoaderErrors: mockGetLoaderErrors,
 }));
 mock.module('@archon/workflows/command-validation', () => ({
   isValidCommandName: mock(
@@ -119,6 +130,30 @@ describe('GET /api/workflows', () => {
     expect(mockDiscoverWorkflows).toHaveBeenCalledWith('/tmp/project', expect.any(Function));
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
+    expect(body.validation_errors).toEqual({
+      count: 1,
+      endpoint: '/api/workflows/errors',
+    });
+  });
+});
+
+describe('GET /api/workflows/errors', () => {
+  test('returns captured loader errors', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/workflows/errors');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      errors: Array<{ filename: string; error_type: string; message: string }>;
+      count: number;
+    };
+
+    expect(body.count).toBe(1);
+    expect(body.errors[0].filename).toBe('bad.yaml');
+    expect(body.errors[0].error_type).toBe('dag_invalid');
+    expect(body.errors[0].message).toContain('loop.until');
   });
 });
 

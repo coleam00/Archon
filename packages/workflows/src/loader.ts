@@ -15,11 +15,74 @@ import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workf
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { z } from '@hono/zod-openapi';
 
+export type LoaderErrorType =
+  | 'parse_error'
+  | 'dag_invalid'
+  | 'missing_required_field'
+  | 'schema_violation';
+
+export interface LoaderError {
+  readonly filename: string;
+  readonly path?: string;
+  readonly error_type: LoaderErrorType;
+  readonly message: string;
+  readonly last_attempt_at: string;
+}
+
+const loaderErrors = new Map<string, LoaderError>();
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.loader');
   return cachedLog;
+}
+
+export function classifyLoaderError(error: WorkflowLoadError): LoaderErrorType {
+  if (error.errorType === 'parse_error') return 'parse_error';
+
+  const message = error.error;
+  if (/missing required field|workflow must have/i.test(message)) {
+    return 'missing_required_field';
+  }
+  if (
+    /dag node validation failed|depends_on unknown|cycle detected|references unknown|mutually exclusive|loop\./i.test(
+      message
+    )
+  ) {
+    return 'dag_invalid';
+  }
+  return 'schema_violation';
+}
+
+export function clearLoaderErrors(): void {
+  loaderErrors.clear();
+}
+
+export function recordLoaderError(error: WorkflowLoadError, path?: string): LoaderError {
+  const loaderError: LoaderError = {
+    filename: error.filename,
+    ...(path !== undefined ? { path } : {}),
+    error_type: classifyLoaderError(error),
+    message: error.error,
+    last_attempt_at: new Date().toISOString(),
+  };
+
+  loaderErrors.set(path ?? error.filename, loaderError);
+  getLog().warn(
+    {
+      filename: loaderError.filename,
+      path: loaderError.path,
+      error_type: loaderError.error_type,
+      validationErrors: [loaderError.message],
+    },
+    'workflow_parse_failed'
+  );
+  return loaderError;
+}
+
+export function getLoaderErrors(): LoaderError[] {
+  return Array.from(loaderErrors.values()).sort((a, b) => a.filename.localeCompare(b.filename));
 }
 
 /**

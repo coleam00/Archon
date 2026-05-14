@@ -151,8 +151,16 @@ export interface WorkflowWithSource {
  */
 export interface WorkflowLoadError {
   readonly filename: string;
+  readonly path?: string;
   readonly error: string;
   readonly errorType: 'read_error' | 'parse_error' | 'validation_error';
+  readonly error_type?:
+    | 'parse_error'
+    | 'dag_invalid'
+    | 'missing_required_field'
+    | 'schema_violation';
+  readonly message?: string;
+  readonly last_attempt_at?: string;
 }
 
 /**
