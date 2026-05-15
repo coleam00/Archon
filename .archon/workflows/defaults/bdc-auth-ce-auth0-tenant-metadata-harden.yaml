@@ -1,0 +1,571 @@
+# bdc-auth-ce-auth0-tenant-metadata-harden.yaml
+# WO: WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01
+# Spec source: bdc-xo:docs/work-orders/WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.md
+# Doctrine anchor: feedback_browser-uses-auth0-only-gas-token-is-legacy.md (2026-05-15)
+#
+# Pre-flight (OPERATOR MUST VERIFY BEFORE FIRING):
+#   1. bluedevilcollectibles/lspro-react MUST be registered in Archon codebases.
+#      Check via:
+#        sqlite3 /opt/bdc/archon-data/archon.db \
+#          "SELECT name FROM remote_agent_codebases" | grep lspro-react
+#      If missing, add via API POST per feedback_archon-codebase-add-via-api-not-ui.md
+#   2. WO spec committed + pushed to bdc-xo main:
+#      docs/work-orders/WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.md
+#   3. GH_TOKEN/GITHUB_TOKEN must have push access to bluedevilcollectibles/lspro-react
+#   4. parallel_ok: NO — touches AuthContext; serialize with any other lspro-react WO
+#   5. Notion page ID — FILL IN before firing flip-notion (search Notion DB
+#      a6df831c-0b52-449f-8ca4-d77be6b70d0a for WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01)
+#
+# Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh \
+#           bdc-auth-ce-auth0-tenant-metadata-harden.yaml
+#
+# Fire after deploy:
+#   curl -X POST https://archon.bluedevilcollectibles.com/api/workflows/bdc-auth-ce-auth0-tenant-metadata-harden/runs \
+#     -H "Content-Type: application/json" \
+#     -d '{"inputs":{"WO_ID":"WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01"}}'
+
+name: bdc-auth-ce-auth0-tenant-metadata-harden
+description: |
+  Use when: Executing WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01 — the P0 live fix
+  that collapses lspro-react browser auth tenant resolution to the Auth0 metadata path.
+  Input: WO_ID = WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.
+  Does: Reads WO spec from bdc-xo via gh api. Clones lspro-react into /tmp.
+        Adds resolveTenantId(user) helper + synchronous sessionStorage write at Auth0
+        login in src/context/AuthContext.jsx. Adds unit tests. Runs npm run build +
+        npm test. Opens PR against main with manifest v2 body. Does NOT touch GAS path
+        or /api/tenant/plan fetch (those are WO #2 cleanup).
+  Repo: bluedevilcollectibles/lspro-react (default branch: main)
+  Class: CODE (single-file frontend hardening)
+  parallel_ok: false — serialize with any other lspro-react WO
+
+policyFile: harness/policies/agent-behavior.md
+model: sonnet
+
+nodes:
+
+  # ---------------------------------------------------------------------------
+  # 1. READ-SPEC — fetch WO spec from bdc-xo (cross-repo via gh api)
+  # ---------------------------------------------------------------------------
+  - id: read-spec
+    bash: |
+      set -euo pipefail
+      WO_ID="${WO_ID:-WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01}"
+
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
+          2>/dev/null || true)
+        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        fi
+      fi
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID} in bdc-xo" >&2
+        exit 1
+      fi
+
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:docs/work-orders/%s.md\nWORKFLOW_ID=%s\n\n' \
+        "$WO_ID" "$WO_ID" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n' "$SPEC_CONTENT"
+
+  # ---------------------------------------------------------------------------
+  # 2. SETUP-CLONE — clone lspro-react into /tmp work dir (idempotent)
+  # ---------------------------------------------------------------------------
+  - id: setup-clone
+    depends_on: [read-spec]
+    bash: |
+      set -euo pipefail
+      WORK_DIR="/tmp/lspro-react-work-$WORKFLOW_ID"
+
+      if [ -d "$WORK_DIR/.git" ]; then
+        cd "$WORK_DIR"
+        git fetch origin
+        git checkout main
+        git reset --hard origin/main
+        echo "WORK_DIR=${WORK_DIR}"
+        echo "STATUS=reused_existing_clone"
+        exit 0
+      fi
+
+      git clone "https://github.com/bluedevilcollectibles/lspro-react.git" \
+        "$WORK_DIR" --depth=50
+      echo "WORK_DIR=${WORK_DIR}"
+      echo "STATUS=fresh_clone"
+
+  # ---------------------------------------------------------------------------
+  # 3. INSPECT-AUTHCONTEXT — read AuthContext.jsx so the planner sees current shape
+  # ---------------------------------------------------------------------------
+  - id: inspect-authcontext
+    depends_on: [setup-clone]
+    bash: |
+      set -euo pipefail
+      WORK_DIR="/tmp/lspro-react-work-$WORKFLOW_ID"
+      AUTH_FILE="$WORK_DIR/src/context/AuthContext.jsx"
+
+      if [ ! -f "$AUTH_FILE" ]; then
+        echo "ERROR: AuthContext.jsx not found at $AUTH_FILE" >&2
+        exit 1
+      fi
+
+      echo "=== AuthContext.jsx (line-numbered) ==="
+      nl -ba "$AUTH_FILE"
+      echo ""
+      echo "=== resolveUserTier / resolveUserRole pattern (existing) ==="
+      grep -n "resolveUser\|app_metadata\|livesellerpro.app" "$AUTH_FILE" || true
+      echo ""
+      echo "=== sessionStorage writes (existing) ==="
+      grep -n "sessionStorage\." "$AUTH_FILE" || true
+
+  # ---------------------------------------------------------------------------
+  # 4. PLAN — concise implementation plan for AuthContext patch
+  # ---------------------------------------------------------------------------
+  - id: plan
+    depends_on: [read-spec, inspect-authcontext]
+    task_class: medium_work
+    prompt: |
+      Plan the single-file AuthContext hardening for WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.
+
+      ## Required Output (Markdown, exact headings)
+
+      ### Files to modify
+      - src/context/AuthContext.jsx (resolveTenantId helper + sessionStorage write)
+
+      ### Files to create
+      - One test file under src/context/ following existing test convention (likely
+        src/context/AuthContext.test.tsx OR src/context/__tests__/AuthContext.test.tsx —
+        check what already exists in the clone)
+
+      ### Files explicitly out of scope
+      - src/lib/api.ts (WO #2 cleanup)
+      - /api/tenant/plan fetch removal (WO #2)
+      - GAS / lspro_token path (WO #2)
+
+      ### Verification commands
+      - cd /tmp/lspro-react-work-$WORKFLOW_ID && npm ci
+      - npm run build
+      - npm test
+      - npx tsc --noEmit (if tsconfig present)
+      - grep -c 'resolveTenantId' src/context/AuthContext.jsx (expect >= 1)
+      - grep -c "sessionStorage.setItem.*lspro_tenant_id" src/context/AuthContext.jsx (expect >= 1)
+
+      ### Commit message
+      fix(auth): resolve tenant_id from Auth0 metadata at login [WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01]
+
+      ### Push policy
+      Branch: fix/auth-ce-tenant-from-auth0-metadata
+      Base: main
+      Staging gate: required (lspro-react auto-deploy pipeline gates main on staging)
+
+      ### Auth0 JWT diagnosis approach
+      Phase 1 of WO requires verifying tenant_id IS in the Auth0 user object.
+      Since the workflow cannot log into Auth0 from inside the container, the planner
+      must trust the spec's verified-evidence section: resolveUserTier already reads
+      from auth0.user['https://livesellerpro.app/app_metadata'], same shape.
+      Implement resolveTenantId mirroring resolveUserTier exactly.
+      If tenant_id is genuinely missing from the JWT, the operator will catch it
+      during post-deploy DevTools verification — that's the stop-rule path.
+
+      ## Inspect-AuthContext output (current file)
+      $inspect-authcontext.output
+
+      ## Spec
+      $read-spec.output
+
+  # ---------------------------------------------------------------------------
+  # 5. IMPLEMENT — patch AuthContext.jsx + add tests
+  # ---------------------------------------------------------------------------
+  - id: implement
+    depends_on: [plan]
+    task_class: medium_work
+    loop:
+      fresh_context: true
+      until: COMPLETE
+      max_iterations: 5
+      prompt: |
+        Implement WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01 in the cloned lspro-react.
+
+        Work directory: /tmp/lspro-react-work-$WORKFLOW_ID
+        Target file: src/context/AuthContext.jsx
+
+        ## Plan
+        $plan.output
+
+        ## Spec
+        $read-spec.output
+
+        ## Execution Rules
+
+        1. Read the FULL src/context/AuthContext.jsx file before editing. Understand
+           resolveUserRole (line ~19), resolveUserTier (line ~29), and the AuthProvider
+           effect's Auth0 branch (line ~82 area).
+
+        2. Add resolveTenantId(user) helper next to resolveUserTier, mirroring the same
+           shape:
+
+             function resolveTenantId(user) {
+               if (!user) return '';
+               const meta =
+                 user['https://livesellerpro.app/app_metadata'] ||
+                 user.app_metadata ||
+                 {};
+               return meta.tenant_id || '';
+             }
+
+        3. In the AuthProvider Auth0 branch (where auth0.isAuthenticated + auth0.user
+           are handled), add a synchronous tenant_id write BEFORE the existing
+           /api/tenant/plan fetch:
+
+             const tenantId = resolveTenantId(auth0.user);
+             if (tenantId) {
+               sessionStorage.setItem('lspro_tenant_id', tenantId);
+             }
+
+        4. Do NOT remove or rewrite the /api/tenant/plan fetch. Do NOT touch the
+           GAS / lspro_token path. Do NOT touch src/lib/api.ts. Those are WO #2.
+
+        5. Add a unit test file for resolveTenantId. First detect the existing test
+           convention by inspecting the cloned repo:
+             - Look for existing src/context/AuthContext.test.* files
+             - If not found, check src/context/__tests__/ or src/__tests__/context/
+             - Match the existing convention (vitest, jest, etc.) by looking at
+               other *.test.* files near AuthContext
+
+           Tests required (minimum 4, asserting REAL behavior — not "did not throw"):
+             a. resolveTenantId(user) returns tenant_id when user has metadata under
+                'https://livesellerpro.app/app_metadata' namespace
+             b. resolveTenantId(user) returns tenant_id when user has fallback
+                app_metadata.tenant_id
+             c. resolveTenantId(null) returns ''
+             d. resolveTenantId({}) returns '' (user with no metadata)
+
+           To make resolveTenantId testable, export it from AuthContext.jsx (named
+           export). If the file currently only exports the AuthProvider default,
+           add a named export for resolveTenantId.
+
+        6. Run verification (do NOT push, do NOT deploy):
+             cd /tmp/lspro-react-work-$WORKFLOW_ID
+             npm ci
+             npm run build
+             npm test
+
+        ## Completion Criteria
+        Output <promise>COMPLETE</promise> only when:
+          - src/context/AuthContext.jsx has resolveTenantId function (exported)
+          - src/context/AuthContext.jsx has sessionStorage.setItem('lspro_tenant_id', ...)
+            in the Auth0 branch BEFORE any /api/tenant/plan fetch
+          - Test file exists with >= 4 tests asserting real behavior
+          - npm run build exits 0
+          - npm test exits 0
+          - GAS / lspro_token path is UNCHANGED (grep proves it)
+          - /api/tenant/plan fetch is UNCHANGED (grep proves it)
+
+  # ---------------------------------------------------------------------------
+  # 6. VERIFY-GREP — structural assertions
+  # ---------------------------------------------------------------------------
+  - id: verify-grep
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      WORK_DIR="/tmp/lspro-react-work-$WORKFLOW_ID"
+      cd "$WORK_DIR"
+
+      AUTH_FILE="src/context/AuthContext.jsx"
+
+      echo "=== lspro-react grep assertions ==="
+
+      grep -q "resolveTenantId" "$AUTH_FILE" \
+        || (echo "FAIL: resolveTenantId missing from AuthContext.jsx" >&2; exit 1)
+
+      grep -q "lspro_tenant_id" "$AUTH_FILE" \
+        || (echo "FAIL: lspro_tenant_id sessionStorage write missing" >&2; exit 1)
+
+      SETITEM_COUNT=$(grep -c "sessionStorage.setItem.*lspro_tenant_id" "$AUTH_FILE" || echo 0)
+      echo "lspro_tenant_id setItem occurrences: $SETITEM_COUNT"
+      if [ "$SETITEM_COUNT" -lt 1 ]; then
+        echo "FAIL: expected >= 1 sessionStorage.setItem for lspro_tenant_id" >&2
+        exit 1
+      fi
+
+      grep -q "livesellerpro.app/app_metadata" "$AUTH_FILE" \
+        || (echo "FAIL: Auth0 metadata namespace reference missing" >&2; exit 1)
+
+      grep -q "lspro_token" "$AUTH_FILE" \
+        || (echo "FAIL: GAS / lspro_token path was removed — this WO must NOT touch it (that is WO #2)" >&2; exit 1)
+
+      grep -q "api/tenant/plan" "$AUTH_FILE" \
+        || (echo "FAIL: /api/tenant/plan fetch was removed — this WO must keep it as backup (removal is WO #2)" >&2; exit 1)
+
+      TEST_FOUND=0
+      for TEST_PATH in \
+        "src/context/AuthContext.test.tsx" \
+        "src/context/AuthContext.test.jsx" \
+        "src/context/AuthContext.test.ts" \
+        "src/context/AuthContext.test.js" \
+        "src/context/__tests__/AuthContext.test.tsx" \
+        "src/context/__tests__/AuthContext.test.jsx" \
+        "src/__tests__/context/AuthContext.test.tsx"; do
+        if [ -f "$TEST_PATH" ]; then
+          TEST_COUNT=$(grep -cE "^\s*(it|test)\(" "$TEST_PATH" || echo 0)
+          echo "Test file: $TEST_PATH — $TEST_COUNT tests"
+          if [ "$TEST_COUNT" -ge 4 ]; then
+            TEST_FOUND=1
+            break
+          fi
+        fi
+      done
+      if [ "$TEST_FOUND" -eq 0 ]; then
+        echo "FAIL: AuthContext test file not found with >= 4 tests" >&2
+        exit 1
+      fi
+
+      echo "=== all grep assertions passed ==="
+
+  # ---------------------------------------------------------------------------
+  # 7. VERIFY-BUILD — run npm run build
+  # ---------------------------------------------------------------------------
+  - id: verify-build
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      WORK_DIR="/tmp/lspro-react-work-$WORKFLOW_ID"
+      cd "$WORK_DIR"
+
+      if [ ! -d node_modules ]; then
+        npm ci --no-audit --no-fund
+      fi
+
+      npm run build
+
+  # ---------------------------------------------------------------------------
+  # 8. VERIFY-TESTS — run npm test
+  # ---------------------------------------------------------------------------
+  - id: verify-tests
+    depends_on: [implement]
+    bash: |
+      set -euo pipefail
+      WORK_DIR="/tmp/lspro-react-work-$WORKFLOW_ID"
+      cd "$WORK_DIR"
+
+      if [ ! -d node_modules ]; then
+        npm ci --no-audit --no-fund
+      fi
+
+      if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
+        npm test -- --run 2>&1 || npm test 2>&1
+      else
+        echo "WARN: no npm test script found in package.json" >&2
+        exit 1
+      fi
+
+  # ---------------------------------------------------------------------------
+  # 9. COMMIT-AND-PUSH — idempotent branch + commit + push
+  # ---------------------------------------------------------------------------
+  - id: commit-and-push
+    depends_on: [verify-grep, verify-build, verify-tests]
+    bash: |
+      set -euo pipefail
+      WORK_DIR="/tmp/lspro-react-work-$WORKFLOW_ID"
+      cd "$WORK_DIR"
+
+      BASE_BRANCH="fix/auth-ce-tenant-from-auth0-metadata"
+      BRANCH="$BASE_BRANCH"
+
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
+          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+        else
+          git checkout "$BRANCH"
+        fi
+      else
+        git checkout -b "$BRANCH"
+      fi
+
+      git add src/context/AuthContext.jsx
+
+      for TEST_PATH in \
+        "src/context/AuthContext.test.tsx" \
+        "src/context/AuthContext.test.jsx" \
+        "src/context/AuthContext.test.ts" \
+        "src/context/AuthContext.test.js" \
+        "src/context/__tests__/AuthContext.test.tsx" \
+        "src/context/__tests__/AuthContext.test.jsx" \
+        "src/__tests__/context/AuthContext.test.tsx"; do
+        if [ -f "$TEST_PATH" ]; then
+          git add "$TEST_PATH"
+        fi
+      done
+
+      if git diff --cached --quiet; then
+        echo "No staged changes; branch already contains requested work"
+      else
+        git -c user.name="John Ranson" -c user.email="admin@bluedevilcollectibles.com" \
+          commit -m "$(printf 'fix(auth): resolve tenant_id from Auth0 metadata at login [WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01]\n\nAdds resolveTenantId(user) helper next to existing resolveUserTier/resolveUserRole\nand writes the tenant slug to sessionStorage synchronously at Auth0 login BEFORE\nthe (CF-Access-gated) /api/tenant/plan fetch fires.\n\nRoot cause anchor (2026-05-14): CE users had no lspro_tenant_id in sessionStorage\nbecause /api/tenant/plan sits behind Cloudflare Access and Auth0 Bearer cannot pass\nCF Access. Downstream callers (scanLookup.ts, CEStep02Processing.tsx, apiFetch)\nread empty tenant_id, dropped the URL param, shopops-api returned 400.\n\nThis WO ships the FAST FIX per John 2026-05-15 ruling that browser auth collapses\nto one path: Auth0. tenant + plan come from Auth0 app_metadata. The GAS /\nlspro_token launcher path stays live in this PR and is retired by WO #2.\nThe /api/tenant/plan fetch stays as backup correction (DB-wins fallback) and\nis retired by WO #2.\n\nDoctrine: feedback_browser-uses-auth0-only-gas-token-is-legacy.md\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')"
+      fi
+
+      git push -u origin "$BRANCH"
+      echo "BRANCH=${BRANCH}"
+      echo "BRANCH_SHA=$(git rev-parse HEAD)"
+
+  # ---------------------------------------------------------------------------
+  # 10. OPEN-PR — idempotent PR against main
+  # ---------------------------------------------------------------------------
+  - id: open-pr
+    depends_on: [commit-and-push]
+    bash: |
+      set -euo pipefail
+      WORK_DIR="/tmp/lspro-react-work-$WORKFLOW_ID"
+      cd "$WORK_DIR"
+
+      BRANCH=$(git rev-parse --abbrev-ref HEAD)
+      REPO="bluedevilcollectibles/lspro-react"
+      BASE="main"
+      TITLE="fix(auth): resolve tenant_id from Auth0 metadata at login [unblocks CE scan + import]"
+
+      EXISTING=$(gh pr list --repo "$REPO" --head "$BRANCH" --json url --jq '.[0].url' 2>/dev/null || true)
+      if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+        echo "PR_URL=${EXISTING}"
+        echo "PR_STATUS=already_open"
+        exit 0
+      fi
+
+      BODY_FILE=$(mktemp)
+      {
+        echo "## Summary"
+        echo "Implements **WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01** — the P0 live fix"
+        echo "for the CE scan 400 + import 0% match symptom. Reads \`tenant_id\` from the"
+        echo "Auth0 user \`app_metadata\` namespace at login and writes it to"
+        echo "\`sessionStorage\` BEFORE any downstream API call fires."
+        echo ""
+        echo "Doctrine: \`feedback_browser-uses-auth0-only-gas-token-is-legacy.md\` (John 2026-05-15)."
+        echo ""
+        echo "## Root cause"
+        echo "- \`/api/tenant/plan\` sits behind Cloudflare Access"
+        echo "- Auth0 Bearer doesn't pass CF Access → 401 → \`setItem('lspro_tenant_id', ...)\` never fires"
+        echo "- Downstream callers (scanLookup, CEStep02Processing, apiFetch) read empty tenant_id"
+        echo "- shopops-api returns 400 \`tenant_id param required\`"
+        echo ""
+        echo "## Fix"
+        echo "Mirror the existing \`resolveUserTier\` / \`resolveUserRole\` pattern (line ~19-35)"
+        echo "with a new \`resolveTenantId(user)\` helper that reads from the same Auth0"
+        echo "namespace, then write tenant synchronously in the AuthProvider effect"
+        echo "BEFORE the broken \`/api/tenant/plan\` fetch fires."
+        echo ""
+        echo "## Files"
+        echo "- Modified: \`src/context/AuthContext.jsx\`"
+        echo "- Created: \`src/context/AuthContext.test.*\` (4+ tests)"
+        echo ""
+        echo "## Tests"
+        echo "- \`npm test\` — 4+ new tests on resolveTenantId behavior"
+        echo "- \`npm run build\` — clean"
+        echo ""
+        echo "## Grep assertions"
+        echo "- \`grep -c 'resolveTenantId' src/context/AuthContext.jsx\` ≥ 1"
+        echo "- \`grep -c 'sessionStorage.setItem.*lspro_tenant_id' src/context/AuthContext.jsx\` ≥ 1"
+        echo ""
+        echo "## What this PR does NOT do (deferred to WO #2 + #3)"
+        echo "- Touch GAS / \`lspro_token\` path"
+        echo "- Remove \`/api/tenant/plan\` fetch (stays as backup)"
+        echo "- Forward-port to \`release/ce\` (separate commit)"
+        echo "- Modify \`src/lib/api.ts\`"
+        echo ""
+        echo "## Post-merge verification (operator-driven)"
+        echo "1. Wait for Vercel deploy. **Vercel cache caveat applies** (anchor: PR #73 incident)."
+        echo "2. If bundle filename doesn't change: empty commit → push → recheck. Dashboard redeploy without build cache if still stuck."
+        echo "3. Hard refresh \`app.livesellerpro.app\`."
+        echo "4. DevTools → Application → Session Storage shows \`lspro_tenant_id\` key with tenant slug."
+        echo "5. CE Step 1 scan UPC \`76194137939500141\` → row populates with real title + cover within 2s."
+        echo "6. CE Step 2 upload 45-row Lunar CSV → match rate > 80% (not 0/45)."
+        echo "7. \`curl https://app.livesellerpro.app/assets/<new-bundle>.js | grep -c resolveTenantId\` ≥ 1."
+        echo ""
+        echo "## Follow-up WOs queued"
+        echo "- WO-AUTH-RETIRE-LSPRO-GAS-BROWSER-TOKEN-01"
+        echo "- WO-AUTH-GAS-LAUNCHER-TO-AUTH0-BRIDGE-01"
+        echo "- WO-AUTH-E2E-CE-SINGLE-AUTH-PATH-01"
+      } > "$BODY_FILE"
+
+      PR_URL=$(gh pr create \
+        --repo "$REPO" \
+        --base "$BASE" \
+        --head "$BRANCH" \
+        --title "$TITLE" \
+        --body-file "$BODY_FILE")
+
+      echo "PR_URL=${PR_URL}"
+
+  # ---------------------------------------------------------------------------
+  # 11. BUILD-MANIFEST — Captain CI manifest v2
+  # ---------------------------------------------------------------------------
+  - id: build-manifest
+    depends_on: [open-pr]
+    task_class: clerical
+    prompt: |
+      Construct the Captain CI completion manifest v2 for
+      WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.
+
+      Output Markdown matching exactly:
+
+      ```
+      WO: WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01
+      Builder: Cauldron (bdc-auth-ce-auth0-tenant-metadata-harden workflow)
+      Files modified: lspro-react/src/context/AuthContext.jsx
+      Files created: <test path from commit-and-push>
+      Tests: <count passing / count total via npm test>
+      PRs: <PR URL from open-pr>
+      Merge ancestors: lspro-react main HEAD: <sha>, manifest commit: <sha>, behind_by: 0
+      Grep assertions:
+        - [ $(grep -c 'resolveTenantId' src/context/AuthContext.jsx) -ge 1 ]
+        - [ $(grep -c 'sessionStorage.setItem.*lspro_tenant_id' src/context/AuthContext.jsx) -ge 1 ]
+      Runtime verification: PENDING (operator-driven post-Vercel-deploy DevTools + bundle-grep)
+      Vercel deployment: PENDING (auto-deploy on main merge)
+      VALIDATION: PASS
+      ```
+
+      ## Inputs
+      Commit + Branch:
+      $commit-and-push.output
+
+      PR:
+      $open-pr.output
+
+      Build:
+      $verify-build.output
+
+      Tests:
+      $verify-tests.output
+
+      Grep:
+      $verify-grep.output
+
+  # ---------------------------------------------------------------------------
+  # 12. FLIP-NOTION — flip WO to REVIEW with manifest
+  # ---------------------------------------------------------------------------
+  - id: flip-notion
+    depends_on: [build-manifest]
+    task_class: clerical
+    prompt: |
+      Update the Notion WO page for WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.
+
+      ## Required Notion Changes
+      - Claude Status: REVIEW
+      - Status: Review
+      - Add the Captain CI manifest below as a page comment
+
+      ## Manifest
+      $build-manifest.output
+
+      ## Notion page ID
+      OPERATOR-FILL-IN-BEFORE-FIRING — search Notion DB
+      a6df831c-0b52-449f-8ca4-d77be6b70d0a for WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.
+
+      If Notion MCP is not available inside the container, do not invent a workaround.
+      Output a TODO for XO to flip Notion manually with the manifest above.
