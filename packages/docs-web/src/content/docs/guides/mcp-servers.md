@@ -203,7 +203,7 @@ nodes:
 This is useful for sandboxing — the AI can only interact through the MCP server
 and cannot touch the filesystem or run shell commands. Codex currently does not
 support Archon's `allowed_tools` / `denied_tools` restrictions, so this pattern
-is enforced for Claude nodes but not Codex nodes.
+is enforced for Claude and Oh My Pi nodes but not Codex nodes.
 
 ## Connection Failure Handling
 
