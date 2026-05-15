@@ -463,7 +463,7 @@ Both sources coexist — inline agents and on-disk agents are both available to 
 
 Every node automatically retries on **transient** errors (SDK subprocess crashes, rate limits, network timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
 
-To customise, add a `retry:` block:
+To customize, add a `retry:` block:
 
 ```yaml
 nodes:
