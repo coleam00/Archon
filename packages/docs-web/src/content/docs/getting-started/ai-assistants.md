@@ -554,6 +554,10 @@ assistants:
       retry:
         enabled: true
         maxRetries: 3
+        fallbackChains:
+          default:
+            - anthropic/claude-haiku-4-5
+        fallbackRevertPolicy: cooldown-expiry
       compaction:
         enabled: true
       contextPromotion:
@@ -610,12 +614,13 @@ Tools that can modify files, run code, access the network, or change session sta
 | OMP config env | ✅ | `assistants.omp.env` applies session-scoped process env for in-process OMP extensions, does not override shell env, and removes keys Archon created after the prompt |
 | OMP interactivity | ✅ | `assistants.omp.interactive: false` passes `hasUI: false` and skips Archon's OMP UI bridge |
 | OMP extension flags | ✅ when an extension runner loads | `assistants.omp.extensionFlags` calls OMP `extensionRunner.setFlagValue()` before the first prompt; Archon emits a warning if no runner is present |
-| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `contextPromotion`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)` |
+| OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `contextPromotion`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)`; retry settings include `enabled`, `maxRetries`, `fallbackChains`, and `fallbackRevertPolicy` |
 | OMP MCP discovery | ✅ (OMP-native) | `assistants.omp.enableMCP` toggles OMP's own MCP discovery from `.omp/mcp.json`, `~/.omp/agent/mcp.json`, root `mcp.json`, and supported third-party config files |
 | Archon `mcp:` field | ✅ (node-scoped) | Workflow node `mcp: .archon/mcp/server.json` loads that Archon MCP JSON only for the node. It does not require `assistants.omp.enableMCP: true` and does not write OMP-native config files |
 | Bash subprocess env injection | ✅ | Workflow/codebase `envVars` are injected into OMP `bash` tool calls. If a model supplies an explicit bash `env` argument for the same key, the tool-call value wins. |
+| Fallback model | ✅ (retry/rate-limit fallback) | `fallbackModel:` maps to OMP `retry.fallbackChains` for the node/workflow primary model. OMP applies it during retryable errors such as rate limits or transient provider failures, not as an arbitrary-error fallback. |
 | Custom tools / commands / hooks paths | OMP-native only | Use OMP discovery directories such as `.omp/tools`, `.omp/commands`, `.omp/hooks`, or extensions; Archon does not write hidden config files or expose path-array shims |
-| Claude hooks / inline agents / sandbox / fallback model / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |
+| Claude hooks / inline agents / sandbox / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |
 
 
 Node-level Archon `mcp:` and `assistants.omp.enableMCP` are intentionally separate. Use `mcp:` when a workflow node needs a least-privilege server list from an Archon JSON file; use `assistants.omp.enableMCP` when you want OMP's broader native discovery behavior for sessions without node-scoped MCP.
