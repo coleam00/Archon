@@ -1,10 +1,4 @@
-type DynamicImport = (specifier: string) => Promise<unknown>;
-
-// External SDK source currently ships TypeScript imports that this package's tsc
-// configuration cannot type-check directly. Use a runtime import indirection so
-// Archon owns the structural boundary instead of compiling OMP internals.
-// eslint-disable-next-line @typescript-eslint/no-implied-eval
-const dynamicImport = new Function('specifier', 'return import(specifier)') as DynamicImport;
+import { importOmpCodingAgent, importOmpMcp } from './sdk-runtime-imports.js';
 
 export interface OmpAuthStorage {
   setRuntimeApiKey(provider: string, apiKey: string): void;
@@ -58,12 +52,13 @@ export interface OmpSession {
   subscribe(listener: (event: unknown) => void): () => void;
   prompt(prompt: string): Promise<unknown>;
   abort(): Promise<unknown>;
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
 
 export interface OmpCreateAgentSessionResult {
   session: OmpSession;
   modelFallbackMessage?: string;
+  mcpManager?: OmpMcpManager;
   setToolUIContext(uiContext: unknown, hasUI: boolean): void;
 }
 
@@ -104,9 +99,6 @@ export interface OmpCodingAgentSdk {
 }
 
 export async function loadOmpSdk(): Promise<OmpCodingAgentSdk> {
-  const [sdk, mcp] = await Promise.all([
-    dynamicImport('@oh-my-pi/pi-coding-agent'),
-    dynamicImport('@oh-my-pi/pi-coding-agent/mcp'),
-  ]);
+  const [sdk, mcp] = await Promise.all([importOmpCodingAgent(), importOmpMcp()]);
   return { ...(sdk as object), ...(mcp as object) } as OmpCodingAgentSdk;
 }
