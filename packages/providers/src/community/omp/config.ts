@@ -1,6 +1,62 @@
-import type { OmpProviderDefaults, OmpSettingsDefaults } from '../../types';
+export interface OmpRetrySettingsDefaults {
+  enabled?: boolean;
+  maxRetries?: number;
+  fallbackChains?: Record<string, string[]>;
+  fallbackRevertPolicy?: 'cooldown-expiry' | 'never';
+}
 
-export type { OmpProviderDefaults };
+export interface OmpCompactionSettingsDefaults {
+  enabled?: boolean;
+}
+
+export interface OmpContextPromotionSettingsDefaults {
+  enabled?: boolean;
+}
+
+export interface OmpSettingsDefaults {
+  retry?: OmpRetrySettingsDefaults;
+  compaction?: OmpCompactionSettingsDefaults;
+  contextPromotion?: OmpContextPromotionSettingsDefaults;
+  modelRoles?: Record<string, string>;
+  enabledModels?: string[];
+  modelProviderOrder?: string[];
+  disabledProviders?: string[];
+  disabledExtensions?: string[];
+}
+
+/**
+ * Community provider defaults for Oh My Pi (@oh-my-pi/pi-coding-agent).
+ * Kept inside the OMP provider directory so community-provider config shape
+ * does not expand the shared provider contract.
+ */
+export interface OmpProviderDefaults {
+  [key: string]: unknown;
+  /** Default model ref in '<omp-provider-id>/<model-id>' format. */
+  model?: string;
+  /** Advanced override for OMP auth/session/settings root. */
+  agentDir?: string;
+  /** Enable OMP's own MCP discovery; separate from node-scoped Archon workflow `mcp:` translation. */
+  enableMCP?: boolean;
+  /** Enable OMP LSP-backed tools and warmup. */
+  enableLsp?: boolean;
+  /** Disable OMP extension discovery while still allowing explicit paths when set true. */
+  disableExtensionDiscovery?: boolean;
+  /** Additional OMP extension entrypoints/directories to load. */
+  additionalExtensionPaths?: string[];
+  /** Explicit OMP built-in tool names to expose. */
+  toolNames?: string[];
+  /** Bind OMP UI context for interactive tools/extensions; defaults to true. */
+  interactive?: boolean;
+  /** OMP extension flag values applied before the first prompt. */
+  extensionFlags?: Record<string, boolean | string>;
+  /**
+   * Config-level environment for in-process OMP extensions.
+   * Existing process.env values are not overridden; shell env wins.
+   */
+  env?: Record<string, string>;
+  /** In-memory OMP Settings.isolated overrides owned by this provider. */
+  settings?: OmpSettingsDefaults;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

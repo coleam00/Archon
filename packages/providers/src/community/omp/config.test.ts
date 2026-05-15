@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { OmpProviderDefaults } from '../../types';
-
-import { parseOmpConfig } from './config';
+import { parseOmpConfig, type OmpProviderDefaults } from './config';
 
 const validOmpConfigInput = {
   model: 'anthropic/claude-sonnet-4-5',
