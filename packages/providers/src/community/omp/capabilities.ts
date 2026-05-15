@@ -12,7 +12,7 @@ export const OMP_CAPABILITIES: ProviderCapabilities = {
   agents: false,
   toolRestrictions: true,
   structuredOutput: true,
-  envInjection: false,
+  envInjection: true,
   costControl: false,
   effortControl: true,
   thinkingControl: true,

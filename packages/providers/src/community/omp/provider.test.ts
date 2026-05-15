@@ -27,7 +27,7 @@ interface FakeSdkOptions {
   onGetApiKey?: (provider: string) => string | undefined | Promise<string | undefined>;
   onModelRegistryRefresh?: () => void | Promise<void>;
   onFindModel?: (provider: string, modelId: string) => unknown;
-  onPrompt?: () => void | Promise<void>;
+  onPrompt?: (session: OmpSession) => void | Promise<void>;
   onDispose?: () => void | Promise<void>;
   mcpTools?: unknown[];
   mcpErrors?: Map<string, string>;
@@ -41,6 +41,7 @@ interface FakeSdkOptions {
   disconnectMcpError?: Error;
   onSetMcpAuthStorage?: (authStorage: OmpAuthStorage) => void;
   returnSdkManagedMcpManager?: boolean;
+  initialBeforeToolCall?: NonNullable<OmpSession['agent']>['beforeToolCall'];
 }
 
 async function collectChunks(
@@ -74,15 +75,19 @@ async function writeTempMcpConfig(config: Record<string, unknown>): Promise<{
 }
 
 function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
+  const agent: NonNullable<OmpSession['agent']> = {
+    ...(options.initialBeforeToolCall ? { beforeToolCall: options.initialBeforeToolCall } : {}),
+  };
   const session: OmpSession = {
     sessionId: 'sess-1',
     ...(options.extensionRunner ? { extensionRunner: options.extensionRunner } : {}),
+    agent,
     subscribe(listener) {
       this.listener = listener;
       return () => undefined;
     },
     async prompt() {
-      await options.onPrompt?.();
+      await options.onPrompt?.(session);
       const listener = this.listener as ((event: unknown) => void) | undefined;
       listener?.({
         type: 'message_update',
@@ -203,6 +208,7 @@ describe('OmpProvider', () => {
     const provider = new OmpProvider(async () => makeSdk());
     expect(provider.getType()).toBe('omp');
     expect(provider.getCapabilities().sessionResume).toBe(true);
+    expect(provider.getCapabilities().envInjection).toBe(true);
   });
 
   test('throws on missing model', async () => {
@@ -324,6 +330,96 @@ describe('OmpProvider', () => {
       if (originalNew === undefined) delete process.env.OMP_PROVIDER_TEST_NEW;
       else process.env.OMP_PROVIDER_TEST_NEW = originalNew;
     }
+  });
+
+  test('injects request env into OMP bash tool calls', async () => {
+    let bashArgs: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        async onPrompt(session) {
+          bashArgs = { command: 'echo $DATABASE_URL' };
+          await session.agent?.beforeToolCall?.({
+            toolCall: { name: 'bash' },
+            args: bashArgs,
+          });
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      env: { DATABASE_URL: 'postgres://managed', API_TOKEN: 'secret' },
+    });
+
+    expect(bashArgs?.env).toEqual({
+      DATABASE_URL: 'postgres://managed',
+      API_TOKEN: 'secret',
+    });
+  });
+
+  test('lets explicit OMP bash env override injected request env', async () => {
+    let bashArgs: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        async onPrompt(session) {
+          bashArgs = {
+            command: 'echo $DATABASE_URL',
+            env: { DATABASE_URL: 'postgres://tool', PATH: '/bin' },
+          };
+          await session.agent?.beforeToolCall?.({
+            toolCall: { name: 'bash' },
+            args: bashArgs,
+          });
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      env: { DATABASE_URL: 'postgres://managed', API_TOKEN: 'secret' },
+    });
+
+    expect(bashArgs?.env).toEqual({
+      DATABASE_URL: 'postgres://tool',
+      API_TOKEN: 'secret',
+      PATH: '/bin',
+    });
+  });
+
+  test('preserves existing OMP beforeToolCall behavior', async () => {
+    const events: string[] = [];
+    let readArgs: Record<string, unknown> | undefined;
+    let bashArgs: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        initialBeforeToolCall(context) {
+          events.push(context.toolCall.name);
+          if (context.toolCall.name === 'read') context.args.path = 'changed.txt';
+          return undefined;
+        },
+        async onPrompt(session) {
+          readArgs = { path: 'original.txt' };
+          bashArgs = { command: 'echo $TOKEN' };
+          await session.agent?.beforeToolCall?.({
+            toolCall: { name: 'read' },
+            args: readArgs,
+          });
+          await session.agent?.beforeToolCall?.({
+            toolCall: { name: 'bash' },
+            args: bashArgs,
+          });
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      env: { TOKEN: 'managed' },
+    });
+
+    expect(events).toEqual(['read', 'bash']);
+    expect(readArgs).toEqual({ path: 'changed.txt' });
+    expect(bashArgs?.env).toEqual({ TOKEN: 'managed' });
   });
 
   test('uses assistant config env for runtime auth override', async () => {
