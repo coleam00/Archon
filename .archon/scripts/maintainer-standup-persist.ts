@@ -52,7 +52,7 @@ if (beginMatches.length > 0 && endMatches.length > 0) {
     const stateText = raw.slice(afterBeginIdx, lastEndIdx).trim();
     try {
       state = JSON.parse(stateText) as State;
-      // Brief is everything before the first line-anchored BEGIN.
+      // Brief = everything before the first BEGIN; preserves prose intact even if state was emitted multiple times.
       brief = raw.slice(0, beginMatches[0].index!).trim();
       source = 'delimiter';
       if (beginMatches.length > 1) {
@@ -61,10 +61,15 @@ if (beginMatches.length > 0 && endMatches.length > 0) {
         );
       }
     } catch (err) {
+      const preview = stateText.length > 200 ? stateText.slice(0, 200) + '…' : stateText;
       process.stderr.write(
-        `Delimiter found but state JSON parse failed: ${(err as Error).message}\n`,
+        `Delimiter found but state JSON parse failed: ${(err as Error).message}\nFailed candidate (first 200 chars): ${preview}\n`,
       );
     }
+  } else {
+    process.stderr.write(
+      `WARN: ARCHON_STATE_JSON_BEGIN/END markers found but all BEGIN markers appear after the last END; skipping delimiter extraction.\n`,
+    );
   }
 }
 
@@ -116,13 +121,19 @@ brief = brief.trim();
 const date = new Date().toLocaleDateString('sv-SE'); // local YYYY-MM-DD
 const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
 const briefsDir = resolve(baseDir, 'briefs');
-mkdirSync(briefsDir, { recursive: true });
-
 const statePath = resolve(baseDir, 'state.json');
 const briefPath = resolve(briefsDir, `${date}.md`);
 
-writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n');
-writeFileSync(briefPath, brief + '\n');
+try {
+  mkdirSync(briefsDir, { recursive: true });
+  writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n');
+  writeFileSync(briefPath, brief + '\n');
+} catch (err) {
+  process.stderr.write(
+    `PERSIST FAILED: could not write output files: ${(err as Error).message}\n`,
+  );
+  process.exit(1);
+}
 
 process.stdout.write(
   JSON.stringify({

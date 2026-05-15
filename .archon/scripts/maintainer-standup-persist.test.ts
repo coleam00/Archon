@@ -98,6 +98,9 @@ describe('maintainer-standup-persist', () => {
   });
 
   test('marker substring inside state JSON string value — not confused', async () => {
+    // Note: the marker appears inline inside JSON (compact single-line), not on its own line,
+    // so the line-anchored regex never matches it. This test provides defence-in-depth but does
+    // not demonstrate a case that failed under the old indexOf approach.
     const stateJson = JSON.stringify({
       version: 5,
       observed_prs: [
@@ -118,6 +121,33 @@ describe('maintainer-standup-persist', () => {
     const result = await runPersist(input);
     expect(result.exitCode).toBe(0);
     expect((result.stateParsed as { version: number }).version).toBe(5);
+  });
+
+  test('BEGIN present but END absent (truncated output) — falls through to error', async () => {
+    const input = [
+      '# Standup',
+      'ARCHON_STATE_JSON_BEGIN',
+      '{"truncated": true', // no END marker — simulates context-length truncation
+    ].join('\n');
+    const result = await runPersist(input);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('PERSIST FAILED');
+  });
+
+  test('prose preamble before first heading is stripped from brief', async () => {
+    const input = [
+      'Some preamble text before the heading.',
+      '# Maintainer Standup — 2026-05-15',
+      'Actual content.',
+      'ARCHON_STATE_JSON_BEGIN',
+      '{"version": 7}',
+      'ARCHON_STATE_JSON_END',
+    ].join('\n');
+    const result = await runPersist(input);
+    expect(result.exitCode).toBe(0);
+    expect(result.briefContent).not.toContain('preamble');
+    expect(result.briefContent).toContain('# Maintainer Standup');
+    expect(result.briefContent).toContain('Actual content.');
   });
 
   test('duplicate BEGIN blocks AND marker in prose — last complete pair wins', async () => {
