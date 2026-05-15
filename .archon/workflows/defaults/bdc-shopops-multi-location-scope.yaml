@@ -139,15 +139,16 @@ nodes:
       exit 0
 
   # -------------------------------------------------------------------------
-  # 3. FRESH BRANCH — create wo/shopops-multi-location-scope-01 from origin/master
+  # 3. FRESH BRANCH — create wo/shopops-multi-location-scope-01 from "origin/$DEFAULT_BRANCH"
   # -------------------------------------------------------------------------
   - id: fresh-branch
     depends_on: [schema-verify]
     bash: |
       set -euo pipefail
-      git fetch origin master --depth=50
-      git checkout master
-      git reset --hard origin/master
+      DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
+      git fetch origin "$DEFAULT_BRANCH" --depth=50
+      git checkout "$DEFAULT_BRANCH"
+      git reset --hard "origin/$DEFAULT_BRANCH"
       BASE_BRANCH="wo/shopops-multi-location-scope-01"
       BRANCH="$BASE_BRANCH"
       if git show-ref --quiet "refs/heads/$BRANCH"; then
@@ -157,7 +158,7 @@ nodes:
           git checkout -b "$BRANCH"
         else
           git checkout "$BRANCH"
-          git reset --hard origin/master
+          git reset --hard "origin/$DEFAULT_BRANCH"
         fi
       else
         git checkout -b "$BRANCH"

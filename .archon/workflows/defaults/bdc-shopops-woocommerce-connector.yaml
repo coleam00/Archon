@@ -15,7 +15,7 @@
 #   docker exec shopops-api psql "$DATABASE_URL" -c "\d product_channel_map" (must not error)
 #   docker exec shopops-api psql "$DATABASE_URL" -c "\d channel_orders" (must not error)
 #
-# Pre-flight: WO spec committed and pushed to bdc-xo origin/main before firing.
+# Pre-flight: WO spec committed and pushed to bdc-xo "origin/$DEFAULT_BRANCH" before firing.
 #   Spec path: docs/work-orders/WO-SHOPOPS-WOOCOMMERCE-CONNECTOR-01.md
 #
 # NOTE ON CWD: Archon CWD = shopops repo root. shopops-api/ is a subdirectory.

@@ -373,14 +373,15 @@ nodes:
     depends_on: [plan]
     bash: |
       set -euo pipefail
+      DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
       STOREFRONT_DIR="/tmp/storefront-work-$WORKFLOW_ID"
 
-      # Idempotent: if already cloned from a prior run, reset to origin/main
+      # Idempotent: if already cloned from a prior run, reset to "origin/$DEFAULT_BRANCH"
       if [ -d "$STOREFRONT_DIR/.git" ]; then
         cd "$STOREFRONT_DIR"
         git fetch origin
-        git checkout main 2>/dev/null || git checkout master
-        git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+        git checkout "$DEFAULT_BRANCH" 2>/dev/null || git checkout "$DEFAULT_BRANCH"
+        git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || git reset --hard "origin/$DEFAULT_BRANCH"
         echo "STOREFRONT_DIR=${STOREFRONT_DIR}"
         echo "STATUS=reused_existing_clone"
         exit 0

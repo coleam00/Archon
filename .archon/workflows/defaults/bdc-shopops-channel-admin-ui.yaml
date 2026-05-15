@@ -4,7 +4,7 @@
 # Pre-flight: codebase bluedevilcollectibles/lspro-react must be registered in Archon
 #   Verify: sqlite3 /opt/bdc/archon-data/archon.db "SELECT name FROM remote_agent_codebases"
 #   Expected: bluedevilcollectibles/lspro-react present
-# Pre-flight: WO spec must be committed + pushed to bdc-xo origin/main before firing
+# Pre-flight: WO spec must be committed + pushed to bdc-xo "origin/$DEFAULT_BRANCH" before firing
 #   File: docs/work-orders/WO-SHOPOPS-CHANNEL-ADMIN-UI-01.md
 # Deploy: BDC_XO/scripts/archon-bridge/sync-workflows.sh WO-SHOPOPS-CHANNEL-ADMIN-UI-01.yaml
 # REVIEW BEFORE DEPLOY: human verifies test thresholds (N=5), screenshot loop (N=3), Notion page ID.

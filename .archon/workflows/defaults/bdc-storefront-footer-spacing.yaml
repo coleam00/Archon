@@ -46,9 +46,10 @@ nodes:
     depends_on: [read-spec]
     bash: |
       set -euo pipefail
-      git fetch origin main --depth=50
-      git checkout main
-      git reset --hard origin/main
+      DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
+      git fetch origin "$DEFAULT_BRANCH" --depth=50
+      git checkout "$DEFAULT_BRANCH"
+      git reset --hard "origin/$DEFAULT_BRANCH"
       BASE_BRANCH="wo/storefront-footer-spacing-01"
       BRANCH="$BASE_BRANCH"
       if git show-ref --quiet "refs/heads/$BRANCH"; then
@@ -58,7 +59,7 @@ nodes:
           git checkout -b "$BRANCH"
         else
           git checkout "$BRANCH"
-          git reset --hard origin/main
+          git reset --hard "origin/$DEFAULT_BRANCH"
         fi
       else
         git checkout -b "$BRANCH"

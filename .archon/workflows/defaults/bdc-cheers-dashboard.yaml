@@ -126,12 +126,13 @@ nodes:
     depends_on: [read-spec]
     bash: |
       set -euo pipefail
+      DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
       SHOPOPS_DIR="/tmp/shopops-work-$WORKFLOW_ID"
       if [ -d "$SHOPOPS_DIR/.git" ]; then
         cd "$SHOPOPS_DIR"
         git fetch origin
-        git checkout master 2>/dev/null || git checkout main
-        git reset --hard origin/master 2>/dev/null || git reset --hard origin/main
+        git checkout "$DEFAULT_BRANCH" 2>/dev/null || git checkout "$DEFAULT_BRANCH"
+        git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || git reset --hard "origin/$DEFAULT_BRANCH"
         echo "STATUS=reused"
       else
         git clone "https://github.com/bluedevilcollectibles/shopops.git" "$SHOPOPS_DIR" --depth=50
