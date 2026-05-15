@@ -119,7 +119,7 @@ Connects to an SSE endpoint.
 
 ## Environment Variable Expansion
 
-Values in `env` and `headers` fields support `$VAR_NAME` references that are
+Values in `env` and `headers` fields support `$VAR_NAME` and `${VAR_NAME}` references that are
 expanded from `process.env` at execution time.
 
 ```json
@@ -128,7 +128,7 @@ expanded from `process.env` at execution time.
     "command": "npx",
     "args": ["-y", "@mcp/server-postgres"],
     "env": {
-      "DATABASE_URL": "$DATABASE_URL",
+      "DATABASE_URL": "${DATABASE_URL}",
       "POOL_SIZE": "$DB_POOL_SIZE"
     }
   }
@@ -136,7 +136,7 @@ expanded from `process.env` at execution time.
 ```
 
 **Rules:**
-- Pattern: `$UPPER_CASE_VAR` (matches `[A-Z_][A-Z0-9_]*`)
+- Patterns: `$UPPER_CASE_VAR` and `${UPPER_CASE_VAR}` (matches `[A-Z_][A-Z0-9_]*`)
 - Only `env` and `headers` values are expanded — `command`, `args`, `url` are left untouched
 - Undefined vars are replaced with empty string and a warning is shown:
   `Warning: Node 'X' MCP config references undefined env vars: VAR_NAME`
