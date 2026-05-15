@@ -39,6 +39,11 @@ import type {
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { resolveClaudeBinaryPath } from './binary-resolver';
+import {
+  buildReauthMessage,
+  isTerminalRefreshReason,
+  refreshIfAuthFailed,
+} from '../auth-refresh/index.js';
 import { createLogger } from '@archon/paths';
 import { readFile } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
@@ -1034,6 +1039,31 @@ export class ClaudeProvider implements IAgentProvider {
           },
           'query_error'
         );
+
+        // BDC fork: subscription auth must self-heal; API-key fallback is forbidden.
+        if (errorClass === 'auth' && attempt === 0) {
+          try {
+            const result = await refreshIfAuthFailed('claude');
+            if (result.refreshed) {
+              getLog().info(
+                { provider: 'claude', newExpiresAt: new Date(result.expiresAt).toISOString() },
+                'token_refreshed_retrying'
+              );
+              lastError = enrichedError;
+              continue;
+            }
+            getLog().error(
+              { provider: 'claude', reason: result.reason, err: result.error },
+              'token_refresh_failed'
+            );
+            if (isTerminalRefreshReason(result.reason)) {
+              throw new Error(buildReauthMessage('claude', result.reason));
+            }
+          } catch (refreshErr) {
+            getLog().error({ provider: 'claude', err: refreshErr }, 'token_refresh_threw');
+            throw refreshErr;
+          }
+        }
 
         if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
           throw enrichedError;

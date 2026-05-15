@@ -16,6 +16,19 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
+const mockRefreshIfAuthFailed = mock(async () => ({
+  refreshed: false,
+  reason: 'no_creds' as const,
+}));
+
+mock.module('../auth-refresh/index.js', () => ({
+  refreshIfAuthFailed: mockRefreshIfAuthFailed,
+  isTerminalRefreshReason: (reason: string) =>
+    reason === 'refresh_expired' || reason === 'refresh_revoked',
+  buildReauthMessage: (provider: string, reason: string) =>
+    `${provider} subscription auth expired (${reason}). Re-run ${provider} login on the harness host.`,
+}));
+
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
 import * as binaryResolver from './binary-resolver';
@@ -78,6 +91,11 @@ describe('ClaudeProvider', () => {
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.debug.mockClear();
+    mockRefreshIfAuthFailed.mockClear();
+    mockRefreshIfAuthFailed.mockResolvedValue({
+      refreshed: false,
+      reason: 'no_creds' as const,
+    });
   });
 
   describe('constructor', () => {
@@ -615,7 +633,7 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).toEqual({ type: 'assistant', content: 'Recovered!' });
     }, 5_000);
 
-    test('classifies auth errors as fatal (no retry)', async () => {
+    test('classifies auth errors as fatal when refresh has no credentials', async () => {
       const error = new Error('unauthorized');
       mockQuery.mockImplementation(async function* () {
         throw error;
@@ -628,7 +646,54 @@ describe('ClaudeProvider', () => {
       };
 
       await expect(consumeGenerator()).rejects.toThrow(/Claude Code auth error/);
-      // Should NOT retry - verify single call
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockRefreshIfAuthFailed).toHaveBeenCalledWith('claude');
+    });
+
+    test('refreshes auth errors once and retries the query', async () => {
+      let callCount = 0;
+      mockRefreshIfAuthFailed.mockResolvedValue({
+        refreshed: true,
+        provider: 'claude' as const,
+        expiresAt: Date.now() + 28_800_000,
+      });
+      mockQuery.mockImplementation(async function* () {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('unauthorized');
+        }
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'Recovered after refresh' }] },
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(mockRefreshIfAuthFailed).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(chunks).toEqual([{ type: 'assistant', content: 'Recovered after refresh' }]);
+    });
+
+    test('surfaces reauth guidance when the refresh token is terminally invalid', async () => {
+      mockRefreshIfAuthFailed.mockResolvedValue({
+        refreshed: false,
+        reason: 'refresh_revoked' as const,
+      });
+      mockQuery.mockImplementation(async function* () {
+        throw new Error('unauthorized');
+      });
+
+      const consumeGenerator = async () => {
+        for await (const _ of client.sendQuery('test', '/workspace')) {
+          // consume
+        }
+      };
+
+      await expect(consumeGenerator()).rejects.toThrow(/subscription auth expired/);
       expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 

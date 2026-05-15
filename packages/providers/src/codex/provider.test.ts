@@ -39,6 +39,19 @@ mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
 
+const mockRefreshIfAuthFailed = mock(async () => ({
+  refreshed: false,
+  reason: 'no_creds' as const,
+}));
+
+mock.module('../auth-refresh/index.js', () => ({
+  refreshIfAuthFailed: mockRefreshIfAuthFailed,
+  isTerminalRefreshReason: (reason: string) =>
+    reason === 'refresh_expired' || reason === 'refresh_revoked',
+  buildReauthMessage: (provider: string, reason: string) =>
+    `${provider} subscription auth expired (${reason}). Re-run ${provider} login on the harness host.`,
+}));
+
 import { CodexProvider, resetCodexSingleton } from './provider';
 
 describe('CodexProvider', () => {
@@ -55,6 +68,11 @@ describe('CodexProvider', () => {
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.debug.mockClear();
+    mockRefreshIfAuthFailed.mockClear();
+    mockRefreshIfAuthFailed.mockResolvedValue({
+      refreshed: false,
+      reason: 'no_creds' as const,
+    });
 
     // Setup default mock thread
     mockStartThread.mockReturnValue(createMockThread('new-thread-id'));
@@ -1183,7 +1201,7 @@ describe('CodexProvider', () => {
         expect(chunks.some(c => c.type === 'assistant' && c.content === 'Recovered!')).toBe(true);
       }, 5_000);
 
-      test('classifies auth errors as fatal (no retry)', async () => {
+      test('classifies auth errors as fatal when refresh has no credentials', async () => {
         mockRunStreamed.mockRejectedValue(new Error('unauthorized'));
 
         const consumeGenerator = async (): Promise<void> => {
@@ -1193,6 +1211,53 @@ describe('CodexProvider', () => {
         };
 
         await expect(consumeGenerator()).rejects.toThrow(/Codex auth error/);
+        expect(mockRunStreamed).toHaveBeenCalledTimes(1);
+        expect(mockRefreshIfAuthFailed).toHaveBeenCalledWith('codex');
+      });
+
+      test('refreshes auth errors once and retries the query', async () => {
+        let callCount = 0;
+        mockRefreshIfAuthFailed.mockResolvedValue({
+          refreshed: true,
+          provider: 'codex' as const,
+          expiresAt: Date.now(),
+        });
+        mockRunStreamed.mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.reject(new Error('unauthorized'));
+          }
+          return Promise.resolve({
+            events: (async function* () {
+              yield { type: 'turn.completed', usage: defaultUsage };
+            })(),
+          });
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/workspace')) {
+          chunks.push(chunk);
+        }
+
+        expect(mockRefreshIfAuthFailed).toHaveBeenCalledTimes(1);
+        expect(mockRunStreamed).toHaveBeenCalledTimes(2);
+        expect(chunks.some(c => c.type === 'result')).toBe(true);
+      });
+
+      test('surfaces reauth guidance when the refresh token is terminally invalid', async () => {
+        mockRefreshIfAuthFailed.mockResolvedValue({
+          refreshed: false,
+          reason: 'refresh_revoked' as const,
+        });
+        mockRunStreamed.mockRejectedValue(new Error('unauthorized'));
+
+        const consumeGenerator = async (): Promise<void> => {
+          for await (const _ of client.sendQuery('test', '/workspace')) {
+            // consume
+          }
+        };
+
+        await expect(consumeGenerator()).rejects.toThrow(/subscription auth expired/);
         expect(mockRunStreamed).toHaveBeenCalledTimes(1);
       });
 

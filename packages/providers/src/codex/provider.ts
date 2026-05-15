@@ -18,6 +18,11 @@ import type {
 import { parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
+import {
+  buildReauthMessage,
+  isTerminalRefreshReason,
+  refreshIfAuthFailed,
+} from '../auth-refresh/index.js';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -644,6 +649,31 @@ export class CodexProvider implements IAgentProvider {
           { err, errorClass, attempt, maxRetries: MAX_SUBPROCESS_RETRIES },
           'query_error'
         );
+
+        // BDC fork: subscription auth must self-heal; API-key fallback is forbidden.
+        if (errorClass === 'auth' && attempt === 0) {
+          try {
+            const result = await refreshIfAuthFailed('codex');
+            if (result.refreshed) {
+              getLog().info(
+                { provider: 'codex', newExpiresAt: new Date(result.expiresAt).toISOString() },
+                'token_refreshed_retrying'
+              );
+              lastError = enrichedError;
+              continue;
+            }
+            getLog().error(
+              { provider: 'codex', reason: result.reason, err: result.error },
+              'token_refresh_failed'
+            );
+            if (isTerminalRefreshReason(result.reason)) {
+              throw new Error(buildReauthMessage('codex', result.reason));
+            }
+          } catch (refreshErr) {
+            getLog().error({ provider: 'codex', err: refreshErr }, 'token_refresh_threw');
+            throw refreshErr;
+          }
+        }
 
         if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
           throw enrichedError;
