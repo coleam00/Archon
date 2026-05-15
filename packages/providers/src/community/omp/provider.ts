@@ -164,6 +164,19 @@ function toOmpSystemPromptBlocks(
   return undefined;
 }
 type ParsedModelRef = NonNullable<ReturnType<typeof parseOmpModelRef>>;
+const OMP_FALLBACK_THINKING_LEVELS = new Set([
+  'inherit',
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+]);
+
+interface ParsedFallbackModelRef extends ParsedModelRef {
+  selector: string;
+}
 
 function requireParsedModelRef(modelRef: string | undefined): ParsedModelRef {
   if (!modelRef) {
@@ -181,6 +194,33 @@ function requireParsedModelRef(modelRef: string | undefined): ParsedModelRef {
   }
 
   return parsed;
+}
+
+function formatParsedModelRef(parsed: ParsedModelRef): string {
+  return `${parsed.provider}/${parsed.modelId}`;
+}
+
+function requireParsedFallbackModelRef(
+  modelRef: string | undefined
+): ParsedFallbackModelRef | undefined {
+  if (modelRef === undefined) return undefined;
+
+  const parsed = parseOmpModelRef(modelRef);
+  if (!parsed) {
+    throw new Error(
+      `Invalid Oh My Pi fallback model ref: '${modelRef}'. Expected format '<omp-provider-id>/<model-id>' (e.g. 'anthropic/claude-haiku-4-5').`
+    );
+  }
+
+  const colonIndex = parsed.modelId.lastIndexOf(':');
+  if (colonIndex > 0) {
+    const suffix = parsed.modelId.slice(colonIndex + 1);
+    if (OMP_FALLBACK_THINKING_LEVELS.has(suffix)) {
+      return { ...parsed, modelId: parsed.modelId.slice(0, colonIndex), selector: modelRef };
+    }
+  }
+
+  return { ...parsed, selector: modelRef };
 }
 
 async function discoverAuthStorageOrThrow(
@@ -357,8 +397,10 @@ export class OmpProvider implements IAgentProvider {
     const systemPromptBlocks = toOmpSystemPromptBlocks(
       requestOptions?.systemPrompt ?? nodeConfig?.systemPrompt
     );
-    const settingsOverrides = buildOmpSettingsOverrides(ompConfig);
-    const settings = sdk.Settings.isolated(settingsOverrides);
+    const fallbackModel = requireParsedFallbackModelRef(
+      requestOptions?.fallbackModel ?? nodeConfig?.fallbackModel
+    );
+    let settingsOverrides: Record<string, unknown> = {};
     const interactive = ompConfig.interactive !== false;
     const extensionsDisabled = ompConfig.disableExtensionDiscovery === true;
     const uiBridge = interactive ? createArchonOmpUIBridge() : undefined;
@@ -383,8 +425,33 @@ export class OmpProvider implements IAgentProvider {
         getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
         getRuntimeAuthOverride(parsed.provider, ompConfig.env);
       if (runtimeOverride) authStorage.setRuntimeApiKey(parsed.provider, runtimeOverride);
+      if (fallbackModel) {
+        const fallbackRuntimeOverride =
+          getRuntimeAuthOverride(fallbackModel.provider, requestOptions?.env) ??
+          getRuntimeAuthOverride(fallbackModel.provider, ompConfig.env);
+        if (fallbackRuntimeOverride) {
+          authStorage.setRuntimeApiKey(fallbackModel.provider, fallbackRuntimeOverride);
+        }
+      }
 
       const { modelRegistry, model } = await resolveSessionModel(sdk, authStorage, parsed);
+
+      if (fallbackModel && !modelRegistry.find(fallbackModel.provider, fallbackModel.modelId)) {
+        throw new Error(
+          `Oh My Pi fallback model not found: provider='${fallbackModel.provider}' model='${fallbackModel.modelId}'. Check the OMP model catalog or your custom model registry.`
+        );
+      }
+
+      settingsOverrides = buildOmpSettingsOverrides(
+        ompConfig,
+        fallbackModel
+          ? {
+              primaryModel: formatParsedModelRef(parsed),
+              fallbackModel: fallbackModel.selector,
+            }
+          : undefined
+      );
+      const settings = sdk.Settings.isolated(settingsOverrides);
 
       if (nodeConfig?.mcp) {
         resolvedMcp = await resolveOmpMcp(sdk, cwd, nodeConfig.mcp, authStorage);

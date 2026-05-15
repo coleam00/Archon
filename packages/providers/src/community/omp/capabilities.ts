@@ -16,6 +16,6 @@ export const OMP_CAPABILITIES: ProviderCapabilities = {
   costControl: false,
   effortControl: true,
   thinkingControl: true,
-  fallbackModel: false,
+  fallbackModel: true,
   sandbox: false,
 };

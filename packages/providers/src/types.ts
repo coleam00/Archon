@@ -99,6 +99,8 @@ export interface PiProviderDefaults {
 export interface OmpRetrySettingsDefaults {
   enabled?: boolean;
   maxRetries?: number;
+  fallbackChains?: Record<string, string[]>;
+  fallbackRevertPolicy?: 'cooldown-expiry' | 'never';
 }
 
 export interface OmpCompactionSettingsDefaults {

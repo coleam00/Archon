@@ -351,7 +351,7 @@ describe('registry', () => {
       expect(caps.hooks).toBe(false);
       expect(caps.agents).toBe(false);
       expect(caps.costControl).toBe(false);
-      expect(caps.fallbackModel).toBe(false);
+      expect(caps.fallbackModel).toBe(true);
       expect(caps.sandbox).toBe(false);
     });
 
