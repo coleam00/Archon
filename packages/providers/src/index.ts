@@ -53,9 +53,3 @@ export {
   registerPiProvider,
   type PiProviderDefaults,
 } from './community/pi';
-export {
-  OmpProvider,
-  parseOmpConfig,
-  registerOmpProvider,
-  type OmpProviderDefaults,
-} from './community/omp';
