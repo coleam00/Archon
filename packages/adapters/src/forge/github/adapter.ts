@@ -16,6 +16,7 @@ import {
   getLinkedIssueNumbers,
   onConversationClosed,
   ConversationLockManager,
+  loadConfig,
 } from '@archon/core';
 import { getArchonWorkspacesPath, getCommandFolderSearchPaths } from '@archon/paths';
 import {
@@ -606,10 +607,12 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     // Include owner in name to distinguish repos with same name from different owners
     // resolve() converts relative paths to absolute (cross-platform)
+    const config = await loadConfig(canonicalPath);
     const codebase = await codebaseDb.createCodebase({
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
       default_cwd: canonicalPath,
+      ai_assistant_type: config.assistant,
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');
