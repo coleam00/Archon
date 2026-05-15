@@ -31,8 +31,7 @@ let state: State | null = null;
 let source: 'delimiter' | 'json-wrapper' | null = null;
 
 // ── Tier 1: delimiter-based extraction ──
-// Markers are matched as standalone lines (^...$, multiline) to prevent
-// false matches when the marker string appears inside PR titles or brief prose.
+// Line-anchored (^...$, gm) to prevent false matches when marker text appears in prose.
 const BEGIN_RE = /^ARCHON_STATE_JSON_BEGIN$/gm;
 const END_RE = /^ARCHON_STATE_JSON_END$/gm;
 

@@ -98,9 +98,7 @@ describe('maintainer-standup-persist', () => {
   });
 
   test('marker substring inside state JSON string value — not confused', async () => {
-    // Note: the marker appears inline inside JSON (compact single-line), not on its own line,
-    // so the line-anchored regex never matches it. This test provides defence-in-depth but does
-    // not demonstrate a case that failed under the old indexOf approach.
+    // Marker inline in compact JSON (not on its own line) — line-anchored regex doesn't match it; defence-in-depth.
     const stateJson = JSON.stringify({
       version: 5,
       observed_prs: [
