@@ -486,7 +486,7 @@ Archon still chooses the initial model from the node/workflow model first, then 
 
 ### OMP tool names
 
-`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `search`, `find`, `lsp`, `notebook`, `web_search`, `ast_grep`, `ast_edit`, `calc`, `task`, `todo_write`, and `ask`.
+`allowed_tools`, `denied_tools`, and `assistants.omp.toolNames` use OMP tool names. Common safe read/analysis tools are `read`, `search`, `find`, `lsp`, `web_search`, `ast_grep`, `ast_edit`, `calc`, `task`, `todo_write`, and `ask`.
 
 Tools that can modify files, run code, access the network, or change session state should be enabled intentionally: `bash`, `python`, `write`, `edit`, `browser`, `ssh`, `github`, `checkpoint`, `rewind`, `job`, `irc`, `render_mermaid`, and `search_tool_bm25`. Hidden SDK tools such as `yield`, `resolve`, and `exit_plan_mode` are only useful for OMP-internal workflows.
 
