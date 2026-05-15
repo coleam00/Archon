@@ -506,7 +506,7 @@ Tools that can modify files, run code, access the network, or change session sta
 | OMP settings overrides | ✅ | `assistants.omp.settings.retry`, `compaction`, `contextPromotion`, `modelRoles`, `enabledModels`, `modelProviderOrder`, `disabledProviders`, and `disabledExtensions` are passed to `Settings.isolated(...)` |
 | OMP MCP discovery | ✅ (OMP-native) | `assistants.omp.enableMCP` toggles OMP's own MCP discovery from `.omp/mcp.json`, `~/.omp/agent/mcp.json`, root `mcp.json`, and supported third-party config files |
 | Archon `mcp:` field | ✅ (node-scoped) | Workflow node `mcp: .archon/mcp/server.json` loads that Archon MCP JSON only for the node. It does not require `assistants.omp.enableMCP: true` and does not write OMP-native config files |
-| Bash subprocess env injection | ❌ | OMP bash env is per tool call; Archon does not inject workflow/codebase `envVars` into every OMP tool subprocess |
+| Bash subprocess env injection | ✅ | Workflow/codebase `envVars` are injected into OMP `bash` tool calls. If a model supplies an explicit bash `env` argument for the same key, the tool-call value wins. |
 | Custom tools / commands / hooks paths | OMP-native only | Use OMP discovery directories such as `.omp/tools`, `.omp/commands`, `.omp/hooks`, or extensions; Archon does not write hidden config files or expose path-array shims |
 | Claude hooks / inline agents / sandbox / fallback model / cost limits | ❌ | no Archon-compatible OMP session-level equivalent wired in v1 |
 
