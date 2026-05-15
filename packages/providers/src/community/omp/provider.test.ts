@@ -405,6 +405,30 @@ describe('OmpProvider', () => {
     });
   });
 
+  test('does not inject assistant config env into OMP bash tool calls', async () => {
+    let bashArgs: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        async onPrompt(session) {
+          bashArgs = { command: 'echo $OMP_CONFIG_ONLY $REQUEST_ONLY' };
+          await session.emitToolCall({
+            toolName: 'bash',
+            toolCallId: 'tool-1',
+            input: bashArgs,
+          });
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      env: { REQUEST_ONLY: 'request-value' },
+      assistantConfig: { env: { OMP_CONFIG_ONLY: 'config-value' } },
+    });
+
+    expect(bashArgs?.env).toEqual({ REQUEST_ONLY: 'request-value' });
+  });
+
   test('does not inject request env into non-bash tool calls', async () => {
     let readInput: Record<string, unknown> | undefined;
     const provider = new OmpProvider(async () =>
