@@ -21,6 +21,10 @@ Connect Archon to a GitLab instance (gitlab.com or self-hosted) so you can inter
 - GitLab Personal Access Token or Project Access Token with `api` scope
 - Public endpoint for webhooks (see ngrok setup below for local development)
 
+:::tip
+`GITLAB_TOKEN` also enables authenticated cloning of private GitLab repositories. If you set it for the adapter, clone authentication works automatically — no extra configuration needed.
+:::
+
 ## Step 1: Create a GitLab Access Token
 
 ### Personal Access Token (recommended for getting started)

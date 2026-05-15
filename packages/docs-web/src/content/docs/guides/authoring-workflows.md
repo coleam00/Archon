@@ -165,7 +165,7 @@ nodes:
     provider: claude             # Per-node provider override
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
-    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude and Oh My Pi)
+    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude, Codex, and Oh My Pi)
     # skills: [remotion-best-practices]  # Optional: per-node skills (Claude, Pi, and Oh My Pi) — see skills guide
 ```
 
@@ -205,7 +205,7 @@ nodes:
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. Supported by Claude, Pi, and Oh My Pi (use each provider's tool names; OMP uses `search`, not `grep`) |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. Supported by Claude, Pi, and Oh My Pi |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Supported by Claude and Oh My Pi. See [MCP Servers](/guides/mcp-servers/) |
+| `mcp` | string | — | Path to MCP server config JSON file. Supported by Claude, Codex, and Oh My Pi. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Skills to preload. Supported by Claude, Pi, and Oh My Pi. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Supported by Claude, Pi, and Oh My Pi (`max` maps to provider-specific strongest setting). Also settable at workflow level |
@@ -1186,7 +1186,7 @@ Before deploying a workflow:
 8. **`allowed_tools` / `denied_tools`** — restrict tools per node (Claude, Pi, and Oh My Pi; use provider-specific tool names)
 9. **`retry:`** — auto-retries transient errors (default: 2 retries / 3 total attempts, 3 s backoff); customize per node
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
-11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude and Oh My Pi)
+11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude, Codex, and Oh My Pi)
 12. **`skills:`** — preload skills into node agents (Claude, Pi, and Oh My Pi)
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
 14. **`effort` / `thinking`** — control reasoning depth per node or workflow (`effort` for Claude, Pi, and Oh My Pi; `thinking` for Claude extended thinking)

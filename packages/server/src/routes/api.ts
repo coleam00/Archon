@@ -156,6 +156,9 @@ function jsonError(description: string): {
 }
 
 const cwdQuerySchema = z.object({ cwd: z.string().optional() });
+const workflowTargetQuerySchema = cwdQuerySchema.extend({
+  source: z.enum(['project', 'global']).optional(),
+});
 
 const getWorkflowsRoute = createRoute({
   method: 'get',
@@ -221,7 +224,7 @@ const saveWorkflowRoute = createRoute({
   summary: 'Save (create or update) a workflow',
   request: {
     params: z.object({ name: z.string() }),
-    query: cwdQuerySchema,
+    query: workflowTargetQuerySchema,
     body: { content: { 'application/json': { schema: saveWorkflowBodySchema } }, required: true },
   },
   responses: {
@@ -241,7 +244,7 @@ const deleteWorkflowRoute = createRoute({
   summary: 'Delete a user-defined workflow',
   request: {
     params: z.object({ name: z.string() }),
-    query: cwdQuerySchema,
+    query: workflowTargetQuerySchema,
   },
   responses: {
     200: {
@@ -2357,9 +2360,16 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
+    const targetSource = c.req.query('source');
+    if (targetSource && targetSource !== 'project' && targetSource !== 'global') {
+      return apiError(c, 400, 'Invalid workflow source');
+    }
+
     const cwd = c.req.query('cwd');
     let workingDir = cwd;
-    if (cwd) {
+    if (targetSource === 'global') {
+      workingDir = undefined;
+    } else if (cwd) {
       if (!(await validateCwd(cwd))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
@@ -2389,15 +2399,18 @@ export function registerApiRoutes(
     }
 
     try {
-      const [workflowFolder] = getWorkflowFolderSearchPaths();
-      const dirPath = join(workingDir, workflowFolder);
+      const source: WorkflowSource = targetSource === 'global' ? 'global' : 'project';
+      const dirPath =
+        source === 'global'
+          ? getHomeWorkflowsPath()
+          : join(workingDir, getWorkflowFolderSearchPaths()[0]);
       await mkdir(dirPath, { recursive: true });
       const filePath = join(dirPath, `${name}.yaml`);
       await writeFile(filePath, yamlContent, 'utf-8');
       return c.json({
         workflow: parsed.workflow,
         filename: `${name}.yaml`,
-        source: 'project' as WorkflowSource,
+        source,
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -2413,14 +2426,21 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
+    const targetSource = c.req.query('source');
+    if (targetSource && targetSource !== 'project' && targetSource !== 'global') {
+      return apiError(c, 400, 'Invalid workflow source');
+    }
+
     // Refuse to delete bundled defaults
-    if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
+    if (targetSource !== 'global' && Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
       return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
     }
 
     const cwd = c.req.query('cwd');
     let workingDir = cwd;
-    if (cwd) {
+    if (targetSource === 'global') {
+      workingDir = undefined;
+    } else if (cwd) {
       if (!(await validateCwd(cwd))) {
         return apiError(c, 400, 'Invalid cwd: must match a registered codebase path');
       }
@@ -2432,8 +2452,10 @@ export function registerApiRoutes(
       workingDir = getArchonHome();
     }
 
-    const [workflowFolder] = getWorkflowFolderSearchPaths();
-    const filePath = join(workingDir, workflowFolder, `${name}.yaml`);
+    const filePath =
+      targetSource === 'global'
+        ? join(getHomeWorkflowsPath(), `${name}.yaml`)
+        : join(workingDir, getWorkflowFolderSearchPaths()[0], `${name}.yaml`);
 
     try {
       await unlink(filePath);

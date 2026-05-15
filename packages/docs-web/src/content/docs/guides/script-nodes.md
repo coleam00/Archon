@@ -229,6 +229,10 @@ literally embedded into the code string at execution time.
 
 ## Environment and Isolation
 
+:::note[Shell injection prevention]
+User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are passed to `bash:` nodes as environment variables (not inline-substituted into the shell command) to prevent shell injection. Script nodes receive these values the same way via `process.env`.
+:::
+
 Script subprocesses receive `process.env` merged with any codebase-scoped env
 vars you've configured via the Web UI (Settings → Projects → Env Vars) or the
 `env:` block in `.archon/config.yaml`. This is the same injection surface used
