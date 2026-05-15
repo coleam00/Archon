@@ -11,6 +11,9 @@
  * first over both the buffer and the waiters list, silently dropping items. The
  * constructor enforces this so the mistake surfaces loudly during development.
  */
+const UNDEFINED_ITEM_ERROR =
+  'AsyncQueue cannot enqueue undefined; use null or a caller-owned sentinel object';
+
 export class AsyncQueue<T> implements AsyncIterable<T> {
   private readonly buffer: T[] = [];
   private readonly waiters: ((result: IteratorResult<T>) => void)[] = [];
@@ -18,6 +21,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
   private closed = false;
 
   push(item: T): void {
+    if (item === undefined) throw new TypeError(UNDEFINED_ITEM_ERROR);
     if (this.closed) return;
     const waiter = this.waiters.shift();
     if (waiter) waiter({ value: item, done: false });
@@ -49,9 +53,8 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
 
   private async *iterate(): AsyncGenerator<T> {
     while (true) {
-      const next = this.buffer.shift();
-      if (next !== undefined) {
-        yield next;
+      if (this.buffer.length > 0) {
+        yield this.buffer.shift() as T;
         continue;
       }
       if (this.closed) return;

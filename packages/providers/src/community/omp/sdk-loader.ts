@@ -43,6 +43,11 @@ export interface OmpSessionInfo {
   path: string;
 }
 
+export interface OmpSkill {
+  name: string;
+  [key: string]: unknown;
+}
+
 export interface OmpExtensionRunner {
   setFlagValue(name: string, value: boolean | string): void;
 }
@@ -82,7 +87,7 @@ export interface OmpCreateAgentSessionOptions {
   modelRegistry: OmpModelRegistry;
   sessionManager: OmpSessionManager;
   settings: unknown;
-  skills: unknown[];
+  skills: OmpSkill[];
   enableMCP: boolean;
   enableLsp: boolean;
   disableExtensionDiscovery?: boolean;
@@ -108,7 +113,7 @@ export interface OmpCodingAgentSdk {
     list(cwd: string, sessionDir?: string): Promise<OmpSessionInfo[]>;
     open(filePath: string, sessionDir?: string): Promise<OmpSessionManager>;
   };
-  discoverSkills(cwd?: string, agentDir?: string): Promise<{ skills: unknown[] }>;
+  discoverSkills(cwd?: string, agentDir?: string): Promise<{ skills: OmpSkill[] }>;
 }
 
 export async function loadOmpSdk(): Promise<OmpCodingAgentSdk> {

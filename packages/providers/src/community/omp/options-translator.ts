@@ -5,6 +5,8 @@ import type { OmpProviderDefaults } from './config';
 
 export type OmpThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
+type OmpSkill = Awaited<ReturnType<OmpCodingAgentSdk['discoverSkills']>>['skills'][number];
+
 const OMP_NATIVE_LEVELS: ReadonlySet<OmpThinkingLevel> = new Set<OmpThinkingLevel>([
   'minimal',
   'low',
@@ -195,7 +197,7 @@ export function resolveOmpToolNames(
 }
 
 export interface ResolvedOmpSkills {
-  skills: unknown[];
+  skills: OmpSkill[];
   missing: string[];
 }
 
@@ -208,13 +210,12 @@ export async function resolveOmpSkills(
   if (!skillNames || skillNames.length === 0) return { skills: [], missing: [] };
 
   const { skills } = await sdk.discoverSkills(cwd, agentDir);
-  const byName = new Map<string, unknown>();
+  const byName = new Map<string, OmpSkill>();
   for (const skill of skills) {
-    const name = (skill as { name?: unknown }).name;
-    if (typeof name === 'string') byName.set(name, skill);
+    byName.set(skill.name, skill);
   }
 
-  const resolved: unknown[] = [];
+  const resolved: OmpSkill[] = [];
   const missing: string[] = [];
   for (const rawName of [...new Set(skillNames)]) {
     const skill = byName.get(rawName);
