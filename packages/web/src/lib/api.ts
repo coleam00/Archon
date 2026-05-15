@@ -424,9 +424,13 @@ export async function getWorkflow(name: string, cwd?: string): Promise<GetWorkfl
 export async function saveWorkflow(
   name: string,
   definition: WorkflowDefinition,
-  cwd?: string
+  cwd?: string,
+  source?: WorkflowSource
 ): Promise<GetWorkflowResponse> {
-  const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+  const query = new URLSearchParams();
+  if (cwd) query.set('cwd', cwd);
+  if (source === 'global') query.set('source', source);
+  const params = query.toString() ? `?${query.toString()}` : '';
   return fetchJSON(`/api/workflows/${encodeURIComponent(name)}${params}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -436,9 +440,13 @@ export async function saveWorkflow(
 
 export async function deleteWorkflow(
   name: string,
-  cwd?: string
+  cwd?: string,
+  source?: WorkflowSource
 ): Promise<{ deleted: boolean; name: string }> {
-  const params = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+  const query = new URLSearchParams();
+  if (cwd) query.set('cwd', cwd);
+  if (source === 'global') query.set('source', source);
+  const params = query.toString() ? `?${query.toString()}` : '';
   return fetchJSON(`/api/workflows/${encodeURIComponent(name)}${params}`, {
     method: 'DELETE',
   });
