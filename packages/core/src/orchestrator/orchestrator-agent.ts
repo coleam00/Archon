@@ -77,6 +77,15 @@ const MAX_BATCH_ASSISTANT_CHUNKS = 20;
 /** Max total chunks (assistant + tool) to keep in batch mode */
 const MAX_BATCH_TOTAL_CHUNKS = 200;
 
+const WORKFLOW_CODEBASE_PREFIXES: readonly { prefix: string; codebaseName: string }[] = [
+  { prefix: 'bdc-shopops-', codebaseName: 'bluedevilcollectibles/shopops' },
+  { prefix: 'bdc-lspro-', codebaseName: 'bluedevilcollectibles/lspro-react' },
+  { prefix: 'bdc-storefront-', codebaseName: 'bluedevilcollectibles/shopops-storefront' },
+  { prefix: 'bdc-xo-', codebaseName: 'bluedevilcollectibles/bdc-xo' },
+  { prefix: 'bdc-harness-', codebaseName: 'bluedevilcollectibles/bdc-harness' },
+  { prefix: 'bdc-auth-', codebaseName: 'bluedevilcollectibles/lspro-react' },
+] as const;
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface WorkflowInvocation {
@@ -89,6 +98,12 @@ export interface WorkflowInvocation {
 export interface ProjectRegistration {
   projectName: string;
   projectPath: string;
+}
+
+interface BoundCodebaseResult {
+  codebase: Codebase;
+  source: 'flag' | 'prefix' | 'fallback';
+  userMessage: string;
 }
 
 export interface OrchestratorCommands {
@@ -1560,6 +1575,75 @@ function resolveWorkflowByName(
   );
 }
 
+function matchesCodebaseName(codebase: Codebase, name: string): boolean {
+  const normalizedName = name.toLowerCase();
+  const codebaseName = codebase.name.toLowerCase();
+  const shortName = codebaseName.split('/').pop() ?? codebaseName;
+  return codebaseName === normalizedName || shortName === normalizedName;
+}
+
+function stripProjectFlag(userMessage: string): { userMessage: string; projectName?: string } {
+  const parts = userMessage.split(/\s+/).filter(Boolean);
+  const cleaned: string[] = [];
+  let projectName: string | undefined;
+
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (part === '--project') {
+      projectName = parts[i + 1];
+      i += 1;
+      continue;
+    }
+    if (part.startsWith('--project=')) {
+      projectName = part.slice('--project='.length);
+      continue;
+    }
+    cleaned.push(part);
+  }
+
+  return { userMessage: cleaned.join(' '), projectName };
+}
+
+export function resolveBoundCodebase({
+  workflowName,
+  userMessage,
+  codebases,
+}: {
+  workflowName: string;
+  userMessage: string;
+  codebases: readonly Codebase[];
+}): BoundCodebaseResult {
+  if (codebases.length === 0) {
+    throw new Error('No codebases registered');
+  }
+
+  const { userMessage: strippedMessage, projectName } = stripProjectFlag(userMessage);
+  if (projectName) {
+    const codebase = codebases.find(c => matchesCodebaseName(c, projectName));
+    if (codebase) {
+      return { codebase, source: 'flag', userMessage: strippedMessage };
+    }
+    getLog().warn({ workflowName, projectName }, 'workflow_codebase_project_not_found');
+    return { codebase: codebases[0], source: 'fallback', userMessage: strippedMessage };
+  }
+
+  const prefixMatch = WORKFLOW_CODEBASE_PREFIXES.find(({ prefix }) =>
+    workflowName.startsWith(prefix)
+  );
+  if (prefixMatch) {
+    const codebase = codebases.find(c => matchesCodebaseName(c, prefixMatch.codebaseName));
+    if (codebase) {
+      return { codebase, source: 'prefix', userMessage: strippedMessage };
+    }
+    getLog().warn(
+      { workflowName, expectedCodebase: prefixMatch.codebaseName },
+      'workflow_codebase_prefix_not_registered'
+    );
+  }
+
+  return { codebase: codebases[0], source: 'fallback', userMessage: strippedMessage };
+}
+
 function workflowLoadErrorForName(
   workflowName: string,
   errors: readonly WorkflowLoadError[]
@@ -1652,7 +1736,12 @@ async function handleWorkflowRunSlashCommand(
     const globalWorkflows = globalDiscovery.workflows.map(w => w.workflow);
     const globalWorkflow = resolveWorkflowByName(workflowName, globalWorkflows);
     if (globalWorkflow) {
-      const codebase = codebases[0];
+      const binding = resolveBoundCodebase({ workflowName, userMessage, codebases });
+      const { codebase } = binding;
+      getLog().info(
+        { workflowName, boundCodebase: codebase.name, source: binding.source },
+        'workflow_codebase_bound'
+      );
       await platform.sendMessage(conversationId, `Starting workflow: \`${globalWorkflow.name}\``);
       await dispatchOrchestratorWorkflow(
         platform,
@@ -1660,7 +1749,7 @@ async function handleWorkflowRunSlashCommand(
         conversation,
         codebase,
         globalWorkflow,
-        userMessage,
+        binding.userMessage,
         isolationHints
       );
       return true;
@@ -1687,7 +1776,17 @@ async function handleWorkflowRunSlashCommand(
   }
 
   if (matches.length === 1) {
-    const { codebase, workflow } = matches[0];
+    const { workflow } = matches[0];
+    const binding = resolveBoundCodebase({
+      workflowName: workflow.name,
+      userMessage,
+      codebases: matches.map(match => match.codebase),
+    });
+    const { codebase } = binding;
+    getLog().info(
+      { workflowName: workflow.name, boundCodebase: codebase.name, source: binding.source },
+      'workflow_codebase_bound'
+    );
     await platform.sendMessage(conversationId, `Starting workflow: \`${workflow.name}\``);
     await dispatchOrchestratorWorkflow(
       platform,
@@ -1695,13 +1794,42 @@ async function handleWorkflowRunSlashCommand(
       conversation,
       codebase,
       workflow,
-      userMessage,
+      binding.userMessage,
       isolationHints
     );
     return true;
   }
 
   if (matches.length > 1) {
+    const binding = resolveBoundCodebase({
+      workflowName,
+      userMessage,
+      codebases: matches.map(match => match.codebase),
+    });
+    if (binding.source !== 'fallback') {
+      const match = matches.find(candidate => candidate.codebase.id === binding.codebase.id);
+      if (match) {
+        getLog().info(
+          {
+            workflowName: match.workflow.name,
+            boundCodebase: binding.codebase.name,
+            source: binding.source,
+          },
+          'workflow_codebase_bound'
+        );
+        await platform.sendMessage(conversationId, `Starting workflow: \`${match.workflow.name}\``);
+        await dispatchOrchestratorWorkflow(
+          platform,
+          conversationId,
+          conversation,
+          binding.codebase,
+          match.workflow,
+          binding.userMessage,
+          isolationHints
+        );
+        return true;
+      }
+    }
     const projectList = matches.map(m => `- ${m.codebase.name}`).join('\n');
     await platform.sendMessage(
       conversationId,
@@ -1785,7 +1913,12 @@ async function handleWorkflowRunCommand(
 
   if (codebases.length === 1) {
     // Auto-select the only project
-    const codebase = codebases[0];
+    const binding = resolveBoundCodebase({ workflowName: workflow.name, userMessage, codebases });
+    const { codebase } = binding;
+    getLog().info(
+      { workflowName: workflow.name, boundCodebase: codebase.name, source: binding.source },
+      'workflow_codebase_bound'
+    );
     const workflowCwd = conversation.cwd ?? codebase.default_cwd;
     try {
       await syncArchonToWorktree(workflowCwd);
@@ -1843,7 +1976,25 @@ async function handleWorkflowRunCommand(
       conversation,
       codebase,
       resolvedWorkflow,
-      userMessage,
+      binding.userMessage,
+      isolationHints
+    );
+    return;
+  }
+
+  const binding = resolveBoundCodebase({ workflowName: workflow.name, userMessage, codebases });
+  if (binding.source !== 'fallback') {
+    getLog().info(
+      { workflowName: workflow.name, boundCodebase: binding.codebase.name, source: binding.source },
+      'workflow_codebase_bound'
+    );
+    await dispatchOrchestratorWorkflow(
+      platform,
+      conversationId,
+      conversation,
+      binding.codebase,
+      workflow,
+      binding.userMessage,
       isolationHints
     );
     return;

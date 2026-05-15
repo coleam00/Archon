@@ -203,7 +203,11 @@ mock.module('fs', () => ({
 
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
 
-import { parseOrchestratorCommands, handleMessage } from './orchestrator-agent';
+import {
+  parseOrchestratorCommands,
+  handleMessage,
+  resolveBoundCodebase,
+} from './orchestrator-agent';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -219,6 +223,90 @@ function makeCodebase(name: string, id = `id-${name}`): Codebase {
     updated_at: new Date(),
   };
 }
+
+describe('resolveBoundCodebase', () => {
+  const bdcHarness = makeCodebase('bluedevilcollectibles/bdc-harness', 'harness-id');
+  const shopops = makeCodebase('bluedevilcollectibles/shopops', 'shopops-id');
+  const lspro = makeCodebase('bluedevilcollectibles/lspro-react', 'lspro-id');
+  const storefront = makeCodebase('bluedevilcollectibles/shopops-storefront', 'storefront-id');
+  const bdcXo = makeCodebase('bluedevilcollectibles/bdc-xo', 'bdc-xo-id');
+  const codebases = [bdcHarness, shopops, lspro, storefront, bdcXo];
+
+  beforeEach(() => {
+    mockLogger.warn.mockClear();
+  });
+
+  test('prefers explicit --project flag over workflow name heuristic', () => {
+    const result = resolveBoundCodebase({
+      workflowName: 'bdc-shopops-cover-cascade',
+      userMessage: 'run this --project shopops-storefront now',
+      codebases,
+    });
+
+    expect(result.codebase.id).toBe(storefront.id);
+    expect(result.source).toBe('flag');
+    expect(result.userMessage).toBe('run this now');
+  });
+
+  test('honors bdc-shopops-* prefix when no flag is present', () => {
+    const result = resolveBoundCodebase({
+      workflowName: 'bdc-shopops-cover-cascade',
+      userMessage: 'run this',
+      codebases,
+    });
+
+    expect(result.codebase.id).toBe(shopops.id);
+    expect(result.source).toBe('prefix');
+    expect(result.userMessage).toBe('run this');
+  });
+
+  test.each([
+    ['bdc-lspro-ce-scan', lspro.id],
+    ['bdc-storefront-pdp-v3', storefront.id],
+    ['bdc-xo-doc-sync', bdcXo.id],
+    ['bdc-harness-api-run', bdcHarness.id],
+    ['bdc-auth-ce-auth0-tenant-metadata-harden', lspro.id],
+  ])('honors %s prefix', (workflowName, expectedCodebaseId) => {
+    const result = resolveBoundCodebase({
+      workflowName,
+      userMessage: 'execute',
+      codebases,
+    });
+
+    expect(result.codebase.id).toBe(expectedCodebaseId);
+    expect(result.source).toBe('prefix');
+  });
+
+  test('falls back to codebases[0] for unknown workflow names', () => {
+    const result = resolveBoundCodebase({
+      workflowName: 'unknown-workflow',
+      userMessage: 'execute',
+      codebases,
+    });
+
+    expect(result.codebase.id).toBe(bdcHarness.id);
+    expect(result.source).toBe('fallback');
+  });
+
+  test('falls back to codebases[0] and strips message when --project is unknown', () => {
+    const result = resolveBoundCodebase({
+      workflowName: 'bdc-shopops-cover-cascade',
+      userMessage: 'execute --project missing-project now',
+      codebases,
+    });
+
+    expect(result.codebase.id).toBe(bdcHarness.id);
+    expect(result.source).toBe('fallback');
+    expect(result.userMessage).toBe('execute now');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflowName: 'bdc-shopops-cover-cascade',
+        projectName: 'missing-project',
+      }),
+      'workflow_codebase_project_not_found'
+    );
+  });
+});
 
 // ─── parseOrchestratorCommands ────────────────────────────────────────────────
 
@@ -1471,6 +1559,94 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
         codebaseId: codebase.id,
       }),
       expect.objectContaining({ name: 'global-workflow' })
+    );
+  });
+
+  test('dispatches app-default /workflow run to prefix-bound codebase', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    const harness = makeCodebase('bluedevilcollectibles/bdc-harness', 'harness-id');
+    const shopops = makeCodebase('bluedevilcollectibles/shopops', 'shopops-id');
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockParseCommand.mockReturnValueOnce({
+      command: 'workflow',
+      args: ['run', 'bdc-shopops-cover-cascade-prh-visibility', 'WO-123'],
+    });
+    mockHandleCommand.mockImplementationOnce(() => {
+      throw new Error('generic command handler should not pre-resolve app-default workflow run');
+    });
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([harness, shopops]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'bdc-shopops-cover-cascade-prh-visibility' }),
+        ],
+        errors: [],
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(
+      platform,
+      'conv-1',
+      '/workflow run bdc-shopops-cover-cascade-prh-visibility WO-123'
+    );
+
+    expect(mockHandleCommand).not.toHaveBeenCalled();
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', { codebase_id: shopops.id });
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originalMessage: 'WO-123',
+        conversationDbId: 'conv-1',
+        codebaseId: shopops.id,
+      }),
+      expect.objectContaining({ name: 'bdc-shopops-cover-cascade-prh-visibility' })
+    );
+  });
+
+  test('strips --project flag from app-default /workflow run before dispatch', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    const harness = makeCodebase('bluedevilcollectibles/bdc-harness', 'harness-id');
+    const storefront = makeCodebase('bluedevilcollectibles/shopops-storefront', 'storefront-id');
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockParseCommand.mockReturnValueOnce({
+      command: 'workflow',
+      args: [
+        'run',
+        'bdc-shopops-cover-cascade-prh-visibility',
+        'WO-123',
+        '--project',
+        'shopops-storefront',
+      ],
+    });
+    mockHandleCommand.mockImplementationOnce(() => {
+      throw new Error('generic command handler should not pre-resolve app-default workflow run');
+    });
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([harness, storefront]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({
+        workflows: [
+          makeTestWorkflowWithSource({ name: 'bdc-shopops-cover-cascade-prh-visibility' }),
+        ],
+        errors: [],
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(
+      platform,
+      'conv-1',
+      '/workflow run bdc-shopops-cover-cascade-prh-visibility WO-123 --project shopops-storefront'
+    );
+
+    expect(mockHandleCommand).not.toHaveBeenCalled();
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', { codebase_id: storefront.id });
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originalMessage: 'WO-123',
+        conversationDbId: 'conv-1',
+        codebaseId: storefront.id,
+      }),
+      expect.objectContaining({ name: 'bdc-shopops-cover-cascade-prh-visibility' })
     );
   });
 
