@@ -38,12 +38,36 @@ function readUsage(usage: unknown): TokenUsage | undefined {
   };
 }
 
-function isAssistantMessage(
-  message: unknown
-): message is { role: 'assistant'; usage?: unknown; stopReason?: string; errorMessage?: unknown } {
+function isAssistantMessage(message: unknown): message is {
+  role: 'assistant';
+  content?: unknown;
+  usage?: unknown;
+  stopReason?: string;
+  errorMessage?: unknown;
+} {
   return (
     !!message && typeof message === 'object' && (message as { role?: unknown }).role === 'assistant'
   );
+}
+
+function extractLastAssistantText(messages: readonly unknown[]): string | undefined {
+  const last = [...messages].reverse().find(isAssistantMessage);
+  if (!last) return undefined;
+
+  const { content } = last;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+
+  let text = '';
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue;
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typedBlock.type === 'text' && typeof typedBlock.text === 'string') {
+      text += typedBlock.text;
+    }
+  }
+
+  return text;
 }
 
 export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
@@ -276,11 +300,19 @@ export async function* bridgeSession(
   const queue = new AsyncQueue<BridgeQueueItem>();
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
+  let currentTurnText = '';
+  let finalAssembledText: string | undefined;
   let promptSettled = false;
   let sawTerminalResult = false;
+  let pendingTerminalResult: ResultChunk | undefined;
 
   const maybeFinish = (): void => {
-    if (promptSettled && sawTerminalResult) queue.push({ kind: 'done' });
+    if (!promptSettled || !sawTerminalResult) return;
+    if (pendingTerminalResult) {
+      queue.push({ kind: 'chunk', chunk: pendingTerminalResult });
+      pendingTerminalResult = undefined;
+    }
+    queue.push({ kind: 'done' });
   };
 
   const onAbort = (): void => {
@@ -298,11 +330,25 @@ export async function* bridgeSession(
 
     unsubscribe = session.subscribe((event: unknown) => {
       try {
-        for (const chunk of mapOmpEvent(event as { type?: string } & Record<string, unknown>)) {
-          if (wantsStructured && chunk.type === 'assistant') assistantBuffer += chunk.content;
-          if (chunk.type === 'result') sawTerminalResult = true;
+        const typedEvent = event as { type?: string } & Record<string, unknown>;
+        if (typedEvent.type === 'turn_start') currentTurnText = '';
+        if (typedEvent.type === 'agent_end') {
+          finalAssembledText = extractLastAssistantText(
+            (typedEvent.messages as unknown[] | undefined) ?? []
+          );
+        }
+        for (const chunk of mapOmpEvent(typedEvent)) {
+          if (chunk.type === 'assistant') {
+            currentTurnText += chunk.content;
+            if (wantsStructured) assistantBuffer += chunk.content;
+          }
+          if (chunk.type === 'result') {
+            sawTerminalResult = true;
+            pendingTerminalResult = chunk;
+            maybeFinish();
+            continue;
+          }
           queue.push({ kind: 'chunk', chunk });
-          if (chunk.type === 'result') maybeFinish();
         }
       } catch (err) {
         queue.push({ kind: 'error', error: err as Error });
@@ -323,7 +369,7 @@ export async function* bridgeSession(
         if (!sawTerminalResult) {
           getLog().warn('omp.event-bridge.result_missing_terminal_event');
           sawTerminalResult = true;
-          queue.push({ kind: 'chunk', chunk: { type: 'result' } });
+          pendingTerminalResult = { type: 'result' };
         }
         maybeFinish();
       },
@@ -336,6 +382,24 @@ export async function* bridgeSession(
       if (item.kind === 'done') return;
       if (item.kind === 'error') throw item.error;
       if (item.chunk.type === 'result') {
+        if (
+          finalAssembledText !== undefined &&
+          finalAssembledText.length > currentTurnText.length &&
+          finalAssembledText.startsWith(currentTurnText)
+        ) {
+          const tail = finalAssembledText.slice(currentTurnText.length);
+          currentTurnText = finalAssembledText;
+          if (wantsStructured) assistantBuffer += tail;
+          getLog().warn(
+            {
+              streamedLen: finalAssembledText.length - tail.length,
+              assembledLen: finalAssembledText.length,
+              tailLen: tail.length,
+            },
+            'omp.event-bridge.streaming_tail_completed'
+          );
+          yield { type: 'assistant', content: tail };
+        }
         yield attachResultMetadata(item.chunk, session, wantsStructured, assistantBuffer);
       } else {
         yield item.chunk;
@@ -347,7 +411,7 @@ export async function* bridgeSession(
     unsubscribe?.();
     if (abortSignal) abortSignal.removeEventListener('abort', onAbort);
     try {
-      session.dispose();
+      await Promise.resolve(session.dispose());
     } catch (err) {
       getLog().debug({ err }, 'omp.event-bridge.dispose_failed');
     }
