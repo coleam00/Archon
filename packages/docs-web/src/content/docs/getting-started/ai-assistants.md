@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, Pi, and Oh My Pi as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -629,7 +629,8 @@ Node-level Archon `mcp:` and `assistants.omp.enableMCP` are intentionally separa
 
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
-- [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
+- [Pi on GitHub](https://github.com/earendil-works/pi) — upstream Pi project.
+- [Oh My Pi on GitHub](https://github.com/can1357/oh-my-pi) — upstream Oh My Pi project.
 
 ## GitHub Copilot (Community Provider)
 
