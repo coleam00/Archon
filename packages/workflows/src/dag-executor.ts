@@ -719,7 +719,8 @@ async function executeNodeInternal(
       docsDir,
       issueContext,
       `dag node '${node.id}' prompt`,
-      forgeProvider
+      forgeProvider,
+      workflowRun.workflow_name
     );
   } catch (error) {
     const err = error as Error;
@@ -1387,7 +1388,12 @@ async function executeBashNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    workflowRun.workflow_name
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
@@ -1397,6 +1403,7 @@ async function executeBashNode(
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
+    WORKFLOW_NAME: workflowRun.workflow_name,
     ...(envVars ?? {}),
   };
 
@@ -1554,13 +1561,24 @@ async function executeScriptNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    workflowRun.workflow_name
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv =
-    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
+  const subprocessEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ARTIFACTS_DIR: artifactsDir,
+    LOG_DIR: logDir,
+    BASE_BRANCH: baseBranch,
+    WORKFLOW_NAME: workflowRun.workflow_name,
+    ...(envVars ?? {}),
+  };
 
   // Build the command and args based on runtime and inline vs named
   let cmd = '';
@@ -1932,7 +1950,8 @@ async function executeLoopNode(
         i === startIteration ? loopUserInput : '',
         undefined, // rejectionReason
         i === startIteration ? '' : lastIterationOutput,
-        config.forgeProvider
+        config.forgeProvider,
+        workflowRun.workflow_name
       );
       const finalPrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
 
@@ -2202,7 +2221,8 @@ async function executeLoopNode(
           undefined,
           undefined,
           undefined,
-          config.forgeProvider
+          config.forgeProvider,
+          workflowRun.workflow_name
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -2213,6 +2233,7 @@ async function executeLoopNode(
           ...process.env,
           FORGE_PROVIDER: config.forgeProvider ?? 'github',
           FORGE_CLI: config.forgeProvider === 'gitlab' ? 'glab' : 'gh',
+          WORKFLOW_NAME: workflowRun.workflow_name,
           ...(config.envVars ?? {}),
         };
         await execFileAsync('bash', ['-c', substitutedBash], { cwd, env: loopBashEnv });
@@ -2460,7 +2481,10 @@ async function executeApprovalNode(
       docsDir,
       issueContext,
       undefined, // loopUserInput
-      rejectionReason
+      rejectionReason,
+      undefined, // loopPrevOutput
+      undefined, // forgeProvider
+      workflowRun.workflow_name
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal.
