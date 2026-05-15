@@ -1244,6 +1244,47 @@ describe('CodexProvider', () => {
         expect(chunks.some(c => c.type === 'result')).toBe(true);
       });
 
+      // BDC fork regression (2026-05-15): the Codex binary returns several
+      // pre-flight / refresh-failure strings that previously classified as
+      // 'unknown' and bypassed the refresh path. AUTH_PATTERNS must catch all of
+      // these so the refresh branch engages (where possible) or terminal auth
+      // failures surface clearly. See behavior spec invariants I-2 and I-9.
+      test.each([
+        ['Not logged in', 'bare binary pre-flight'],
+        ["Not signed in. Please run 'codex login'", 'cloud-tasks variant'],
+        [
+          'Your access token could not be refreshed. Please log out and sign in again.',
+          'refresh-failed terminal message',
+        ],
+      ])('classifies binary-side auth error as auth: %s (%s)', async (errorMessage, _label) => {
+        let callCount = 0;
+        mockRefreshIfAuthFailed.mockResolvedValue({
+          refreshed: true,
+          provider: 'codex' as const,
+          expiresAt: Date.now() + 28_800_000,
+        });
+        mockRunStreamed.mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.reject(new Error(errorMessage));
+          }
+          return Promise.resolve({
+            events: (async function* () {
+              yield { type: 'turn.completed', usage: defaultUsage };
+            })(),
+          });
+        });
+
+        const chunks = [];
+        for await (const chunk of client.sendQuery('test', '/workspace')) {
+          chunks.push(chunk);
+        }
+
+        expect(mockRefreshIfAuthFailed).toHaveBeenCalledWith('codex');
+        expect(mockRunStreamed).toHaveBeenCalledTimes(2);
+        expect(chunks.some(c => c.type === 'result')).toBe(true);
+      });
+
       test('surfaces reauth guidance when the refresh token is terminally invalid', async () => {
         mockRefreshIfAuthFailed.mockResolvedValue({
           refreshed: false,

@@ -678,6 +678,41 @@ describe('ClaudeProvider', () => {
       expect(chunks).toEqual([{ type: 'assistant', content: 'Recovered after refresh' }]);
     });
 
+    // BDC fork regression (2026-05-15): the Claude binary's pre-flight token check
+    // returns "Not logged in · Please run /login" which previously classified as
+    // 'unknown' and bypassed the refresh path. AUTH_PATTERNS must catch this so the
+    // refresh branch engages. See behavior spec invariant I-2.
+    test.each([
+      ['Not logged in · Please run /login', 'binary pre-flight expired-token error'],
+      ['Please run /login Error: success', 'binary "please run /login" variant'],
+    ])('classifies binary-side auth error as auth: %s (%s)', async (errorMessage, _label) => {
+      let callCount = 0;
+      mockRefreshIfAuthFailed.mockResolvedValue({
+        refreshed: true,
+        provider: 'claude' as const,
+        expiresAt: Date.now() + 28_800_000,
+      });
+      mockQuery.mockImplementation(async function* () {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error(errorMessage);
+        }
+        yield {
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'Recovered after refresh' }] },
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(mockRefreshIfAuthFailed).toHaveBeenCalledWith('claude');
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(chunks).toEqual([{ type: 'assistant', content: 'Recovered after refresh' }]);
+    });
+
     test('surfaces reauth guidance when the refresh token is terminally invalid', async () => {
       mockRefreshIfAuthFailed.mockResolvedValue({
         refreshed: false,

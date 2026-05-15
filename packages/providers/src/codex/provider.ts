@@ -130,6 +130,15 @@ const AUTH_PATTERNS = [
   'invalid token',
   '401',
   '403',
+  // BDC fork addition (2026-05-15): Codex binary's own pre-flight token check
+  // short-circuits with "Not logged in" or "Not signed in. Please run 'codex login'"
+  // before the HTTP request is made. Also covers terminal refresh-failure messages
+  // ("Your access token could not be refreshed ... Please log out and sign in again")
+  // so those bubble as auth class and surface clearly to the operator.
+  'not logged in',
+  'not signed in',
+  'log out and sign in again',
+  "please run 'codex login'",
 ];
 const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'codex exec'];
 

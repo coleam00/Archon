@@ -115,6 +115,12 @@ const AUTH_PATTERNS = [
   'invalid token',
   '401',
   '403',
+  // BDC fork addition (2026-05-15): Claude binary's own pre-flight token check
+  // short-circuits with "Not logged in · Please run /login" before the HTTP
+  // request is made. Without these patterns the error is classified as
+  // 'unknown' and the OAuth refresh branch never engages.
+  'not logged in',
+  'please run /login',
 ];
 const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'operation aborted'];
 
