@@ -9,8 +9,10 @@
 export interface ClaudeProviderDefaults {
   [key: string]: unknown;
   model?: string;
-  /** Claude Code settingSources — controls which CLAUDE.md files are loaded.
-   *  @default ['project', 'user']
+  /**
+   * Claude Code settingSources — controls which project/user SDK sources are loaded:
+   * CLAUDE.md, skills, commands, agents, and hooks.
+   * @default ['project', 'user']
    */
   settingSources?: ('project' | 'user')[];
   /** Absolute path to the Claude Code SDK's `cli.js`. Required in compiled

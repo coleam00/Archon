@@ -219,7 +219,7 @@ nodes:
 | `skills` | string[] | — | Skills to preload. Supported by Claude, Pi, and Oh My Pi. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'low'`\|`'medium'`\|`'high'`\|`'max'` | — | Reasoning depth. Supported by Claude, Pi, and Oh My Pi (`max` maps to provider-specific strongest setting). Also settable at workflow level |
-| `thinking` | string \| object | — | Thinking mode. Claude supports string/object forms; Pi and Oh My Pi support string effort-like levels only and warn on Claude object form. Also settable at workflow level |
+| `thinking` | string \| object | — | Claude extended thinking mode (`'adaptive'`, `'enabled'`, `'disabled'`, or object form). Use `effort` for Pi and Oh My Pi reasoning depth. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
@@ -246,6 +246,8 @@ These fields map directly to Claude Agent SDK options. All are Claude-only — C
   thinking: adaptive              # 'adaptive' | 'disabled'
   # thinking: { type: enabled, budgetTokens: 8000 }  # object form
 ```
+
+For Pi and Oh My Pi, set `effort: low|medium|high|max` instead of `thinking`. The workflow schema accepts Claude thinking strings/object forms only.
 
 **maxBudgetUsd** — per-node USD cost cap (node fails with error if exceeded):
 
@@ -1383,7 +1385,7 @@ Before deploying a workflow:
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude, Codex, and Oh My Pi)
 12. **`skills:`** — preload skills into node agents (Claude, Pi, and Oh My Pi)
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort` / `thinking`** — control reasoning depth and thinking mode per node or workflow (Claude, Pi, and Oh My Pi; Claude also supports object-form `thinking`)
+14. **`effort` / `thinking`** — control reasoning depth per node or workflow (`effort` for Claude, Pi, and Oh My Pi; `thinking` for Claude extended thinking)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)

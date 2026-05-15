@@ -28,10 +28,15 @@ echo "Regenerating bundled defaults..."
 bun run scripts/generate-bundled-defaults.ts
 
 # Update build-time constants in source before compiling.
-# The file is restored via an EXIT trap so the dev tree is never left dirty,
-# even if `bun build --compile` fails mid-way. See GitHub issue #979.
+# Build-time rewrites are restored via an EXIT trap so the dev tree is never
+# left dirty, even if `bun build --compile` fails mid-way. See GitHub issue #979.
 BUNDLED_BUILD_FILE="packages/paths/src/bundled-build.ts"
-trap 'echo "Restoring ${BUNDLED_BUILD_FILE}..."; git checkout -- "${BUNDLED_BUILD_FILE}" || echo "WARNING: failed to restore ${BUNDLED_BUILD_FILE} — working tree may be dirty" >&2' EXIT
+cleanup_build_rewrites() {
+  echo "Restoring ${BUNDLED_BUILD_FILE}..."
+  git checkout -- "${BUNDLED_BUILD_FILE}" || echo "WARNING: failed to restore ${BUNDLED_BUILD_FILE} — working tree may be dirty" >&2
+  bun run scripts/prepare-compiled-markit.ts --restore || echo "WARNING: failed to restore markit-ai PDF converter — run bun install to reset node_modules" >&2
+}
+trap cleanup_build_rewrites EXIT
 
 echo "Updating build-time constants (version=${VERSION}, is_binary=true)..."
 cat > "$BUNDLED_BUILD_FILE" << EOF
@@ -47,6 +52,10 @@ export const BUNDLED_IS_BINARY = true;
 export const BUNDLED_VERSION = '${VERSION}';
 export const BUNDLED_GIT_COMMIT = '${GIT_COMMIT}';
 EOF
+
+echo "Disabling markit-ai PDF conversion for compiled binaries..."
+bun run scripts/prepare-compiled-markit.ts
+
 
 # Determine which targets to build
 if [ -n "$TARGET" ] && [ -n "$OUTFILE" ]; then
@@ -79,13 +88,11 @@ for target_pair in "${TARGETS[@]}"; do
   # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
   # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
   # Always --minify to match release parity.
-  # Keep mupdf external: @oh-my-pi/pi-coding-agent reaches it through markit-ai's
-  # optional PDF converter, and Bun 1.3.x cannot compile markit-ai's CJS require
-  # of mupdf's top-level-await ESM bundle. The OMP SDK itself remains bundled.
+  # PDF conversion is patched out above because markit-ai reaches mupdf through
+  # a CJS require of a top-level-await ESM bundle, which Bun 1.3.x cannot compile.
   bun build \
     --compile \
     --minify \
-    --external=mupdf \
     --target="$target" \
     --outfile="$outfile" \
     packages/cli/src/cli.ts
