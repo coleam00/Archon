@@ -20,18 +20,18 @@ Analyze merge conflicts in the PR, automatically resolve simple conflicts where 
 ### 1.1 Parse Input
 
 **Check input format:**
-- Number (`123`, `#123`) → GitHub PR number
-- URL (`https://github.com/...`) → Extract PR number
+- Number (`123`, `#123`) → $FORGE_NAME PR number
+- URL → Extract PR number
 - Empty → Check current branch for open PR
 
 ```bash
-gh pr view {number} --json number,title,headRefName,baseRefName,mergeable,mergeStateStatus
+bun "$FORGE_CLI" pr view {number} --json number,title,headRefName,baseRefName,mergeable,mergeStateStatus
 ```
 
 ### 1.2 Verify Conflicts Exist
 
 ```bash
-gh pr view {number} --json mergeable,mergeStateStatus --jq '.mergeable, .mergeStateStatus'
+bun "$FORGE_CLI" pr view {number} --json mergeable,mergeStateStatus --jq '.mergeable, .mergeStateStatus'
 ```
 
 | Status | Action |
@@ -52,8 +52,8 @@ PR #{number} has no merge conflicts. It's ready for review/merge.
 
 ```bash
 # Get branch info
-PR_HEAD=$(gh pr view {number} --json headRefName --jq '.headRefName')
-PR_BASE=$(gh pr view {number} --json baseRefName --jq '.baseRefName')
+PR_HEAD=$(bun "$FORGE_CLI" pr view {number} --json headRefName --jq '.headRefName')
+PR_BASE=$(bun "$FORGE_CLI" pr view {number} --json baseRefName --jq '.baseRefName')
 
 # Fetch latest
 git fetch origin $PR_BASE
@@ -277,7 +277,7 @@ git push --force-with-lease origin $PR_HEAD
 ### 5.2 Verify PR is Now Mergeable
 
 ```bash
-gh pr view {number} --json mergeable,mergeStateStatus
+bun "$FORGE_CLI" pr view {number} --json mergeable,mergeStateStatus
 ```
 
 Should show `MERGEABLE`.
@@ -364,10 +364,10 @@ Resolved {N} conflicts in {M} files.
 - **Timestamp**: {ISO timestamp}
 ```
 
-### 6.2 Post GitHub Comment
+### 6.2 Post $FORGE_NAME Comment
 
 ```bash
-gh pr comment {number} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment {number} --body "$(cat <<'EOF'
 ## ✅ Conflicts Resolved
 
 **Rebased onto**: `{base}`
@@ -394,7 +394,7 @@ EOF
 
 **PHASE_6_CHECKPOINT:**
 - [ ] Artifact created
-- [ ] GitHub comment posted
+- [ ] $FORGE_NAME comment posted
 
 ---
 
@@ -476,5 +476,5 @@ If type-check/tests fail after resolution:
 - **CONFLICTS_RESOLVED**: All conflicts resolved (auto or manual)
 - **VALIDATION_PASSED**: Type check, tests, lint all pass
 - **BRANCH_PUSHED**: PR branch updated with resolution
-- **PR_MERGEABLE**: GitHub shows PR as mergeable
-- **DOCUMENTED**: Resolution artifact and GitHub comment created
+- **PR_MERGEABLE**: $FORGE_NAME shows PR as mergeable
+- **DOCUMENTED**: Resolution artifact and $FORGE_NAME comment created

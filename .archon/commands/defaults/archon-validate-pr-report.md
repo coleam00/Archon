@@ -34,7 +34,7 @@ Also read the PR details:
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
-gh pr view "$PR_NUMBER" --json title,body,url,headRefName,baseRefName,additions,deletions,changedFiles
+bun "$FORGE_CLI" pr view "$PR_NUMBER" --json title,body,url,headRefName,baseRefName,additions,deletions,changedFiles
 ```
 
 List all screenshots taken:
@@ -187,7 +187,7 @@ If the verdict is clear, post a condensed summary to the PR as a comment:
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
 
 # Create a concise PR comment
-gh pr comment "$PR_NUMBER" --body "$(cat <<'COMMENT'
+bun "$FORGE_CLI" pr comment "$PR_NUMBER" --body "$(cat <<'COMMENT'
 ## Archon PR Validation Report
 
 **Verdict**: {APPROVE / REQUEST_CHANGES}

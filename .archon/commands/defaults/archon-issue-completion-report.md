@@ -1,5 +1,5 @@
 ---
-description: Post completion report to GitHub issue with results, unaddressed items, and follow-up suggestions
+description: Post completion report to forge issue with results, unaddressed items, and follow-up suggestions
 argument-hint: (none - reads from workflow artifacts)
 ---
 
@@ -12,9 +12,9 @@ argument-hint: (none - reads from workflow artifacts)
 
 ## Your Mission
 
-Compile all workflow artifacts into a final report and post it to the original GitHub issue. Summarize what was done, what wasn't addressed (and why), and suggest follow-up issues if needed.
+Compile all workflow artifacts into a final report and post it to the original $FORGE_NAME issue. Summarize what was done, what wasn't addressed (and why), and suggest follow-up issues if needed.
 
-**GitHub action**: Post completion report as a comment on the original issue
+**$FORGE_NAME action**: Post completion report as a comment on the original issue
 **Output artifact**: `$ARTIFACTS_DIR/completion-report.md`
 
 ---
@@ -219,14 +219,14 @@ Write to `$ARTIFACTS_DIR/completion-report.md`:
 
 ---
 
-## Phase 4: POST — GitHub Issue Comment
+## Phase 4: POST — $FORGE_NAME Issue Comment
 
-Post to the original GitHub issue:
+Post to the original $FORGE_NAME issue:
 
 ```bash
 ISSUE_NUMBER=$(echo "$ARGUMENTS" | grep -oE '[0-9]+')
 
-gh issue comment $ISSUE_NUMBER --body "$(cat <<'EOF'
+bun "$FORGE_CLI" issue comment $ISSUE_NUMBER --body "$(cat <<'EOF'
 ## ✅ Issue Resolution Report
 
 **PR**: #{pr-number} ({pr-url})
@@ -292,7 +292,7 @@ EOF
 
 **PHASE_4_CHECKPOINT:**
 
-- [ ] GitHub comment posted to issue
+- [ ] $FORGE_NAME comment posted to issue
 
 ---
 
@@ -318,7 +318,7 @@ EOF
 ### Artifacts
 
 - Completion report: `$ARTIFACTS_DIR/completion-report.md`
-- GitHub comment: Posted to issue
+- $FORGE_NAME comment: Posted to issue
 
 ### Next Steps
 
@@ -333,6 +333,6 @@ EOF
 
 - **ALL_ARTIFACTS_READ**: All workflow artifacts loaded and parsed
 - **REPORT_COMPILED**: Comprehensive completion report written
-- **GITHUB_POSTED**: Comment posted to original issue
+- **FORGE_POSTED**: Comment posted to original issue
 - **UNADDRESSED_DOCUMENTED**: Clear reasons for anything not fixed
 - **FOLLOWUPS_SUGGESTED**: Actionable follow-up issues recommended where appropriate

@@ -1,6 +1,6 @@
 ---
 description: Execute an implementation plan with rigorous validation loops
-argument-hint: <path/to/plan.md or GitHub issue URL>
+argument-hint: <path/to/plan.md or $FORGE_NAME issue URL>
 ---
 
 # Implement Plan
@@ -57,7 +57,7 @@ Check `package.json` (or equivalent) for available scripts:
 cat $ARGUMENTS
 ```
 
-If `$ARGUMENTS` is a GitHub issue URL or number (e.g., `#123`), fetch the issue body which contains the plan.
+If `$ARGUMENTS` is a $FORGE_NAME issue URL or number (e.g., `#123`), fetch the issue body which contains the plan.
 
 ### 1.2 Extract Key Sections
 
@@ -77,7 +77,7 @@ Locate and understand:
 ```
 Error: Plan not found at $ARGUMENTS
 
-Provide a valid plan path or GitHub issue containing the plan.
+Provide a valid plan path or $FORGE_NAME issue containing the plan.
 ```
 
 **PHASE_1_CHECKPOINT:**

@@ -45,7 +45,7 @@ echo "Main repo: $CANONICAL_REPO"
 
 ```bash
 PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number | tr -d '\n')
-gh pr view "$PR_NUMBER" --json title,body
+bun "$FORGE_CLI" pr view "$PR_NUMBER" --json title,body
 ```
 
 ```bash

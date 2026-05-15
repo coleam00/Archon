@@ -16,7 +16,7 @@ Create the final summary report for the workflow run:
 2. List deviations and their rationale
 3. Surface unfixed review findings (MEDIUM/LOW)
 4. Create actionable follow-up recommendations
-5. Post to GitHub PR as a comment
+5. Post to $FORGE_NAME PR as a comment
 6. Write artifact for future reference
 
 **Output**: Decision matrix the user can act on quickly.
@@ -187,7 +187,7 @@ Structure the output for easy decision-making:
 
 ---
 
-### 📋 Suggested GitHub Issues
+### 📋 Suggested $FORGE_NAME Issues
 
 | # | Title | Labels | From |
 |---|-------|--------|------|
@@ -233,9 +233,9 @@ Structure the output for easy decision-making:
 
 ---
 
-## Phase 4: POST - GitHub PR Comment
+## Phase 4: POST - $FORGE_NAME PR Comment
 
-### 4.1 Format for GitHub
+### 4.1 Format for $FORGE_NAME
 
 Create a PR comment with the summary:
 
@@ -327,15 +327,15 @@ These were **intentionally excluded** from scope:
 **Artifacts**: `$ARTIFACTS_DIR/`
 ```
 
-### 4.2 Post to GitHub
+### 4.2 Post to $FORGE_NAME
 
 ```bash
-gh pr comment {pr-number} --body "{formatted-summary}"
+bun "$FORGE_CLI" pr comment {pr-number} --body "{formatted-summary}"
 ```
 
 **PHASE_4_CHECKPOINT:**
 
-- [ ] Summary formatted for GitHub
+- [ ] Summary formatted for $FORGE_NAME
 - [ ] Comment posted to PR
 
 ---
@@ -395,7 +395,7 @@ Write to `$ARTIFACTS_DIR/workflow-summary.md`:
 
 ## Follow-Up Recommendations
 
-### GitHub Issues to Create
+### $FORGE_NAME Issues to Create
 
 {List with draft titles/bodies}
 
@@ -415,7 +415,7 @@ Write to `$ARTIFACTS_DIR/workflow-summary.md`:
 
 ---
 
-## GitHub Comment
+## $FORGE_NAME Comment
 
 Posted to: {PR URL}#comment-{id}
 ```
@@ -466,7 +466,7 @@ This allows legacy tools to find review artifacts at `$ARTIFACTS_DIR/../reviews/
 | Quick wins available | {N} |
 | Follow-up issues suggested | {N} |
 
-### Posted to GitHub
+### Posted to $FORGE_NAME
 
 Summary comment added to PR with:
 - Implementation vs plan comparison
@@ -492,6 +492,6 @@ Summary comment added to PR with:
 
 - **ARTIFACTS_LOADED**: All workflow artifacts read
 - **MATRIX_CREATED**: Follow-up items categorized and prioritized
-- **GITHUB_POSTED**: Summary comment on PR
+- **FORGE_POSTED**: Summary comment on PR
 - **ARTIFACT_WRITTEN**: workflow-summary.md created
 - **ACTIONABLE**: User has clear next steps with minimal cognitive load

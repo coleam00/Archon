@@ -311,9 +311,9 @@ nodes:
 
       1. Stage all changes and create a single commit (or verify existing commits)
       2. Push the branch: `git push -u origin HEAD`
-      3. Check if a PR already exists: `gh pr list --head $(git branch --show-current)`
+      3. Check if a PR already exists: `bun "$FORGE_CLI" pr list --head $(git branch --show-current)`
       4. Create the PR targeting `$BASE_BRANCH` as the base branch:
-         `gh pr create --base $BASE_BRANCH --title "..." --body "..."`
+         `bun "$FORGE_CLI" pr create --base $BASE_BRANCH --title "..." --body "..."`
          - Title: concise description of what was simplified (under 70 chars)
          - Body: use the format below
       5. Save the PR URL to `$ARTIFACTS_DIR/.pr-url`
@@ -356,7 +356,7 @@ nodes:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                Verify this command succeeded. If git push or gh pr create failed,
+                Verify this command succeeded. If git push or bun "$FORGE_CLI" pr create failed,
                 read the error message carefully before retrying.
 
   - id: verify-pr-base

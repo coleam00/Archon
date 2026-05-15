@@ -1,11 +1,14 @@
 ---
-description: Investigate a GitHub issue or problem - analyze codebase, create plan, post to GitHub
+description: Investigate a forge issue or problem - analyze codebase, create plan, post to forge
 argument-hint: <issue-number|url|"description">
 ---
 
 # Investigate Issue
 
 **Input**: $ARGUMENTS
+**Forge**: $FORGE_TYPE
+
+> **Forge note**: When `$FORGE_TYPE` is not `github`, use `bun "$FORGE_CLI"` instead of `gh` for all forge operations (e.g., `"$FORGE_CLI" issue view`, `"$FORGE_CLI" issue comment`). The tool handles authentication and API differences automatically.
 
 ---
 
@@ -14,7 +17,7 @@ argument-hint: <issue-number|url|"description">
 Investigate the issue/problem and produce a comprehensive implementation plan that:
 
 1. Can be executed by `/implement-issue`
-2. Is posted as a GitHub comment (if GH issue provided)
+2. Is posted as a $FORGE_NAME comment (if $FORGE_NAME issue provided)
 3. Captures all context needed for one-pass implementation
 
 **Golden Rule**: The artifact you produce IS the specification. The implementing agent should be able to work from it without asking questions.
@@ -27,18 +30,18 @@ Investigate the issue/problem and produce a comprehensive implementation plan th
 
 **Check the input format:**
 
-- Looks like a number (`123`, `#123`) → GitHub issue number
-- Starts with `http` → GitHub URL (extract issue number)
+- Looks like a number (`123`, `#123`) → $FORGE_NAME issue number
+- Starts with `http` → $FORGE_NAME URL (extract issue number)
 - Anything else → Free-form description
 
 ```bash
-# If GitHub issue, fetch it:
-gh issue view {number} --json title,body,labels,comments,state,url,author
+# If forge issue, fetch it:
+bun "$FORGE_CLI" issue view {number} --json title,body,labels,comments,state,url,author
 ```
 
 ### 1.2 Extract Context
 
-**If GitHub issue:**
+**If $FORGE_NAME issue:**
 - Title: What's the reported problem?
 - Body: Details, reproduction steps, expected vs actual
 - Labels: bug? enhancement? documentation?
@@ -47,7 +50,7 @@ gh issue view {number} --json title,body,labels,comments,state,url,author
 
 **If free-form:**
 - Parse as problem description
-- Note: No GitHub posting (artifact only)
+- Note: No $FORGE_NAME posting (artifact only)
 
 ### 1.3 Classify Issue Type
 
@@ -97,13 +100,13 @@ Each assessment requires a **one-sentence reasoning** explaining WHY you chose t
 | LOW | Uncertain root cause, limited evidence, many unknowns |
 
 **PHASE_1_CHECKPOINT:**
-- [ ] Input type identified (GH issue or free-form)
+- [ ] Input type identified ($FORGE_NAME issue or free-form)
 - [ ] Issue content extracted
 - [ ] Type classified
 - [ ] Severity (bug) or Priority (other) assessed with reasoning
 - [ ] Complexity assessed with reasoning (after Phase 2)
 - [ ] Confidence assessed with reasoning (after Phase 3)
-- [ ] If GH issue: confirmed it's open and not already has PR
+- [ ] If $FORGE_NAME issue: confirmed it's open and not already has PR
 
 ---
 
@@ -426,14 +429,14 @@ bun run lint
 
 ---
 
-## Phase 5: POST - GitHub Comment
+## Phase 5: POST - $FORGE_NAME Comment
 
-**Only if input was a GitHub issue (not free-form):**
+**Only if input was a $FORGE_NAME issue (not free-form):**
 
-Format the artifact for GitHub and post:
+Format the artifact for $FORGE_NAME and post:
 
 ```bash
-gh issue comment {number} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" issue comment {number} --body "$(cat <<'EOF'
 ## 🔍 Investigation: {Title}
 
 **Type**: `{TYPE}`
@@ -456,7 +459,7 @@ gh issue comment {number} --body "$(cat <<'EOF'
 
 ### Root Cause Analysis
 
-{evidence chain, formatted for GitHub}
+{evidence chain, formatted for $FORGE_NAME}
 
 ---
 
@@ -495,7 +498,7 @@ EOF
 ```
 
 **PHASE_5_CHECKPOINT:**
-- [ ] Comment posted to GitHub (if GH issue)
+- [ ] Comment posted to $FORGE_NAME (if $FORGE_NAME issue)
 - [ ] Formatting renders correctly
 
 ---
@@ -533,7 +536,7 @@ EOF
 
 📄 `$ARTIFACTS_DIR/investigation.md`
 
-### GitHub
+### $FORGE_NAME
 
 {✅ Posted to issue | ⏭️ Skipped (free-form input)}
 
@@ -572,5 +575,5 @@ Run `/implement-issue {number}` to execute the plan.
 - **ARTIFACT_COMPLETE**: All sections filled with specific, actionable content
 - **EVIDENCE_BASED**: Every claim has file:line reference or proof
 - **IMPLEMENTABLE**: Another agent can execute without questions
-- **GITHUB_POSTED**: Comment visible on issue (if GH issue)
+- **FORGE_POSTED**: Comment visible on issue (if $FORGE_NAME issue)
 - **COMMITTED**: Artifact saved in git

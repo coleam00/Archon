@@ -1,5 +1,5 @@
 ---
-description: Synthesize all review agent findings into consolidated report and post to GitHub
+description: Synthesize all review agent findings into consolidated report and post to forge
 argument-hint: (none - reads from review artifacts)
 ---
 
@@ -9,10 +9,10 @@ argument-hint: (none - reads from review artifacts)
 
 ## Your Mission
 
-Read all parallel review agent artifacts, synthesize findings into a consolidated report, create a master artifact, and post a comprehensive review comment to the GitHub PR.
+Read all parallel review agent artifacts, synthesize findings into a consolidated report, create a master artifact, and post a comprehensive review comment to the $FORGE_NAME PR.
 
 **Output artifact**: `$ARTIFACTS_DIR/review/consolidated-review.md`
-**GitHub action**: Post PR comment with full review
+**$FORGE_NAME action**: Post PR comment with full review
 
 ---
 
@@ -256,14 +256,14 @@ If not addressing in this PR, create issues for:
 
 ---
 
-## Phase 4: POST - GitHub PR Comment
+## Phase 4: POST - $FORGE_NAME PR Comment
 
-### 4.1 Format for GitHub
+### 4.1 Format for $FORGE_NAME
 
-Create a GitHub-friendly version of the review:
+Create a $FORGE_NAME-compatible version of the review:
 
 ```bash
-gh pr comment {number} --body "$(cat <<'EOF'
+bun "$FORGE_CLI" pr comment {number} --body "$(cat <<'EOF'
 # 🔍 Comprehensive PR Review
 
 **PR**: #{number}
@@ -373,7 +373,7 @@ EOF
 ```
 
 **PHASE_4_CHECKPOINT:**
-- [ ] GitHub comment posted
+- [ ] $FORGE_NAME comment posted
 - [ ] Formatting renders correctly
 - [ ] All severity levels included
 
@@ -394,4 +394,4 @@ Output only a brief confirmation (this will be posted as a comment):
 - **ALL_ARTIFACTS_READ**: All 5 agent findings loaded
 - **FINDINGS_SYNTHESIZED**: Combined, deduplicated, prioritized
 - **CONSOLIDATED_CREATED**: Master artifact written
-- **GITHUB_POSTED**: PR comment visible
+- **FORGE_POSTED**: PR comment visible

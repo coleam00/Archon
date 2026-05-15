@@ -1,5 +1,5 @@
 ---
-description: Research web sources for context relevant to a GitHub issue or feature
+description: Research web sources for context relevant to a forge issue or feature
 argument-hint: <issue-number or search context>
 ---
 
@@ -24,10 +24,10 @@ Search the web for information relevant to the issue or feature being worked on.
 
 ### 1.1 Get Issue Context
 
-If input looks like a GitHub issue number:
+If input looks like a $FORGE_NAME issue number:
 
 ```bash
-gh issue view $ARGUMENTS --json title,body,labels
+bun "$FORGE_CLI" issue view $ARGUMENTS --json title,body,labels
 ```
 
 ### 1.2 Identify Research Targets

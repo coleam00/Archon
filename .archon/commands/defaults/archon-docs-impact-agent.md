@@ -34,7 +34,7 @@ cat $ARTIFACTS_DIR/review/scope.md
 ### 1.3 Get PR Diff
 
 ```bash
-gh pr diff {number}
+bun "$FORGE_CLI" pr diff {number}
 ```
 
 ### 1.4 Read Current Documentation
