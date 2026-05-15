@@ -79,9 +79,13 @@ for target_pair in "${TARGETS[@]}"; do
   # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
   # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
   # Always --minify to match release parity.
+  # Keep mupdf external: @oh-my-pi/pi-coding-agent reaches it through markit-ai's
+  # optional PDF converter, and Bun 1.3.x cannot compile markit-ai's CJS require
+  # of mupdf's top-level-await ESM bundle. The OMP SDK itself remains bundled.
   bun build \
     --compile \
     --minify \
+    --external=mupdf \
     --target="$target" \
     --outfile="$outfile" \
     packages/cli/src/cli.ts
