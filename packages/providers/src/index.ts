@@ -43,6 +43,7 @@ export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 
 // Utilities (needed by consumers)
 export { resetCodexSingleton } from './codex/provider';
+export { loadMcpConfig, type LoadedMcpConfig } from './mcp/config';
 export { resolveCodexBinaryPath, fileExists as codexFileExists } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
 
