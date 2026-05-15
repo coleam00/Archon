@@ -13,7 +13,7 @@ DAG workflow nodes support a `mcp` field that attaches MCP (Model Context Protoc
 servers to individual nodes. Each node gets exactly the external tools it needs —
 GitHub, Linear, Postgres, etc. — without over-provisioning.
 
-**Supported on Claude and Oh My Pi** — Codex and the older Pi provider warn and ignore the `mcp` field.
+**Supported on Claude and Oh My Pi** — Codex and the Pi provider warn and ignore the `mcp` field.
 
 ## Quick Start
 
@@ -375,7 +375,7 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 ## Limitations
 
 - **Provider support** — Claude and Oh My Pi support node-scoped `mcp:` configs.
-  Codex and the older Pi provider warn and ignore the field; configure MCP servers
+  Codex and the Pi provider warn and ignore the field; configure MCP servers
   through their native config surfaces instead.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
@@ -394,7 +394,7 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 | `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |
 | `MCP server connection failed` | Server process crashed or URL unreachable | Check command/URL, test the server standalone |
 | Plugin MCP missing from workflow output | User-level plugin MCPs (from `~/.claude/`) are filtered out of workflow warnings | Run with `--verbose` and look for `dag.mcp_plugin_connection_suppressed` |
-| `mcp config but uses unsupported provider` | Node resolved to Codex or the older Pi provider | Set `provider: claude` or `provider: omp` on the node/workflow |
+| `mcp config but uses unsupported provider` | Node resolved to Codex or the Pi provider | Set `provider: claude` or `provider: omp` on the node/workflow |
 | `Haiku model with MCP servers` | Haiku doesn't support tool search | Use `model: sonnet` or `model: opus` instead |
 
 ## Finding MCP Servers
