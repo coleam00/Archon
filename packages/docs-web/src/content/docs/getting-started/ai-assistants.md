@@ -510,7 +510,7 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 
 ## Oh My Pi (Community Provider)
 
-Oh My Pi is registered as `provider: omp` with display name **Oh My Pi (community)**. It is separate from the existing `provider: pi` integration; `pi` remains the older Pi community adapter, while `omp` maps explicitly to the Oh My Pi SDK packages (`@oh-my-pi/*`).
+Oh My Pi is registered as `provider: omp` with display name **Oh My Pi (community)**. It is separate from the existing `provider: pi` integration; Pi and Oh My Pi share a base lineage, but Archon treats them as distinct agents with different package families, runtime surfaces, and provider behavior. The OMP provider maps explicitly to the Oh My Pi SDK packages (`@oh-my-pi/*`).
 
 ### Configure Oh My Pi
 
