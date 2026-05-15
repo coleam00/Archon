@@ -564,7 +564,18 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             ) : dagDefinitionErrorMessage ? (
               <div className="flex flex-col items-center justify-center h-full text-text-secondary px-4 text-center">
                 <p className="text-error mb-1">Failed to load workflow graph</p>
-                <p className="text-xs">{dagDefinitionErrorMessage}</p>
+                <p className="text-xs mb-3">{dagDefinitionErrorMessage}</p>
+                <button
+                  type="button"
+                  onClick={(): void => {
+                    void queryClient.invalidateQueries({
+                      queryKey: ['workflowDefinition', initialData?.workflowName, codebaseCwd],
+                    });
+                  }}
+                  className="text-xs text-primary hover:text-accent-bright transition-colors"
+                >
+                  Retry
+                </button>
               </div>
             ) : workflowDefPending ? (
               <div className="flex items-center justify-center h-full text-text-secondary">
