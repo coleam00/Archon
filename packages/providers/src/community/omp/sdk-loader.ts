@@ -46,9 +46,29 @@ export interface OmpExtensionRunner {
   setFlagValue(name: string, value: boolean | string): void;
 }
 
+export interface OmpBeforeToolCallContext {
+  toolCall: { name: string };
+  args: Record<string, unknown>;
+}
+
+export interface OmpBeforeToolCallResult {
+  block?: boolean;
+  reason?: string;
+}
+
+export type OmpBeforeToolCall = (
+  context: OmpBeforeToolCallContext,
+  signal?: AbortSignal
+) => Promise<OmpBeforeToolCallResult | undefined> | OmpBeforeToolCallResult | undefined;
+
+export interface OmpAgent {
+  beforeToolCall?: OmpBeforeToolCall;
+}
+
 export interface OmpSession {
   sessionId?: string;
   extensionRunner?: OmpExtensionRunner;
+  agent?: OmpAgent;
   subscribe(listener: (event: unknown) => void): () => void;
   prompt(prompt: string): Promise<unknown>;
   abort(): Promise<unknown>;

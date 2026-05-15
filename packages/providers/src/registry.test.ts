@@ -398,7 +398,7 @@ describe('registry', () => {
       expect(entries).toHaveLength(1);
     });
 
-    test('declares honest v1 capabilities', () => {
+    test('declares v2 capabilities', () => {
       registerOmpProvider();
       const caps = getProviderCapabilities('omp');
       expect(caps.sessionResume).toBe(true);
@@ -407,7 +407,7 @@ describe('registry', () => {
       expect(caps.structuredOutput).toBe(true);
       expect(caps.effortControl).toBe(true);
       expect(caps.thinkingControl).toBe(true);
-      expect(caps.envInjection).toBe(false);
+      expect(caps.envInjection).toBe(true);
       expect(caps.mcp).toBe(true);
       expect(caps.hooks).toBe(false);
       expect(caps.agents).toBe(false);
