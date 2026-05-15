@@ -31,20 +31,40 @@ let state: State | null = null;
 let source: 'delimiter' | 'json-wrapper' | null = null;
 
 // ── Tier 1: delimiter-based extraction ──
-const BEGIN = 'ARCHON_STATE_JSON_BEGIN';
-const END = 'ARCHON_STATE_JSON_END';
-const beginIdx = raw.indexOf(BEGIN);
-const endIdx = raw.indexOf(END);
-if (beginIdx !== -1 && endIdx !== -1 && endIdx > beginIdx) {
-  const stateText = raw.slice(beginIdx + BEGIN.length, endIdx).trim();
-  try {
-    state = JSON.parse(stateText) as State;
-    brief = raw.slice(0, beginIdx).trim();
-    source = 'delimiter';
-  } catch (err) {
-    process.stderr.write(
-      `Delimiter found but state JSON parse failed: ${(err as Error).message}\n`,
-    );
+// Markers are matched as standalone lines (^...$, multiline) to prevent
+// false matches when the marker string appears inside PR titles or brief prose.
+const BEGIN_RE = /^ARCHON_STATE_JSON_BEGIN$/gm;
+const END_RE = /^ARCHON_STATE_JSON_END$/gm;
+
+const beginMatches = [...raw.matchAll(BEGIN_RE)];
+const endMatches = [...raw.matchAll(END_RE)];
+
+if (beginMatches.length > 0 && endMatches.length > 0) {
+  // Strategy: last END, then last BEGIN before it — the complete final block.
+  const lastEnd = endMatches[endMatches.length - 1];
+  const lastEndIdx = lastEnd.index!;
+
+  const beginsBeforeEnd = beginMatches.filter((m) => m.index! < lastEndIdx);
+  if (beginsBeforeEnd.length > 0) {
+    const lastBegin = beginsBeforeEnd[beginsBeforeEnd.length - 1];
+    const afterBeginIdx = lastBegin.index! + lastBegin[0].length;
+
+    const stateText = raw.slice(afterBeginIdx, lastEndIdx).trim();
+    try {
+      state = JSON.parse(stateText) as State;
+      // Brief is everything before the first line-anchored BEGIN.
+      brief = raw.slice(0, beginMatches[0].index!).trim();
+      source = 'delimiter';
+      if (beginMatches.length > 1) {
+        process.stderr.write(
+          `WARN: ${beginMatches.length} ARCHON_STATE_JSON_BEGIN markers found; used the last complete pair.\n`,
+        );
+      }
+    } catch (err) {
+      process.stderr.write(
+        `Delimiter found but state JSON parse failed: ${(err as Error).message}\n`,
+      );
+    }
   }
 }
 
