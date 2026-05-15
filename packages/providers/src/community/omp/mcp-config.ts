@@ -51,6 +51,7 @@ function expandEnvVars(config: Record<string, unknown>, mcpPath: string): Loaded
       throw new Error(`MCP server config must be a JSON object: ${serverName} in ${mcpPath}`);
     }
     const server = { ...(serverConfig as Record<string, unknown>) };
+    if (server.enabled === false) continue;
     if (server.env !== undefined) {
       if (!isRecord(server.env)) {
         throw new Error(`MCP server env must be a JSON object: ${serverName} in ${mcpPath}`);

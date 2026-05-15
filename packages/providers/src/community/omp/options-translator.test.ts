@@ -146,6 +146,15 @@ describe('getRuntimeAuthOverride', () => {
     expect(getRuntimeAuthOverride('anthropic', { ANTHROPIC_API_KEY: 'sk-test' })).toBe('sk-test');
   });
 
+  test('reads request-scoped API keys for newer OMP providers', () => {
+    expect(getRuntimeAuthOverride('moonshot', { MOONSHOT_API_KEY: 'moonshot-key' })).toBe(
+      'moonshot-key'
+    );
+    expect(getRuntimeAuthOverride('qwen-portal', { QWEN_PORTAL_API_KEY: 'qwen-key' })).toBe(
+      'qwen-key'
+    );
+  });
+
   test('reads Hugging Face hub token before generic HF token', () => {
     expect(
       getRuntimeAuthOverride('huggingface', {

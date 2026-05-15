@@ -40,6 +40,19 @@ describe('loadMcpConfig', () => {
     expect(result.serverNames).toEqual(['github', 'postgres']);
   });
 
+  test('filters disabled servers before connecting', async () => {
+    const config = {
+      enabled: { command: 'npx', args: ['enabled-server'] },
+      disabled: { command: 'npx', args: ['disabled-server'], enabled: false },
+    };
+    await writeFile(join(testDir, 'disabled.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('disabled.json', testDir);
+
+    expect(result.serverNames).toEqual(['enabled']);
+    expect(result.servers).toEqual({ enabled: { command: 'npx', args: ['enabled-server'] } });
+  });
+
   test('expands $VAR_NAME in env values from process.env', async () => {
     process.env.TEST_OMP_MCP_TOKEN = 'secret123';
     const config = { github: { command: 'npx', env: { TOKEN: '$TEST_OMP_MCP_TOKEN' } } };
