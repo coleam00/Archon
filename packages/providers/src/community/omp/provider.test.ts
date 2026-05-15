@@ -226,6 +226,7 @@ describe('OmpProvider', () => {
     expect(provider.getType()).toBe('omp');
     expect(provider.getCapabilities().sessionResume).toBe(true);
     expect(provider.getCapabilities().envInjection).toBe(true);
+    expect(provider.getCapabilities().fallbackModel).toBe(true);
   });
 
   test('throws on missing model', async () => {
@@ -286,7 +287,12 @@ describe('OmpProvider', () => {
       model: 'anthropic/claude-sonnet-4-5',
       assistantConfig: {
         settings: {
-          retry: { enabled: false, maxRetries: 2 },
+          retry: {
+            enabled: false,
+            maxRetries: 2,
+            fallbackChains: { default: ['openrouter/qwen/qwen3-coder'] },
+            fallbackRevertPolicy: 'never',
+          },
           compaction: { enabled: true },
           contextPromotion: { enabled: false },
           modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
@@ -301,6 +307,8 @@ describe('OmpProvider', () => {
     expect(settingsOverrides).toEqual({
       'retry.enabled': false,
       'retry.maxRetries': 2,
+      'retry.fallbackChains': { default: ['openrouter/qwen/qwen3-coder'] },
+      'retry.fallbackRevertPolicy': 'never',
       'compaction.enabled': true,
       'contextPromotion.enabled': false,
       modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
@@ -309,6 +317,152 @@ describe('OmpProvider', () => {
       disabledProviders: ['experimental-provider'],
       disabledExtensions: ['risky-extension'],
     });
+  });
+
+  test('does not add OMP retry fallback overrides without fallbackModel', async () => {
+    let settingsOverrides: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSettingsIsolated(overrides) {
+          settingsOverrides = overrides;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+    });
+
+    expect(settingsOverrides).toEqual({});
+  });
+
+  test('maps fallbackModel to OMP retry fallback chain settings', async () => {
+    let settingsOverrides: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSettingsIsolated(overrides) {
+          settingsOverrides = overrides;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      fallbackModel: 'openrouter/qwen/qwen3-coder',
+    });
+
+    expect(settingsOverrides).toEqual({
+      'retry.fallbackChains': { archon: ['openrouter/qwen/qwen3-coder'] },
+      modelRoles: { archon: 'anthropic/claude-sonnet-4-5' },
+    });
+  });
+
+  test('passes fallback provider runtime auth override', async () => {
+    const runtimeOverrides: Array<[string, string]> = [];
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSetRuntimeApiKey(providerName, apiKey) {
+          runtimeOverrides.push([providerName, apiKey]);
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      fallbackModel: 'openrouter/qwen/qwen3-coder',
+      env: {
+        ANTHROPIC_API_KEY: 'anthropic-request-key',
+        OPENROUTER_API_KEY: 'openrouter-request-key',
+      },
+    });
+
+    expect(runtimeOverrides).toEqual([
+      ['anthropic', 'anthropic-request-key'],
+      ['openrouter', 'openrouter-request-key'],
+    ]);
+  });
+
+  test('merges fallbackModel with explicit OMP retry fallback settings', async () => {
+    let settingsOverrides: Record<string, unknown> | undefined;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onSettingsIsolated(overrides) {
+          settingsOverrides = overrides;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      fallbackModel: 'openrouter/qwen/qwen3-coder:off',
+      assistantConfig: {
+        settings: {
+          retry: {
+            enabled: true,
+            fallbackChains: { default: ['anthropic/claude-opus-4-5'] },
+            fallbackRevertPolicy: 'never',
+          },
+          modelRoles: { default: 'anthropic/claude-sonnet-4-5' },
+        },
+      },
+    });
+
+    expect(settingsOverrides).toEqual({
+      'retry.enabled': true,
+      'retry.fallbackChains': {
+        default: ['anthropic/claude-opus-4-5'],
+        archon: ['openrouter/qwen/qwen3-coder:off'],
+      },
+      'retry.fallbackRevertPolicy': 'never',
+      modelRoles: {
+        default: 'anthropic/claude-sonnet-4-5',
+        archon: 'anthropic/claude-sonnet-4-5',
+      },
+    });
+  });
+
+  test('rejects invalid OMP fallback model refs before creating a session', async () => {
+    let createCount = 0;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onCreateAgentSession() {
+          createCount += 1;
+        },
+      })
+    );
+
+    await expect(async () => {
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        fallbackModel: 'claude-haiku-4-5',
+      });
+    }).toThrow('Invalid Oh My Pi fallback model ref');
+    expect(createCount).toBe(0);
+  });
+
+  test('rejects unknown OMP fallback models before creating a session', async () => {
+    let createCount = 0;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onFindModel(providerName, modelId) {
+          if (providerName === 'anthropic' && modelId === 'claude-sonnet-4-5') {
+            return { provider: providerName, id: modelId };
+          }
+          return undefined;
+        },
+        onCreateAgentSession() {
+          createCount += 1;
+        },
+      })
+    );
+
+    await expect(async () => {
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        fallbackModel: 'openrouter/qwen/qwen3-coder',
+      });
+    }).toThrow('Oh My Pi fallback model not found');
+    expect(createCount).toBe(0);
   });
 
   test('applies config env without overriding shell env and keeps auth overrides', async () => {

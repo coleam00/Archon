@@ -22,6 +22,16 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
   return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
+function stringArrayRecord(value: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(value)) return undefined;
+  const filtered: Record<string, string[]> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const strings = stringArray(item, true);
+    if (strings !== undefined) filtered[key] = strings;
+  }
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
 function booleanOrStringRecord(value: unknown): Record<string, boolean | string> | undefined {
   if (!isRecord(value)) return undefined;
   const filtered: Record<string, boolean | string> = {};
@@ -42,6 +52,11 @@ function retrySettings(value: unknown): OmpSettingsDefaults['retry'] | undefined
     value.maxRetries >= 0
   ) {
     retry.maxRetries = value.maxRetries;
+  }
+  const fallbackChains = stringArrayRecord(value.fallbackChains);
+  if (fallbackChains !== undefined) retry.fallbackChains = fallbackChains;
+  if (value.fallbackRevertPolicy === 'cooldown-expiry' || value.fallbackRevertPolicy === 'never') {
+    retry.fallbackRevertPolicy = value.fallbackRevertPolicy;
   }
 
   return Object.keys(retry).length > 0 ? retry : undefined;

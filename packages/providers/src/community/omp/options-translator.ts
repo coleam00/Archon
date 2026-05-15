@@ -13,6 +13,8 @@ const OMP_NATIVE_LEVELS: ReadonlySet<OmpThinkingLevel> = new Set<OmpThinkingLeve
   'xhigh',
 ]);
 
+const ARCHON_FALLBACK_ROLE = 'archon';
+
 export const DEFAULT_OMP_TOOL_NAMES = [
   'ask',
   'bash',
@@ -227,21 +229,45 @@ function assignOverride(overrides: Record<string, unknown>, key: string, value: 
   if (value !== undefined) overrides[key] = value;
 }
 
-export function buildOmpSettingsOverrides(config: OmpProviderDefaults): Record<string, unknown> {
+export interface OmpFallbackModelOverride {
+  primaryModel: string;
+  fallbackModel: string;
+}
+
+export function buildOmpSettingsOverrides(
+  config: OmpProviderDefaults,
+  fallback?: OmpFallbackModelOverride
+): Record<string, unknown> {
   const settings = config.settings;
-  if (!settings) return {};
+  if (!settings && !fallback) return {};
+
+  const retry = settings?.retry;
+  const modelRoles = settings?.modelRoles !== undefined ? { ...settings.modelRoles } : undefined;
+  const fallbackChains =
+    retry?.fallbackChains !== undefined ? { ...retry.fallbackChains } : undefined;
+
+  const effectiveModelRoles =
+    fallback !== undefined
+      ? { ...modelRoles, [ARCHON_FALLBACK_ROLE]: fallback.primaryModel }
+      : modelRoles;
+  const effectiveFallbackChains =
+    fallback !== undefined
+      ? { ...fallbackChains, [ARCHON_FALLBACK_ROLE]: [fallback.fallbackModel] }
+      : fallbackChains;
 
   const overrides: Record<string, unknown> = {};
   for (const [key, value] of [
-    ['retry.enabled', settings.retry?.enabled],
-    ['retry.maxRetries', settings.retry?.maxRetries],
-    ['compaction.enabled', settings.compaction?.enabled],
-    ['contextPromotion.enabled', settings.contextPromotion?.enabled],
-    ['modelRoles', settings.modelRoles],
-    ['enabledModels', settings.enabledModels],
-    ['modelProviderOrder', settings.modelProviderOrder],
-    ['disabledProviders', settings.disabledProviders],
-    ['disabledExtensions', settings.disabledExtensions],
+    ['retry.enabled', retry?.enabled],
+    ['retry.maxRetries', retry?.maxRetries],
+    ['retry.fallbackChains', effectiveFallbackChains],
+    ['retry.fallbackRevertPolicy', retry?.fallbackRevertPolicy],
+    ['compaction.enabled', settings?.compaction?.enabled],
+    ['contextPromotion.enabled', settings?.contextPromotion?.enabled],
+    ['modelRoles', effectiveModelRoles],
+    ['enabledModels', settings?.enabledModels],
+    ['modelProviderOrder', settings?.modelProviderOrder],
+    ['disabledProviders', settings?.disabledProviders],
+    ['disabledExtensions', settings?.disabledExtensions],
   ] as const) {
     assignOverride(overrides, key, value);
   }
