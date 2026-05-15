@@ -43,6 +43,7 @@ const mockSetFlagValue = mock((_name: string, _value: boolean | string) => undef
 const mockExtensionRunner = {
   setFlagValue: mockSetFlagValue,
 };
+const mockSetModel = mock(async (_model: unknown) => undefined);
 const mockSession = {
   subscribe: mockSubscribe,
   prompt: mockPrompt,
@@ -50,6 +51,7 @@ const mockSession = {
   dispose: mockDispose,
   bindExtensions: mockBindExtensions,
   extensionRunner: mockExtensionRunner,
+  setModel: mockSetModel,
   isStreaming: false,
   sessionId: 'mock-session-uuid',
 };
@@ -188,6 +190,7 @@ describe('PiProvider', () => {
     mockDispose.mockClear();
     mockSubscribe.mockClear();
     mockBindExtensions.mockClear();
+    mockSetModel.mockClear();
     mockSetFlagValue.mockClear();
     mockResourceLoaderReload.mockClear();
     mockCreateAgentSession.mockClear();
@@ -281,11 +284,9 @@ describe('PiProvider', () => {
   });
 
   test('ModelRegistry.create receives the AuthStorage instance', async () => {
-    // Headline-fix wiring: ModelRegistry.create must receive the same
-    // AuthStorage instance returned by AuthStorage.create(), so registry
-    // lookups can resolve user-configured custom models from
-    // ~/.pi/agent/models.json (LM Studio, ollama, llamacpp, etc.). Without
-    // this wiring the registry only sees the static built-in catalog.
+    // ModelRegistry.create must receive the same AuthStorage instance
+    // returned by AuthStorage.create(), so extension providers can resolve
+    // credentials and register models during bindExtensions().
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -327,17 +328,17 @@ describe('PiProvider', () => {
   });
 
   test('Pi model not found includes models.json load error when registry reports one', async () => {
-    // ModelRegistry swallows models.json parse/validation errors into an
-    // internal loadError. When find() returns undefined we surface that
-    // error in both the structured log and the throw message so users
-    // debugging a custom-provider config see the actual reason.
     process.env.GEMINI_API_KEY = 'sk-test';
+    // find() is called twice — first on the static catalog, then again after bindExtensions()
+    // resolves extension providers. Both must return undefined to trigger the error.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryCreate.mockImplementationOnce(() => ({
       find: mockModelRegistryFind,
       getError: () => 'Provider lm-studio: "baseUrl" is required when defining custom models.',
     }));
 
+    resetScript(scriptedAgentEnd());
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'lm-studio/some-model',
@@ -345,15 +346,14 @@ describe('PiProvider', () => {
     );
 
     expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('models.json failed to load');
-    expect(error?.message).toContain('"baseUrl" is required');
-    expect(mockLogger.error).toHaveBeenCalledWith(
+    expect(error?.message).toContain('provider extension');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         piProvider: 'lm-studio',
         modelId: 'some-model',
         loadError: expect.stringContaining('"baseUrl" is required'),
       }),
-      'pi.model_not_found'
+      'pi.model_registry_load_error'
     );
   });
 
@@ -407,17 +407,43 @@ describe('PiProvider', () => {
 
   test('throws when ModelRegistry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
-    // 'nonexistent' is handled in mockModelRegistryFind to return undefined, but
-    // the adapter rejects unknown providers. To exercise
-    // the not-found branch, use a known provider but unknown modelId by
-    // temporarily swapping mockModelRegistryFind to always return undefined.
+    // find() is called twice — first on the static catalog, then again after bindExtensions()
+    // resolves extension providers. Both must return undefined to trigger the error.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    resetScript(scriptedAgentEnd());
     const { error } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/unknown-model-id',
       })
     );
     expect(error?.message).toContain('Pi model not found');
+    expect(error?.message).toContain('provider extension');
+  });
+
+  test('deferred resolution: calls session.setModel when find() resolves after bindExtensions', async () => {
+    // Phase 1: model not in static catalog (extension provider path).
+    // Phase 2: extension registers the model during bindExtensions() and find() succeeds.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() => ({
+      id: 'custom-model',
+      provider: 'extension-provider',
+      name: 'extension-provider/custom-model',
+    }));
+    resetScript(scriptedAgentEnd());
+
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'extension-provider/custom-model',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(mockModelRegistryFind).toHaveBeenCalledTimes(2);
+    expect(mockSetModel).toHaveBeenCalledTimes(1);
+    expect(mockSetModel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'custom-model', provider: 'extension-provider' })
+    );
   });
 
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
