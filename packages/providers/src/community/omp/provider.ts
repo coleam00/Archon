@@ -3,6 +3,7 @@ import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
+  OmpMcpManager,
   OmpModelRegistry,
 } from './sdk-loader';
 
@@ -355,6 +356,7 @@ export class OmpProvider implements IAgentProvider {
     let resolvedMcp: ResolvedOmpMcp | undefined;
     let sendQueryError: unknown;
     let disconnectError: Error | undefined;
+    let sdkManagedMcp: OmpMcpManager | undefined;
     try {
       const runtimeOverride =
         getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
@@ -439,6 +441,10 @@ export class OmpProvider implements IAgentProvider {
 
       const agentSessionResult = await sdk.createAgentSession(sessionOptions);
       const { session, modelFallbackMessage } = agentSessionResult;
+      sdkManagedMcp =
+        agentSessionResult.mcpManager && agentSessionResult.mcpManager !== resolvedMcp?.manager
+          ? agentSessionResult.mcpManager
+          : undefined;
 
       if (ompConfig.extensionFlags && session.extensionRunner) {
         for (const [name, value] of Object.entries(ompConfig.extensionFlags)) {
@@ -493,6 +499,22 @@ export class OmpProvider implements IAgentProvider {
             { err: disconnectError, mcpPath: nodeConfig?.mcp },
             'omp.mcp_disconnect_failed'
           );
+        }
+      }
+      if (sdkManagedMcp) {
+        const sdkDisconnectError = await disconnectOmpMcpManager(
+          sdkManagedMcp,
+          'Oh My Pi SDK-managed MCP teardown failed'
+        );
+        if (sdkDisconnectError) {
+          getLog().error({ err: sdkDisconnectError }, 'omp.sdk_mcp_disconnect_failed');
+          disconnectError = disconnectError
+            ? combineCleanupError(
+                disconnectError,
+                sdkDisconnectError,
+                'Multiple Oh My Pi MCP teardowns failed.'
+              )
+            : sdkDisconnectError;
         }
       }
       restoreConfigEnv(configEnvKeysApplied);

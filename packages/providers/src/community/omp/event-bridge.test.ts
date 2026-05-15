@@ -201,10 +201,14 @@ describe('bridgeSession', () => {
     });
   });
 
-  test('uses terminal result delivered before prompt settles on a later macrotask', async () => {
+  test('buffers terminal result until prompt settles', async () => {
     let listener: ((event: unknown) => void) | undefined;
+    let releasePrompt: (() => void) | undefined;
+    const promptReleased = new Promise<void>(resolve => {
+      releasePrompt = resolve;
+    });
     const session: OmpSession = {
-      sessionId: 'sess-macrotask',
+      sessionId: 'sess-buffered',
       subscribe(fn) {
         listener = fn;
         return () => {
@@ -216,16 +220,69 @@ describe('bridgeSession', () => {
           type: 'message_update',
           assistantMessageEvent: { type: 'text_delta', delta: 'done' },
         });
-        await new Promise<void>(resolve => {
-          setTimeout(() => {
-            listener?.({
-              type: 'agent_end',
-              messages: [
-                { role: 'assistant', usage: { input: 2, output: 3 }, stopReason: 'end_turn' },
-              ],
-            });
-            resolve();
-          }, 0);
+        listener?.({
+          type: 'agent_end',
+          messages: [{ role: 'assistant', usage: { input: 2, output: 3 }, stopReason: 'end_turn' }],
+        });
+        await promptReleased;
+      },
+      async abort() {
+        return undefined;
+      },
+      dispose() {
+        return undefined;
+      },
+    };
+
+    const chunks: unknown[] = [];
+    const collect = (async () => {
+      for await (const chunk of bridgeSession(session, 'hi')) {
+        chunks.push(chunk);
+      }
+    })();
+
+    await Bun.sleep(20);
+    expect(chunks).toEqual([{ type: 'assistant', content: 'done' }]);
+
+    releasePrompt?.();
+    await collect;
+    expect(chunks).toEqual([
+      { type: 'assistant', content: 'done' },
+      {
+        type: 'result',
+        tokens: { input: 2, output: 3 },
+        stopReason: 'end_turn',
+        sessionId: 'sess-buffered',
+      },
+    ]);
+  });
+
+  test('emits missing assistant tail from terminal transcript before result', async () => {
+    let listener: ((event: unknown) => void) | undefined;
+    const session: OmpSession = {
+      sessionId: 'sess-tail',
+      subscribe(fn) {
+        listener = fn;
+        return () => {
+          listener = undefined;
+        };
+      },
+      async prompt() {
+        listener?.({ type: 'turn_start' });
+        listener?.({
+          type: 'message_update',
+          assistantMessageEvent: { type: 'text_delta', delta: 'hel' },
+        });
+        listener?.({
+          type: 'agent_end',
+          messages: [
+            {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'hello' }],
+              usage: { input: 1, output: 2 },
+              stopReason: 'end_turn',
+            },
+          ],
         });
       },
       async abort() {
@@ -241,12 +298,16 @@ describe('bridgeSession', () => {
       chunks.push(chunk);
     }
 
-    expect(chunks.at(-1)).toEqual({
-      type: 'result',
-      tokens: { input: 2, output: 3 },
-      stopReason: 'end_turn',
-      sessionId: 'sess-macrotask',
-    });
+    expect(chunks).toEqual([
+      { type: 'assistant', content: 'hel' },
+      { type: 'assistant', content: 'lo' },
+      {
+        type: 'result',
+        tokens: { input: 1, output: 2 },
+        stopReason: 'end_turn',
+        sessionId: 'sess-tail',
+      },
+    ]);
   });
 
   test('does not fail when prompt resolves before a delayed terminal event', async () => {
@@ -456,6 +517,60 @@ describe('bridgeSession', () => {
     expect(disposed).toBe(true);
     expect(elapsed).toBeLessThan(200);
   }, 5_000);
+
+  test('awaits async session disposal before closing generator', async () => {
+    let listener: ((event: unknown) => void) | undefined;
+    let releaseDispose: (() => void) | undefined;
+    const disposeReleased = new Promise<void>(resolve => {
+      releaseDispose = resolve;
+    });
+    let disposeStarted = false;
+    let collectFinished = false;
+    const session: OmpSession = {
+      sessionId: 'sess-async-dispose',
+      subscribe(fn) {
+        listener = fn;
+        return () => undefined;
+      },
+      async prompt() {
+        listener?.({
+          type: 'agent_end',
+          messages: [{ role: 'assistant', usage: { input: 1, output: 1 }, stopReason: 'end_turn' }],
+        });
+      },
+      async abort() {
+        return undefined;
+      },
+      async dispose() {
+        disposeStarted = true;
+        await disposeReleased;
+      },
+    };
+
+    const chunks: unknown[] = [];
+    const collect = (async () => {
+      for await (const chunk of bridgeSession(session, 'hi')) {
+        chunks.push(chunk);
+      }
+      collectFinished = true;
+    })();
+
+    await Bun.sleep(20);
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        tokens: { input: 1, output: 1 },
+        stopReason: 'end_turn',
+        sessionId: 'sess-async-dispose',
+      },
+    ]);
+    expect(disposeStarted).toBe(true);
+    expect(collectFinished).toBe(false);
+
+    releaseDispose?.();
+    await collect;
+    expect(collectFinished).toBe(true);
+  });
 
   test('dispose errors do not mask a successful terminal result', async () => {
     let listener: ((event: unknown) => void) | undefined;

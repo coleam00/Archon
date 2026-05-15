@@ -8,6 +8,7 @@ import type {
   OmpAuthStorage,
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
+  OmpCreateAgentSessionResult,
   OmpExtensionRunner,
   OmpMcpManager,
   OmpMcpSourceMeta,
@@ -38,6 +39,7 @@ interface FakeSdkOptions {
   onDisconnectMcp?: () => void;
   disconnectMcpError?: Error;
   onSetMcpAuthStorage?: (authStorage: OmpAuthStorage) => void;
+  returnSdkManagedMcpManager?: boolean;
 }
 
 async function collectChunks(
@@ -108,44 +110,50 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
     },
   };
 
+  class FakeMcpManager implements OmpMcpManager {
+    constructor(
+      readonly cwd: string,
+      readonly toolCache?: unknown
+    ) {}
+
+    setAuthStorage(authStorage: OmpAuthStorage): void {
+      options.onSetMcpAuthStorage?.(authStorage);
+    }
+
+    async connectServers(
+      configs: Record<string, unknown>,
+      sources: Record<string, OmpMcpSourceMeta>
+    ) {
+      options.onConnectMcp?.({ configs, sources, manager: this });
+      if (options.mcpConnectError) throw options.mcpConnectError;
+      return {
+        tools: options.mcpTools ?? [],
+        errors: options.mcpErrors ?? new Map<string, string>(),
+        connectedServers: Object.keys(configs).filter(name => !options.mcpErrors?.has(name)),
+        exaApiKeys: [],
+      };
+    }
+
+    async disconnectAll(): Promise<void> {
+      options.onDisconnectMcp?.();
+      if (options.disconnectMcpError) throw options.disconnectMcpError;
+    }
+  }
+
   return {
-    MCPManager: class implements OmpMcpManager {
-      constructor(
-        readonly cwd: string,
-        readonly toolCache?: unknown
-      ) {}
-
-      setAuthStorage(authStorage: OmpAuthStorage): void {
-        options.onSetMcpAuthStorage?.(authStorage);
-      }
-
-      async connectServers(
-        configs: Record<string, unknown>,
-        sources: Record<string, OmpMcpSourceMeta>
-      ) {
-        options.onConnectMcp?.({ configs, sources, manager: this });
-        if (options.mcpConnectError) throw options.mcpConnectError;
-        return {
-          tools: options.mcpTools ?? [],
-          errors: options.mcpErrors ?? new Map<string, string>(),
-          connectedServers: Object.keys(configs).filter(name => !options.mcpErrors?.has(name)),
-          exaApiKeys: [],
-        };
-      }
-
-      async disconnectAll(): Promise<void> {
-        options.onDisconnectMcp?.();
-        if (options.disconnectMcpError) throw options.disconnectMcpError;
-      }
-    },
+    MCPManager: FakeMcpManager,
     async createAgentSession(sessionOptions) {
       options.onCreateAgentSession?.(sessionOptions);
-      return {
+      const result: OmpCreateAgentSessionResult = {
         session,
         setToolUIContext(uiContext, hasUI) {
           options.onSetToolUIContext?.(uiContext, hasUI);
         },
       };
+      if (options.returnSdkManagedMcpManager) {
+        result.mcpManager = new FakeMcpManager('/sdk-managed', null);
+      }
+      return result;
     },
     async discoverAuthStorage() {
       return authStorage;
@@ -1102,6 +1110,25 @@ describe('OmpProvider', () => {
     expect(sessionOptions?.enableMCP).toBe(true);
     expect(sessionOptions?.mcpManager).toBeUndefined();
     expect(sessionOptions?.customTools).toBeUndefined();
+  });
+
+  test('disconnects SDK-managed MCP manager when broad OMP discovery is enabled', async () => {
+    let disconnectCount = 0;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        returnSdkManagedMcpManager: true,
+        onDisconnectMcp() {
+          disconnectCount += 1;
+        },
+      })
+    );
+
+    await collectChunks(provider, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { enableMCP: true },
+    });
+
+    expect(disconnectCount).toBe(1);
   });
   test('reports capabilities mcp true', () => {
     const provider = new OmpProvider(async () => makeSdk());
