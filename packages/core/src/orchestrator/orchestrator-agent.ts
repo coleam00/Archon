@@ -696,7 +696,8 @@ export async function handleMessage(
 
     // 2. Check for deterministic commands
     if (message.startsWith('/')) {
-      const { command } = commandHandler.parseCommand(message);
+      const parsedCommand = commandHandler.parseCommand(message);
+      const { command } = parsedCommand;
       const deterministicCommands = [
         'help',
         'status',
@@ -730,6 +731,19 @@ export async function handleMessage(
           const result = await handleRemoveProject(message);
           await platform.sendMessage(conversationId, result);
           return;
+        }
+
+        if (command === 'workflow') {
+          const handledWorkflowRun = await handleWorkflowRunSlashCommand(
+            platform,
+            conversationId,
+            conversation,
+            parsedCommand.args,
+            isolationHints
+          );
+          if (handledWorkflowRun) {
+            return;
+          }
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
@@ -1534,6 +1548,168 @@ async function handleRemoveProject(message: string): Promise<string> {
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
   return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+}
+
+function resolveWorkflowByName(
+  workflowName: string,
+  workflows: readonly WorkflowDefinition[]
+): WorkflowDefinition | undefined {
+  return (
+    findWorkflow(workflowName, [...workflows]) ??
+    workflows.find(w => w.name.toLowerCase() === workflowName.toLowerCase())
+  );
+}
+
+function workflowLoadErrorForName(
+  workflowName: string,
+  errors: readonly WorkflowLoadError[]
+): WorkflowLoadError | undefined {
+  return errors.find(
+    e =>
+      e.filename.replace(/\.ya?ml$/, '') === workflowName ||
+      e.filename === `${workflowName}.yaml` ||
+      e.filename === `${workflowName}.yml`
+  );
+}
+
+async function discoverWorkflowForCodebase(
+  workflowName: string,
+  workflowCwd: string
+): Promise<
+  | { ok: true; workflow?: WorkflowDefinition; loadError?: WorkflowLoadError }
+  | { ok: false; error: Error }
+> {
+  try {
+    await syncArchonToWorktree(workflowCwd);
+  } catch (error) {
+    getLog().debug({ err: error as Error, workflowCwd }, 'workflow_sync_before_direct_run_failed');
+  }
+
+  try {
+    const discovery = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+    const workflows = discovery.workflows.map(w => w.workflow);
+    return {
+      ok: true,
+      workflow: resolveWorkflowByName(workflowName, workflows),
+      loadError: workflowLoadErrorForName(workflowName, discovery.errors),
+    };
+  } catch (error) {
+    return { ok: false, error: error as Error };
+  }
+}
+
+/**
+ * Handle explicit /workflow run before the generic command handler resolves workflows.
+ *
+ * API-triggered workflow conversations are often created without a codebase_id. The
+ * generic command handler discovers workflows from the global workspace in that state,
+ * which can return "workflow not found" before the E2 project auto-select logic gets a
+ * chance to attach the matching codebase. Resolve against registered codebases here so
+ * /api/workflows/:name/run reliably reaches dispatchBackgroundWorkflow.
+ */
+async function handleWorkflowRunSlashCommand(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  args: string[],
+  isolationHints?: HandleMessageContext['isolationHints']
+): Promise<boolean> {
+  if (args[0] !== 'run') {
+    return false;
+  }
+
+  if (conversation.codebase_id) {
+    return false;
+  }
+
+  const workflowName = args[1];
+  const userMessage = args.slice(2).join(' ');
+
+  if (!workflowName) {
+    await platform.sendMessage(
+      conversationId,
+      'Usage: /workflow run <name> [args]\n\nUse /workflow list to see available workflows.'
+    );
+    return true;
+  }
+
+  getLog().debug({ workflowName, conversationId }, 'workflow_run_slash_direct');
+
+  const codebases = await codebaseDb.listCodebases();
+  if (codebases.length === 0) {
+    await platform.sendMessage(
+      conversationId,
+      'No projects registered. Ask me to set up a project first.'
+    );
+    return true;
+  }
+
+  const matches: { codebase: Codebase; workflow: WorkflowDefinition }[] = [];
+  let firstLoadError: WorkflowLoadError | undefined;
+  let firstDiscoveryError: { codebase: Codebase; error: Error } | undefined;
+
+  for (const codebase of codebases) {
+    const workflowCwd = codebase.default_cwd;
+    const discovery = await discoverWorkflowForCodebase(workflowName, workflowCwd);
+    if (!discovery.ok) {
+      firstDiscoveryError ??= { codebase, error: discovery.error };
+      continue;
+    }
+    firstLoadError ??= discovery.loadError;
+    if (discovery.workflow) {
+      matches.push({ codebase, workflow: discovery.workflow });
+    }
+  }
+
+  if (matches.length === 1) {
+    const { codebase, workflow } = matches[0];
+    await platform.sendMessage(conversationId, `Starting workflow: \`${workflow.name}\``);
+    await dispatchOrchestratorWorkflow(
+      platform,
+      conversationId,
+      conversation,
+      codebase,
+      workflow,
+      userMessage,
+      isolationHints
+    );
+    return true;
+  }
+
+  if (matches.length > 1) {
+    const projectList = matches.map(m => `- ${m.codebase.name}`).join('\n');
+    await platform.sendMessage(
+      conversationId,
+      `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: /workflow run ${workflowName} --project <name> "${userMessage}"`
+    );
+    return true;
+  }
+
+  if (firstLoadError) {
+    await platform.sendMessage(
+      conversationId,
+      `Workflow \`${workflowName}\` failed to load: ${firstLoadError.error}\n\nFix the YAML file and try again.`
+    );
+    return true;
+  }
+
+  if (firstDiscoveryError && codebases.length === 1) {
+    getLog().error(
+      { err: firstDiscoveryError.error, cwd: firstDiscoveryError.codebase.default_cwd },
+      'workflow_discovery_failed'
+    );
+    await platform.sendMessage(
+      conversationId,
+      `Failed to load workflows: ${firstDiscoveryError.error.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`
+    );
+    return true;
+  }
+
+  await platform.sendMessage(
+    conversationId,
+    `Workflow \`${workflowName}\` not found.\n\nUse /workflow list to see available workflows.`
+  );
+  return true;
 }
 
 /**
