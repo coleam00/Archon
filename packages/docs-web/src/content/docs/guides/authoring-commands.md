@@ -227,7 +227,7 @@ Archon replaces variables in command text before sending to the AI. The most com
 |----------|-------|
 | `$ARGUMENTS` / `$USER_MESSAGE` | User's input message |
 | `$1`, `$2`, `$3` | Positional arguments (direct invocation only) |
-| `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
+| `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run. Default: `~/.archon/workspaces/owner/repo/artifacts/runs/{run-id}/`. Opt-in via `ARCHON_STORE_ARTIFACTS_IN_WORKTREE=true` to use `<repo>/.archon/artifacts/runs/{run-id}/` instead. |
 | `$BASE_BRANCH` | Base branch (auto-detected or configured) |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$WORKFLOW_ID` | Unique workflow run ID |

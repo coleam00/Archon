@@ -224,6 +224,7 @@ Environment variables override all other configuration. They are organized by ca
 | Variable | Description | Default |
 | --- | --- | --- |
 | `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
+| `ARCHON_STORE_ARTIFACTS_IN_WORKTREE` | When set to `true` or `1`, workflow artifacts are written to `<repo>/.archon/artifacts/` (inside the repo, may be git-tracked depending on your `.gitignore`) instead of the default central workspace at `~/.archon/workspaces/owner/repo/artifacts/`. Useful when you want artifacts to travel with the repo. | -- |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
