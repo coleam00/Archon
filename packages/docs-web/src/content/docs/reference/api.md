@@ -217,7 +217,7 @@ curl http://localhost:3090/api/workflows/archon-assist
 Query parameters:
 - `cwd` (optional) -- Working directory for project-specific lookup
 
-Returns `{ workflow, filename, source: "project" | "bundled" }`.
+Returns `{ workflow, filename, source: "project" | "global" | "bundled" }`. The endpoint auto-discovers across all three scopes in order (project → home-scoped → bundled). `source: "global"` is returned when the workflow comes from `~/.archon/workflows/`.
 
 #### Validate a Workflow
 
@@ -239,6 +239,7 @@ curl -X PUT http://localhost:3090/api/workflows/my-workflow \
 
 Query parameters:
 - `cwd` (optional) -- Target directory (must have `.archon/workflows/`)
+- `source` (optional, enum: `project` \| `global`) -- Scope to write the workflow to. Defaults to `project` (writes to `<cwd>/.archon/workflows/`). Pass `source=global` to write to the home-scoped location (`~/.archon/workflows/`). Returns `400 "Invalid workflow source"` if any other value is supplied.
 
 Validates the definition before saving. Returns the saved workflow.
 
@@ -247,6 +248,10 @@ Validates the definition before saving. Returns the saved workflow.
 ```bash
 curl -X DELETE http://localhost:3090/api/workflows/my-workflow
 ```
+
+Query parameters:
+- `cwd` (optional) -- Target directory (must have `.archon/workflows/`)
+- `source` (optional, enum: `project` \| `global`) -- Scope to delete from. Defaults to `project`. Pass `source=global` to delete from `~/.archon/workflows/`. Returns `400 "Invalid workflow source"` if any other value is supplied.
 
 Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 

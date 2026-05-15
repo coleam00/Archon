@@ -590,6 +590,24 @@ describe('PUT /api/workflows/:name', () => {
       await rm(testArchonHome, { recursive: true, force: true });
     }
   });
+
+  test('returns 400 when source is not project or global', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/workflows/some-workflow?source=bundled', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        definition: {
+          name: 'some-workflow',
+          description: 'x',
+          nodes: [{ id: 'a', command: 'a' }],
+        },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
 });
 
 describe('DELETE /api/workflows/:name', () => {
@@ -655,6 +673,52 @@ describe('DELETE /api/workflows/:name', () => {
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }
+  });
+
+  test('removes home-scoped workflow file when source=global', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-del-global-${Date.now()}`);
+    const workflowDir = join(testArchonHome, 'workflows');
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'home-to-delete.yaml'),
+      'name: home-to-delete\ndescription: y\nnodes:\n  - id: z\n    command: z\n'
+    );
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = testArchonHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      const response = await app.request('/api/workflows/home-to-delete?source=global', {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { deleted: boolean; name: string };
+      expect(body.deleted).toBe(true);
+      expect(body.name).toBe('home-to-delete');
+
+      // Confirm the file is gone from the home-scoped location.
+      const fsPromises = await import('fs/promises');
+      await expect(fsPromises.access(join(workflowDir, 'home-to-delete.yaml'))).rejects.toThrow();
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('returns 400 when source is not project or global', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/workflows/some-workflow?source=bundled', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(400);
   });
 });
 
