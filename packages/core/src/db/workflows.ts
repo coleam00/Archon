@@ -26,8 +26,8 @@ class WorkflowRunGuardError extends Error {}
 
 /**
  * Normalize a WorkflowRun row from the database.
- * SQLite stores metadata as TEXT (JSON string), PostgreSQL returns parsed objects.
- * This ensures metadata is always a parsed object regardless of database backend.
+ * SQLite stores metadata as TEXT (JSON string) and dates as TEXT; PostgreSQL returns parsed objects.
+ * This ensures metadata is always a parsed object and date fields are always Date objects.
  */
 function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
   if (typeof row.metadata === 'string') {
@@ -35,6 +35,13 @@ function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
       row.metadata = JSON.parse(row.metadata) as Record<string, unknown>;
     } catch {
       row.metadata = {};
+    }
+  }
+  // SQLite returns date columns as strings — coerce them to Date objects.
+  for (const field of ['started_at', 'completed_at', 'last_activity_at'] as const) {
+    const val = row[field];
+    if (typeof val === 'string') {
+      (row as Record<string, unknown>)[field] = new Date(val);
     }
   }
   return row;
