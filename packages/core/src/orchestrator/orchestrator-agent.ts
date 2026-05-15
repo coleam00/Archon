@@ -1644,6 +1644,31 @@ async function handleWorkflowRunSlashCommand(
     return true;
   }
 
+  try {
+    const globalDiscovery = await discoverWorkflowsWithConfig(
+      getArchonWorkspacesPath(),
+      loadConfig
+    );
+    const globalWorkflows = globalDiscovery.workflows.map(w => w.workflow);
+    const globalWorkflow = resolveWorkflowByName(workflowName, globalWorkflows);
+    if (globalWorkflow) {
+      const codebase = codebases[0];
+      await platform.sendMessage(conversationId, `Starting workflow: \`${globalWorkflow.name}\``);
+      await dispatchOrchestratorWorkflow(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        globalWorkflow,
+        userMessage,
+        isolationHints
+      );
+      return true;
+    }
+  } catch (error) {
+    getLog().warn({ err: error as Error, workflowName }, 'global_workflow_run_discovery_failed');
+  }
+
   const matches: { codebase: Codebase; workflow: WorkflowDefinition }[] = [];
   let firstLoadError: WorkflowLoadError | undefined;
   let firstDiscoveryError: { codebase: Codebase; error: Error } | undefined;

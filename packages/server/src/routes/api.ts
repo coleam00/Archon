@@ -1930,12 +1930,18 @@ export function registerApiRoutes(
     }
     try {
       const { conversationId, message } = getValidatedBody(c, runWorkflowBodySchema);
-      // Persist user message and register DB ID (same as message endpoint)
+      // Persist user message and register DB ID (same as message endpoint).
+      // /run callers may provide a fresh platform conversation id; create that
+      // row up front so workflow dispatch can attach a run and web persistence
+      // has a DB id for status/output messages.
       let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
       try {
         conv = await conversationDb.findConversationByPlatformId(conversationId);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+      }
+      if (!conv) {
+        conv = await conversationDb.getOrCreateConversation('web', conversationId);
       }
       if (conv) {
         try {

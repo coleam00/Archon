@@ -1440,6 +1440,40 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
     );
   });
 
+  test('dispatches app-default /workflow run with default codebase context', async () => {
+    const conversation = makeConversation({ codebase_id: null });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
+    mockParseCommand.mockReturnValueOnce({
+      command: 'workflow',
+      args: ['run', 'global-workflow', 'WO-123'],
+    });
+    mockHandleCommand.mockImplementationOnce(() => {
+      throw new Error('generic command handler should not pre-resolve app-default workflow run');
+    });
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
+      Promise.resolve({
+        workflows: [makeTestWorkflowWithSource({ name: 'global-workflow' })],
+        errors: [],
+      })
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run global-workflow WO-123');
+
+    expect(mockHandleCommand).not.toHaveBeenCalled();
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1', { codebase_id: codebase.id });
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originalMessage: 'WO-123',
+        conversationDbId: 'conv-1',
+        codebaseId: codebase.id,
+      }),
+      expect.objectContaining({ name: 'global-workflow' })
+    );
+  });
+
   test('resolves workflow by case-insensitive name when exact match fails', async () => {
     const upperWorkflow = makeTestWorkflow({ name: 'Assist' });
     const conversation = makeConversation({ codebase_id: null });
@@ -1512,7 +1546,9 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
       })
     );
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
-    mockDiscoverWorkflowsWithConfig.mockRejectedValueOnce(new Error('YAML parse error'));
+    mockDiscoverWorkflowsWithConfig
+      .mockResolvedValueOnce({ workflows: [], errors: [] })
+      .mockRejectedValueOnce(new Error('YAML parse error'));
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run assist test');
