@@ -40,7 +40,9 @@ import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { resolveClaudeBinaryPath } from './binary-resolver';
 import {
+  AUTH_PATTERNS,
   buildReauthMessage,
+  ensureFreshAuth,
   isTerminalRefreshReason,
   refreshIfAuthFailed,
 } from '../auth-refresh/index.js';
@@ -108,20 +110,9 @@ const MAX_SUBPROCESS_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
 
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
-const AUTH_PATTERNS = [
-  'credit balance',
-  'unauthorized',
-  'authentication',
-  'invalid token',
-  '401',
-  '403',
-  // BDC fork addition (2026-05-15): Claude binary's own pre-flight token check
-  // short-circuits with "Not logged in · Please run /login" before the HTTP
-  // request is made. Without these patterns the error is classified as
-  // 'unknown' and the OAuth refresh branch never engages.
-  'not logged in',
-  'please run /login',
-];
+// AUTH_PATTERNS is shared with codex/provider.ts and orchestrator-agent.ts via
+// packages/providers/src/auth-refresh/auth-patterns.ts. Edit that file (not here)
+// to add new auth-error markers.
 const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'operation aborted'];
 
 function classifySubprocessError(
@@ -940,6 +931,16 @@ export class ClaudeProvider implements IAgentProvider {
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
     let lastError: Error | undefined;
+
+    // BDC fork: Layer 2 — proactive auth freshness check.
+    // Subscription OAuth tokens can expire while the container is idle. The
+    // Claude binary subprocess does its own pre-flight check on the
+    // credentials file and exits with "Not logged in" before any HTTP call,
+    // bypassing the SDK's reactive refresh path. Refresh BEFORE we spawn so
+    // the subprocess always sees a fresh access token on disk.
+    // Behavior spec v2 invariant I-1; research doc §Design recommendation L2.
+    await ensureFreshAuth('claude');
+
     const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
     // Resolve Claude CLI path once before the retry loop. In binary mode this

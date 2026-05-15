@@ -54,6 +54,19 @@ mock.module('./binary-resolver', () => ({
   resolveCodexBinaryPath: mockResolveCodexBinaryPath,
 }));
 
+// BDC fork (WO-HARNESS-PROVIDER-PROACTIVE-AUTH-REFRESH-01, L2): provider.sendQuery
+// now calls ensureFreshAuth before SDK invocation. In tests we want it to be a
+// no-op so the binary-resolution behavior under test is isolated from real
+// disk state ($HOME/.codex/auth.json on the dev machine).
+mock.module('../auth-refresh/index.js', () => ({
+  ensureFreshAuth: mock(async () => {}),
+  refreshIfAuthFailed: mock(async () => ({ refreshed: false, reason: 'no_creds' as const })),
+  isTerminalRefreshReason: () => false,
+  buildReauthMessage: (provider: string, reason: string) => `${provider} auth dead (${reason})`,
+  AUTH_PATTERNS: [],
+  isAuthErrorMessage: () => false,
+}));
+
 import { CodexProvider, resetCodexSingleton } from './provider';
 
 describe('CodexProvider binary mode resolution', () => {

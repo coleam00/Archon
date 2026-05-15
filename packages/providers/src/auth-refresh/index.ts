@@ -9,4 +9,6 @@ export async function refreshIfAuthFailed(provider: ProviderName): Promise<Refre
 }
 
 export { buildReauthMessage, isTerminalRefreshReason } from './shared.js';
+export { ensureFreshAuth } from './preflight.js';
+export { AUTH_PATTERNS, isAuthErrorMessage } from './auth-patterns.js';
 export type { ProviderName, RefreshFailureReason, RefreshResult } from './types.js';

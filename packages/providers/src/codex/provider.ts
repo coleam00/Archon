@@ -19,7 +19,9 @@ import { parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import {
+  AUTH_PATTERNS,
   buildReauthMessage,
+  ensureFreshAuth,
   isTerminalRefreshReason,
   refreshIfAuthFailed,
 } from '../auth-refresh/index.js';
@@ -123,23 +125,9 @@ function buildModelAccessMessage(model?: string): string {
 const MAX_SUBPROCESS_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', '429', 'overloaded'];
-const AUTH_PATTERNS = [
-  'credit balance',
-  'unauthorized',
-  'authentication',
-  'invalid token',
-  '401',
-  '403',
-  // BDC fork addition (2026-05-15): Codex binary's own pre-flight token check
-  // short-circuits with "Not logged in" or "Not signed in. Please run 'codex login'"
-  // before the HTTP request is made. Also covers terminal refresh-failure messages
-  // ("Your access token could not be refreshed ... Please log out and sign in again")
-  // so those bubble as auth class and surface clearly to the operator.
-  'not logged in',
-  'not signed in',
-  'log out and sign in again',
-  "please run 'codex login'",
-];
+// AUTH_PATTERNS is shared with claude/provider.ts and orchestrator-agent.ts via
+// packages/providers/src/auth-refresh/auth-patterns.ts. Edit that file (not here)
+// to add new auth-error markers.
 const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'codex exec'];
 
 function classifyCodexError(
@@ -557,6 +545,14 @@ export class CodexProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    // BDC fork: Layer 2 — proactive auth freshness check.
+    // For Codex, ensureFreshAuth first attempts a "soft refresh" via the
+    // binary's own OAuth path (OpenAI's documented approach per
+    // developers.openai.com/codex/auth/ci-cd-auth) and only falls back to a
+    // direct refresh-endpoint POST if that path doesn't advance auth.json.
+    // Behavior spec v2 invariant I-1; research doc §Design recommendation L2 + L4.
+    await ensureFreshAuth('codex');
+
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
 

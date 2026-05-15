@@ -25,6 +25,14 @@ import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import {
+  buildReauthMessage,
+  isAuthErrorMessage,
+  isTerminalRefreshReason,
+  refreshIfAuthFailed,
+} from '@archon/providers/auth-refresh';
+import type { ProviderName } from '@archon/providers/auth-refresh';
+import { AuthRefreshedRetryNeeded } from './auth-retry-sentinel';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { syncArchonToWorktree } from '../utils/worktree-sync';
 import { syncWorkspace, toRepoPath } from '@archon/git';
@@ -870,38 +878,60 @@ export async function handleMessage(
     };
 
     const mode = platform.getStreamingMode();
-    if (mode === 'stream') {
-      await handleStreamMode(
-        platform,
-        conversationId,
-        message,
-        codebases,
-        workflows,
-        aiClient,
-        fullPrompt,
-        cwd,
-        session,
-        isolationHints,
-        conversation,
-        issueContext,
-        requestOptions
-      );
-    } else {
-      await handleBatchMode(
-        platform,
-        conversationId,
-        message,
-        codebases,
-        workflows,
-        aiClient,
-        fullPrompt,
-        cwd,
-        session,
-        isolationHints,
-        conversation,
-        issueContext,
-        requestOptions
-      );
+    // BDC fork: at-most-one retry on Layer 3 AuthRefreshedRetryNeeded sentinel.
+    // The sentinel is thrown by handleStreamMode / handleBatchMode when the
+    // SDK reports an auth-class result-with-isError AND refreshIfAuthFailed
+    // succeeds. We catch ONLY that sentinel, retry the same turn once, and
+    // let any further error (including a second sentinel) propagate.
+    // Behavior spec v2 invariant I-11.
+    const runTurn = async (): Promise<void> => {
+      if (mode === 'stream') {
+        await handleStreamMode(
+          platform,
+          conversationId,
+          message,
+          codebases,
+          workflows,
+          aiClient,
+          fullPrompt,
+          cwd,
+          session,
+          isolationHints,
+          conversation,
+          issueContext,
+          requestOptions
+        );
+      } else {
+        await handleBatchMode(
+          platform,
+          conversationId,
+          message,
+          codebases,
+          workflows,
+          aiClient,
+          fullPrompt,
+          cwd,
+          session,
+          isolationHints,
+          conversation,
+          issueContext,
+          requestOptions
+        );
+      }
+    };
+
+    try {
+      await runTurn();
+    } catch (err) {
+      if (err instanceof AuthRefreshedRetryNeeded) {
+        getLog().info(
+          { conversationId, provider: aiClient.getType() },
+          'orchestrator_retry_after_auth_refresh'
+        );
+        await runTurn();
+      } else {
+        throw err;
+      }
     }
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
@@ -996,6 +1026,45 @@ async function handleStreamMode(
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
+        // BDC fork: Layer 3 — detect auth-class errors in the SDK's
+        // result-with-isError path. The provider's try/catch around
+        // sendQuery only catches THROWN errors; the Claude SDK reports
+        // some auth failures (subprocess pre-flight short-circuit) as a
+        // normal `result` message with isError=true. Without this branch
+        // the auth failure flows past PR #48's reactive refresh and the
+        // user sees only a generic formatted error.
+        // Behavior spec v2 invariant I-11; research doc §Design rec L3.
+        if (isAuthErrorMessage(msg.errorSubtype)) {
+          const provider = aiClient.getType() as ProviderName;
+          getLog().info(
+            { conversationId, provider, errorSubtype: msg.errorSubtype },
+            'orchestrator_auth_refresh_retry'
+          );
+          const result = await refreshIfAuthFailed(provider);
+          if (result.refreshed) {
+            if (newSessionId) {
+              await tryPersistSessionId(session.id, newSessionId);
+            }
+            throw new AuthRefreshedRetryNeeded();
+          }
+          // Refresh failed — surface re-auth instructions instead of the
+          // generic formatted error so the operator knows what to do.
+          getLog().error(
+            { conversationId, provider, reason: result.reason },
+            'orchestrator_auth_refresh_failed'
+          );
+          await platform.sendMessage(
+            conversationId,
+            isTerminalRefreshReason(result.reason)
+              ? buildReauthMessage(provider, result.reason)
+              : classifyAndFormatError(new Error(msg.errorSubtype ?? 'AI result error'))
+          );
+          if (newSessionId) {
+            await tryPersistSessionId(session.id, newSessionId);
+          }
+          return;
+        }
+
         getLog().warn(
           {
             conversationId,
@@ -1140,6 +1209,37 @@ async function handleBatchMode(
         newSessionId = msg.sessionId;
       }
       if (msg.isError) {
+        // BDC fork: Layer 3 — same auth detection as streaming variant.
+        // Behavior spec v2 invariant I-11; research doc §Design rec L3.
+        if (isAuthErrorMessage(msg.errorSubtype)) {
+          const provider = aiClient.getType() as ProviderName;
+          getLog().info(
+            { conversationId, provider, errorSubtype: msg.errorSubtype },
+            'orchestrator_auth_refresh_retry'
+          );
+          const result = await refreshIfAuthFailed(provider);
+          if (result.refreshed) {
+            if (newSessionId) {
+              await tryPersistSessionId(session.id, newSessionId);
+            }
+            throw new AuthRefreshedRetryNeeded();
+          }
+          getLog().error(
+            { conversationId, provider, reason: result.reason },
+            'orchestrator_auth_refresh_failed'
+          );
+          await platform.sendMessage(
+            conversationId,
+            isTerminalRefreshReason(result.reason)
+              ? buildReauthMessage(provider, result.reason)
+              : classifyAndFormatError(new Error(msg.errorSubtype ?? 'AI result error'))
+          );
+          if (newSessionId) {
+            await tryPersistSessionId(session.id, newSessionId);
+          }
+          return;
+        }
+
         getLog().warn(
           {
             conversationId,

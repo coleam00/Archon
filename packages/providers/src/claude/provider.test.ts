@@ -27,6 +27,40 @@ mock.module('../auth-refresh/index.js', () => ({
     reason === 'refresh_expired' || reason === 'refresh_revoked',
   buildReauthMessage: (provider: string, reason: string) =>
     `${provider} subscription auth expired (${reason}). Re-run ${provider} login on the harness host.`,
+  // L2 + shared module additions (WO-HARNESS-PROVIDER-PROACTIVE-AUTH-REFRESH-01).
+  // ensureFreshAuth is a no-op in tests — the reactive refresh path is what
+  // these regression tests exercise.
+  ensureFreshAuth: mock(async () => {}),
+  AUTH_PATTERNS: [
+    'credit balance',
+    'unauthorized',
+    'authentication',
+    'invalid token',
+    '401',
+    '403',
+    'not logged in',
+    'please run /login',
+    'refresh token',
+    'could not be refreshed',
+    'log out and sign in',
+  ],
+  isAuthErrorMessage: (message: string | undefined) => {
+    if (!message) return false;
+    const lower = message.toLowerCase();
+    return [
+      'credit balance',
+      'unauthorized',
+      'authentication',
+      'invalid token',
+      '401',
+      '403',
+      'not logged in',
+      'please run /login',
+      'refresh token',
+      'could not be refreshed',
+      'log out and sign in',
+    ].some(p => lower.includes(p));
+  },
 }));
 
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';

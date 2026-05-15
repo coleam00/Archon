@@ -87,4 +87,13 @@ fi
 # Run setup-auth (exits after configuring Codex credentials), then exec the server
 # exec ensures bun is PID 1 and receives SIGTERM for graceful shutdown
 $RUNNER bun run setup-auth
+
+# BDC fork (WO-HARNESS-PROVIDER-PROACTIVE-AUTH-REFRESH-01, Layer 5):
+# Proactively refresh Claude + Codex OAuth tokens if they're stale at boot.
+# Container may have been stopped for >12h; refresh now so the first
+# workflow/chat doesn't pay the refresh cost. Failure is best-effort — the
+# script always exits 0 and the reactive refresh path (PR #48) catches
+# any 401 that slips through.
+$RUNNER bun run verify-auth || true
+
 exec $RUNNER bun run start
