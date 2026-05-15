@@ -490,6 +490,13 @@ describe('cloneRepository', () => {
       expect(result).toEqual({ token: undefined, scheme: '' });
     });
 
+    test('resolves GH_TOKEN for bare host/path form without protocol', () => {
+      process.env.GH_TOKEN = 'ghp_bare';
+      const result = resolveForgeAuth('github.com/owner/repo');
+      expect(result).toEqual({ token: 'ghp_bare', scheme: '' });
+      delete process.env.GH_TOKEN;
+    });
+
     test('does not match forge name in URL path (security)', () => {
       process.env.GITLAB_TOKEN = 'glpat-leaked';
       const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');

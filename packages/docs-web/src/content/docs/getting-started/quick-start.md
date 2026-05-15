@@ -14,6 +14,7 @@ sidebar:
 3. Authenticate with Claude: run `claude /login` (uses your existing Claude Pro/Max subscription)
 4. In compiled Archon binaries, set `CLAUDE_BIN_PATH` (see [Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only))
 5. Navigate to any git repository
+6. For private repos: set `GH_TOKEN` (GitHub), `GITLAB_TOKEN` (GitLab), or `GITEA_TOKEN` (Gitea/Forgejo) — Archon uses these to authenticate when cloning
 
 ## Run Your First Workflow
 

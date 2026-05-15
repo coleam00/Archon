@@ -44,12 +44,7 @@ interface ForgeAuthEntry {
   scheme: string;
 }
 
-/**
- * Known forge authentication mappings.
- * Entries with `exact: true` match the full hostname.
- * Entries with `exact: false` match if the hostname contains the pattern as a label.
- * Order matters: exact matches are checked first.
- */
+/** Known exact-hostname → env-var + scheme mappings. */
 const FORGE_AUTH: ForgeAuthEntry[] = [
   { hostPattern: 'github.com', envVar: 'GH_TOKEN', scheme: '' },
   { hostPattern: 'gitlab.com', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
@@ -255,7 +250,8 @@ function normalizeRepoUrl(rawUrl: string): {
   const normalizedUrl = rawUrl.replace(/\/+$/, '');
 
   let workingUrl = normalizedUrl;
-  const sshMatch = /^git@([^:]+):(.+)$/.exec(workingUrl);
+  // Convert SSH URLs (git@host:owner/repo) to HTTPS for any host
+  const sshMatch = /^git@([^:]+):(.+)$/.exec(normalizedUrl);
   if (sshMatch) {
     workingUrl = `https://${sshMatch[1]}/${sshMatch[2]}`;
   }
@@ -331,7 +327,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   if (forgeToken) {
     const parsed = safeParseUrl(workingUrl);
     if (parsed) {
-      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.host}${parsed.pathname}`;
+      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.hostname}${parsed.pathname}`;
     } else if (!workingUrl.startsWith('http')) {
       // Bare host/path form (e.g. github.com/owner/repo)
       cloneUrl = `https://${authScheme}${forgeToken}@${workingUrl}`;
@@ -410,9 +406,9 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   if (remoteUrl) {
     const cleaned = remoteUrl.replace(/\.git$/, '').replace(/\/+$/, '');
     let workingRemote = cleaned;
-    const sshMatch = /^git@([^:]+):(.+)$/.exec(workingRemote);
-    if (sshMatch) {
-      workingRemote = `https://${sshMatch[1]}/${sshMatch[2]}`;
+    const sshRemoteMatch = /^git@([^:]+):(.+)$/.exec(cleaned);
+    if (sshRemoteMatch) {
+      workingRemote = `https://${sshRemoteMatch[1]}/${sshRemoteMatch[2]}`;
     }
     const parts = workingRemote.split('/');
     const r = parts.pop();
