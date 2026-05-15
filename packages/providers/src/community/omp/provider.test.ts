@@ -29,6 +29,10 @@ interface FakeSdkOptions {
   onGetApiKey?: (provider: string) => string | undefined | Promise<string | undefined>;
   onModelRegistryRefresh?: () => void | Promise<void>;
   onFindModel?: (provider: string, modelId: string) => unknown;
+  onModelRegistryGetApiKey?: (
+    model: unknown,
+    sessionId?: string
+  ) => string | undefined | Promise<string | undefined>;
   onPrompt?: (session: FakeOmpSession) => void | Promise<void>;
   onDispose?: () => void | Promise<void>;
   mcpTools?: unknown[];
@@ -188,6 +192,18 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
       }
       refreshInBackground(): void {
         return undefined;
+      }
+      async getApiKey(model: unknown, _sessionId?: string): Promise<string | undefined> {
+        if (options.onModelRegistryGetApiKey) {
+          return await options.onModelRegistryGetApiKey(model, _sessionId);
+        }
+        if (typeof model === 'object' && model !== null) {
+          const provider = (model as { provider?: unknown }).provider;
+          if (typeof provider === 'string' && options.onGetApiKey) {
+            return await options.onGetApiKey(provider);
+          }
+        }
+        return options.apiKey ?? 'sk-test';
       }
       find(provider: string, modelId: string): unknown {
         if (options.onFindModel) return options.onFindModel(provider, modelId);
@@ -384,10 +400,17 @@ describe('OmpProvider', () => {
 
   test('merges fallbackModel with explicit OMP retry fallback settings', async () => {
     let settingsOverrides: Record<string, unknown> | undefined;
+    const resolvedModels = new Map([
+      ['anthropic/claude-sonnet-4-5', { provider: 'anthropic', id: 'claude-sonnet-4-5' }],
+      ['openrouter/qwen/qwen3-coder', { provider: 'openrouter', id: 'qwen/qwen3-coder' }],
+    ]);
     const provider = new OmpProvider(async () =>
       makeSdk({
         onSettingsIsolated(overrides) {
           settingsOverrides = overrides;
+        },
+        onFindModel(providerName, modelId) {
+          return resolvedModels.get(`${providerName}/${modelId}`);
         },
       })
     );
@@ -410,17 +433,48 @@ describe('OmpProvider', () => {
     expect(settingsOverrides).toEqual({
       'retry.enabled': true,
       'retry.fallbackChains': {
-        default: ['anthropic/claude-opus-4-5'],
         archon: ['openrouter/qwen/qwen3-coder:off'],
+        default: ['anthropic/claude-opus-4-5'],
       },
       'retry.fallbackRevertPolicy': 'never',
       modelRoles: {
-        default: 'anthropic/claude-sonnet-4-5',
         archon: 'anthropic/claude-sonnet-4-5',
+        default: 'anthropic/claude-sonnet-4-5',
       },
     });
+    expect(Object.keys(settingsOverrides?.['retry.fallbackChains'] ?? {})).toEqual([
+      'archon',
+      'default',
+    ]);
   });
 
+  test('rejects explicit OMP archon fallback role collisions', async () => {
+    const provider = new OmpProvider(async () => makeSdk());
+
+    await expect(async () => {
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        fallbackModel: 'openrouter/qwen/qwen3-coder',
+        assistantConfig: {
+          settings: {
+            modelRoles: { archon: 'anthropic/claude-opus-4-5' },
+          },
+        },
+      });
+    }).toThrow('settings.modelRoles.archon');
+
+    await expect(async () => {
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        fallbackModel: 'openrouter/qwen/qwen3-coder',
+        assistantConfig: {
+          settings: {
+            retry: { fallbackChains: { archon: ['anthropic/claude-opus-4-5'] } },
+          },
+        },
+      });
+    }).toThrow('settings.retry.fallbackChains.archon');
+  });
   test('rejects invalid OMP fallback model refs before creating a session', async () => {
     let createCount = 0;
     const provider = new OmpProvider(async () =>
@@ -462,6 +516,38 @@ describe('OmpProvider', () => {
         fallbackModel: 'openrouter/qwen/qwen3-coder',
       });
     }).toThrow('Oh My Pi fallback model not found');
+    expect(createCount).toBe(0);
+  });
+
+  test('rejects fallback models without usable auth before creating a session', async () => {
+    let createCount = 0;
+    const fallbackModelInstance = { provider: 'openrouter', id: 'qwen/qwen3-coder' };
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onFindModel(providerName, modelId) {
+          if (providerName === 'anthropic' && modelId === 'claude-sonnet-4-5') {
+            return { provider: providerName, id: modelId };
+          }
+          if (providerName === 'openrouter' && modelId === 'qwen/qwen3-coder') {
+            return fallbackModelInstance;
+          }
+          return undefined;
+        },
+        onModelRegistryGetApiKey(model) {
+          return model === fallbackModelInstance ? undefined : 'sk-test';
+        },
+        onCreateAgentSession() {
+          createCount += 1;
+        },
+      })
+    );
+
+    await expect(async () => {
+      await collectChunks(provider, {
+        model: 'anthropic/claude-sonnet-4-5',
+        fallbackModel: 'openrouter/qwen/qwen3-coder',
+      });
+    }).toThrow('Oh My Pi fallback model has no usable auth');
     expect(createCount).toBe(0);
   });
 

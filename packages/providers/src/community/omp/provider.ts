@@ -436,9 +436,17 @@ export class OmpProvider implements IAgentProvider {
 
       const { modelRegistry, model } = await resolveSessionModel(sdk, authStorage, parsed);
 
-      if (fallbackModel && !modelRegistry.find(fallbackModel.provider, fallbackModel.modelId)) {
+      const fallbackModelInstance = fallbackModel
+        ? modelRegistry.find(fallbackModel.provider, fallbackModel.modelId)
+        : undefined;
+      if (fallbackModel && !fallbackModelInstance) {
         throw new Error(
           `Oh My Pi fallback model not found: provider='${fallbackModel.provider}' model='${fallbackModel.modelId}'. Check the OMP model catalog or your custom model registry.`
+        );
+      }
+      if (fallbackModel && !(await modelRegistry.getApiKey(fallbackModelInstance, undefined))) {
+        throw new Error(
+          `Oh My Pi fallback model has no usable auth: provider='${fallbackModel.provider}' model='${fallbackModel.modelId}'. Configure credentials for the fallback provider before setting fallbackModel.`
         );
       }
 

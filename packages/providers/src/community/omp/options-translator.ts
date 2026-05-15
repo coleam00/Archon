@@ -234,6 +234,22 @@ export interface OmpFallbackModelOverride {
   fallbackModel: string;
 }
 
+function assertNoReservedFallbackRole(
+  modelRoles: Record<string, string> | undefined,
+  fallbackChains: Record<string, string[]> | undefined
+): void {
+  if (modelRoles?.[ARCHON_FALLBACK_ROLE] !== undefined) {
+    throw new Error(
+      `Oh My Pi fallbackModel cannot be combined with assistants.omp.settings.modelRoles.${ARCHON_FALLBACK_ROLE}; the '${ARCHON_FALLBACK_ROLE}' role is reserved by Archon.`
+    );
+  }
+  if (fallbackChains?.[ARCHON_FALLBACK_ROLE] !== undefined) {
+    throw new Error(
+      `Oh My Pi fallbackModel cannot be combined with assistants.omp.settings.retry.fallbackChains.${ARCHON_FALLBACK_ROLE}; the '${ARCHON_FALLBACK_ROLE}' fallback chain is reserved by Archon.`
+    );
+  }
+}
+
 export function buildOmpSettingsOverrides(
   config: OmpProviderDefaults,
   fallback?: OmpFallbackModelOverride
@@ -246,13 +262,15 @@ export function buildOmpSettingsOverrides(
   const fallbackChains =
     retry?.fallbackChains !== undefined ? { ...retry.fallbackChains } : undefined;
 
+  if (fallback !== undefined) assertNoReservedFallbackRole(modelRoles, fallbackChains);
+
   const effectiveModelRoles =
     fallback !== undefined
-      ? { ...modelRoles, [ARCHON_FALLBACK_ROLE]: fallback.primaryModel }
+      ? { [ARCHON_FALLBACK_ROLE]: fallback.primaryModel, ...modelRoles }
       : modelRoles;
   const effectiveFallbackChains =
     fallback !== undefined
-      ? { ...fallbackChains, [ARCHON_FALLBACK_ROLE]: [fallback.fallbackModel] }
+      ? { [ARCHON_FALLBACK_ROLE]: [fallback.fallbackModel], ...fallbackChains }
       : fallbackChains;
 
   const overrides: Record<string, unknown> = {};
