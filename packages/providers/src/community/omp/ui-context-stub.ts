@@ -72,8 +72,8 @@ function lastStringArg(args: unknown[]): string {
   return '';
 }
 
-async function unsupportedCustom(): Promise<never> {
-  throw new Error('OMP UI custom() is not supported in Archon UI stub');
+function passthroughWrap(_level: unknown): (s: string) => string {
+  return (s: string): string => s;
 }
 
 export function createArchonOmpUIContext(bridge: ArchonOmpUIBridge): OmpExtensionUIContext {
@@ -81,6 +81,14 @@ export function createArchonOmpUIContext(bridge: ArchonOmpUIBridge): OmpExtensio
     get(_target, prop: string | symbol): unknown {
       if (prop === 'getColorMode') return () => 'truecolor';
       if (prop === 'getFgAnsi' || prop === 'getBgAnsi') return () => '';
+      if (
+        typeof prop === 'string' &&
+        (prop === 'getThinkingBorderColor' ||
+          prop === 'getBashModeBorderColor' ||
+          /^get.*Color$/.test(prop))
+      ) {
+        return passthroughWrap;
+      }
       if (prop === 'name' || prop === 'sourcePath' || prop === 'sourceInfo') return undefined;
       return (...args: unknown[]) => lastStringArg(args);
     },
@@ -104,7 +112,7 @@ export function createArchonOmpUIContext(bridge: ArchonOmpUIBridge): OmpExtensio
     setFooter: noop,
     setHeader: noop,
     setTitle: noop,
-    custom: unsupportedCustom as OmpExtensionUIContext['custom'],
+    custom: async () => undefined as never,
     pasteToEditor: noop,
     setEditorText: noop,
     getEditorText: () => '',

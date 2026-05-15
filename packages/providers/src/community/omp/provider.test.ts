@@ -28,6 +28,7 @@ interface FakeSdkOptions {
   onModelRegistryRefresh?: () => void | Promise<void>;
   onFindModel?: (provider: string, modelId: string) => unknown;
   onPrompt?: () => void | Promise<void>;
+  onDispose?: () => void | Promise<void>;
   mcpTools?: unknown[];
   mcpErrors?: Map<string, string>;
   mcpConnectError?: Error;
@@ -96,6 +97,7 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
       return undefined;
     },
     dispose() {
+      void options.onDispose?.();
       return undefined;
     },
   } as OmpSession & { listener?: (event: unknown) => void };
@@ -712,6 +714,34 @@ describe('OmpProvider', () => {
       type: 'system',
       content: '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.',
     });
+  });
+
+  test('disposes session when consumer cancels after a pre-bridge warning', async () => {
+    let disposeCount = 0;
+    const provider = new OmpProvider(async () =>
+      makeSdk({
+        onDispose() {
+          disposeCount += 1;
+        },
+      })
+    );
+
+    const chunks = provider.sendQuery('hi', '/repo', undefined, {
+      model: 'anthropic/claude-sonnet-4-5',
+      assistantConfig: { extensionFlags: { plan: true } },
+    });
+
+    await expect(chunks.next()).resolves.toEqual({
+      done: false,
+      value: {
+        type: 'system',
+        content: '⚠️ Oh My Pi ignored extensionFlags because no OMP extension runner was loaded.',
+      },
+    });
+
+    await chunks.return(undefined as never);
+
+    expect(disposeCount).toBe(1);
   });
 
   test('passes workflow mcp config through OMP MCP manager', async () => {

@@ -5,6 +5,7 @@ import type {
   OmpCreateAgentSessionOptions,
   OmpMcpManager,
   OmpModelRegistry,
+  OmpSession,
 } from './sdk-loader';
 
 import { loadOmpSdk } from './sdk-loader';
@@ -357,6 +358,7 @@ export class OmpProvider implements IAgentProvider {
     let sendQueryError: unknown;
     let disconnectError: Error | undefined;
     let sdkManagedMcp: OmpMcpManager | undefined;
+    let sessionForCleanup: OmpSession | undefined;
     try {
       const runtimeOverride =
         getRuntimeAuthOverride(parsed.provider, requestOptions?.env) ??
@@ -441,6 +443,7 @@ export class OmpProvider implements IAgentProvider {
 
       const agentSessionResult = await sdk.createAgentSession(sessionOptions);
       const { session, modelFallbackMessage } = agentSessionResult;
+      sessionForCleanup = session;
       sdkManagedMcp =
         agentSessionResult.mcpManager && agentSessionResult.mcpManager !== resolvedMcp?.manager
           ? agentSessionResult.mcpManager
@@ -473,6 +476,7 @@ export class OmpProvider implements IAgentProvider {
         ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
         : prompt;
 
+      sessionForCleanup = undefined;
       try {
         yield* bridgeSession(
           session,
@@ -489,6 +493,15 @@ export class OmpProvider implements IAgentProvider {
     } catch (err) {
       sendQueryError = err;
     } finally {
+      if (sessionForCleanup) {
+        try {
+          await Promise.resolve(sessionForCleanup.dispose());
+        } catch (err) {
+          getLog().debug({ err }, 'omp.provider.dispose_unbridged_session_failed');
+        } finally {
+          sessionForCleanup = undefined;
+        }
+      }
       if (resolvedMcp) {
         disconnectError = await disconnectOmpMcpManager(
           resolvedMcp.manager,
