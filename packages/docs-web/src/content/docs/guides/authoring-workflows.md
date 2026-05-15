@@ -695,7 +695,7 @@ Workflows are validated at load time for **provider identity only**:
 - Validation errors are shown in `/workflow list`.
 
 Example validation error:
-```
+```text
 Unknown provider 'claud'. Registered: claude, codex, pi, omp
 ```
 

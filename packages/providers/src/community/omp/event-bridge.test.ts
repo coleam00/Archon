@@ -395,11 +395,12 @@ describe('bridgeSession', () => {
       },
     };
 
-    await expect(async () => {
+    const run = (async () => {
       for await (const _chunk of bridgeSession(session, 'hi', controller.signal)) {
         // consume
       }
-    }).toThrow('Oh My Pi request aborted before prompt start.');
+    })();
+    await expect(run).rejects.toThrow('Oh My Pi request aborted before prompt start.');
 
     expect(promptCalled).toBe(false);
     expect(abortCalled).toBe(true);
@@ -428,11 +429,12 @@ describe('bridgeSession', () => {
       },
     };
 
-    await expect(async () => {
+    const run = (async () => {
       for await (const _chunk of bridgeSession(session, 'hi', undefined, undefined, uiBridge)) {
         // consume
       }
-    }).toThrow('subscribe failed');
+    })();
+    await expect(run).rejects.toThrow('subscribe failed');
 
     expect(disposed).toBe(true);
     expect(emitterStates).toHaveLength(2);
@@ -460,11 +462,12 @@ describe('bridgeSession', () => {
       },
     };
 
-    await expect(async () => {
+    const run = (async () => {
       for await (const _chunk of bridgeSession(session, 'hi')) {
         // consume
       }
-    }).toThrow('prompt setup failed');
+    })();
+    await expect(run).rejects.toThrow('prompt setup failed');
 
     expect(unsubscribed).toBe(true);
     expect(disposed).toBe(true);
