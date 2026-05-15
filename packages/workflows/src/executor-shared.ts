@@ -372,7 +372,8 @@ export function substituteWorkflowVariables(
   issueContext?: string,
   loopUserInput?: string,
   rejectionReason?: string,
-  loopPrevOutput?: string
+  loopPrevOutput?: string,
+  options?: { shellSafe?: boolean }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
   if (!baseBranch && prompt.includes('$BASE_BRANCH')) {
@@ -386,31 +387,39 @@ export function substituteWorkflowVariables(
   const resolvedDocsDir = docsDir || 'docs/';
 
   // Substitute basic variables
+  // When shellSafe is true, skip user-controlled variables — they will be passed
+  // via subprocess environment variables instead to prevent shell injection.
   let result = prompt
     .replace(/\$WORKFLOW_ID/g, workflowId)
-    .replace(/\$USER_MESSAGE/g, userMessage)
-    .replace(/\$ARGUMENTS/g, userMessage)
     .replace(/\$ARTIFACTS_DIR/g, artifactsDir)
     .replace(/\$BASE_BRANCH/g, baseBranch)
-    .replace(/\$DOCS_DIR/g, resolvedDocsDir)
-    .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
-    .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
-    .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
+    .replace(/\$DOCS_DIR/g, resolvedDocsDir);
+
+  if (!options?.shellSafe) {
+    result = result
+      .replace(/\$USER_MESSAGE/g, userMessage)
+      .replace(/\$ARGUMENTS/g, userMessage)
+      .replace(/\$LOOP_USER_INPUT/g, loopUserInput ?? '')
+      .replace(/\$REJECTION_REASON/g, rejectionReason ?? '')
+      .replace(/\$LOOP_PREV_OUTPUT/g, loopPrevOutput ?? '');
+  }
 
   // Check if context variables exist (use fresh regex to avoid lastIndex issues)
   const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(result);
 
   // Substitute or clear context variables (use fresh global regex for replace)
-  if (!issueContext && hasContextVariables) {
-    getLog().debug(
-      {
-        action: 'clearing variables',
-        variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
-      },
-      'context_variables_cleared'
-    );
+  if (!options?.shellSafe) {
+    if (!issueContext && hasContextVariables) {
+      getLog().debug(
+        {
+          action: 'clearing variables',
+          variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
+        },
+        'context_variables_cleared'
+      );
+    }
+    result = result.replace(new RegExp(CONTEXT_VAR_PATTERN_STR, 'g'), issueContext ?? '');
   }
-  result = result.replace(new RegExp(CONTEXT_VAR_PATTERN_STR, 'g'), issueContext ?? '');
 
   return {
     prompt: result,

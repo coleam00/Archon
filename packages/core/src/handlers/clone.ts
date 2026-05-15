@@ -25,6 +25,86 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * Parse a URL safely, returning null for non-URL strings (e.g. bare host/path).
+ */
+function safeParseUrl(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
+}
+
+/** Forge auth config: which env var to check and what auth URL scheme to use. */
+interface ForgeAuthEntry {
+  hostPattern: string;
+  envVar: string;
+  /** URL user-info prefix (e.g. 'oauth2:' for GitLab, empty for GitHub). */
+  scheme: string;
+}
+
+/**
+ * Known forge authentication mappings.
+ * Entries with `exact: true` match the full hostname.
+ * Entries with `exact: false` match if the hostname contains the pattern as a label.
+ * Order matters: exact matches are checked first.
+ */
+const FORGE_AUTH: ForgeAuthEntry[] = [
+  { hostPattern: 'github.com', envVar: 'GH_TOKEN', scheme: '' },
+  { hostPattern: 'gitlab.com', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
+  { hostPattern: 'gitea.com', envVar: 'GITEA_TOKEN', scheme: '' },
+];
+
+/**
+ * Resolve forge-specific authentication token and URL scheme for a repository URL.
+ * Returns the token and auth scheme prefix, or empty values if no token is available.
+ */
+/** Well-known self-hosted hostname label patterns → env var + scheme. */
+const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: string }[] = [
+  { label: 'gitlab', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
+  { label: 'gitea', envVar: 'GITEA_TOKEN', scheme: '' },
+  { label: 'forgejo', envVar: 'GITEA_TOKEN', scheme: '' },
+];
+
+export function resolveForgeAuth(url: string): { token: string | undefined; scheme: string } {
+  // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
+  let hostname: string;
+  const parsed = safeParseUrl(url);
+  if (parsed) {
+    hostname = parsed.hostname.toLowerCase();
+  } else {
+    // Bare host/path form: take everything before the first slash
+    hostname = url.split('/')[0].toLowerCase();
+  }
+
+  // 1. Exact known-host match
+  for (const entry of FORGE_AUTH) {
+    if (hostname === entry.hostPattern) {
+      const token = process.env[entry.envVar];
+      if (token) {
+        return { token, scheme: entry.scheme };
+      }
+      return { token: undefined, scheme: '' };
+    }
+  }
+
+  // 2. Self-hosted: check if any hostname label matches a known forge name
+  //    e.g. "gitlab.mycompany.com" has labels ["gitlab", "mycompany", "com"]
+  const labels = hostname.split('.');
+  for (const entry of SELF_HOSTED_FORGE) {
+    if (labels.includes(entry.label)) {
+      const token = process.env[entry.envVar];
+      if (token) {
+        return { token, scheme: entry.scheme };
+      }
+      return { token: undefined, scheme: '' };
+    }
+  }
+
+  return { token: undefined, scheme: '' };
+}
+
 export interface RegisterResult {
   codebaseId: string;
   name: string;
@@ -244,17 +324,17 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication if GitHub token is available
+  // Build clone command with authentication using forge-specific tokens
   let cloneUrl = workingUrl;
-  const ghToken = process.env.GH_TOKEN;
+  const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
 
-  if (ghToken && workingUrl.includes('github.com')) {
-    if (workingUrl.startsWith('https://github.com')) {
-      cloneUrl = workingUrl.replace('https://github.com', `https://${ghToken}@github.com`);
-    } else if (workingUrl.startsWith('http://github.com')) {
-      cloneUrl = workingUrl.replace('http://github.com', `https://${ghToken}@github.com`);
+  if (forgeToken) {
+    const parsed = safeParseUrl(workingUrl);
+    if (parsed) {
+      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.host}${parsed.pathname}`;
     } else if (!workingUrl.startsWith('http')) {
-      cloneUrl = `https://${ghToken}@${workingUrl}`;
+      // Bare host/path form (e.g. github.com/owner/repo)
+      cloneUrl = `https://${authScheme}${forgeToken}@${workingUrl}`;
     }
     getLog().debug('clone_authenticated');
   }
