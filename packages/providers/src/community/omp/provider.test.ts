@@ -10,8 +10,10 @@ import type {
   OmpCreateAgentSessionOptions,
   OmpCreateAgentSessionResult,
   OmpExtensionRunner,
+  OmpExtensionApi,
   OmpMcpManager,
   OmpMcpSourceMeta,
+  OmpToolCallEvent,
   OmpSession,
 } from './sdk-loader';
 import type { MessageChunk } from '../../types';
@@ -27,7 +29,7 @@ interface FakeSdkOptions {
   onGetApiKey?: (provider: string) => string | undefined | Promise<string | undefined>;
   onModelRegistryRefresh?: () => void | Promise<void>;
   onFindModel?: (provider: string, modelId: string) => unknown;
-  onPrompt?: (session: OmpSession) => void | Promise<void>;
+  onPrompt?: (session: FakeOmpSession) => void | Promise<void>;
   onDispose?: () => void | Promise<void>;
   mcpTools?: unknown[];
   mcpErrors?: Map<string, string>;
@@ -41,7 +43,12 @@ interface FakeSdkOptions {
   disconnectMcpError?: Error;
   onSetMcpAuthStorage?: (authStorage: OmpAuthStorage) => void;
   returnSdkManagedMcpManager?: boolean;
-  initialBeforeToolCall?: NonNullable<OmpSession['agent']>['beforeToolCall'];
+}
+
+type OmpToolCallHandler = (event: OmpToolCallEvent) => void | Promise<void>;
+
+interface FakeOmpSession extends OmpSession {
+  emitToolCall(event: OmpToolCallEvent): Promise<void>;
 }
 
 async function collectChunks(
@@ -75,16 +82,17 @@ async function writeTempMcpConfig(config: Record<string, unknown>): Promise<{
 }
 
 function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
-  const agent: NonNullable<OmpSession['agent']> = {
-    ...(options.initialBeforeToolCall ? { beforeToolCall: options.initialBeforeToolCall } : {}),
-  };
-  const session: OmpSession = {
+  let toolCallHandlers: OmpToolCallHandler[] = [];
+
+  const session: FakeOmpSession = {
     sessionId: 'sess-1',
     ...(options.extensionRunner ? { extensionRunner: options.extensionRunner } : {}),
-    agent,
     subscribe(listener) {
       this.listener = listener;
       return () => undefined;
+    },
+    async emitToolCall(event) {
+      for (const handler of toolCallHandlers) await handler(event);
     },
     async prompt() {
       await options.onPrompt?.(session);
@@ -105,7 +113,7 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
       void options.onDispose?.();
       return undefined;
     },
-  } as OmpSession & { listener?: (event: unknown) => void };
+  } as FakeOmpSession & { listener?: (event: unknown) => void };
 
   const authStorage: OmpAuthStorage = {
     setRuntimeApiKey(provider, apiKey) {
@@ -151,6 +159,15 @@ function makeSdk(options: FakeSdkOptions = {}): OmpCodingAgentSdk {
     MCPManager: FakeMcpManager,
     async createAgentSession(sessionOptions) {
       options.onCreateAgentSession?.(sessionOptions);
+      toolCallHandlers = [];
+      const extensionApi: OmpExtensionApi = {
+        on(_event, handler) {
+          toolCallHandlers.push(handler);
+        },
+      };
+      for (const extension of sessionOptions.extensions ?? []) {
+        await extension(extensionApi);
+      }
       const result: OmpCreateAgentSessionResult = {
         session,
         setToolUIContext(uiContext, hasUI) {
@@ -338,9 +355,10 @@ describe('OmpProvider', () => {
       makeSdk({
         async onPrompt(session) {
           bashArgs = { command: 'echo $DATABASE_URL' };
-          await session.agent?.beforeToolCall?.({
-            toolCall: { name: 'bash' },
-            args: bashArgs,
+          await session.emitToolCall({
+            toolName: 'bash',
+            toolCallId: 'tool-1',
+            input: bashArgs,
           });
         },
       })
@@ -366,9 +384,10 @@ describe('OmpProvider', () => {
             command: 'echo $DATABASE_URL',
             env: { DATABASE_URL: 'postgres://tool', PATH: '/bin' },
           };
-          await session.agent?.beforeToolCall?.({
-            toolCall: { name: 'bash' },
-            args: bashArgs,
+          await session.emitToolCall({
+            toolName: 'bash',
+            toolCallId: 'tool-1',
+            input: bashArgs,
           });
         },
       })
@@ -386,27 +405,16 @@ describe('OmpProvider', () => {
     });
   });
 
-  test('preserves existing OMP beforeToolCall behavior', async () => {
-    const events: string[] = [];
-    let readArgs: Record<string, unknown> | undefined;
-    let bashArgs: Record<string, unknown> | undefined;
+  test('does not inject request env into non-bash tool calls', async () => {
+    let readInput: Record<string, unknown> | undefined;
     const provider = new OmpProvider(async () =>
       makeSdk({
-        initialBeforeToolCall(context) {
-          events.push(context.toolCall.name);
-          if (context.toolCall.name === 'read') context.args.path = 'changed.txt';
-          return undefined;
-        },
         async onPrompt(session) {
-          readArgs = { path: 'original.txt' };
-          bashArgs = { command: 'echo $TOKEN' };
-          await session.agent?.beforeToolCall?.({
-            toolCall: { name: 'read' },
-            args: readArgs,
-          });
-          await session.agent?.beforeToolCall?.({
-            toolCall: { name: 'bash' },
-            args: bashArgs,
+          readInput = { path: 'original.txt' };
+          await session.emitToolCall({
+            toolName: 'read',
+            toolCallId: 'tool-1',
+            input: readInput,
           });
         },
       })
@@ -417,9 +425,7 @@ describe('OmpProvider', () => {
       env: { TOKEN: 'managed' },
     });
 
-    expect(events).toEqual(['read', 'bash']);
-    expect(readArgs).toEqual({ path: 'changed.txt' });
-    expect(bashArgs?.env).toEqual({ TOKEN: 'managed' });
+    expect(readInput).toEqual({ path: 'original.txt' });
   });
 
   test('uses assistant config env for runtime auth override', async () => {

@@ -1,10 +1,9 @@
 import { createLogger } from '@archon/paths';
 import type {
-  OmpBeforeToolCall,
-  OmpBeforeToolCallResult,
   OmpAuthStorage,
   OmpCodingAgentSdk,
   OmpCreateAgentSessionOptions,
+  OmpExtensionFactory,
   OmpMcpManager,
   OmpModelRegistry,
   OmpSession,
@@ -117,28 +116,21 @@ function hasConfigEnv(env: Record<string, string> | undefined): env is Record<st
   return env !== undefined && Object.keys(env).length > 0;
 }
 
-function installBashEnvInjection(
-  session: OmpSession,
+function createBashEnvInjectionExtension(
   env: Record<string, string> | undefined
-): void {
-  if (!hasConfigEnv(env)) return;
-  const agent = session.agent;
-  if (!agent) {
-    throw new Error('Oh My Pi SDK session does not expose agent hooks required for env injection.');
-  }
+): OmpExtensionFactory | undefined {
+  if (!hasConfigEnv(env)) return undefined;
 
-  const previousBeforeToolCall: OmpBeforeToolCall | undefined = agent.beforeToolCall;
-  agent.beforeToolCall = async (context, signal): Promise<OmpBeforeToolCallResult | undefined> => {
-    const previousResult = await previousBeforeToolCall?.(context, signal);
-    if (previousResult?.block) return previousResult;
-    if (context.toolCall.name !== 'bash') return previousResult;
+  return api => {
+    api.on('tool_call', event => {
+      if (event.toolName !== 'bash') return;
 
-    const toolEnv = context.args.env;
-    context.args.env =
-      toolEnv && typeof toolEnv === 'object' && !Array.isArray(toolEnv)
-        ? { ...env, ...(toolEnv as Record<string, string>) }
-        : env;
-    return previousResult;
+      const toolEnv = event.input.env;
+      event.input.env =
+        toolEnv && typeof toolEnv === 'object' && !Array.isArray(toolEnv)
+          ? { ...env, ...(toolEnv as Record<string, string>) }
+          : env;
+    });
   };
 }
 
@@ -428,6 +420,7 @@ export class OmpProvider implements IAgentProvider {
       const effectiveToolNames = effectiveMcpTools
         ? mergeToolNames(toolNames, effectiveMcpTools.toolNames)
         : toolNames;
+      const envInjectionExtension = createBashEnvInjectionExtension(requestOptions?.env);
       const sessionOptions: OmpCreateAgentSessionOptions = {
         cwd,
         ...(ompConfig.agentDir ? { agentDir: ompConfig.agentDir } : {}),
@@ -445,6 +438,7 @@ export class OmpProvider implements IAgentProvider {
         ...(ompConfig.additionalExtensionPaths
           ? { additionalExtensionPaths: ompConfig.additionalExtensionPaths }
           : {}),
+        ...(envInjectionExtension ? { extensions: [envInjectionExtension] } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(systemPromptBlocks !== undefined ? { systemPrompt: systemPromptBlocks } : {}),
         ...(resolvedMcp ? { mcpManager: resolvedMcp.manager } : {}),
@@ -471,7 +465,6 @@ export class OmpProvider implements IAgentProvider {
       const agentSessionResult = await sdk.createAgentSession(sessionOptions);
       const { session, modelFallbackMessage } = agentSessionResult;
       sessionForCleanup = session;
-      installBashEnvInjection(session, requestOptions?.env);
       sdkManagedMcp =
         agentSessionResult.mcpManager && agentSessionResult.mcpManager !== resolvedMcp?.manager
           ? agentSessionResult.mcpManager
