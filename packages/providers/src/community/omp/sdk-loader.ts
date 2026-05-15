@@ -7,6 +7,7 @@ export interface OmpAuthStorage {
 
 export interface OmpModelRegistry {
   find(provider: string, modelId: string): unknown;
+  getApiKey(model: unknown, sessionId?: string): Promise<string | undefined>;
   refresh(strategy?: string): Promise<void>;
   refreshInBackground(strategy?: string): void;
 }
