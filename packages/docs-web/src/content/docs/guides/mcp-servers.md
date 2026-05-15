@@ -218,8 +218,8 @@ User-level plugin MCPs inherited from provider-specific user config routinely
 fail to connect inside headless workflow subprocesses and are **not** surfaced
 when the workflow did not configure MCP itself — they're not actionable for the
 workflow author. They appear only in debug logs as
-`dag.mcp_plugin_connection_suppressed` for Claude workflows. Run the CLI with
-`--verbose` (or set `LOG_LEVEL=debug` on the server) if you need to see them.
+`dag.mcp_plugin_connection_suppressed`. Run the CLI with `--verbose` (or set
+`LOG_LEVEL=debug` on the server) if you need to see them.
 
 ## Workflow Examples
 

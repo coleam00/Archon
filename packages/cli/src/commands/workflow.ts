@@ -14,7 +14,6 @@ import { createLogger, getArchonHome } from '@archon/paths';
 import { join } from 'node:path';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { inferProviderFromModel } from '@archon/workflows/model-validation';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
 import {
@@ -140,9 +139,12 @@ function resolveTitleAssistantType(
   defaultAssistant: string | undefined,
   conversationAssistant: string | undefined
 ): string {
+  // Per CLAUDE.md, provider is resolved via an explicit chain:
+  // node.provider ?? workflow.provider ?? config.assistant. Model never
+  // influences provider selection — vendor SDKs add new model names faster
+  // than we can keep a mapping in sync.
   const fallbackAssistant = defaultAssistant ?? conversationAssistant ?? 'claude';
   if (workflow.provider) return workflow.provider;
-  if (workflow.model) return inferProviderFromModel(workflow.model, fallbackAssistant);
   return fallbackAssistant;
 }
 
