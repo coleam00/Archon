@@ -1,0 +1,20 @@
+{
+  "name": "@archon/overseer",
+  "version": "0.1.0",
+  "description": "Cauldron workflow-failure decision layer. Ports load-bearing slice of overlord/router.py (BDC) to TypeScript. Skeleton: error classification + retry decisions. Future: provider failover, grader integration.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./classify": "./src/classify.ts",
+    "./decide": "./src/decide.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.10.5"
+  }
+}

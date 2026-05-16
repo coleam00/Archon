@@ -119,9 +119,9 @@ nodes:
       set -euo pipefail
       if [ -f package.json ]; then
         if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
-          npm run build
+          bun run build
         else
-          echo "No npm build script; skipping build."
+          echo "No package build script; skipping build."
         fi
       elif [ -f tests/run_all.js ]; then
         node tests/run_all.js
@@ -134,7 +134,7 @@ nodes:
     bash: |
       set -euo pipefail
       if [ -f tsconfig.json ]; then
-        npx tsc --noEmit
+        bunx tsc --noEmit
       else
         echo "No tsconfig.json; skipping TypeScript check."
       fi

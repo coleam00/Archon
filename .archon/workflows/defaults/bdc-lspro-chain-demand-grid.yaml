@@ -281,7 +281,7 @@ nodes:
     depends_on: [implement-ui]
     bash: |
       set -euo pipefail
-      npx tsc --noEmit
+      bunx tsc --noEmit
       echo "TS_OK"
 
   - id: verify-tests-ui

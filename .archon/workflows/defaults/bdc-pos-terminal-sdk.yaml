@@ -190,7 +190,7 @@ nodes:
            - createConnectionToken()
            - createPaymentIntent({ amount_cents, transaction_id, tenant_id, idempotency_key })
            - createRefund({ payment_intent_id, amount_cents, reason, idempotency_key })
-           Use the existing 'stripe' npm package (it is already in shopops-api/package.json).
+           Use the existing 'stripe' package (bun-installed) (it is already in shopops-api/package.json).
         3. Create shopops-api/routes/pos-terminal.js with 5 endpoints per WO §7.
            Pattern: require('express').Router(), use X-Shopops-Tenant header (same as pos.js).
         4. Modify shopops-api/index.js to mount: app.use('/pos/terminal', require('./routes/pos-terminal'))

@@ -97,56 +97,62 @@ nodes:
         - Do not bypass approval gates.
         - Stop and report a blocker if the spec is ambiguous or a needed source of truth is missing.
 
-        ## Completion Criteria
-        Output <promise>COMPLETE</promise> only when all spec stop conditions that can be run in this checkout have passed, or when a true blocker is identified with evidence.
+        ## Commit-and-push BEFORE exit (Patch 2, 2026-05-16)
+        When your implementation is complete, BEFORE emitting the sentinel below, run:
+
+        ```bash
+        BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        # Re-derive WO_ID locally (don't interpolate spec output — quote-safety)
+        WO_ID="${WO_ID:-$(printf '%s\n' "${USER_MESSAGE:-}" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)}"
+        git add -A
+        git diff --cached --quiet || git commit -m "feat: implement ${WO_ID}
+
+        Implementation per WO spec. Self-verified within implement loop.
+        Workflow-time verify-* removed 2026-05-16 (Patch 1); PR-time gates handle validation.
+
+        Co-Authored-By: Claude (Cauldron major-build) <noreply@anthropic.com>"
+        git push -u origin "$BRANCH" 2>&1 || echo "WARN: push failed — operator must recover from worktree"
+        ```
+
+        Why: workflow-time verify-* gates were removed (Patch 1). Even with them gone, if any
+        downstream node fails (sentinel mismatch, war-council-validator timeout, etc.), the
+        traditional commit-and-push node may be skipped. Committing + pushing HERE makes your
+        work durable regardless of what happens after this iteration ends.
+
+        Worst case: the downstream commit-and-push node runs and is a no-op because HEAD is
+        already pushed. Best case: your work is on origin even if everything else fails.
+
+        ## Completion Criteria + Sentinel Emission (Patch 3, 2026-05-16)
+        Output ALL THREE of the following standard BDC sentinels, each on its own line at the
+        very end of your output, when all spec stop conditions are met OR a true blocker is
+        identified with evidence:
+
+        COMPLETE
+        BUILD_COMPLETE
+        <promise>COMPLETE</promise>
+
+        Reason: BDC YAMLs have used different sentinel strings over time. Emitting all three
+        guarantees the loop's `until:` matcher finds one. If you found a true blocker, end
+        with a single line `BLOCKED: <one-sentence reason>` instead.
       until: COMPLETE
       max_iterations: 5
       fresh_context: true
 
-  - id: verify-build
-    depends_on: [implement]
-    bash: |
-      set -euo pipefail
-      # Container is bun-only — no npm. Use bun run.
-      if [ -f package.json ]; then
-        if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
-          bun run build
-        else
-          echo "No build script in package.json; skipping build."
-        fi
-      elif [ -f tests/run_all.js ]; then
-        bun tests/run_all.js
-      else
-        echo "No recognized build command; record as not applicable in manifest."
-      fi
-
-  - id: verify-types
-    depends_on: [implement]
-    bash: |
-      set -euo pipefail
-      if [ -f tsconfig.json ]; then
-        bunx tsc --noEmit
-      else
-        echo "No tsconfig.json; skipping TypeScript check."
-      fi
-
-  - id: verify-tests
-    depends_on: [implement]
-    bash: |
-      set -euo pipefail
-      # Container is bun-only — use bun test.
-      if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
-        bun test
-      elif find . -path ./.git -prune -o \( -name '*test*' -o -name '*spec*' \) -type f -print -quit | grep -q .; then
-        echo "Test files detected but no test script in package.json." >&2
-        # Try direct bun test as fallback
-        bun test 2>&1 || { echo "bun test failed without a script — manual verify needed" >&2; exit 1; }
-      else
-        echo "No test files detected; record as not applicable in manifest."
-      fi
+  # NOTE — verify-build / verify-types / verify-tests removed 2026-05-16 (Patch 1 of Cauldron friction sweep).
+  # Rationale: those nodes consistently killed valid implementation work on pre-existing harness rot
+  # (15+ @archon/paths failures, npm-not-found before bun sweep, scope-too-wide tsc) rather than catching
+  # real WO-introduced bugs. The implement loop now self-verifies (Rule 19 of YAML Recipe v1) and commits
+  # its own work before exit (Patch 2). Downstream PR-time gates catch real bugs at human-readable layer:
+  #   - codex-review (adversarial schema/code)
+  #   - claude-review (doctrine/architecture)
+  #   - Gitleaks (secret scan)
+  #   - e2e-smoke (CI integration test)
+  #   - Captain CI manifest contract check
+  # Workflow-time verify-* was redundant with PR-time review and high-cost-low-value. See also: WO-149
+  # (verify-scope-to-changed-files) and WO-146 (npm→bun sweep) for the deeper structural fixes.
 
   - id: war-council-validator
-    depends_on: [verify-build, verify-types, verify-tests]
+    depends_on: [implement]
     task_class: medium_work
     prompt: |
       Invoke or emulate the war-council-validator review for this Work Order.
@@ -268,9 +274,12 @@ nodes:
         echo "$plan.output"
         echo
         echo "## Validation"
-        echo "$verify-build.output"
-        echo "$verify-types.output"
-        echo "$verify-tests.output"
+        echo "Workflow-time verify-* nodes were removed 2026-05-16 (Patch 1) — agent self-verifies in implement loop;"
+        echo "real validation gates run at PR time (codex-review + claude-review + Gitleaks + e2e-smoke + Captain CI)."
+        echo "See implement output below for what the builder verified locally."
+        echo
+        echo "## Implement output"
+        echo "$implement.output"
         echo
         echo "## Validator"
         echo "$war-council-validator.output"
@@ -294,14 +303,8 @@ nodes:
       $implement.output
 
       Verification:
-      Build:
-      $verify-build.output
-
-      Types:
-      $verify-types.output
-
-      Tests:
-      $verify-tests.output
+      (Workflow-time verify-build/types/tests removed 2026-05-16 — agent self-verifies in
+      implement loop, PR-time gates handle real validation. See implement output above.)
 
       Validator:
       $war-council-validator.output

@@ -272,7 +272,7 @@ nodes:
            gated by meetsTier('hq') — match the existing route guard pattern.
         8. Create src/tests/cheers-scoring.test.ts — 8 Vitest tests per WO §7
         9. Create src/tests/cheers-dashboard-page.test.tsx — 4 RTL tests with vi.mock('@/lib/api')
-        10. Do NOT add new npm dependencies.
+        10. Do NOT add new package dependencies.
         11. Do NOT modify AdminPage, CustomersPage, server.js, or any unrelated file.
 
         ## Completion criteria
@@ -288,7 +288,7 @@ nodes:
     bash: |
       set -euo pipefail
       if [ -f tsconfig.json ]; then
-        npx tsc --noEmit || (echo "TypeScript errors" >&2; exit 1)
+        bunx tsc --noEmit || (echo "TypeScript errors" >&2; exit 1)
         echo "TypeScript check: PASS"
       fi
 

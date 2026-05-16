@@ -2,7 +2,7 @@ name: bdc-ce-regression-suite
 description: |
   Use when: Shipping WO-CI-CE-REGRESSION-SUITE-01 — CE-only regression suite + CI wiring.
   Input: WO_ID = WO-CI-CE-REGRESSION-SUITE-01.
-  Does: Reads spec from bdc-xo via gh api (cross-repo), implements `npm run test:ce-regression`
+  Does: Reads spec from bdc-xo via gh api (cross-repo), implements `bun run test:ce-regression`
         on lspro-react covering CE matrix (auth, license, import paths, AutoFix, cover lookup,
         WhatNot export, no PRO/HQ UI), adds .github/workflows/ce-regression.yml that runs on
         PRs targeting release/ce, opens PR against main, flips Notion to REVIEW.
@@ -57,10 +57,10 @@ nodes:
         - 11-no-pro-hq-ui.spec.ts (negative assertion: no PRO/HQ controls visible to CE plan)
       - CI workflow file: `.github/workflows/ce-regression.yml`
         - Triggers: pull_request targeting release/ce
-        - Runs: `npm run test:ce-regression`
+        - Runs: `bun run test:ce-regression`
         - Required check: yes (blocks merge to release/ce on fail)
       - Verification commands:
-        - `npm run test:ce-regression` (locally)
+        - `bun run test:ce-regression` (locally)
         - `grep -c "test:ce-regression" package.json` (>= 1)
         - `ls .github/workflows/ce-regression.yml`
       - Commit message: `feat(ci): WO-CI-CE-REGRESSION-SUITE-01 — CE regression gate for release/ce PRs`
@@ -90,7 +90,7 @@ nodes:
         - Each test asserts ONE matrix item from the CE Regression Matrix.
         - Add `"test:ce-regression"` script to package.json. Use Vitest if it's already a dep, else Playwright if present.
         - Create `.github/workflows/ce-regression.yml` that runs on PRs targeting release/ce ONLY (use `on.pull_request.branches: [release/ce]`).
-        - The workflow MUST install deps + run `npm run test:ce-regression` and fail on non-zero exit.
+        - The workflow MUST install deps + run `bun run test:ce-regression` and fail on non-zero exit.
         - Do NOT touch any other test files. Do NOT modify CE wizard components.
         - Do NOT deploy. Do NOT push directly to main or release/ce.
 
@@ -99,7 +99,7 @@ nodes:
           - 11 spec files exist with at least one real assertion each (no skip-only files)
           - package.json scripts.test:ce-regression set
           - .github/workflows/ce-regression.yml exists with correct trigger
-          - `npm run test:ce-regression` passes locally (or skipped with clear reason logged)
+          - `bun run test:ce-regression` passes locally (or skipped with clear reason logged)
 
   - id: verify-grep
     depends_on: [implement]
@@ -118,7 +118,7 @@ nodes:
     bash: |
       set -euo pipefail
       if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts['test:ce-regression'] ? 0 : 1)"; then
-        npm run test:ce-regression || echo "Tests may fail in workspace (missing env); CI is authoritative."
+        bun run test:ce-regression || echo "Tests may fail in workspace (missing env); CI is authoritative."
       else
         echo "test:ce-regression script missing" >&2
         exit 1
@@ -227,7 +227,7 @@ nodes:
 
       Required fields: WO, Builder, Files created (11 specs + 1 workflow), Files modified (package.json),
       PR URL, Merge ancestor lspro-react main HEAD, Grep assertions, Runtime verification
-      (`npm run test:ce-regression` exit code), CI evidence, VALIDATION: PASS.
+      (`bun run test:ce-regression` exit code), CI evidence, VALIDATION: PASS.
 
       ## Inputs
       $read-spec.output

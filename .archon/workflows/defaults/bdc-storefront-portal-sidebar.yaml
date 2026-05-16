@@ -223,7 +223,7 @@ nodes:
            // TODO: target page deferred — link will 404 until WO-XXX ships
            comment AND record in the run output for the manifest builder.
         9. Do NOT touch backend routes, auth middleware, or any non-portal page.
-        10. Do NOT add new npm dependencies.
+        10. Do NOT add new package dependencies.
 
         ## Completion criteria
         Output <promise>COMPLETE</promise> only when:
@@ -239,7 +239,7 @@ nodes:
       set -euo pipefail
       cd /tmp/storefront-work-$WORKFLOW_ID
       if [ -f tsconfig.json ]; then
-        npx tsc --noEmit
+        bunx tsc --noEmit
         echo "TS_OK"
       else
         echo "No tsconfig — skip"

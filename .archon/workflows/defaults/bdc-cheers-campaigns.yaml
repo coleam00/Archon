@@ -257,7 +257,7 @@ nodes:
         6. Create src/tests/cheers-campaigns.test.tsx — 6 Vitest tests per WO §7.
            Use vi.mock('@/lib/api') for apiFetch.
         7. Use apiFetch from @/lib/api. Returns Promise<Response>. Call .json() on the result.
-        8. Do NOT add npm dependencies.
+        8. Do NOT add new package dependencies.
 
         <promise>COMPLETE</promise> when 5 files exist + App.tsx has both routes +
         test file has >=6 test() blocks.
@@ -302,7 +302,7 @@ nodes:
     depends_on: [implement-ui]
     bash: |
       set -euo pipefail
-      npx tsc --noEmit
+      bunx tsc --noEmit
       echo "TS_OK"
 
   - id: verify-tests-ui

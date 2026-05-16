@@ -31,8 +31,8 @@ description: |
   Input: WO_ID = WO-AUTH-CE-AUTH0-TENANT-METADATA-HARDEN-01.
   Does: Reads WO spec from bdc-xo via gh api. Clones lspro-react into /tmp.
         Adds resolveTenantId(user) helper + synchronous sessionStorage write at Auth0
-        login in src/context/AuthContext.jsx. Adds unit tests. Runs npm run build +
-        npm test. Opens PR against main with manifest v2 body. Does NOT touch GAS path
+        login in src/context/AuthContext.jsx. Adds unit tests. Runs bun run build +
+        bun test. Opens PR against main with manifest v2 body. Does NOT touch GAS path
         or /api/tenant/plan fetch (those are WO #2 cleanup).
   Repo: bluedevilcollectibles/lspro-react (default branch: main)
   Class: CODE (single-file frontend hardening)
@@ -149,10 +149,10 @@ nodes:
       - GAS / lspro_token path (WO #2)
 
       ### Verification commands
-      - cd /tmp/lspro-react-work-$WORKFLOW_ID && npm ci
-      - npm run build
-      - npm test
-      - npx tsc --noEmit (if tsconfig present)
+      - cd /tmp/lspro-react-work-$WORKFLOW_ID && bun install --frozen-lockfile
+      - bun run build
+      - bun test
+      - bunx tsc --noEmit (if tsconfig present)
       - grep -c 'resolveTenantId' src/context/AuthContext.jsx (expect >= 1)
       - grep -c "sessionStorage.setItem.*lspro_tenant_id" src/context/AuthContext.jsx (expect >= 1)
 
@@ -252,9 +252,9 @@ nodes:
 
         6. Run verification (do NOT push, do NOT deploy):
              cd /tmp/lspro-react-work-$WORKFLOW_ID
-             npm ci
-             npm run build
-             npm test
+             bun install --frozen-lockfile
+             bun run build
+             bun test
 
         ## Completion Criteria
         Output <promise>COMPLETE</promise> only when:
@@ -262,8 +262,8 @@ nodes:
           - src/context/AuthContext.jsx has sessionStorage.setItem('lspro_tenant_id', ...)
             in the Auth0 branch BEFORE any /api/tenant/plan fetch
           - Test file exists with >= 4 tests asserting real behavior
-          - npm run build exits 0
-          - npm test exits 0
+          - bun run build exits 0
+          - bun test exits 0
           - GAS / lspro_token path is UNCHANGED (grep proves it)
           - /api/tenant/plan fetch is UNCHANGED (grep proves it)
 
@@ -339,10 +339,10 @@ nodes:
       cd "$WORK_DIR"
 
       if [ ! -d node_modules ]; then
-        npm ci --no-audit --no-fund
+        bun install --frozen-lockfile
       fi
 
-      npm run build
+      bun run build
 
   # ---------------------------------------------------------------------------
   # 8. VERIFY-TESTS — run npm test
@@ -355,13 +355,13 @@ nodes:
       cd "$WORK_DIR"
 
       if [ ! -d node_modules ]; then
-        npm ci --no-audit --no-fund
+        bun install --frozen-lockfile
       fi
 
       if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
-        npm test -- --run 2>&1 || npm test 2>&1
+        bun test -- --run 2>&1 || bun test 2>&1
       else
-        echo "WARN: no npm test script found in package.json" >&2
+        echo "WARN: no bun test script found in package.json" >&2
         exit 1
       fi
 
@@ -465,8 +465,8 @@ nodes:
         echo "- Created: \`src/context/AuthContext.test.*\` (4+ tests)"
         echo ""
         echo "## Tests"
-        echo "- \`npm test\` — 4+ new tests on resolveTenantId behavior"
-        echo "- \`npm run build\` — clean"
+        echo "- \`bun test\` — 4+ new tests on resolveTenantId behavior"
+        echo "- \`bun run build\` — clean"
         echo ""
         echo "## Grep assertions"
         echo "- \`grep -c 'resolveTenantId' src/context/AuthContext.jsx\` ≥ 1"
@@ -519,7 +519,7 @@ nodes:
       Builder: Cauldron (bdc-auth-ce-auth0-tenant-metadata-harden workflow)
       Files modified: lspro-react/src/context/AuthContext.jsx
       Files created: <test path from commit-and-push>
-      Tests: <count passing / count total via npm test>
+      Tests: <count passing / count total via bun test>
       PRs: <PR URL from open-pr>
       Merge ancestors: lspro-react main HEAD: <sha>, manifest commit: <sha>, behind_by: 0
       Grep assertions:

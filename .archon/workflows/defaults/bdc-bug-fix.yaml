@@ -76,8 +76,8 @@ nodes:
 
       # Detect test runner and run the specific test
       if [ -f package.json ] && grep -q '"test"' package.json; then
-        echo "Running test via npm test..."
-        if npm test -- "$TEST_PATH" 2>&1; then
+        echo "Running test via bun test..."
+        if bun test -- "$TEST_PATH" 2>&1; then
           echo "ERROR: Test passed, but it MUST fail before the fix is applied!" >&2
           exit 1
         fi
@@ -88,8 +88,8 @@ nodes:
           exit 1
         fi
       else
-        echo "Could not detect test runner. Assuming npm test..." >&2
-        if npm test -- "$TEST_PATH" 2>&1; then
+        echo "Could not detect test runner. Assuming bun test..." >&2
+        if bun test -- "$TEST_PATH" 2>&1; then
           echo "ERROR: Test passed, but it MUST fail before the fix is applied!" >&2
           exit 1
         fi
@@ -175,11 +175,11 @@ nodes:
       fi
 
       if [ -f package.json ] && grep -q '"test"' package.json; then
-        npm test -- "$TEST_PATH"
+        bun test -- "$TEST_PATH"
       elif [ -f pyproject.toml ] || [ -f requirements.txt ]; then
         pytest "$TEST_PATH" -v
       else
-        npm test -- "$TEST_PATH"
+        bun test -- "$TEST_PATH"
       fi
       echo "Test passes after fix."
 
@@ -189,9 +189,9 @@ nodes:
       set -euo pipefail
       if [ -f package.json ]; then
         if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
-          npm run build
+          bun run build
         else
-          echo "No npm build script; skipping build."
+          echo "No package build script; skipping build."
         fi
       elif [ -f tests/run_all.js ]; then
         node tests/run_all.js
@@ -204,7 +204,7 @@ nodes:
     bash: |
       set -euo pipefail
       if [ -f tsconfig.json ]; then
-        npx tsc --noEmit
+        bunx tsc --noEmit
       else
         echo "No tsconfig.json; skipping TypeScript check."
       fi
@@ -215,9 +215,9 @@ nodes:
       set -euo pipefail
       echo "Running full test suite to check for regressions..."
       if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
-        npm test
+        bun test
       elif find . -path ./.git -prune -o \( -name '*test*' -o -name '*spec*' \) -type f -print -quit | grep -q .; then
-        echo "Test files detected but no npm test script was found." >&2
+        echo "Test files detected but no bun test script was found." >&2
         exit 1
       else
         echo "No test files detected; record as not applicable in manifest."

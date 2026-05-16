@@ -140,8 +140,8 @@ nodes:
         4. ConnectShopifyModal submits PATCH with correct payload (mock apiFetch, assert call args)
         5. Disconnect confirm guard: PATCH NOT called when user cancels confirm dialog
       - Verification commands:
-        - bun run test (or npm test) — must exit 0 with >= 5 passing assertions
-        - npx tsc --noEmit (TypeScript clean)
+        - bun run test (or bun test) — must exit 0 with >= 5 passing assertions
+        - bunx tsc --noEmit (TypeScript clean)
         - grep -c "ConnectShopifyModal\|ConnectWooCommerceModal" src/pages/ChannelsConfigPage.tsx
         - grep -c "PATCH" src/pages/ChannelsConfigPage.tsx
       - Commit message: feat(channels): WO-SHOPOPS-CHANNEL-ADMIN-UI-01 — channels connect/disconnect UI
@@ -209,7 +209,7 @@ nodes:
     bash: |
       set -euo pipefail
       if [ -f tsconfig.json ]; then
-        npx tsc --noEmit
+        bunx tsc --noEmit
         echo "TypeScript check: PASS"
       else
         echo "No tsconfig.json found — skipping type check"
