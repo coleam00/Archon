@@ -48,9 +48,13 @@ nodes:
     depends_on: [read-spec]
     bash: |
       set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      # Re-derive WO_ID locally instead of interpolating $read-spec.output —
+      # spec body may contain unbalanced quotes that break the assembled bash.
+      WO_ID="${WO_ID:-}"
+      if [ -z "$WO_ID" ]; then
+        WO_ID=$(printf '%s\n' "${USER_MESSAGE:-}" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
+      fi
       # n8n webhook stripped per Rule 11 (hangs ≥120s in executor subprocess).
-      # Status visible via /api/conversations/<id> and container logs.
       echo "STARTED: ${WO_ID}"
 
   - id: plan
@@ -247,7 +251,8 @@ nodes:
       fi
       COMMIT_MESSAGE=$(printf '%s\n' "$plan.output" | sed -n 's/^Commit message: //p' | head -n 1)
       if [ -z "$COMMIT_MESSAGE" ]; then
-        WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+        # Re-derive WO_ID locally — see post-started for rationale
+        WO_ID="${WO_ID:-$(printf '%s\n' "${USER_MESSAGE:-}" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)}"
         COMMIT_MESSAGE="feat: ${WO_ID} implementation"
       fi
       git commit -m "$COMMIT_MESSAGE"
@@ -326,9 +331,9 @@ nodes:
     depends_on: [build-manifest]
     bash: |
       set -euo pipefail
-      WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
+      # Re-derive WO_ID locally — see post-started for rationale
+      WO_ID="${WO_ID:-$(printf '%s\n' "${USER_MESSAGE:-}" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)}"
       # n8n webhook stripped per Rule 11 (hangs ≥120s in executor subprocess).
-      # Completion visible via build-manifest output + Notion flip.
       echo "COMPLETED: ${WO_ID}"
 
   - id: flip-notion
