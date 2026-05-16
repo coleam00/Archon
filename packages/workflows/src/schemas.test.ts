@@ -810,3 +810,38 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — description field
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — description field', () => {
+  test('accepts description on a bash node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'read-spec',
+      bash: 'gh api repos/foo/bar',
+      description: 'Read spec from bdc-xo via gh api',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBe('Read spec from bdc-xo via gh api');
+    }
+  });
+
+  test('description is optional — node without it still validates', () => {
+    const result = dagNodeSchema.safeParse({ id: 'x', bash: 'echo hello' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.description).toBeUndefined();
+    }
+  });
+
+  test('rejects description longer than 120 characters', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      bash: 'echo hi',
+      description: 'x'.repeat(121),
+    });
+    expect(result.success).toBe(false);
+  });
+});

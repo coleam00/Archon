@@ -2028,6 +2028,7 @@ export interface components {
     };
     DagNode: {
       id: string;
+      description?: string;
       depends_on?: string[];
       when?: string;
       /** @enum {string} */

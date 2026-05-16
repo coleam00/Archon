@@ -131,6 +131,7 @@ const AGENT_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 export const dagNodeBaseSchema = z.object({
   id: z.string(),
+  description: z.string().max(120).optional(),
   depends_on: z.array(z.string()).optional(),
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),
@@ -531,6 +532,7 @@ export const dagNodeSchema = dagNodeBaseSchema
     // Common base fields (sparse — only include defined values)
     const base = {
       id,
+      ...(data.description !== undefined ? { description: data.description } : {}),
       ...(data.depends_on !== undefined && data.depends_on.length > 0
         ? { depends_on: data.depends_on }
         : {}),

@@ -50,19 +50,20 @@ export function resolveNodeDisplay(dn: DagNode): {
   bashScript?: string;
   bashTimeout?: number;
 } {
+  const label = dn.description ?? dn.id;
   if ('bash' in dn && dn.bash) {
     return {
-      label: 'Shell',
+      label,
       nodeType: 'bash',
       bashScript: dn.bash,
       bashTimeout: dn.timeout,
     };
   }
   if ('command' in dn && dn.command) {
-    return { label: dn.command, nodeType: 'command' };
+    return { label, nodeType: 'command' };
   }
   return {
-    label: 'Prompt',
+    label,
     nodeType: 'prompt',
     promptText: dn.prompt,
   };

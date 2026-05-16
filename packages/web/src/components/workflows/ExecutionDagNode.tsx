@@ -55,6 +55,7 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
         >
           {typeLabel}
         </span>
+        <span className="text-[10px] text-text-tertiary">·</span>
         <span className="text-xs font-medium text-text-primary truncate max-w-[100px]">
           {data.label}
         </span>
