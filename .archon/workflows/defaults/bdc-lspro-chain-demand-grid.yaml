@@ -40,14 +40,16 @@ nodes:
     bash: |
       set -euo pipefail
       WO_ID="${WO_ID:-WO-LSPRO-CHAIN-DEMAND-GRID-01}"
+      # Primary path (gh --template, no jq dependency)
       SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
       if [ -z "$SPEC" ]; then
         GLOB=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
-          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' 2>/dev/null || true)
-        if [ -n "$GLOB" ] && [ "$GLOB" != "null" ]; then
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null \
+          | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB" ]; then
           SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB}?ref=main" \
-            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
         fi
       fi
       if [ -z "$SPEC" ]; then echo "Spec not found" >&2; exit 1; fi
@@ -110,12 +112,17 @@ nodes:
     depends_on: [schema-verify]
     bash: |
       set -euo pipefail
-      DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
+      # shopops is the SECONDARY repo here — clone into /tmp using shopops master/main lookup.
+      # Note: $(git remote show origin) reads CWD's origin (lspro-react) — wrong default branch
+      # for shopops. Hard-code 'master' (verified correct for shopops repo).
+      SHOPOPS_DEFAULT="master"
       DIR="/tmp/shopops-work-$WORKFLOW_ID"
       if [ -d "$DIR/.git" ]; then
-        cd "$DIR"; git fetch origin
-        git checkout "$DEFAULT_BRANCH" 2>/dev/null || git checkout "$DEFAULT_BRANCH"
-        git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || git reset --hard "origin/$DEFAULT_BRANCH"
+        cd "$DIR"; git fetch origin || true
+        if ! git checkout "$SHOPOPS_DEFAULT" 2>/dev/null; then
+          echo "shopops default branch held by other worktree; staying on current HEAD"
+        fi
+        git reset --hard "origin/$SHOPOPS_DEFAULT" 2>/dev/null || true
       else
         git clone "https://github.com/bluedevilcollectibles/shopops.git" "$DIR" --depth=50
       fi
@@ -124,12 +131,22 @@ nodes:
   - id: audit-prior-art
     depends_on: [read-spec]
     bash: |
-      set -euo pipefail
-      ls -la src/pages/cheers/ 2>/dev/null || echo "cheers/ dir not yet created"
-      grep -n "Route path" src/App.tsx | head -30
-      grep -n "meetsTier" src/lib/tiers.ts | head -10
-      ls -la src/pages/PullListCommandCenter.tsx
-      head -50 src/pages/PullListCommandCenter.tsx
+      # set -e DELIBERATELY OMITTED — audit must NEVER fail (BUG-3 tolerant).
+      # lspro-react DOES have src/ (verified). Tolerate missing files for new modules.
+      if [ -d src/pages/cheers ]; then
+        ls -la src/pages/cheers/ 2>/dev/null || true
+      else
+        echo "cheers/ dir not yet created"
+      fi
+      [ -e src/App.tsx ] && grep -n "Route path" src/App.tsx 2>/dev/null | head -30 || echo "(App.tsx missing)"
+      [ -e src/lib/tiers.ts ] && grep -n "meetsTier" src/lib/tiers.ts 2>/dev/null | head -10 || echo "(tiers.ts missing)"
+      if [ -e src/pages/PullListCommandCenter.tsx ]; then
+        ls -la src/pages/PullListCommandCenter.tsx 2>/dev/null || true
+        head -50 src/pages/PullListCommandCenter.tsx 2>/dev/null || true
+      else
+        echo "(PullListCommandCenter.tsx missing — audit tolerant)"
+      fi
+      exit 0
 
   - id: plan
     depends_on: [audit-prior-art, setup-shopops-clone]
@@ -338,18 +355,9 @@ nodes:
     bash: |
       set -euo pipefail
       BASE="wo/lspro-chain-demand-grid-01"
-      BRANCH="$BASE"
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
-           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-          BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
-          git checkout -b "$BRANCH"
-        else
-          git checkout "$BRANCH"
-        fi
-      else
-        git checkout -b "$BRANCH"
-      fi
+      # Default to unique run-suffixed branch (avoids worktree collisions)
+      BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+      git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
       git add src/App.tsx src/pages/cheers/ChainDemandGridPage.tsx \
         src/pages/cheers/components/DemandGridTable.tsx \
@@ -372,12 +380,9 @@ nodes:
       set -euo pipefail
       cd /tmp/shopops-work-$WORKFLOW_ID
       BASE="wo/lspro-chain-demand-grid-01"
-      BRANCH="$BASE"
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        git checkout "$BRANCH"
-      else
-        git checkout -b "$BRANCH"
-      fi
+      # Default to unique run-suffixed branch (avoids worktree collisions)
+      BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+      git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
       git add shopops-api/routes/chain-demand.js \
               shopops-api/lib/demand-grid-builder.js \
@@ -398,7 +403,7 @@ nodes:
     depends_on: [commit-and-push-ui]
     bash: |
       set -euo pipefail
-      BRANCH="wo/lspro-chain-demand-grid-01"
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/lspro-react"
       BODY=$(mktemp)
       {
@@ -418,7 +423,7 @@ nodes:
         echo "WO-SHOPOPS-MULTI-LOCATION-SCOPE-01 must be MERGED (location_id column)."
       } > "$BODY"
 
-      PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null)
+      PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null)
       if [ -n "$PR_URL" ]; then echo "UI_PR_URL=$PR_URL"; exit 0; fi
 
       for attempt in 1 2 3; do
@@ -436,7 +441,7 @@ nodes:
     bash: |
       set -euo pipefail
       cd /tmp/shopops-work-$WORKFLOW_ID
-      BRANCH="wo/lspro-chain-demand-grid-01"
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/shopops"
       BODY=$(mktemp)
       {
@@ -447,7 +452,7 @@ nodes:
         echo '  docker exec shopops-api grep -n "chain/demand-grid" /app/routes/chain-demand.js'
       } > "$BODY"
 
-      PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null)
+      PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null)
       if [ -n "$PR_URL" ]; then echo "API_PR_URL=$PR_URL"; exit 0; fi
 
       for attempt in 1 2 3; do
@@ -480,8 +485,10 @@ nodes:
   - id: verify-vercel
     depends_on: [open-pr-ui]
     bash: |
+      # set -e DELIBERATELY OMITTED — best-effort
+      BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
       sleep 30
-      RESULT=$(gh pr list --repo bluedevilcollectibles/lspro-react --head wo/lspro-chain-demand-grid-01 --state open --json url 2>&1)
+      RESULT=$(gh pr list --repo bluedevilcollectibles/lspro-react --head "$BRANCH" --state open --json url 2>&1)
       if echo "$RESULT" | grep -q "url"; then
         echo "STATUS=pr_open_preview_pending"
       else

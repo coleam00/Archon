@@ -55,20 +55,21 @@ nodes:
       WO_ID="${WO_ID:-WO-SHOPOPS-COMMERCE-SPINE-01}"
 
       # Primary: docs/work-orders/<WO_ID>.md in bdc-xo
+      # gh --template uses Go templates (built into gh, no external jq dependency)
       SPEC_CONTENT=$(gh api \
         "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
 
-      # Fallback: date-prefix glob in docs/superpowers/specs/ (Rule 5)
+      # Fallback: glob docs/superpowers/specs/*<WO_ID>*.md
       if [ -z "$SPEC_CONTENT" ]; then
         GLOB_PATH=$(gh api \
           "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
-          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
-          2>/dev/null || true)
-        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' \
+          2>/dev/null | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB_PATH" ]; then
           SPEC_CONTENT=$(gh api \
             "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
-            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
         fi
       fi
 
@@ -80,7 +81,7 @@ nodes:
       # Also fetch behavior spec for context
       BEHAVIOR_SPEC=$(gh api \
         "repos/bluedevilcollectibles/bdc-xo/contents/docs/behavior-specs/COMMERCE_CHANNEL_SPINE_BEHAVIOR.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
 
       printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:docs/work-orders/%s.md\nWORKFLOW_ID=%s\n\n' \
         "$WO_ID" "$WO_ID" "$WORKFLOW_ID"
@@ -317,18 +318,20 @@ nodes:
     bash: |
       set -euo pipefail
       BASE_BRANCH="wo/shopops-commerce-spine-01"
-      BRANCH="$BASE_BRANCH"
+      BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
 
-      # Idempotent checkout: handle worktree-locked branch (Rule 2 / process step 3)
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
-           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+      # Idempotent checkout: prefer stable BASE_BRANCH unless it's locked to another worktree
+      if git show-ref --quiet "refs/heads/$BASE_BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BASE_BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BASE_BRANCH" ]; then
+          # Branch locked to another worktree — use timestamped variant
           git checkout -b "$BRANCH"
         else
-          git checkout "$BRANCH"
+          BRANCH="$BASE_BRANCH"
+          git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
         fi
       else
+        BRANCH="$BASE_BRANCH"
         git checkout -b "$BRANCH"
       fi
 
@@ -357,8 +360,8 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      # Branch hardcoded to match commit-and-push BASE_BRANCH literal
-      BRANCH="wo/shopops-commerce-spine-01"
+      # Use current HEAD branch (set by commit-and-push — may be timestamped variant)
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/shopops"
       BASE="master"
       TITLE="feat(api): WO-SHOPOPS-COMMERCE-SPINE-01 — commerce channel spine"
@@ -404,7 +407,8 @@ nodes:
 
       # Idempotent PR creation
       existing_pr_url() {
-        gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+          --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null
       }
       PR_URL="$(existing_pr_url)"
       if [ -n "$PR_URL" ]; then

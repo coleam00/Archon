@@ -38,19 +38,20 @@ nodes:
       set -euo pipefail
       WO_ID="${WO_ID:-WO-CHANNELS-OAUTH-WRITE-FLOWS-01}"
 
+      # gh --template uses Go templates (built-in, no jq dependency).
       SPEC_CONTENT=$(gh api \
         "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
 
       if [ -z "$SPEC_CONTENT" ]; then
         GLOB_PATH=$(gh api \
           "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
-          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
-          2>/dev/null || true)
-        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null \
+          | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB_PATH" ]; then
           SPEC_CONTENT=$(gh api \
             "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
-            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
         fi
       fi
 
@@ -87,20 +88,23 @@ nodes:
     bash: |
       set -euo pipefail
       DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
-      git fetch origin "$DEFAULT_BRANCH" --depth=50
-      git checkout "$DEFAULT_BRANCH"
-      git reset --hard "origin/$DEFAULT_BRANCH"
+      git fetch origin "$DEFAULT_BRANCH" --depth=50 || true
+      git checkout "$DEFAULT_BRANCH" 2>/dev/null \
+        || { echo "branch held by other worktree; staying on current HEAD"; }
+      git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || true
+
       BASE_BRANCH="wo/channels-oauth-write-flows-01"
-      BRANCH="$BASE_BRANCH"
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
-           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
-          git checkout -b "$BRANCH"
-        else
-          git checkout "$BRANCH"
-          git reset --hard "origin/$DEFAULT_BRANCH"
+      # Default to a unique timestamped branch (worktree-safe on rerun).
+      BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+      if ! git worktree list --porcelain | grep -qx "branch refs/heads/$BASE_BRANCH"; then
+        if [ "$(git rev-parse --abbrev-ref HEAD)" = "$BASE_BRANCH" ]; then
+          BRANCH="$BASE_BRANCH"
+        elif ! git show-ref --quiet "refs/heads/$BASE_BRANCH"; then
+          BRANCH="$BASE_BRANCH"
         fi
+      fi
+      if git show-ref --quiet "refs/heads/$BRANCH"; then
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
       else
         git checkout -b "$BRANCH"
       fi
@@ -252,7 +256,8 @@ nodes:
     depends_on: [verify-backend-grep, verify-backend-tests]
     bash: |
       set -euo pipefail
-      BRANCH="wo/channels-oauth-write-flows-01"
+      # Read actual branch from current HEAD (fresh-branch may have used unique suffix).
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       git add \
         shopops-api/routes/channels.js \
         shopops-api/tests/test_channels_connect.js
@@ -270,13 +275,16 @@ nodes:
     depends_on: [commit-and-push-backend]
     bash: |
       set -euo pipefail
-      BRANCH="wo/channels-oauth-write-flows-01"
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/shopops"
       BASE="master"
       TITLE="feat(api): WO-CHANNELS-OAUTH-WRITE-FLOWS-01 — channel connect/disconnect"
       BODY_FILE=$(mktemp)
       printf '## Summary\nImplements WO-CHANNELS-OAUTH-WRITE-FLOWS-01 — backend connect/disconnect routes.\n\n## Plan: A (P1 Mutant Market 2026-06-15)\n\n## Polish bar: ROUGH OK\nv1 limitations explicit: no token refresh, no validation ping, toast-only errors.\nManual disconnect-then-reconnect is acceptable recovery path.\n\nUI companion PR: bluedevilcollectibles/lspro-react.\n' > "$BODY_FILE"
-      existing_pr_url() { gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null; }
+      existing_pr_url() {
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+          --json url --template '{{range .}}{{.url}}{{"\n"}}{{end}}' 2>/dev/null | head -1
+      }
       PR_URL="$(existing_pr_url)"
       if [ -n "$PR_URL" ]; then echo "PR_URL=$PR_URL"; exit 0; fi
       for attempt in 1 2 3 4 5; do

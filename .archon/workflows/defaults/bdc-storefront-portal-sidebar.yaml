@@ -39,14 +39,16 @@ nodes:
     bash: |
       set -euo pipefail
       WO_ID="${WO_ID:-WO-STOREFRONT-PORTAL-SIDEBAR-01}"
+      # Primary path (gh --template, no jq dependency)
       SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
       if [ -z "$SPEC" ]; then
         GLOB=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
-          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' 2>/dev/null || true)
-        if [ -n "$GLOB" ] && [ "$GLOB" != "null" ]; then
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null \
+          | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB" ]; then
           SPEC=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB}?ref=main" \
-            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
         fi
       fi
       if [ -z "$SPEC" ]; then echo "Spec not found" >&2; exit 1; fi
@@ -59,9 +61,12 @@ nodes:
       DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
       DIR="/tmp/storefront-work-$WORKFLOW_ID"
       if [ -d "$DIR/.git" ]; then
-        cd "$DIR"; git fetch origin
-        git checkout "$DEFAULT_BRANCH" 2>/dev/null || git checkout "$DEFAULT_BRANCH"
-        git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || git reset --hard "origin/$DEFAULT_BRANCH"
+        cd "$DIR"; git fetch origin || true
+        # Tolerate worktree-locked default branch
+        if ! git checkout "$DEFAULT_BRANCH" 2>/dev/null; then
+          echo "default branch held by other worktree; staying on current HEAD"
+        fi
+        git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || true
         echo "STATUS=reused"
       else
         git clone "https://github.com/bluedevilcollectibles/shopops-storefront.git" "$DIR" --depth=50
@@ -72,39 +77,54 @@ nodes:
   - id: audit-prior-art
     depends_on: [setup-storefront-clone]
     bash: |
-      set -euo pipefail
+      # set -e DELIBERATELY OMITTED — audit must NEVER fail (BUG-3 tolerant)
       DIR="/tmp/storefront-work-$WORKFLOW_ID"
-      cd "$DIR"
+      cd "$DIR" || { echo "WARN: storefront clone dir missing"; exit 0; }
 
-      echo "=== Portal directory contents ==="
-      find "app/shops/[shopSlug]/portal" -type f 2>/dev/null | head -40 || \
-        find "app" -path "*portal*" -type f 2>/dev/null | head -40
+      echo "=== Portal directory contents (storefront uses Next.js app/, no src/) ==="
+      if [ -d "app/shops/[shopSlug]/portal" ]; then
+        find "app/shops/[shopSlug]/portal" -type f 2>/dev/null | head -40 || true
+      elif [ -d app ]; then
+        find "app" -path "*portal*" -type f 2>/dev/null | head -40 || true
+      else
+        echo "(app/ not found — non-Next.js layout?)"
+      fi
 
       echo "=== Existing portal page (placeholder) ==="
-      if [ -f "app/shops/[shopSlug]/portal/page.tsx" ]; then
-        head -80 "app/shops/[shopSlug]/portal/page.tsx"
+      if [ -e "app/shops/[shopSlug]/portal/page.tsx" ]; then
+        head -80 "app/shops/[shopSlug]/portal/page.tsx" 2>/dev/null || true
       fi
 
       echo "=== Existing portal layout (if any) ==="
-      if [ -f "app/shops/[shopSlug]/portal/layout.tsx" ]; then
-        head -60 "app/shops/[shopSlug]/portal/layout.tsx"
+      if [ -e "app/shops/[shopSlug]/portal/layout.tsx" ]; then
+        head -60 "app/shops/[shopSlug]/portal/layout.tsx" 2>/dev/null || true
       else
         echo "(no layout.tsx — WILL CREATE)"
       fi
 
       echo "=== Font/theme tokens ==="
-      grep -rn "Cormorant" app/ styles/ globals.css 2>/dev/null | head -10
-      grep -rn "dark" app/shops/\[shopSlug\]/portal/ 2>/dev/null | head -10
+      if [ -d app ]; then
+        grep -rn "Cormorant" app/ 2>/dev/null | head -10 || true
+      fi
+      [ -d styles ] && grep -rn "Cormorant" styles/ 2>/dev/null | head -10 || true
+      [ -e globals.css ] && grep -n "Cormorant" globals.css 2>/dev/null | head -10 || true
+      if [ -d "app/shops/[shopSlug]/portal" ]; then
+        grep -rn "dark" "app/shops/[shopSlug]/portal/" 2>/dev/null | head -10 || true
+      fi
 
       echo "=== Existing logout pattern ==="
-      grep -rn "logout\|signOut\|sign-out" app/ lib/ 2>/dev/null | head -15
+      [ -d app ] && grep -rn "logout\|signOut\|sign-out" app/ 2>/dev/null | head -15 || true
+      [ -d lib ] && grep -rn "logout\|signOut\|sign-out" lib/ 2>/dev/null | head -15 || true
 
       echo "=== Real portal sub-routes (for sidebar link verification) ==="
-      find "app/shops/[shopSlug]/portal" -name "page.tsx" 2>/dev/null | head -20
+      if [ -d "app/shops/[shopSlug]/portal" ]; then
+        find "app/shops/[shopSlug]/portal" -name "page.tsx" 2>/dev/null | head -20 || true
+      fi
 
       echo "=== Existing test setup ==="
-      find __tests__ tests -type d 2>/dev/null | head -10
-      ls package.json && grep -E '"test|"vitest|"jest' package.json | head -5
+      find __tests__ tests -type d 2>/dev/null | head -10 || true
+      [ -e package.json ] && grep -E '"test|"vitest|"jest' package.json 2>/dev/null | head -5 || true
+      exit 0
 
   - id: plan
     depends_on: [audit-prior-art]
@@ -314,18 +334,9 @@ nodes:
       set -euo pipefail
       cd /tmp/storefront-work-$WORKFLOW_ID
       BASE="wo/storefront-portal-sidebar-01"
-      BRANCH="$BASE"
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
-           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-          BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
-          git checkout -b "$BRANCH"
-        else
-          git checkout "$BRANCH"
-        fi
-      else
-        git checkout -b "$BRANCH"
-      fi
+      # Default to unique run-suffixed branch (avoids worktree collisions)
+      BRANCH="${BASE}-run-$(date +%Y%m%d%H%M%S)"
+      git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
       # Stage all portal changes
       git add "app/shops/[shopSlug]/portal/layout.tsx" \
@@ -348,7 +359,7 @@ nodes:
     bash: |
       set -euo pipefail
       cd /tmp/storefront-work-$WORKFLOW_ID
-      BRANCH="wo/storefront-portal-sidebar-01"
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/shopops-storefront"
       BODY=$(mktemp)
       {
@@ -375,7 +386,7 @@ nodes:
         echo "Spec: bdc-xo docs/work-orders/WO-STOREFRONT-PORTAL-SIDEBAR-01.md"
       } > "$BODY"
 
-      PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null)
+      PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null)
       if [ -n "$PR_URL" ]; then echo "PR_URL=$PR_URL"; exit 0; fi
 
       for attempt in 1 2 3; do
@@ -392,9 +403,11 @@ nodes:
     depends_on: [open-pr]
     bash: |
       # set -e DELIBERATELY OMITTED — best-effort
+      cd /tmp/storefront-work-$WORKFLOW_ID 2>/dev/null || true
+      BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
       sleep 30
       RESULT=$(gh pr list --repo bluedevilcollectibles/shopops-storefront \
-        --head wo/storefront-portal-sidebar-01 --state open --json url,statusCheckRollup 2>&1)
+        --head "$BRANCH" --state open --json url,statusCheckRollup 2>&1)
       if echo "$RESULT" | grep -q "url"; then
         echo "STATUS=pr_open"
         echo "DETAIL=Vercel preview triggered by PR; check PR conversation for preview URL"

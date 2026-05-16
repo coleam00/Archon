@@ -33,9 +33,22 @@ nodes:
     bash: |
       set -euo pipefail
       WO_ID="${WO_ID:-WO-STOREFRONT-FOOTER-SPACING-01}"
+      # Primary: docs/work-orders/<WO_ID>.md (gh --template, no jq dependency)
       SPEC_CONTENT=$(gh api \
         "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+      # Fallback: glob docs/superpowers/specs/*<WO_ID>*.md
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null \
+          | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB_PATH" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+        fi
+      fi
       if [ -z "$SPEC_CONTENT" ]; then
         echo "ERROR: Spec not found for ${WO_ID}" >&2; exit 1
       fi
@@ -47,37 +60,43 @@ nodes:
     bash: |
       set -euo pipefail
       DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
-      git fetch origin "$DEFAULT_BRANCH" --depth=50
-      git checkout "$DEFAULT_BRANCH"
-      git reset --hard "origin/$DEFAULT_BRANCH"
-      BASE_BRANCH="wo/storefront-footer-spacing-01"
-      BRANCH="$BASE_BRANCH"
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
-           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
-          git checkout -b "$BRANCH"
-        else
-          git checkout "$BRANCH"
-          git reset --hard "origin/$DEFAULT_BRANCH"
-        fi
-      else
-        git checkout -b "$BRANCH"
+      git fetch origin "$DEFAULT_BRANCH" --depth=50 || true
+      # Defensive: default branch may be held by another worktree.
+      if ! git checkout "$DEFAULT_BRANCH" 2>/dev/null; then
+        echo "branch held by other worktree; staying on current HEAD"
       fi
+      git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || true
+      BASE_BRANCH="wo/storefront-footer-spacing-01"
+      # Default to unique run-suffixed branch to avoid worktree collisions.
+      BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+      git checkout -b "$BRANCH"
       echo "BRANCH=${BRANCH}"
 
   - id: locate-footer
     depends_on: [fresh-branch]
     bash: |
-      set -euo pipefail
+      # set -e DELIBERATELY OMITTED — audit must NEVER fail (BUG-3 tolerant)
       echo "=== grep for footer-component candidates ==="
-      grep -rln "Pull List" app/ 2>/dev/null | head -20 || true
-      echo "---"
-      grep -rln "Catalog.*Pull List\|footer\|<footer" app/ 2>/dev/null | head -20 || true
-      echo "---"
-      # Also surface shared layouts:
-      ls -la app/shops/\[shopSlug\]/portal/ 2>/dev/null || true
-      ls -la app/shops/\[shopSlug\]/ 2>/dev/null || true
+      if [ -d app ]; then
+        grep -rln "Pull List" app/ 2>/dev/null | head -20 || true
+        echo "---"
+        grep -rln "Catalog.*Pull List\|footer\|<footer" app/ 2>/dev/null | head -20 || true
+        echo "---"
+        # Surface shared layouts (Next.js app/ layout, no src/ in storefront):
+        if [ -d "app/shops/[shopSlug]/portal" ]; then
+          ls -la "app/shops/[shopSlug]/portal/" 2>/dev/null || true
+        fi
+        if [ -d "app/shops/[shopSlug]" ]; then
+          ls -la "app/shops/[shopSlug]/" 2>/dev/null || true
+        fi
+      else
+        echo "(app/ not found — non-Next.js layout?)"
+      fi
+      # Also tolerate components/ at root
+      if [ -d components ]; then
+        grep -rln "Pull List\|<footer" components/ 2>/dev/null | head -10 || true
+      fi
+      exit 0
 
   - id: implement
     depends_on: [locate-footer]
@@ -150,10 +169,9 @@ nodes:
     depends_on: [verify-grep, verify-tsc]
     bash: |
       set -euo pipefail
-      BRANCH="wo/storefront-footer-spacing-01"
-      if [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
-      fi
+      # Use the actual current branch (fresh-branch creates a unique run-suffixed one).
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+      echo "Committing on BRANCH=${BRANCH}"
       git add -A
       if git diff --cached --quiet; then
         echo "No staged changes"
@@ -169,9 +187,10 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      BRANCH="wo/storefront-footer-spacing-01"
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/shopops-storefront"
-      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+        --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null || true)
       if [ -n "$EXIST" ]; then echo "PR=$EXIST"; exit 0; fi
       for i in 1 2 3; do
         if URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \

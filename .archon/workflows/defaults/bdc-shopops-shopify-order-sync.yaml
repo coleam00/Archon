@@ -44,41 +44,63 @@ nodes:
   - id: read-spec
     bash: |
       set -euo pipefail
-      WO_ID="WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01"
+      WO_ID="${WO_ID:-WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01}"
 
-      # Try docs/work-orders/ path first (new convention for SHOPOPS WOs)
-      SPEC_PATH="docs/work-orders/${WO_ID}.md"
-      if [ ! -f "$SPEC_PATH" ]; then
-        # Fall back to date-prefix glob in docs/superpowers/specs/ (standard BDC convention)
-        SPEC_PATH=$(ls docs/superpowers/specs/*${WO_ID}.md 2>/dev/null | head -n 1 || true)
+      # CWD is shopops repo; spec lives in bdc-xo. Fetch via cross-repo gh api.
+      # gh --template uses Go templates (built into gh, no external jq dependency)
+      SPEC_CONTENT=$(gh api \
+        "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+
+      # Fallback: glob docs/superpowers/specs/*<WO_ID>*.md
+      if [ -z "$SPEC_CONTENT" ]; then
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' \
+          2>/dev/null | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB_PATH" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+        fi
       fi
-      if [ -z "$SPEC_PATH" ] || [ ! -f "$SPEC_PATH" ]; then
-        # Also try bare filename in docs/superpowers/specs/
-        SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
-      fi
-      if [ ! -f "$SPEC_PATH" ]; then
-        echo "Spec not found for WO_ID=${WO_ID}" >&2
-        echo "Tried: docs/work-orders/${WO_ID}.md, docs/superpowers/specs/*${WO_ID}.md" >&2
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID} in bdc-xo (tried docs/work-orders/ and date-prefix glob)" >&2
         exit 1
       fi
 
-      printf 'WO_ID=%s\nSPEC_PATH=%s\nWORKFLOW_ID=%s\n\n' "$WO_ID" "$SPEC_PATH" "$WORKFLOW_ID"
-      cat "$SPEC_PATH"
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:docs/work-orders/%s.md\nWORKFLOW_ID=%s\n\n' \
+        "$WO_ID" "$WO_ID" "$WORKFLOW_ID"
+      printf -- '--- SPEC ---\n%s\n' "$SPEC_CONTENT"
 
   - id: read-prior-art
     depends_on: [read-spec]
     bash: |
-      set -euo pipefail
+      # set -e DELIBERATELY OMITTED — audit step is informational; must not fail the workflow
       # CWD is shopops repo root; shopops-api/ is a subdirectory.
       # Read existing Shopify patterns before implementing to reuse proven patterns.
       echo "=== routes/shopify-import.js (lines 1-60: shopifyGet client pattern) ==="
-      head -60 shopops-api/routes/shopify-import.js 2>/dev/null || echo "FILE NOT FOUND: shopops-api/routes/shopify-import.js"
+      if [ -e shopops-api/routes/shopify-import.js ]; then
+        head -60 shopops-api/routes/shopify-import.js 2>/dev/null || true
+      else
+        echo "FILE NOT FOUND: shopops-api/routes/shopify-import.js"
+      fi
       echo ""
       echo "=== routes/webhooks.js (if exists — existing webhook handler patterns) ==="
-      cat shopops-api/routes/webhooks.js 2>/dev/null || echo "FILE NOT FOUND: shopops-api/routes/webhooks.js (no prior webhook handler)"
+      if [ -e shopops-api/routes/webhooks.js ]; then
+        cat shopops-api/routes/webhooks.js 2>/dev/null || true
+      else
+        echo "FILE NOT FOUND: shopops-api/routes/webhooks.js (no prior webhook handler)"
+      fi
       echo ""
       echo "=== index.js route registration block ==="
-      grep -n "require\|app\.use\|router" shopops-api/index.js 2>/dev/null | head -40 || echo "FILE NOT FOUND: shopops-api/index.js"
+      if [ -e shopops-api/index.js ]; then
+        grep -n "require\|app\.use\|router" shopops-api/index.js 2>/dev/null | head -40 || true
+      else
+        echo "FILE NOT FOUND: shopops-api/index.js"
+      fi
+      exit 0
 
   - id: verify-schema
     depends_on: [read-spec]
@@ -293,16 +315,20 @@ nodes:
     bash: |
       set -euo pipefail
       BASE_BRANCH="wo/shopops-shopify-order-sync-01"
-      BRANCH="$BASE_BRANCH"
+      BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
 
-      # Idempotent checkout pattern (gold standard from bdc-ce-regression-suite.yaml)
-      if git worktree list --porcelain | grep -qx "branch refs/heads/$BRANCH"; then
-        # Branch is locked to another worktree — generate a timestamped variant
-        BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
-        git checkout -b "$BRANCH"
-      elif git show-ref --quiet "refs/heads/$BRANCH"; then
-        git checkout "$BRANCH"
+      # Idempotent checkout: prefer stable BASE_BRANCH unless it's locked to another worktree
+      if git show-ref --quiet "refs/heads/$BASE_BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BASE_BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BASE_BRANCH" ]; then
+          # Branch is locked to another worktree — use timestamped variant
+          git checkout -b "$BRANCH"
+        else
+          BRANCH="$BASE_BRANCH"
+          git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+        fi
       else
+        BRANCH="$BASE_BRANCH"
         git checkout -b "$BRANCH"
       fi
 
@@ -347,8 +373,8 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      # Hardcoded branch name — must match commit-and-push BASE_BRANCH literal
-      BRANCH="wo/shopops-shopify-order-sync-01"
+      # Use current HEAD branch (set by commit-and-push — may be timestamped variant)
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/shopops"
       BASE="main"
       TITLE="feat(shopops): WO-SHOPOPS-SHOPIFY-ORDER-SYNC-01 — Shopify order webhook ingestion"
@@ -391,7 +417,8 @@ nodes:
 
       # Idempotent PR creation
       existing_pr_url() {
-        gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+          --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null
       }
       PR_URL="$(existing_pr_url)"
       if [ -n "$PR_URL" ]; then

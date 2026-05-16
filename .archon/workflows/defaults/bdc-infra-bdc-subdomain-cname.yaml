@@ -42,11 +42,29 @@ nodes:
     bash: |
       set -euo pipefail
       WO_ID="${WO_ID:-WO-INFRA-BDC-SUBDOMAIN-CNAME-01}"
+
+      # Try canonical path first: docs/work-orders/<WO_ID>.md
+      # gh --template uses Go templates (built-in to gh, no external jq dependency)
       SPEC_CONTENT=$(gh api \
         "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+
+      # Fallback: glob docs/superpowers/specs/*<WO_ID>*.md
       if [ -z "$SPEC_CONTENT" ]; then
-        echo "ERROR: Spec not found for ${WO_ID}" >&2; exit 1
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null \
+          | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB_PATH" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+        fi
+      fi
+
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "ERROR: Spec not found for ${WO_ID} in bdc-xo" >&2
+        exit 1
       fi
       printf 'WO_ID=%s\nWORKFLOW_ID=%s\n\n--- SPEC ---\n%s\n' \
         "$WO_ID" "$WORKFLOW_ID" "$SPEC_CONTENT"
@@ -82,21 +100,28 @@ nodes:
     bash: |
       set -euo pipefail
       DEFAULT_BRANCH="$(git remote show origin | sed -n 's,.*HEAD branch: ,,p')"
-      git fetch origin "$DEFAULT_BRANCH" --depth=50
-      git checkout "$DEFAULT_BRANCH"
-      git reset --hard "origin/$DEFAULT_BRANCH"
+      # Defensive: if the default branch is already checked out in another worktree,
+      # we can't switch to it. Stay on current HEAD instead.
+      if ! git checkout "$DEFAULT_BRANCH" 2>/dev/null; then
+        echo "branch held by other worktree; staying on current HEAD"
+      fi
+      git fetch origin "$DEFAULT_BRANCH" --depth=50 || true
+      git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || true
       BASE_BRANCH="wo/infra-bdc-subdomain-cname-01"
-      BRANCH="$BASE_BRANCH"
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
-           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+      # Default to unique branch (worktree-collision safe).
+      BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+      if git show-ref --quiet "refs/heads/$BASE_BRANCH"; then
+        if git worktree list --porcelain | grep -q "branch refs/heads/$BASE_BRANCH" && \
+           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BASE_BRANCH" ]; then
+          # base branch held by another worktree; use unique
           git checkout -b "$BRANCH"
         else
-          git checkout "$BRANCH"
-          git reset --hard "origin/$DEFAULT_BRANCH"
+          BRANCH="$BASE_BRANCH"
+          git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+          git reset --hard "origin/$DEFAULT_BRANCH" 2>/dev/null || true
         fi
       else
+        BRANCH="$BASE_BRANCH"
         git checkout -b "$BRANCH"
       fi
       echo "BRANCH=${BRANCH}"
@@ -243,7 +268,8 @@ nodes:
       set -euo pipefail
       BRANCH="wo/infra-bdc-subdomain-cname-01"
       REPO="bluedevilcollectibles/bdc-xo"
-      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+        --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null || true)
       if [ -n "$EXIST" ]; then echo "BDCXO_PR=$EXIST"; exit 0; fi
       for i in 1 2 3; do
         if URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \
@@ -261,7 +287,8 @@ nodes:
       set -euo pipefail
       REPO="bluedevilcollectibles/shopops-storefront"
       BRANCH="wo/infra-bdc-subdomain-cname-01-marketing"
-      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)
+      EXIST=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+        --json url --template '{{range .}}{{.url}}{{end}}' 2>/dev/null || true)
       if [ -n "$EXIST" ]; then echo "STOREFRONT_PR=$EXIST"; exit 0; fi
       for i in 1 2 3; do
         if URL=$(gh pr create --repo "$REPO" --base main --head "$BRANCH" \

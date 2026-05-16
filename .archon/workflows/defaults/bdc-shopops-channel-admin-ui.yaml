@@ -38,21 +38,26 @@ nodes:
       WO_ID="${WO_ID:-WO-SHOPOPS-CHANNEL-ADMIN-UI-01}"
 
       # Spec lives in bdc-xo repo, not in lspro-react. Fetch via gh api cross-repo.
-      # Try canonical work-orders path first, then date-prefix glob fallback (Rule 5).
+      # gh --template uses Go templates (built-in to gh, no external jq dependency).
       SPEC_CONTENT=$(gh api \
         "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
 
       if [ -z "$SPEC_CONTENT" ]; then
-        # Glob fallback: list directory and grep for date-prefixed match
-        SPEC_CONTENT=$(gh api \
-          "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders?ref=main" \
-          --jq '.[] | select(.name | test("'"${WO_ID}"'")) | .download_url' 2>/dev/null \
-          | head -n 1 | xargs curl -fsSL 2>/dev/null || true)
+        # Glob fallback: list docs/superpowers/specs and grep for WO ID
+        GLOB_PATH=$(gh api \
+          "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null \
+          | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB_PATH" ]; then
+          SPEC_CONTENT=$(gh api \
+            "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+        fi
       fi
 
       if [ -z "$SPEC_CONTENT" ]; then
-        echo "Spec not found for ${WO_ID} in bdc-xo docs/work-orders/" >&2
+        echo "Spec not found for ${WO_ID} in bdc-xo docs/work-orders/ or docs/superpowers/specs/" >&2
         exit 1
       fi
 
@@ -62,31 +67,47 @@ nodes:
   - id: audit-prior-art
     depends_on: [read-spec]
     bash: |
-      set -euo pipefail
+      # set -e DELIBERATELY OMITTED — audit is best-effort; never fails the workflow
+      set -u
       echo "=== Prior art audit for WO-SHOPOPS-CHANNEL-ADMIN-UI-01 ==="
 
-      # Confirm route is already wired in App.tsx
-      grep -n "settings/channels" src/App.tsx || grep -rn "settings/channels" src/ | head -5
+      # Confirm route is already wired in App.tsx (lspro-react has src/, but tolerate absence)
+      if [ -e src/App.tsx ]; then
+        grep -n "settings/channels" src/App.tsx 2>/dev/null || \
+          grep -rn "settings/channels" src/ 2>/dev/null | head -5 || true
+      else
+        echo "(src/App.tsx not present; skipping route grep)"
+      fi
 
       # Confirm ChannelsConfigPage.tsx exists and check its current shape
-      ls -la src/pages/ChannelsConfigPage.tsx
-      echo "--- ChannelsConfigPage.tsx head ---"
-      head -60 src/pages/ChannelsConfigPage.tsx
+      if [ -e src/pages/ChannelsConfigPage.tsx ]; then
+        ls -la src/pages/ChannelsConfigPage.tsx 2>/dev/null || true
+        echo "--- ChannelsConfigPage.tsx head ---"
+        head -60 src/pages/ChannelsConfigPage.tsx 2>/dev/null || true
+      else
+        echo "(src/pages/ChannelsConfigPage.tsx not yet present)"
+      fi
 
       # Confirm apiFetch helper location
-      ls -la src/lib/api.ts
-      echo "--- apiFetch signature ---"
-      grep -n "export.*apiFetch" src/lib/api.ts
+      if [ -e src/lib/api.ts ]; then
+        ls -la src/lib/api.ts 2>/dev/null || true
+        echo "--- apiFetch signature ---"
+        grep -n "export.*apiFetch" src/lib/api.ts 2>/dev/null || true
+      fi
 
-      # Check tiers helper
-      grep -n "meetsTier\|ELITE\|shop_ops" src/lib/tiers.ts 2>/dev/null | head -20 || \
-        grep -rn "meetsTier" src/lib/ | head -10
+      # Check tiers helper (best-effort)
+      if [ -e src/lib/tiers.ts ]; then
+        grep -n "meetsTier\|ELITE\|shop_ops" src/lib/tiers.ts 2>/dev/null | head -20 || true
+      else
+        grep -rn "meetsTier" src/lib/ 2>/dev/null | head -10 || true
+      fi
 
       # Check existing test structure
       echo "--- Existing test files ---"
-      find src/ -name "*.test.ts" -o -name "*.test.tsx" | head -20
+      find src/ -name "*.test.ts" -o -name "*.test.tsx" 2>/dev/null | head -20 || true
 
       echo "=== Audit complete ==="
+      exit 0
 
   - id: plan
     depends_on: [audit-prior-art]
@@ -317,14 +338,21 @@ nodes:
     bash: |
       set -euo pipefail
       BASE_BRANCH="wo/shopops-channel-admin-ui-01"
-      BRANCH="$BASE_BRANCH"
+      # Default to a unique timestamped branch (avoids worktree collisions on rerun).
+      BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
 
-      # Idempotent checkout pattern (from bdc-ce-regression-suite.yaml gold standard)
-      if git worktree list --porcelain | grep -qx "branch refs/heads/$BRANCH"; then
-        BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+      # If the base branch is free (not held by another worktree, not yet existing),
+      # prefer it for cleaner PR review.
+      if ! git worktree list --porcelain | grep -qx "branch refs/heads/$BASE_BRANCH"; then
+        if [ "$(git rev-parse --abbrev-ref HEAD)" = "$BASE_BRANCH" ]; then
+          BRANCH="$BASE_BRANCH"
+        elif ! git show-ref --quiet "refs/heads/$BASE_BRANCH"; then
+          BRANCH="$BASE_BRANCH"
+        fi
       fi
+
       if git show-ref --quiet "refs/heads/$BRANCH"; then
-        git checkout "$BRANCH"
+        git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
       else
         git checkout -b "$BRANCH"
       fi
@@ -368,8 +396,8 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      # Hardcoded branch name — must match commit-and-push BASE_BRANCH literal.
-      BRANCH="wo/shopops-channel-admin-ui-01"
+      # Read actual branch from current HEAD (commit-and-push may have used unique suffix).
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/lspro-react"
       BASE="main"
       TITLE="feat(channels): WO-SHOPOPS-CHANNEL-ADMIN-UI-01 — channels connect/disconnect UI"
@@ -411,9 +439,10 @@ nodes:
         echo "Generated by Archon harness (WO-SHOPOPS-CHANNEL-ADMIN-UI-01)"
       } > "$BODY_FILE"
 
-      # Idempotent PR creation
+      # Idempotent PR creation (gh --template avoids jq dependency)
       existing_pr_url() {
-        gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url // empty' 2>/dev/null
+        gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+          --json url --template '{{range .}}{{.url}}{{"\n"}}{{end}}' 2>/dev/null | head -1
       }
       PR_URL="$(existing_pr_url)"
       if [ -n "$PR_URL" ]; then
@@ -449,8 +478,10 @@ nodes:
       echo "Waiting 30s for Vercel preview deploy to start..."
       sleep 30
 
-      RESULT=$(gh pr list --repo "$REPO" --head "wo/shopops-channel-admin-ui-01" \
-        --state open --json url,headRefName 2>&1)
+      BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo wo/shopops-channel-admin-ui-01)"
+      RESULT=$(gh pr list --repo "$REPO" --head "$BRANCH" \
+        --state open --json url,headRefName \
+        --template '{{range .}}url={{.url}} branch={{.headRefName}}{{"\n"}}{{end}}' 2>&1)
       EXIT=$?
 
       if [ $EXIT -eq 0 ] && echo "$RESULT" | grep -q "url"; then

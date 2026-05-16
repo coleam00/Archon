@@ -9,7 +9,7 @@
 #      Expected default_cwd: /home/appuser/shopops-storefront (NOT /.archon/workspaces/...)
 #      Per memory note reference_archon-codebase-registry-paths.md.
 #   2. shopops-storefront default branch confirmed:
-#      gh api repos/bluedevilcollectibles/shopops-storefront --jq .default_branch
+#      gh api repos/bluedevilcollectibles/shopops-storefront --template '{{.default_branch}}'
 #      Expected: master (per battlegroup briefing 2026-05-13). If 'main', update
 #      BASE references in commit-and-push and open-pr nodes below.
 #   3. WO spec committed + pushed to bdc-xo main branch:
@@ -66,21 +66,21 @@ nodes:
       set -euo pipefail
       WO_ID="${WO_ID:-WO-STOREFRONT-CATALOG-REAL-COVERS-01}"
 
-      # Primary path: docs/work-orders/<WO_ID>.md
+      # Primary path: docs/work-orders/<WO_ID>.md (gh --template, no jq dependency)
       SPEC_CONTENT=$(gh api \
         "repos/bluedevilcollectibles/bdc-xo/contents/docs/work-orders/${WO_ID}.md?ref=main" \
-        --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+        --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
 
-      # Fallback: date-prefix glob in docs/superpowers/specs/ (Rule 5)
+      # Fallback: glob docs/superpowers/specs/*<WO_ID>*.md (Rule 5)
       if [ -z "$SPEC_CONTENT" ]; then
         GLOB_PATH=$(gh api \
           "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" \
-          --jq '[.[] | select(.name | test("'"${WO_ID}"'")) | .path] | .[0]' \
-          2>/dev/null || true)
-        if [ -n "$GLOB_PATH" ] && [ "$GLOB_PATH" != "null" ]; then
+          --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null \
+          | grep "${WO_ID}.md$" | head -1 || true)
+        if [ -n "$GLOB_PATH" ]; then
           SPEC_CONTENT=$(gh api \
             "repos/bluedevilcollectibles/bdc-xo/contents/${GLOB_PATH}?ref=main" \
-            --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+            --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
         fi
       fi
 
@@ -98,41 +98,40 @@ nodes:
   - id: inspect-current-state
     depends_on: [read-spec]
     bash: |
-      set -euo pipefail
-
+      # set -e DELIBERATELY OMITTED — audit must NEVER fail (BUG-3 tolerant)
       echo "=== seed catalog current state ==="
       if [ -f lib/seed-data/catalog.json ]; then
-        TOTAL=$(jq 'length' lib/seed-data/catalog.json)
-        WITH_COVER=$(jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' lib/seed-data/catalog.json)
+        # python3 single-line replaces jq (jq not in bun container; multi-line py heredocs break Bun YAML parser)
+        TOTAL=$(python3 -c "import json,sys; print(len(json.load(open('lib/seed-data/catalog.json'))))" 2>/dev/null || echo 0)
+        WITH_COVER=$(python3 -c "import json,sys; d=json.load(open('lib/seed-data/catalog.json')); print(sum(1 for x in d if x.get('cover_url')))" 2>/dev/null || echo 0)
         echo "TOTAL_ITEMS=${TOTAL}"
         echo "ITEMS_WITH_COVER_URL=${WITH_COVER}"
         echo "FIRST_THREE_UPCS:"
-        jq -r '.[0:3] | .[] | "  upc=\(.upc) title=\(.title) cover_url=\(.cover_url)"' lib/seed-data/catalog.json
+        python3 -c "import json; d=json.load(open('lib/seed-data/catalog.json')); [print('  upc='+str(x.get('upc'))+' title='+str(x.get('title'))+' cover_url='+str(x.get('cover_url'))) for x in d[:3]]" 2>/dev/null || true
       else
-        echo "ERROR: lib/seed-data/catalog.json not found at CWD" >&2
-        exit 1
+        echo "WARN: lib/seed-data/catalog.json not found at CWD (audit tolerant)"
       fi
 
       echo ""
       echo "=== catalog page current state ==="
       CATALOG_PAGE="app/shops/[shopSlug]/catalog/page.tsx"
-      if [ -f "$CATALOG_PAGE" ]; then
+      if [ -e "$CATALOG_PAGE" ]; then
         echo "File exists: $CATALOG_PAGE"
-        grep -n 'cover_url\|issue-cover\|cat-card__cover' "$CATALOG_PAGE" || echo "(no matches yet)"
+        grep -n 'cover_url\|issue-cover\|cat-card__cover' "$CATALOG_PAGE" 2>/dev/null || echo "(no matches yet)"
       else
-        echo "ERROR: $CATALOG_PAGE not found" >&2
-        exit 1
+        echo "WARN: $CATALOG_PAGE not found (audit tolerant — implement loop will surface)"
       fi
 
       echo ""
       echo "=== PDP page (optional) ==="
       PDP_PAGE="app/shops/[shopSlug]/comic/[upc]/page.tsx"
-      if [ -f "$PDP_PAGE" ]; then
+      if [ -e "$PDP_PAGE" ]; then
         echo "PDP_PAGE_EXISTS=true"
-        grep -n 'cover_url\|issue-cover' "$PDP_PAGE" || echo "(no cover refs)"
+        grep -n 'cover_url\|issue-cover' "$PDP_PAGE" 2>/dev/null || echo "(no cover refs)"
       else
         echo "PDP_PAGE_EXISTS=false"
       fi
+      exit 0
 
   # ---------------------------------------------------------------------------
   # 3. PROBE-COVER-API — best-effort connectivity check to api.livesellerpro.app
@@ -300,8 +299,8 @@ nodes:
            note in commit message: "backfill JSON to be run locally by operator before PR
            merge — see scripts/backfill-seed-covers.mjs".
 
-        5. After running, verify with jq:
-             jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' lib/seed-data/catalog.json
+        5. After running, verify with python3 (jq not in container):
+             python3 -c "import json; d=json.load(open('lib/seed-data/catalog.json')); print(sum(1 for x in d if x.get('cover_url')))"
            Target: >= 40 (70% of 57 seed items). Acceptable for ROUGH OK: whatever the
            cascade returned. Log the actual count.
 
@@ -369,8 +368,9 @@ nodes:
 
       CATALOG="lib/seed-data/catalog.json"
       ls "$CATALOG" || (echo "FAIL: $CATALOG missing" >&2; exit 1)
-      WITH_COVER=$(jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' "$CATALOG")
-      TOTAL=$(jq 'length' "$CATALOG")
+      # python3 replaces jq (no jq in bun container)
+      WITH_COVER=$(python3 -c "import json; d=json.load(open('$CATALOG')); print(sum(1 for x in d if x.get('cover_url')))")
+      TOTAL=$(python3 -c "import json; print(len(json.load(open('$CATALOG'))))")
       echo "COVER_URLS_POPULATED=${WITH_COVER}/${TOTAL}"
       # ROUGH OK: warn if <40 but don't fail; spec §10 explicitly allows lower threshold
       if [ "$WITH_COVER" -lt 40 ]; then
@@ -443,20 +443,9 @@ nodes:
     bash: |
       set -euo pipefail
       BASE_BRANCH="wo/storefront-catalog-real-covers-01"
-      BRANCH="$BASE_BRANCH"
-
-      # Idempotent checkout: handle worktree-locked branch
-      if git show-ref --quiet "refs/heads/$BRANCH"; then
-        if git worktree list --porcelain | grep -q "branch refs/heads/$BRANCH" && \
-           [ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]; then
-          BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
-          git checkout -b "$BRANCH"
-        else
-          git checkout "$BRANCH"
-        fi
-      else
-        git checkout -b "$BRANCH"
-      fi
+      # Default to unique run-suffixed branch (avoids worktree collisions)
+      BRANCH="${BASE_BRANCH}-run-$(date +%Y%m%d%H%M%S)"
+      git checkout -b "$BRANCH" 2>/dev/null || git checkout "$BRANCH"
 
       # Stage all WO-related files
       git add lib/catalog-cover.ts
@@ -488,7 +477,8 @@ nodes:
     depends_on: [commit-and-push]
     bash: |
       set -euo pipefail
-      BRANCH="wo/storefront-catalog-real-covers-01"
+      # Read branch from current HEAD (commit-and-push set it as the unique run-suffixed branch)
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       REPO="bluedevilcollectibles/shopops-storefront"
       BASE="master"
       TITLE="feat(storefront): WO-STOREFRONT-CATALOG-REAL-COVERS-01 — real cover art in catalog"
@@ -527,7 +517,7 @@ nodes:
 
       existing_pr_url() {
         gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url \
-          --jq '.[0].url // empty' 2>/dev/null
+          --template '{{range .}}{{.url}}{{end}}' 2>/dev/null
       }
       PR_URL="$(existing_pr_url)"
       if [ -n "$PR_URL" ]; then
@@ -560,7 +550,7 @@ nodes:
     depends_on: [open-pr]
     bash: |
       # set -e DELIBERATELY OMITTED — Vercel deployments may legitimately be slow/queued
-      BRANCH="wo/storefront-catalog-real-covers-01"
+      BRANCH="$(git rev-parse --abbrev-ref HEAD)"
       PROJECT="shopops-storefront"
 
       if [ -z "${VERCEL_TOKEN:-}" ]; then
@@ -575,10 +565,11 @@ nodes:
         DEPLOY=$(curl -sf \
           "https://api.vercel.com/v6/deployments?projectId=${PROJECT}&meta-githubCommitRef=${BRANCH}&limit=1" \
           -H "Authorization: Bearer ${VERCEL_TOKEN}" 2>&1)
-        STATE=$(echo "$DEPLOY" | jq -r '.deployments[0].state // "UNKNOWN"' 2>/dev/null)
-        URL=$(echo "$DEPLOY" | jq -r '.deployments[0].url // ""' 2>/dev/null)
-        CREATED=$(echo "$DEPLOY" | jq -r '.deployments[0].createdAt // ""' 2>/dev/null)
-        COMMIT=$(echo "$DEPLOY" | jq -r '.deployments[0].meta.githubCommitSha // ""' 2>/dev/null)
+        # python3 single-line replaces jq for nested JSON parsing
+        STATE=$(echo "$DEPLOY" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('deployments',[{}])[0].get('state','UNKNOWN'))" 2>/dev/null || echo UNKNOWN)
+        URL=$(echo "$DEPLOY" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('deployments',[{}])[0].get('url',''))" 2>/dev/null || echo "")
+        CREATED=$(echo "$DEPLOY" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('deployments',[{}])[0].get('createdAt',''))" 2>/dev/null || echo "")
+        COMMIT=$(echo "$DEPLOY" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('deployments',[{}])[0].get('meta',{}).get('githubCommitSha',''))" 2>/dev/null || echo "")
         echo "attempt=${attempt} state=${STATE} url=${URL}"
         if [ "$STATE" = "READY" ]; then
           echo "STATUS=ok"
@@ -640,7 +631,7 @@ nodes:
       Grep assertions:
         grep -c 'item.cover_url' app/shops/[shopSlug]/catalog/page.tsx  # >= 1
         grep -c 'shouldShowPalette\|getCoverImgProps' lib/catalog-cover.ts  # >= 2
-        jq '[.[] | select(.cover_url != null and .cover_url != "")] | length' lib/seed-data/catalog.json
+        python3 -c "import json; d=json.load(open('lib/seed-data/catalog.json')); print(sum(1 for x in d if x.get('cover_url')))"
         [include actual count from verify-grep.output COVER_URLS_POPULATED]
 
       Runtime verification: N/A (CODE class, frontend-only — Vercel preview is the runtime proof)
