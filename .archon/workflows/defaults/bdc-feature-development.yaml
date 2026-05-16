@@ -6,7 +6,7 @@ description: |
   NOT for: Doctrine-only updates, cleanup sweeps, infrastructure deploys, or bug-fix WOs with their own workflow.
 
 policyFile: harness/policies/agent-behavior.md
-model: claude-sonnet-4-5
+model: sonnet
 
 nodes:
   - id: read-spec
@@ -20,27 +20,38 @@ nodes:
         echo "WO_ID missing. Provide WO_ID in environment or user message." >&2
         exit 1
       fi
-      # Try direct path first, then date-prefixed glob (specs are commonly named YYYY-MM-DD-WO-...md)
-      # CWD is the bdc-xo repo root (Archon worktree), so paths are relative — no BDC_XO/ prefix.
-      SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
-      if [ ! -f "$SPEC_PATH" ]; then
-        SPEC_PATH=$(ls docs/superpowers/specs/*${WO_ID}.md 2>/dev/null | head -n 1 || true)
+      # Specs live in bdc-xo (NOT the target codebase). Cross-repo fetch via gh api.
+      # Per YAML Recipe v1 §4 / Rule 5: try docs/work-orders/ then docs/superpowers/specs/ glob.
+      SPEC_PATH="docs/work-orders/${WO_ID}.md"
+      SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Fallback 1: docs/superpowers/specs/${WO_ID}.md direct
+        SPEC_PATH="docs/superpowers/specs/${WO_ID}.md"
+        SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --template '{{.content}}' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true)
       fi
-      if [ -z "$SPEC_PATH" ] || [ ! -f "$SPEC_PATH" ]; then
-        echo "Spec not found for WO_ID=${WO_ID} (tried docs/superpowers/specs/${WO_ID}.md and date-prefix glob)" >&2
+      if [ -z "$SPEC_CONTENT" ]; then
+        # Fallback 2: date-prefix glob in docs/superpowers/specs/
+        MATCH=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/docs/superpowers/specs?ref=main" --template '{{range .}}{{.path}}{{"\n"}}{{end}}' 2>/dev/null | grep "${WO_ID}.md$" | head -n 1)
+        if [ -n "$MATCH" ]; then
+          SPEC_PATH="$MATCH"
+          SPEC_CONTENT=$(gh api "repos/bluedevilcollectibles/bdc-xo/contents/${SPEC_PATH}?ref=main" --template '{{.content}}' | tr -d '\n' | base64 -d || true)
+        fi
+      fi
+      if [ -z "$SPEC_CONTENT" ]; then
+        echo "Spec not found in bdc-xo for WO_ID=${WO_ID} (tried docs/work-orders/, docs/superpowers/specs/ direct, and date-prefix glob)" >&2
         exit 1
       fi
-      printf 'WO_ID=%s\nSPEC_PATH=%s\n\n' "$WO_ID" "$SPEC_PATH"
-      cat "$SPEC_PATH"
+      printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\n\n' "$WO_ID" "$SPEC_PATH"
+      printf '%s\n' "$SPEC_CONTENT"
 
   - id: post-started
     depends_on: [read-spec]
     bash: |
       set -euo pipefail
       WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"started\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+      # n8n webhook stripped per Rule 11 (hangs ≥120s in executor subprocess).
+      # Status visible via /api/conversations/<id> and container logs.
+      echo "STARTED: ${WO_ID}"
 
   - id: plan
     depends_on: [read-spec]
@@ -121,7 +132,7 @@ nodes:
     bash: |
       set -euo pipefail
       if [ -f tsconfig.json ]; then
-        npx tsc --noEmit
+        bunx tsc --noEmit
       else
         echo "No tsconfig.json; skipping TypeScript check."
       fi
@@ -220,7 +231,7 @@ nodes:
         echo "No changed files found; cannot commit." >&2
         exit 1
       fi
-      while IFS= read -r path; do
+      printf '%s\n' "$CHANGED_FILES" | while IFS= read -r path; do
         if [ -z "$path" ]; then
           continue
         fi
@@ -229,9 +240,7 @@ nodes:
           exit 1
         fi
         git add -- "$path"
-      done <<EOF
-      $CHANGED_FILES
-      EOF
+      done
       if git diff --cached --quiet; then
         echo "No changes staged; cannot commit." >&2
         exit 1
@@ -318,10 +327,9 @@ nodes:
     bash: |
       set -euo pipefail
       WO_ID=$(printf '%s\n' "$read-spec.output" | sed -n 's/^WO_ID=//p' | head -n 1)
-      DETAIL=$(printf '%s\n' "$build-manifest.output" | python -c "import json,sys; print(json.dumps(sys.stdin.read()))")
-      curl -sS -X POST "https://n8n.bluedevilcollectibles.com/webhook/builder-status" \
-        -H "Content-Type: application/json" \
-        -d "{\"action\":\"completed\",\"wo_id\":\"${WO_ID}\",\"builder\":\"Major Build\",\"detail\":${DETAIL}}"
+      # n8n webhook stripped per Rule 11 (hangs ≥120s in executor subprocess).
+      # Completion visible via build-manifest output + Notion flip.
+      echo "COMPLETED: ${WO_ID}"
 
   - id: flip-notion
     depends_on: [post-completed]
