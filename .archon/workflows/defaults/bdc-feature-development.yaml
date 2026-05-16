@@ -106,14 +106,15 @@ nodes:
     depends_on: [implement]
     bash: |
       set -euo pipefail
+      # Container is bun-only — no npm. Use bun run.
       if [ -f package.json ]; then
         if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
-          npm run build
+          bun run build
         else
-          echo "No npm build script; skipping build."
+          echo "No build script in package.json; skipping build."
         fi
       elif [ -f tests/run_all.js ]; then
-        node tests/run_all.js
+        bun tests/run_all.js
       else
         echo "No recognized build command; record as not applicable in manifest."
       fi
@@ -132,11 +133,13 @@ nodes:
     depends_on: [implement]
     bash: |
       set -euo pipefail
+      # Container is bun-only — use bun test.
       if [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
-        npm test
+        bun test
       elif find . -path ./.git -prune -o \( -name '*test*' -o -name '*spec*' \) -type f -print -quit | grep -q .; then
-        echo "Test files detected but no npm test script was found." >&2
-        exit 1
+        echo "Test files detected but no test script in package.json." >&2
+        # Try direct bun test as fallback
+        bun test 2>&1 || { echo "bun test failed without a script — manual verify needed" >&2; exit 1; }
       else
         echo "No test files detected; record as not applicable in manifest."
       fi
