@@ -44,19 +44,6 @@ nodes:
       printf 'WO_ID=%s\nSPEC_PATH=bdc-xo:%s\n\n' "$WO_ID" "$SPEC_PATH"
       printf '%s\n' "$SPEC_CONTENT"
 
-  - id: post-started
-    depends_on: [read-spec]
-    bash: |
-      set -euo pipefail
-      # Re-derive WO_ID locally instead of interpolating $read-spec.output —
-      # spec body may contain unbalanced quotes that break the assembled bash.
-      WO_ID="${WO_ID:-}"
-      if [ -z "$WO_ID" ]; then
-        WO_ID=$(printf '%s\n' "${USER_MESSAGE:-}" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)
-      fi
-      # n8n webhook stripped per Rule 11 (hangs ≥120s in executor subprocess).
-      echo "STARTED: ${WO_ID}"
-
   - id: plan
     depends_on: [read-spec]
     task_class: medium_work
@@ -327,17 +314,8 @@ nodes:
       - PR URL, if opened
       - Staging gate status, if required
 
-  - id: post-completed
-    depends_on: [build-manifest]
-    bash: |
-      set -euo pipefail
-      # Re-derive WO_ID locally — see post-started for rationale
-      WO_ID="${WO_ID:-$(printf '%s\n' "${USER_MESSAGE:-}" | grep -Eo 'WO-[A-Z0-9-]+' | head -n 1 || true)}"
-      # n8n webhook stripped per Rule 11 (hangs ≥120s in executor subprocess).
-      echo "COMPLETED: ${WO_ID}"
-
   - id: flip-notion
-    depends_on: [post-completed]
+    depends_on: [build-manifest]
     task_class: clerical
     prompt: |
       Update the Notion Work Order page if Notion MCP is available in this runtime.
