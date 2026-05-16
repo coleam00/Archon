@@ -176,9 +176,9 @@ export function Sidebar(): React.ReactElement {
       <div className="flex flex-col gap-3 p-4">
         <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <div className="flex h-8 w-8 items-center justify-center bg-black text-white">
-            <span className="text-sm font-semibold">A</span>
+            <span className="text-sm font-semibold">K</span>
           </div>
-          <span className="text-base font-semibold text-black">Archon</span>
+          <span className="text-base font-semibold text-black">Kairon</span>
         </Link>
       </div>
 
