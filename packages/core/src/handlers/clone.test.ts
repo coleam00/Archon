@@ -60,6 +60,12 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
+// ── config-loader mock ──────────────────────────────────────────────────────
+const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
+mock.module('../config/config-loader', () => ({
+  loadConfig: mockLoadConfig,
+}));
+
 // ── utils/commands mock ─────────────────────────────────────────────────────
 const mockFindMarkdownFilesRecursive = mock(() => Promise.resolve([]));
 mock.module('../utils/commands', () => ({
@@ -103,6 +109,8 @@ function clearMocks(): void {
   mockFindCodebaseByName.mockReset();
   mockUpdateCodebase.mockReset();
   mockFindMarkdownFilesRecursive.mockReset();
+  mockLoadConfig.mockReset();
+  mockLoadConfig.mockResolvedValue({ assistant: 'claude' });
   mockLogger.info.mockClear();
   mockLogger.debug.mockClear();
   mockLogger.warn.mockClear();
@@ -769,6 +777,32 @@ describe('cloneRepository', () => {
     });
 
     test('defaults to claude when neither .codex nor .claude folder exists', async () => {
+      spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
+      expect(createCall[0].ai_assistant_type).toBe('claude');
+    });
+
+    test('uses configured provider when no .codex or .claude folder exists', async () => {
+      mockLoadConfig.mockResolvedValue({ assistant: 'pi' });
+      spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ ai_assistant_type: 'pi' }) as ReturnType<typeof makeCodebase>
+      );
+
+      await cloneRepository('https://github.com/owner/repo');
+
+      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
+      expect(createCall[0].ai_assistant_type).toBe('pi');
+    });
+
+    test('falls back to claude when loadConfig fails', async () => {
+      mockLoadConfig.mockRejectedValue(new Error('config load failed'));
       spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
