@@ -174,20 +174,6 @@ describe('getWorkflowCategory', () => {
     expect(getWorkflowCategory('archon-assist', 'General help')).toBe('Development');
     expect(getWorkflowCategory('archon-idea-to-pr', 'From idea to PR')).toBe('Development');
   });
-
-  test('groups PRD pipeline workflows under PRD Pipeline (overrides keyword inference)', () => {
-    // These four would otherwise fall under Code Review (workflow 4 mentions "review"),
-    // Development (plan/implement keywords), or Automation. The explicit set check
-    // above the keyword inference keeps them grouped as one pipeline.
-    expect(getWorkflowCategory('archon-brainstorm-to-prd', 'Brainstorm to PRD')).toBe(
-      'PRD Pipeline'
-    );
-    expect(getWorkflowCategory('archon-prd-to-plan', 'Plan from PRD')).toBe('PRD Pipeline');
-    expect(getWorkflowCategory('archon-plan-to-stories', 'Stories from plan')).toBe('PRD Pipeline');
-    expect(getWorkflowCategory('archon-execute-story', 'Implement a story end-to-end')).toBe(
-      'PRD Pipeline'
-    );
-  });
 });
 
 describe('getWorkflowTags', () => {

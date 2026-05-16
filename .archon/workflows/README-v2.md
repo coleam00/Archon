@@ -1,8 +1,8 @@
 # Archon v2 Workflows — Side-by-Side Test Bench
 
-This directory contains v2 forks of two Archon workflows, designed to fix the
-quality issues observed in the Memexia audit (2026-04-30). The originals live
-under `.archon/workflows/defaults/` (bundled) and continue to work unchanged.
+This directory contains v2 forks of two Archon workflows, designed to fix
+recurring quality issues seen in prior audits. The originals live under
+`.archon/workflows/defaults/` (bundled) and continue to work unchanged.
 
 ## What's in v2
 
@@ -57,7 +57,7 @@ A consistent source of silent failures in the original ship-* workflows was bash
 
 ### 7. fix-github-issue-v2 only: extra gates
 
-- `dedup-check` — before classifying, check if the issue already has a merged PR and abort if so. Would have caught the PR #40 / #23 duplicate in Memexia.
+- `dedup-check` — before classifying, check if the issue already has a merged PR and abort if so.
 - `plan-confidence-gate` — read the plan's self-rated Confidence Score and abort if < 7.
 - `validate-gate` — after the AI's `archon-validate` node, run the project's own `validate` script as a hard gate before PR creation. Type-check alone is insufficient.
 

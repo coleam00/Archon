@@ -20,8 +20,8 @@ Even if you found zero issues, Write the JSON with empty findings array.
 # Test-Coverage Review Agent (v2)
 
 Edit tool is denied (no source modifications); Write and Bash are allowed.
-The most consistent finding across the Memexia audit was "headline fix
-shipped with zero tests for it." Be aggressive about flagging this.
+A recurring finding across prior audits was "headline fix shipped with
+zero tests for it." Be aggressive about flagging this.
 
 ## Phase 1: LOAD
 

@@ -35,7 +35,7 @@ gh pr diff $PR_NUMBER
 Look for:
 - **Swallowed errors** — `catch (e) {}`, `catch (e) { /* ignore */ }`, `.catch(() => {})`, `.catch(() => null)`
 - **Generic catches that mask bugs** — `catch (e: any)` followed by no instanceof check, just logging
-- **Inappropriate fallbacks** — silently degrading when caller expects failure (e.g., returning `{success: true, results: []}` when upstream is unreachable; this is the exact pattern Memexia issue #8 was filed about)
+- **Inappropriate fallbacks** — silently degrading when caller expects failure (e.g., returning `{success: true, results: []}` when upstream is unreachable)
 - **Missing error paths** — try blocks where the catch never re-throws and never sets a degraded state
 - **Mixed timeout / connection-refused handling** — `AbortError` and `ECONNREFUSED` both treated as "ok, return empty"
 - **Body-read silent swallow** — `resp.text().catch(() => '')`
@@ -81,7 +81,7 @@ Write both:
 
 `confirmation_check` examples for this category:
 - `! grep -nE "catch\s*\([^)]*\)\s*\{\s*\}" path/to/file.ts`  (no empty catches)
-- `grep -q "throw new MemexiaError" path/to/file.ts`  (the specific error type is now thrown)
+- `grep -q "throw new UpstreamUnavailableError" path/to/file.ts`  (the specific error type is now thrown)
 
 ## Phase 4: VALIDATE
 

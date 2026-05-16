@@ -107,43 +107,21 @@ export function getWorkflowDisplayName(name: string): string {
 }
 
 /** Workflow category for filtering. */
-export type WorkflowCategory =
-  | 'All'
-  | 'PRD Pipeline'
-  | 'CI/CD'
-  | 'Code Review'
-  | 'Automation'
-  | 'Development';
+export type WorkflowCategory = 'All' | 'CI/CD' | 'Code Review' | 'Automation' | 'Development';
 
 export const CATEGORIES: WorkflowCategory[] = [
   'All',
-  'PRD Pipeline',
   'CI/CD',
   'Code Review',
   'Automation',
   'Development',
 ];
 
-/** Workflows that make up the Memexia-backed PRD pipeline (workflows 1–4). */
-const PRD_PIPELINE_WORKFLOWS = new Set([
-  'archon-brainstorm-to-prd',
-  'archon-prd-to-plan',
-  'archon-plan-to-stories',
-  'archon-execute-story',
-]);
-
 /**
  * Derive a category from the workflow name and description.
  * Uses word-boundary checks for short tokens to avoid false positives.
  */
 export function getWorkflowCategory(name: string, description: string): WorkflowCategory {
-  // Explicit pipeline membership wins over keyword inference — the four
-  // workflows trigger 'plan'/'implement'/'review' keywords but conceptually
-  // belong together as a single PRD pipeline.
-  if (PRD_PIPELINE_WORKFLOWS.has(name)) {
-    return 'PRD Pipeline';
-  }
-
   const lower = `${name} ${description}`.toLowerCase();
 
   // Code Review
