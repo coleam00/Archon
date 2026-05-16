@@ -12,6 +12,19 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
+// Mock @archon/providers for the dynamic import in createCodebase
+mock.module('@archon/providers', () => ({
+  getRegisteredProviders: () => [
+    { id: 'claude', builtIn: true },
+    { id: 'codex', builtIn: true },
+  ],
+  isRegisteredProvider: (id: string) => ['claude', 'codex'].includes(id),
+  getRegisteredProviderNames: () => ['claude', 'codex'],
+  registerBuiltinProviders: () => {},
+  registerCommunityProviders: () => {},
+  registerProvider: () => {},
+}));
+
 import {
   createCodebase,
   getCodebase,
