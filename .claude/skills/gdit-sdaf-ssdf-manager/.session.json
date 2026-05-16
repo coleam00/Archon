@@ -1,0 +1,9 @@
+{
+  "profile_name": "cdp-ssdf",
+  "account_id": "600964781099",
+  "region": "us-gov-east-1",
+  "arn": "arn:aws-us-gov:sts::600964781099:assumed-role/AWSReservedSSO_AWSAdministratorAccess_f03003a7d16600b3/tom.moore",
+  "validated_at": "2026-05-01T15:41:27.704961",
+  "pipeline_name": "hcom-release-pipeline",
+  "artifact_bucket": "hcom-release-pipeline-artifacts-600964781099-us-gov-east-1"
+}

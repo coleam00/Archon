@@ -1,0 +1,160 @@
+skill_name: training-module-creator
+menu_version: "1.0"
+description: Create, build, and validate training modules
+
+preamble: |
+  You are using the Training Module Creator skill. This skill helps you
+  design and create drop-in training modules with SKILL.md, MENU.yaml, and
+  an HTML companion page. Select a workflow below.
+
+workflows:
+  - id: design-module
+    title: "1. Design Module"
+    prompt: |
+      Help the user design a new training module before scaffolding it.
+      This is a collaborative ideation phase — do NOT run any scripts yet.
+
+      Work through these areas conversationally (do not dump all questions at once —
+      ask 2-3 at a time, build on answers):
+
+      **1. Learning Objectives**
+      - What should students be able to do after completing this module?
+      - What specific skills or concepts does it teach?
+      - Who is the target audience? What do they already know?
+      - Are there prerequisites (other modules, tools, accounts)?
+
+      **2. Training Scenario**
+      - What concrete project or exercise will students build/do?
+        (e.g., expense-tracker used a CLI app, getting-started used a hello-world spec)
+      - Why this scenario? Does it naturally demonstrate the target concepts?
+      - What is the scope — what is IN and what is deliberately OUT?
+      - Does it require external resources (AWS account, specific tools, data)?
+
+      **3. Step Sequence**
+      - Break the module into ordered steps (aim for 5-9 steps)
+      - For each step, define:
+        - Title and estimated time
+        - What the student does (hands-on) vs learns (conceptual)
+        - What the AI prompt should accomplish
+        - The key concept / takeaway
+      - Identify which steps build on previous outputs
+      - Identify the final "wrap-up" step with summary and next steps
+
+      **4. Summary**
+      After the conversation, produce a structured summary:
+      ```
+      Module: <name>
+      Description: <one-line>
+      Audience: <who>
+      Prerequisites: <what>
+      Scenario: <what students build/do>
+
+      Steps:
+      1. <title> (<time>) — <what happens>
+      2. <title> (<time>) — <what happens>
+      ...
+      ```
+
+      Ask the user to confirm the plan. Once confirmed, tell them to select
+      workflow 2 (Scaffold Module) to create the files. The agent should save
+      the step plan in context so it can be used in the scaffold phase.
+    variations:
+      - label: Concise
+        prompt: |
+          Help me design a training module. Ask about learning objectives,
+          target audience, training scenario, and step sequence. Produce a
+          structured plan at the end.
+      - label: Minimal
+        prompt: |
+          Help me plan a new training module — objectives, scenario, and steps.
+    expect: "The agent will guide you through a collaborative design conversation, asking about objectives, audience, scenario, and step sequence. It produces a structured module plan for your approval."
+    concept: "Good training modules start with clear objectives and a concrete scenario. The design phase prevents wasted effort from building the wrong thing."
+
+  - id: scaffold-module
+    title: "2. Scaffold Module"
+    prompt: |
+      Scaffold a new training module from a design plan.
+
+      1. Check if a module design was just completed in this session (workflow 1).
+         If yes, use that plan. If no, ask the user to describe the module name
+         and step plan (or suggest running workflow 1 first).
+
+      2. Ask for the target modules directory (default: the framework-training modules path)
+
+      3. Collect the step definitions. For each planned step, build a JSON array:
+         ```json
+         [
+           {
+             "id": "step-id",
+             "title": "1. Step Title",
+             "prompt": "Full AI prompt text for this step",
+             "variations": [
+               {"label": "Concise", "prompt": "Shorter version"},
+               {"label": "Minimal", "prompt": "Minimal version"}
+             ],
+             "expect": "What to Expect text",
+             "concept": "Key Concept text",
+             "time": "10 min"
+           }
+         ]
+         ```
+         If coming from the design phase, generate the step JSON from the agreed
+         plan — fill in prompt text, variations, expect, and concept for each step.
+         The last step should have `"summary": true`.
+
+      4. Write the JSON to a temp file, then run:
+         python3 ~/.kiro/skills/training-module-creator/scripts/init_module.py --name <name> --path <path> --steps <json-file>
+
+      5. Show the created files. Remind the user to:
+         - Review and refine the generated MENU.yaml prompts
+         - Run workflow 3 (Build HTML) to generate the companion page
+         - Run workflow 4 (Validate) to check completeness
+    variations:
+      - label: Concise
+        prompt: |
+          Scaffold a training module. Use the design plan from this session
+          (or ask for one). Generate step JSON and run init_module.py --steps.
+      - label: Minimal
+        prompt: |
+          Create the module files from a design plan.
+    expect: "The agent will take the design plan, generate pre-populated MENU.yaml steps, and scaffold the module directory with real content instead of TODO placeholders."
+    concept: "The scaffold phase turns the design into files. The --steps flag pre-populates MENU.yaml so you start with real content, not empty templates."
+
+  - id: build-html
+    title: "3. Build HTML"
+    prompt: |
+      Generate an HTML companion page for a training module.
+
+      1. Ask for the module directory path
+      2. Run: python3 ~/.kiro/skills/training-module-creator/scripts/build_html.py --module <path>
+      3. Report the output file location
+      4. Explain: the HTML is generated from MENU.yaml (single source of truth)
+         and lives inside the module folder for portability
+    variations:
+      - label: Concise
+        prompt: |
+          Generate HTML for a training module. Ask for the module path, then run build_html.py.
+      - label: Minimal
+        prompt: |
+          Build the HTML companion page for a module.
+    expect: "The agent will generate a self-contained HTML file inside the module folder."
+    concept: "MENU.yaml is the single source of truth. The HTML is generated from it — never hand-edited."
+
+  - id: validate-module
+    title: "4. Validate Module"
+    prompt: |
+      Validate a training module for completeness and correctness.
+
+      1. Ask for the module directory path
+      2. Run: python3 ~/.kiro/skills/training-module-creator/scripts/validate_module.py <path>
+      3. Show the results and explain any failures
+      4. If course.html is missing or stale, suggest running build_html.py
+    variations:
+      - label: Concise
+        prompt: |
+          Validate a training module. Ask for the path, then run validate_module.py.
+      - label: Minimal
+        prompt: |
+          Check a training module for errors.
+    expect: "The agent will run validation checks and report pass/fail per check."
+    concept: "Validation catches structural issues before the module is deployed."

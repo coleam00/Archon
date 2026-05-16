@@ -65,6 +65,8 @@ function normalizeClaudeUsage(usage?: {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 }): TokenUsage | undefined {
   if (!usage) return undefined;
   const input = usage.input_tokens;
@@ -75,6 +77,12 @@ function normalizeClaudeUsage(usage?: {
     input,
     output,
     ...(typeof total === 'number' ? { total } : {}),
+    ...(typeof usage.cache_read_input_tokens === 'number'
+      ? { cacheRead: usage.cache_read_input_tokens }
+      : {}),
+    ...(typeof usage.cache_creation_input_tokens === 'number'
+      ? { cacheWrite: usage.cache_creation_input_tokens }
+      : {}),
   };
 }
 
@@ -778,7 +786,13 @@ async function* streamClaudeMessages(
         session_id?: string;
         is_error?: boolean;
         subtype?: string;
-        usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          total_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
         structured_output?: unknown;
         total_cost_usd?: number;
         stop_reason?: string | null;

@@ -1,0 +1,271 @@
+{
+  "remediation_library_version": "1.0",
+  "last_updated": "2025-09-26T07:41:00Z",
+  "description": "Registry of parameterized remediation scripts for Security Hub findings",
+  "remediations": {
+    "S3.8": {
+      "control_id": "S3.8",
+      "title": "S3 general purpose buckets should block public access",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/s3/block-public-access.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["bucket-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/s3/block-public-access.py --bucket-name BUCKET_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "created_date": "2025-09-26T07:13:00Z"
+    },
+    "S3.5": {
+      "control_id": "S3.5",
+      "title": "S3 general purpose buckets should require requests to use SSL",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/s3/enforce-ssl-only.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["bucket-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/s3/enforce-ssl-only.py --bucket-name BUCKET_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Additive bucket policy (preserves existing statements)",
+      "created_date": "2025-09-26T07:24:00Z"
+    },
+    "S3.6": {
+      "control_id": "S3.6",
+      "title": "S3 general purpose buckets should have Lifecycle configurations",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/s3/enable-lifecycle.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["bucket-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/s3/enable-lifecycle.py --bucket-name BUCKET_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Additive lifecycle rules (preserves existing rules)",
+      "created_date": "2025-09-26T07:24:00Z"
+    },
+    "S3.14": {
+      "control_id": "S3.14",
+      "title": "S3 general purpose buckets should have versioning enabled",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/s3/enable-versioning.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["bucket-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/s3/enable-versioning.py --bucket-name BUCKET_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Bucket property modification (non-destructive)",
+      "created_date": "2025-09-26T07:24:00Z"
+    },
+    "S3.17": {
+      "control_id": "S3.17",
+      "title": "S3 general purpose buckets should be encrypted at rest with AWS KMS keys",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/s3/enable-kms-encryption.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["bucket-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/s3/enable-kms-encryption.py --bucket-name BUCKET_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Safe encryption upgrade (AES256→KMS only, preserves existing KMS)",
+      "created_date": "2025-09-26T07:55:00Z"
+    },
+    "S3.11": {
+      "control_id": "S3.11",
+      "title": "S3 general purpose buckets should have event notifications enabled",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/s3/enable-event-notifications.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["bucket-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/s3/enable-event-notifications.py --bucket-name BUCKET_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Additive EventBridge notifications (preserves existing notifications)",
+      "created_date": "2025-09-26T08:18:00Z"
+    },
+    "S3.9": {
+      "control_id": "S3.9",
+      "title": "S3 general purpose buckets should have server access logging enabled",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/s3/enable-access-logging.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["bucket-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/s3/enable-access-logging.py --bucket-name BUCKET_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Conditional logging enablement (preserves existing logging configuration)",
+      "created_date": "2025-09-26T08:24:00Z"
+    },
+    "EC2.7": {
+      "control_id": "EC2.7",
+      "title": "EBS default encryption should be enabled",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/ebs/enable-default-encryption.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": [],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/ebs/enable-default-encryption.py --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Conditional encryption enablement (preserves existing KMS key configuration)",
+      "created_date": "2025-09-26T09:55:00Z"
+    },
+    "Macie.1": {
+      "control_id": "Macie.1",
+      "title": "Macie should be enabled",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/macie/enable-macie.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": [],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/macie/enable-macie.py --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Conditional service enablement (preserves existing Macie configuration)",
+      "created_date": "2025-09-26T09:55:00Z"
+    },
+    "APIGateway.3": {
+      "control_id": "APIGateway.3",
+      "title": "API Gateway REST API stages should have AWS X-Ray tracing enabled",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/apigateway/enable-xray-tracing.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["api-id", "stage-name"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/apigateway/enable-xray-tracing.py --api-id API_ID --stage-name STAGE_NAME --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Conditional X-Ray enablement (preserves existing stage configuration)",
+      "created_date": "2025-09-26T09:55:00Z"
+    },
+    "CloudWatch.All": {
+      "control_id": "CloudWatch.1-14",
+      "title": "CloudWatch log metric filters and alarms for security monitoring",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/cloudwatch/create-log-metric-filter.py",
+      "bulk_script_path": "specs/features/security-compliance/remediation-library/scripts/cloudwatch/bulk-remediate-cloudwatch.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["control-id"],
+        "optional": ["log-group", "profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/cloudwatch/create-log-metric-filter.py --control-id CloudWatch.1 --finding-id FINDING_ID",
+      "bulk_usage": "python3 specs/features/security-compliance/remediation-library/scripts/cloudwatch/bulk-remediate-cloudwatch.py",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL", "CIS_CONTROLS"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Additive metric filters and alarms (preserves existing CloudWatch configuration)",
+      "findings_covered": 13,
+      "created_date": "2025-09-26T16:15:00Z"
+    },
+    "VPC.Endpoints": {
+      "control_id": "EC2.55,EC2.56,EC2.57,EC2.58,EC2.60,EC2.10",
+      "title": "VPC interface endpoints for AWS services",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/vpc/create-vpc-endpoint.py",
+      "bulk_script_path": "specs/features/security-compliance/remediation-library/scripts/vpc/bulk-remediate-vpc.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["control-id", "vpc-id"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/vpc/create-vpc-endpoint.py --control-id EC2.57 --vpc-id VPC_ID --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Additive VPC endpoints (preserves existing network configuration)",
+      "findings_covered": 6,
+      "created_date": "2025-09-26T16:30:00Z"
+    },
+    "VPC.FlowLogs": {
+      "control_id": "EC2.6",
+      "title": "VPC flow logging should be enabled in all VPCs",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/vpc/enable-flow-logs.py",
+      "remediation_type": "AWS_CLI",
+      "parameters": {
+        "required": ["vpc-id"],
+        "optional": ["profile", "region", "dry-run", "finding-id"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/vpc/enable-flow-logs.py --vpc-id VPC_ID --finding-id FINDING_ID",
+      "compliance_frameworks": ["NIST_800_171", "SOC2", "AWS_FOUNDATIONAL"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Additive flow logging (preserves existing VPC configuration)",
+      "findings_covered": 1,
+      "created_date": "2025-09-26T16:30:00Z"
+    },
+    "CircularDependency.Suppression": {
+      "control_id": "S3.9-CircularDependency",
+      "title": "Suppress S3.9 findings for access log buckets (circular dependency)",
+      "script_path": "specs/features/security-compliance/remediation-library/scripts/securityhub/suppress-circular-dependency-findings.py",
+      "remediation_type": "SECURITY_HUB_SUPPRESSION",
+      "parameters": {
+        "required": [],
+        "optional": ["profile", "region", "dry-run"]
+      },
+      "usage": "python3 specs/features/security-compliance/remediation-library/scripts/securityhub/suppress-circular-dependency-findings.py",
+      "compliance_frameworks": ["AWS_FOUNDATIONAL", "ARCHITECTURAL_LIMITATION"],
+      "reusable": true,
+      "tested": true,
+      "iam_safe": true,
+      "iam_safe_method": "Security Hub finding suppression (no infrastructure changes)",
+      "findings_covered": 5,
+      "suppression_reason": "Circular dependency - access log buckets cannot log to themselves (AWS architectural limitation)",
+      "created_date": "2025-09-26T17:42:00Z"
+    }
+  },
+  "remediation_types": {
+    "CLOUDFORMATION": "Remediation through CloudFormation template updates",
+    "AWS_CLI": "Remediation through direct AWS API calls", 
+    "ACCOUNT_CONFIG": "Account-level configuration changes",
+    "MANUAL": "Manual remediation steps required"
+  },
+  "usage_workflow": {
+    "1_check_registry": "Check if remediation script exists for control ID",
+    "2_reuse_or_create": "Reuse existing script or create new parameterized script",
+    "3_execute": "Run script with finding-specific parameters",
+    "4_validate": "Confirm remediation success with validation framework",
+    "5_update_registry": "Add new scripts to registry for future reuse"
+  },
+  "integration_points": {
+    "discovery": "scripts/security-hub-discovery.py",
+    "validation": "scripts/validate-security-compliance.py", 
+    "status_update": "scripts/update-security-hub-status.py",
+    "dashboard": "scripts/generate-compliance-dashboard.py"
+  }
+}

@@ -1,0 +1,490 @@
+---
+skill_name: ssdf-compliance-mapping
+menu_version: "1.6"
+description: NIST SP 800-218 compliance mapping, gap analysis, and artifact generation
+
+workflows:
+  - id: select-profile
+    label: "Select Pipeline Profile"
+    description: "Pick a pipeline profile for this project"
+    instructions: |
+      Select an SSDF pipeline profile for this project.
+
+      IMPORTANT: Pipeline profiles describe CI/CD pipelines that exist
+      externally as shared infrastructure. Projects are consumers of a
+      pipeline — they do NOT contain the pipeline's IaC, buildspecs, or
+      scanner configs. Do NOT scan the project for pipeline artifacts to
+      verify alignment. The profile IS the source of truth for pipeline
+      capabilities. Only the pipeline project itself (or the pipeline
+      team) can modify profiles via manage-profiles.
+
+      Steps:
+      1. List available profiles from assets/pipeline-profiles/.
+         Read each YAML and present as numbered menu:
+         - Profile ID (filename without .yaml)
+         - Name and description
+         - Platform, stage count, estimated coverage
+         Also offer: "none — describe my pipeline manually"
+
+      2. User selects a profile. They know which pipeline serves their project.
+
+      3. Scan the project ONLY for project-level context needed for mapping:
+         a. Steering rules — check LOCAL then GLOBAL:
+            Local:  {project}/.kiro/steering/
+            Global: ~/.kiro/steering/
+            Record which path resolved (local or global).
+         b. Existing compliance docs — check for:
+            - docs/compliance-by-family/ (standardized path)
+            - Any other compliance docs (note for migration)
+         Do NOT scan for or ask about project specs (requirements.md,
+         tasks.md, etc.). SSDF mappings document how the pipeline meets
+         NIST controls — the pipeline profile contains all implementation
+         details. Project feature specs are not relevant to SSDF mapping.
+
+      4. Report what was found:
+         - "Steering rules: {local|global} at {path}"
+         - "Existing compliance docs: {found|none}"
+         No profile variations are proposed — the profile is accepted as-is.
+
+      5. Write profile ID to docs/compliance-by-family/.profile-id
+         Create the directory if it doesn't exist.
+
+      6. If "none" selected: ask about platform, stages, tools, controls.
+         Build profile from answers, generate GUID, save to library,
+         write .profile-id.
+
+      See references/PIPELINE-PROFILES.md for naming and structure.
+    parameters:
+      - name: project_path
+        required: false
+        prompt: "Project root path (default: current directory)"
+        default: "."
+
+  - id: create-family-mapping
+    label: "Create Control Family Mapping"
+    description: "Generate per-family compliance mapping document"
+    instructions: |
+      Create a compliance mapping document for a NIST 800-218 control family.
+
+      Prerequisites: docs/compliance-by-family/.profile-id must exist.
+      If missing, tell the user: ".profile-id not found — run the select-profile
+      workflow first to choose a pipeline profile." Do not proceed without it.
+
+      Steps:
+      1. Ask which family: PO, PS, PW, or RV
+      2. Read .profile-id, load profile from assets/pipeline-profiles/
+      2.5. If sysml.enabled in project.yaml, scan .kiro/specs/*/model.sysml for
+         ComplianceGraph blocks. Extract satisfy relationships targeting the
+         requested family practices (e.g., PW_* for PW family). Build
+         component-to-practice map. Corporate policy references come directly
+         from requirement def doc strings (after the | separator). Present as
+         "SysML Graph Evidence" subsection in each sub-practice mapping.
+         Pipeline profile remains source of truth for CI/CD capabilities —
+         ComplianceGraph adds structured implementation and org policy evidence.
+         If no ComplianceGraph blocks exist, skip this step silently.
+      3. Read references/NIST.SP.800-218.pdf — this is the authoritative source.
+         Extract the exact sub-practice IDs and descriptions for the requested
+         family from Table 1. Every sub-practice in the PDF must appear in the
+         mapping. No sub-practices may be added or removed. Use the PDF text
+         for section headers and NIST Definition fields.
+      4. Read references/COMPLIANCE-MAPPING-FORMAT.md for document structure
+      5. Read references/NIST-800-218-PRACTICES.md as a quick-reference index
+         (but defer to the PDF if any discrepancy)
+      6. Read references/SUB-PRACTICE-TIERS.md to classify each sub-practice:
+         - T1 (Pipeline-Assessable): full mapping with implementation, evidence,
+           validation, gaps
+         - T2 (Organization-Deferred): abbreviated section with NIST definition,
+           statement that this is an organizational process outside pipeline scope,
+           org standards crosswalk citations as evidence, status 🏢 Organization-Deferred.
+           Do NOT generate pipeline gaps or remediation tasks for T2 sub-practices.
+      7. Read references/EVIDENCE-PATTERNS.md for platform commands
+      8. Read references/ORG-STANDARDS-SSDF-CROSSWALK.md for org policy alignment
+      9. For each sub-practice (verified against PDF):
+         IF T1 (Pipeline-Assessable):
+         a. Paraphrase NIST definition and notional examples
+         b. Map profile capabilities using pipeline_stages[].nist_mapping
+            AND pipeline_stages[].artifacts. The nist_mapping field shows
+            which sub-practices a stage directly addresses. The artifacts
+            field shows what evidence each stage produces and which tool
+            creates it. When documenting pipeline implementation, build a
+            table with columns: Stage | Tool | Artifact — so auditors can
+            trace each artifact to the specific tool that creates it.
+            This is critical for sub-practices about artifact generation
+            (e.g., PO.3.3) and integrity (e.g., PS.2.1).
+            The profile describes the pipeline's capabilities. All pipeline
+            implementation details come from the profile — not from scanning
+            the project for pipeline artifacts.
+            NEVER infer or fabricate capabilities not explicitly in the
+            profile. If a tool, service, or endpoint is not listed in the
+            profile YAML, it does not exist. Do not assume related services
+            (e.g., Lambda does NOT imply API Gateway).
+         c. Cross-reference steering rules for additional context:
+            - Steering rules: check LOCAL then GLOBAL:
+              Local: {project}/.kiro/steering/
+              Global: ~/.kiro/steering/
+            Record actual resolved paths in evidence.
+            Do NOT cross-reference project feature specs (requirements.md,
+            tasks.md, etc.) — SSDF mappings are about the pipeline, and
+            the profile contains all pipeline implementation details.
+         d. Cross-reference org standards from ORG-STANDARDS-SSDF-CROSSWALK.md:
+            Add an "Organization Standards Alignment" section citing the
+            specific document ID and section that supports the sub-practice.
+         e. List evidence with platform-appropriate commands
+         f. Provide validation commands
+         g. Assess gaps — check profile known_gaps
+
+         IF T2 (Organization-Deferred):
+         a. Paraphrase NIST definition (brief)
+         b. State: "This sub-practice is an organizational process outside
+            the scope of pipeline technical assessment."
+         c. Cite org standards from ORG-STANDARDS-SSDF-CROSSWALK.md as
+            the primary evidence that the organization addresses this control.
+            List each relevant org standard with document ID and section
+            number, exactly as they appear in the crosswalk. This gives
+            auditors a direct reference to the organizational policy that
+            satisfies the sub-practice.
+         d. Status: 🏢 Organization-Deferred
+         e. No pipeline gaps, no remediation tasks
+
+      10. Create coverage summary table. In the summary:
+          - Count T1 sub-practices separately from T2
+          - Show T2 sub-practices as "🏢 Organization-Deferred" in the table
+          - Calculate Implemented/Partial/Not Implemented percentages
+            based on T1 sub-practices only
+      11. Write to docs/compliance-by-family/{FAMILY}-{NAME}.md
+    parameters:
+      - name: family
+        required: true
+        prompt: "Control family to map (PO, PS, PW, or RV)"
+
+  - id: analyze-gaps
+    label: "Analyze Gaps for Control Family"
+    description: "Review mapping document and create gap remediation plan"
+    instructions: |
+      Create a gap remediation plan from an existing family mapping document.
+
+      Prerequisites: Family mapping document must exist in docs/compliance-by-family/.
+      If missing, tell the user: "No mapping found for {FAMILY} — run the
+      create-family-mapping workflow first." Do not proceed without it.
+
+      If all sub-practices are ✅ Implemented with only minor gaps noted,
+      still create a GAP-REMEDIATION.md documenting the improvement items.
+      Set the gap inventory status to "✅ Implemented (minor)" and priority
+      to "Low" for these items. This ensures every family with any noted
+      gaps has a remediation plan, even if coverage is 100%.
+
+      Steps:
+      1. Ask which family (or auto-detect from available mappings)
+      2. Read family mapping from docs/compliance-by-family/
+      3. Load pipeline profile via .profile-id
+      4. Read references/SUB-PRACTICE-TIERS.md to identify T2 sub-practices
+      5. Use assets/templates/GAP-REMEDIATION.md as template
+      6. Extract all gaps from T1 (Pipeline-Assessable) sub-practices ONLY.
+         Skip T2 (Organization-Deferred) sub-practices — they do not
+         generate pipeline gaps or remediation tasks.
+      6.5. When ComplianceGraph data is available (sysml.enabled and model.sysml
+         files with ComplianceGraph blocks exist), classify gaps as:
+         - Implementation gap: no satisfy relationship for the practice
+         - Test gap: satisfy exists but no verify relationship
+         - Evidence gap: satisfy + verify exist but no commit evidence
+         Present this three-tier classification in the gap inventory table.
+         When no ComplianceGraph data is available, use the existing binary
+         classification (implemented vs not implemented).
+      7. For each gap: risk (LOW/MEDIUM/HIGH), type (Doc/Process/Technical), effort, priority
+      7. Break into subtasks with recommended content
+      8. Identify needed artifact templates from assets/templates/
+      9. Create prioritized roadmap
+      10. Calculate expected coverage improvement
+      11. Write to docs/compliance-by-family/{FAMILY}/GAP-REMEDIATION.md
+    parameters:
+      - name: family
+        required: true
+        prompt: "Control family to analyze (PO, PS, PW, or RV)"
+
+  - id: scaffold-artifacts
+    label: "Scaffold Gap Remediation Artifacts"
+    description: "Generate template documents for each identified gap"
+    instructions: |
+      Scaffold artifacts needed to close gaps in a GAP-REMEDIATION.md.
+
+      Prerequisites: GAP-REMEDIATION.md must exist for the family.
+      If missing, tell the user: "No gap remediation plan found for {FAMILY} —
+      run the analyze-gaps workflow first." Do not proceed without it.
+
+      Steps:
+      1. Read docs/compliance-by-family/{FAMILY}/GAP-REMEDIATION.md
+      2. Load pipeline profile via .profile-id for context
+      3. Find all "Create ..." references in the gap doc
+      4. For each, select matching template from assets/templates/
+      5. Customize: project name from profile, current date, fill TODOs with gap context
+
+         CRITICAL: Only reference tools, services, stages, and capabilities
+         that are explicitly listed in the profile YAML. Do NOT infer or
+         fabricate capabilities. If Lambda functions exist in the profile,
+         that does NOT mean API Gateway exists. If SAST scanners exist,
+         that does NOT mean DAST exists. Every claim must trace to a
+         specific field in the profile. When in doubt, leave a TODO
+         rather than fabricate content.
+
+      6. Determine placement:
+         - Cross-family artifacts (RISK-REGISTER, ROOT-CAUSE-ANALYSIS-TEMPLATE,
+           LESSONS-LEARNED) go in docs/compliance-by-family/SHARED/
+         - Family-specific artifacts go in docs/compliance-by-family/{FAMILY}/
+         Cross-family artifacts are those referenced by 2+ families in their
+         gap remediation plans or mapping documents.
+      7. Report what was created and where
+
+      8. POST-SCAFFOLD TRACEABILITY UPDATE:
+         After all artifacts are written, update GAP-REMEDIATION.md to record
+         which gaps now have scaffolded artifacts. For each gap in the Gap
+         Inventory table that received an artifact:
+         a. Add a new column "Artifact Status" to the Gap Inventory table
+            (if not already present). Values:
+            - `📄 Scaffolded` — artifact file created, contains TODOs
+            - `—` — no artifact created for this gap (process/config gap)
+         b. Under each gap's remediation section, append a line:
+            `**Artifact**: `{FAMILY}/{ARTIFACT-NAME}.md` — 📄 Scaffolded [DATE]`
+            or for SHARED artifacts:
+            `**Artifact**: `SHARED/{ARTIFACT-NAME}.md` — 📄 Scaffolded [DATE]`
+
+         This is informational only — it does NOT change the gap's status
+         (still open) or the mapping document's compliance status. Scaffolding
+         a template with TODOs does not close a gap.
+    parameters:
+      - name: family
+        required: true
+        prompt: "Control family to scaffold artifacts for (PO, PS, PW, or RV)"
+
+  - id: close-gap
+    label: "Close Gap (Update Compliance Status)"
+    description: "Mark a gap as remediated and propagate status to mapping doc"
+    instructions: |
+      Mark one or more gaps as remediated and update compliance status.
+
+      This is the ONLY workflow that changes compliance status in mapping
+      documents. Scaffolding artifacts does not close gaps — this workflow
+      does, after evidence is confirmed.
+
+      Prerequisites:
+      - GAP-REMEDIATION.md must exist for the family
+      - The mapping document must exist for the family
+      If either is missing, direct the user to the appropriate workflow.
+
+      Steps:
+      1. Ask which family (or accept as parameter).
+      2. Read docs/compliance-by-family/{FAMILY}/GAP-REMEDIATION.md.
+      3. Present the Gap Inventory table. Ask which gap(s) to close.
+         Accept gap numbers (e.g., "1, 3, 7") or sub-practice IDs
+         (e.g., "PW.1.1, PW.8.1").
+      4. For EACH gap the user wants to close, require evidence:
+         a. Ask: "What evidence confirms this gap is closed?"
+            Acceptable evidence:
+            - Artifact completed (no remaining TODOs relevant to the gap)
+            - Pipeline profile updated (new tool/stage added)
+            - Process documented and approved
+            - Configuration change deployed
+            - Steering rule added/updated
+         b. Verify the evidence:
+            - If artifact: check the file exists and has substantive
+              content (not just TODOs). If still full of TODOs, REJECT
+              and tell the user the artifact needs to be completed first.
+            - If profile change: verify the profile YAML field exists.
+            - If process/config: accept user attestation but note it.
+         c. If evidence is insufficient, explain what's needed and do NOT
+            close the gap. No security theater — Rule 9.
+
+      5. For each confirmed closure, update GAP-REMEDIATION.md:
+         a. In the Gap Inventory table, change the status:
+            - From `❌ Not Implemented` or `⚠️ Partial` to `✅ Remediated`
+         b. Under the gap's remediation section, append:
+            `**Closed**: [DATE] — {brief evidence summary}`
+         c. If an "Artifact Status" column exists, update from
+            `📄 Scaffolded` to `✅ Complete`
+
+      6. Update the MAPPING document
+         (docs/compliance-by-family/{FAMILY}-{NAME}.md):
+         a. Find the sub-practice section for the closed gap.
+         b. Change the status line:
+            - `❌ NOT IMPLEMENTED` → `✅ IMPLEMENTED`
+            - `⚠️ PARTIAL` → `✅ IMPLEMENTED`
+            Only upgrade to ✅ if ALL gaps for that sub-practice are
+            closed. If the sub-practice had multiple gaps and only some
+            are closed, change ❌ to ⚠️ PARTIAL (not to ✅).
+         c. Add an evidence line under the sub-practice referencing the
+            completed artifact or change:
+            `**Remediation evidence**: {artifact path or description} — closed [DATE]`
+         d. Update the Coverage Summary table at the bottom of the
+            mapping document to reflect the new status.
+         e. Update the summary counts:
+            `**Implemented**: X of Y sub-practices (Z%)`
+            Recalculate all three lines (Implemented, Partial, Not Implemented).
+
+      7. Update GAP-REMEDIATION.md header stats:
+         Recalculate the "Current State" section counts to match the
+         updated mapping document.
+
+      8. Update the "Expected Coverage After Remediation" table if present,
+         moving the "Current" column to reflect actual state.
+
+      9. Report summary:
+         - Which gaps were closed
+         - New compliance percentages
+         - Remaining open gaps
+
+      IMPORTANT: This workflow does NOT modify the pipeline profile.
+      If the gap closure requires a profile change (e.g., new scanner),
+      the user must run manage-profiles first, then come back to close-gap.
+    parameters:
+      - name: family
+        required: true
+        prompt: "Control family (PO, PS, PW, or RV)"
+      - name: gaps
+        required: false
+        prompt: "Gap numbers or sub-practice IDs to close (e.g., '1, 3' or 'PW.1.1, PW.8.1')"
+
+  - id: validate-docs
+    label: "Validate Compliance Documentation"
+    description: "Check completeness and consistency of all compliance docs"
+    instructions: |
+      Run: python3 ~/.kiro/skills/ssdf-compliance-mapping/scripts/validate_compliance.py {project_path}
+
+      Review output and for each finding, recommend the corrective workflow:
+      - ".profile-id NOT FOUND" → run select-profile
+      - "profile not found in library" → run manage-profiles to verify library
+      - "Mapping: NOT FOUND" for a family → run create-family-mapping for that family
+      - "Missing sub-practice section" → run update-mapping to add the missing section
+      - "Gap Remediation: NOT FOUND" → run analyze-gaps for that family
+      - "Referenced artifact not yet created" → run scaffold-artifacts for that family
+      - "Missing Coverage Summary" → run update-mapping to add summary table
+
+      After reporting, ask: "Want me to run any of these corrective workflows now?"
+    parameters:
+      - name: project_path
+        required: false
+        prompt: "Project root path (default: current directory)"
+        default: "."
+
+  - id: update-mapping
+    label: "Update Mapping (Delta Change)"
+    description: "Update specific sections after a project change"
+    instructions: |
+      Update compliance docs after a project change.
+
+      Prerequisites: docs/compliance-by-family/.profile-id must exist.
+      If missing, tell the user: ".profile-id not found — run the select-profile
+      workflow first." Do not proceed without it.
+
+      Steps:
+      1. Ask what changed.
+
+      2. Load current pipeline profile via .profile-id.
+
+      3. Determine if the change requires a new profile variation:
+         - New/removed stage or tool → new profile needed
+         - Infrastructure control change → new profile needed
+         - Doc/process gap closed → profile unchanged, just update mapping
+         If new profile needed, follow the manage-profiles "create variation"
+         process (copy base, apply change, generate GUID, save, update .profile-id).
+
+      4. Identify ALL affected families. A single change can impact multiple families.
+         Example: adding a DAST scanner affects PW (PW.8 testing) and possibly
+         RV (RV.1 vulnerability detection). List affected families and confirm
+         with user before proceeding.
+
+      5. For each affected family:
+         a. Update the mapping doc sections where the change applies
+         b. Update GAP-REMEDIATION.md if a gap was closed or a new gap introduced
+         c. If a gap was closed, update the coverage summary and roadmap
+
+      6. Run validate-docs workflow to verify consistency.
+    parameters:
+      - name: change_description
+        required: true
+        prompt: "What changed? (e.g., 'Added OWASP ZAP DAST to Stage 2')"
+
+  - id: manage-profiles
+    label: "Manage Pipeline Profiles"
+    description: "List, view, create, or delete pipeline profiles in the library"
+    instructions: |
+      Manage the SSDF pipeline profile library.
+
+      Sub-options (present as menu):
+      a. List profiles — summary table of all profiles in assets/pipeline-profiles/
+      b. View profile — display a specific profile in detail
+      c. Create variation — copy existing, apply changes, new GUID, save
+      d. Delete profile — remove from library (with safety checks)
+
+      For creating variations:
+      1. User selects base profile
+      2. Describe differences
+      3. Copy base, apply changes, update known_gaps
+      4. Generate GUID: python3 -c "import secrets; print(secrets.token_hex(3)[:5])"
+      5. Save as {platform}-{variant}-{guid}.yaml
+      6. Update profile.id inside the YAML to match filename (without .yaml)
+
+      For deleting profiles:
+      1. Show the profile to confirm identity
+      2. Check if the current project's .profile-id references this profile
+      3. Warn: "Other projects may also reference this profile. Deletion only
+         removes it from the library — any project with this ID in .profile-id
+         will fail validation."
+      4. Require explicit confirmation before deleting
+
+      See references/PIPELINE-PROFILES.md for naming conventions.
+    parameters: []
+
+  - id: full-compliance-cycle
+    label: "Full Compliance Cycle (All Families)"
+    description: "Select profile, map all families, gap analysis, scaffold, validate"
+    instructions: |
+      Complete SSDF compliance cycle for all 4 control families.
+      This orchestrates the other workflows in sequence. Confirm with user
+      before each phase.
+
+      Phase 1 — Profile Selection:
+        Execute the select-profile workflow.
+
+      Phase 2 — Mapping:
+        Execute create-family-mapping for each family: PO, PS, PW, RV.
+
+      Phase 3 — Gap Analysis:
+        Execute analyze-gaps for each family: PO, PS, PW, RV.
+
+      Phase 4 — Scaffold Artifacts:
+        Execute scaffold-artifacts for each family: PO, PS, PW, RV.
+        After scaffolding, GAP-REMEDIATION.md files are annotated with
+        artifact creation status (📄 Scaffolded). This does NOT close gaps.
+
+      Phase 4b — Close Gaps (optional, user-driven):
+        If the user has completed any artifacts or implemented processes,
+        execute close-gap for the relevant families. This is the only
+        step that updates compliance status in mapping documents.
+        Skip if no gaps are ready to close.
+
+      Phase 5 — Validation:
+        Execute validate-docs workflow.
+
+      Expected output structure:
+      ```
+      docs/compliance-by-family/
+      ├── .profile-id
+      ├── PO-PREPARE-ORGANIZATION.md
+      ├── PO/
+      │   ├── GAP-REMEDIATION.md
+      │   └── {scaffolded artifacts}
+      ├── PS-PROTECT-SOFTWARE.md
+      ├── PS/
+      │   ├── GAP-REMEDIATION.md
+      │   └── {scaffolded artifacts}
+      ├── PW-PRODUCE-WELL-SECURED-SOFTWARE.md
+      ├── PW/
+      │   ├── GAP-REMEDIATION.md
+      │   └── {scaffolded artifacts}
+      ├── RV-RESPOND-VULNERABILITIES.md
+      ├── RV/
+      │   ├── GAP-REMEDIATION.md
+      │   └── {scaffolded artifacts}
+      └── SHARED/
+          └── {cross-family artifacts}
+      ```
+    parameters: []

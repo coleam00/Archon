@@ -1,0 +1,179 @@
+name: gdit-sdaf-idea-to-pr
+description: |
+  Use when: You have a feature idea and want spec-first, compliance-tracked end-to-end development.
+  Input: Feature description in natural language, or path to a PRD/brief
+  Output: PR with GDIT specs (.kiro/specs/<feature>/), compliance-tagged commits, full review
+
+  Full workflow:
+  1. Verify GDIT setup (guard node)
+  2. Create GDIT spec (requirements.md, design.md, tasks.md)
+  3. Validate spec with validate-spec.py
+  4. Setup branch (Archon plan-setup)
+  5. Implement with GDIT protocol + Archon validation loops
+  6. Security scan (gitleaks, semgrep, trivy, checkov)
+  7. Compliance-tagged git checkpoint
+  8. Finalize PR
+  9. 6-agent parallel review (5 Archon agents + GDIT audit)
+  10. Synthesize findings and fix
+  11. Final summary
+
+  NOT for: Executing existing specs (use gdit-sdaf-plan-to-pr), quick fixes.
+provider: claude
+model: sonnet
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 0: GUARD
+  # ═══════════════════════════════════════════════════════════════════
+  - id: guard-setup
+    bash: |
+      if [ ! -f "$HOME/.kiro/scripts/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at ~/.kiro/scripts/."
+        echo "Run 'gdit-sdaf-setup' workflow first, then retry."
+        exit 1
+      fi
+      echo "GDIT setup verified."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 1: CREATE SPEC
+  # ═══════════════════════════════════════════════════════════════════
+  - id: create-spec
+    command: gdit-sdaf-spec-create
+    depends_on: [guard-setup]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 2: VALIDATE SPEC
+  # ═══════════════════════════════════════════════════════════════════
+  - id: validate-spec
+    command: gdit-sdaf-spec-validate
+    depends_on: [create-spec]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 3: BRANCH SETUP
+  # ═══════════════════════════════════════════════════════════════════
+  - id: plan-setup
+    command: archon-plan-setup
+    depends_on: [validate-spec]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 4: IMPLEMENT
+  # ═══════════════════════════════════════════════════════════════════
+  - id: implement-tasks
+    command: gdit-sdaf-implement
+    depends_on: [plan-setup]
+    context: fresh
+    model: opus
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 5: VALIDATE (SECURITY + ARCHON)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: security-scan
+    command: gdit-sdaf-validate
+    depends_on: [implement-tasks]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 6: GIT CHECKPOINT
+  # ═══════════════════════════════════════════════════════════════════
+  - id: checkpoint
+    command: gdit-sdaf-checkpoint
+    depends_on: [security-scan]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 7: FINALIZE PR
+  # ═══════════════════════════════════════════════════════════════════
+  - id: finalize-pr
+    command: archon-finalize-pr
+    depends_on: [checkpoint]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 8: VERIFY PR BASE
+  # ═══════════════════════════════════════════════════════════════════
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      BRANCH=$(git branch --show-current)
+      if [ "$FORGE_PROVIDER" = "gitlab" ]; then
+        MR_DATA=$(glab mr list --source-branch "$BRANCH" --output json --limit 1 2>/dev/null || echo "[]")
+        ACTUAL=$(echo "$MR_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['target_branch'] if d else '')" 2>/dev/null || echo "")
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          MR_IID=$(echo "$MR_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['iid'] if d else '')")
+          glab mr update "$MR_IID" --target-branch "$EXPECTED"
+        fi
+      else
+        ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName' 2>/dev/null || echo "")
+        if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$EXPECTED" ]; then
+          PR_NUMBER=$(gh pr view --json number -q '.number')
+          gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+        fi
+      fi
+    depends_on: [finalize-pr]
+
+  - id: review-scope
+    command: archon-pr-review-scope
+    depends_on: [verify-pr-base]
+    context: fresh
+
+  - id: sync
+    command: archon-sync-pr-with-main
+    depends_on: [review-scope]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 9: 6-AGENT PARALLEL REVIEW
+  # ═══════════════════════════════════════════════════════════════════
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: gdit-audit
+    command: gdit-sdaf-audit
+    depends_on: [sync]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 10: SYNTHESIZE + FIX
+  # ═══════════════════════════════════════════════════════════════════
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on:
+      [code-review, error-handling, test-coverage, comment-quality, docs-impact, gdit-audit]
+    trigger_rule: one_success
+    context: fresh
+
+  - id: implement-fixes
+    command: archon-implement-review-fixes
+    depends_on: [synthesize]
+    context: fresh
+
+  - id: workflow-summary
+    command: archon-workflow-summary
+    depends_on: [implement-fixes]
+    context: fresh

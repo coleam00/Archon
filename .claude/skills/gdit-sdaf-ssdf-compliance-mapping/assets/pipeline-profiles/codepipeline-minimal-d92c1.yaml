@@ -1,0 +1,149 @@
+# Pipeline Profile: AWS CodePipeline — Minimal
+# A basic CodePipeline with source, security scanning, packaging, and deploy.
+# No Security Hub integration, no signing, no SBOM, no approval gate.
+# Starting point for teams beginning their SSDF compliance journey.
+
+profile:
+  id: codepipeline-minimal-d92c1
+  name: "AWS CodePipeline — Minimal"
+  description: "4-stage CodePipeline with basic SAST and secrets detection"
+  ci_platform: codepipeline
+  iac_type: cloudformation
+  ssdf_coverage: "~12 of 25 applicable technical sub-practices (~48%)"
+
+pipeline_stages:
+  - name: "Source"
+    stage_number: 1
+    purpose: "CodeCommit or S3 source"
+    tools: ["codecommit"]
+    artifacts:
+      - file: "source-artifact"
+        tool: "codecommit"
+        description: "Source code snapshot from CodeCommit or S3"
+    blocks_on_failure: true
+    nist_mapping: ["PS.1.1"]
+
+  - name: "Build"
+    stage_number: 2
+    purpose: "Build and basic security scanning"
+    tools: ["semgrep", "gitleaks"]
+    artifacts:
+      - file: "semgrep-report.json"
+        tool: "semgrep"
+        description: "SAST findings"
+      - file: "gitleaks-report.json"
+        tool: "gitleaks"
+        description: "Secret detection results"
+      - file: "build-output"
+        tool: "pipeline-logic"
+        description: "Compiled build output"
+    blocks_on_failure: true
+    nist_mapping: ["PW.5.1", "PW.7.2", "RV.1.1"]
+
+  - name: "Package"
+    stage_number: 3
+    purpose: "Package application artifacts"
+    tools: []
+    artifacts:
+      - file: "application-package"
+        tool: "pipeline-logic"
+        description: "Packaged application artifacts"
+    blocks_on_failure: true
+    nist_mapping: ["PW.6.1"]
+
+  - name: "Deploy"
+    stage_number: 4
+    purpose: "Deploy to target environment"
+    tools: ["cloudformation"]
+    artifacts:
+      - file: "deploy-output"
+        tool: "cloudformation"
+        description: "Deployment output and stack events"
+    blocks_on_failure: true
+    nist_mapping: []
+
+security_scanning:
+  sast:
+    enabled: true
+    tool: "semgrep"
+    rulesets: ["security-audit"]
+    severity_threshold: "ERROR"
+    report_format: "json"
+    command: "semgrep --config=p/security-audit --severity=ERROR --json --output=semgrep-report.json ."
+
+  secrets_detection:
+    enabled: true
+    tool: "gitleaks"
+    blocks_pipeline: true
+    command: "gitleaks detect --source=. --no-git --report-path=gitleaks-report.json"
+
+  sca:
+    enabled: false
+  iac_scanning:
+    enabled: false
+  dast:
+    enabled: false
+  container_scanning:
+    enabled: false
+
+infrastructure:
+  encryption_at_rest: true
+  encryption_in_transit: true
+  vpc_isolation: false
+  least_privilege_iam: true
+  secrets_management:
+    enabled: true
+    service: "aws-secrets-manager"
+  logging:
+    enabled: true
+    service: "cloudwatch"
+    retention_days: 30
+
+integrity:
+  code_signing:
+    enabled: false
+  checksums:
+    enabled: false
+  sbom:
+    enabled: false
+  release_manifest:
+    enabled: false
+
+vulnerability_management:
+  tracking_system: ""
+  severity_scoring: ""
+  auto_resolution: false
+  sla_defined: false
+
+processes:
+  peer_code_review:
+    enabled: false
+  design_review:
+    enabled: false
+  secure_coding_guidelines:
+    enabled: false
+  threat_modeling:
+    enabled: false
+  security_training:
+    enabled: false
+  change_advisory_board:
+    enabled: false
+  incident_response:
+    enabled: false
+
+approval:
+  manual_approval_required: false
+  approval_mechanism: ""
+  notification_method: ""
+
+known_gaps:
+  - sub_practice: "PW.8.1"
+    description: "No DAST or executable testing"
+  - sub_practice: "PW.8.2"
+    description: "No executable testing"
+  - sub_practice: "PS.2.1"
+    description: "No code signing or checksums"
+  - sub_practice: "PS.3.2"
+    description: "No SBOM or provenance tracking"
+  - sub_practice: "RV.2.1"
+    description: "No vulnerability tracking system"

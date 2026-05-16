@@ -1,0 +1,154 @@
+name: archon-estimate-effort
+description: |
+  Use when: Estimating effort, cost, and duration for a workflow before running it.
+  Triggers: "estimate effort", "how long will this take", "estimate cost",
+            "how expensive is", "estimate workflow", "effort estimate".
+  Does: Reads historical metrics from ~/.archon/metrics/runs-*.jsonl and computes
+        percentile estimates (p50/p90) for wall-clock time and USD cost.
+        Breaks down by scope (small/medium/large) when available.
+        Handles cold start gracefully (< 5 runs → reports available data + notes insufficient sample).
+  NOT for: Running workflows, reviewing code, or creating plans.
+
+nodes:
+  - id: estimate
+    bash: |
+      set -euo pipefail
+
+      WORKFLOW_TARGET="$ARGUMENTS"
+      METRICS_DIR="$HOME/.archon/metrics"
+
+      # Verify jq is available
+      if ! command -v jq &>/dev/null; then
+        echo '{"status":"error","message":"jq is required but not installed. Install it with: sudo apt-get install jq (Linux) or brew install jq (macOS)"}'
+        exit 0
+      fi
+
+      # Collect all JSONL files
+      JSONL_FILES=()
+      while IFS= read -r -d '' f; do
+        JSONL_FILES+=("$f")
+      done < <(find "$METRICS_DIR" -maxdepth 1 -name 'runs-*.jsonl' -print0 2>/dev/null | sort -z)
+
+      if [ ${#JSONL_FILES[@]} -eq 0 ]; then
+        echo "{\"status\":\"no_data\",\"message\":\"No metrics data found yet. Run some workflows first — each run writes a record to $METRICS_DIR/runs-YYYY-MM.jsonl.\"}"
+        exit 0
+      fi
+
+      # Concatenate all records
+      ALL_RUNS=$(cat "${JSONL_FILES[@]}")
+
+      if [ -z "$ALL_RUNS" ]; then
+        echo "{\"status\":\"no_data\",\"message\":\"Metrics files exist but contain no records yet.\"}"
+        exit 0
+      fi
+
+      TOTAL_RUNS=$(echo "$ALL_RUNS" | wc -l | tr -d ' ')
+
+      # Filter to the target workflow if specified
+      if [ -n "$WORKFLOW_TARGET" ]; then
+        # Try exact match first, then substring
+        FILTERED=$(echo "$ALL_RUNS" | jq -c --arg w "$WORKFLOW_TARGET" 'select(.workflow == $w)')
+        if [ -z "$FILTERED" ]; then
+          FILTERED=$(echo "$ALL_RUNS" | jq -c --arg w "$WORKFLOW_TARGET" 'select(.workflow | ascii_downcase | contains($w | ascii_downcase))')
+        fi
+        SCOPE_LABEL="$WORKFLOW_TARGET"
+      else
+        FILTERED="$ALL_RUNS"
+        SCOPE_LABEL="all workflows"
+      fi
+
+      if [ -z "$FILTERED" ]; then
+        # List known workflows to help the user
+        KNOWN=$(echo "$ALL_RUNS" | jq -r '.workflow' | sort -u | head -20 | sed 's/^/  - /')
+        echo "{\"status\":\"no_match\",\"workflow\":\"$WORKFLOW_TARGET\",\"message\":\"No runs found matching '$WORKFLOW_TARGET'. Known workflows in your metrics data:\",\"known_workflows\":$(echo "$ALL_RUNS" | jq -r '.workflow' | sort -u | jq -R . | jq -sc .)}"
+        exit 0
+      fi
+
+      RUN_COUNT=$(echo "$FILTERED" | wc -l | tr -d ' ')
+      MIN_RUNS=5
+
+      # Build the full statistics object with jq
+      STATS=$(echo "$FILTERED" | jq -sc --arg wf "$SCOPE_LABEL" --argjson min "$MIN_RUNS" '
+        def percentile(arr; p):
+          (arr | sort) as $s |
+          ($s | length) as $n |
+          if $n == 0 then null
+          elif $n == 1 then $s[0]
+          else $s[($n * p / 100 | floor | if . >= $n then $n - 1 else . end)]
+          end;
+
+        . as $runs |
+        ($runs | length) as $n |
+        ($runs | map(select(.outcome == "success")) | length) as $success |
+        ($runs | map(select(.outcome != null and .outcome != "success") | .failure_mode // "unknown") | group_by(.) | map({mode: .[0], count: length}) | sort_by(-.count) | .[0:5]) as $failure_modes |
+        ($runs | map(.wall_clock_ms | select(. != null))) as $clocks |
+        ($runs | map(.total_usd | select(. != null and . > 0))) as $costs |
+
+        # Build scope breakdown (small/medium/large) when scope data exists
+        ($runs | group_by(.scope) | map(select(.[0].scope != null)) | map({
+          scope: .[0].scope,
+          count: length,
+          wall_clock_p50: (percentile(map(.wall_clock_ms | select(. != null)); 50)),
+          wall_clock_p90: (percentile(map(.wall_clock_ms | select(. != null)); 90)),
+          cost_p50: (percentile(map(.total_usd | select(. != null and . > 0)); 50)),
+          cost_p90: (percentile(map(.total_usd | select(. != null and . > 0)); 90))
+        })) as $by_scope |
+
+        {
+          status: (if $n < $min then "insufficient_data" else "ok" end),
+          workflow: $wf,
+          run_count: $n,
+          minimum_recommended: $min,
+          success_rate: (if $n > 0 then ($success / $n * 100 | round) else 0 end),
+          estimates: {
+            wall_clock_ms: {
+              p50: (percentile($clocks; 50)),
+              p90: (percentile($clocks; 90))
+            },
+            cost_usd: {
+              p50: (percentile($costs; 50)),
+              p90: (percentile($costs; 90))
+            }
+          },
+          failure_modes: $failure_modes,
+          by_scope: (if ($by_scope | length) > 0 then $by_scope else null end),
+          note: (if $n < $min then "Sample size \($n) is below the recommended minimum of \($min) runs for reliable estimates. Results shown are based on available data." else null end)
+        }
+      ')
+
+      echo "$STATS"
+
+  - id: format-report
+    prompt: |
+      Format the following workflow effort estimate as a clear, concise markdown report
+      that a developer can act on immediately.
+
+      Raw estimate data:
+      $estimate.output
+
+      ## Formatting rules
+
+      1. **Start with a one-sentence summary** of what to expect (e.g., "Based on 12 runs,
+         archon-fix-github-issue typically takes 4–18 minutes and costs $0.30–$1.20.")
+
+      2. **Show a table** with p50 and p90 estimates for wall-clock time (converted to
+         human-readable: ms → seconds or minutes) and cost in USD.
+
+      3. **Show the success rate** as a percentage.
+
+      4. **If by_scope is present**, show a breakdown table by scope (small/medium/large).
+
+      5. **If failure_modes is non-empty**, list the top failure modes with their counts.
+
+      6. **If status is "insufficient_data"**, prominently note that estimates are preliminary
+         and based on fewer than the recommended minimum runs. Show the data anyway.
+
+      7. **If status is "no_data" or "no_match"**, explain what happened and show the
+         message/known_workflows from the data.
+
+      8. **Keep it short** — no preamble, no "here is the report", just the report itself.
+
+      9. **End with**: "Source: `~/.archon/metrics/` — updated after every workflow run."
+    depends_on: [estimate]
+    model: haiku
+    allowed_tools: []

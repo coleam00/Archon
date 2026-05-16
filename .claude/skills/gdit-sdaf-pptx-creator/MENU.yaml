@@ -1,0 +1,157 @@
+skill_name: pptx-creator
+menu_version: "1.0"
+description: Create presentations from YAML content files
+
+workflows:
+  - id: ideate
+    label: "1. Ideate — Define Your Presentation"
+    description: "Structured conversation to align audience, message, and source material before generating content"
+    instructions: |
+      Guide the user through a structured ideation conversation to define the presentation.
+      Ask these questions one or two at a time — don't overwhelm with all at once.
+
+      1. AUDIENCE: Who is this presentation for?
+         - Leadership / executives (high-level, metrics-focused, strategic)
+         - Technical team (detailed, architecture, implementation)
+         - Customer / external (value proposition, benefits, outcomes)
+         - Board / governance (compliance, risk, ROI)
+         - Mixed audience (balance depth with accessibility)
+
+      2. KEY MESSAGE: What is the ONE thing the audience should walk away remembering?
+         Help the user distill to a single sentence. If they give multiple, ask which is primary.
+
+      3. TONE: What tone fits the audience and message?
+         - Data-driven (metrics, charts, evidence)
+         - Persuasive (call to action, benefits, urgency)
+         - Informational (overview, education, onboarding)
+         - Formal (compliance, governance, audit)
+
+      4. LENGTH: How long is the presentation?
+         - Use ~1 slide per minute as a guideline
+         - 5 minutes = ~5 slides, 15 minutes = ~12-15 slides, 30 minutes = ~20-25 slides
+         - Ask: "How many minutes do you have?" then suggest slide count
+
+      5. SOURCE MATERIAL: What project files should I read to extract content?
+         - Ask: "Are there any project files I should read for data, metrics, or context?"
+         - Examples: analysis docs, READMEs, spec files, reports, data files
+         - Read each file the user points to and extract:
+           * Key metrics and data points
+           * Themes and narrative arcs
+           * Technical details appropriate for the audience level
+           * Quotes or findings worth highlighting
+         - Summarize what you extracted and confirm with the user
+
+      6. THEME: Any visual preferences?
+         - Color scheme (corporate colors, dark/light, specific hex values)
+         - Branding requirements (company name in footer, specific terminology)
+         - If no preference, use the default navy/blue/orange theme
+
+      7. DIAGRAMS: Any architecture diagrams or visuals to include?
+         - Ask: "Do you have any diagrams (.drawio, .png, .svg) to include as an appendix?"
+         - For .drawio files, the converter extracts text labels automatically
+         - Scan directories the user points to for .drawio files
+         - Each diagram becomes an appendix slide with extracted content
+         - Add them to the appendix.diagrams section of the YAML
+
+      After gathering all answers, produce a STRUCTURED BRIEF:
+
+      ```
+      PRESENTATION BRIEF
+      ==================
+      Audience: [who]
+      Key Message: [one sentence]
+      Tone: [tone]
+      Length: [N slides, ~M minutes]
+      Theme: [colors/branding]
+
+      Source Material Reviewed:
+      - [file]: [what was extracted]
+
+      Proposed Outline:
+      1. [Slide title] — [slide type] — [what it covers]
+      2. [Slide title] — [slide type] — [what it covers]
+      ...
+      ```
+
+      Ask the user to confirm or adjust the brief before proceeding to content generation.
+      Say: "Does this outline look right? I can adjust any section, add/remove slides,
+      or change the emphasis. When you're happy, say 'generate content' to proceed."
+
+  - id: generate-content
+    label: "2. Generate Content — Create YAML"
+    description: "Generate the YAML content file from the ideation brief"
+    instructions: |
+      Read the ideation brief from the conversation (or ask the user to run the ideate
+      workflow first if no brief exists).
+
+      Read references/schema.md for the full YAML schema.
+
+      Generate a YAML content file following these principles:
+      - Select slide types that match each section of the outline
+      - Write concise bullet points (not paragraphs) — max 6-8 bullets per slide
+      - Extract metrics from source material into metric boxes with appropriate colors
+      - Structure the narrative: problem → solution → evidence → call to action
+      - Use the theme colors from the brief (or defaults)
+      - Keep slide titles short (under 50 characters)
+      - Use the grid type for framework comparisons or feature matrices
+      - Use two-column for before/after, pros/cons, or side-by-side comparisons
+      - Use metrics type when you have 3-5 key numbers to highlight
+
+      Write the YAML file to the location the user specifies (or suggest a sensible default
+      like `dist/[topic].yaml` or the current directory).
+
+      After writing, tell the user:
+      "Content file created at [path]. You can:
+      - Edit the YAML directly to adjust any content
+      - Say 'generate presentation' to convert to .pptx
+      - Say 'regenerate' to recreate the YAML with different parameters"
+
+  - id: generate-presentation
+    label: "3. Generate Presentation — Convert to PPTX"
+    description: "Convert a YAML content file to .pptx"
+    instructions: |
+      Run the converter script on the YAML content file:
+
+      ```bash
+      python3 ~/.kiro/skills/pptx-creator/scripts/yaml_to_pptx.py <yaml-file> [--output <output.pptx>]
+      ```
+
+      If the user hasn't specified a YAML file, look for one created in the generate-content
+      step. If none exists, ask the user to provide a path or run generate-content first.
+
+      After successful conversion, report the output path, slide count, and file size.
+      Suggest: "Open in PowerPoint, LibreOffice, or Google Slides for final polish."
+
+  - id: regenerate
+    label: "Regenerate — Update and Rebuild"
+    description: "Regenerate YAML content or rebuild .pptx after edits"
+    instructions: |
+      Determine what the user wants to regenerate:
+
+      1. If they edited the YAML and want a new .pptx:
+         Run the converter script on the updated YAML file.
+
+      2. If they want to change the content:
+         Ask what to change (add slides, remove slides, update metrics, change tone).
+         Read the existing YAML, modify it, write it back, then run the converter.
+
+      3. If they want to start over:
+         Go back to the ideate workflow.
+
+  - id: customize-theme
+    label: "Customize Theme"
+    description: "Modify the color theme of an existing YAML content file"
+    instructions: |
+      Read the existing YAML content file and show the current theme settings.
+
+      Help the user customize:
+      - primary: Main dark color (header bars, dark backgrounds)
+      - secondary: Supporting color (column backgrounds, accents)
+      - accent: Highlight color (metric values, emphasis, accent bars)
+      - background: Slide background (usually white)
+      - text: Body text color
+      - muted: Footer and secondary text
+      - light_bg: Light background for cards and grid cells
+
+      Accept hex values (#RRGGBB) or common color names.
+      Update the YAML theme section and regenerate the .pptx.

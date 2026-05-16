@@ -1,0 +1,162 @@
+# Pipeline Profile: GitLab CI — Security Scanning
+# GitLab CI pipeline with built-in security scanning (SAST, secrets, SCA, container).
+# Uses GitLab Ultimate security features where available.
+
+profile:
+  id: gitlab-ci-security-e8b4a
+  name: "GitLab CI — Security Scanning"
+  description: "GitLab CI with SAST, secrets detection, SCA, and container scanning"
+  ci_platform: gitlab-ci
+  iac_type: terraform
+  ssdf_coverage: "~16 of 25 applicable technical sub-practices (~64%)"
+
+pipeline_stages:
+  - name: "build"
+    stage_number: 1
+    purpose: "Build application and dependencies"
+    tools: []
+    artifacts:
+      - file: "build-output"
+        tool: "pipeline-logic"
+        description: "Compiled application build output"
+    blocks_on_failure: true
+    nist_mapping: ["PW.6.1"]
+
+  - name: "test"
+    stage_number: 2
+    purpose: "Unit and integration tests"
+    tools: ["pytest", "jest"]
+    artifacts:
+      - file: "test-results"
+        tool: "pytest"
+        description: "Unit and integration test results"
+    blocks_on_failure: true
+    nist_mapping: ["PW.8.1"]
+
+  - name: "security"
+    stage_number: 3
+    purpose: "Security scanning (SAST, secrets, SCA, container)"
+    tools: ["semgrep", "gitleaks", "trivy", "checkov"]
+    artifacts:
+      - file: "gl-sast-report.json"
+        tool: "semgrep"
+        description: "SAST findings for security audit and OWASP Top 10"
+      - file: "gl-secret-detection-report.json"
+        tool: "gitleaks"
+        description: "Secret detection results"
+      - file: "gl-dependency-scanning-report.json"
+        tool: "trivy"
+        description: "SCA dependency vulnerability scan results"
+      - file: "gl-container-scanning-report.json"
+        tool: "trivy"
+        description: "Container image vulnerability scan results"
+    blocks_on_failure: true
+    nist_mapping: ["PW.5.1", "PW.7.2", "PW.4.4", "RV.1.1", "RV.1.2"]
+
+  - name: "deploy"
+    stage_number: 4
+    purpose: "Deploy to target environment"
+    tools: ["terraform"]
+    artifacts:
+      - file: "terraform-plan"
+        tool: "terraform"
+        description: "Terraform execution plan for target environment"
+    blocks_on_failure: true
+    nist_mapping: []
+
+security_scanning:
+  sast:
+    enabled: true
+    tool: "semgrep"
+    rulesets: ["security-audit", "owasp-top-ten"]
+    severity_threshold: "ERROR"
+    report_format: "json"
+    command: "semgrep --config=p/security-audit --config=p/owasp-top-ten --severity=ERROR --json ."
+
+  secrets_detection:
+    enabled: true
+    tool: "gitleaks"
+    blocks_pipeline: true
+    command: "gitleaks detect --source=. --no-git --report-path=gl-secret-detection-report.json"
+
+  sca:
+    enabled: true
+    tool: "trivy"
+    severity_threshold: "HIGH,CRITICAL"
+    command: "trivy fs --severity HIGH,CRITICAL --format json --output gl-dependency-scanning-report.json ."
+
+  iac_scanning:
+    enabled: true
+    tools:
+      - name: "checkov"
+        command: "checkov -d infrastructure/ --output json --output-file checkov-report.json"
+
+  dast:
+    enabled: false
+
+  container_scanning:
+    enabled: true
+    tool: "trivy"
+    command: "trivy image --severity HIGH,CRITICAL --format json --output gl-container-scanning-report.json ${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}"
+
+infrastructure:
+  encryption_at_rest: true
+  encryption_in_transit: true
+  vpc_isolation: false
+  least_privilege_iam: true
+  secrets_management:
+    enabled: true
+    service: "gitlab-ci-variables"
+  logging:
+    enabled: true
+    service: "gitlab-job-logs"
+    retention_days: 90
+
+integrity:
+  code_signing:
+    enabled: false
+  checksums:
+    enabled: false
+  sbom:
+    enabled: false
+  release_manifest:
+    enabled: false
+
+vulnerability_management:
+  tracking_system: "gitlab-vulnerability-report"
+  severity_scoring: "cvss"
+  auto_resolution: true
+  sla_defined: false
+
+processes:
+  peer_code_review:
+    enabled: true
+    tool: "gitlab-mr"
+    required_approvers: 1
+  design_review:
+    enabled: false
+  secure_coding_guidelines:
+    enabled: false
+  threat_modeling:
+    enabled: false
+  security_training:
+    enabled: false
+  change_advisory_board:
+    enabled: false
+  incident_response:
+    enabled: false
+
+approval:
+  manual_approval_required: false
+  approval_mechanism: "gitlab-approval"
+  notification_method: "email"
+
+known_gaps:
+  - sub_practice: "PW.8.1"
+    description: "No DAST (can enable GitLab DAST)"
+  - sub_practice: "PS.2.1"
+    description: "No release signing or checksums"
+  - sub_practice: "PS.3.2"
+    description: "No SBOM generation"
+  - sub_practice: "PW.1.1"
+    description: "No threat model"

@@ -1,0 +1,190 @@
+---
+# Skill Menu Manifest
+# Converted from gitleaks-compliance extension (handles all GitLab security scanners)
+
+skill_name: gitlab-security-scanning
+menu_version: "1.0"
+description: Query, remediate, and report on security findings from GitLab scanners (Gitleaks, SAST, dependency scanning, etc.)
+
+workflows:
+  - id: config
+    label: "Configure Projects"
+    description: "Manage saved GitLab projects and switch active project"
+    instructions: |
+      Configure GitLab projects for Gitleaks scanning.
+      
+      This will:
+      1. Prompt for GitLab project ID
+      2. Prompt for GitLab URL
+      3. Save configuration to ~/.gdit-sdaf-secrets/gitlab-projects.json
+      4. Set as active project
+      
+      Run: python3 scripts/command_handlers.py config
+    interactive: true
+    
+  - id: posture
+    label: "Security Posture Report"
+    description: "Consolidated security report across all configured projects"
+    instructions: |
+      Generate security posture report across all configured projects.
+      
+      This will:
+      1. Load all configured projects
+      2. Query Gitleaks findings for each
+      3. Aggregate findings by severity
+      4. Generate consolidated report
+      5. Save to temp/security-posture-{timestamp}.json
+      
+      Requires: GitLab API token
+      Run: python3 scripts/command_handlers.py posture
+    parameters:
+      - name: gitlab_token
+        required: true
+        prompt: "GitLab API Token"
+        secure: true
+    
+  - id: scan-findings
+    label: "Scan Security Findings"
+    description: "Query GitLab for security findings from all scanners"
+    instructions: |
+      Scan active project for security findings from all GitLab scanners.
+      
+      This will:
+      1. Query GitLab API for all vulnerability types
+      2. Display findings by scanner type (Gitleaks, SAST, dependencies, etc.)
+      3. Show findings by severity
+      4. Display file locations and line numbers
+      5. Save results to temp/gitlab-security-report-{timestamp}.json
+      
+      Scanner types:
+      - secret_detection (Gitleaks) - Exposed secrets
+      - sast - Static application security testing
+      - dependency_scanning - Vulnerable dependencies
+      - container_scanning - Container vulnerabilities
+      - dast - Dynamic application security testing
+      
+      Requires: Active project configured, GitLab API token
+      Run: python3 scripts/command_handlers.py scan --report-type all
+    parameters:
+      - name: gitlab_token
+        required: true
+        prompt: "GitLab API Token"
+        secure: true
+    
+  - id: mark-false-positive
+    label: "Mark False Positives"
+    description: "Mark documentation examples as false positives"
+    instructions: |
+      Mark Gitleaks findings as false positives in GitLab.
+      
+      This will:
+      1. Display current findings
+      2. Prompt for vulnerability ID to dismiss
+      3. Mark as false positive in GitLab
+      4. Add dismissal comment
+      
+      Use for: Documentation examples, test fixtures, public keys
+      
+      Requires: GitLab API token with write access
+      Run: python3 scripts/command_handlers.py mark-false-positive
+    parameters:
+      - name: gitlab_token
+        required: true
+        prompt: "GitLab API Token"
+        secure: true
+    
+  - id: auto-remediate
+    label: "Auto-Remediate Findings"
+    description: "Automatically remediate findings with reusable scripts"
+    instructions: |
+      Automatically remediate Gitleaks findings using script library.
+      
+      This will:
+      1. Analyze finding type (AWS key, GitHub token, etc.)
+      2. Select appropriate remediation script
+      3. Remove or mask the secret
+      4. Commit changes with security fix message
+      5. Update GitLab finding status
+      
+      Available remediation scripts:
+      - aws_access_key_remediation.py
+      - github_token_remediation.py
+      - generic_api_key_remediation.py
+      - private_key_remediation.py
+      
+      Requires: GitLab API token, git repository
+      Run: python3 scripts/command_handlers.py remediate
+    parameters:
+      - name: gitlab_token
+        required: true
+        prompt: "GitLab API Token"
+        secure: true
+    
+  - id: generate-report
+    label: "Generate Compliance Report"
+    description: "Generate compliance report for Gitleaks findings"
+    instructions: |
+      Generate executive compliance report.
+      
+      This will:
+      1. Query all findings for active project
+      2. Calculate risk score and level
+      3. Generate findings summary by severity
+      4. List top critical findings
+      5. Provide remediation recommendations
+      6. Save report in specified format
+      
+      Formats: json, markdown, csv
+      Output: temp/gitleaks-executive-report-{timestamp}.{format}
+      
+      Requires: GitLab API token
+      Run: python3 scripts/command_handlers.py report --format markdown
+    parameters:
+      - name: gitlab_token
+        required: true
+        prompt: "GitLab API Token"
+        secure: true
+      - name: format
+        required: false
+        prompt: "Report format (json/markdown/csv)"
+        default: "markdown"
+    
+  - id: list-scripts
+    label: "List Remediation Scripts"
+    description: "Show available remediation scripts in library"
+    instructions: |
+      List available remediation scripts in the library.
+      
+      Scripts located in: scripts/remediation-library/
+      
+      Available scripts:
+      1. aws_access_key_remediation.py
+         - Removes AWS access keys (AKIA...)
+         - Replaces with placeholder
+         - Commits with security fix message
+      
+      2. github_token_remediation.py
+         - Removes GitHub personal access tokens
+         - Removes GitHub OAuth tokens
+         - Commits with security fix message
+      
+      3. generic_api_key_remediation.py
+         - Removes generic API keys
+         - Comments out the line
+         - Commits with security fix message
+      
+      4. private_key_remediation.py
+         - Removes private keys (RSA, SSH, etc.)
+         - Replaces with placeholder
+         - Commits with security fix message
+      
+      All scripts are parameterized and reusable.
+      
+      Run: python3 scripts/command_handlers.py list-scripts
+
+# AI Usage Instructions:
+# When user says "load gitleaks skill":
+# 1. Present 7 main workflows exactly as shown
+# 2. When user selects workflow, show instructions
+# 3. Prompt for required parameters
+# 4. Execute via scripts/command_handlers.py

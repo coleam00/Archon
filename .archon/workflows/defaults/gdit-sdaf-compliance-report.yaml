@@ -1,0 +1,53 @@
+name: gdit-sdaf-compliance-report
+description: |
+  Use when: Generating a NIST SP 800-218 compliance report or AI-assisted development ROI summary.
+  Requires: GDIT specs in .kiro/specs/ and gdit-sdaf-setup completed.
+  Output: Compliance coverage matrix + value report saved to $ARTIFACTS_DIR/
+
+nodes:
+  - id: guard-setup
+    bash: |
+      if [ ! -f "$HOME/.kiro/scripts/validate-spec.py" ]; then
+        echo "ERROR: GDIT scripts not found at ~/.kiro/scripts/."
+        echo "Run 'gdit-sdaf-setup' workflow first, then retry."
+        exit 1
+      fi
+      if [ ! -d ".kiro/specs" ]; then
+        echo "ERROR: No .kiro/specs/ directory found."
+        echo "Create specs with gdit-sdaf-spec-create first."
+        exit 1
+      fi
+      echo "Guard checks passed."
+
+  - id: ssdf-coverage
+    bash: |
+      python3 ~/.kiro/skills/ssdf-auditor/scripts/coverage_matrix.py 2>/dev/null || \
+        echo "ssdf-auditor scripts not available — run gdit-sdaf-setup to install skills"
+    depends_on: [guard-setup]
+
+  - id: gap-report
+    bash: |
+      python3 ~/.kiro/skills/ssdf-auditor/scripts/gap_report.py 2>/dev/null || \
+        echo "Gap report unavailable — see ssdf-coverage output above"
+    depends_on: [ssdf-coverage]
+
+  - id: value-report
+    bash: |
+      python3 ~/.kiro/skills/value-reporting/scripts/value_report.py \
+        --scope project --dashboard 2>/dev/null || \
+        echo "No value tracking data found. Enable value-tracking in .kiro/config/project.yaml."
+    depends_on: [guard-setup]
+
+  - id: save-report
+    prompt: |
+      Synthesize the outputs from ssdf-coverage, gap-report, and value-report into a
+      single compliance and ROI report. Save it to $ARTIFACTS_DIR/compliance-report.md.
+
+      Report sections:
+      1. Executive Summary (3 bullets)
+      2. NIST SP 800-218 Coverage Matrix (T1 practices, PASS/PARTIAL/GAP)
+      3. Top 5 Gaps with Remediation Priority
+      4. AI-Assisted Development ROI (from value-report data)
+      5. Recommended Next Actions
+    depends_on: [gap-report, value-report]
+    context: fresh

@@ -1,8 +1,9 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
-import { mkdir } from 'fs/promises';
+import { mkdir, readFile } from 'fs/promises';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps, WorkflowConfig } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -13,8 +14,9 @@ import { executeDagWorkflow } from './dag-executor';
 import { logWorkflowStart, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { getWorkflowEventEmitter } from './event-emitter';
+import { attachMetricsWriter } from './metrics-writer';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import { classifyError, resolveForgeProvider } from './executor-shared';
+import { classifyError, classifyFailureMode, resolveForgeProvider } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -208,6 +210,113 @@ async function resolveProjectPaths(
     artifactsDir: join(cwd, '.archon', 'artifacts', 'runs', workflowRunId),
     logDir: join(cwd, '.archon', 'logs'),
   };
+}
+
+/**
+ * Emit a workflow_fingerprint event with repo identity and commit SHA.
+ * Non-blocking: all git/fs failures are caught internally and logged.
+ */
+async function emitWorkflowFingerprint(
+  emitter: ReturnType<typeof getWorkflowEventEmitter>,
+  runId: string,
+  cwd: string
+): Promise<void> {
+  const { execFileAsync } = await import('@archon/git');
+
+  let repo = 'unknown';
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+      timeout: 5000,
+    });
+    const url = stdout.trim();
+    // Extract "owner/repo" from SSH (git@github.com:owner/repo.git) or HTTPS URLs
+    const match = /[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(url);
+    repo = match ? match[1] : url;
+  } catch {
+    // git not available or no remote — leave as 'unknown'
+  }
+
+  let commitSha = 'unknown';
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', cwd, 'rev-parse', 'HEAD'], {
+      timeout: 5000,
+    });
+    commitSha = stdout.trim();
+  } catch {
+    // git not available — leave as 'unknown'
+  }
+
+  let claudeMdHash: string | undefined;
+  try {
+    const content = await readFile(join(cwd, 'CLAUDE.md'), 'utf-8');
+    claudeMdHash = createHash('sha256').update(content).digest('hex');
+  } catch {
+    // CLAUDE.md absent or unreadable — omit the field
+  }
+
+  emitter.emit({
+    type: 'workflow_fingerprint',
+    runId,
+    repo,
+    commitSha,
+    workingPath: cwd,
+    ...(claudeMdHash !== undefined ? { claudeMdHash } : {}),
+  });
+}
+
+/**
+ * Emit a size_proxy_emitted event with the input message word count and git
+ * diff stats vs. the branch base. Non-blocking: all failures are caught internally.
+ */
+async function emitSizeProxy(
+  emitter: ReturnType<typeof getWorkflowEventEmitter>,
+  runId: string,
+  cwd: string,
+  userMessage: string
+): Promise<void> {
+  const { execFileAsync } = await import('@archon/git');
+
+  const wordCount = userMessage.trim().split(/\s+/).filter(Boolean).length;
+  const inputWordCount = wordCount > 0 ? wordCount : undefined;
+
+  let gitAdditions: number | undefined;
+  let gitDeletions: number | undefined;
+  let gitChangedFiles: number | undefined;
+
+  try {
+    const mergeBaseResult = await execFileAsync(
+      'git',
+      ['-C', cwd, 'merge-base', 'HEAD', 'origin/HEAD'],
+      { timeout: 5000 }
+    ).catch(() => ({ stdout: '' }));
+    const base = mergeBaseResult.stdout.trim() || 'HEAD~1';
+
+    const { stdout: diffStat } = await execFileAsync(
+      'git',
+      ['-C', cwd, 'diff', '--shortstat', base, 'HEAD'],
+      { timeout: 5000 }
+    );
+
+    // Parse " 3 files changed, 142 insertions(+), 28 deletions(-)"
+    const filesMatch = /(\d+) files? changed/.exec(diffStat);
+    const addMatch = /(\d+) insertions?\(\+\)/.exec(diffStat);
+    const delMatch = /(\d+) deletions?\(-\)/.exec(diffStat);
+
+    if (filesMatch) gitChangedFiles = parseInt(filesMatch[1], 10);
+    if (addMatch) gitAdditions = parseInt(addMatch[1], 10);
+    if (delMatch) gitDeletions = parseInt(delMatch[1], 10);
+  } catch {
+    // git not available or no commits — omit git fields
+  }
+
+  emitter.emit({
+    type: 'size_proxy_emitted',
+    runId,
+    ...(inputWordCount !== undefined ? { inputWordCount } : {}),
+    ...(gitAdditions !== undefined ? { gitAdditions } : {}),
+    ...(gitDeletions !== undefined ? { gitDeletions } : {}),
+    ...(gitChangedFiles !== undefined ? { gitChangedFiles } : {}),
+  });
 }
 
 /**
@@ -622,6 +731,7 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       conversationId: conversationDbId,
+      nodesTotal: workflow.nodes.length,
     });
 
     // Fire-and-forget anonymous usage telemetry. No PII: only workflow name +
@@ -645,6 +755,19 @@ export async function executeWorkflow(
           'workflow_event_persist_failed'
         );
       });
+
+    // Emit codebase fingerprint — non-blocking, never throws to caller
+    emitWorkflowFingerprint(emitter, workflowRun.id, cwd).catch((err: Error) => {
+      getLog().warn({ err, workflowRunId: workflowRun.id }, 'workflow.fingerprint_emit_failed');
+    });
+
+    // Emit size proxy (input word count + git diff stats) — non-blocking
+    emitSizeProxy(emitter, workflowRun.id, cwd, userMessage).catch((err: Error) => {
+      getLog().warn({ err, workflowRunId: workflowRun.id }, 'workflow.size_proxy_emit_failed');
+    });
+
+    // Attach metrics writer — non-blocking, self-cleaning on terminal event
+    attachMetricsWriter(workflowRun.id, workflow.name, artifactsDir);
 
     // Set status to running now that execution has started (skip for resumed runs — already running)
     if (!dagPriorCompletedNodes) {
@@ -803,6 +926,7 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       error: err.message,
+      failureMode: classifyFailureMode(err),
     });
     deps.store
       .createWorkflowEvent({
