@@ -13,3 +13,5 @@ description: |
 nodes:
   - id: resolve
     command: archon-resolve-merge-conflicts
+provider: claude
+model: MiniMax-M2.7

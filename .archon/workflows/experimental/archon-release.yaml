@@ -23,11 +23,11 @@ description: |
     archon workflow run archon-release "--dry-run"         # dry-run patch (implicit)
 
 provider: claude
-model: sonnet
-interactive: true                       # required: has approval gates
+model: MiniMax-M2.7
+interactive: true # required: has approval gates
 
 worktree:
-  enabled: false                        # operates on the live dev branch — never use a worktree
+  enabled: false # operates on the live dev branch — never use a worktree
 
 nodes:
   # ═══════════════════════════════════════════════════════════════════
@@ -301,16 +301,16 @@ nodes:
           description: One-line summary of the release theme
         added:
           type: array
-          items: { type: string }
+          items: {type: string}
         changed:
           type: array
-          items: { type: string }
+          items: {type: string}
         fixed:
           type: array
-          items: { type: string }
+          items: {type: string}
         removed:
           type: array
-          items: { type: string }
+          items: {type: string}
       required: [summary, added, changed, fixed, removed]
 
   # Bridge: persist draft-changelog's AI output to disk via auto-shell-quoted
@@ -419,7 +419,6 @@ nodes:
       Reply with `/workflow approve <run-id>` to continue, or
       `/workflow reject <run-id> <reason>` to abort.
     depends_on: [format-changelog, collect-commits, bump-version, parse-args]
-    model: haiku
     allowed_tools: []
 
   - id: review-changelog
@@ -589,7 +588,6 @@ nodes:
       Then approve here to continue with tag, GitHub release, dev sync,
       binary wait, and Homebrew formula update.
     depends_on: [create-pr]
-    model: haiku
     allowed_tools: []
     when: "$parse-args.output.dryRun == 'false'"
 
@@ -704,7 +702,7 @@ nodes:
 
       echo "Timed out waiting for binaries after 15 minutes"
       exit 1
-    timeout: 1000000              # 16 minutes — outer bound on the polling loop
+    timeout: 1000000 # 16 minutes — outer bound on the polling loop
     depends_on: [sync-dev-with-main, check-homebrew, bump-version]
     when: "$parse-args.output.dryRun == 'false' && $check-homebrew.output == 'true'"
 

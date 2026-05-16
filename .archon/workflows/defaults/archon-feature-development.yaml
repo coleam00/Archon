@@ -8,7 +8,6 @@ description: |
 nodes:
   - id: implement
     command: archon-implement
-    model: opus[1m]
 
   - id: create-pr
     command: archon-create-pr
@@ -28,3 +27,5 @@ nodes:
         echo "PR base verified: $EXPECTED"
       fi
     depends_on: [create-pr]
+provider: claude
+model: MiniMax-M2.7

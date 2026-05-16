@@ -49,7 +49,6 @@ nodes:
         If no explicit steps given, infer the most likely way to trigger the issue.
 
       Provide reasoning for your classification.
-    model: haiku
     allowed_tools: []
     output_format:
       type: object
@@ -594,3 +593,5 @@ nodes:
          - Summary of reproduction results (reproduced/partial)
     depends_on: [draft-issue]
     context: fresh
+provider: claude
+model: MiniMax-M2.7

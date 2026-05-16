@@ -15,10 +15,10 @@ description: |
            (use repo-triage).
 
 provider: claude
-model: sonnet
+model: MiniMax-M2.7
 
 worktree:
-  enabled: false   # Live checkout — needs to git pull and read .archon/maintainer-standup/
+  enabled: false # Live checkout — needs to git pull and read .archon/maintainer-standup/
 
 nodes:
   # ── Layer 0: gather facts in parallel ──

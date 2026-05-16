@@ -46,3 +46,5 @@ nodes:
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
+provider: claude
+model: MiniMax-M2.7

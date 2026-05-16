@@ -125,4 +125,5 @@ nodes:
     depends_on: [render-video]
     allowed_tools:
       - Read
-    model: haiku
+provider: claude
+model: MiniMax-M2.7

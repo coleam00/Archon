@@ -8,3 +8,5 @@ description: |
 nodes:
   - id: assist
     command: archon-assist
+provider: claude
+model: MiniMax-M2.7

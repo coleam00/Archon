@@ -106,12 +106,7 @@ nodes:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                For the file you just read, assess:
-                (1) Single responsibility — does this module do exactly one thing?
-                (2) Cognitive load — could a new team member understand this in 5 minutes?
-                (3) Abstraction value — does every abstraction earn its complexity, or is it premature?
-                (4) Dependency direction — does this file depend on things at its own level or below, not above?
-                Add any concerns to your running list. Be specific — cite line ranges and function names.
+                For the file you just read, assess: (1) Single responsibility — does this module do exactly one thing? (2) Cognitive load — could a new team member understand this in 5 minutes? (3) Abstraction value — does every abstraction earn its complexity, or is it premature? (4) Dependency direction — does this file depend on things at its own level or below, not above? Add any concerns to your running list. Be specific — cite line ranges and function names.
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 3: PLAN
@@ -185,31 +180,24 @@ nodes:
             hookSpecificOutput:
               hookEventName: PreToolUse
               additionalContext: >
-                Before writing: Is this file in your plan? If not, explain why you're
-                touching it. Check how many files import from this module — changes to
-                widely-imported modules need extra scrutiny.
+                Before writing: Is this file in your plan? If not, explain why you're touching it. Check how many files import from this module — changes to widely-imported modules need extra scrutiny.
       PostToolUse:
         - matcher: "Write|Edit"
           response:
             systemMessage: >
-              You just modified a file. Do these things NOW before moving on:
-              1. Run the type checker to verify your change compiles
-              2. Re-read the file you changed — is it ACTUALLY simpler, or did you just move complexity around?
-              3. State in ONE sentence why this change reduces complexity. If you cannot justify it, revert it.
+              You just modified a file. Do these things NOW before moving on: 1. Run the type checker to verify your change compiles 2. Re-read the file you changed — is it ACTUALLY simpler, or did you just move complexity around? 3. State in ONE sentence why this change reduces complexity. If you cannot justify it, revert it.
         - matcher: "Read"
           response:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                Before modifying this file, consider: will your change reduce or increase
-                the number of concepts a reader needs to hold in their head?
+                Before modifying this file, consider: will your change reduce or increase the number of concepts a reader needs to hold in their head?
         - matcher: "Bash"
           response:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                Check the exit code. If the command failed, diagnose the root cause
-                before attempting a fix. Do not blindly retry.
+                Check the exit code. If the command failed, diagnose the root cause before attempting a fix. Do not blindly retry.
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 5: VALIDATE
@@ -280,17 +268,14 @@ nodes:
         - matcher: "Write|Edit"
           response:
             systemMessage: >
-              You just made a fix. Run the specific failing validation check NOW
-              to verify your fix works. Do not batch fixes — verify each one.
+              You just made a fix. Run the specific failing validation check NOW to verify your fix works. Do not batch fixes — verify each one.
       PreToolUse:
         - matcher: "Write|Edit"
           response:
             hookSpecificOutput:
               hookEventName: PreToolUse
               additionalContext: >
-                You are fixing validation failures only. Do not make any changes
-                beyond what's needed to pass the failing checks. If in doubt, revert
-                the original change that caused the failure.
+                You are fixing validation failures only. Do not make any changes beyond what's needed to pass the failing checks. If in doubt, revert the original change that caused the failure.
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 7: CREATE PR
@@ -356,8 +341,7 @@ nodes:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                Verify this command succeeded. If git push or gh pr create failed,
-                read the error message carefully before retrying.
+                Verify this command succeeded. If git push or gh pr create failed, read the error message carefully before retrying.
 
   - id: verify-pr-base
     bash: |
@@ -372,3 +356,4 @@ nodes:
         echo "PR base verified: $EXPECTED"
       fi
     depends_on: [create-pr]
+model: MiniMax-M2.7

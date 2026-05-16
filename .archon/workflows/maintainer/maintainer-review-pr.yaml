@@ -17,8 +17,8 @@ description: |
            (use archon-comprehensive-pr-review). Quick triage of all open PRs
            (use maintainer-standup).
 
-provider: pi
-model: minimax/MiniMax-M2.7
+provider: claude
+model: MiniMax-M2.7
 
 interactive: true # Required for the decline-approval gate
 

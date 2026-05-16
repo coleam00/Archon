@@ -50,3 +50,5 @@ nodes:
 
       Read `.archon/test-loop-dag-counter.txt` and confirm the final counter value.
       Report: "Test loop DAG completed successfully. Final counter: {value}"
+provider: claude
+model: MiniMax-M2.7

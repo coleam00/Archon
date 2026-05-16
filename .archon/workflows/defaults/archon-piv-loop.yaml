@@ -174,7 +174,6 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-plan
-    model: sonnet
     depends_on: [explore]
     context: fresh
     prompt: |
@@ -411,7 +410,6 @@ nodes:
   - id: implement
     depends_on: [implement-setup]
     idle_timeout: 600000
-    model: claude-opus-4-6[1m]
     loop:
       prompt: |
         # PIV Loop — Implementation Agent
@@ -536,7 +534,6 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: code-review
-    model: sonnet
     depends_on: [implement]
     context: fresh
     prompt: |
@@ -687,7 +684,6 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: finalize
-    model: sonnet
     depends_on: [fix-feedback]
     context: fresh
     prompt: |
@@ -768,3 +764,4 @@ nodes:
         echo "PR base verified: $EXPECTED"
       fi
     depends_on: [finalize]
+model: MiniMax-M2.7

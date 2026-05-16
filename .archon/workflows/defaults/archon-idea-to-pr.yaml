@@ -52,7 +52,6 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    model: opus[1m]
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 4: VALIDATE
@@ -148,3 +147,5 @@ nodes:
     command: archon-workflow-summary
     depends_on: [implement-fixes]
     context: fresh
+provider: claude
+model: MiniMax-M2.7

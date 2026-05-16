@@ -207,7 +207,6 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: execute-refactor
-    model: opus[1m]
     prompt: |
       You are executing a refactoring plan with strict safety guardrails.
 
@@ -253,27 +252,18 @@ nodes:
             hookSpecificOutput:
               hookEventName: PreToolUse
               additionalContext: >
-                Before modifying this file: Is this file in your refactoring plan
-                ($ARTIFACTS_DIR/refactor-plan.md)? If it's not a planned target file
-                AND not a file that imports from the target, explain why you're touching it.
-                Unplanned changes increase risk.
+                Before modifying this file: Is this file in your refactoring plan ($ARTIFACTS_DIR/refactor-plan.md)? If it's not a planned target file AND not a file that imports from the target, explain why you're touching it. Unplanned changes increase risk.
       PostToolUse:
         - matcher: "Write|Edit"
           response:
             systemMessage: >
-              You just modified a file. STOP and do these things NOW before making any
-              other changes:
-              1. Run `bun run type-check` to verify the change compiles
-              2. If type-check fails, fix the error immediately
-              3. Verify you preserved the exact same behavior — no logic changes, only structural moves
-              Only proceed to the next change after type-check passes.
+              You just modified a file. STOP and do these things NOW before making any other changes: 1. Run `bun run type-check` to verify the change compiles 2. If type-check fails, fix the error immediately 3. Verify you preserved the exact same behavior — no logic changes, only structural moves Only proceed to the next change after type-check passes.
         - matcher: "Bash"
           response:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                Check the exit code. If type-check or any validation failed, fix the issue
-                before continuing. Do not accumulate broken state.
+                Check the exit code. If type-check or any validation failed, fix the issue before continuing. Do not accumulate broken state.
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 5: VALIDATE — Full test suite (bash, no AI escape hatch)
@@ -357,17 +347,14 @@ nodes:
         - matcher: "Write|Edit"
           response:
             systemMessage: >
-              You just made a fix. Run the specific failing validation check NOW
-              to verify your fix works. Do not batch fixes — verify each one.
+              You just made a fix. Run the specific failing validation check NOW to verify your fix works. Do not batch fixes — verify each one.
       PreToolUse:
         - matcher: "Write|Edit"
           response:
             hookSpecificOutput:
               hookEventName: PreToolUse
               additionalContext: >
-                You are fixing validation failures only. Do not make any changes
-                beyond what's needed to pass the failing checks. If in doubt, revert
-                the original change that caused the failure.
+                You are fixing validation failures only. Do not make any changes beyond what's needed to pass the failing checks. If in doubt, revert the original change that caused the failure.
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 7: VERIFY BEHAVIOR — Read-only confirmation
@@ -509,8 +496,7 @@ nodes:
             hookSpecificOutput:
               hookEventName: PostToolUse
               additionalContext: >
-                Verify this command succeeded. If git push or gh pr create failed,
-                read the error message carefully before retrying.
+                Verify this command succeeded. If git push or gh pr create failed, read the error message carefully before retrying.
 
   - id: verify-pr-base
     bash: |
@@ -525,3 +511,4 @@ nodes:
         echo "PR base verified: $EXPECTED"
       fi
     depends_on: [create-pr]
+model: MiniMax-M2.7

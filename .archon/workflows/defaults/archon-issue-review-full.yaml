@@ -105,3 +105,5 @@ nodes:
     command: archon-workflow-summary
     depends_on: [implement-fixes]
     context: fresh
+provider: claude
+model: MiniMax-M2.7

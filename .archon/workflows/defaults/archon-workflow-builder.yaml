@@ -63,7 +63,6 @@ nodes:
       Be specific and concrete. Each proposed node should have a clear type
       (bash, prompt, command, script, loop, or approval) and a one-line
       description of what it does.
-    model: haiku
     allowed_tools: []
     output_format:
       type: object
@@ -246,3 +245,5 @@ nodes:
          - How to run it: `bun run cli workflow run $extract-intent.output.workflow_name "your input"`
          - How to test it: `bun run cli validate workflows $extract-intent.output.workflow_name`
     depends_on: [validate-yaml]
+provider: claude
+model: MiniMax-M2.7

@@ -1,11 +1,6 @@
 name: repo-triage
 description: >-
-  Periodic repo maintenance — in parallel, triages open issues (labels +
-  dedup detection + 3-day auto-close) and cross-references open PRs against
-  open issues (conservative: suggests Closes #X only when a PR fully
-  addresses an issue, never closes anything itself). State is persisted
-  under .archon/state/ so prior runs are remembered. Designed for periodic
-  runs; safe to re-run; idempotent.
+  Periodic repo maintenance — in parallel, triages open issues (labels + dedup detection + 3-day auto-close) and cross-references open PRs against open issues (conservative: suggests Closes #X only when a PR fully addresses an issue, never closes anything itself). State is persisted under .archon/state/ so prior runs are remembered. Designed for periodic runs; safe to re-run; idempotent.
 interactive: false
 
 # Read-only triage runs directly in the live checkout. Creating a worktree
@@ -19,14 +14,11 @@ nodes:
   # Issue triage — runs concurrently with pr-link (no depends_on between them).
   # ---------------------------------------------------------------------------
   - id: triage-issues
-    model: sonnet
     allowed_tools: [Bash, Read, Write, Task]
     agents:
       brief-gen:
         description: >-
-          Reads a single GitHub issue and returns a concise JSON brief,
-          plus a template-adherence check if the caller provided template
-          context. Used for duplicate detection + template-fill reporting.
+          Reads a single GitHub issue and returns a concise JSON brief, plus a template-adherence check if the caller provided template context. Used for duplicate detection + template-fill reporting.
         model: haiku
         tools: [Bash, Read]
         prompt: |
@@ -321,13 +313,11 @@ nodes:
   # ---------------------------------------------------------------------------
   - id: closed-dedup-check
     depends_on: [triage-issues]
-    model: sonnet
     allowed_tools: [Bash, Read, Write, Task]
     agents:
       closed-brief-gen:
         description: >-
-          Reads a single recently-CLOSED GitHub issue and returns a JSON
-          brief including close reason and any closing PR reference.
+          Reads a single recently-CLOSED GitHub issue and returns a JSON brief including close reason and any closing PR reference.
         model: haiku
         tools: [Bash, Read]
         prompt: |
@@ -567,13 +557,11 @@ nodes:
   # other top-level nodes.
   # ---------------------------------------------------------------------------
   - id: closed-pr-dedup-check
-    model: sonnet
     allowed_tools: [Bash, Read, Write, Task]
     agents:
       pr-brief-gen:
         description: >-
-          Reads a single PR (open OR closed) and returns a compact JSON
-          brief suitable for cross-comparison.
+          Reads a single PR (open OR closed) and returns a compact JSON brief suitable for cross-comparison.
         model: haiku
         tools: [Bash, Read]
         prompt: |
@@ -778,15 +766,11 @@ nodes:
   # PR ↔ issue linker — runs concurrently with triage-issues.
   # ---------------------------------------------------------------------------
   - id: link-prs
-    model: sonnet
     allowed_tools: [Bash, Read, Write, Task]
     agents:
       pr-issue-matcher:
         description: >-
-          Given one PR (title + body + diff) and a compact list of open
-          issues, returns related-issue matches AND a template-adherence
-          check if the caller provided the PR template. Conservative —
-          prefers "related" over "fully-addresses" when in doubt.
+          Given one PR (title + body + diff) and a compact list of open issues, returns related-issue matches AND a template-adherence check if the caller provided the PR template. Conservative — prefers "related" over "fully-addresses" when in doubt.
         model: haiku
         tools: [Bash, Read]
         prompt: |
@@ -1153,7 +1137,6 @@ nodes:
   # nudge each item once per quiet period.
   # ---------------------------------------------------------------------------
   - id: stale-nudge
-    model: sonnet
     allowed_tools: [Bash, Read, Write]
     prompt: |
       You post gentle reminders on GitHub issues and PRs that have gone
@@ -1291,7 +1274,6 @@ nodes:
       - closed-dedup-check
       - closed-pr-dedup-check
       - stale-nudge
-    model: sonnet
     allowed_tools: [Bash, Read, Write]
     prompt: |
       You synthesise the outputs of all prior nodes in this run into one
@@ -1586,3 +1568,5 @@ nodes:
         hypothetical.
       - Slack posting is best-effort; digest.md on disk is the source
         of truth.
+provider: claude
+model: MiniMax-M2.7
