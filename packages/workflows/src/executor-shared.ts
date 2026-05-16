@@ -551,3 +551,59 @@ export function stripCompletionTags(content: string, until?: string): string {
 export function isInlineScript(script: string): boolean {
   return script.includes('\n') || /[;(){}&|<>$`"' ]/.test(script);
 }
+
+// ─── Agent Persona Resolution ────────────────────────────────────────────────
+
+import type { AgentPersona } from './agents/registry';
+
+/**
+ * Result of resolving an agent persona for a DAG node dispatch.
+ *
+ * When an agent persona is resolved:
+ * - `model` overrides the node's model (agent wins, log a warning if different)
+ * - `systemPrompt` is prepended to the node's prompt
+ * - `tools` is set as `allowed_tools` on the dispatch options (if the agent declares tools)
+ */
+export interface AgentPersonaResolution {
+  model: string;
+  systemPrompt: string;
+  allowedTools?: string[];
+  agentName: string;
+}
+
+/**
+ * Apply an agent persona to node dispatch options.
+ *
+ * The persona's model takes precedence over the node's resolved model.
+ * If a mismatch is detected, a warning is logged.
+ * The persona's system prompt is prepended to the node prompt.
+ * The persona's tool list (if present) is applied as allowed_tools.
+ */
+export function resolveAgentPersona(
+  persona: AgentPersona,
+  currentModel: string | undefined
+): AgentPersonaResolution {
+  if (currentModel !== undefined && currentModel !== persona.model) {
+    getLog().warn(
+      { agentName: persona.name, agentModel: persona.model, nodeModel: currentModel },
+      'agent.model_mismatch_agent_wins'
+    );
+  }
+
+  const resolution: AgentPersonaResolution = {
+    model: persona.model,
+    systemPrompt: persona.systemPrompt,
+    agentName: persona.name,
+  };
+
+  if (persona.tools && persona.tools.length > 0) {
+    resolution.allowedTools = persona.tools;
+  }
+
+  getLog().info(
+    { name: persona.name, model: persona.model, tools: persona.tools ?? [] },
+    'agent.resolved'
+  );
+
+  return resolution;
+}

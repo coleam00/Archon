@@ -35,6 +35,7 @@ import type { WorkflowDefinition, DagNode } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
+import { loadAgentFile } from './agents/registry';
 
 // =============================================================================
 // Types
@@ -475,6 +476,36 @@ export async function validateWorkflowResources(
             field: 'allowed_tools/denied_tools',
             message: `Tool restrictions are not supported by provider '${provider}' — this will be ignored`,
             hint: 'Remove tool restriction fields or switch to a provider that supports them',
+          });
+        }
+      }
+    }
+
+    // --- Agent persona: check .archon/agents/<name>.md exists and is valid ---
+    const agentName = 'agent' in node ? (node as { agent?: string }).agent : undefined;
+    if (agentName) {
+      const agentFilePath = join(cwd, '.archon', 'agents', `${agentName}.md`);
+      const agentExists = await fileExists(agentFilePath);
+      if (!agentExists) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'agent',
+          message: `Agent '${agentName}' not found: .archon/agents/${agentName}.md does not exist`,
+          hint: `Create .archon/agents/${agentName}.md with name, model, and system prompt frontmatter`,
+        });
+      } else {
+        // Validate the agent file itself (catches model/tool errors at workflow-load time)
+        try {
+          await loadAgentFile(agentFilePath);
+        } catch (e) {
+          const err = e as Error;
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'agent',
+            message: `Agent file '${agentName}' failed validation: ${err.message}`,
+            hint: 'Fix the agent file frontmatter (name, model, tools) and ensure the body is non-empty',
           });
         }
       }

@@ -46,6 +46,7 @@ nodes:
 
   - id: plan
     depends_on: [read-spec]
+    agent: war-council-architect
     task_class: medium_work
     prompt: |
       Read the BDC Work Order spec below and produce a concise implementation plan.
@@ -76,8 +77,8 @@ nodes:
 
   - id: implement
     depends_on: [plan]
+    agent: major-build
     task_class: medium_work
-    model: opus[1m]
     loop:
       prompt: |
         Implement the approved plan for this BDC feature Work Order.

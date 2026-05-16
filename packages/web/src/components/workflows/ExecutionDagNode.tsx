@@ -59,6 +59,14 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
         <span className="text-xs font-medium text-text-primary truncate max-w-[100px]">
           {data.label}
         </span>
+        {data.agentPersona && (
+          <>
+            <span className="text-[10px] text-text-tertiary">·</span>
+            <span className="text-[10px] text-text-tertiary italic truncate max-w-[80px]">
+              {data.agentPersona}
+            </span>
+          </>
+        )}
         {data.duration !== undefined && (
           <span className="text-[10px] text-text-tertiary ml-auto shrink-0">
             {formatDurationMs(data.duration)}

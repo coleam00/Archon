@@ -11,6 +11,8 @@ export interface DagNodeData extends DagNode {
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
+  /** Agent persona name resolved from the node's `agent:` field, if present. */
+  agentPersona?: string;
   /** Required by React Flow's Node<T> constraint — do not rely on this for typed access. */
   [key: string]: unknown;
 }
@@ -66,7 +68,8 @@ function DagNodeRender({ data, selected }: NodeProps<DagFlowNode>): React.ReactE
     data.when ||
     (data.trigger_rule && data.trigger_rule !== 'all_success') ||
     (data.skills && data.skills.length > 0) ||
-    data.mcp;
+    data.mcp ||
+    data.agentPersona;
 
   return (
     <div
@@ -82,7 +85,7 @@ function DagNodeRender({ data, selected }: NodeProps<DagFlowNode>): React.ReactE
 
       {/* Content area */}
       <div className="flex-1 min-w-0 px-2.5 py-2">
-        {/* Header: badge + label */}
+        {/* Header: badge + label [+ separator + agent persona] */}
         <div className="flex items-center gap-1.5 mb-1">
           <span
             className={cn(
@@ -94,6 +97,12 @@ function DagNodeRender({ data, selected }: NodeProps<DagFlowNode>): React.ReactE
             {config.badge}
           </span>
           <span className="text-xs font-medium text-text-primary truncate">{data.label}</span>
+          {data.agentPersona && (
+            <>
+              <span className="text-[10px] text-text-tertiary shrink-0">·</span>
+              <span className="text-[10px] text-text-tertiary italic truncate">{data.agentPersona}</span>
+            </>
+          )}
         </div>
 
         {/* Content preview */}

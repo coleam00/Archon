@@ -49,23 +49,27 @@ export function resolveNodeDisplay(dn: DagNode): {
   promptText?: string;
   bashScript?: string;
   bashTimeout?: number;
+  agentPersona?: string;
 } {
   const label = dn.description ?? dn.id;
+  const agentPersona = (dn as { agent?: string }).agent;
   if ('bash' in dn && dn.bash) {
     return {
       label,
       nodeType: 'bash',
       bashScript: dn.bash,
       bashTimeout: dn.timeout,
+      ...(agentPersona ? { agentPersona } : {}),
     };
   }
   if ('command' in dn && dn.command) {
-    return { label, nodeType: 'command' };
+    return { label, nodeType: 'command', ...(agentPersona ? { agentPersona } : {}) };
   }
   return {
     label,
     nodeType: 'prompt',
     promptText: dn.prompt,
+    ...(agentPersona ? { agentPersona } : {}),
   };
 }
 

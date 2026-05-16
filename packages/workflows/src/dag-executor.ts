@@ -6,7 +6,7 @@
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
 import { readFile } from 'fs/promises';
-import { isAbsolute, resolve as resolvePath } from 'path';
+import { isAbsolute, join, resolve as resolvePath } from 'path';
 import { execFileAsync } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
@@ -75,13 +75,34 @@ import {
   stripCompletionTags,
   isInlineScript,
   formatSubprocessFailure,
+  resolveAgentPersona,
 } from './executor-shared';
+import { loadAgentRegistry, resolveAgent } from './agents/registry';
+import type { AgentRegistry } from './agents/registry';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.dag-executor');
   return cachedLog;
+}
+
+// Agent registry cache: keyed by agents directory path, populated on first use.
+// One cache entry per unique repo root — each worktree gets its own registry.
+const agentRegistryCache = new Map<string, AgentRegistry>();
+
+async function getAgentRegistry(cwd: string): Promise<AgentRegistry> {
+  const agentsDir = join(resolvePath(cwd, '.archon', 'agents'));
+  const cached = agentRegistryCache.get(agentsDir);
+  if (cached !== undefined) return cached;
+  const registry = await loadAgentRegistry(agentsDir);
+  agentRegistryCache.set(agentsDir, registry);
+  return registry;
+}
+
+/** Clear the agent registry cache — exposed for testing only. */
+export function clearAgentRegistryCache(): void {
+  agentRegistryCache.clear();
 }
 
 const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
@@ -344,7 +365,7 @@ async function resolveNodeProviderAndModel(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRunId: string,
-  _cwd: string,
+  cwd: string,
   workflowLevelOptions: WorkflowLevelOptions
 ): Promise<{
   provider: string;
@@ -433,13 +454,39 @@ async function resolveNodeProviderAndModel(
     );
   }
 
+  // Resolve agent persona (if node declares agent:)
+  // The persona's model overrides the node-resolved model; its system prompt is
+  // prepended to any node-level systemPrompt; its tools list (if present) is
+  // used as allowed_tools (node-level allowed_tools take precedence if set).
+  let effectiveModel = model;
+  let effectiveSystemPrompt = node.systemPrompt;
+  let effectiveAllowedTools = node.allowed_tools;
+
+  const agentName = 'agent' in node ? (node as { agent?: string }).agent : undefined;
+  if (agentName) {
+    const registry = await getAgentRegistry(cwd);
+    const persona = resolveAgent(agentName, registry);
+    if (persona) {
+      const personaResolution = resolveAgentPersona(persona, effectiveModel);
+      effectiveModel = personaResolution.model;
+      // Prepend agent system prompt (agent role comes before node task)
+      effectiveSystemPrompt = effectiveSystemPrompt
+        ? `${personaResolution.systemPrompt}\n\n${effectiveSystemPrompt}`
+        : personaResolution.systemPrompt;
+      // Agent tools only apply when node doesn't already restrict tools
+      if (personaResolution.allowedTools && !effectiveAllowedTools) {
+        effectiveAllowedTools = personaResolution.allowedTools;
+      }
+    }
+  }
+
   // Build universal base options
   const baseOptions: SendQueryOptions = {};
-  if (model) baseOptions.model = model;
+  if (effectiveModel) baseOptions.model = effectiveModel;
   if (config.envVars && Object.keys(config.envVars).length > 0) {
     baseOptions.env = config.envVars;
   }
-  if (node.systemPrompt !== undefined) baseOptions.systemPrompt = node.systemPrompt;
+  if (effectiveSystemPrompt !== undefined) baseOptions.systemPrompt = effectiveSystemPrompt;
   if (node.maxBudgetUsd !== undefined) baseOptions.maxBudgetUsd = node.maxBudgetUsd;
   const fb = node.fallbackModel ?? workflowLevelOptions.fallbackModel;
   if (fb) baseOptions.fallbackModel = fb;
@@ -453,7 +500,7 @@ async function resolveNodeProviderAndModel(
     hooks: node.hooks,
     skills: node.skills,
     agents: node.agents,
-    allowed_tools: node.allowed_tools,
+    allowed_tools: effectiveAllowedTools,
     denied_tools: node.denied_tools,
     effort: node.effort ?? workflowLevelOptions.effort,
     thinking: node.thinking ?? workflowLevelOptions.thinking,
@@ -461,7 +508,7 @@ async function resolveNodeProviderAndModel(
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
     maxBudgetUsd: node.maxBudgetUsd,
-    systemPrompt: node.systemPrompt,
+    systemPrompt: effectiveSystemPrompt,
     fallbackModel: fb,
   };
 
@@ -474,7 +521,7 @@ async function resolveNodeProviderAndModel(
     assistantConfig,
   };
 
-  return { provider, model, options };
+  return { provider, model: effectiveModel, options };
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
