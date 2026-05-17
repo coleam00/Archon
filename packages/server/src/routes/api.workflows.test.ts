@@ -323,6 +323,35 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('returns project workflow when file uses .yml extension (matches discovery)', async () => {
+    const testDir = join(tmpdir(), `wf-yml-test-${Date.now()}`);
+    const workflowDir = join(testDir, '.archon', 'workflows');
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'phase-0-spike.yml'),
+      'name: phase-0-spike\ndescription: Spike\nnodes:\n  - id: plan\n    command: plan\n'
+    );
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/phase-0-spike?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        source: string;
+        filename: string;
+        workflow: { name: string };
+      };
+      expect(body.source).toBe('project');
+      expect(body.filename).toBe('phase-0-spike.yml');
+      expect(body.workflow).toBeDefined();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   test('returns home-scoped workflow with source:global when project/bundled miss', async () => {
     const tmpHome = join(tmpdir(), `wf-home-test-${Date.now()}`);
     const homeWorkflowsDir = join(tmpHome, 'workflows');

@@ -3577,6 +3577,25 @@ export function registerApiRoutes(
       return apiError(c, 400, 'Invalid workflow name');
     }
 
+    // Workflow files may use `.yaml` or `.yml` (the discovery scanner accepts
+    // both — `workflow-discovery.ts`'s readdir filter at line 119). Mirror
+    // that here so the by-name lookup doesn't 404 on `.yml` files like
+    // `phase-0-spike.yml` that the list endpoint already returns.
+    const tryReadWorkflowAt = async (
+      dir: string
+    ): Promise<{ filename: string; content: string } | null> => {
+      for (const ext of ['yaml', 'yml']) {
+        const filename = `${name}.${ext}`;
+        try {
+          const content = await readFile(join(dir, filename), 'utf-8');
+          return { filename, content };
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+      }
+      return null;
+    };
+
     try {
       const cwd = c.req.query('cwd');
       let workingDir = cwd;
@@ -3589,82 +3608,80 @@ export function registerApiRoutes(
         if (codebases.length > 0) workingDir = codebases[0].default_cwd;
       }
 
-      const filename = `${name}.yaml`;
-
       // 1. Try user-defined workflow in cwd.
       if (workingDir) {
         const [workflowFolder] = getWorkflowFolderSearchPaths();
-        const filePath = join(workingDir, workflowFolder, filename);
         try {
-          const content = await readFile(filePath, 'utf-8');
-          const result = parseWorkflow(content, filename);
-          if (result.error) {
-            return apiError(c, 500, `Workflow file is invalid: ${result.error.error}`);
+          const hit = await tryReadWorkflowAt(join(workingDir, workflowFolder));
+          if (hit) {
+            const result = parseWorkflow(hit.content, hit.filename);
+            if (result.error) {
+              return apiError(c, 500, `Workflow file is invalid: ${result.error.error}`);
+            }
+            return c.json({
+              workflow: result.workflow,
+              filename: hit.filename,
+              source: 'project' as WorkflowSource,
+            });
           }
-          return c.json({
-            workflow: result.workflow,
-            filename,
-            source: 'project' as WorkflowSource,
-          });
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            getLog().error({ err, name }, 'workflow.fetch_failed');
-            return apiError(c, 500, 'Failed to read workflow');
-          }
+          getLog().error({ err, name }, 'workflow.fetch_failed');
+          return apiError(c, 500, 'Failed to read workflow');
         }
       }
 
       // 2. Fall back to home-scoped workflow (`~/.archon/workflows/`).
       // Mirrors the discovery order in `discoverWorkflowsWithConfig`.
-      {
-        const homeFilePath = join(getHomeWorkflowsPath(), filename);
-        try {
-          const content = await readFile(homeFilePath, 'utf-8');
-          const result = parseWorkflow(content, filename);
+      try {
+        const hit = await tryReadWorkflowAt(getHomeWorkflowsPath());
+        if (hit) {
+          const result = parseWorkflow(hit.content, hit.filename);
           if (result.error) {
             return apiError(c, 500, `Home workflow file is invalid: ${result.error.error}`);
           }
           return c.json({
             workflow: result.workflow,
-            filename,
+            filename: hit.filename,
             source: 'global' as WorkflowSource,
           });
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            getLog().error({ err, name }, 'workflow.fetch_home_failed');
-            return apiError(c, 500, 'Failed to read home-scoped workflow');
-          }
         }
+      } catch (err) {
+        getLog().error({ err, name }, 'workflow.fetch_home_failed');
+        return apiError(c, 500, 'Failed to read home-scoped workflow');
       }
 
       // 3. Fall back to bundled defaults.
       if (Object.hasOwn(BUNDLED_WORKFLOWS, name)) {
+        const bundledFilename = `${name}.yaml`;
         const bundledContent = BUNDLED_WORKFLOWS[name];
-        const result = parseWorkflow(bundledContent, filename);
+        const result = parseWorkflow(bundledContent, bundledFilename);
         if (result.error) {
           return apiError(c, 500, `Bundled workflow is invalid: ${result.error.error}`);
         }
-        return c.json({ workflow: result.workflow, filename, source: 'bundled' as WorkflowSource });
+        return c.json({
+          workflow: result.workflow,
+          filename: bundledFilename,
+          source: 'bundled' as WorkflowSource,
+        });
       }
 
       if (!isBinaryBuild()) {
-        const defaultFilePath = join(getDefaultWorkflowsPath(), filename);
         try {
-          const content = await readFile(defaultFilePath, 'utf-8');
-          const result = parseWorkflow(content, filename);
-          if (result.error) {
-            return apiError(c, 500, `Default workflow is invalid: ${result.error.error}`);
+          const hit = await tryReadWorkflowAt(getDefaultWorkflowsPath());
+          if (hit) {
+            const result = parseWorkflow(hit.content, hit.filename);
+            if (result.error) {
+              return apiError(c, 500, `Default workflow is invalid: ${result.error.error}`);
+            }
+            return c.json({
+              workflow: result.workflow,
+              filename: hit.filename,
+              source: 'bundled' as WorkflowSource,
+            });
           }
-          return c.json({
-            workflow: result.workflow,
-            filename,
-            source: 'bundled' as WorkflowSource,
-          });
         } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            getLog().error({ err, name }, 'workflow.fetch_default_failed');
-            return apiError(c, 500, 'Failed to read default workflow');
-          }
+          getLog().error({ err, name }, 'workflow.fetch_default_failed');
+          return apiError(c, 500, 'Failed to read default workflow');
         }
       }
 
@@ -3775,21 +3792,24 @@ export function registerApiRoutes(
       workingDir = getArchonHome();
     }
 
-    const filePath =
+    const dir =
       targetSource === 'global'
-        ? join(getHomeWorkflowsPath(), `${name}.yaml`)
-        : join(workingDir, getWorkflowFolderSearchPaths()[0], `${name}.yaml`);
+        ? getHomeWorkflowsPath()
+        : join(workingDir, getWorkflowFolderSearchPaths()[0]);
 
-    try {
-      await unlink(filePath);
-      return c.json({ deleted: true, name });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return apiError(c, 404, `Workflow not found: ${name}`);
+    // Try both `.yaml` and `.yml` extensions to match discovery semantics.
+    for (const ext of ['yaml', 'yml']) {
+      const filePath = join(dir, `${name}.${ext}`);
+      try {
+        await unlink(filePath);
+        return c.json({ deleted: true, name });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        getLog().error({ err, name }, 'workflow.delete_failed');
+        return apiError(c, 500, 'Failed to delete workflow');
       }
-      getLog().error({ err, name }, 'workflow.delete_failed');
-      return apiError(c, 500, 'Failed to delete workflow');
     }
+    return apiError(c, 404, `Workflow not found: ${name}`);
   });
 
   // GET /api/commands - List available command names for the workflow node palette
