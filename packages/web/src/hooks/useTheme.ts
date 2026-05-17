@@ -6,8 +6,12 @@ const STORAGE_KEY = 'archon-theme';
 
 function getInitialTheme(): Theme {
   if (typeof window === 'undefined') return 'dark';
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored === 'light' || stored === 'dark') return stored;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored === 'light' || stored === 'dark') return stored;
+  } catch {
+    // localStorage unavailable (Safari private mode, Firefox privacy settings)
+  }
   return 'dark';
 }
 
@@ -21,7 +25,11 @@ export function useTheme(): { theme: Theme; toggleTheme: () => void } {
     } else {
       root.classList.remove('dark');
     }
-    localStorage.setItem(STORAGE_KEY, theme);
+    try {
+      localStorage.setItem(STORAGE_KEY, theme);
+    } catch {
+      // Storage unavailable or quota exceeded — theme state persists in memory
+    }
   }, [theme]);
 
   const toggleTheme = useCallback(() => {

@@ -25,10 +25,14 @@
     <script>
       // Apply saved theme before React renders to prevent flash
       (function () {
-        var theme = localStorage.getItem('archon-theme');
-        if (theme === 'light') {
-          document.documentElement.classList.remove('dark');
-        } else {
+        try {
+          var theme = localStorage.getItem('archon-theme');
+          if (theme === 'light') {
+            document.documentElement.classList.remove('dark');
+          } else {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {
           document.documentElement.classList.add('dark');
         }
       })();
