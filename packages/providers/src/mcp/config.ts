@@ -35,7 +35,7 @@ function expandEnvVarsInRecord(
     result[key] = val.replace(
       /\$(?:\{([A-Z_][A-Z0-9_]*)\}|([A-Z_][A-Z0-9_]*))/g,
       (_, braced: string | undefined, bare: string | undefined) => {
-        const varName = braced ?? bare ?? '';
+        const varName = braced ?? bare ?? ''; // alternation guarantees one group matched; '' is unreachable
         const envVal = envSource[varName];
         if (envVal === undefined) {
           missingVars.push(varName);
