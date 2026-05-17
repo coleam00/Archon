@@ -305,21 +305,34 @@ export async function getRunningWorkflows(): Promise<
 
 export async function findResumableRun(
   workflowName: string,
-  workingPath: string
+  workingPath: string,
+  userMessage?: string
 ): Promise<WorkflowRun | null> {
   const dialect = getDialect();
+  // When userMessage is provided (auto-resume from executor.ts where the
+  // caller knows the current invocation's input), narrow the match so a
+  // failed run for a DIFFERENT plan/description on the same workflow+path
+  // is not silently picked up. When omitted (explicit `--resume` from the
+  // CLI, where the user is asking to reuse whatever the prior run was),
+  // fall back to the original workflow_name + working_path match.
+  const narrowByUserMessage = userMessage !== undefined;
+  const userMessagePredicate = narrowByUserMessage ? 'AND user_message = $3' : '';
+  const params: unknown[] = narrowByUserMessage
+    ? [workflowName, workingPath, userMessage]
+    : [workflowName, workingPath];
   try {
     const result = await pool.query<WorkflowRun>(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND working_path = $2
+         ${userMessagePredicate}
          AND (
            status IN ('failed', 'paused')
            OR (status = 'running' AND (last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(3)}))
          )
        ORDER BY started_at DESC
        LIMIT 1`,
-      [workflowName, workingPath, 1]
+      params
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;

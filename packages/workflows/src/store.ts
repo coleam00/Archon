@@ -63,7 +63,11 @@ export interface IWorkflowStore {
     workingPath: string,
     self?: { id: string; startedAt: Date }
   ): Promise<WorkflowRun | null>;
-  findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
+  findResumableRun(
+    workflowName: string,
+    workingPath: string,
+    userMessage?: string
+  ): Promise<WorkflowRun | null>;
   failOrphanedRuns(): Promise<{ count: number }>;
   resumeWorkflowRun(id: string): Promise<WorkflowRun>;
   updateWorkflowRun(

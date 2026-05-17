@@ -490,7 +490,9 @@ describe('workflows database', () => {
       expect(query).not.toContain('conversation_id');
       expect(query).toContain('ORDER BY started_at DESC');
       expect(query).not.toMatch(/--.*\$\d/); // regression guard for #999: $N in SQL comments breaks convertPlaceholders
-      expect(params).toEqual(['feature-development', '/repo/path', 1]);
+      // userMessage omitted -> no $3 predicate, params length 2
+      expect(query).not.toContain('user_message = $3');
+      expect(params).toEqual(['feature-development', '/repo/path']);
     });
 
     test('returns a stale running run (no activity for >1 day)', async () => {
@@ -509,7 +511,7 @@ describe('workflows database', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'running'");
       expect(query).toContain('last_activity_at');
-      expect(params).toEqual(['feature-development', '/repo/path', 1]);
+      expect(params).toEqual(['feature-development', '/repo/path']);
     });
 
     test('returns a running run with null last_activity_at (never recorded activity)', async () => {
@@ -542,6 +544,53 @@ describe('workflows database', () => {
       await expect(findResumableRun('test', '/path')).rejects.toThrow(
         'Failed to find resumable run: Connection refused'
       );
+    });
+
+    test('narrows by user_message when provided (auto-resume path)', async () => {
+      const failedRun = {
+        ...mockWorkflowRun,
+        status: 'failed' as const,
+        working_path: '/repo/path',
+        user_message: 'plan-A.md',
+      };
+      mockQuery.mockResolvedValueOnce(createQueryResult([failedRun]));
+
+      const result = await findResumableRun('feature-development', '/repo/path', 'plan-A.md');
+
+      expect(result).toEqual(failedRun);
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('user_message = $3');
+      expect(params).toEqual(['feature-development', '/repo/path', 'plan-A.md']);
+    });
+
+    test('does NOT cross-resume a failed run for a different user_message', async () => {
+      // Empty result means SQL filtered it out — the bug fix.
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      const result = await findResumableRun('feature-development', '/repo/path', 'plan-B.md');
+
+      expect(result).toBeNull();
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('user_message = $3');
+      expect(params).toEqual(['feature-development', '/repo/path', 'plan-B.md']);
+    });
+
+    test('explicit --resume (no user_message) falls back to workflow+path match', async () => {
+      // Caller is CLI --resume path; user is asking to reuse whatever the
+      // prior failed run was. user_message predicate must NOT be added.
+      const failedRun = {
+        ...mockWorkflowRun,
+        status: 'failed' as const,
+        working_path: '/repo/path',
+      };
+      mockQuery.mockResolvedValueOnce(createQueryResult([failedRun]));
+
+      const result = await findResumableRun('feature-development', '/repo/path');
+
+      expect(result).toEqual(failedRun);
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).not.toContain('user_message = $3');
+      expect(params).toEqual(['feature-development', '/repo/path']);
     });
   });
 

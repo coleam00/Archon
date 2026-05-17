@@ -315,7 +315,11 @@ export async function executeWorkflow(
     // Step 1: Find prior failed run — non-critical, fall through on DB error
     let resumableRun: Awaited<ReturnType<typeof deps.store.findResumableRun>> = null;
     try {
-      resumableRun = await deps.store.findResumableRun(workflow.name, cwd);
+      // Pass userMessage so a failed run for a DIFFERENT plan/description on
+      // the same (workflow_name, working_path) is not silently picked up.
+      // Especially load-bearing for workflows with `worktree.enabled: false`,
+      // where every invocation shares cwd.
+      resumableRun = await deps.store.findResumableRun(workflow.name, cwd, userMessage);
     } catch (error) {
       const err = error as Error;
       getLog().error(
