@@ -22,14 +22,7 @@ nodes:
       mkdir -p .security-scans
       gitleaks detect --source . --report-format json \
         --report-path .security-scans/gitleaks-report.json 2>&1 || true
-      SECRETS=$(python3 -c "
-import json
-try:
-    r = json.load(open('.security-scans/gitleaks-report.json'))
-    print(len(r) if isinstance(r, list) else 0)
-except:
-    print(0)
-")
+      SECRETS=$(python3 -c "import json; r=json.load(open('.security-scans/gitleaks-report.json')); print(len(r) if isinstance(r, list) else 0)" 2>/dev/null || echo "0")
       echo "gitleaks: $SECRETS secrets found"
       echo "$SECRETS" > .security-scans/gitleaks-count.txt
     depends_on: [guard-setup]
@@ -39,14 +32,7 @@ except:
       set -uo pipefail
       mkdir -p .security-scans
       semgrep --config auto --json --output .security-scans/semgrep-report.json . 2>/dev/null || true
-      FINDINGS=$(python3 -c "
-import json
-try:
-    r = json.load(open('.security-scans/semgrep-report.json'))
-    print(len(r.get('results', [])))
-except:
-    print(0)
-")
+      FINDINGS=$(python3 -c "import json; r=json.load(open('.security-scans/semgrep-report.json')); print(len(r.get('results', [])))" 2>/dev/null || echo "0")
       echo "semgrep: $FINDINGS findings"
       echo "$FINDINGS" > .security-scans/semgrep-count.txt
     depends_on: [guard-setup]
@@ -56,15 +42,7 @@ except:
       set -uo pipefail
       mkdir -p .security-scans
       trivy fs --format json --output .security-scans/trivy-report.json . 2>/dev/null || true
-      VULNS=$(python3 -c "
-import json
-try:
-    r = json.load(open('.security-scans/trivy-report.json'))
-    total = sum(len(res.get('Vulnerabilities', []) or []) for res in (r.get('Results') or []))
-    print(total)
-except:
-    print(0)
-")
+      VULNS=$(python3 -c "import json; r=json.load(open('.security-scans/trivy-report.json')); print(sum(len(res.get('Vulnerabilities',[]) or []) for res in (r.get('Results') or [])))" 2>/dev/null || echo "0")
       echo "trivy: $VULNS vulnerabilities found"
       echo "$VULNS" > .security-scans/trivy-count.txt
     depends_on: [guard-setup]
@@ -88,20 +66,7 @@ except:
       GITLEAKS=$(cat .security-scans/gitleaks-count.txt 2>/dev/null || echo "0")
       SEMGREP=$(cat .security-scans/semgrep-count.txt 2>/dev/null || echo "0")
       TRIVY=$(cat .security-scans/trivy-count.txt 2>/dev/null || echo "0")
-      python3 -c "
-import json, datetime
-manifest = {
-    'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-    'scanners': {
-        'gitleaks': {'findings': int('$GITLEAKS')},
-        'semgrep': {'findings': int('$SEMGREP')},
-        'trivy': {'findings': int('$TRIVY')}
-    }
-}
-with open('.scan-manifest.json', 'w') as f:
-    json.dump(manifest, f, indent=2)
-print('.scan-manifest.json written')
-"
+      python3 -c "import json,datetime; m={'timestamp':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scanners':{'gitleaks':{'findings':int('$GITLEAKS')},'semgrep':{'findings':int('$SEMGREP')},'trivy':{'findings':int('$TRIVY')}}}; json.dump(m,open('.scan-manifest.json','w'),indent=2); print('.scan-manifest.json written')"
     depends_on: [run-gitleaks, run-semgrep, run-trivy, run-checkov]
     trigger_rule: all_done
 
