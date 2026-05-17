@@ -169,6 +169,16 @@ This runs `check:bundled`, `check:bundled-skill`, type-check, lint, format check
 - Disabling rules to "make CI pass"
 - Bulk disabling at file level (`/* eslint-disable */`)
 
+**Type-assertion dead-end (Archon-specific):**
+`@typescript-eslint/non-nullable-type-assertion-style` and
+`@typescript-eslint/no-non-null-assertion` together prohibit both `as T` and `!` for
+non-null narrowing. The compliant resolution is a `?? fallback` value with an inline
+comment explaining why the fallback is unreachable:
+```typescript
+// alternation guarantees one group matched; '' fallback is unreachable
+const varName = braced ?? bare ?? '';
+```
+
 ### Database
 
 **Auto-Detection (SQLite is the default — zero setup):**
