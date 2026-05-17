@@ -97,6 +97,27 @@ export function resolveForgeAuth(url: string): { token: string | undefined; sche
     }
   }
 
+  // 3. Explicit URL match: compare clone hostname against configured *_URL env vars.
+  //    Handles self-hosted instances where the hostname doesn't contain a forge name
+  //    (e.g. git.example.com with GITEA_URL=https://git.example.com).
+  const URL_FORGE: { urlEnvVar: string; tokenEnvVar: string; scheme: string }[] = [
+    { urlEnvVar: 'GITEA_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
+    { urlEnvVar: 'GITLAB_URL', tokenEnvVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
+    { urlEnvVar: 'FORGEJO_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
+  ];
+  for (const entry of URL_FORGE) {
+    const forgeUrl = process.env[entry.urlEnvVar];
+    if (forgeUrl) {
+      const forgeParsed = safeParseUrl(forgeUrl);
+      if (forgeParsed?.hostname.toLowerCase() === hostname) {
+        const token = process.env[entry.tokenEnvVar];
+        if (token) {
+          return { token, scheme: entry.scheme };
+        }
+      }
+    }
+  }
+
   return { token: undefined, scheme: '' };
 }
 
