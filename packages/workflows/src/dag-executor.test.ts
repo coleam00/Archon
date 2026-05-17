@@ -2491,6 +2491,66 @@ describe('loadMcpConfig', () => {
     delete process.env.TEST_MCP_TOKEN_445;
   });
 
+  it('expands ${VAR} brace syntax in env values', async () => {
+    process.env.TEST_BRACE_TOKEN_445 = 'secret_brace';
+    const config = { github: { command: 'npx', env: { TOKEN: '${TEST_BRACE_TOKEN_445}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.github as Record<string, unknown>;
+    expect(server.env).toEqual({ TOKEN: 'secret_brace' });
+
+    delete process.env.TEST_BRACE_TOKEN_445;
+  });
+
+  it('expands mixed $VAR and ${VAR} syntax in the same string', async () => {
+    process.env.TEST_MIXED_HOST_445 = 'myhost';
+    process.env.TEST_MIXED_PORT_445 = '5432';
+    const config = {
+      db: {
+        command: 'npx',
+        env: { DATABASE_URL: 'postgresql://$TEST_MIXED_HOST_445:${TEST_MIXED_PORT_445}/mydb' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.db as Record<string, unknown>;
+    expect(server.env).toEqual({ DATABASE_URL: 'postgresql://myhost:5432/mydb' });
+
+    delete process.env.TEST_MIXED_HOST_445;
+    delete process.env.TEST_MIXED_PORT_445;
+  });
+
+  it('reports missing vars for ${VAR} brace syntax', async () => {
+    delete process.env.NONEXISTENT_BRACE_VAR_445;
+    const config = { svc: { command: 'npx', env: { KEY: '${NONEXISTENT_BRACE_VAR_445}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ KEY: '' });
+    expect(result.missingVars).toContain('NONEXISTENT_BRACE_VAR_445');
+  });
+
+  it('expands ${VAR} brace syntax in headers values', async () => {
+    process.env.TEST_BRACE_API_KEY_445 = 'key_brace';
+    const config = {
+      api: {
+        type: 'http',
+        url: 'https://example.com',
+        headers: { Authorization: 'Bearer ${TEST_BRACE_API_KEY_445}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.api as Record<string, unknown>;
+    expect(server.headers).toEqual({ Authorization: 'Bearer key_brace' });
+
+    delete process.env.TEST_BRACE_API_KEY_445;
+  });
+
   it('expands $VAR_NAME in headers values', async () => {
     process.env.TEST_API_KEY_445 = 'key456';
     const config = {

@@ -123,7 +123,7 @@ Connects to an SSE endpoint.
 
 ## Environment Variable Expansion
 
-Values in `env` and `headers` fields support `$VAR_NAME` references. They are
+Values in `env` and `headers` fields support `$VAR_NAME` and `${VAR_NAME}` references. They are
 expanded from Archon's process environment at execution time. Codex workflow
 nodes also include codebase-scoped env vars in that expansion.
 
@@ -141,7 +141,7 @@ nodes also include codebase-scoped env vars in that expansion.
 ```
 
 **Rules:**
-- Pattern: `$UPPER_CASE_VAR` (matches `[A-Z_][A-Z0-9_]*`)
+- Pattern: `$UPPER_CASE_VAR` or `${UPPER_CASE_VAR}` (matches `[A-Z_][A-Z0-9_]*`)
 - Only `env` and `headers` values are expanded — `command`, `args`, `url` are left untouched
 - Undefined vars are replaced with empty string and a warning is shown:
   `Warning: Node 'X' MCP config references undefined env vars: VAR_NAME`
