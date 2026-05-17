@@ -1,0 +1,323 @@
+name: piv-system-evolution
+description: |
+  Use when: User wants guided Plan-Implement-Validate development that also evolves the
+  codebase's AI Layer.
+  Triggers: "piv system evolution", "piv loop and evolve", "fix and improve the ai layer",
+            "guided development with system evolution".
+  NOT for: Autonomous implementation with no human review (use archon-feature-development).
+  NOT for: PRD creation (use archon-interactive-prd).
+
+  The PIV loop (Plan -> Implement -> Validate) on one feature or bug, with a closing
+  system-evolution phase: the run's friction is turned into concrete AI-Layer improvements
+  (CLAUDE.md, command prompts, references) that a human curates before they are committed.
+
+  Three human-in-the-loop gates: after priming, after planning, and at the end.
+  The autonomous phases are adapted from the agentic-coding-course AI Layer.
+  Input: a GitHub issue number, a feature description, or a path to a plan file.
+  Ends in a draft PR on an isolated worktree branch.
+
+provider: claude
+model: sonnet
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: PRIME — load task + codebase context
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: prime
+    command: piv-prime
+    context: fresh
+
+  # ── GATE 1: prime-review — human confirms/corrects the understanding ──
+  - id: prime-review
+    depends_on: [prime]
+    loop:
+      prompt: |
+        # PIV — Prime Review Gate
+
+        A human is reviewing the agent's understanding of the task and codebase before
+        any planning happens.
+
+        **Human's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## If there is NO human input yet (first iteration):
+
+        1. Read `$ARTIFACTS_DIR/prime.md` — the primer the prime phase produced.
+        2. Present, concisely:
+           - The task as the agent understood it
+           - The relevant existing code it found
+           - Its initial approach and the key decisions needing a human
+           - Every open question from the primer
+        3. Ask the human to confirm the understanding, correct anything wrong, point at code
+           the agent missed, or set direction.
+        4. Do NOT emit the completion signal on the first iteration.
+
+        ## If the human HAS provided input (later iterations):
+
+        1. Read their input carefully. Capture every correction, clarification, and piece of
+           direction.
+        2. Append what they said to `$ARTIFACTS_DIR/prime-review.md` under a clear heading
+           (create the file if it does not exist). This file is the authoritative correction
+           layer the planning phase will read — it overrides the primer where they conflict.
+        3. If they asked a question, answer it with evidence from the codebase. Do NOT emit
+           the signal — they are still in conversation.
+        4. If they gave corrections or direction, acknowledge what you recorded, then ask if
+           they are ready to plan. Do NOT emit the signal yet.
+
+        **Emitting the completion signal:**
+        Only when the human's LATEST message clearly approves moving on — an explicit
+        "ready", "approved", "looks good", "proceed", "go" — do this:
+        - Ensure `$ARTIFACTS_DIR/prime-review.md` exists. If the human made no corrections,
+          write it with a single line: "Primer approved as-is, no corrections."
+        - Output: "Understanding confirmed. Proceeding to planning."
+        - Emit: <promise>PRIME_OK</promise>
+
+        NEVER emit <promise>PRIME_OK</promise> for a question, a correction, or anything
+        ambiguous. When unsure, ask.
+      until: PRIME_OK
+      max_iterations: 12
+      interactive: true
+      gate_message: |
+        Review the agent's understanding above. Correct anything wrong, point it at code it
+        missed, or say "ready" to move on to planning.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: PLAN — create the implementation plan
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: plan
+    command: piv-plan
+    depends_on: [prime-review]
+    context: fresh
+
+  # ── GATE 2: plan-review — human reviews/edits the plan ──
+  - id: plan-review
+    depends_on: [plan]
+    loop:
+      prompt: |
+        # PIV — Plan Review Gate
+
+        A human is reviewing the implementation plan before any code is written.
+
+        **Human's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## Step 1: Read the plan
+
+        Read `$ARTIFACTS_DIR/plan.md` in full. Also read `CLAUDE.md` for conventions.
+
+        ## Step 2: Process
+
+        **If there is NO human input yet (first iteration):**
+        - Present the plan's key decisions, its task list, and its risks.
+        - Ask the human to review and give feedback.
+        - Do NOT emit the completion signal.
+
+        **If the human EXPLICITLY approved** (said "approved", "looks good", "ship it",
+        "proceed", or similar):
+        - Make no further changes.
+        - Output: "Plan approved. Proceeding to implementation."
+        - Emit: <promise>PLAN_OK</promise>
+
+        **If the human gave specific feedback:**
+        - Edit `$ARTIFACTS_DIR/plan.md` directly — add, remove, or change tasks; adjust
+          success criteria, testing strategy, or risks as asked.
+        - Re-verify any file paths or patterns you changed.
+        - Show what changed and the updated task/file counts.
+        - Ask for more feedback or an approval. Do NOT emit the signal.
+
+        NEVER emit <promise>PLAN_OK</promise> unless the human's latest message is an
+        explicit approval. Questions and change requests are not approval.
+      until: PLAN_OK
+      max_iterations: 12
+      interactive: true
+      gate_message: |
+        Review the plan in $ARTIFACTS_DIR/plan.md. Give specific feedback on what to change,
+        or say "approved" to begin implementation.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: IMPLEMENT — execute the plan task-by-task
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement
+    command: piv-implement
+    depends_on: [plan-review]
+    context: fresh
+    model: claude-opus-4-6[1m]
+    idle_timeout: 900000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: VALIDATE — run the project's validation suite
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate
+    command: piv-validate
+    depends_on: [implement]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: CODE REVIEW — technical review + fixes
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: code-review
+    command: piv-code-review
+    depends_on: [validate]
+    context: fresh
+
+  - id: code-review-fix
+    command: piv-code-review-fix
+    depends_on: [code-review]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: REFLECT — execution report + system review
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: execution-report
+    command: piv-execution-report
+    depends_on: [code-review-fix]
+    context: fresh
+
+  - id: system-review
+    command: piv-system-review
+    depends_on: [execution-report]
+    context: fresh
+
+  # ── GATE 3: system-evolution — human curates the AI-Layer changes ──
+  - id: system-evolution
+    depends_on: [system-review]
+    loop:
+      prompt: |
+        # PIV — System Evolution Gate
+
+        The fix is built, validated, and reviewed. The system-review phase proposed concrete
+        improvements to the codebase's AI Layer. A human now curates them — only approved
+        changes get committed.
+
+        **Human's latest input**: $LOOP_USER_INPUT
+
+        ---
+
+        ## If there is NO human input yet (first iteration):
+
+        1. Read `$ARTIFACTS_DIR/system-review.md` — the numbered AI-Layer evolution proposals.
+        2. Present each proposal concisely: its number, the target file, the exact change,
+           and why it helps the next run.
+        3. Ask the human to curate — approve all, approve specific numbers, edit a proposal,
+           or reject. Make clear that only what they approve will be committed.
+        4. Do NOT emit the completion signal on the first iteration.
+        5. If the proposal file says no changes are worth making, say so and ask the human to
+           confirm — they can still add their own. If they confirm, you may emit the signal.
+
+        ## If the human HAS provided input (later iterations):
+
+        1. Parse exactly which proposals they approved, edited, or rejected.
+        2. For each APPROVED proposal: apply the change to the real AI-Layer file
+           (`CLAUDE.md`, a reference doc, a command prompt, or a new file as proposed).
+           Apply human edits exactly as they specified.
+        3. After applying changes, commit ONLY the AI-Layer files as a dedicated commit —
+           keep it separate from the code fix:
+           ```bash
+           git add -A
+           git status --short
+           git commit -m "chore(ai-layer): evolve AI Layer from PIV run"
+           ```
+           Skip the commit cleanly if nothing was approved.
+        4. Report what was applied and committed. Ask if they have more to curate.
+        5. Do NOT emit the signal unless they are explicitly done.
+
+        **Emitting the completion signal:**
+        When the human's LATEST message clearly means they are done curating — "done",
+        "approved", "that's all", "finalize", "ship it" — apply and commit any remaining
+        approved proposals, then:
+        - Output a summary of every AI-Layer change committed.
+        - Emit: <promise>EVOLVED</promise>
+
+        NEVER emit <promise>EVOLVED</promise> while the human is still curating or asking
+        questions. Never commit a proposal the human did not approve.
+      until: EVOLVED
+      max_iterations: 15
+      interactive: true
+      gate_message: |
+        Review the proposed AI-Layer changes in $ARTIFACTS_DIR/system-review.md. Approve the
+        proposals you want (by number), edit any, reject the rest, or say "done" to finalize.
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 7: FINALIZE — push the worktree branch and open a draft PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: finalize
+    depends_on: [system-evolution]
+    context: fresh
+    prompt: |
+      # PIV — Finalize
+
+      The implementation is approved and the AI Layer has been evolved. Push the worktree
+      branch and open a draft pull request. The draft PR is how this run is validated.
+
+      ## Step 1: Confirm everything is committed
+
+      ```bash
+      git status --short
+      ```
+
+      If anything is uncommitted, stage and commit it with a clear message before continuing.
+
+      ## Step 2: Push the branch
+
+      ```bash
+      git push -u origin HEAD
+      ```
+
+      ## Step 3: Gather context for the PR body
+
+      Read these artifacts:
+      - `$ARTIFACTS_DIR/plan.md` — what was built
+      - `$ARTIFACTS_DIR/execution-report.md` — how the run went
+      - `$ARTIFACTS_DIR/system-review.md` — the AI-Layer changes that were curated
+
+      Review the commits and diff:
+
+      ```bash
+      git log --oneline --no-merges $BASE_BRANCH..HEAD
+      git diff --stat $BASE_BRANCH..HEAD
+      ```
+
+      ## Step 4: Create the draft PR
+
+      Check whether a PR already exists for this branch:
+
+      ```bash
+      gh pr view --json url,number 2>/dev/null || echo "NO_PR"
+      ```
+
+      If none exists, look for a PR template (`.github/pull_request_template.md`,
+      `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`) and read it.
+
+      Create a DRAFT PR with `gh pr create --draft --base $BASE_BRANCH`:
+      - Title: concise, imperative, under 70 characters.
+      - Body: fill in the PR template if one exists. Otherwise include a summary, the change
+        list, validation evidence, the AI-Layer changes made, and `Fixes #<issue>` if the
+        input was a GitHub issue. Pass the body via a heredoc.
+
+      ## Step 5: Report
+
+      Output a final summary:
+
+      ```
+      ===============================================================
+      PIV SYSTEM EVOLUTION — COMPLETE
+      ===============================================================
+      Branch: {branch}
+      Draft PR: {url}
+
+      Code changes:   {file count}, +{X} -{Y}
+      AI-Layer changes committed: {list, or "none"}
+
+      Validation: {result from $ARTIFACTS_DIR/validation.md}
+      ===============================================================
+      ```

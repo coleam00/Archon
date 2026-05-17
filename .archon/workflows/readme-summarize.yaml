@@ -1,0 +1,8 @@
+name: readme-summarize
+description: Summarize the README for the Archon codebase
+
+nodes:
+  - id: summarize
+    prompt: |
+      Read the README.md file in the current repository and provide a concise summary of what this project does, its key features, and how to get started.
+    allowed_tools: []
