@@ -164,6 +164,14 @@ describe('TelegramAdapter', () => {
       const secondCall = mockSendMessage.mock.calls[1];
       expect(secondCall.length).toBe(2); // (id, text) — no options object
     });
+
+    test('should silently skip whitespace-only messages', async () => {
+      await adapter.sendMessage('12345', '\n');
+      await adapter.sendMessage('12345', '   \n  \t  ');
+      await adapter.sendMessage('12345', '');
+
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
   });
 
   describe('getConversationId', () => {

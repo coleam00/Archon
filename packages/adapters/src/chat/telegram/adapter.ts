@@ -54,6 +54,11 @@ export class TelegramAdapter implements IPlatformAdapter {
    *   (paragraphs rarely have formatting that spans across them)
    */
   async sendMessage(chatId: string, message: string, _metadata?: MessageMetadata): Promise<void> {
+    // Telegram rejects whitespace-only messages (400: text must be non-empty).
+    // Reasoning models (e.g. GLM-4.5-Air via Pi) can emit newline-only chunks
+    // during streaming — skip silently.
+    if (!message.trim()) return;
+
     const id = parseInt(chatId);
     getLog().debug({ chatId, messageLength: message.length }, 'telegram.send_message');
 
