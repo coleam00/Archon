@@ -1292,10 +1292,10 @@ describe('executeDagWorkflow -- bash nodes', () => {
     );
 
     // The workflow should complete (it handles failures) but the node failed
-    // The mock platform should have received a failure message about no successful nodes
+    // The mock platform should have received a failure message about the failed node
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('fail'));
     expect(failMsg).toBeDefined();
   });
 
@@ -3239,6 +3239,54 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         (call[0] as { step_name: string }).step_name === 'step1'
     );
     expect(skippedEvent).toBeDefined();
+    expect(skippedEvent[0].data.node_output).toBe('prior output');
+  });
+
+  it('emits node_skipped_prior_success with empty output when node ID not in map', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('resume-empty-output');
+
+    // priorCompletedNodes has step1 but with undefined value to test the ?? '' fallback
+    const priorCompletedNodes = new Map<string, string>([
+      ['step1', undefined as unknown as string],
+    ]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-resume',
+      testDir,
+      {
+        name: 'two-step',
+        nodes: [
+          { id: 'step1', command: 'step1' },
+          { id: 'step2', command: 'step2', depends_on: ['step1'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const skippedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+        (call[0] as { step_name: string }).step_name === 'step1'
+    );
+    expect(skippedEvent).toBeDefined();
+    // The ?? '' fallback kicks in when the map value is undefined
+    expect(skippedEvent[0].data.node_output).toBe('');
   });
 
   it('runs all nodes when priorCompletedNodes is empty', async () => {
@@ -4988,7 +5036,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     expect(store.failWorkflowRun).toHaveBeenCalled();
     // The "unknown provider" detail surfaces on the node_failed event; the
-    // workflow-level fail message is a generic "no successful nodes" summary.
+    // workflow-level fail message names the failing node(s).
     const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
     const nodeFailedEvents = eventCalls.filter(
       (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
@@ -4999,6 +5047,44 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       unknown
     >;
     expect(nodeFailedData.error).toContain("unknown provider 'claud'");
+  });
+
+  it('failure message names the failing node instead of generic summary', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-dag',
+      testDir,
+      {
+        name: 'fail-msg-test',
+        nodes: [
+          {
+            id: 'fail-node',
+            command: 'my-cmd',
+            provider: 'nonexistent',
+          },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    const failCall = (store.failWorkflowRun as ReturnType<typeof mock>).mock.calls[0];
+    const failMsg = failCall[1] as string;
+    expect(failMsg).toContain('fail-node failed');
+    expect(failMsg).not.toContain('no successful nodes');
   });
 
   it('excludes intermediate nodes with dependents from terminal set (fan-in DAG)', async () => {
@@ -6545,7 +6631,7 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('fail-script'));
     expect(failMsg).toBeDefined();
   });
 
@@ -6640,7 +6726,7 @@ describe('executeDagWorkflow -- script nodes', () => {
     const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
     const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
     // Workflow fails because the only node failed (timeout)
-    const failMsg = messages.find((m: string) => m.includes('no successful nodes'));
+    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('slow-script'));
     expect(failMsg).toBeDefined();
   }, 10000);
 

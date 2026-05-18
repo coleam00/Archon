@@ -208,6 +208,46 @@ describe('workflow-events', () => {
       ]);
     });
 
+    test('returns outputs from node_skipped_prior_success events (multi-resume)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'node-a', data: { node_output: 'output A' } },
+          { step_name: 'node-b', data: { reason: 'prior_success', node_output: 'output B' } },
+        ])
+      );
+
+      const result = await getCompletedDagNodeOutputs('run-resume');
+
+      expect(result.size).toBe(2);
+      expect(result.get('node-a')).toBe('output A');
+      expect(result.get('node-b')).toBe('output B');
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('node_skipped_prior_success'),
+        ['run-resume']
+      );
+    });
+
+    test('returns outputs when only node_skipped_prior_success rows exist (no node_completed)', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'node-x',
+            data: { reason: 'prior_success', node_output: 'skipped output X' },
+          },
+          {
+            step_name: 'node-y',
+            data: { reason: 'prior_success', node_output: 'skipped output Y' },
+          },
+        ])
+      );
+
+      const result = await getCompletedDagNodeOutputs('run-all-skipped');
+
+      expect(result.size).toBe(2);
+      expect(result.get('node-x')).toBe('skipped output X');
+      expect(result.get('node-y')).toBe('skipped output Y');
+    });
+
     test('parses JSON string data (SQLite path)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
