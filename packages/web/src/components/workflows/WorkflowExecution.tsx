@@ -568,9 +568,16 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
                 <button
                   type="button"
                   onClick={(): void => {
-                    void queryClient.invalidateQueries({
-                      queryKey: ['workflowDefinition', initialData?.workflowName, codebaseCwd],
-                    });
+                    queryClient
+                      .resetQueries({
+                        queryKey: ['workflowDefinition', initialData?.workflowName, codebaseCwd],
+                      })
+                      .catch((err: unknown) => {
+                        console.error('[WorkflowExecution] Retry resetQueries failed', {
+                          workflowName: initialData?.workflowName,
+                          error: err instanceof Error ? err.message : err,
+                        });
+                      });
                   }}
                   className="text-xs text-primary hover:text-accent-bright transition-colors"
                 >
@@ -583,6 +590,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
                 Loading graph...
               </div>
             ) : (
+              // Final fallback: query resolved with no nodes and no error.
+              // Covers older runs whose stored workflow has no DAG.
               <div className="flex items-center justify-center h-full text-text-secondary px-4 text-center">
                 <p>Workflow graph unavailable for this run.</p>
               </div>
