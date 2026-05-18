@@ -13,16 +13,23 @@ mock.module('./connection', () => ({
 }));
 
 // Mock @archon/providers for the dynamic import in createCodebase
+const mockGetRegisteredProviders = mock(() => [
+  { id: 'claude', builtIn: true },
+  { id: 'codex', builtIn: true },
+]);
 mock.module('@archon/providers', () => ({
-  getRegisteredProviders: () => [
-    { id: 'claude', builtIn: true },
-    { id: 'codex', builtIn: true },
-  ],
+  getRegisteredProviders: mockGetRegisteredProviders,
   isRegisteredProvider: (id: string) => ['claude', 'codex'].includes(id),
   getRegisteredProviderNames: () => ['claude', 'codex'],
   registerBuiltinProviders: () => {},
   registerCommunityProviders: () => {},
   registerProvider: () => {},
+}));
+
+// Mock config-loader for createCodebase's layered fallback
+const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
+mock.module('../config/config-loader', () => ({
+  loadConfig: mockLoadConfig,
 }));
 
 import {
@@ -41,6 +48,14 @@ import {
 describe('codebases', () => {
   beforeEach(() => {
     mockQuery.mockClear();
+    mockGetRegisteredProviders.mockClear();
+    mockLoadConfig.mockClear();
+    // Restore defaults
+    mockGetRegisteredProviders.mockImplementation(() => [
+      { id: 'claude', builtIn: true },
+      { id: 'codex', builtIn: true },
+    ]);
+    mockLoadConfig.mockImplementation(() => Promise.resolve({ assistant: 'claude' }));
   });
 
   const mockCodebase: Codebase = {
@@ -91,7 +106,38 @@ describe('codebases', () => {
       );
     });
 
-    test('defaults ai_assistant_type to claude', async () => {
+    test('defaults ai_assistant_type from config.assistant', async () => {
+      mockLoadConfig.mockImplementation(() => Promise.resolve({ assistant: 'codex' }));
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
+
+      await createCodebase({
+        name: 'test-project',
+        default_cwd: '/workspace/test-project',
+      });
+
+      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['codex']));
+    });
+
+    test('falls back to builtIn provider when config.assistant is unavailable', async () => {
+      mockLoadConfig.mockImplementation(() => {
+        throw new Error('no config');
+      });
+      mockGetRegisteredProviders.mockImplementation(() => [{ id: 'pi', builtIn: true }]);
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
+
+      await createCodebase({
+        name: 'test-project',
+        default_cwd: '/workspace/test-project',
+      });
+
+      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['pi']));
+    });
+
+    test('falls back to hardcoded claude when registry is empty and config fails', async () => {
+      mockLoadConfig.mockImplementation(() => {
+        throw new Error('no config');
+      });
+      mockGetRegisteredProviders.mockImplementation(() => []);
       mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
 
       await createCodebase({
