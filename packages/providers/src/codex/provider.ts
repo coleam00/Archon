@@ -315,6 +315,11 @@ async function* streamCodexEvents(
   const state: CodexStreamState = {};
   let accumulatedText = '';
 
+  if (abortSignal?.aborted) {
+    getLog().info('query_aborted_before_stream');
+    throw new Error('Query aborted');
+  }
+
   // If the iterator closes without a terminal event (e.g. the model was
   // rejected before the turn even started), we synthesize a fail-stop result
   // after the loop so the dag-executor's `msg.isError` branch catches it
@@ -787,6 +792,7 @@ export class CodexProvider implements IAgentProvider {
           } catch (startError) {
             const err = startError as Error;
             if (isModelAccessError(err.message)) {
+              getLog().debug({ attempt, errorClass: 'model_access' }, 'query_error_pre_retry');
               throw new Error(buildModelAccessMessage(requestOptions?.model));
             }
             throw new Error(`Codex query failed: ${err.message}`);

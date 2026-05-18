@@ -43,7 +43,7 @@ See [Anthropic's setup guide](https://code.claude.com/docs/en/setup) for the ful
 
 ### Binary path configuration (compiled binaries only)
 
-Compiled Archon binaries cannot auto-discover Claude Code at runtime. Supply the path via either:
+In compiled Archon binaries, if `claude` is not on the default install path Archon autodetects, supply the path via either:
 
 1. **Environment variable** (highest precedence):
    ```ini
@@ -55,8 +55,9 @@ Compiled Archon binaries cannot auto-discover Claude Code at runtime. Supply the
      claude:
        claudeBinaryPath: /absolute/path/to/claude
    ```
+3. **Autodetect** (zero-config fallback): Archon probes `~/.local/bin/claude` (POSIX) and `%USERPROFILE%\.local\bin\claude.exe` (Windows), matching the native curl/PowerShell installer layouts.
 
-If neither is set in a compiled binary, Archon throws with install instructions on first Claude query.
+If none of the three resolves in a compiled binary, Archon throws with install instructions on first Claude query.
 
 The Claude Agent SDK accepts either the native compiled binary or a JS `cli.js`.
 
@@ -173,6 +174,7 @@ In compiled Archon binaries, if `codex` is not on the default PATH Archon expect
        codexBinaryPath: /absolute/path/to/codex
    ```
 3. **Vendor directory** (zero-config fallback): drop the native binary at `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows).
+4. **Autodetect** (zero-config fallback): if the vendor directory is empty, Archon probes the common npm-global install layouts: `~/.npm-global/bin/codex` (POSIX), `/opt/homebrew/bin/codex` (macOS Apple Silicon), `/usr/local/bin/codex` (macOS Intel and Linux), `%APPDATA%\npm\codex.cmd` and `%USERPROFILE%\.npm-global\codex.cmd` (Windows). For other npm prefixes or custom layouts, set `CODEX_BIN_PATH` or the config path explicitly.
 
 Dev mode (`bun run`) does not require any of the above — the SDK resolves `codex` via `node_modules`.
 
