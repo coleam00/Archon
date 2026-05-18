@@ -125,13 +125,16 @@ export class TelegramAdapter implements IPlatformAdapter {
     // Will be accumulated with subsequent chunks. Force flush on shutdown.
     if (!force && text.trim().length < BUFFER_MIN_FLUSH_LENGTH) {
       getLog().debug({ chatId, textLength: text.trim().length }, 'telegram.buffer_skip_short');
-      // Re-buffer: put the text back for the next accumulation cycle
-      const existing = this.buffers.get(chatId);
-      if (existing) {
-        existing.text = text + existing.text;
-      } else {
-        this.buffers.set(chatId, { text, timer: null });
-      }
+      // Re-buffer: put the text back and schedule a flush so short final responses
+      // are eventually delivered even if no subsequent chunk arrives.
+      const rebuffered = this.buffers.get(chatId) ?? { text: '', timer: null };
+      rebuffered.text = text + rebuffered.text;
+      if (rebuffered.timer) clearTimeout(rebuffered.timer);
+      rebuffered.timer = setTimeout(() => {
+        const current = this.buffers.get(chatId);
+        if (current) this.flushBuffer(chatId, current, true);
+      }, BUFFER_FLUSH_MS);
+      this.buffers.set(chatId, rebuffered);
       return;
     }
 

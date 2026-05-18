@@ -758,7 +758,7 @@ describe('PiProvider', () => {
 
   // ─── v2 wiring: thinking, tools, systemPrompt ─────────────────────────
 
-  function scriptedAgentEnd(): FakeEvent[] {
+  function scriptedAgentEnd(text?: string): FakeEvent[] {
     return [
       {
         type: 'agent_end',
@@ -774,7 +774,7 @@ describe('PiProvider', () => {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },
             stopReason: 'stop',
-            content: [],
+            content: text ? [{ type: 'text', text }] : [],
           },
         ],
       },
@@ -1320,7 +1320,7 @@ describe('PiProvider', () => {
           partial: { role: 'assistant' } as never,
         },
       },
-      ...scriptedAgentEnd(),
+      ...scriptedAgentEnd(text),
     ];
   }
 

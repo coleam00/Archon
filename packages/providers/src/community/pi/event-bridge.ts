@@ -361,14 +361,16 @@ export async function* bridgeSession(
     try {
       if (event.type === 'agent_end') {
         finalAssembledText = extractLastAssistantText(event.messages);
+        // Always reset assistantBuffer on agent_end to prevent stale
+        // text_delta content from being parsed as structured output.
+        if (wantsStructured) {
+          assistantBuffer = finalAssembledText ?? '';
+        }
       }
       // On agent_end, emit the full assembled text BEFORE the result chunk
       // so callers receive assistant text before the terminal result.
       if (event.type === 'agent_end' && finalAssembledText) {
         queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: finalAssembledText } });
-        if (wantsStructured) {
-          assistantBuffer = finalAssembledText;
-        }
       }
       for (const chunk of mapPiEvent(event)) {
         if (wantsStructured && chunk.type === 'assistant') {

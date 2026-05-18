@@ -615,8 +615,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;
   if (!opts.skipPlatformAdapters && process.env.TELEGRAM_BOT_TOKEN) {
-    const streamingMode = (process.env.TELEGRAM_STREAMING_MODE ??
-      'stream') as import('@archon/adapters').TelegramStreamingMode;
+    const rawStreamingMode = process.env.TELEGRAM_STREAMING_MODE ?? 'stream';
+    const validModes = ['stream', 'batch', 'buffered'] as const;
+    if (!validModes.includes(rawStreamingMode as (typeof validModes)[number])) {
+      throw new Error(
+        `Invalid TELEGRAM_STREAMING_MODE="${rawStreamingMode}". Expected one of: ${validModes.join(', ')}.`
+      );
+    }
+    const streamingMode = rawStreamingMode as import('@archon/adapters').TelegramStreamingMode;
     telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN, streamingMode);
     const telegramAdapter = telegram; // Capture for use in callback
 
