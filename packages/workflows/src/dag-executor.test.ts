@@ -891,6 +891,13 @@ describe('extractNodeOutputEnvVars', () => {
     expect(script).toBe('echo $a.output.field_name');
     expect(envVars).toEqual({});
   });
+
+  it('handles empty string node output', () => {
+    const outputs = new Map([['a', makeOutput('completed', '')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output', outputs);
+    expect(script).toBe('echo "${_ARCHON_NODE_A_OUTPUT}"');
+    expect(envVars).toEqual({ _ARCHON_NODE_A_OUTPUT: '' });
+  });
 });
 
 describe('substituteNodeOutputRefs -- structuredOutput preference', () => {
@@ -1608,6 +1615,110 @@ describe('executeDagWorkflow -- bash nodes', () => {
       const envArg = (firstCall?.[2] as { env: NodeJS.ProcessEnv }).env;
       expect(envArg?.USER_MESSAGE).toBe('$(rm -rf /)');
       expect(envArg?.ARGUMENTS).toBe('$(rm -rf /)');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('passes $nodeId.output value via _ARCHON_NODE_* env var in executeBashNode', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('bash-env-var-run-id');
+      const upstreamOutput = 'upstream value with $special "chars"';
+
+      const nodes: DagNode[] = [
+        { id: 'upstream', bash: 'echo upstream' },
+        { id: 'consumer', bash: 'echo $upstream.output', depends_on: ['upstream'] },
+      ];
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-env-var',
+        testDir,
+        { name: 'env-var-test', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        new Map([['upstream', upstreamOutput]])
+      );
+
+      const consumerCall = execSpy.mock.calls.find(call => {
+        const script = (call[1] as string[])[1] ?? '';
+        return script.includes('_ARCHON_NODE_UPSTREAM_OUTPUT');
+      });
+      expect(consumerCall).toBeDefined();
+      const envArg = (consumerCall![2] as { env: NodeJS.ProcessEnv }).env;
+      expect(envArg?._ARCHON_NODE_UPSTREAM_OUTPUT).toBe(upstreamOutput);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('passes $nodeId.output via _ARCHON_NODE_* env var in until_bash', async () => {
+    // until_bash returning exit 0 signals loop completion; mock it to exit 0
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
+    try {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-until-bash-session' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('until-bash-env-run-id');
+      const upstreamOutput = 'done';
+
+      // upstream is a bash node whose output is pre-seeded via priorCompletedNodes
+      const nodes: DagNode[] = [
+        { id: 'upstream', bash: 'echo upstream' },
+        {
+          id: 'check',
+          loop: {
+            prompt: 'Do work.',
+            until_bash: 'test $upstream.output = "done"',
+            until: 'COMPLETE',
+            max_iterations: 1,
+          },
+          depends_on: ['upstream'],
+        },
+      ];
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-until-bash-env',
+        testDir,
+        { name: 'until-bash-env-test', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        new Map([['upstream', upstreamOutput]])
+      );
+
+      const bashCall = execSpy.mock.calls.find(call => {
+        const script = (call[1] as string[])[1] ?? '';
+        return script.includes('_ARCHON_NODE_UPSTREAM_OUTPUT');
+      });
+      expect(bashCall).toBeDefined();
+      const envArg = (bashCall![2] as { env: NodeJS.ProcessEnv }).env;
+      expect(envArg?._ARCHON_NODE_UPSTREAM_OUTPUT).toBe(upstreamOutput);
     } finally {
       execSpy.mockRestore();
     }

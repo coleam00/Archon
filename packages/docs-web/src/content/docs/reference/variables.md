@@ -67,7 +67,7 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 
 ### Shell Quoting in `bash:` vs `script:`
 
-`$nodeId.output` values are **auto shell-quoted** (single-quoted, with embedded `'` escaped) when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
+In `bash:` nodes, `$nodeId.output` (whole-output) is passed into the script via a dedicated environment variable (`_ARCHON_NODE_<ID>_OUTPUT`) and referenced as `"${_ARCHON_NODE_<ID>_OUTPUT}"`. This avoids size limits that inline argument quoting imposes on large LLM outputs. Field-access refs (`$nodeId.output.field`) are still substituted inline as shell-quoted strings. Values are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
 
 ### Example
 
