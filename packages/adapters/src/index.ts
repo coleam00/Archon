@@ -1,5 +1,5 @@
 // Chat adapters
-export { TelegramAdapter } from './chat/telegram';
+export { TelegramAdapter, type TelegramStreamingMode } from './chat/telegram';
 export { SlackAdapter } from './chat/slack';
 
 // Forge adapters

@@ -166,6 +166,47 @@ describe('TelegramAdapter', () => {
     });
   });
 
+  describe('buffered mode', () => {
+    let adapter: TelegramAdapter;
+    let mockSendMessage: Mock<() => Promise<void>>;
+
+    beforeEach(() => {
+      adapter = new TelegramAdapter('fake-token-for-testing', 'buffered');
+      mockSendMessage = mock(() => Promise.resolve());
+      (adapter.getBot().api as unknown as { sendMessage: Mock<() => Promise<void>> }).sendMessage =
+        mockSendMessage;
+    });
+
+    test('should report stream mode to orchestrator (not batch)', () => {
+      expect(adapter.getStreamingMode()).toBe('stream');
+    });
+
+    test('should coalesce rapid chunks into a single message', async () => {
+      // Rapid-fire chunks within the debounce window (total > BUFFER_MIN_FLUSH_LENGTH)
+      await adapter.sendMessage('12345', 'Hello from the buffered');
+      await adapter.sendMessage('12345', ' Telegram adapter test');
+      await adapter.sendMessage('12345', ' with enough content to flush!');
+
+      // Nothing sent yet — still buffering
+      expect(mockSendMessage).not.toHaveBeenCalled();
+
+      // Wait for debounce timer to fire (3000ms)
+      await new Promise(resolve => setTimeout(resolve, 3100));
+
+      // Should have sent one coalesced message
+      expect(mockSendMessage).toHaveBeenCalledTimes(1);
+      const call = mockSendMessage.mock.calls[0];
+      expect(call[0]).toBe(12345);
+      expect(call[1]).toContain('Hello from the buffered');
+    });
+
+    test('should skip whitespace-only chunks without flushing', async () => {
+      await adapter.sendMessage('12345', '\n');
+      await new Promise(resolve => setTimeout(resolve, 3100));
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getConversationId', () => {
     test('should return chat.id as string for private chat', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');

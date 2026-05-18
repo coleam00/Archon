@@ -515,7 +515,7 @@ describe('PiProvider', () => {
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'from-env');
   });
 
-  test('yields assistant chunks from text_delta events', async () => {
+  test('yields assembled assistant text from agent_end instead of text_delta chunks', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
       {
@@ -547,7 +547,7 @@ describe('PiProvider', () => {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
             },
             stopReason: 'stop',
-            content: [],
+            content: [{ type: 'text', text: 'Hello world' }],
           },
         ],
       },
@@ -559,9 +559,9 @@ describe('PiProvider', () => {
       })
     );
     expect(error).toBeUndefined();
+    // text_delta chunks are suppressed; assembled text from agent_end is emitted instead
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'Hello' },
-      { type: 'assistant', content: ' world' },
+      { type: 'assistant', content: 'Hello world' },
       expect.objectContaining({ type: 'result', stopReason: 'stop' }),
     ]);
   });

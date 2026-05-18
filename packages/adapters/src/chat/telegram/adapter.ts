@@ -19,16 +19,32 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const MAX_LENGTH = 4096;
 
+/** Streaming mode for the Telegram adapter. */
+export type TelegramStreamingMode = 'stream' | 'batch' | 'buffered';
+
+/** Buffered mode: debounce interval (ms). */
+const BUFFER_FLUSH_MS = 3000;
+/** Buffered mode: skip flushing buffers shorter than this (likely a single token before a thinking pause). */
+const BUFFER_MIN_FLUSH_LENGTH = 50;
+
+/** State for a single chat's buffer. */
+interface BufferState {
+  text: string;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 export class TelegramAdapter implements IPlatformAdapter {
   private bot: Bot;
-  private streamingMode: 'stream' | 'batch';
+  private mode: TelegramStreamingMode;
   private allowedUserIds: number[];
   private messageHandler: ((ctx: TelegramMessageContext) => Promise<void>) | null = null;
+  // Buffered mode: per-chat accumulation state
+  private buffers = new Map<string, BufferState>();
 
-  constructor(token: string, mode: 'stream' | 'batch' = 'stream') {
+  constructor(token: string, mode: TelegramStreamingMode = 'stream') {
     // grammY does not impose a handler timeout by default (unlike Telegraf's 90s limit)
     this.bot = new Bot(token);
-    this.streamingMode = mode;
+    this.mode = mode;
 
     // Parse Telegram user whitelist (optional - empty = open access)
     // Support both TELEGRAM_ALLOWED_USER_IDS and TELEGRAM_ALLOWED_USERS
@@ -54,14 +70,93 @@ export class TelegramAdapter implements IPlatformAdapter {
    *   (paragraphs rarely have formatting that spans across them)
    */
   async sendMessage(chatId: string, message: string, _metadata?: MessageMetadata): Promise<void> {
+    // Telegram rejects whitespace-only messages (400: text must be non-empty).
+    // Reasoning models (e.g. GLM-4.5-Air via Pi) can emit newline-only chunks
+    // during streaming — skip silently.
+    if (!message.trim()) return;
+
+    // Buffered mode: accumulate chunks and flush on debounce timer or size threshold.
+    // Recommended for providers that emit token-level chunks (e.g. Pi/z.ai with
+    // GLM-4.5-Air) where each token would otherwise become a separate Telegram message.
+    if (this.mode === 'buffered') {
+      this.bufferChunk(chatId, message);
+      return;
+    }
+
+    await this.deliverMessage(chatId, message);
+  }
+
+  /**
+   * Accumulate a chunk into the per-chat buffer. Flushes when
+   * BUFFER_FLUSH_MS elapses with no new chunks (end of AI response).
+   * Long responses are split at paragraph boundaries by deliverMessage.
+   */
+  private bufferChunk(chatId: string, chunk: string): void {
+    let state = this.buffers.get(chatId);
+    if (!state) {
+      state = { text: '', timer: null };
+      this.buffers.set(chatId, state);
+    }
+
+    // Append chunk and reset debounce timer
+    state.text += chunk;
+    if (state.timer) clearTimeout(state.timer);
+
+    state.timer = setTimeout(() => {
+      const current = this.buffers.get(chatId);
+      if (current && current.text.trim().length > 0) {
+        this.flushBuffer(chatId, current);
+      }
+    }, BUFFER_FLUSH_MS);
+  }
+
+  /** Flush a buffered chat's accumulated text and clean up state. */
+  private flushBuffer(chatId: string, state: BufferState, force = false): void {
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    const text = state.text;
+    this.buffers.delete(chatId);
+
+    if (!text.trim()) return;
+
+    // Skip very short buffers (likely a single token before a thinking pause).
+    // Will be accumulated with subsequent chunks. Force flush on shutdown.
+    if (!force && text.trim().length < BUFFER_MIN_FLUSH_LENGTH) {
+      getLog().debug({ chatId, textLength: text.trim().length }, 'telegram.buffer_skip_short');
+      // Re-buffer: put the text back for the next accumulation cycle
+      const existing = this.buffers.get(chatId);
+      if (existing) {
+        existing.text = text + existing.text;
+      } else {
+        this.buffers.set(chatId, { text, timer: null });
+      }
+      return;
+    }
+
+    getLog().debug({ chatId, textLength: text.length }, 'telegram.buffer_flush');
+    // Fire-and-forget — errors are logged inside deliverMessage/sendFormattedChunk
+    void this.deliverMessage(chatId, text).catch((err: unknown) => {
+      getLog().error({ err, chatId }, 'telegram.buffered_flush_failed');
+    });
+  }
+
+  /** Flush all pending buffers — called during shutdown to avoid losing in-flight text. */
+  private flushAllBuffers(): void {
+    for (const [chatId, state] of this.buffers) {
+      this.flushBuffer(chatId, state, true);
+    }
+  }
+
+  /** Send a complete (non-buffered) message to Telegram. */
+  private async deliverMessage(chatId: string, message: string): Promise<void> {
     const id = parseInt(chatId);
     getLog().debug({ chatId, messageLength: message.length }, 'telegram.send_message');
 
     if (message.length <= MAX_LENGTH) {
-      // Short message: try MarkdownV2 formatting
       await this.sendFormattedChunk(id, message);
     } else {
-      // Long message: split by paragraphs, format each chunk
       getLog().debug({ messageLength: message.length }, 'telegram.message_splitting');
       const chunks = splitIntoParagraphChunks(message, MAX_LENGTH - 200);
 
@@ -71,9 +166,7 @@ export class TelegramAdapter implements IPlatformAdapter {
     }
   }
 
-  /**
-   * Send a single chunk with MarkdownV2 formatting, with fallback to plain text
-   */
+  /** Send a single chunk with MarkdownV2 formatting, with fallback to plain text. */
   private async sendFormattedChunk(id: number, chunk: string): Promise<void> {
     // If chunk is still too long after paragraph splitting, fall back to plain text
     if (chunk.length > MAX_LENGTH) {
@@ -122,10 +215,12 @@ export class TelegramAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Get the configured streaming mode
+   * Get the configured streaming mode.
+   * Buffered mode reports 'stream' to the orchestrator — chunks are sent
+   * one at a time and coalesced inside the adapter.
    */
   getStreamingMode(): 'stream' | 'batch' {
-    return this.streamingMode;
+    return this.mode === 'batch' ? 'batch' : 'stream';
   }
 
   /**
@@ -239,9 +334,11 @@ export class TelegramAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Stop the bot gracefully
+   * Stop the bot gracefully.
+   * Flushes any pending buffered messages before stopping so in-flight text is not lost.
    */
   stop(): void {
+    this.flushAllBuffers();
     this.bot.stop();
     getLog().info('telegram.bot_stopped');
   }

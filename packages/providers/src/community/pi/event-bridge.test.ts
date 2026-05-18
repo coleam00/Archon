@@ -652,11 +652,10 @@ describe('streaming tail completion', () => {
     } as unknown as AgentSessionEvent;
   }
 
-  test('emits corrective assistant chunk when streaming truncated', async () => {
+  test('emits assembled text from agent_end when streaming differs', async () => {
     const streamed = 'The repo is cloned. Let me register it.\n\n/register-project';
     const full =
       'The repo is cloned. Let me register it.\n\n/register-project SaberEngine "/path/to/repo"';
-    const tail = full.slice(streamed.length);
 
     let listener: ((event: AgentSessionEvent) => void) | undefined;
     const mockSession = {
@@ -666,7 +665,6 @@ describe('streaming tail completion', () => {
         return () => {};
       },
       prompt: async () => {
-        listener?.({ type: 'turn_start' } as AgentSessionEvent);
         listener?.(makeTextDeltaEvent(streamed));
         listener?.(makeAgentEndEvent(full));
       },
@@ -679,14 +677,14 @@ describe('streaming tail completion', () => {
       chunks.push(chunk);
     }
 
+    // text_deltas are suppressed; assembled text emitted at agent_end
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
-    expect(assistantChunks).toHaveLength(2);
-    expect(assistantChunks[0].content).toBe(streamed);
-    expect(assistantChunks[1].content).toBe(tail);
+    expect(assistantChunks).toHaveLength(1);
+    expect(assistantChunks[0].content).toBe(full);
     expect(chunks[chunks.length - 1].type).toBe('result');
   });
 
-  test('does not emit corrective chunk when streaming is complete', async () => {
+  test('emits assembled text once when streaming matches', async () => {
     const full = 'complete text no truncation';
 
     let listener: ((event: AgentSessionEvent) => void) | undefined;
@@ -697,7 +695,6 @@ describe('streaming tail completion', () => {
         return () => {};
       },
       prompt: async () => {
-        listener?.({ type: 'turn_start' } as AgentSessionEvent);
         listener?.(makeTextDeltaEvent(full));
         listener?.(makeAgentEndEvent(full));
       },
@@ -715,7 +712,7 @@ describe('streaming tail completion', () => {
     expect(assistantChunks[0].content).toBe(full);
   });
 
-  test('does not emit corrective chunk when assembled text does not start with streamed (mismatch)', async () => {
+  test('emits assembled text even when it differs from streamed text', async () => {
     let listener: ((event: AgentSessionEvent) => void) | undefined;
     const mockSession = {
       sessionId: 'session-1',
@@ -724,7 +721,6 @@ describe('streaming tail completion', () => {
         return () => {};
       },
       prompt: async () => {
-        listener?.({ type: 'turn_start' } as AgentSessionEvent);
         listener?.(makeTextDeltaEvent('different content'));
         listener?.(makeAgentEndEvent('assembled is completely different'));
       },
@@ -739,10 +735,11 @@ describe('streaming tail completion', () => {
 
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
     expect(assistantChunks).toHaveLength(1);
-    expect(assistantChunks[0].content).toBe('different content');
+    // Assembled text replaces streamed text
+    expect(assistantChunks[0].content).toBe('assembled is completely different');
   });
 
-  test('resets per-turn text on turn_start so only final turn is checked', async () => {
+  test('emits final assembled text from multi-turn session', async () => {
     let listener: ((event: AgentSessionEvent) => void) | undefined;
     const mockSession = {
       sessionId: 'session-1',
@@ -751,11 +748,9 @@ describe('streaming tail completion', () => {
         return () => {};
       },
       prompt: async () => {
-        listener?.({ type: 'turn_start' } as AgentSessionEvent);
         listener?.(makeTextDeltaEvent('turn one text'));
-        listener?.({ type: 'turn_start' } as AgentSessionEvent); // second turn resets counter
         listener?.(makeTextDeltaEvent('turn two'));
-        listener?.(makeAgentEndEvent('turn two')); // last assistant msg matches turn 2
+        listener?.(makeAgentEndEvent('turn two')); // last assistant msg
       },
       abort: async () => {},
       dispose: () => {},
@@ -766,13 +761,13 @@ describe('streaming tail completion', () => {
       chunks.push(chunk);
     }
 
+    // text_deltas suppressed; only assembled text emitted
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
-    expect(assistantChunks).toHaveLength(2);
-    expect(assistantChunks[0].content).toBe('turn one text');
-    expect(assistantChunks[1].content).toBe('turn two');
+    expect(assistantChunks).toHaveLength(1);
+    expect(assistantChunks[0].content).toBe('turn two');
   });
 
-  test('corrective chunk is added to assistantBuffer when wantsStructured', async () => {
+  test('assembled text is used for structured output parsing', async () => {
     const streamed = '{"partial":';
     const full = '{"partial":true}';
 
@@ -784,7 +779,6 @@ describe('streaming tail completion', () => {
         return () => {};
       },
       prompt: async () => {
-        listener?.({ type: 'turn_start' } as AgentSessionEvent);
         listener?.(makeTextDeltaEvent(streamed));
         listener?.(makeAgentEndEvent(full));
       },
