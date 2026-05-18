@@ -13,8 +13,7 @@ DAG workflow nodes support a `mcp` field that attaches MCP (Model Context Protoc
 servers to individual nodes. Each node gets exactly the external tools it needs —
 GitHub, Linear, Postgres, etc. — without over-provisioning.
 
-MCP works with Codex and Claude workflow nodes. Pi nodes still warn and ignore
-the `mcp` field.
+**Supported on Claude, Codex, and Oh My Pi** — the Pi provider warns and ignores the `mcp` field.
 
 ## Quick Start
 
@@ -182,6 +181,11 @@ Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
 Codex SDK, so the servers are available for that node without requiring global
 `~/.codex/config.toml` setup.
 
+Oh My Pi uses its runtime's actual loaded MCP tool names instead of Claude wildcards,
+but workflow authors configure the same `mcp:` JSON file and do not need to list
+those MCP tools manually. In Claude and Oh My Pi nodes, MCP tools merge with any
+existing `allowed_tools` on the node.
+
 ## MCP-Only Nodes
 
 For providers that support tool restrictions, combine `mcp` with
@@ -199,7 +203,7 @@ nodes:
 This is useful for sandboxing — the AI can only interact through the MCP server
 and cannot touch the filesystem or run shell commands. Codex currently does not
 support Archon's `allowed_tools` / `denied_tools` restrictions, so this pattern
-is enforced for Claude nodes but not Codex nodes.
+is enforced for Claude and Oh My Pi nodes but not Codex nodes.
 
 ## Connection Failure Handling
 
@@ -220,6 +224,10 @@ when the workflow did not configure MCP itself — they're not actionable for th
 workflow author. They appear only in debug logs as
 `dag.mcp_plugin_connection_suppressed`. Run the CLI with `--verbose` (or set
 `LOG_LEVEL=debug` on the server) if you need to see them.
+
+Oh My Pi node-scoped `mcp:` is separate from OMP-native discovery configured by
+`assistants.omp.enableMCP`. A node-level Archon MCP config does not require
+`assistants.omp.enableMCP: true` and does not write `.omp/mcp.json` files.
 
 ## Workflow Examples
 
@@ -377,6 +385,9 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 
 ## Limitations
 
+- **Provider support** — Claude, Codex, and Oh My Pi support node-scoped `mcp:`
+  configs. The Pi provider warns and ignores the field; configure MCP servers
+  through Pi's native config surfaces instead.
 - **Codex tool restrictions** — Codex nodes support `mcp`, but Archon's
   `allowed_tools` / `denied_tools` restrictions are still ignored by Codex.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
@@ -396,6 +407,7 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 | `undefined env vars: VAR_NAME` | Environment variable not set | Export the variable or add it to your `.env` |
 | `MCP server connection failed` | Server process crashed or URL unreachable | Check command/URL, test the server standalone |
 | Plugin MCP missing from workflow output | User-level plugin MCPs are filtered out of workflow warnings | Run with `--verbose` and look for provider MCP debug logs |
+| `mcp config but uses unsupported provider` | Node resolved to the Pi provider | Set `provider: claude`, `provider: codex`, or `provider: omp` on the node/workflow |
 | `allowed_tools` ignored with Codex | Codex provider does not support Archon's tool restrictions yet | Do not rely on `allowed_tools: []` for Codex sandboxing |
 | `Haiku model with MCP servers` | Haiku doesn't support tool search | Use `model: sonnet` or `model: opus` instead |
 

@@ -532,6 +532,25 @@ assistants:
       const safe = toSafeConfig(config);
       expect(safe.assistants.claude).not.toHaveProperty('settingSources');
     });
+
+    test('toSafeConfig exposes only safe OMP defaults', async () => {
+      mockReadConfigFile.mockResolvedValue(`
+assistants:
+  omp:
+    model: anthropic/claude-sonnet-4-5
+    agentDir: /tmp/omp-agent
+    additionalExtensionPaths:
+      - /opt/omp/ext
+    toolNames:
+      - bash
+    env:
+      ANTHROPIC_API_KEY: secret
+`);
+
+      const config = await loadConfig();
+      const safe = toSafeConfig(config);
+      expect(safe.assistants.omp).toEqual({ model: 'anthropic/claude-sonnet-4-5' });
+    });
   });
 
   describe('updateGlobalConfig', () => {

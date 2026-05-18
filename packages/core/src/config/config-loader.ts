@@ -99,6 +99,7 @@ const SAFE_ASSISTANT_FIELDS: Record<string, readonly string[]> = {
   // community providers — list each field we're confident is safe to
   // show in the web UI. Unknown providers fall through with no fields.
   pi: ['model'],
+  omp: ['model'],
 };
 
 function toSafeAssistantDefaults(assistants: AssistantDefaults): SafeConfig['assistants'] {
