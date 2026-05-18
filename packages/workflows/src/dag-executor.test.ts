@@ -41,6 +41,7 @@ import {
   buildTopologicalLayers,
   checkTriggerRule,
   substituteNodeOutputRefs,
+  extractNodeOutputEnvVars,
   executeDagWorkflow,
 } from './dag-executor';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
@@ -825,6 +826,70 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
   it('dot notation on invalid JSON returns quoted empty string when escapedForBash=true', () => {
     const outputs = new Map([['a', makeOutput('completed', 'not-json')]]);
     expect(substituteNodeOutputRefs('$a.output.field', outputs, true)).toBe("''");
+  });
+});
+
+describe('extractNodeOutputEnvVars', () => {
+  it('replaces $nodeId.output with env var ref and records the value', () => {
+    const outputs = new Map([['synthesize', makeOutput('completed', 'hello world')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('RAW=$synthesize.output', outputs);
+    expect(script).toBe('RAW="${_ARCHON_NODE_SYNTHESIZE_OUTPUT}"');
+    expect(envVars).toEqual({ _ARCHON_NODE_SYNTHESIZE_OUTPUT: 'hello world' });
+  });
+
+  it('handles 50KB+ output with special shell characters', () => {
+    const largeValue = 'x'.repeat(10_000) + ' $VAR `cmd` "quote" \'sq\' * ? ' + 'y'.repeat(40_000);
+    const outputs = new Map([['synth', makeOutput('completed', largeValue)]]);
+    const { script, envVars } = extractNodeOutputEnvVars("printf '%s' $synth.output", outputs);
+    expect(script).toBe('printf \'%s\' "${_ARCHON_NODE_SYNTH_OUTPUT}"');
+    expect(envVars._ARCHON_NODE_SYNTH_OUTPUT).toBe(largeValue);
+    expect(envVars._ARCHON_NODE_SYNTH_OUTPUT?.length).toBeGreaterThan(50_000);
+  });
+
+  it('leaves $nodeId.output.field refs untouched for substituteNodeOutputRefs', () => {
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ x: 1 }))]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output.x', outputs);
+    expect(script).toBe('echo $a.output.x');
+    expect(envVars).toEqual({});
+  });
+
+  it('handles both whole-output and field refs in the same script', () => {
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ x: 1 }))]]);
+    const { script, envVars } = extractNodeOutputEnvVars(
+      'FULL=$a.output\nFIELD=$a.output.x',
+      outputs
+    );
+    expect(script).toBe('FULL="${_ARCHON_NODE_A_OUTPUT}"\nFIELD=$a.output.x');
+    expect(envVars).toEqual({ _ARCHON_NODE_A_OUTPUT: JSON.stringify({ x: 1 }) });
+  });
+
+  it('normalizes hyphens in node ID to underscores in env var name', () => {
+    const outputs = new Map([['my-node', makeOutput('completed', 'val')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $my-node.output', outputs);
+    expect(script).toBe('echo "${_ARCHON_NODE_MY_NODE_OUTPUT}"');
+    expect(envVars._ARCHON_NODE_MY_NODE_OUTPUT).toBe('val');
+  });
+
+  it('leaves unknown node ref unchanged so substituteNodeOutputRefs can warn', () => {
+    const outputs = new Map<string, NodeOutput>();
+    const { script, envVars } = extractNodeOutputEnvVars('echo $missing.output', outputs);
+    expect(script).toBe('echo $missing.output');
+    expect(envVars).toEqual({});
+  });
+
+  it('replaces multiple references to the same node with one env var', () => {
+    const outputs = new Map([['a', makeOutput('completed', 'val')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output; echo $a.output', outputs);
+    expect(script).toBe('echo "${_ARCHON_NODE_A_OUTPUT}"; echo "${_ARCHON_NODE_A_OUTPUT}"');
+    expect(envVars).toEqual({ _ARCHON_NODE_A_OUTPUT: 'val' });
+  });
+
+  it('does not replace when output ref is followed by a field', () => {
+    const outputs = new Map([['a', makeOutput('completed', 'val')]]);
+    // Trailing alphanumeric after `.output.` should still be treated as field-access
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output.field_name', outputs);
+    expect(script).toBe('echo $a.output.field_name');
+    expect(envVars).toEqual({});
   });
 });
 

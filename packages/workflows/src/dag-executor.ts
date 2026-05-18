@@ -234,6 +234,38 @@ function shellQuote(value: string): string {
 }
 
 /**
+ * For bash node scripts: replaces $nodeId.output references (whole-output, no .field)
+ * with env-var expansions ("${_ARCHON_NODE_<ID>_OUTPUT}") and returns the env vars
+ * to inject into the subprocess environment.
+ *
+ * This avoids inline shell-quoting of arbitrarily large LLM outputs — the same
+ * pattern used for $USER_MESSAGE / $ARGUMENTS / $LOOP_* since #1651.
+ * Field-access refs ($nodeId.output.field) are left for substituteNodeOutputRefs.
+ */
+export function extractNodeOutputEnvVars(
+  script: string,
+  nodeOutputs: Map<string, NodeOutput>
+): { script: string; envVars: Record<string, string> } {
+  const envVars: Record<string, string> = {};
+  const modifiedScript = script.replace(
+    // Match $nodeId.output NOT followed by .fieldname (negative lookahead)
+    /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?!\.[a-zA-Z_])/g,
+    (match, nodeId: string) => {
+      const nodeOutput = nodeOutputs.get(nodeId);
+      if (!nodeOutput) {
+        // Leave unresolved — substituteNodeOutputRefs will warn and emit ''
+        return match;
+      }
+      const envVarName = `_ARCHON_NODE_${nodeId.replace(/-/g, '_').toUpperCase()}_OUTPUT`;
+      envVars[envVarName] = nodeOutput.output;
+      // Double-quoted expansion: prevents word-splitting without inline quoting
+      return `"\${${envVarName}}"`;
+    }
+  );
+  return { script: modifiedScript, envVars };
+}
+
+/**
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
  *
@@ -1302,7 +1334,13 @@ async function executeBashNode(
     undefined,
     { shellSafe: true }
   );
-  const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
+  // Pass $nodeId.output (whole output) via env vars to avoid inline shell-quoting of
+  // large values — see #1717. Field-access refs ($nodeId.output.field) remain inline.
+  const { script: scriptWithEnvVarRefs, envVars: nodeOutputEnvVars } = extractNodeOutputEnvVars(
+    substitutedScript,
+    nodeOutputs
+  );
+  const finalScript = substituteNodeOutputRefs(scriptWithEnvVarRefs, nodeOutputs, true);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   const subprocessEnv: NodeJS.ProcessEnv = {
@@ -1318,6 +1356,7 @@ async function executeBashNode(
     CONTEXT: issueContext ?? '',
     EXTERNAL_CONTEXT: issueContext ?? '',
     ISSUE_CONTEXT: issueContext ?? '',
+    ...nodeOutputEnvVars,
     ...(envVars ?? {}),
   };
 
@@ -2139,10 +2178,13 @@ async function executeLoopNode(
           undefined,
           { shellSafe: true }
         );
+        // Pass $nodeId.output via env vars to avoid inline shell-quoting of large values — see #1717.
+        const { script: bashWithEnvVarRefs, envVars: untilBashNodeEnvVars } =
+          extractNodeOutputEnvVars(bashPrompt, nodeOutputs);
         const substitutedBash = substituteNodeOutputRefs(
-          bashPrompt,
+          bashWithEnvVarRefs,
           nodeOutputs,
-          true // escapedForBash
+          true // escapedForBash — field refs only remain
         );
         await execFileAsync('bash', ['-c', substitutedBash], {
           cwd,
@@ -2157,6 +2199,7 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
+            ...untilBashNodeEnvVars,
           },
         });
         bashComplete = true; // exit 0 = complete
