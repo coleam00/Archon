@@ -68,10 +68,10 @@ describe('telegram-markdown', () => {
     });
 
     describe('blockquotes', () => {
-      // Regression: telegramify-markdown 1.3.2 escaped the `>` marker and
-      // double-escaped any other special character on the same line, which
+      // Regression: telegramify-markdown escaped the `>` blockquote marker
+      // and double-escaped special characters on the same line, which
       // Telegram rejected with "Character '.' is reserved and must be
-      // escaped". 1.3.3 fixes both. See coleam00/Archon#1102.
+      // escaped". See coleam00/Archon#1102.
       test('escapes special chars exactly once inside blockquotes', () => {
         expect(convertToTelegramMarkdown('> hi.')).toBe('> hi\\.\n');
       });
