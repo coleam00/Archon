@@ -5,11 +5,12 @@
  * - UI never writes directly — it calls skill verbs; server pushes truth back
  *   via SSE (M4) or refetch on miss.
  * - `useEntity(key, loader)` subscribes to a key. First subscriber triggers
- *   the loader; subsequent subscribers read from cache.
+ *   the loader; subsequent subscribers read from cache. After `invalidate()`
+ *   or `refetch()`, any key with an active subscriber reloads automatically.
  * - `patch` and `set` are for the SSE dispatcher and skill-layer optimistic
  *   updates only.
  *
- * Deliberately minimal: ~100 LOC. No React Query, no Zustand.
+ * Deliberately minimal: ~120 LOC. No React Query, no Zustand.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -20,11 +21,33 @@ const cache = new Map<string, unknown>();
 const listeners = new Map<string, Set<Listener>>();
 const errors = new Map<string, Error>();
 const inflight = new Map<string, Promise<unknown>>();
+const loaders = new Map<string, () => Promise<unknown>>();
 
 function notify(key: string): void {
   const subs = listeners.get(key);
   if (subs === undefined) return;
   for (const l of subs) l();
+}
+
+function ensureLoad(key: string): void {
+  if (cache.has(key) || inflight.has(key)) return;
+  const loader = loaders.get(key);
+  if (loader === undefined) return;
+  const p = loader()
+    .then(v => {
+      cache.set(key, v);
+      errors.delete(key);
+      notify(key);
+    })
+    .catch((e: unknown) => {
+      const err = e instanceof Error ? e : new Error(String(e));
+      errors.set(key, err);
+      notify(key);
+    })
+    .finally(() => {
+      inflight.delete(key);
+    });
+  inflight.set(key, p);
 }
 
 export function get(key: string): unknown {
@@ -48,6 +71,7 @@ export function invalidate(keyPrefix: string): void {
     if (key === keyPrefix || key.startsWith(`${keyPrefix}:`)) {
       cache.delete(key);
       notify(key);
+      ensureLoad(key);
     }
   }
 }
@@ -72,7 +96,6 @@ export interface EntityView<T> {
  * invokes `loader`. Updates propagate to all subscribers via `notify`.
  */
 export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<T> {
-  // Stable loader ref so we don't re-run just because the caller inlined a new closure.
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
 
@@ -91,30 +114,16 @@ export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<
     };
     subs.add(listener);
 
-    // If not cached and no load in flight, trigger one.
-    if (!cache.has(key) && !inflight.has(key)) {
-      const p = loaderRef
-        .current()
-        .then(v => {
-          cache.set(key, v);
-          errors.delete(key);
-          notify(key);
-        })
-        .catch((e: unknown) => {
-          const err = e instanceof Error ? e : new Error(String(e));
-          errors.set(key, err);
-          notify(key);
-        })
-        .finally(() => {
-          inflight.delete(key);
-        });
-      inflight.set(key, p);
-    }
+    loaders.set(key, () => loaderRef.current());
+    ensureLoad(key);
 
     return (): void => {
       active = false;
       subs.delete(listener);
-      if (subs.size === 0) listeners.delete(key);
+      if (subs.size === 0) {
+        listeners.delete(key);
+        loaders.delete(key);
+      }
     };
   }, [key]);
 
@@ -126,6 +135,7 @@ export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<
       cache.delete(key);
       errors.delete(key);
       notify(key);
+      ensureLoad(key);
     },
   };
 }

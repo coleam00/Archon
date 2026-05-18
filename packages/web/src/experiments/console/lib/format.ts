@@ -55,3 +55,23 @@ export function formatClock(iso: string): string {
   const ss = d.getSeconds().toString().padStart(2, '0');
   return `${hh}:${mm}:${ss}`;
 }
+
+/**
+ * Compact project subtitle: `owner/repo` for typical git URLs, last two path
+ * segments otherwise. Falls back to the input string when it can't extract
+ * a sensible short form.
+ */
+export function formatProjectLocator(project: {
+  repositoryUrl: string | null;
+  path: string;
+}): string {
+  if (project.repositoryUrl !== null && project.repositoryUrl.length > 0) {
+    // Matches `…[:/]owner/repo[.git]` for github / gitlab / gitea / ssh forms.
+    const m = /[/:]([^/:]+\/[^/:]+?)(?:\.git)?$/.exec(project.repositoryUrl);
+    if (m !== null) return m[1];
+    return project.repositoryUrl;
+  }
+  const segs = project.path.split('/').filter(s => s.length > 0);
+  if (segs.length <= 2) return project.path;
+  return `…/${segs.slice(-2).join('/')}`;
+}
