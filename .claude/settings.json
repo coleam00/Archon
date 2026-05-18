@@ -66,14 +66,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.kiro/claude-code/hooks/checkpoint-reminder.sh"
-          }
-        ]
       }
     ],
     "SubagentStop": [
