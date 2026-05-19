@@ -222,16 +222,20 @@ function MessageBubbleRaw({ message }: MessageBubbleProps): React.ReactElement {
           ) : (
             <div className="chat-markdown max-w-none text-sm text-text-primary">
               {isThinking && (
-                <div className="flex items-center gap-1.5 py-1">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary" />
-                  <span
-                    className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
-                    style={{ animationDelay: '0.2s' }}
-                  />
-                  <span
-                    className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
-                    style={{ animationDelay: '0.4s' }}
-                  />
+                <div className="flex items-center gap-2 py-1 text-sm text-text-tertiary">
+                  <span className="sr-only">Thinking</span>
+                  <span className="font-medium">Thinking</span>
+                  <div className="flex items-center gap-1.5" aria-hidden="true">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary" />
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
+                      style={{ animationDelay: '0.2s' }}
+                    />
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-text-tertiary"
+                      style={{ animationDelay: '0.4s' }}
+                    />
+                  </div>
                 </div>
               )}
               {isJsonString(message.content) ? (
