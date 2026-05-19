@@ -23,6 +23,7 @@ import {
 import type { RepoPath, BranchName } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
+import { loadRepoConfig } from '../config/config-loader';
 import { ConversationNotFoundError } from '../types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -243,10 +244,10 @@ export async function removeEnvironment(
  */
 export async function cleanupToMakeRoom(
   codebaseId: string,
-  mainRepoPath: string
+  mainRepoPath: string,
+  options: { remote?: string } = {}
 ): Promise<CleanupOperationResult> {
-  // Reuse the merged cleanup logic
-  return cleanupMergedWorktrees(codebaseId, mainRepoPath);
+  return cleanupMergedWorktrees(codebaseId, mainRepoPath, options);
 }
 
 /**
@@ -308,7 +309,9 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const mainBranch = await getDefaultBranch(mainRepoPath);
+        const envRemote =
+          (await loadRepoConfig(env.codebase_default_cwd)).worktree?.remote?.trim() || undefined;
+        const mainBranch = await getDefaultBranch(mainRepoPath, envRemote);
         const merged = await isBranchMerged(
           mainRepoPath,
           toBranchName(env.branch_name),

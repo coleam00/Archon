@@ -168,7 +168,7 @@ export async function cleanupStaleEnvironments(
 export async function cleanupMergedEnvironments(
   codebaseId: string,
   mainPath: string,
-  options: { includeClosed?: boolean } = {}
+  options: { includeClosed?: boolean; remote?: string } = {}
 ): Promise<CleanupOperationResult> {
   return cleanupMergedWorktrees(codebaseId, mainPath, options);
 }

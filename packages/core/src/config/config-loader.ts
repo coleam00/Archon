@@ -457,7 +457,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
     result.baseBranch = repo.worktree.baseBranch.trim();
   }
 
-  // Propagate git remote name for non-origin remote support
+  // Pass remote to callers for git fetch/push operations
   if (repo.worktree?.remote?.trim()) {
     result.remote = repo.worktree.remote.trim();
   }
