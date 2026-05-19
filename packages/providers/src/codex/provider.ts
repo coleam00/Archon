@@ -337,6 +337,59 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   return { turnOptions, hasOutputFormat };
 }
 
+/**
+ * Extract the last valid JSON object from a string that may contain multiple
+ * concatenated JSON objects (common when Codex streams progress updates).
+ *
+ * Forward-scans to find top-level `{…}` blocks using brace-depth tracking
+ * (respecting quoted strings), tries JSON.parse on each, and returns the
+ * last successfully parsed object.
+ */
+function extractLastJsonObject(text: string): unknown {
+  let lastParsed: unknown;
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '{') {
+      i++;
+      continue;
+    }
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let j = i;
+    for (; j < text.length; j++) {
+      const ch = text[j];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\' && inString) {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (ch === '{') depth++;
+      if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            lastParsed = JSON.parse(text.slice(i, j + 1));
+          } catch {
+            // matched braces but not valid JSON — skip
+          }
+          break;
+        }
+      }
+    }
+    i = depth === 0 ? j + 1 : text.length;
+  }
+  return lastParsed;
+}
+
 // ─── Stream Normalizer ───────────────────────────────────────────────────
 
 /** State maintained across Codex event stream normalization. */
@@ -580,22 +633,33 @@ async function* streamCodexEvents(
       // Codex returns structured output inline in agent_message text.
       // Normalize: parse as JSON and put on structuredOutput so the
       // dag-executor can handle all providers uniformly.
+      //
+      // Codex may stream multiple intermediate JSON objects as separate
+      // agent_message items (progress updates). accumulatedText is the
+      // concatenation of all of them, which isn't valid JSON. When a
+      // straight parse fails, extract the last complete JSON object —
+      // that's the authoritative final answer.
       let structuredOutput: unknown;
       if (hasOutputFormat && accumulatedText) {
         try {
           structuredOutput = JSON.parse(accumulatedText);
           getLog().debug('codex.structured_output_parsed');
         } catch {
-          getLog().warn(
-            { outputPreview: accumulatedText.slice(0, 200) },
-            'codex.structured_output_not_json'
-          );
-          yield {
-            type: 'system',
-            content:
-              '⚠️ Structured output requested but Codex returned non-JSON text. ' +
-              'Downstream $nodeId.output.field references may not evaluate correctly.',
-          };
+          structuredOutput = extractLastJsonObject(accumulatedText);
+          if (structuredOutput !== undefined) {
+            getLog().debug('codex.structured_output_parsed_last_object');
+          } else {
+            getLog().warn(
+              { outputPreview: accumulatedText.slice(0, 200) },
+              'codex.structured_output_not_json'
+            );
+            yield {
+              type: 'system',
+              content:
+                '⚠️ Structured output requested but Codex returned non-JSON text. ' +
+                'Downstream $nodeId.output.field references may not evaluate correctly.',
+            };
+          }
         }
       }
 
