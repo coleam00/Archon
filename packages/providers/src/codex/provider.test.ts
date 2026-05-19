@@ -682,7 +682,13 @@ describe('CodexProvider', () => {
 
       expect(mockRunStreamed).toHaveBeenCalledWith(
         'test prompt',
-        expect.objectContaining({ outputSchema: schema })
+        expect.objectContaining({
+          outputSchema: {
+            ...schema,
+            additionalProperties: false,
+            required: ['summary'],
+          },
+        })
       );
     });
 

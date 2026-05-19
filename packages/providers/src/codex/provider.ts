@@ -267,6 +267,50 @@ function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
   };
 }
 
+// ─── Schema Normalizer (OpenAI Structured Outputs compliance) ────────────
+
+/**
+ * Recursively normalize a JSON schema for OpenAI Structured Outputs compliance.
+ *
+ * OpenAI requires two things Claude doesn't:
+ *   1. Every object must have `additionalProperties: false`.
+ *   2. Every object must have a `required` array listing ALL property keys.
+ *
+ * Workflow authors writing provider-agnostic YAML typically omit both.
+ */
+function normalizeSchemaForOpenAI(schema: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...schema };
+
+  if (out.type === 'object') {
+    if (!('additionalProperties' in out)) {
+      out.additionalProperties = false;
+    }
+    if (typeof out.properties === 'object' && out.properties !== null) {
+      const props = out.properties as Record<string, Record<string, unknown>>;
+      const propKeys = Object.keys(props);
+
+      const existingRequired = Array.isArray(out.required) ? (out.required as string[]) : [];
+      const missingRequired = propKeys.filter(k => !existingRequired.includes(k));
+      if (missingRequired.length > 0) {
+        out.required = [...existingRequired, ...missingRequired];
+      }
+
+      const normalized: Record<string, Record<string, unknown>> = {};
+      for (const [key, value] of Object.entries(props)) {
+        normalized[key] =
+          typeof value === 'object' && value !== null ? normalizeSchemaForOpenAI(value) : value;
+      }
+      out.properties = normalized;
+    }
+  }
+
+  if (out.type === 'array' && typeof out.items === 'object' && out.items !== null) {
+    out.items = normalizeSchemaForOpenAI(out.items as Record<string, unknown>);
+  }
+
+  return out;
+}
+
 // ─── Turn Options Builder ────────────────────────────────────────────────
 
 /**
@@ -282,10 +326,10 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
     requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
   );
   if (requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.outputFormat.schema;
+    turnOptions.outputSchema = normalizeSchemaForOpenAI(requestOptions.outputFormat.schema);
   }
   if (requestOptions?.nodeConfig?.output_format && !requestOptions?.outputFormat) {
-    turnOptions.outputSchema = requestOptions.nodeConfig.output_format;
+    turnOptions.outputSchema = normalizeSchemaForOpenAI(requestOptions.nodeConfig.output_format);
   }
   if (requestOptions?.abortSignal) {
     turnOptions.signal = requestOptions.abortSignal;
