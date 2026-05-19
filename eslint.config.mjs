@@ -24,6 +24,7 @@ export default tseslint.config(
       '*.d.ts', // Root-level declaration files (not in tsconfig project scope)
       '**/*.generated.d.ts', // Auto-generated declaration files (e.g. openapi-typescript output)
       'packages/web/vite.config.ts', // Vite config doesn't need type-checked linting
+      'packages/web/vite.plugin.vault-contacts.ts', // Vite plugin doesn't need type-checked linting
       'packages/web/components.json',
       'packages/web/src/components/ui/**', // shadcn/ui auto-generated components
       'packages/web/src/lib/utils.ts', // shadcn/ui utility file

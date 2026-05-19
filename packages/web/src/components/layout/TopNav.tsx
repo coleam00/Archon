@@ -17,6 +17,7 @@ import {
   FlaskConical,
   Wrench,
   CheckSquare,
+  Users,
 } from 'lucide-react';
 import { listDashboardRuns, getUpdateCheck } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -29,6 +30,7 @@ const tabs = [
   { to: '/category/research-learning', end: false, icon: FlaskConical, label: 'Research' },
   { to: '/category/techbase', end: false, icon: Wrench, label: 'Techbase' },
   { to: '/category/work-daily-ops', end: false, icon: CheckSquare, label: 'Daily Ops' },
+  { to: '/contacts', end: false, icon: Users, label: 'Contacts' },
   // Brand tabs (drill-down per business)
   { to: '/pmc', end: false, icon: Briefcase, label: 'PMC' },
   { to: '/workflows', end: false, icon: Workflow, label: 'Workflows' },

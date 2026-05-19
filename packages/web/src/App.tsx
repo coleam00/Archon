@@ -20,6 +20,7 @@ import { QEPPage } from '@/routes/QEPPage';
 import { SocialContentPage } from '@/routes/SocialContentPage';
 import { PMCPage } from '@/routes/PMCPage';
 import { CategoryPage } from '@/routes/CategoryPage';
+import { ContactsPage } from '@/routes/ContactsPage';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -82,6 +83,7 @@ export function App(): React.ReactElement {
                 <Route path="/chat/*" element={<ChatPage />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/category/:slug" element={<CategoryPage />} />
+                <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/pmc" element={<PMCPage />} />
                 <Route path="/workflows" element={<WorkflowsPage />} />
                 <Route path="/workflows/builder" element={<WorkflowBuilderPage />} />
