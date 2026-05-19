@@ -518,6 +518,8 @@ Agents working in worktrees can run the app for self-testing (make changes → r
 
 ```bash
 # Run in worktree (port auto-allocated based on path)
+# Initialize packages in a fresh worktree before running any type-check or tests
+bun install
 bun dev &
 # [Hono] Worktree detected (/path/to/worktree)
 # [Hono] Auto-allocated port: 3637 (base: 3090, offset: +547)
