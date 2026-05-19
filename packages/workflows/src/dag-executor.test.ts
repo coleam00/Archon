@@ -41,6 +41,7 @@ import {
   buildTopologicalLayers,
   checkTriggerRule,
   substituteNodeOutputRefs,
+  extractNodeOutputEnvVars,
   executeDagWorkflow,
 } from './dag-executor';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
@@ -828,6 +829,77 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
   });
 });
 
+describe('extractNodeOutputEnvVars', () => {
+  it('replaces $nodeId.output with env var ref and records the value', () => {
+    const outputs = new Map([['synthesize', makeOutput('completed', 'hello world')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('RAW=$synthesize.output', outputs);
+    expect(script).toBe('RAW="${_ARCHON_NODE_SYNTHESIZE_OUTPUT}"');
+    expect(envVars).toEqual({ _ARCHON_NODE_SYNTHESIZE_OUTPUT: 'hello world' });
+  });
+
+  it('handles 50KB+ output with special shell characters', () => {
+    const largeValue = 'x'.repeat(10_000) + ' $VAR `cmd` "quote" \'sq\' * ? ' + 'y'.repeat(40_000);
+    const outputs = new Map([['synth', makeOutput('completed', largeValue)]]);
+    const { script, envVars } = extractNodeOutputEnvVars("printf '%s' $synth.output", outputs);
+    expect(script).toBe('printf \'%s\' "${_ARCHON_NODE_SYNTH_OUTPUT}"');
+    expect(envVars._ARCHON_NODE_SYNTH_OUTPUT).toBe(largeValue);
+    expect(envVars._ARCHON_NODE_SYNTH_OUTPUT?.length).toBeGreaterThan(50_000);
+  });
+
+  it('leaves $nodeId.output.field refs untouched for substituteNodeOutputRefs', () => {
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ x: 1 }))]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output.x', outputs);
+    expect(script).toBe('echo $a.output.x');
+    expect(envVars).toEqual({});
+  });
+
+  it('handles both whole-output and field refs in the same script', () => {
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ x: 1 }))]]);
+    const { script, envVars } = extractNodeOutputEnvVars(
+      'FULL=$a.output\nFIELD=$a.output.x',
+      outputs
+    );
+    expect(script).toBe('FULL="${_ARCHON_NODE_A_OUTPUT}"\nFIELD=$a.output.x');
+    expect(envVars).toEqual({ _ARCHON_NODE_A_OUTPUT: JSON.stringify({ x: 1 }) });
+  });
+
+  it('normalizes hyphens in node ID to underscores in env var name', () => {
+    const outputs = new Map([['my-node', makeOutput('completed', 'val')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $my-node.output', outputs);
+    expect(script).toBe('echo "${_ARCHON_NODE_MY_NODE_OUTPUT}"');
+    expect(envVars._ARCHON_NODE_MY_NODE_OUTPUT).toBe('val');
+  });
+
+  it('leaves unknown node ref unchanged so substituteNodeOutputRefs can warn', () => {
+    const outputs = new Map<string, NodeOutput>();
+    const { script, envVars } = extractNodeOutputEnvVars('echo $missing.output', outputs);
+    expect(script).toBe('echo $missing.output');
+    expect(envVars).toEqual({});
+  });
+
+  it('replaces multiple references to the same node with one env var', () => {
+    const outputs = new Map([['a', makeOutput('completed', 'val')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output; echo $a.output', outputs);
+    expect(script).toBe('echo "${_ARCHON_NODE_A_OUTPUT}"; echo "${_ARCHON_NODE_A_OUTPUT}"');
+    expect(envVars).toEqual({ _ARCHON_NODE_A_OUTPUT: 'val' });
+  });
+
+  it('does not replace when output ref is followed by a field', () => {
+    const outputs = new Map([['a', makeOutput('completed', 'val')]]);
+    // Trailing alphanumeric after `.output.` should still be treated as field-access
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output.field_name', outputs);
+    expect(script).toBe('echo $a.output.field_name');
+    expect(envVars).toEqual({});
+  });
+
+  it('handles empty string node output', () => {
+    const outputs = new Map([['a', makeOutput('completed', '')]]);
+    const { script, envVars } = extractNodeOutputEnvVars('echo $a.output', outputs);
+    expect(script).toBe('echo "${_ARCHON_NODE_A_OUTPUT}"');
+    expect(envVars).toEqual({ _ARCHON_NODE_A_OUTPUT: '' });
+  });
+});
+
 describe('substituteNodeOutputRefs -- structuredOutput preference', () => {
   it('prefers structuredOutput.field over JSON.parse(output)', () => {
     // Pi-shape: prose output text with structuredOutput populated by tryParseStructuredOutput.
@@ -1543,6 +1615,110 @@ describe('executeDagWorkflow -- bash nodes', () => {
       const envArg = (firstCall?.[2] as { env: NodeJS.ProcessEnv }).env;
       expect(envArg?.USER_MESSAGE).toBe('$(rm -rf /)');
       expect(envArg?.ARGUMENTS).toBe('$(rm -rf /)');
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('passes $nodeId.output value via _ARCHON_NODE_* env var in executeBashNode', async () => {
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'ok\n', stderr: '' });
+    try {
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('bash-env-var-run-id');
+      const upstreamOutput = 'upstream value with $special "chars"';
+
+      const nodes: DagNode[] = [
+        { id: 'upstream', bash: 'echo upstream' },
+        { id: 'consumer', bash: 'echo $upstream.output', depends_on: ['upstream'] },
+      ];
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-env-var',
+        testDir,
+        { name: 'env-var-test', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        new Map([['upstream', upstreamOutput]])
+      );
+
+      const consumerCall = execSpy.mock.calls.find(call => {
+        const script = (call[1] as string[])[1] ?? '';
+        return script.includes('_ARCHON_NODE_UPSTREAM_OUTPUT');
+      });
+      expect(consumerCall).toBeDefined();
+      const envArg = (consumerCall![2] as { env: NodeJS.ProcessEnv }).env;
+      expect(envArg?._ARCHON_NODE_UPSTREAM_OUTPUT).toBe(upstreamOutput);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  it('passes $nodeId.output via _ARCHON_NODE_* env var in until_bash', async () => {
+    // until_bash returning exit 0 signals loop completion; mock it to exit 0
+    const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
+    try {
+      mockSendQueryDag.mockImplementation(function* () {
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-until-bash-session' };
+      });
+
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('until-bash-env-run-id');
+      const upstreamOutput = 'done';
+
+      // upstream is a bash node whose output is pre-seeded via priorCompletedNodes
+      const nodes: DagNode[] = [
+        { id: 'upstream', bash: 'echo upstream' },
+        {
+          id: 'check',
+          loop: {
+            prompt: 'Do work.',
+            until_bash: 'test $upstream.output = "done"',
+            until: 'COMPLETE',
+            max_iterations: 1,
+          },
+          depends_on: ['upstream'],
+        },
+      ];
+
+      await executeDagWorkflow(
+        mockDeps,
+        platform,
+        'conv-until-bash-env',
+        testDir,
+        { name: 'until-bash-env-test', nodes },
+        workflowRun,
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig,
+        undefined,
+        undefined,
+        new Map([['upstream', upstreamOutput]])
+      );
+
+      const bashCall = execSpy.mock.calls.find(call => {
+        const script = (call[1] as string[])[1] ?? '';
+        return script.includes('_ARCHON_NODE_UPSTREAM_OUTPUT');
+      });
+      expect(bashCall).toBeDefined();
+      const envArg = (bashCall![2] as { env: NodeJS.ProcessEnv }).env;
+      expect(envArg?._ARCHON_NODE_UPSTREAM_OUTPUT).toBe(upstreamOutput);
     } finally {
       execSpy.mockRestore();
     }

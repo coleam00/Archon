@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - MCP server support for Codex workflow nodes via the shared `loadMcpConfig` module — pass `mcp: <path>` on a Codex node and the config is translated to Codex's `mcp_servers` overrides at runtime. MCP client errors are surfaced to the workflow author as `system` chunks when MCP is explicitly configured for the node (#1459).
 
+### Fixed
+
+- **Bash node large-output corruption**: whole-output `$nodeId.output` refs in `bash:` and `until_bash` loop conditions now travel via environment variables instead of inline shell-quoting. Inputs of any size (including 40 KB+ LLM outputs) are handled correctly. Field-access refs (`$nodeId.output.field`) are unaffected. Closes #1717.
+
 ## [0.3.12] - 2026-05-14
 
 Orchestrator prompt-cache fix, SDK termination edge cases, marketplace expansion, and broad workflow fixes.

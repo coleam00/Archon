@@ -199,9 +199,10 @@ for field access in `when:` conditions and prompt substitution.
 ### Variable Substitution in Scripts
 
 Variables are substituted into the `script` text **as raw strings, without
-shell quoting** — unlike `bash:` nodes, where `$nodeId.output` values are
-auto-quoted. Treat substituted values as untrusted input and parse them with
-language features, not by interpolating into shell syntax.
+shell quoting** — unlike `bash:` nodes, where `$nodeId.output` whole-output
+values are passed safely via environment variables. Treat substituted values
+as untrusted input and parse them with language features, not by interpolating
+into shell syntax.
 
 :::caution[Avoid String.raw with `$nodeId.output`]
 The pattern `` String.raw`$nodeId.output` `` looks safe but fails silently when

@@ -594,26 +594,23 @@ export async function safeSendMessage(
       'platform_message_send_failed'
     );
 
-    // Reset tracker on any non-UNKNOWN outcome — only *consecutive* UNKNOWN
-    // errors should trip the threshold (e.g. UNKNOWN→TRANSIENT→UNKNOWN→UNKNOWN
-    // is two separate runs, not three in a row).
-    if (unknownErrorTracker && errorType !== 'UNKNOWN') {
-      unknownErrorTracker.count = 0;
-    }
-
     // Fatal errors should not be suppressed - they indicate configuration issues
     if (errorType === 'FATAL') {
       throw new Error(`Platform authentication/permission error: ${err.message}`);
     }
 
-    // Track consecutive UNKNOWN errors - abort if threshold exceeded
+    // Track consecutive UNKNOWN errors; reset on any non-UNKNOWN outcome.
+    // Only *consecutive* UNKNOWN errors should trip the threshold (e.g. UNKNOWN→TRANSIENT→UNKNOWN→UNKNOWN
+    // is two separate runs, not three in a row).
     if (errorType === 'UNKNOWN' && unknownErrorTracker) {
       unknownErrorTracker.count++;
       if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
         throw new Error(
-          `${String(UNKNOWN_ERROR_THRESHOLD)} consecutive unrecognized errors - aborting workflow: ${err.message}`
+          `${UNKNOWN_ERROR_THRESHOLD} consecutive unrecognized errors - aborting workflow: ${err.message}`
         );
       }
+    } else if (unknownErrorTracker) {
+      unknownErrorTracker.count = 0;
     }
 
     // Transient errors (and below-threshold unknown errors) suppressed to allow workflow to continue
