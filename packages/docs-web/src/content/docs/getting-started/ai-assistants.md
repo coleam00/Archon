@@ -286,7 +286,7 @@ assistants:
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
 | Hooks | ✅ | Plugin hook system (tool, session, message hooks) |
-| Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode put it in cofnig file. |
+| Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode puts it in config. |
 | Thinking control | ❌ | No explicit `thinking` field in agent frontmatter; OpenCode auto-enables reasoning when `agents[].model` is a reasoning-capable model (e.g. `anthropic/claude-sonnet-4-5`) |
 | Fallback model | ❌ | No native failover in the SDK |
 | Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |

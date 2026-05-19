@@ -55,10 +55,7 @@ async function readStructuredOutput(
       return info.structured_output;
     }
   } catch (error) {
-    getLog().debug(
-      { err: error, sessionId, messageId },
-      'opencode.structured_output_lookup_failed'
-    );
+    getLog().warn({ err: error, sessionId, messageId }, 'opencode.structured_output_lookup_failed');
   }
   return undefined;
 }

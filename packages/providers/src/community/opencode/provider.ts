@@ -199,13 +199,16 @@ export class OpencodeProvider implements IAgentProvider {
         const delayMs = this.retryBaseDelayMs * 2 ** attempt;
         getLog().info({ attempt, delayMs, errorClass }, 'opencode.retrying_query');
         await delay(delayMs);
+        if (lastError) {
+          enrichedError.cause = lastError;
+        }
         lastError = enrichedError;
       } finally {
         runtime.release();
       }
     }
 
-    throw lastError ?? new Error('OpenCode query failed after retries');
+    throw lastError ?? new Error(`OpenCode query failed after ${MAX_RETRIES} retries`);
   }
 
   getType(): string {

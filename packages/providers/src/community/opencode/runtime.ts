@@ -123,7 +123,7 @@ function killProcess(pid: number): void {
       process.kill(pid, 'SIGKILL');
     }
   } catch (error) {
-    getLog().debug({ err: error, pid }, 'opencode.process_kill_failed');
+    getLog().warn({ err: error, pid }, 'opencode.process_kill_failed');
   }
 }
 
@@ -270,7 +270,7 @@ export async function disposeInstanceForDirectory(
   try {
     await client.instance.dispose({ query: { directory } });
   } catch (error) {
-    getLog().debug(
+    getLog().warn(
       {
         err: error,
         directory,

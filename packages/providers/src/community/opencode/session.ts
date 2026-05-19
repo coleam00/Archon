@@ -38,8 +38,8 @@ export async function resolveSessionId(
       if (typeof sessionId === 'string' && sessionId.length > 0) {
         return { sessionId, resumed: true };
       }
-    } catch {
-      // Fall through to fresh session creation and surface a warning upstream.
+    } catch (error) {
+      getLog().warn({ err: error, resumeSessionId, cwd }, 'opencode.session_resume_failed');
     }
   }
 
@@ -110,10 +110,7 @@ async function readStructuredOutput(
       return info.structured_output;
     }
   } catch (error) {
-    getLog().debug(
-      { err: error, sessionId, messageId },
-      'opencode.structured_output_lookup_failed'
-    );
+    getLog().warn({ err: error, sessionId, messageId }, 'opencode.structured_output_lookup_failed');
   }
 
   return undefined;
