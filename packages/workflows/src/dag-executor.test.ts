@@ -2598,6 +2598,66 @@ describe('loadMcpConfig', () => {
       'MCP config figma.headers.Authorization must be a string'
     );
   });
+
+  it('expands ${VAR_NAME} brace form in env values', async () => {
+    process.env.TEST_MCP_TOKEN_1612 = 'braced_secret';
+    const config = { github: { command: 'npx', env: { TOKEN: '${TEST_MCP_TOKEN_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.github as Record<string, unknown>;
+    expect(server.env).toEqual({ TOKEN: 'braced_secret' });
+
+    delete process.env.TEST_MCP_TOKEN_1612;
+  });
+
+  it('expands ${VAR_NAME} brace form in headers values', async () => {
+    process.env.TEST_API_KEY_1612 = 'braced_key456';
+    const config = {
+      api: {
+        type: 'http',
+        url: 'https://example.com',
+        headers: { Authorization: 'Bearer ${TEST_API_KEY_1612}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.api as Record<string, unknown>;
+    expect(server.headers).toEqual({ Authorization: 'Bearer braced_key456' });
+
+    delete process.env.TEST_API_KEY_1612;
+  });
+
+  it('expands mixed $VAR and ${VAR} in the same string', async () => {
+    process.env.TEST_HOST_1612 = 'localhost';
+    process.env.TEST_PORT_1612 = '5432';
+    const config = {
+      db: {
+        command: 'npx',
+        env: { DSN: 'postgres://$TEST_HOST_1612:${TEST_PORT_1612}/mydb' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.db as Record<string, unknown>;
+    expect(server.env).toEqual({ DSN: 'postgres://localhost:5432/mydb' });
+
+    delete process.env.TEST_HOST_1612;
+    delete process.env.TEST_PORT_1612;
+  });
+
+  it('reports missing vars and returns empty string for undefined ${VAR} brace form', async () => {
+    delete process.env.NONEXISTENT_BRACE_VAR_1612;
+    const config = { svc: { command: 'npx', env: { KEY: '${NONEXISTENT_BRACE_VAR_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ KEY: '' });
+    expect(result.missingVars).toContain('NONEXISTENT_BRACE_VAR_1612');
+  });
 });
 
 // ---------------------------------------------------------------------------
