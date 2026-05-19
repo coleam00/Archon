@@ -41,6 +41,8 @@ import {
   getRunArtifactsPath,
   getArchonHome,
   isDocker,
+  isWSL,
+  getWSLDistroName,
   checkForUpdate,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
@@ -824,6 +826,8 @@ const getHealthRoute = createRoute({
               runningWorkflows: z.number(),
               version: z.string().optional(),
               is_docker: z.boolean(),
+              is_wsl: z.boolean(),
+              wsl_distro: z.string().optional(),
               activePlatforms: z.array(z.string()).optional(),
             })
             .openapi('HealthResponse'),
@@ -2753,6 +2757,8 @@ export function registerApiRoutes(
       runningWorkflows: runningWorkflowRows.length,
       version: appVersion,
       is_docker: isDocker(),
+      is_wsl: isWSL(),
+      ...(getWSLDistroName() ? { wsl_distro: getWSLDistroName() } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
     });
   });
