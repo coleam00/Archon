@@ -49,6 +49,12 @@ export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claud
 
 // Community providers
 export {
+  OpencodeProvider,
+  parseOpencodeConfig,
+  registerOpencodeProvider,
+  type OpencodeProviderDefaults,
+} from './community/opencode';
+export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
