@@ -1,0 +1,77 @@
+name: fund-analyze-only
+description: |
+  Use when: User wants to analyze funds using previously cached data.
+  Triggers: "fund analyze", "analyze cached", "run analysis".
+
+  DAG workflow that:
+  1. Loads cached data from ~/.archon/cache/fund-analysis/
+  2. Parallel AI news analysis + score engine computation
+  3. Generates reports (MD + CSV + JSON)
+
+  Requires: fund-fetch-only must have been run first to populate the cache.
+  NOT for: First-time runs — use fund-fetch-only to collect data first.
+
+provider: claude
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: LOAD CACHED DATA
+  # Restore data from persistent cache into artifacts directory.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: load-cache
+    description: Load previously cached data into artifacts directory
+    bash: |
+      set -euo pipefail
+      CACHE_DIR="$HOME/.archon/cache/fund-analysis"
+      mkdir -p "$ARTIFACTS_DIR"
+
+      MISSING_COUNT=0
+      for file in market_data.json macro_data.json news_feed.json; do
+        if [ -f "$CACHE_DIR/$file" ]; then
+          cp "$CACHE_DIR/$file" "$ARTIFACTS_DIR/$file"
+          echo "  Loaded from cache: $file"
+        else
+          echo "  MISSING: $file not found in cache ($CACHE_DIR)"
+          MISSING_COUNT=$((MISSING_COUNT + 1))
+        fi
+      done
+
+      if [ "$MISSING_COUNT" -gt 0 ]; then
+        echo ""
+        echo "ERROR: $MISSING_COUNT cached file(s) missing."
+        echo "Run 'archon workflow run fund-fetch-only' first to collect data."
+        exit 1
+      fi
+
+      echo "Cache loaded successfully. Ready for analysis."
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: PARALLEL ANALYSIS
+  # News analysis and scoring run concurrently.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: analyze-news
+    description: Deep Claude AI news analysis
+    command: fund-analyze-news
+    depends_on: [load-cache]
+    context: fresh
+    model: sonnet
+
+  - id: score-engine
+    description: Run TypeScript scoring engine
+    command: fund-score-engine
+    depends_on: [load-cache]
+    context: fresh
+    model: haiku
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: REPORT GENERATION
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: generate-reports
+    description: Generate analysis reports in MD + CSV + JSON
+    command: fund-generate-reports
+    depends_on: [analyze-news, score-engine]
+    context: fresh
+    model: haiku

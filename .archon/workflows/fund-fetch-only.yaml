@@ -1,0 +1,61 @@
+name: fund-fetch-only
+description: |
+  Use when: User wants to collect and cache data only (no analysis).
+  Triggers: "fund fetch", "fetch market data", "collect fund data".
+
+  DAG workflow that:
+  1. Parallel data collection (market + macro + news)
+  2. Saves all results to cache for later analysis runs
+
+  NOT for: Running analysis — use fund-analyze-only or fund-analysis for that.
+
+provider: claude
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: PARALLEL DATA COLLECTION
+  # All three fetch nodes run concurrently.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-market
+    description: Collect global market data
+    command: fund-fetch-market
+    context: fresh
+    model: haiku
+
+  - id: fetch-macro
+    description: Collect 26 macroeconomic indicators
+    command: fund-fetch-macro
+    context: fresh
+    model: haiku
+
+  - id: fetch-news
+    description: Collect financial news feed
+    command: fund-fetch-news
+    context: fresh
+    model: haiku
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: SAVE TO CACHE
+  # Copies all collected data to a persistent cache directory.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: save-cache
+    description: Save collected data to persistent cache for later analysis
+    depends_on: [fetch-market, fetch-macro, fetch-news]
+    bash: |
+      set -euo pipefail
+      CACHE_DIR="$HOME/.archon/cache/fund-analysis"
+      mkdir -p "$CACHE_DIR"
+
+      echo "Saving collected data to cache: $CACHE_DIR"
+      for file in market_data.json macro_data.json news_feed.json; do
+        if [ -f "$ARTIFACTS_DIR/$file" ]; then
+          cp "$ARTIFACTS_DIR/$file" "$CACHE_DIR/$file"
+          echo "  Cached: $file"
+        else
+          echo "  WARNING: $file not found in artifacts"
+        fi
+      done
+
+      echo "Cache saved. Data ready for fund-analyze-only."

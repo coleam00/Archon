@@ -1,5 +1,19 @@
 worktree:
-  baseBranch: dev
+  baseBranch: main
 
-docs:
-  path: packages/docs-web/src/content/docs
+fund_analysis:
+  throttle_seconds: 300
+  max_retries: 3
+  fund_codes_file: "~/Data_share/基金OCR/基金-代码.txt"
+  data_cache_dir: "~/.archon/cache/fund-analysis"
+  six_dim_weights:
+    fcf_quality: 0.20
+    capital_efficiency: 0.18
+    shareholder_return: 0.15
+    valuation_safety: 0.18
+    growth: 0.17
+    macro_geopolitical: 0.12
+  news_sources:
+    - baidu
+    - eastmoney
+    - cctv

@@ -1,0 +1,34 @@
+name: fund-news-only
+description: |
+  Use when: User wants to fetch and analyze financial news only.
+  Triggers: "fund news", "analyze news", "news analysis".
+
+  Sequential workflow that:
+  1. Fetches financial news from akshare
+  2. Performs Claude AI deep analysis of news sentiment and impact
+
+  Output: Structured JSON news analysis saved to $ARTIFACTS_DIR/news_analysis.json
+
+provider: claude
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: FETCH NEWS
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-news
+    description: Collect financial news feed from akshare
+    command: fund-fetch-news
+    context: fresh
+    model: haiku
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: ANALYZE NEWS
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: analyze-news
+    description: Deep Claude AI news analysis
+    command: fund-analyze-news
+    depends_on: [fetch-news]
+    context: fresh
+    model: sonnet

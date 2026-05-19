@@ -1,0 +1,120 @@
+name: fund-analysis
+description: |
+  Use when: User wants to run a full fund quantitative analysis pipeline.
+  Triggers: "fund analysis", "analyze fund", "fund scoring", "基金分析".
+
+  DAG workflow that:
+  1. Parallel data collection (market + macro + news + fund list)
+  2. Parallel AI analysis + scoring (news analysis + score engine)
+  3. Merges results and generates reports in MD + CSV + JSON
+
+  Accepts: Optional fund codes file path or configuration reference.
+
+provider: claude
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: PARALLEL DATA COLLECTION
+  # fetch-market, fetch-macro, fetch-news, load-funds all run
+  # concurrently since they have no depends_on edges.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-market
+    description: Collect global market data (US stocks, A-share indices, HK stocks, global indices)
+    command: fund-fetch-market
+    context: fresh
+    model: haiku
+
+  - id: fetch-macro
+    description: Collect 26 macroeconomic indicators (China + US + global)
+    command: fund-fetch-macro
+    context: fresh
+    model: haiku
+
+  - id: fetch-news
+    description: Collect financial news feed
+    command: fund-fetch-news
+    context: fresh
+    model: haiku
+
+  - id: load-funds
+    description: Load fund list from codes file or position CSV
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+
+      CODES_FILE="$HOME/Data_share/基金OCR/基金-代码.txt"
+      if [ -f "$CODES_FILE" ]; then
+        echo "Loading fund codes from: $CODES_FILE"
+        uv run python -c "
+      import json, sys
+      funds = []
+      with open('$CODES_FILE', encoding='utf-8') as f:
+          for line in f:
+              line = line.strip()
+              if not line or line.startswith('#'):
+                  continue
+              parts = line.replace(',', ' ').split(None, 1)
+              code = parts[0].strip()
+              name = parts[1].strip() if len(parts) > 1 else ''
+              if code:
+                  funds.append({'code': code, 'name': name, 'category': ''})
+      print(json.dumps({'funds': funds, '_total': len(funds)}, ensure_ascii=False))
+      " > "$ARTIFACTS_DIR/fund_list.json"
+      else
+        echo "Fund codes file not found, falling back to position CSV"
+        POSITION_CSV="$HOME/Data_share/基金分析/基金持仓数据.csv"
+        if [ -f "$POSITION_CSV" ]; then
+          uv run python -c "
+      import csv, json, sys
+      funds = []
+      with open('$POSITION_CSV', encoding='utf-8-sig') as f:
+          reader = csv.DictReader(f)
+          for row in reader:
+              code = row.get('基金代码', row.get('code', '')).strip()
+              name = row.get('基金名称', row.get('name', ''))
+              category = row.get('分类', row.get('category', ''))
+              if code:
+                  funds.append({'code': code, 'name': name or '', 'category': category or ''})
+      print(json.dumps({'funds': funds, '_total': len(funds)}, ensure_ascii=False))
+      " > "$ARTIFACTS_DIR/fund_list.json"
+        else
+          echo '{"_error":"No fund source found"}' > "$ARTIFACTS_DIR/fund_list.json"
+          echo "WARNING: No fund list source available" >&2
+        fi
+      fi
+
+      echo "Fund list loaded: $(uv run python -c "import json; d=json.load(open('$ARTIFACTS_DIR/fund_list.json')); print(d.get('_total', 0))") funds"
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: PARALLEL AI ANALYSIS + SCORING
+  # analyze-news (depends on fetch-news) and score-engine (depends
+  # on fetch-macro + load-funds) run concurrently.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: analyze-news
+    description: Deep Claude AI news analysis — sentiment, sector impact, macro risk
+    command: fund-analyze-news
+    depends_on: [fetch-news]
+    context: fresh
+    model: sonnet
+
+  - id: score-engine
+    description: Run TypeScript scoring engine — six-dim scores + five-dim screening
+    command: fund-score-engine
+    depends_on: [fetch-macro, load-funds]
+    context: fresh
+    model: haiku
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: REPORT GENERATION
+  # generate-reports waits for both analyze-news and score-engine
+  # to complete, then produces all three output formats.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: generate-reports
+    description: Generate analysis reports (Markdown + CSV + JSON)
+    command: fund-generate-reports
+    depends_on: [analyze-news, score-engine]
+    context: fresh
+    model: haiku
