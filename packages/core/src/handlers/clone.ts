@@ -62,6 +62,13 @@ const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: string }[] = [
   { label: 'forgejo', envVar: 'GITEA_TOKEN', scheme: '' },
 ];
 
+/** Explicit *_URL env var → token env var + scheme for opaque self-hosted hostnames. */
+const URL_FORGE: { urlEnvVar: string; tokenEnvVar: string; scheme: string }[] = [
+  { urlEnvVar: 'GITEA_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
+  { urlEnvVar: 'GITLAB_URL', tokenEnvVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
+  { urlEnvVar: 'FORGEJO_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
+];
+
 export function resolveForgeAuth(url: string): { token: string | undefined; scheme: string } {
   // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
   let hostname: string;
@@ -100,11 +107,6 @@ export function resolveForgeAuth(url: string): { token: string | undefined; sche
   // 3. Explicit URL match: compare clone hostname against configured *_URL env vars.
   //    Handles self-hosted instances where the hostname doesn't contain a forge name
   //    (e.g. git.example.com with GITEA_URL=https://git.example.com).
-  const URL_FORGE: { urlEnvVar: string; tokenEnvVar: string; scheme: string }[] = [
-    { urlEnvVar: 'GITEA_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
-    { urlEnvVar: 'GITLAB_URL', tokenEnvVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
-    { urlEnvVar: 'FORGEJO_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
-  ];
   for (const entry of URL_FORGE) {
     const forgeUrl = process.env[entry.urlEnvVar];
     if (forgeUrl) {
