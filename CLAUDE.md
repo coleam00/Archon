@@ -144,6 +144,11 @@ bun run format
 bun run format:check
 ```
 
+> **Known intermittent noise**: `@archon/adapters` and `@archon/cli` occasionally show
+> `bun-types` definition errors during incremental type checks. Run `bun run type-check`
+> (full, all packages) to confirm whether a failure is pre-existing before treating it as a
+> blocker. If it disappears on `bun run validate`, it is pre-existing noise — not your bug.
+
 ### Pre-PR Validation
 
 **Always run before creating a pull request:**
@@ -583,6 +588,12 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 - Docker: Paths automatically set to `/.archon/`
 
 ## Development Guidelines
+
+**Code and Comment Co-evolution**
+- When modifying a function body, scan the 3–5 lines directly above it for JSDoc or inline
+  doc comments that describe the function's behavior, parameters, or return value. Update them
+  to match the new behavior before moving on. Stale doc comments mislead future readers and
+  reviewers more than no comment at all.
 
 ### When Creating New Features
 
