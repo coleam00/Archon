@@ -687,36 +687,77 @@ export async function workflowRunCommand(
     }
   })();
 
-  // Register cleanup handlers for graceful termination
+  // Register cleanup handlers for graceful termination.
+  //
+  // Cleanup runs with a brief grace period before forcing the in-flight workflow
+  // run to fail. This handles a real race we observed in the field:
+  //
+  //   A workflow's final node performs a state-changing side effect (e.g.
+  //   transitioning an issue label out of an "in-progress" set). An external
+  //   orchestrator watching that state sees the change and cancels the runner
+  //   by sending SIGTERM. At that moment the DAG executor has already finished
+  //   the last node but has not yet reached `completeWorkflowRun`. Without a
+  //   grace period, cleanup wins the race, marks the run as failed, and exits
+  //   1 — even though the work succeeded. Downstream consumers then treat the
+  //   exit code as a failure signal and retry idempotent work that is already
+  //   done, producing log noise and (in some cases) duplicate side effects.
+  //
+  // Grace strategy:
+  //   - Poll `getActiveWorkflowRun` every `POLL_MS` for up to `GRACE_MS`
+  //   - If the run finishes naturally during the grace window, look up its
+  //     final status and exit 0 only if the DB says `completed`
+  //   - If the run is still active after grace, force-fail it (preserving the
+  //     previous behaviour for genuine cancels like a user Ctrl+C)
+  //   - If we never see an active run during grace, exit 1 (preserves
+  //     previous behaviour — we don't know what happened)
+  //
+  // 5 seconds is generous: `completeWorkflowRun` typically runs in <100ms.
+  // A legitimate user-driven cancel is delayed by at most 5s, which is the
+  // right trade for not corrupting the success/failure signal.
+  const TERMINATION_GRACE_MS = 5000;
+  const TERMINATION_POLL_MS = 100;
   let terminating = false;
-  const cleanup = (signal: string): void => {
+  const cleanup = async (signal: string): Promise<void> => {
     if (terminating) return;
     terminating = true;
     getLog().info({ conversationId: conversation.id, signal }, 'workflow.process_terminating');
-    workflowDb
-      .getActiveWorkflowRun(conversation.id)
-      .then(activeRun => {
-        if (activeRun) {
-          return workflowDb.failWorkflowRun(activeRun.id, `Process terminated (${signal})`);
-        }
-        return undefined;
-      })
-      .catch((err: unknown) => {
-        const e = err as Error;
-        getLog().error(
-          { err: e, errorType: e.constructor.name },
-          'workflow.termination_cleanup_failed'
-        );
-      })
-      .finally(() => {
-        process.exit(1);
-      });
+
+    const startedAt = Date.now();
+    let lastSeenRunId: string | null = null;
+    while (Date.now() - startedAt < TERMINATION_GRACE_MS) {
+      const activeRun = await workflowDb.getActiveWorkflowRun(conversation.id).catch(() => null);
+      if (!activeRun) break; // run finished naturally during grace
+      lastSeenRunId = activeRun.id;
+      await new Promise(resolve => setTimeout(resolve, TERMINATION_POLL_MS));
+    }
+
+    let exitCode = 1;
+    try {
+      if (lastSeenRunId && Date.now() - startedAt >= TERMINATION_GRACE_MS) {
+        // Still active after grace — genuine cancel, force-fail.
+        await workflowDb.failWorkflowRun(lastSeenRunId, `Process terminated (${signal})`);
+      } else if (lastSeenRunId) {
+        // Was active during grace, now isn't — trust the DB's verdict.
+        const status = await workflowDb.getWorkflowRunStatus(lastSeenRunId).catch(() => null);
+        if (status === 'completed') exitCode = 0;
+      }
+      // If `lastSeenRunId` is null we never saw an active run during grace.
+      // Either nothing was running, or it had already terminated before our
+      // first poll. Preserve the previous exit-1 behaviour in that edge case.
+    } catch (err) {
+      const e = err as Error;
+      getLog().error(
+        { err: e, errorType: e.constructor.name },
+        'workflow.termination_cleanup_failed'
+      );
+    }
+    process.exit(exitCode);
   };
   process.once('SIGTERM', () => {
-    cleanup('SIGTERM');
+    void cleanup('SIGTERM');
   });
   process.once('SIGINT', () => {
-    cleanup('SIGINT');
+    void cleanup('SIGINT');
   });
 
   // Subscribe to workflow events for progress rendering on stderr.
