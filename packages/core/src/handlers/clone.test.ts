@@ -503,6 +503,41 @@ describe('cloneRepository', () => {
       expect(result).toEqual({ token: undefined, scheme: '' });
       delete process.env.GITLAB_TOKEN;
     });
+
+    test('returns GITEA_TOKEN when GITEA_URL hostname matches clone URL', () => {
+      process.env.GITEA_URL = 'https://git.example.com';
+      process.env.GITEA_TOKEN = 'gitea_tok_123';
+      const result = resolveForgeAuth('https://git.example.com/group/app.git');
+      expect(result).toEqual({ token: 'gitea_tok_123', scheme: '' });
+      delete process.env.GITEA_URL;
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('returns GITLAB_TOKEN with oauth2: scheme when GITLAB_URL hostname matches', () => {
+      process.env.GITLAB_URL = 'https://code.mycompany.com';
+      process.env.GITLAB_TOKEN = 'glpat-corp';
+      const result = resolveForgeAuth('https://code.mycompany.com/team/project');
+      expect(result).toEqual({ token: 'glpat-corp', scheme: 'oauth2:' });
+      delete process.env.GITLAB_URL;
+      delete process.env.GITLAB_TOKEN;
+    });
+
+    test('does not leak GITEA_TOKEN when GITEA_URL is set but hostname differs', () => {
+      process.env.GITEA_URL = 'https://git.example.com';
+      process.env.GITEA_TOKEN = 'gitea_tok_secret';
+      const result = resolveForgeAuth('https://evil.example.com/repo');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+      delete process.env.GITEA_URL;
+      delete process.env.GITEA_TOKEN;
+    });
+
+    test('URL fallback does not activate when token env var is unset', () => {
+      process.env.GITEA_URL = 'https://git.example.com';
+      delete process.env.GITEA_TOKEN;
+      const result = resolveForgeAuth('https://git.example.com/group/app');
+      expect(result).toEqual({ token: undefined, scheme: '' });
+      delete process.env.GITEA_URL;
+    });
   });
 
   // ── Already-cloned directory ───────────────────────────────────────────
