@@ -876,6 +876,17 @@ describe('substituteNodeOutputRefs -- large output file substitution', () => {
     expect(result).toBe(`echo ${largeOutput}`);
     expect(result).not.toContain('$(cat ');
   });
+
+  it('falls back to shell-quoting when file write fails', () => {
+    const largeOutput = 'x'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
+    // Use a non-existent directory to trigger writeFileSync failure
+    const badDir = '/nonexistent-path-that-does-not-exist';
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, true, badDir);
+    // Should fall back to inline shell-quoting instead of crashing
+    expect(result).not.toContain('$(cat ');
+    expect(result).toBe(`echo '${largeOutput}'`);
+  });
 });
 
 describe('substituteNodeOutputRefs -- structuredOutput preference', () => {

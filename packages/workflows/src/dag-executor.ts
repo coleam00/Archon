@@ -247,8 +247,17 @@ function shellQuoteOrFile(
   if (outputFileDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
     const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
     const filePath = joinPath(outputFileDir, filename);
-    writeFileSync(filePath, value);
-    return `$(cat ${shellQuote(filePath)})`;
+    try {
+      writeFileSync(filePath, value);
+      return `$(cat ${shellQuote(filePath)})`;
+    } catch (fileErr) {
+      const err = fileErr as Error;
+      getLog().error(
+        { err, nodeId, field, valueSize: value.length, filePath },
+        'dag.large_output_file_write_failed'
+      );
+      return shellQuote(value); // fallback: inline (pre-file-spill behavior)
+    }
   }
   return shellQuote(value);
 }
