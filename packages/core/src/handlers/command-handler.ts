@@ -17,7 +17,7 @@ import {
   getWorktreeStatusBreakdown,
 } from '../services/cleanup-service';
 import { getArchonWorkspacesPath } from '@archon/paths';
-import { loadConfig } from '../config/config-loader';
+import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type {
@@ -493,9 +493,11 @@ async function handleWorktreeCommand(
       }
 
       try {
+        const repoConf = await loadRepoConfig(mainPath);
+        const remote = repoConf.worktree?.remote?.trim() || undefined;
         let result;
         if (cleanupType === 'merged') {
-          result = await cleanupMergedWorktrees(conversation.codebase_id, mainPath);
+          result = await cleanupMergedWorktrees(conversation.codebase_id, mainPath, { remote });
         } else {
           result = await cleanupStaleWorktrees(conversation.codebase_id, mainPath);
         }
@@ -1001,7 +1003,13 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // Add worktree breakdown if codebase is configured
       if (codebase) {
         try {
-          const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
+          const statusConf = await loadRepoConfig(codebase.default_cwd);
+          const statusRemote = statusConf.worktree?.remote?.trim() || undefined;
+          const breakdown = await getWorktreeStatusBreakdown(
+            codebase.id,
+            codebase.default_cwd,
+            statusRemote
+          );
           msg += `\n\nWorktrees: ${String(breakdown.total)} active`;
           if (breakdown.merged > 0 || breakdown.stale > 0) {
             if (breakdown.merged > 0) {
