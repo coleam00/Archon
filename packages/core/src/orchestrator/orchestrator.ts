@@ -275,7 +275,9 @@ export async function dispatchBackgroundWorkflow(
   });
 
   // 3. Resolve isolation for this worker (each background workflow gets its own worktree).
-  // Isolation failure is fatal — never run a workflow in a shared/parent worktree.
+  // A workflow with `worktree.enabled: false` short-circuits the resolver entirely
+  // and runs in the live checkout — no worktree creation, no env row. This matches
+  // the behavior of dispatchOrchestratorWorkflow (orchestrator-agent.ts:331).
   let workerCwd: string;
   if (ctx.codebaseId) {
     const codebase = await getCodebase(ctx.codebaseId);
@@ -284,20 +286,28 @@ export async function dispatchBackgroundWorkflow(
         `Cannot dispatch workflow "${workflow.name}": codebase ${ctx.codebaseId} not found`
       );
     }
-    const result = await validateAndResolveIsolation(
-      workerConv,
-      codebase,
-      ctx.platform,
-      workerPlatformId,
-      { workflowType: 'thread', workflowId: workerPlatformId }
-    );
-    workerCwd = result.cwd;
-    await db.updateConversation(workerConv.id, { cwd: workerCwd }).catch((e: unknown) => {
-      getLog().warn(
-        { err: toError(e), workerPlatformId },
-        'orchestrator.worker_cwd_persist_failed'
+    if (workflow.worktree?.enabled === false) {
+      getLog().info(
+        { workflowName: workflow.name, workerPlatformId, codebaseId: ctx.codebaseId },
+        'workflow.worktree_disabled_by_policy'
       );
-    });
+      workerCwd = codebase.default_cwd;
+    } else {
+      const result = await validateAndResolveIsolation(
+        workerConv,
+        codebase,
+        ctx.platform,
+        workerPlatformId,
+        { workflowType: 'thread', workflowId: workerPlatformId }
+      );
+      workerCwd = result.cwd;
+      await db.updateConversation(workerConv.id, { cwd: workerCwd }).catch((e: unknown) => {
+        getLog().warn(
+          { err: toError(e), workerPlatformId },
+          'orchestrator.worker_cwd_persist_failed'
+        );
+      });
+    }
   } else {
     // No codebase — run in parent's cwd (no isolation needed for non-repo workflows)
     workerCwd = ctx.cwd;
