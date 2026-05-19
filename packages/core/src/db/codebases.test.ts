@@ -26,9 +26,14 @@ mock.module('@archon/providers', () => ({
   registerProvider: () => {},
 }));
 
-// Mock config-loader for createCodebase's layered fallback
+// Import real config-loader so the mock preserves all exports.
+// mock.module is process-global and irrevocable in Bun — an incomplete mock
+// here would hide exports like loadGlobalConfig from other test files in the
+// same batch (config-loader.test.ts).
+import * as realConfigLoader from '../config/config-loader';
 const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
 mock.module('../config/config-loader', () => ({
+  ...realConfigLoader,
   loadConfig: mockLoadConfig,
 }));
 
