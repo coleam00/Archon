@@ -5,9 +5,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
 } from 'react';
-import { useNavigate } from 'react-router';
 import { WorkflowPicker } from './WorkflowPicker';
-import { useEntity } from '../store/cache';
+import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import type { Workflow } from '../primitives/workflow';
@@ -53,7 +52,6 @@ function writeLastWorkflow(name: string): void {
  * expanded state and focuses the textarea. Enter starts; Esc collapses.
  */
 export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): ReactElement {
-  const navigate = useNavigate();
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [mode, setMode] = useState<Mode>('collapsed');
   const [workflowName, setWorkflowName] = useState<string>(() => readLastWorkflow());
@@ -119,14 +117,17 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     setSubmitting(true);
     try {
       writeLastWorkflow(workflowName);
-      const started = await skill.startRun({
+      await skill.startRun({
         projectId,
         workflow: workflowName,
         message: context,
       });
+      // Dispatch is fire-and-forget — the orchestrator creates the run row
+      // asynchronously. Nudge the runs feed so the new card appears as soon
+      // as the row exists, instead of waiting for the next 3s poll tick.
       setContext('');
       setMode('collapsed');
-      navigate(`/console/p/${projectId}/r/${started.runId}`);
+      invalidate('runs');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to start run.');
     } finally {
