@@ -16,8 +16,7 @@ function describeJsonType(value: unknown): string {
 }
 
 /**
- * Expand $VAR_NAME references in string-valued records from the supplied
- * environment source.
+ * Expand `$VAR_NAME` and `${VAR_NAME}` references in string-valued records from the supplied environment source.
  */
 function expandEnvVarsInRecord(
   record: Record<string, unknown>,
