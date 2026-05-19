@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import {
   analyzeFund,
   analyzeFunds,
@@ -9,6 +9,7 @@ import {
   evaluateMacroRisk,
   evaluateShareholderReturn,
   evaluateValuationSafety,
+  parseCliArgs,
   screenFundamentalQualitative,
   screenHoldingPenetration,
   screenManagerEvaluation,
@@ -334,5 +335,117 @@ describe("analyzeFunds", () => {
     expect(results.length).toBe(2);
     expect(results[0].fundCode).toBe("001");
     expect(results[1].fundCode).toBe("002");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI argument parsing
+// ---------------------------------------------------------------------------
+
+describe("parseCliArgs", () => {
+  const saved = [...Bun.argv];
+
+  afterEach(() => {
+    Bun.argv = saved;
+  });
+
+  it("parses --funds-file", () => {
+    Bun.argv = ["bun", "script.ts", "--funds-file", "funds.json"];
+    const args = parseCliArgs();
+    expect(args.fundsFile).toBe("funds.json");
+  });
+
+  it("parses --holdings-file", () => {
+    Bun.argv = ["bun", "script.ts", "--holdings-file", "holdings.json"];
+    const args = parseCliArgs();
+    expect(args.holdingsFile).toBe("holdings.json");
+  });
+
+  it("parses --output", () => {
+    Bun.argv = ["bun", "script.ts", "--output", "results.json"];
+    const args = parseCliArgs();
+    expect(args.output).toBe("results.json");
+  });
+
+  it("parses multiple args together", () => {
+    Bun.argv = ["bun", "script.ts", "--funds-file", "f.json", "--macro-file", "m.json", "--output", "o.json"];
+    const args = parseCliArgs();
+    expect(args.fundsFile).toBe("f.json");
+    expect(args.macroFile).toBe("m.json");
+    expect(args.output).toBe("o.json");
+  });
+
+  it("returns empty object when no args", () => {
+    Bun.argv = ["bun", "script.ts"];
+    const args = parseCliArgs();
+    expect(args.fundsFile).toBeUndefined();
+    expect(args.output).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extended evaluateMacroRisk tests
+// ---------------------------------------------------------------------------
+
+describe("evaluateMacroRisk extended", () => {
+  it("MIXED sentiment reduces score slightly", () => {
+    const base = evaluateMacroRisk("股票");
+    const mixed = evaluateMacroRisk("股票", { overallSentiment: "MIXED" });
+    expect(mixed.score).toBeLessThan(base.score);
+  });
+
+  it("gold spot > 2% reduces score (risk-off signal)", () => {
+    const base = evaluateMacroRisk("股票");
+    const withGold = evaluateMacroRisk("股票", null, {
+      GOLD_SPOT: [{ 涨跌幅: 3.0 }],
+    });
+    expect(withGold.score).toBeLessThan(base.score);
+  });
+
+  it("gold spot ≤ 2% does not reduce score", () => {
+    const base = evaluateMacroRisk("股票");
+    const withGold = evaluateMacroRisk("股票", null, {
+      GOLD_SPOT: [{ 涨跌幅: 1.5 }],
+    });
+    expect(withGold.score).toBe(base.score);
+  });
+
+  it("empty gold array does not crash", () => {
+    const result = evaluateMacroRisk("股票", null, { GOLD_SPOT: [] });
+    expect(result.score).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WARN boundary condition tests
+// ---------------------------------------------------------------------------
+
+describe("screenPerformanceRiskQuant boundaries", () => {
+  it("WARN when drawdown > 0.25", () => {
+    expect(screenPerformanceRiskQuant({ sharpeRatio: 0.5, maxDrawdown: 0.3, volatility: 0.15 })).toBe("WARN");
+  });
+
+  it("WARN when volatility > 0.3", () => {
+    expect(screenPerformanceRiskQuant({ sharpeRatio: 0.5, maxDrawdown: 0.1, volatility: 0.35 })).toBe("WARN");
+  });
+});
+
+describe("screenHoldingPenetration boundaries", () => {
+  it("WARN when top10 > 0.5", () => {
+    expect(screenHoldingPenetration({ top10Concentration: 0.55, sectorCount: 5 })).toBe("WARN");
+  });
+
+  it("WARN when sectors < 3", () => {
+    expect(screenHoldingPenetration({ top10Concentration: 0.3, sectorCount: 2 })).toBe("WARN");
+  });
+});
+
+describe("screenManagerEvaluation boundaries", () => {
+  it("WARN when experience < 3 years", () => {
+    expect(screenManagerEvaluation({ experienceYears: 2.5, managedFunds: 2 })).toBe("WARN");
+  });
+
+  it("WARN when managing more than 5 funds", () => {
+    expect(screenManagerEvaluation({ experienceYears: 8, managedFunds: 6 })).toBe("WARN");
   });
 });

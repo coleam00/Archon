@@ -1,5 +1,8 @@
 worktree:
-  baseBranch: main
+  baseBranch: dev
+
+docs:
+  path: packages/docs-web/src/content/docs/
 
 fund_analysis:
   throttle_seconds: 300

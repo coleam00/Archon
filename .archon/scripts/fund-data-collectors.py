@@ -14,6 +14,7 @@ import argparse
 import json
 import sys
 import time
+from functools import reduce
 
 
 def _check_import(module_name: str, pip_name: str | None = None) -> None:
@@ -82,8 +83,8 @@ def fetch_market_data() -> dict:
                     "pb_ratio": float(info.get("priceToBook", 0) or 0),
                     "volume": float(info.get("regularMarketVolume", 0) or 0),
                 })
-            except Exception:
-                pass
+            except Exception as exc:
+                result.setdefault("_errors", []).append(f"美股 {sym} 采集失败: {exc}")
     except Exception as exc:
         result["_errors"] = result.get("_errors", [])
         result["_errors"].append(f"美股采集失败: {exc}")
@@ -176,6 +177,10 @@ MACRO_FETCHERS: list[tuple[str, str]] = [
 ]
 
 
+def _resolve_attr(obj, path: str):
+    return reduce(getattr, path.split("."), obj)
+
+
 def fetch_macro_indicators() -> dict:
     """采集所有宏观指标。"""
     _check_import("akshare", "akshare")
@@ -186,7 +191,7 @@ def fetch_macro_indicators() -> dict:
 
     for indicator_name, func_ref in MACRO_FETCHERS:
         try:
-            func = eval(func_ref, {"ak": ak})
+            func = _resolve_attr(ak, func_ref)
             data = func()
             if data is None:
                 errors.append(f"指标 {indicator_name} 返回 None")
@@ -204,7 +209,7 @@ def fetch_macro_indicators() -> dict:
         time.sleep(1.0)  # akshare 请求节流
 
     results["_errors"] = errors
-    results["_success_count"] = sum(1 for v in results.values() if not isinstance(v, list) or v)
+    results["_success_count"] = sum(1 for k, v in results.items() if not k.startswith("_") and (not isinstance(v, list) or v))
     results["_total"] = len(MACRO_FETCHERS)
     return results
 
@@ -213,6 +218,8 @@ def fetch_macro_indicators() -> dict:
 # 新闻数据采集
 # ---------------------------------------------------------------------------
 
+# 当前仅使用 akshare 的 stock_info_global_em 作为主新闻源。
+# 多源采集（baidu/eastmoney/cctv）可通过 config.yaml 的 news_sources 在未来版本中启用。
 NEWS_SOURCES = {
     "baidu": "stock_zh_a_alerts_cls",
     "eastmoney": "stock_info_global_em",
@@ -257,26 +264,30 @@ def load_fund_list(codes_file: str | None = None) -> dict:
     优先从 codes_file（每行一个代码，格式：`代码 名称` 或 `代码,名称`），
     回退到 ~/Data_share/基金分析/基金持仓数据.csv 的代码列。
     """
-    import os
     import csv
+    import os
 
     funds: list[dict] = []
+    errors: list[str] = []
 
-    if codes_file and os.path.exists(codes_file):
-        with open(codes_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.replace(",", " ").split(None, 1)
-                code = parts[0].strip()
-                name = parts[1].strip() if len(parts) > 1 else ""
-                if code:
-                    funds.append({"code": code, "name": name, "category": ""})
-    else:
-        fallback_path = os.path.expanduser("~/Data_share/基金分析/基金持仓数据.csv")
-        if os.path.exists(fallback_path):
-            with open(fallback_path, newline="", encoding="utf-8-sig") as f:
+    def read_codes_file(path: str) -> None:
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.replace(",", " ").split(None, 1)
+                    code = parts[0].strip()
+                    name = parts[1].strip() if len(parts) > 1 else ""
+                    if code:
+                        funds.append({"code": code, "name": name, "category": ""})
+        except (IOError, OSError, UnicodeDecodeError) as exc:
+            errors.append(f"读取基金代码文件失败: {path} — {exc}")
+
+    def read_csv_fallback(path: str) -> None:
+        try:
+            with open(path, newline="", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     code = row.get("基金代码", row.get("code", "")).strip()
@@ -284,8 +295,17 @@ def load_fund_list(codes_file: str | None = None) -> dict:
                     category = row.get("分类", row.get("category", ""))
                     if code:
                         funds.append({"code": code, "name": name or "", "category": category or ""})
+        except (IOError, OSError, UnicodeDecodeError) as exc:
+            errors.append(f"读取基金持仓CSV失败: {path} — {exc}")
 
-    return {"funds": funds, "_total": len(funds)}
+    if codes_file and os.path.exists(codes_file):
+        read_codes_file(codes_file)
+    else:
+        fallback_path = os.path.expanduser("~/Data_share/基金分析/基金持仓数据.csv")
+        if os.path.exists(fallback_path):
+            read_csv_fallback(fallback_path)
+
+    return {"funds": funds, "_total": len(funds), "_errors": errors}
 
 
 # ---------------------------------------------------------------------------

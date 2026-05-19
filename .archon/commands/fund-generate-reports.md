@@ -19,7 +19,7 @@ The report generator expects:
 Run the report generator:
 
 ```bash
-cd $ARCHON_PROJECT_ROOT && bun run .archon/scripts/fund-report-generator.ts \
+bun run .archon/scripts/fund-report-generator.ts \
   --scores "$ARTIFACTS_DIR/scoring_results.json" \
   --output-dir "$ARTIFACTS_DIR"
 ```

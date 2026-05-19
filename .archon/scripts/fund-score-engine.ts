@@ -262,18 +262,18 @@ export function evaluateMacroRisk(
 
   // Gold spot check (simplified from Python — uses macro data if available)
   if (macroData) {
-    try {
-      const gold = macroData["GOLD_SPOT"];
-      if (gold && Array.isArray(gold) && gold.length > 0) {
+    const gold = macroData["GOLD_SPOT"];
+    if (gold && Array.isArray(gold) && gold.length > 0) {
+      try {
         const last = gold[gold.length - 1] as Record<string, unknown>;
         const goldPct = typeof last["涨跌幅"] === "number" ? last["涨跌幅"] : 0;
         if (goldPct > 2) {
           score -= 1.0;
           reasons.push("金价大涨(避险情绪): -1.0");
         }
+      } catch {
+        // gold spot data structure changed — ignore gracefully
       }
-    } catch {
-      // ignore
     }
   }
 
@@ -499,7 +499,7 @@ interface CliArgs {
   output?: string;
 }
 
-function parseCliArgs(): CliArgs {
+export function parseCliArgs(): CliArgs {
   const args = Bun.argv.slice(2);
   const result: CliArgs = {};
   for (let i = 0; i < args.length; i++) {
@@ -520,35 +520,67 @@ if (cliArgs.fundsFile || cliArgs.output) {
   const fs = await import("node:fs");
 
   let funds: FundEntry[] = [];
-  if (cliArgs.fundsFile && fs.existsSync(cliArgs.fundsFile)) {
-    const raw = JSON.parse(fs.readFileSync(cliArgs.fundsFile, "utf-8"));
-    funds = raw.funds ?? raw ?? [];
+  if (cliArgs.fundsFile) {
+    if (!fs.existsSync(cliArgs.fundsFile)) {
+      console.error(`Funds file not found: ${cliArgs.fundsFile}`);
+      process.exit(1);
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(cliArgs.fundsFile, "utf-8"));
+      funds = raw.funds ?? raw ?? [];
+    } catch (err) {
+      const message = err instanceof SyntaxError
+        ? `Invalid JSON in funds file: ${cliArgs.fundsFile}`
+        : `Failed to read funds file: ${cliArgs.fundsFile} — ${(err as Error).message}`;
+      console.error(message);
+      process.exit(1);
+    }
+  }
+
+  function readJsonFile(path: string): Record<string, unknown> | null {
+    if (!fs.existsSync(path)) {
+      console.error(`Data file not found: ${path}`);
+      return null;
+    }
+    try {
+      return JSON.parse(fs.readFileSync(path, "utf-8"));
+    } catch (err) {
+      const message = err instanceof SyntaxError
+        ? `Invalid JSON in data file: ${path}`
+        : `Failed to read data file: ${path} — ${(err as Error).message}`;
+      console.error(message);
+      return null;
+    }
   }
 
   let holdingsData: HoldingsData | null = null;
-  if (cliArgs.holdingsFile && fs.existsSync(cliArgs.holdingsFile)) {
-    holdingsData = JSON.parse(fs.readFileSync(cliArgs.holdingsFile, "utf-8"));
-  }
+  if (cliArgs.holdingsFile) holdingsData = readJsonFile(cliArgs.holdingsFile) as HoldingsData | null;
 
   let macroData: Record<string, unknown> | null = null;
-  if (cliArgs.macroFile && fs.existsSync(cliArgs.macroFile)) {
-    macroData = JSON.parse(fs.readFileSync(cliArgs.macroFile, "utf-8"));
-  }
+  if (cliArgs.macroFile) macroData = readJsonFile(cliArgs.macroFile);
 
   let newsSentiment: NewsSentiment | null = null;
-  if (cliArgs.newsFile && fs.existsSync(cliArgs.newsFile)) {
-    const newsRaw = JSON.parse(fs.readFileSync(cliArgs.newsFile, "utf-8"));
-    newsSentiment = newsRaw.overall_sentiment
-      ? { overallSentiment: newsRaw.overall_sentiment }
+  if (cliArgs.newsFile) {
+    const newsRaw = readJsonFile(cliArgs.newsFile);
+    newsSentiment = newsRaw?.overall_sentiment
+      ? { overallSentiment: newsRaw.overall_sentiment as NewsSentiment["overallSentiment"] }
       : null;
   }
 
   const results = analyzeFunds(funds, holdingsData, null, null, null, null, macroData, newsSentiment);
 
   if (cliArgs.output) {
-    const outDir = cliArgs.output.substring(0, cliArgs.output.lastIndexOf("/"));
-    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-    fs.writeFileSync(cliArgs.output, JSON.stringify(results, null, 2), "utf-8");
+    try {
+      const outSep = cliArgs.output.lastIndexOf("/");
+      if (outSep > 0) {
+        const outDir = cliArgs.output.substring(0, outSep);
+        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+      }
+      fs.writeFileSync(cliArgs.output, JSON.stringify(results, null, 2), "utf-8");
+    } catch (err) {
+      console.error(`Failed to write output file: ${cliArgs.output} — ${(err as Error).message}`);
+      process.exit(1);
+    }
   }
 
   const buyCount = results.filter((r) => r.recommendation === "BUY").length;

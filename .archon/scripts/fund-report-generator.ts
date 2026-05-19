@@ -97,7 +97,9 @@ function timestamp(): string {
 }
 
 function ensureOutputDir(path: string): void {
-  const dir = path.substring(0, path.lastIndexOf("/"));
+  const sep = path.lastIndexOf("/");
+  if (sep <= 0) return; // no directory component, assume cwd
+  const dir = path.substring(0, sep);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
@@ -347,7 +349,7 @@ interface CliArgs {
   outputDir?: string;
 }
 
-function parseArgs(): CliArgs {
+export function parseArgs(): CliArgs {
   const args = Bun.argv.slice(2);
   const result: CliArgs = {};
   for (let i = 0; i < args.length; i++) {
@@ -357,20 +359,42 @@ function parseArgs(): CliArgs {
   return result;
 }
 
-const cliArgs = parseArgs();
-if (cliArgs.scoresFile || cliArgs.outputDir) {
+async function runCli(): Promise<void> {
+  const cliArgs = parseArgs();
+  if (!cliArgs.scoresFile && !cliArgs.outputDir) return;
+
   let analyses: FundAnalysisResult[] = [];
-  if (cliArgs.scoresFile && existsSync(cliArgs.scoresFile)) {
-    analyses = JSON.parse(await import("node:fs").then((m) => m.readFileSync(cliArgs.scoresFile, "utf-8")));
+  if (cliArgs.scoresFile) {
+    if (!existsSync(cliArgs.scoresFile)) {
+      console.error(`Scores file not found: ${cliArgs.scoresFile}`);
+      process.exit(1);
+    }
+    try {
+      const raw = await import("node:fs").then((m) => m.readFileSync(cliArgs.scoresFile, "utf-8"));
+      analyses = JSON.parse(raw);
+    } catch (err) {
+      const message = err instanceof SyntaxError
+        ? `Invalid JSON in scores file: ${cliArgs.scoresFile}`
+        : `Failed to read scores file: ${cliArgs.scoresFile} — ${(err as Error).message}`;
+      console.error(message);
+      process.exit(1);
+    }
   }
 
   if (cliArgs.outputDir) {
     process.env.ARTIFACTS_DIR = cliArgs.outputDir;
   }
 
-  const paths = generateAllReports(analyses);
-  console.log("报告生成完成:");
-  console.log(`  Markdown: ${paths.markdown}`);
-  console.log(`  CSV: ${paths.csv}`);
-  console.log(`  JSON: ${paths.json}`);
+  try {
+    const paths = generateAllReports(analyses);
+    console.log("报告生成完成:");
+    console.log(`  Markdown: ${paths.markdown}`);
+    console.log(`  CSV: ${paths.csv}`);
+    console.log(`  JSON: ${paths.json}`);
+  } catch (err) {
+    console.error(`Report generation failed: ${(err as Error).message}`);
+    process.exit(1);
+  }
 }
+
+runCli();

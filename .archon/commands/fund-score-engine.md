@@ -20,7 +20,7 @@ The scoring engine expects these files in `$ARTIFACTS_DIR`:
 Run the scoring engine:
 
 ```bash
-cd $ARCHON_PROJECT_ROOT && bun run .archon/scripts/fund-score-engine.ts \
+bun run .archon/scripts/fund-score-engine.ts \
   --funds-file "$ARTIFACTS_DIR/fund_list.json" \
   --holdings-file "$ARTIFACTS_DIR/holdings_analysis.json" \
   --macro-file "$ARTIFACTS_DIR/macro_data.json" \
