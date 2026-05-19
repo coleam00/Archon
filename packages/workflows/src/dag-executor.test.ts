@@ -2598,6 +2598,66 @@ describe('loadMcpConfig', () => {
       'MCP config figma.headers.Authorization must be a string'
     );
   });
+
+  it('expands ${VAR_NAME} brace syntax in env values', async () => {
+    process.env.TEST_MCP_BRACE_1612 = 'bracevalue';
+    const config = { svc: { command: 'npx', env: { TOKEN: '${TEST_MCP_BRACE_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ TOKEN: 'bracevalue' });
+
+    delete process.env.TEST_MCP_BRACE_1612;
+  });
+
+  it('expands ${VAR_NAME} brace syntax in headers values', async () => {
+    process.env.TEST_MCP_HDR_1612 = 'hdrvalue';
+    const config = {
+      api: {
+        type: 'http',
+        url: 'https://example.com',
+        headers: { Authorization: 'Bearer ${TEST_MCP_HDR_1612}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.api as Record<string, unknown>;
+    expect(server.headers).toEqual({ Authorization: 'Bearer hdrvalue' });
+
+    delete process.env.TEST_MCP_HDR_1612;
+  });
+
+  it('expands mixed $VAR and ${VAR} in the same string', async () => {
+    process.env.TEST_MCP_A_1612 = 'alpha';
+    process.env.TEST_MCP_B_1612 = 'beta';
+    const config = {
+      svc: {
+        command: 'npx',
+        env: { COMBINED: '$TEST_MCP_A_1612:${TEST_MCP_B_1612}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ COMBINED: 'alpha:beta' });
+
+    delete process.env.TEST_MCP_A_1612;
+    delete process.env.TEST_MCP_B_1612;
+  });
+
+  it('reports missing ${VAR_NAME} brace-form vars in missingVars', async () => {
+    delete process.env.NONEXISTENT_BRACE_1612;
+    const config = { svc: { command: 'npx', env: { KEY: '${NONEXISTENT_BRACE_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ KEY: '' });
+    expect(result.missingVars).toContain('NONEXISTENT_BRACE_1612');
+  });
 });
 
 // ---------------------------------------------------------------------------
