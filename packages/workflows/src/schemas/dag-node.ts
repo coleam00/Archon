@@ -158,6 +158,8 @@ export const dagNodeBaseSchema = z.object({
   effort: effortLevelSchema.optional(),
   thinking: thinkingConfigSchema.optional(),
   maxBudgetUsd: z.number().positive().optional(),
+  // YAML workflows: string-only. The wider SystemPromptInput (preset object) is used
+  // programmatically by the orchestrator for prompt caching; Zod intentionally stays narrow.
   systemPrompt: z.string().min(1).optional(),
   fallbackModel: z.string().min(1).optional(),
   betas: z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array").optional(),

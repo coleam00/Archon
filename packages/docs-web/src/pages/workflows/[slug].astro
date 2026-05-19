@@ -1,0 +1,415 @@
+---
+import { marketplaceEntries, tagConfig } from '../../data/marketplace';
+
+export function getStaticPaths() {
+  return marketplaceEntries.map((entry) => ({
+    params: { slug: entry.slug },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+
+const sourceAtSha = entry.sourceUrl.replace(/\/blob\/[^/]+\//, `/blob/${entry.sha}/`);
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{entry.name} — Archon Workflows</title>
+    <meta name="description" content={entry.description} />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script is:inline>
+      (function () {
+        const theme = localStorage.getItem('starlight-theme') || 'dark';
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a href="/" class="nav-logo">
+          <img src="/favicon.png" alt="Archon" width="28" height="28" />
+          <span>Archon</span>
+        </a>
+        <div class="nav-links">
+          <a href="/">Docs</a>
+          <a href="/roadmap/">Roadmap</a>
+          <a href="/workflows/" class="active">Workflows</a>
+          <a
+            href="https://github.com/coleam00/Archon"
+            target="_blank"
+            rel="noopener">GitHub</a
+          >
+        </div>
+      </div>
+    </nav>
+
+    <main>
+      <div class="breadcrumb">
+        <a href="/workflows/">Workflows</a>
+        <span>›</span>
+        <span>{entry.name}</span>
+      </div>
+
+      <div class="workflow-header">
+        <h1>{entry.name}</h1>
+        <div class="meta">
+          <a
+            href={`https://github.com/${entry.author}`}
+            target="_blank"
+            rel="noopener"
+            class="author">@{entry.author}</a
+          >
+          <span class="compat-badge">{entry.archonVersionCompat}</span>
+          {
+            entry.tags.map((tag) => (
+              <span
+                class="tag"
+                style={`color: ${tagConfig[tag]?.color ?? '#94a3b8'}; background: ${tagConfig[tag]?.bg ?? 'transparent'}; border-color: ${tagConfig[tag]?.border ?? '#1e293b'};`}
+              >
+                {tagConfig[tag]?.label ?? tag}
+              </span>
+            ))
+          }
+        </div>
+      </div>
+
+      <p class="description">{entry.description}</p>
+
+      <div class="install-section">
+        <h2>Install</h2>
+        <div class="code-block">
+          <code>archon workflow install {entry.slug}</code>
+          <button
+            class="copy-btn"
+            data-copy={`archon workflow install ${entry.slug}`}>Copy</button
+          >
+        </div>
+      </div>
+
+      <div class="source-section">
+        <h2>Source</h2>
+        <p>
+          Pinned to commit <code class="sha">{entry.sha.slice(0, 8)}</code>
+        </p>
+        <a href={sourceAtSha} target="_blank" rel="noopener" class="source-link"
+          >View YAML on GitHub →</a
+        >
+      </div>
+
+      <a href="/workflows/" class="back-link">← Back to all workflows</a>
+    </main>
+
+    <script is:inline>
+      document.querySelectorAll('.copy-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          navigator.clipboard.writeText(btn.dataset.copy).then(function () {
+            btn.textContent = 'Copied!';
+            setTimeout(function () {
+              btn.textContent = 'Copy';
+            }, 2000);
+          });
+        });
+      });
+    </script>
+
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html {
+        background: #0f1219;
+        color: #e2e8f0;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        scroll-behavior: smooth;
+      }
+
+      body {
+        min-height: 100vh;
+        background: #0f1219;
+      }
+
+      a {
+        text-decoration: none;
+        color: inherit;
+      }
+
+      /* Nav */
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        background: rgba(15, 18, 25, 0.85);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid #1e293b;
+      }
+
+      .nav-inner {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0.75rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .nav-logo {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-weight: 600;
+        font-size: 1.1rem;
+        color: #f1f5f9;
+      }
+
+      .nav-logo img {
+        border-radius: 6px;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 1.5rem;
+        font-size: 0.9rem;
+      }
+
+      .nav-links a {
+        color: #94a3b8;
+        transition: color 0.2s;
+      }
+
+      .nav-links a:hover,
+      .nav-links a.active {
+        color: #f1f5f9;
+      }
+
+      /* Breadcrumb */
+      .breadcrumb {
+        max-width: 760px;
+        margin: 1.5rem auto 0;
+        padding: 0 1.5rem;
+        font-size: 0.875rem;
+        color: #475569;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .breadcrumb a {
+        color: #3b82f6;
+      }
+
+      .breadcrumb a:hover {
+        color: #60a5fa;
+      }
+
+      /* Header */
+      .workflow-header {
+        max-width: 760px;
+        margin: 2rem auto 0;
+        padding: 0 1.5rem;
+      }
+
+      .workflow-header h1 {
+        font-size: 2.25rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: #f1f5f9;
+        margin-bottom: 0.75rem;
+      }
+
+      .meta {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+
+      .author {
+        color: #3b82f6;
+        font-size: 0.9rem;
+      }
+
+      .author:hover {
+        color: #60a5fa;
+      }
+
+      .compat-badge {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        background: rgba(148, 163, 184, 0.08);
+        color: #94a3b8;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+      }
+
+      .tag {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        border: 1px solid;
+      }
+
+      /* Description */
+      .description {
+        max-width: 760px;
+        margin: 1.5rem auto 0;
+        padding: 0 1.5rem;
+        font-size: 1rem;
+        color: #94a3b8;
+        line-height: 1.7;
+      }
+
+      /* Install */
+      .install-section {
+        max-width: 760px;
+        margin: 2.5rem auto 0;
+        padding: 0 1.5rem;
+      }
+
+      .install-section h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #f1f5f9;
+        margin-bottom: 0.75rem;
+      }
+
+      .code-block {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid #1e293b;
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.875rem;
+        color: #e2e8f0;
+      }
+
+      .copy-btn {
+        margin-left: auto;
+        padding: 0.35rem 0.75rem;
+        border: 1px solid #1e293b;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.05);
+        color: #94a3b8;
+        cursor: pointer;
+        font-size: 0.8rem;
+        font-family: inherit;
+        transition:
+          background 0.2s,
+          border-color 0.2s,
+          color 0.2s;
+      }
+
+      .copy-btn:hover {
+        background: rgba(59, 130, 246, 0.12);
+        border-color: rgba(59, 130, 246, 0.35);
+        color: #f1f5f9;
+      }
+
+      /* Source */
+      .source-section {
+        max-width: 760px;
+        margin: 2.5rem auto 0;
+        padding: 0 1.5rem;
+      }
+
+      .source-section h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #f1f5f9;
+        margin-bottom: 0.75rem;
+      }
+
+      .source-section p {
+        color: #94a3b8;
+        font-size: 0.9rem;
+      }
+
+      .sha {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.8rem;
+        padding: 0.1rem 0.4rem;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 4px;
+        color: #e2e8f0;
+      }
+
+      .source-link {
+        display: inline-block;
+        margin-top: 0.5rem;
+        color: #3b82f6;
+        font-size: 0.9rem;
+      }
+
+      .source-link:hover {
+        color: #60a5fa;
+      }
+
+      /* Back link */
+      .back-link {
+        display: inline-block;
+        max-width: 760px;
+        margin: 2rem auto 3rem;
+        padding: 0 1.5rem;
+        color: #475569;
+        font-size: 0.875rem;
+      }
+
+      .back-link:hover {
+        color: #94a3b8;
+      }
+
+      main {
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: #0f1219;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: #1e293b;
+        border-radius: 4px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: #334155;
+      }
+
+      /* Responsive */
+      @media (max-width: 640px) {
+        .workflow-header h1 {
+          font-size: 1.75rem;
+        }
+
+        .nav-links {
+          gap: 1rem;
+          font-size: 0.8rem;
+        }
+      }
+    </style>
+  </body>
+</html>

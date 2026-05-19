@@ -17,7 +17,11 @@ import {
   onConversationClosed,
   ConversationLockManager,
 } from '@archon/core';
-import { getArchonWorkspacesPath, getCommandFolderSearchPaths } from '@archon/paths';
+import {
+  ensureProjectStructure,
+  getCommandFolderSearchPaths,
+  getProjectSourcePath,
+} from '@archon/paths';
 import {
   isWorktreePath,
   cloneRepository,
@@ -490,6 +494,11 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     // Directory doesn't exist - clone the repository
     getLog().info({ owner, repo, repoPath }, 'github.repo_cloning');
+
+    // Create project structure (source/, worktrees/, artifacts/, logs/) before
+    // cloning so worktree paths resolve correctly on first webhook clone.
+    await ensureProjectStructure(owner, repo);
+
     const ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
 
@@ -580,9 +589,10 @@ export class GitHubAdapter implements IPlatformAdapter {
     let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);
     existing ??= await codebaseDb.findCodebaseByRepoUrl(repoUrlWithGit);
 
-    // Canonical path includes owner to prevent collisions between repos with same name
-    // e.g., alice/utils and bob/utils get separate directories
-    const canonicalPath = join(getArchonWorkspacesPath(), owner, repo);
+    // Canonical path uses the project source/ subdirectory so that worktrees/,
+    // artifacts/, and logs/ live as siblings of the cloned repo (not nested
+    // inside it). Mirrors the CLI /clone path; see issue #1547.
+    const canonicalPath = getProjectSourcePath(owner, repo);
 
     if (existing) {
       // Check if existing codebase points to a worktree path - fix it if so

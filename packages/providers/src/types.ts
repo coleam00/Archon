@@ -9,8 +9,12 @@
 export interface ClaudeProviderDefaults {
   [key: string]: unknown;
   model?: string;
-  /** Claude Code settingSources — controls which CLAUDE.md files are loaded.
-   *  @default ['project']
+  /** Claude Code settingSources — controls which sources the SDK loads:
+   *  CLAUDE.md, skills, commands, agents, and hooks. Both project-level
+   *  (`<cwd>/.claude/`) and user-level (`~/.claude/`) are loaded by default.
+   *  Set explicitly to `['project']` to scope a workflow to project-only
+   *  resources (e.g. CI, shared environments).
+   *  @default ['project', 'user']
    */
   settingSources?: ('project' | 'user')[];
   /** Absolute path to the Claude Code SDK's `cli.js`. Required in compiled
@@ -80,6 +84,18 @@ export interface PiProviderDefaults {
    * @default undefined
    */
   env?: Record<string, string>;
+  /**
+   * Maximum number of concurrent Pi `session.prompt()` calls allowed.
+   * When this limit is reached, additional calls queue and wait rather than
+   * fail. Pi/Minimax does not throttle concurrent requests at the SDK layer
+   * (unlike the Claude SDK), so this prevents cascading 429/rate-limit failures
+   * when many parallel workflow nodes invoke Pi simultaneously.
+   *
+   * Set to a positive integer matching your Pi API tier's concurrency limit.
+   * Omit for unlimited (not recommended for production batches).
+   * @default undefined (unlimited)
+   */
+  maxConcurrent?: number;
 }
 
 /** Generic per-provider defaults bag used by config surfaces and UI. */
@@ -149,13 +165,27 @@ export type MessageChunk =
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 
 /**
+ * System prompt input accepted by all providers. Mirrors the Claude Agent SDK
+ * preset-with-append shape so callers can opt into cacheable prefix behavior.
+ * Hand-written duplicate of the SDK type — see file-header rule forbidding SDK imports here.
+ */
+export interface SystemPromptPreset {
+  type: 'preset';
+  preset: 'claude_code';
+  append?: string;
+  excludeDynamicSections?: boolean;
+}
+
+export type SystemPromptInput = string | string[] | SystemPromptPreset;
+
+/**
  * Universal request options accepted by all providers.
  * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
  */
 export interface AgentRequestOptions {
   model?: string;
   abortSignal?: AbortSignal;
-  systemPrompt?: string;
+  systemPrompt?: SystemPromptInput;
   outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
   env?: Record<string, string>;
   maxBudgetUsd?: number;
@@ -208,7 +238,7 @@ export interface NodeConfig {
   betas?: string[];
   output_format?: Record<string, unknown>;
   maxBudgetUsd?: number;
-  systemPrompt?: string;
+  systemPrompt?: SystemPromptInput;
   fallbackModel?: string;
   idle_timeout?: number;
   [key: string]: unknown;

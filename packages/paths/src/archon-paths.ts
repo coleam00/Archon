@@ -81,6 +81,16 @@ export function getArchonWorkspacesPath(): string {
 }
 
 /**
+ * Ensure the workspaces directory exists and return its path.
+ * Safe to call on a fresh install before any workspace is registered.
+ */
+export async function ensureArchonWorkspacesPath(): Promise<string> {
+  const path = getArchonWorkspacesPath();
+  await mkdir(path, { recursive: true });
+  return path;
+}
+
+/**
  * Get the global worktrees directory (~/.archon/worktrees/).
  * Used as the legacy fallback for repos not registered under workspaces/.
  * New project registrations use getProjectWorktreesPath(owner, repo) instead.

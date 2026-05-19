@@ -16,6 +16,14 @@
 import type { NodeOutput } from './schemas';
 import { createLogger } from '@archon/paths';
 
+/** Thrown when a $nodeId.output.field reference cannot parse the node's output text as JSON. */
+class OutputRefParseError extends Error {
+  constructor(nodeId: string, field: string) {
+    super(`Cannot parse output of node '${nodeId}' as JSON for field '${field}'`);
+    this.name = 'OutputRefParseError';
+  }
+}
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -38,23 +46,52 @@ function resolveOutputRef(
     getLog().warn({ nodeId }, 'condition_output_ref_unknown_node');
     return '';
   }
+  if (!field) {
+    // For unfielded ref, structuredOutput shape is opaque — defer to output text (which is
+    // empty for failed nodes, matching the historical fail-closed contract).
+    if (!nodeOutput.output) return '';
+    return nodeOutput.output;
+  }
+
+  // Dot notation: prefer the provider-supplied parsed object when present. This avoids
+  // JSON.parse on fence-wrapped/preamble-prefixed payloads (Pi/Minimax) and on output text
+  // that has already been overridden by structuredOutput (Claude/Codex with output_format).
+  const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
+  if (
+    structured !== undefined &&
+    structured !== null &&
+    typeof structured === 'object' &&
+    !Array.isArray(structured)
+  ) {
+    const value = (structured as Record<string, unknown>)[field];
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+    return ''; // null, undefined, symbol, bigint → empty
+  }
+
+  // Fallback: parse output text. Backward-compatible path for older NodeOutput rows or
+  // providers that don't emit a structured payload on the result chunk.
   if (!nodeOutput.output) return '';
 
-  if (!field) return nodeOutput.output;
+  // Strip common markdown fences that LLMs (Pi/Minimax) wrap around JSON.
+  let text = nodeOutput.output;
+  const fenceMatch = /^[\s\S]*?```(?:json)?\s*\n([\s\S]*?)\n\s*```[\s\S]*$/.exec(text);
+  if (fenceMatch?.[1]) text = fenceMatch[1];
 
-  // Dot notation: parse JSON and access field
   try {
-    const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
+    const parsed = JSON.parse(text) as Record<string, unknown>;
     const value = parsed[field];
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    return ''; // objects, null, undefined, symbol, bigint → empty
+    if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+    return ''; // null, undefined, symbol, bigint → empty
   } catch {
     getLog().warn(
       { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100) },
       'condition_json_parse_failed'
     );
-    return '';
+    throw new OutputRefParseError(nodeId, field);
   }
 }
 
@@ -109,7 +146,15 @@ function evaluateAtom(
     return { result: false, parsed: false };
   }
 
-  const actual = resolveOutputRef(nodeId, field, nodeOutputs);
+  let actual: string;
+  try {
+    actual = resolveOutputRef(nodeId, field, nodeOutputs);
+  } catch (err) {
+    if (err instanceof OutputRefParseError) {
+      return { result: false, parsed: false };
+    }
+    throw err;
+  }
 
   let result: boolean;
   if (operator === '==' || operator === '!=') {

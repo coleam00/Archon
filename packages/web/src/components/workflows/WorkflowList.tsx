@@ -174,8 +174,24 @@ export function WorkflowList(): React.ReactElement {
         {/* Workflow grid */}
         {!hasWorkflows ? (
           <div className="text-sm text-text-secondary">
-            No workflows found. Add workflow definitions to{' '}
-            <code className="text-xs bg-surface-inset px-1 py-0.5 rounded">.archon/workflows/</code>
+            {localProjectId ? (
+              <>
+                No workflows found in this project. Add workflow definitions to{' '}
+                <code className="text-xs bg-surface-inset px-1 py-0.5 rounded">
+                  .archon/workflows/
+                </code>{' '}
+                in the project root.
+              </>
+            ) : (
+              <>
+                No workflows are available. Bundled defaults should appear here automatically; if
+                they do not, check that{' '}
+                <code className="text-xs bg-surface-inset px-1 py-0.5 rounded">
+                  defaults.loadDefaultWorkflows
+                </code>{' '}
+                is enabled in your config.
+              </>
+            )}
           </div>
         ) : filteredWorkflows.length === 0 ? (
           <div className="text-sm text-text-secondary py-8 text-center">

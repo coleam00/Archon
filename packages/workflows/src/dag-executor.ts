@@ -74,6 +74,8 @@ import {
   stripCompletionTags,
   isInlineScript,
   formatSubprocessFailure,
+  safeSendMessage,
+  type SendMessageContext,
 } from './executor-shared';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -186,12 +188,6 @@ export function shouldContinueStreamingForStatus(status: string | null): boolean
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
 
-/** Context for platform message sending */
-interface SendMessageContext {
-  workflowId?: string;
-  nodeName?: string;
-}
-
 /** Default DAG node retry for TRANSIENT errors */
 const DEFAULT_NODE_MAX_RETRIES = 2;
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
@@ -230,44 +226,6 @@ function isTransientNodeError(errorMessage: string): boolean {
 }
 
 /**
- * Safely send a message to the platform without crashing on failure.
- * Returns true if message was sent successfully, false otherwise.
- */
-async function safeSendMessage(
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  metadata?: WorkflowMessageMetadata
-): Promise<boolean> {
-  try {
-    await platform.sendMessage(conversationId, message, metadata);
-    return true;
-  } catch (error) {
-    const err = error as Error;
-    const errorType = classifyError(err);
-
-    getLog().error(
-      {
-        err,
-        conversationId,
-        messageLength: message.length,
-        errorType,
-        platformType: platform.getPlatformType(),
-        ...context,
-      },
-      'dag_node_message_send_failed'
-    );
-
-    if (errorType === 'FATAL') {
-      throw new Error(`Platform authentication/permission error: ${err.message}`);
-    }
-
-    return false;
-  }
-}
-
-/**
  * Single-quote a string for safe inline shell use.
  * Replaces each ' with '\'' (end quote, literal single-quote, re-open quote).
  */
@@ -299,6 +257,26 @@ export function substituteNodeOutputRefs(
       if (!field) {
         return escapedForBash ? shellQuote(nodeOutput.output) : nodeOutput.output;
       }
+      // Prefer the provider-supplied structured payload when present. Providers that emit
+      // fence-wrapped or preamble-prefixed JSON (Pi/Minimax) parse it onto the result chunk
+      // via tryParseStructuredOutput; consuming that object directly avoids re-parsing prose
+      // here. Falls back to JSON.parse on output for providers that don't normalize
+      // (or for older NodeOutput rows from before this field existed).
+      const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
+      if (
+        structured !== undefined &&
+        structured !== null &&
+        typeof structured === 'object' &&
+        !Array.isArray(structured)
+      ) {
+        const value = (structured as Record<string, unknown>)[field];
+        if (typeof value === 'string') return escapedForBash ? shellQuote(value) : value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        if (Array.isArray(value) || typeof value === 'object') {
+          return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
+        }
+        return escapedForBash ? "''" : '';
+      }
       try {
         const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
         const value = parsed[field];
@@ -307,7 +285,12 @@ export function substituteNodeOutputRefs(
         // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
         // String(boolean) is 'true' or 'false' — no shell metacharacters.
         if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-        return escapedForBash ? "''" : ''; // objects, null, undefined, symbol, bigint → empty
+        // arrays and objects: JSON-stringify. Bash passes substitution as a single
+        // argument, so downstream tools (jq, etc.) receive a JSON literal they can parse.
+        if (Array.isArray(value) || typeof value === 'object') {
+          return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
+        }
+        return escapedForBash ? "''" : ''; // undefined, symbol, bigint → empty (null is caught above by typeof check)
       } catch (jsonErr) {
         getLog().warn(
           { nodeId, field, outputPreview: nodeOutput.output.slice(0, 100), err: jsonErr as Error },
@@ -320,7 +303,7 @@ export function substituteNodeOutputRefs(
 }
 
 // buildSDKHooksFromYAML moved to @archon/providers/src/claude/provider.ts
-// loadMcpConfig moved to @archon/providers/src/claude/provider.ts
+// loadMcpConfig moved to @archon/providers/src/mcp/config.ts
 
 /**
  * Resolve per-node provider and model.
@@ -898,8 +881,13 @@ async function executeNodeInternal(
         }
         // Fail loudly on any other SDK error result. Previously we broke out of
         // the stream silently, producing empty/partial output without signaling
-        // failure — which let failed iterations masquerade as successes (#1208).
-        if (msg.isError) {
+        // failure — which let failed iterations masquerade as successes.
+        // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+        // clean stop_sequence termination. The Claude provider already filters
+        // this out, but the guard here keeps a third-party IAgentProvider that
+        // forwards the SDK pair raw from producing a "SDK returned success"
+        // false failure.
+        if (msg.isError && msg.errorSubtype !== 'success') {
           const subtype = msg.errorSubtype ?? 'unknown';
           const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
           getLog().error(
@@ -1200,6 +1188,7 @@ async function executeNodeInternal(
       output: nodeOutputText,
       sessionId: newSessionId,
       costUsd: nodeCostUsd,
+      ...(structuredOutput !== undefined ? { structuredOutput } : {}),
     };
   } catch (error) {
     const err = error as Error;
@@ -1307,7 +1296,11 @@ async function executeBashNode(
     artifactsDir,
     baseBranch,
     docsDir,
-    issueContext
+    issueContext,
+    undefined,
+    undefined,
+    undefined,
+    { shellSafe: true }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
 
@@ -1317,6 +1310,14 @@ async function executeBashNode(
     ARTIFACTS_DIR: artifactsDir,
     LOG_DIR: logDir,
     BASE_BRANCH: baseBranch,
+    USER_MESSAGE: workflowRun.user_message,
+    ARGUMENTS: workflowRun.user_message,
+    LOOP_USER_INPUT: '',
+    LOOP_PREV_OUTPUT: '',
+    REJECTION_REASON: '',
+    CONTEXT: issueContext ?? '',
+    EXTERNAL_CONTEXT: issueContext ?? '',
+    ISSUE_CONTEXT: issueContext ?? '',
     ...(envVars ?? {}),
   };
 
@@ -1479,8 +1480,13 @@ async function executeScriptNode(
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
-  const subprocessEnv =
-    envVars && Object.keys(envVars).length > 0 ? { ...process.env, ...envVars } : undefined;
+  const subprocessEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ARTIFACTS_DIR: artifactsDir,
+    LOG_DIR: logDir,
+    BASE_BRANCH: baseBranch,
+    ...(envVars ?? {}),
+  };
 
   // Build the command and args based on runtime and inline vs named
   let cmd = '';
@@ -1765,6 +1771,7 @@ async function executeLoopNode(
     : '';
 
   let lastIterationOutput = '';
+  let lastIterationStructuredOutput: unknown;
   let loopTotalCostUsd: number | undefined;
   let loopFinalStopReason: string | undefined;
   let loopTotalNumTurns: number | undefined;
@@ -1915,11 +1922,19 @@ async function executeLoopNode(
           if (msg.numTurns !== undefined) {
             loopTotalNumTurns = (loopTotalNumTurns ?? 0) + msg.numTurns;
           }
+          if (msg.structuredOutput !== undefined) {
+            lastIterationStructuredOutput = msg.structuredOutput;
+          }
           // Fail the iteration loudly on SDK error results. Previously we broke
           // silently, producing empty output and continuing to the next iteration —
           // which made `error_during_execution` on resumed interactive loops look
-          // like a "5-second crash" that kept burning iterations (#1208).
-          if (msg.isError) {
+          // like a "5-second crash" that kept burning iterations.
+          // Exception: errorSubtype === 'success' is the Claude SDK's marker for a
+          // clean stop_sequence termination (the SDK sets is_error: true alongside
+          // subtype: 'success' to encode "non-default termination, not a failure").
+          // The Claude provider already filters this; the guard here defends
+          // against a third-party IAgentProvider that forwards the SDK pair raw.
+          if (msg.isError && msg.errorSubtype !== 'success') {
             const subtype = msg.errorSubtype ?? 'unknown';
             const errorsDetail = msg.errors?.length ? ` — ${msg.errors.join('; ')}` : '';
             getLog().error(
@@ -2099,6 +2114,7 @@ async function executeLoopNode(
       await safeSendMessage(platform, conversationId, cleanOutput, msgContext);
     }
 
+    const prevIterationOutput = lastIterationOutput;
     lastIterationOutput = cleanOutput || fullOutput;
 
     // Check LLM completion signal — the AI decides whether the user approved.
@@ -2117,14 +2133,32 @@ async function executeLoopNode(
           artifactsDir,
           baseBranch,
           docsDir,
-          issueContext
+          issueContext,
+          undefined,
+          undefined,
+          undefined,
+          { shellSafe: true }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
           nodeOutputs,
           true // escapedForBash
         );
-        await execFileAsync('bash', ['-c', substitutedBash], { cwd });
+        await execFileAsync('bash', ['-c', substitutedBash], {
+          cwd,
+          timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+          env: {
+            ...process.env,
+            USER_MESSAGE: workflowRun.user_message,
+            ARGUMENTS: workflowRun.user_message,
+            LOOP_USER_INPUT: i === startIteration ? (loopUserInput ?? '') : '',
+            LOOP_PREV_OUTPUT: prevIterationOutput,
+            REJECTION_REASON: '',
+            CONTEXT: issueContext ?? '',
+            EXTERNAL_CONTEXT: issueContext ?? '',
+            ISSUE_CONTEXT: issueContext ?? '',
+          },
+        });
         bashComplete = true; // exit 0 = complete
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
@@ -2133,6 +2167,12 @@ async function executeLoopNode(
           getLog().warn(
             { err: bashErr, nodeId: node.id, iteration: i },
             'loop_node.until_bash_exec_error'
+          );
+        } else if (bashErr.code !== undefined) {
+          // Log non-ENOENT system errors (syntax errors, permission issues, etc.)
+          getLog().warn(
+            { err: bashErr, nodeId: node.id, iteration: i },
+            'loop_node.until_bash_unexpected_error'
           );
         }
         bashComplete = false; // non-zero exit = not complete
@@ -2215,6 +2255,9 @@ async function executeLoopNode(
         output: lastIterationOutput,
         sessionId: currentSessionId,
         costUsd: loopTotalCostUsd,
+        ...(lastIterationStructuredOutput !== undefined
+          ? { structuredOutput: lastIterationStructuredOutput }
+          : {}),
       };
     }
 
@@ -2562,7 +2605,10 @@ export async function executeDagWorkflow(
                 workflow_run_id: workflowRun.id,
                 event_type: 'node_skipped_prior_success',
                 step_name: node.id,
-                data: { reason: 'prior_success' },
+                data: {
+                  reason: 'prior_success',
+                  node_output: priorCompletedNodes.get(node.id) ?? '',
+                },
               })
               .catch((err: Error) => {
                 getLog().error(
@@ -3061,9 +3107,16 @@ export async function executeDagWorkflow(
 
   if (!anyCompleted) {
     if (await skipIfStatusChanged('dag.skip_fail_status_changed')) return;
+    const failedNodes: string[] = [];
+    for (const [nodeId, o] of nodeOutputs) {
+      if (o.state === 'failed') failedNodes.push(nodeId);
+    }
     const failMsg =
-      `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
-      'Check node conditions, trigger rules, and upstream failures.';
+      failedNodes.length > 0
+        ? `DAG workflow '${workflow.name}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
+          `${nodeCounts.skipped} downstream node${nodeCounts.skipped !== 1 ? 's were' : ' was'} skipped.`
+        : `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
+          'Check node conditions, trigger rules, and upstream failures.';
     // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
     // Frontend guards with isValidNodeCounts so missing node_counts is safe.
     await deps.store.failWorkflowRun(workflowRun.id, failMsg).catch((dbErr: Error) => {

@@ -19,6 +19,13 @@
 #     ARCHON_DATA=/opt/archon-data    # Any absolute path on the host
 #   Default: Docker-managed volume (archon_data)
 #
+# User home (Claude/Codex/Pi config, gitconfig, shell history):
+#   /home/appuser is persisted by default to the archon_user_home named volume so
+#   user-installed Claude Code skills/commands/agents/hooks, Codex/Pi auth state,
+#   and ~/.gitconfig survive container rebuilds. To use a host path instead:
+#     ARCHON_USER_HOME=/opt/archon-user-home    # Any absolute path on the host
+#   Default: Docker-managed volume (archon_user_home)
+#
 # Cloud (HTTPS):
 #   1. Set DOMAIN=archon.example.com in .env
 #   2. Point DNS A record to your server
@@ -39,6 +46,7 @@ services:
       - "${PORT:-3000}:${PORT:-3000}"
     volumes:
       - ${ARCHON_DATA:-archon_data}:/.archon
+      - ${ARCHON_USER_HOME:-archon_user_home}:/home/appuser
     networks:
       - archon-network
     restart: unless-stopped
@@ -122,6 +130,7 @@ services:
 
 volumes:
   archon_data:
+  archon_user_home:
   postgres_data:
   caddy_data:
   caddy_config:

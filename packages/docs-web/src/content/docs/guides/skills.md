@@ -123,13 +123,16 @@ Step-by-step content here. The agent loads this when the skill activates.
 
 ## Skill Discovery
 
-Skills are discovered from these locations (via `settingSources: ['project']`
-set in ClaudeProvider):
+Skills are discovered from these locations (via the default
+`settingSources: ['project', 'user']` set in ClaudeProvider):
 
 | Location | Scope |
 |----------|-------|
 | `.claude/skills/` (in cwd) | Project-level |
 | `~/.claude/skills/` | User-level (all projects) |
+
+Set `assistants.claude.settingSources: ['project']` in `.archon/config.yaml`
+to scope a workflow to project-level skills only.
 
 Skills installed via `npx skills add` land in `.claude/skills/` by default.
 Use `-g` for global installation to `~/.claude/skills/`.
@@ -166,6 +169,7 @@ smaller box with a tastefully curated set of tools."
 
 | Skill | Install | What It Teaches |
 |-------|---------|----------------|
+| `archon` (bundled) | `archon skill install` | Archon workflows, commands, and project conventions |
 | `remotion-best-practices` | `npx skills add remotion-dev/skills` | Remotion animation patterns, API usage, gotchas (35 rules) |
 | `skill-creator` | `npx skills add anthropics/skills` | How to create new SKILL.md files |
 | Community skills | Browse [skills.sh](https://skills.sh) | Search 500K+ skills for any domain |

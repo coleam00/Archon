@@ -25,6 +25,10 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorkspacesPath: mock(() => '/tmp/test-workspaces'),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.claude/commands']),
+  getProjectSourcePath: mock(
+    (owner: string, repo: string) => `/tmp/test-workspaces/${owner}/${repo}/source`
+  ),
+  ensureProjectStructure: mock(async () => undefined),
   logArchonPaths: mock(() => undefined),
   validateAppDefaultsPaths: mock(async () => undefined),
 }));

@@ -15,6 +15,7 @@ This file is **committed and shared by all maintainers**. Edit deliberately — 
 - **Type-safe.** Strict TypeScript everywhere. No `any` without justification.
 - **Composable.** Scripts in `.archon/scripts/`, commands in `.archon/commands/`, workflows compose them.
 - **Self-hostable.** Bun + TypeScript runtime. SQLite by default; PostgreSQL optional. Zero external service dependencies for core operation.
+- **Forge-agnostic.** GitHub is the primary forge, but Gitea and GitLab are community supported targets via community adapters at `packages/adapters/src/community/forge/`. Long-term home for outbound forge operations (PR/issue/review CRUD) is the same per-forge adapter that handles inbound webhooks. New forges land as new community adapters that implement the shared interface.
 
 ## What Archon is NOT
 

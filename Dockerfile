@@ -108,13 +108,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
 # Point agent-browser to system Chromium (avoids ~400MB Chrome for Testing download)
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Pre-configure the Claude Code SDK cli.js path for any consumer that runs
-# a compiled Archon binary inside (or extending) this image. In source mode
-# (the default `bun run start` ENTRYPOINT), BUNDLED_IS_BINARY is false and
-# this variable is ignored — the SDK resolves cli.js via node_modules. Kept
-# here so extenders don't need to rediscover the path.
-# Path matches the hoisted layout produced by `bun install --linker=hoisted`.
-ENV CLAUDE_BIN_PATH=/app/node_modules/@anthropic-ai/claude-agent-sdk/cli.js
+# CLAUDE_BIN_PATH is set at container startup (docker-entrypoint.sh).
+# The entrypoint pins the glibc variant to bypass the SDK's musl-first resolver.
 
 # Create non-root user for running Claude Code
 # Claude Code refuses to run with --dangerously-skip-permissions as root for security

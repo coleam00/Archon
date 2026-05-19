@@ -84,8 +84,17 @@ git status --porcelain
 ```
 
 **If dirty**:
-1. Stage changes: `git add -A`
-2. Commit: `git commit -m "Final changes before PR"`
+
+1. Stage **only** the source files that are part of this change — never `git add -A`, `git add .`, or `git add -u`. List them by name:
+   ```bash
+   git add path/to/file1 path/to/file2 ...
+   git status --porcelain  # verify nothing else is staged
+   ```
+2. **Never stage** scratch / review / PR-body artifacts, even if they show up in `git status`:
+   - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
+   - `review/`, `*-report.md` at the repo root
+   - Anything under `$ARTIFACTS_DIR`
+3. Commit: `git commit -m "Final changes before PR"`
 
 ### 2.2 Push Branch
 

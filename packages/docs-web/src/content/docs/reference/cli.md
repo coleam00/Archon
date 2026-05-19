@@ -50,7 +50,7 @@ archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth su
 archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 ```
 
-**Note:** Workflow and isolation commands require running from within a git repository. Running from subdirectories automatically resolves to the repo root. The `version`, `help`, `chat`, `setup`, and `serve` commands work anywhere.
+**Note:** Workflow and isolation commands require running from within a git repository. Running from subdirectories automatically resolves to the repo root. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands work anywhere.
 
 ## Commands
 
@@ -83,6 +83,18 @@ archon setup --spawn              # open in a new terminal window
 | `--spawn` | Open setup wizard in a new terminal window. |
 
 **Write safety**: `archon setup` never writes to `<cwd>/.env` — that file belongs to you. The wizard always targets one archon-owned file chosen by `--scope`, merges into existing content (so user-added keys survive), and writes a timestamped backup before every rewrite (e.g. `~/.archon/.env.archon-backup-2026-04-20T09-28-11-000Z`).
+
+### `doctor`
+
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, gh CLI auth, Pi auth (when Pi is configured as default), database reachability, workspace writability, bundled defaults, and adapter token pings (Slack/Telegram, best-effort).
+
+```bash
+archon doctor
+```
+
+Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
+
+Also runs automatically at the end of `archon setup` (optional).
 
 ### `workflow list`
 
@@ -335,6 +347,20 @@ archon serve --download-only
 
 The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
 
+### `skill install [path]`
+
+Install the bundled Archon skill files into a project's `.claude/skills/archon/` directory. Always overwrites existing files to ensure the latest version shipped with the current Archon binary is installed.
+
+```bash
+# Install into the current directory
+archon skill install
+
+# Install into a specific project
+archon skill install /path/to/project
+```
+
+The Archon skill teaches Claude Code how to work with Archon workflows, commands, and project conventions. It is also installed automatically during `archon setup`.
+
 ### `version`
 
 Show version, build type, and database info.
@@ -372,8 +398,8 @@ At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude
 
 On startup, the CLI:
 1. Strips `<cwd>/.env*` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
-2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys from ~/.archon/.env` when N > 0.
-3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Emits `[archon] loaded N keys from <path> (repo scope, overrides user scope)` when N > 0.
+2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys …` when N > 0 **and** `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug/trace` is set.
+3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Same verbosity gate as step 2.
 4. Auto-enables global Claude auth if no explicit tokens are set.
 
 `<cwd>/.env` is never loaded — it belongs to the target project. See [Configuration Reference: `.env` File Locations](/reference/configuration/#env-file-locations) for the full three-path model.
