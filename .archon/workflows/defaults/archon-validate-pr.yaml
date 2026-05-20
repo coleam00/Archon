@@ -1,9 +1,9 @@
 name: archon-validate-pr
 description: |
-  Use when: User wants a thorough PR validation that tests both main (bug present) and feature branch (bug fixed).
-  Triggers: "validate PR", "validate pr #123", "test this PR", "verify PR", "full PR validation",
-            "validate pull request", "test PR end-to-end".
-  Does: Fetches PR info -> finds free ports -> parallel code review (main vs feature) ->
+  Use when: User wants a thorough MR validation that tests both main (bug present) and feature branch (bug fixed).
+  Triggers: "validate MR", "validate mr !123", "test this MR", "verify MR", "full MR validation",
+            "validate merge request", "test MR end-to-end".
+  Does: Fetches MR info -> finds free ports -> parallel code review (main vs feature) ->
         E2E test on main (reproduce bug) -> E2E test on feature (verify fix) -> final verdict report.
   NOT for: Quick code-only reviews (use archon-smart-pr-review), fixing issues, general exploration.
 
@@ -20,26 +20,45 @@ nodes:
 
   - id: fetch-pr
     bash: |
-      # Extract PR number from arguments
-      PR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+' | head -1)
-      # Fallback: extract first number if no URL path found (e.g., "validate PR 42")
-      if [ -z "$PR_NUMBER" ]; then
-        PR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '[0-9]+' | head -1)
+      # Extract MR number from arguments (GitLab URL format: /merge_requests/N)
+      MR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '/merge_requests/[0-9]+' | grep -oE '[0-9]+' | head -1)
+      # Fallback: extract first number if no URL path found (e.g., "validate MR 42")
+      if [ -z "$MR_NUMBER" ]; then
+        MR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '[0-9]+' | head -1)
       fi
-      if [ -z "$PR_NUMBER" ]; then
-        # Try getting PR from current branch
-        PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+      if [ -z "$MR_NUMBER" ]; then
+        # Try getting MR from current branch
+        MR_NUMBER=$(glab mr view --output json 2>/dev/null | jq -r '.iid')
       fi
 
-      if [ -z "$PR_NUMBER" ]; then
-        echo "ERROR: No PR number found in arguments: $ARGUMENTS"
+      if [ -z "$MR_NUMBER" ]; then
+        echo "ERROR: No MR number found in arguments: $ARGUMENTS"
         exit 1
       fi
 
-      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+      echo "$MR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
 
-      # Fetch full PR details
-      gh pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+      # Resolve GitLab hostname and numeric project ID from git remote
+      REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
+      if [ -z "$REMOTE_URL" ]; then
+        echo "ERROR: No git remote 'origin' found"
+        exit 1
+      fi
+      # Extract hostname from SSH (git@host:path) or HTTPS (https://host/path)
+      GL_HOST=$(echo "$REMOTE_URL" | sed -E 's#^.*@([^:/]+)[:/].*#\1#; s#^https?://([^/]+)/.*#\1#')
+      # Extract namespace/project path
+      PROJECT_PATH=$(echo "$REMOTE_URL" | sed -E 's#^(https?://[^/]+/|.*:)##; s#\.git$##')
+      # Resolve numeric project ID (avoids URL-encoding issues with glab)
+      PROJECT_ID=$(glab api --hostname "$GL_HOST" "projects?search=$(basename "$PROJECT_PATH")" | jq -r ".[] | select(.path_with_namespace==\"$PROJECT_PATH\") | .id")
+      if [ -z "$PROJECT_ID" ]; then
+        echo "ERROR: Could not resolve project ID for $PROJECT_PATH on $GL_HOST"
+        exit 1
+      fi
+      echo "$PROJECT_ID" > "$ARTIFACTS_DIR/.project-id"
+      echo "$GL_HOST" > "$ARTIFACTS_DIR/.gl-host"
+
+      # Fetch full MR details via GitLab API
+      glab api --hostname "$GL_HOST" "projects/$PROJECT_ID/merge_requests/$MR_NUMBER"
 
   - id: find-ports
     bash: |
@@ -60,10 +79,13 @@ nodes:
       WORKTREE_PATH=$(pwd)
       FEATURE_BRANCH=$(git branch --show-current)
 
-      # Get PR branch info
-      PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
-      PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
-      PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+      # Get MR branch info
+      MR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+      PROJECT_ID=$(cat "$ARTIFACTS_DIR/.project-id")
+      GL_HOST=$(cat "$ARTIFACTS_DIR/.gl-host")
+      MR_JSON=$(glab api --hostname "$GL_HOST" "projects/$PROJECT_ID/merge_requests/$MR_NUMBER")
+      PR_HEAD=$(echo "$MR_JSON" | jq -r '.source_branch')
+      PR_BASE=$(echo "$MR_JSON" | jq -r '.target_branch')
 
       echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
       echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"
