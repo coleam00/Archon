@@ -1,10 +1,16 @@
-// Side-effect import to load the global JSX namespace augmentation declared in
-// ./jsx.d.ts for any consumer that resolves this package via its source-entry
-// export (e.g. @archon/web, whose tsconfig `include` doesn't reach studio's src).
-// Without this, downstream consumers see ~28 TS2503 errors across studio's .tsx
-// files because the ambient `declare global { namespace JSX }` only loads when
-// jsx.d.ts is in the compilation. TS resolves './jsx' to the sibling .d.ts file.
-import './jsx';
+// Pull jsx.d.ts into downstream consumers' compilation so the ambient
+// `declare global { namespace JSX }` is in scope for any tsx file resolved
+// through this package's source entry (e.g. @archon/web, whose tsconfig
+// `include` doesn't reach studio's src). Without this, downstream consumers
+// see ~28 TS2503 errors across studio's .tsx files.
+//
+// Use a triple-slash directive (type-only) rather than `import './jsx'`: the
+// latter resolves to `jsx.d.ts` only at type-check time and fails at runtime
+// (Bun, Node) because there is no sibling .ts/.js file. Runtime consumers
+// that route through this barrel (e.g. @archon/web's ExecutionNodeAdapter)
+// otherwise hit a "cannot find module" error.
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- pulling a .d.ts global augmentation into downstream compilation is exactly what this directive is for; an `import './jsx'` would fail at Bun runtime
+/// <reference path="./jsx.d.ts" />
 
 // Public surface for @archon-studio/core. Re-export only what consumers should use.
 export const STUDIO_CORE_VERSION = '0.0.0';
@@ -20,6 +26,8 @@ export type {
 export type { WorkflowDefinition, DagNode } from './schemas';
 export { workflowDefinitionSchema } from './schemas';
 export { VARIANT_IDS, type VariantId } from './nodes/registry';
+export { getVariant } from './nodes/default-registry';
+export type { BuilderNode, DagNodeData, VariantDefinition } from './nodes/shared/types';
 
 export { WorkflowBuilder, type WorkflowBuilderProps } from './components/WorkflowBuilder';
 export { NodeInspector } from './components/inspector/NodeInspector';
