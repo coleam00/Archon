@@ -1,3 +1,11 @@
+// Side-effect import to load the global JSX namespace augmentation declared in
+// ./jsx.d.ts for any consumer that resolves this package via its source-entry
+// export (e.g. @archon/web, whose tsconfig `include` doesn't reach studio's src).
+// Without this, downstream consumers see ~28 TS2503 errors across studio's .tsx
+// files because the ambient `declare global { namespace JSX }` only loads when
+// jsx.d.ts is in the compilation. TS resolves './jsx' to the sibling .d.ts file.
+import './jsx';
+
 // Public surface for @archon-studio/core. Re-export only what consumers should use.
 export const STUDIO_CORE_VERSION = '0.0.0';
 

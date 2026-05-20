@@ -165,6 +165,7 @@
       "name": "@archon/web",
       "version": "0.3.12",
       "dependencies": {
+        "@archon/workflow-studio-core": "workspace:*",
         "@dagrejs/dagre": "^2.0.4",
         "@radix-ui/react-alert-dialog": "^1.1.15",
         "@radix-ui/react-dialog": "^1.1.15",
