@@ -1,1 +1,1 @@
-export { TelegramAdapter } from './adapter';
+export { TelegramAdapter, type TelegramStreamingMode } from './adapter';

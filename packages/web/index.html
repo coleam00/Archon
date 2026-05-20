@@ -12,12 +12,31 @@
       rel="stylesheet"
     />
     <style>
-      body {
+      /* Prevent flash: apply theme before React hydrates */
+      html:not(.dark) body {
+        background-color: #f9f9fb;
+      }
+      html.dark body {
         background-color: #0f1117;
       }
     </style>
   </head>
   <body>
+    <script>
+      // Apply saved theme before React renders to prevent flash
+      (function () {
+        try {
+          var theme = localStorage.getItem('archon-theme');
+          if (theme === 'light') {
+            document.documentElement.classList.remove('dark');
+          } else {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
