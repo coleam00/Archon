@@ -17,7 +17,7 @@
  * Same-named files at a higher scope override those at lower scopes.
  */
 import { readFile, readdir, access, stat } from 'fs/promises';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -118,7 +118,7 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
           errors.push(...subResult.errors);
         } else if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
           const content = await readFile(entryPath, 'utf-8');
-          const result = parseWorkflow(content, entry);
+          const result = parseWorkflow(content, entry, dirname(entryPath));
 
           if (result.workflow) {
             workflows.set(entry, result.workflow);
