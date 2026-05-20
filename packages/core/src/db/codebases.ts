@@ -118,6 +118,27 @@ export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebas
   return result.rows[0] || null;
 }
 
+/**
+ * Find a codebase by name and local path (composite identity).
+ * This is the preferred lookup for registration flows where path is known.
+ */
+export async function findCodebaseByNameAndPath(
+  name: string,
+  defaultCwd: string
+): Promise<Codebase | null> {
+  const result = await pool.query<Codebase>(
+    'SELECT * FROM remote_agent_codebases WHERE name = $1 AND default_cwd = $2 LIMIT 1',
+    [name, defaultCwd]
+  );
+  return result.rows[0] || null;
+}
+
+/**
+ * Find a codebase by name only.
+ * When multiple rows share the same name (different local paths), returns the
+ * most recently created one. Callers that have path context should prefer
+ * {@link findCodebaseByNameAndPath} for unambiguous lookup.
+ */
 export async function findCodebaseByName(name: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases WHERE name = $1 ORDER BY created_at DESC LIMIT 1',
