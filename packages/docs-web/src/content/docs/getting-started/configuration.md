@@ -14,7 +14,7 @@ Set these in your shell or `.env` file:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `CLAUDE_BIN_PATH` | Yes (binary builds) | Absolute path to the Claude Code SDK's `cli.js`. Required in compiled Archon binaries unless `assistants.claude.claudeBinaryPath` is set. Dev mode (`bun run`) auto-resolves via `node_modules`. |
+| `CLAUDE_BIN_PATH` | No (binary builds autodetect `~/.local/bin/claude`) | Absolute path to the Claude Code binary or SDK `cli.js`. Overrides autodetection in compiled Archon binaries. Falls back to `assistants.claude.claudeBinaryPath`, then to the native-installer path. Dev mode (`bun run`) auto-resolves via `node_modules`. |
 | `CLAUDE_USE_GLOBAL_AUTH` | No | Set to `true` to use credentials from `claude /login` (default when no other Claude token is set) |
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | OAuth token from `claude setup-token` (alternative to global auth) |
 | `CLAUDE_API_KEY` | No | Anthropic API key for pay-per-use (alternative to global auth) |

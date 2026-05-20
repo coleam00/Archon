@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
 
@@ -248,6 +252,21 @@ describe('PiProvider', () => {
     await consume(new PiProvider().sendQuery('hi', '/tmp'));
     expect(process.env.PI_PACKAGE_DIR).toBeDefined();
     expect(process.env.PI_PACKAGE_DIR).toContain('archon-pi-shim');
+
+    // Stub contents are load-bearing: Pi reads `version` to populate its
+    // user-agent and `piConfig` (even when empty) to opt into the defaults
+    // path instead of erroring on missing config. Asserting on shape so a
+    // regression here surfaces in the test suite, not in a Pi runtime crash.
+    const shimDir = process.env.PI_PACKAGE_DIR;
+    expect(shimDir).toBe(join(tmpdir(), 'archon-pi-shim'));
+    const stub = JSON.parse(readFileSync(join(shimDir!, 'package.json'), 'utf8')) as {
+      name: string;
+      version: string;
+      piConfig: Record<string, unknown>;
+    };
+    expect(stub.name).toBe('archon-pi-shim');
+    expect(stub.version).toBe('0.0.0');
+    expect(stub.piConfig).toEqual({});
   });
 
   test('throws when no model is configured', async () => {

@@ -90,17 +90,24 @@ function ensurePiPackageDirShim(): void {
   const shimDir = join(tmpdir(), 'archon-pi-shim');
   const shimPkgJson = join(shimDir, 'package.json');
   if (!existsSync(shimPkgJson)) {
-    mkdirSync(shimDir, { recursive: true });
     // `piConfig: {}` is explicit so Pi's defaults (`name: 'pi'`,
     // `configDir: '.pi'`) kick in — matches Pi's standalone behavior.
-    writeFileSync(
-      shimPkgJson,
-      JSON.stringify({
-        name: 'archon-pi-shim',
-        version: '0.0.0',
-        piConfig: {},
-      })
-    );
+    try {
+      mkdirSync(shimDir, { recursive: true });
+      writeFileSync(
+        shimPkgJson,
+        JSON.stringify({
+          name: 'archon-pi-shim',
+          version: '0.0.0',
+          piConfig: {},
+        })
+      );
+    } catch (error) {
+      // Surface as a classified error so the executor's catch sees a known
+      // shape instead of a raw EACCES/ENOSPC from node:fs.
+      const err = error as NodeJS.ErrnoException;
+      throw new Error(`Pi shim setup failed at ${shimDir}: ${err.message}`);
+    }
   }
   process.env.PI_PACKAGE_DIR = shimDir;
 }
