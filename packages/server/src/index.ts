@@ -73,8 +73,10 @@ import {
   loadConfig,
   logConfig,
   getPort,
+  conversationDb,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
+import { wrapAdapterWithPersistence, persistUserMessage } from './adapters/platform-persistence';
 import {
   createLogger,
   logArchonPaths,
@@ -373,16 +375,28 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           parentConversationId = discordAdapter.getParentChannelId(message) ?? undefined;
         }
 
+        // Resolve conversation DB row so Web UI history reads find the messages.
+        // handleMessage calls getOrCreateConversation internally; doing it here
+        // is idempotent and gives us the dbId needed for persistence.
+        const conv = await conversationDb.getOrCreateConversation(
+          discordAdapter.getPlatformType(),
+          conversationId,
+          undefined,
+          parentConversationId
+        );
+        await persistUserMessage(conv.id, discordAdapter.getPlatformType(), content);
+        const persistingAdapter = wrapAdapterWithPersistence(discordAdapter, conv.id);
+
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager
           .acquireLock(conversationId, async () => {
-            await handleMessage(discordAdapter, conversationId, content, {
+            await handleMessage(persistingAdapter, conversationId, content, {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
             });
           })
-          .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
+          .catch(createMessageErrorHandler('Discord', persistingAdapter, conversationId));
       });
 
       // Don't let a Discord login failure (bad token, missing privileged
@@ -445,16 +459,25 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           parentConversationId = slackAdapter.getParentConversationId(event) ?? undefined;
         }
 
+        const conv = await conversationDb.getOrCreateConversation(
+          slackAdapter.getPlatformType(),
+          conversationId,
+          undefined,
+          parentConversationId
+        );
+        await persistUserMessage(conv.id, slackAdapter.getPlatformType(), content);
+        const persistingAdapter = wrapAdapterWithPersistence(slackAdapter, conv.id);
+
         // Fire-and-forget: handler returns immediately, processing happens async
         lockManager
           .acquireLock(conversationId, async () => {
-            await handleMessage(slackAdapter, conversationId, content, {
+            await handleMessage(persistingAdapter, conversationId, content, {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
             });
           })
-          .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
+          .catch(createMessageErrorHandler('Slack', persistingAdapter, conversationId));
       });
 
       await slack.start();
@@ -621,14 +644,21 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Register message handler (auth is handled internally by adapter)
     telegramAdapter.onMessage(async ({ conversationId, message }) => {
+      const conv = await conversationDb.getOrCreateConversation(
+        telegramAdapter.getPlatformType(),
+        conversationId
+      );
+      await persistUserMessage(conv.id, telegramAdapter.getPlatformType(), message);
+      const persistingAdapter = wrapAdapterWithPersistence(telegramAdapter, conv.id);
+
       // Fire-and-forget: handler returns immediately, processing happens async
       lockManager
         .acquireLock(conversationId, async () => {
-          await handleMessage(telegramAdapter, conversationId, message, {
+          await handleMessage(persistingAdapter, conversationId, message, {
             isolationHints: { workflowType: 'thread', workflowId: conversationId },
           });
         })
-        .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
+        .catch(createMessageErrorHandler('Telegram', persistingAdapter, conversationId));
     });
 
     try {
