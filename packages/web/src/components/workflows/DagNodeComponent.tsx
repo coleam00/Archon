@@ -50,7 +50,7 @@ const TYPE_CONFIG = {
   },
 } as const;
 
-function getContentPreview(data: DagNodeData): string {
+export function getContentPreview(data: DagNodeData): string {
   switch (data.nodeType) {
     case 'command':
       return data.label;
