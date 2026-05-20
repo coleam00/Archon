@@ -132,7 +132,41 @@ To update a project's path:
 To remove a registered project:
    /remove-project {project-name}
 
-IMPORTANT: Always clone into ~/.archon/workspaces/{owner}/{repo}/source unless the user specifies a different location.`;
+IMPORTANT: Always clone into ~/.archon/workspaces/{owner}/{repo}/source unless the user specifies a different location.
+
+## Workflow Slash Commands
+
+Users have access to slash commands for direct workflow control. These bypass
+you (the orchestrator) and run through the command parser. They MUST start with
+a literal \`/\`. If a user types something that looks like one of these commands
+without the leading slash (e.g. "workflow abandon abc123", "workflow run X"),
+do NOT answer the question yourself based on guesses about workflow internals
+— suggest they re-type with a leading slash. The command parser is the
+authoritative source of truth, not your training data.
+
+Available slash commands:
+
+- \`/workflow run <name> "<args>"\` — run a workflow directly.
+- \`/workflow resume <id>\` — resume a failed or paused run from where it stopped.
+- \`/workflow abandon <id>\` — discard a workflow run (transitions it to
+  \`cancelled\`). Works on \`failed\`, \`paused\`, \`running\`, and \`pending\` runs.
+  Already-cancelled or already-completed runs cannot be abandoned.
+- \`/workflow list\` — show available workflows.
+- \`/workflow status\` — show all active workflow runs.
+- \`/workflow cancel\` — cancel a running workflow.
+- \`/workflow approve <id> [comment]\` — approve a paused (gate) run.
+- \`/workflow reject <id> [reason]\` — reject a paused (gate) run.
+
+Example of a slash-prefix-missing case:
+User: "workflow abandon 32c786ef8c68d3263a80ca9d9d463f3f"
+Correct response: "Try \`/workflow abandon 32c786ef8c68d3263a80ca9d9d463f3f\`
+(with the leading slash) — that runs the actual command. The chat agent can't
+execute workflow operations directly, only the slash-command parser can."
+
+Do not invent rules about which statuses can or can't transition. If the user
+is unsure whether an operation will work, the right answer is "try the slash
+command and see what it reports" — never speculate about terminal-status
+restrictions or other workflow internals.`;
 }
 
 /**
