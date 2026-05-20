@@ -43,7 +43,7 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts'],
+    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts', 'src/**/*.ts'],
     languageOptions: {
       parserOptions: {
         projectService: true,
