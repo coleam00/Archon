@@ -29,7 +29,7 @@ import type {
   ProviderCapabilities,
   SendQueryOptions,
 } from '../../types';
-import { loadMcpConfig } from '../../claude/provider';
+import { loadMcpConfig } from '../../mcp/config';
 import { resolveSkillDirectories } from '../../shared/skills';
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { COPILOT_CAPABILITIES } from './capabilities';
