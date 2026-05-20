@@ -1,0 +1,42 @@
+name: development-plan-to-pr
+description: |
+  Use when: An approved PRD or implementation plan is ready to become a pull request.
+  Triggers: "build approved plan", "implement this PRD", "plan to PR", "development plan to PR".
+  Does: Confirms implementation scope -> requires build approval -> implements in a worktree ->
+        validates -> creates PR -> writes implementation report.
+  NOT for: Creating PRDs, design handoff, standalone security review, or release readiness.
+
+provider: claude
+
+nodes:
+  - id: confirm-plan
+    command: development-confirm-plan
+    context: fresh
+
+  - id: build-approval
+    approval:
+      message: "Approve implementation scope before code changes begin."
+      capture_response: true
+    depends_on: [confirm-plan]
+
+  - id: implement
+    command: archon-implement-tasks
+    depends_on: [build-approval]
+    context: fresh
+    model: opus[1m]
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement]
+    context: fresh
+
+  - id: finalize-pr
+    command: archon-finalize-pr
+    depends_on: [validate]
+    context: fresh
+
+  - id: implementation-report
+    command: development-implementation-report
+    depends_on: [finalize-pr]
+    context: fresh
+

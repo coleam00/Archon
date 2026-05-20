@@ -1,0 +1,101 @@
+name: security-risk-gate
+description: |
+  Use when: A change may affect auth, permissions, secrets, customer data, dependencies,
+            public APIs, webhooks, file transfer, admin behavior, infra, or any release-risk area.
+  Triggers: "security gate", "security review", "review security risk", "needs security".
+  Does: Classifies security triggers -> runs risk review when needed -> requires security approval
+        or risk acceptance for medium/high risk -> writes security signoff.
+  NOT for: General code review without security impact or production deployment planning.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  - id: classify-security
+    prompt: |
+      Classify whether this change requires a security review.
+
+      Input:
+      $ARGUMENTS
+
+      Review is required for authentication, authorization, permissions, secrets,
+      payments, PII, customer data, audit logs, infra/IaC, dependency changes,
+      public APIs, webhooks, file upload/download, admin features, privilege
+      boundaries, external exposure, or labels security-review, release-risk,
+      customer-data, or auth.
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        review_required:
+          type: string
+          enum: ["true", "false"]
+        risk_level:
+          type: string
+          enum: ["low", "medium", "high"]
+        approval_required:
+          type: string
+          enum: ["true", "false"]
+        triggers:
+          type: string
+        reasoning:
+          type: string
+      required: [review_required, risk_level, approval_required, triggers, reasoning]
+
+  - id: security-review
+    command: security-risk-review
+    depends_on: [classify-security]
+    when: "$classify-security.output.review_required == 'true'"
+    context: fresh
+
+  - id: threat-model
+    command: security-threat-model
+    depends_on: [security-review]
+    when: "$classify-security.output.risk_level == 'high'"
+    context: fresh
+
+  - id: dependency-review
+    command: security-dependency-review
+    depends_on: [classify-security]
+    when: "$classify-security.output.triggers != ''"
+    context: fresh
+
+  - id: secrets-permissions-review
+    command: security-secrets-permissions-review
+    depends_on: [security-review]
+    when: "$classify-security.output.approval_required == 'true'"
+    context: fresh
+
+  - id: security-approval
+    approval:
+      message: "Security approval is required. Approve, or provide risk acceptance details and required follow-up."
+      capture_response: true
+    depends_on: [security-review, threat-model, dependency-review, secrets-permissions-review]
+    trigger_rule: all_done
+    when: "$classify-security.output.approval_required == 'true'"
+
+  - id: risk-acceptance
+    command: security-risk-acceptance
+    depends_on: [security-approval]
+    when: "$classify-security.output.risk_level == 'medium' || $classify-security.output.risk_level == 'high'"
+    context: fresh
+
+  - id: security-signoff
+    prompt: |
+      Write `$ARTIFACTS_DIR/security/security-signoff.md`.
+
+      Include:
+      - Security review required: $classify-security.output.review_required
+      - Risk level: $classify-security.output.risk_level
+      - Approval required: $classify-security.output.approval_required
+      - Triggers: $classify-security.output.triggers
+      - Approval response, if any: $security-approval.output
+      - Risk acceptance artifact, if any
+      - Final verdict: clear, clear with accepted risk, or blocked
+    depends_on: [classify-security, security-review, security-approval, risk-acceptance]
+    trigger_rule: all_done
+    context: fresh
+

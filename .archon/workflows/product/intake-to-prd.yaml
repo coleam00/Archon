@@ -1,0 +1,72 @@
+name: product-intake-to-prd
+description: |
+  Use when: Product needs to turn an idea, customer request, bug, or roadmap item into an approved PRD.
+  Triggers: "create PRD", "product intake", "new product request", "turn this into requirements".
+  Does: Classifies request -> researches product and repo context -> captures product answers ->
+        generates PRD -> waits for product approval.
+  NOT for: Implementing approved work, validating a PR, or release readiness.
+
+provider: claude
+interactive: true
+worktree:
+  enabled: false
+
+nodes:
+  - id: classify
+    prompt: |
+      Classify this product intake request.
+
+      Request:
+      $ARGUMENTS
+
+      Return whether it is ready for PRD drafting or needs more information first.
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        request_type:
+          type: string
+          enum: ["bug", "feature", "experiment", "customer-request", "tech-debt", "support-escalation", "incident-followup"]
+        readiness:
+          type: string
+          enum: ["ready", "needs-more-information"]
+        reasoning:
+          type: string
+      required: [request_type, readiness, reasoning]
+
+  - id: research
+    command: product-intake-research
+    depends_on: [classify]
+    context: fresh
+
+  - id: foundation-gate
+    approval:
+      message: "Review the intake research. Add missing product answers or approve to generate the PRD."
+      capture_response: true
+    depends_on: [research]
+
+  - id: generate-prd
+    command: product-prd-generate
+    depends_on: [foundation-gate]
+    context: fresh
+
+  - id: product-approval
+    approval:
+      message: "Approve the PRD for design and implementation planning, or reject with required edits."
+      capture_response: true
+    depends_on: [generate-prd]
+
+  - id: decision-log
+    prompt: |
+      Write a concise decision log to `$ARTIFACTS_DIR/product/decision-log.md`.
+
+      Include:
+      - Request type: $classify.output.request_type
+      - Readiness: $classify.output.readiness
+      - Product approval response: $product-approval.output
+      - PRD artifact path
+      - Recommended next workflow
+    depends_on: [product-approval]
+    context: fresh
+
