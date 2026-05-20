@@ -1,4 +1,4 @@
-import { DefaultResourceLoader } from '@mariozechner/pi-coding-agent';
+import { DefaultResourceLoader, getAgentDir } from '@earendil-works/pi-coding-agent';
 
 export interface NoopResourceLoaderOptions {
   /**
@@ -68,6 +68,7 @@ export function createNoopResourceLoader(
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
+    agentDir: getAgentDir(),
     noExtensions: options.enableExtensions !== true,
     noSkills: true,
     noPromptTemplates: true,

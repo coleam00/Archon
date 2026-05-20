@@ -36,7 +36,7 @@ export interface CodexProviderDefaults {
 }
 
 /**
- * Community provider defaults for Pi (@mariozechner/pi-coding-agent).
+ * Community provider defaults for Pi (@earendil-works/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */
 export interface PiProviderDefaults {

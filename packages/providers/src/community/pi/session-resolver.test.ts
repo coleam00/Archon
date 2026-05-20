@@ -6,7 +6,7 @@ const mockCreate = mock((_cwd: string) => ({ __kind: 'created' }));
 const mockOpen = mock((_path: string) => ({ __kind: 'opened' }));
 const mockList = mock(async (_cwd: string) => [] as { id: string; path: string; cwd: string }[]);
 
-mock.module('@mariozechner/pi-coding-agent', () => ({
+mock.module('@earendil-works/pi-coding-agent', () => ({
   SessionManager: {
     create: mockCreate,
     open: mockOpen,

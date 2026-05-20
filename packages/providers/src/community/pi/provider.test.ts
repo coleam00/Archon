@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { AgentSessionEvent } from '@mariozechner/pi-coding-agent';
+import type { AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 
 import { createMockLogger } from '../../test/mocks/logger';
 
@@ -127,13 +127,17 @@ const MockDefaultResourceLoader = mock((_opts: unknown) => ({
 // name so assertions can verify which tools the provider selected.
 const mockCreateReadTool = mock((_cwd: string) => ({ __piTool: 'read' }));
 const mockCreateBashTool = mock((_cwd: string, _options?: unknown) => ({ __piTool: 'bash' }));
+const mockCreateBashToolDefinition = mock((_cwd: string, _options?: unknown) => ({
+  name: 'bash',
+  __piTool: 'bash',
+}));
 const mockCreateEditTool = mock((_cwd: string) => ({ __piTool: 'edit' }));
 const mockCreateWriteTool = mock((_cwd: string) => ({ __piTool: 'write' }));
 const mockCreateGrepTool = mock((_cwd: string) => ({ __piTool: 'grep' }));
 const mockCreateFindTool = mock((_cwd: string) => ({ __piTool: 'find' }));
 const mockCreateLsTool = mock((_cwd: string) => ({ __piTool: 'ls' }));
 
-mock.module('@mariozechner/pi-coding-agent', () => ({
+mock.module('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: mockCreateAgentSession,
   AuthStorage: { create: mockAuthCreate },
   ModelRegistry: { create: mockModelRegistryCreate },
@@ -147,8 +151,10 @@ mock.module('@mariozechner/pi-coding-agent', () => ({
     inMemory: mockSettingsManagerInMemory,
   },
   DefaultResourceLoader: MockDefaultResourceLoader,
+  getAgentDir: mock(() => '/tmp/pi-agent'),
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
+  createBashToolDefinition: mockCreateBashToolDefinition,
   createEditTool: mockCreateEditTool,
   createWriteTool: mockCreateWriteTool,
   createGrepTool: mockCreateGrepTool,
@@ -206,6 +212,7 @@ describe('PiProvider', () => {
     MockDefaultResourceLoader.mockClear();
     mockCreateReadTool.mockClear();
     mockCreateBashTool.mockClear();
+    mockCreateBashToolDefinition.mockClear();
     mockCreateEditTool.mockClear();
     mockCreateWriteTool.mockClear();
     mockCreateGrepTool.mockClear();
@@ -879,8 +886,7 @@ describe('PiProvider', () => {
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
     expect(Array.isArray(callArgs.tools)).toBe(true);
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
-    expect(tools.map(t => t.__piTool).sort()).toEqual(['grep', 'read']);
+    expect((callArgs.tools as string[]).sort()).toEqual(['grep', 'read']);
   });
 
   test('nodeConfig.allowed_tools: [] disables all Pi tools (LLM-only)', async () => {
@@ -928,11 +934,11 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    const tools = callArgs.tools as string[];
     // Pi has 7 built-ins, 2 denied → 5 remain
     expect(tools).toHaveLength(5);
-    expect(tools.find(t => t.__piTool === 'bash')).toBeUndefined();
-    expect(tools.find(t => t.__piTool === 'write')).toBeUndefined();
+    expect(tools).not.toContain('bash');
+    expect(tools).not.toContain('write');
   });
 
   test('no allowed_tools / denied_tools leaves Pi default tools in place', async () => {
@@ -962,12 +968,13 @@ describe('PiProvider', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // Env present → we override Pi's built-in codingTools so bash sees the env.
-    const tools = callArgs.tools as Array<{ __piTool: string }>;
+    // Env present → we pass explicit default tool names plus an env-aware bash override.
+    const tools = callArgs.tools as string[];
     expect(Array.isArray(tools)).toBe(true);
-    expect(tools.map(t => t.__piTool).sort()).toEqual(['bash', 'edit', 'read', 'write']);
+    expect(tools.sort()).toEqual(['bash', 'edit', 'read', 'write']);
+    expect(callArgs.customTools).toEqual([{ name: 'bash', __piTool: 'bash' }]);
 
-    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    const bashCall = mockCreateBashToolDefinition.mock.calls.find(call => call[1] !== undefined);
     expect(bashCall).toBeDefined();
     const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
     expect(typeof bashOptions.spawnHook).toBe('function');
@@ -995,7 +1002,7 @@ describe('PiProvider', () => {
       })
     );
 
-    const bashCall = mockCreateBashTool.mock.calls.find(call => call[1] !== undefined);
+    const bashCall = mockCreateBashToolDefinition.mock.calls.find(call => call[1] !== undefined);
     expect(bashCall).toBeDefined();
     const bashOptions = bashCall![1] as { spawnHook: (c: unknown) => unknown };
     const merged = bashOptions.spawnHook({
@@ -1018,8 +1025,8 @@ describe('PiProvider', () => {
       })
     );
 
-    // Every createBashTool call in this test path is either (cwd) or (cwd, undefined).
-    for (const call of mockCreateBashTool.mock.calls) {
+    // No env means no env-aware bash override is needed.
+    for (const call of mockCreateBashToolDefinition.mock.calls) {
       expect(call[1]).toBeUndefined();
     }
   });

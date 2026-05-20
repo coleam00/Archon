@@ -15,10 +15,10 @@ import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig } from './config';
 import { parsePiModelRef } from './model-ref';
 
-// IMPORTANT: Do NOT add static `import { ... } from '@mariozechner/*'` here,
+// IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
 // values from Pi (options-translator, resource-loader, session-resolver,
-// ui-context-stub, event-bridge). Pi's `@mariozechner/pi-coding-agent/dist/config.js`
+// ui-context-stub, event-bridge). Pi's `@earendil-works/pi-coding-agent/dist/config.js`
 // runs `readFileSync(getPackageJsonPath(), "utf-8")` at module load; inside a
 // compiled Archon binary `getPackageJsonPath()` resolves to
 // `dirname(process.execPath) + "/package.json"` — a path that doesn't exist —
@@ -165,7 +165,7 @@ ${JSON.stringify(schema, null, 2)}`;
 }
 
 /**
- * Pi community provider — wraps `@mariozechner/pi-coding-agent`'s full
+ * Pi community provider — wraps `@earendil-works/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
  */
@@ -199,7 +199,7 @@ export class PiProvider implements IAgentProvider {
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
     ] = await Promise.all([
-      import('@mariozechner/pi-coding-agent'),
+      import('@earendil-works/pi-coding-agent'),
       import('./event-bridge'),
       import('./options-translator'),
       import('./resource-loader'),
@@ -341,11 +341,11 @@ export class PiProvider implements IAgentProvider {
     //        requestOptions.env (codebase-scoped env vars from .archon/config.yaml)
     //        is injected into bash subprocesses via a BashSpawnHook, mirroring
     //        Claude's options.env and Codex's constructor env.
-    const { tools: filteredTools, unknownTools } = resolvePiTools(
-      cwd,
-      nodeConfig,
-      requestOptions?.env
-    );
+    const {
+      tools: filteredTools,
+      customTools,
+      unknownTools,
+    } = resolvePiTools(cwd, nodeConfig, requestOptions?.env);
     if (unknownTools.length > 0) {
       yield {
         type: 'system',
@@ -496,6 +496,7 @@ export class PiProvider implements IAgentProvider {
       resourceLoader,
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(filteredTools !== undefined ? { tools: filteredTools } : {}),
+      ...(customTools !== undefined ? { customTools } : {}),
     });
 
     // Extension models aren't in the static catalog — skip the fallback warning.

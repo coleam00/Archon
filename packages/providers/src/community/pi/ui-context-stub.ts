@@ -4,7 +4,7 @@ import type {
   ExtensionWidgetOptions,
   TerminalInputHandler,
   Theme,
-} from '@mariozechner/pi-coding-agent';
+} from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 
@@ -105,6 +105,12 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
     setWorkingMessage(_message?: string): void {
       noop();
     },
+    setWorkingVisible(_visible: boolean): void {
+      noop();
+    },
+    setWorkingIndicator(_options?: Parameters<ExtensionUIContext['setWorkingIndicator']>[0]): void {
+      noop();
+    },
     setHiddenThinkingLabel(_label?: string): void {
       noop();
     },
@@ -135,8 +141,16 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
     editor(_title: string, _prefill?: string): Promise<string | undefined> {
       return Promise.resolve(undefined);
     },
+    addAutocompleteProvider(
+      _factory: Parameters<ExtensionUIContext['addAutocompleteProvider']>[0]
+    ): void {
+      noop();
+    },
     setEditorComponent(_factory: Parameters<ExtensionUIContext['setEditorComponent']>[0]): void {
       noop();
+    },
+    getEditorComponent(): ReturnType<ExtensionUIContext['getEditorComponent']> {
+      return undefined;
     },
     get theme(): Theme {
       return themeProxy;
