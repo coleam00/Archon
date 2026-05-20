@@ -17,7 +17,7 @@ mock.module('@archon/paths', () => ({
   BUNDLED_VERSION: 'dev',
 }));
 
-import { serveCommand, parseChecksum } from './serve';
+import { serveCommand, parseChecksum, parseEmbeddedChecksum } from './serve';
 
 describe('parseChecksum', () => {
   const validHash = 'a'.repeat(64);
@@ -65,6 +65,22 @@ describe('parseChecksum', () => {
     expect(() => parseChecksum(checksums, 'archon-web.tar.gz')).toThrow(
       'Malformed checksum entry for archon-web.tar.gz'
     );
+  });
+});
+
+describe('parseEmbeddedChecksum', () => {
+  const validHash = 'b'.repeat(64);
+
+  it('should accept a lowercase 64-char hex checksum', () => {
+    expect(parseEmbeddedChecksum(validHash)).toBe(validHash);
+  });
+
+  it('should trim surrounding whitespace before validation', () => {
+    expect(parseEmbeddedChecksum(`  ${validHash}\n`)).toBe(validHash);
+  });
+
+  it('should reject malformed embedded checksums', () => {
+    expect(() => parseEmbeddedChecksum('not-a-sha')).toThrow('Malformed embedded checksum');
   });
 });
 
