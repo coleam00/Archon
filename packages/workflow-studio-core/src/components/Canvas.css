@@ -1,0 +1,33 @@
+/* Dark-theme overrides for React Flow's built-in <Controls /> panel.
+ * Default style ships light-on-light, which has near-zero contrast against
+ * the studio's dark canvas. We invert: panel uses studio surface tokens,
+ * buttons use studio fg, hover states bump the muted token.
+ *
+ * Selectors are global (xyflow's own classnames, not CSS-module-scoped)
+ * so this file is a plain CSS import, not a module. */
+
+.react-flow__controls {
+  background: var(--studio-surface);
+  border: 1px solid var(--studio-muted);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.react-flow__controls-button {
+  background: var(--studio-surface);
+  border: none;
+  border-bottom: 1px solid var(--studio-muted);
+  color: var(--studio-fg);
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--studio-muted);
+}
+
+.react-flow__controls-button svg {
+  fill: var(--studio-fg);
+}

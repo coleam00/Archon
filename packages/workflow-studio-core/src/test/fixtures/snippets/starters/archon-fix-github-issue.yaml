@@ -1,0 +1,321 @@
+name: archon-fix-github-issue
+description: |
+  Use when: User wants to FIX, RESOLVE, or IMPLEMENT a solution for a GitHub issue.
+  Triggers: "fix this issue", "implement issue #123", "resolve this bug", "fix it",
+            "fix issue", "resolve issue", "fix #123".
+  NOT for: Comprehensive multi-agent reviews (use archon-issue-review-full),
+           questions about issues, CI failures, PR reviews, general exploration.
+
+  DAG workflow that:
+  1. Classifies the issue (bug/feature/enhancement/etc)
+  2. Researches context (web research + codebase exploration via investigate/plan)
+  3. Routes to investigate (bugs) or plan (features) based on classification
+  4. Implements the fix/feature with validation
+  5. Creates a draft PR using the repo's PR template
+  6. Runs smart review (always code review + CLAUDE.md check, conditional additional agents)
+  7. Aggressively self-fixes all findings (tests, docs, error handling)
+  8. Simplifies changed code (implements fixes directly, not just reports)
+  9. Reports results back to the GitHub issue with follow-up suggestions
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: FETCH & CLASSIFY
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: extract-issue-number
+    prompt: |
+      Find the GitHub issue number for this request.
+
+      Request: $ARGUMENTS
+
+      Rules:
+      - If the message contains an explicit issue number (e.g., "#709", "issue 709", "709"), extract that number.
+      - If the message is ambiguous (e.g., "fix the SQLite timestamp bug"), use `gh issue list` to search for matching issues and pick the best match.
+
+      CRITICAL: Your final output must be ONLY the bare number with no quotes, no markdown, no explanation. Example correct output: 709
+
+  - id: fetch-issue
+    bash: |
+      # Strip quotes, whitespace, markdown backticks from AI output
+      ISSUE_NUM=$(echo "$extract-issue-number.output" | tr -d "'\"\`\n " | grep -oE '[0-9]+' | head -1)
+      if [ -z "$ISSUE_NUM" ]; then
+        echo "Failed to extract issue number from: $extract-issue-number.output" >&2
+        exit 1
+      fi
+      gh issue view "$ISSUE_NUM" --json title,body,labels,comments,state,url,author
+    depends_on: [extract-issue-number]
+
+  - id: classify
+    prompt: |
+      You are an issue classifier. Analyze the GitHub issue below and determine its type.
+
+      ## Issue Content
+
+      $fetch-issue.output
+
+      ## Classification Rules
+
+      | Type | Indicators |
+      |------|------------|
+      | bug | "broken", "error", "crash", "doesn't work", stack traces, regression |
+      | feature | "add", "new", "support", "would be nice", net-new capability |
+      | enhancement | "improve", "better", "update existing", "extend", incremental improvement |
+      | refactor | "clean up", "simplify", "reorganize", "restructure" |
+      | chore | "update deps", "upgrade", "maintenance", "CI/CD" |
+      | documentation | "docs", "readme", "clarify", "examples" |
+
+      Provide reasoning for your classification.
+    depends_on: [fetch-issue]
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        issue_type:
+          type: string
+          enum: ['bug', 'feature', 'enhancement', 'refactor', 'chore', 'documentation']
+        title:
+          type: string
+        reasoning:
+          type: string
+      required: [issue_type, title, reasoning]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: RESEARCH (parallel with PR template fetch)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: web-research
+    command: archon-web-research
+    depends_on: [classify]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: INVESTIGATE (bugs) / PLAN (features)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: investigate
+    command: archon-investigate-issue
+    depends_on: [classify, web-research]
+    when: "$classify.output.issue_type == 'bug'"
+    context: fresh
+
+  - id: plan
+    command: archon-create-plan
+    depends_on: [classify, web-research]
+    when: "$classify.output.issue_type != 'bug'"
+    context: fresh
+
+  # Bridge: ensure investigation.md exists for the implement step
+  # archon-fix-issue reads from $ARTIFACTS_DIR/investigation.md
+  # archon-create-plan writes to $ARTIFACTS_DIR/plan.md
+  # This node copies plan.md → investigation.md when the plan path was taken
+  - id: bridge-artifacts
+    bash: |
+      if [ -f "$ARTIFACTS_DIR/plan.md" ] && [ ! -f "$ARTIFACTS_DIR/investigation.md" ]; then
+        cp "$ARTIFACTS_DIR/plan.md" "$ARTIFACTS_DIR/investigation.md"
+        echo "Bridged plan.md to investigation.md for implement step"
+      elif [ -f "$ARTIFACTS_DIR/investigation.md" ]; then
+        echo "investigation.md exists from investigate step"
+      else
+        echo "WARNING: No investigation.md or plan.md found — implement may fail"
+      fi
+    depends_on: [investigate, plan]
+    trigger_rule: one_success
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: IMPLEMENT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement
+    command: archon-fix-issue
+    depends_on: [bridge-artifacts]
+    context: fresh
+    model: opus[1m]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: VALIDATE
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: CREATE DRAFT PR
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-pr
+    prompt: |
+      Create a draft pull request for the current branch.
+
+      ## Context
+
+      - **Issue**: $ARGUMENTS
+      - **Classification**: $classify.output
+      - **Issue title**: $classify.output.title
+
+      ## Instructions
+
+      1. Check git status — ensure all changes are committed. If uncommitted changes exist, stage and commit them.
+      2. Push the branch: `git push -u origin HEAD`
+      3. Read implementation artifacts from `$ARTIFACTS_DIR/` for context:
+         - `$ARTIFACTS_DIR/investigation.md` or `$ARTIFACTS_DIR/plan.md`
+         - `$ARTIFACTS_DIR/implementation.md`
+         - `$ARTIFACTS_DIR/validation.md`
+      4. Check if a PR already exists for this branch: `gh pr list --head $(git branch --show-current)`
+         - If PR exists, skip creation and capture its number
+      5. Look for the project's PR template at `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/PULL_REQUEST_TEMPLATE.md`. Read whichever one exists.
+      6. Create a DRAFT PR: `gh pr create --draft --base $BASE_BRANCH`
+         - Title: concise, imperative mood, under 70 chars
+         - Body: if a PR template was found, fill in **every section** with details from the artifacts. Don't skip sections or leave placeholders. If no template, write a body with summary, changes, validation evidence, and `Fixes #...`.
+         - Link to issue: include `Fixes #...` or `Closes #...`
+      7. Capture PR identifiers:
+         ```bash
+         PR_NUMBER=$(gh pr view --json number -q '.number')
+         echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+         PR_URL=$(gh pr view --json url -q '.url')
+         echo "$PR_URL" > "$ARTIFACTS_DIR/.pr-url"
+         ```
+    depends_on: [validate]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 7: REVIEW
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [create-pr]
+
+  - id: review-scope
+    command: archon-pr-review-scope
+    depends_on: [verify-pr-base]
+    context: fresh
+
+  - id: review-classify
+    prompt: |
+      You are a PR review classifier. Analyze the PR scope and determine
+      which review agents should run.
+
+      ## PR Scope
+
+      $review-scope.output
+
+      ## Rules
+
+      - **Code review**: ALWAYS run. This is mandatory for every PR. It also checks
+        the PR against CLAUDE.md rules and project conventions.
+      - **Error handling**: Run if the diff touches code with try/catch, error handling,
+        async/await, or adds new failure paths.
+      - **Test coverage**: Run if the diff touches source code (not just tests, docs, or config).
+      - **Comment quality**: Run if the diff adds or modifies comments, docstrings, JSDoc,
+        or significant documentation within code files.
+      - **Docs impact**: Run if the diff adds/removes/renames public APIs, commands, CLI flags,
+        environment variables, or user-facing features.
+
+      Provide your reasoning for each decision.
+    depends_on: [review-scope]
+    model: haiku
+    allowed_tools: []
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        run_code_review:
+          type: string
+          enum: ['true', 'false']
+        run_error_handling:
+          type: string
+          enum: ['true', 'false']
+        run_test_coverage:
+          type: string
+          enum: ['true', 'false']
+        run_comment_quality:
+          type: string
+          enum: ['true', 'false']
+        run_docs_impact:
+          type: string
+          enum: ['true', 'false']
+        reasoning:
+          type: string
+      required:
+        - run_code_review
+        - run_error_handling
+        - run_test_coverage
+        - run_comment_quality
+        - run_docs_impact
+        - reasoning
+
+  # Code review always runs — mandatory
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [review-classify]
+    context: fresh
+
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_error_handling == 'true'"
+    context: fresh
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_test_coverage == 'true'"
+    context: fresh
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_comment_quality == 'true'"
+    context: fresh
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [review-classify]
+    when: "$review-classify.output.run_docs_impact == 'true'"
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 8: SYNTHESIZE + SELF-FIX
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    trigger_rule: one_success
+    context: fresh
+
+  - id: self-fix
+    command: archon-self-fix-all
+    depends_on: [synthesize]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 9: SIMPLIFY
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: simplify
+    command: archon-simplify-changes
+    depends_on: [self-fix]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 10: REPORT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: report
+    command: archon-issue-completion-report
+    depends_on: [simplify]
+    context: fresh

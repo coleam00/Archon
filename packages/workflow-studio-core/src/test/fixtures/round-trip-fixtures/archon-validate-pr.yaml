@@ -1,0 +1,211 @@
+name: archon-validate-pr
+description: |
+  Use when: User wants a thorough PR validation that tests both main (bug present) and feature branch (bug fixed).
+  Triggers: "validate PR", "validate pr #123", "test this PR", "verify PR", "full PR validation",
+            "validate pull request", "test PR end-to-end".
+  Does: Fetches PR info -> finds free ports -> parallel code review (main vs feature) ->
+        E2E test on main (reproduce bug) -> E2E test on feature (verify fix) -> final verdict report.
+  NOT for: Quick code-only reviews (use archon-smart-pr-review), fixing issues, general exploration.
+
+  This workflow is designed for running in parallel — each instance finds its own free ports
+  to avoid conflicts. Produces artifacts in $ARTIFACTS_DIR/ and posts a validation report.
+
+provider: claude
+model: opus
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: SETUP — Fetch PR info and allocate ports
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-pr
+    bash: |
+      # Extract PR number from arguments
+      PR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+' | head -1)
+      # Fallback: extract first number if no URL path found (e.g., "validate PR 42")
+      if [ -z "$PR_NUMBER" ]; then
+        PR_NUMBER=$(echo "$ARGUMENTS" | grep -oE '[0-9]+' | head -1)
+      fi
+      if [ -z "$PR_NUMBER" ]; then
+        # Try getting PR from current branch
+        PR_NUMBER=$(gh pr view --json number -q '.number' 2>/dev/null)
+      fi
+
+      if [ -z "$PR_NUMBER" ]; then
+        echo "ERROR: No PR number found in arguments: $ARGUMENTS"
+        exit 1
+      fi
+
+      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
+
+      # Fetch full PR details
+      gh pr view "$PR_NUMBER" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
+
+  - id: find-ports
+    bash: |
+      # Use Bun to let the OS pick truly free ports (cross-platform: Linux, macOS, Windows)
+      BACKEND_PORT=$(bun -e "const s = Bun.serve({port: 0, fetch: () => new Response('')}); console.log(s.port); s.stop()")
+      FRONTEND_PORT=$(bun -e "const s = Bun.serve({port: 0, fetch: () => new Response('')}); console.log(s.port); s.stop()")
+
+      echo "$BACKEND_PORT" > "$ARTIFACTS_DIR/.backend-port"
+      echo "$FRONTEND_PORT" > "$ARTIFACTS_DIR/.frontend-port"
+
+      echo "BACKEND_PORT=$BACKEND_PORT"
+      echo "FRONTEND_PORT=$FRONTEND_PORT"
+
+  - id: resolve-paths
+    bash: |
+      # Resolve canonical repo path (main branch) vs worktree path (feature branch)
+      CANONICAL_REPO=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+      WORKTREE_PATH=$(pwd)
+      FEATURE_BRANCH=$(git branch --show-current)
+
+      # Get PR branch info
+      PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+      PR_HEAD=$(gh pr view "$PR_NUMBER" --json headRefName -q '.headRefName')
+      PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+
+      echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
+      echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"
+      echo "$FEATURE_BRANCH" > "$ARTIFACTS_DIR/.feature-branch"
+      echo "$PR_HEAD" > "$ARTIFACTS_DIR/.pr-head"
+      echo "$PR_BASE" > "$ARTIFACTS_DIR/.pr-base"
+
+      echo "CANONICAL_REPO=$CANONICAL_REPO"
+      echo "WORKTREE_PATH=$WORKTREE_PATH"
+      echo "FEATURE_BRANCH=$FEATURE_BRANCH"
+      echo "PR_HEAD=$PR_HEAD"
+      echo "PR_BASE=$PR_BASE"
+    depends_on: [fetch-pr]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: CODE REVIEW — Parallel analysis of main vs feature
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: code-review-main
+    command: archon-validate-pr-code-review-main
+    depends_on: [fetch-pr, resolve-paths]
+    context: fresh
+
+  - id: code-review-feature
+    command: archon-validate-pr-code-review-feature
+    depends_on: [fetch-pr, resolve-paths, code-review-main]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: E2E TESTING — Sequential (after code reviews finish)
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: classify-testability
+    prompt: |
+      You are a PR testability classifier. Determine whether this PR's changes can be
+      validated via browser E2E testing, or if it requires code-review-only validation.
+
+      ## PR Details
+
+      $fetch-pr.output
+
+      ## Rules
+
+      - **e2e_testable**: Changes affect the Web UI (components, hooks, styles, API routes
+        that serve the frontend, SSE streaming, layout, user-visible behavior). These can be
+        validated by starting Archon and using agent-browser to interact with the UI.
+      - **code_review_only**: Changes are purely backend logic, CLI-only, workflow engine,
+        database schemas, git operations, build tooling, tests, documentation, or other
+        non-UI code. No visual validation possible.
+
+      Consider: even if a change is backend, if it affects what the frontend displays
+      (e.g., API response format changes, SSE event changes), it IS e2e_testable.
+    depends_on: [fetch-pr]
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        testable:
+          type: string
+          enum: ["e2e_testable", "code_review_only"]
+        reasoning:
+          type: string
+        test_plan:
+          type: string
+      required: [testable, reasoning, test_plan]
+
+  - id: e2e-test-main
+    command: archon-validate-pr-e2e-main
+    depends_on: [classify-testability, find-ports, resolve-paths, code-review-main, code-review-feature]
+    when: "$classify-testability.output.testable == 'e2e_testable'"
+    context: fresh
+    idle_timeout: 1800000
+
+  - id: e2e-test-feature
+    command: archon-validate-pr-e2e-feature
+    depends_on: [e2e-test-main, find-ports, resolve-paths]
+    when: "$classify-testability.output.testable == 'e2e_testable'"
+    context: fresh
+    idle_timeout: 1800000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: FINAL REPORT — Synthesize all findings
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: cleanup-processes
+    bash: |
+      # Safety net: kill any orphaned processes from E2E testing
+      # This runs after E2E nodes complete (or timeout/fail) to prevent process accumulation
+      BACKEND_PORT=$(cat "$ARTIFACTS_DIR/.backend-port" 2>/dev/null | tr -d '\n')
+      FRONTEND_PORT=$(cat "$ARTIFACTS_DIR/.frontend-port" 2>/dev/null | tr -d '\n')
+
+      if [ -z "$BACKEND_PORT" ] || [ -z "$FRONTEND_PORT" ]; then
+        echo "No port files found — skipping cleanup"
+        exit 0
+      fi
+
+      echo "Cleaning up ports $BACKEND_PORT and $FRONTEND_PORT..."
+
+      # Kill by all recorded PID files
+      for pidfile in "$ARTIFACTS_DIR"/.e2e-*-pid; do
+        if [ -f "$pidfile" ]; then
+          PID=$(cat "$pidfile" | tr -d '\n')
+          echo "Killing PID $PID from $pidfile"
+          kill "$PID" 2>/dev/null || taskkill //F //T //PID "$PID" 2>/dev/null || true
+        fi
+      done
+
+      # Kill by port (cross-platform fallback)
+      for PORT in $BACKEND_PORT $FRONTEND_PORT; do
+        fuser -k "$PORT/tcp" 2>/dev/null || true
+        lsof -ti:"$PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+        netstat -ano 2>/dev/null | grep ":$PORT " | grep LISTENING | awk '{print $5}' | sort -u | while read pid; do
+          taskkill //F //T //PID "$pid" 2>/dev/null || true
+        done
+      done
+
+      # pkill fallback: catch processes that escaped PID/port cleanup
+      pkill -f "PORT=$BACKEND_PORT.*bun" 2>/dev/null || true
+      pkill -f "vite.*port.*$FRONTEND_PORT" 2>/dev/null || true
+
+      # Close this workflow's browser session only (scoped by session ID)
+      BROWSER_SESSION=$(cat "$ARTIFACTS_DIR/.browser-session" 2>/dev/null | tr -d '\n')
+      if [ -n "$BROWSER_SESSION" ]; then
+        agent-browser --session "$BROWSER_SESSION" close 2>/dev/null || true
+      fi
+
+      # Remove main E2E worktree if it still exists (safety net)
+      CANONICAL_REPO=$(cat "$ARTIFACTS_DIR/.canonical-repo" 2>/dev/null | tr -d '\n')
+      MAIN_E2E_PATH=$(cat "$ARTIFACTS_DIR/.e2e-main-worktree" 2>/dev/null | tr -d '\n')
+      if [ -n "$MAIN_E2E_PATH" ] && [ -n "$CANONICAL_REPO" ] && [ -d "$MAIN_E2E_PATH" ]; then
+        echo "Removing leftover main E2E worktree: $MAIN_E2E_PATH"
+        git -C "$CANONICAL_REPO" worktree remove "$MAIN_E2E_PATH" --force 2>/dev/null || rm -rf "$MAIN_E2E_PATH"
+      fi
+
+      sleep 1
+      echo "Process cleanup complete"
+    depends_on: [e2e-test-main, e2e-test-feature]
+    trigger_rule: all_done
+
+  - id: final-report
+    command: archon-validate-pr-report
+    depends_on: [code-review-main, code-review-feature, e2e-test-main, e2e-test-feature, classify-testability, cleanup-processes]
+    trigger_rule: all_done
+    context: fresh

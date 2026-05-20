@@ -1,0 +1,28 @@
+.library {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--studio-bg);
+  overflow-y: auto;
+  /* border-right is owned by the WorkflowBuilder grid cell wrapper to avoid
+     the duplicate-1px-border that was rendering as a 2px line. */
+}
+.section {
+  padding: 12px;
+  border-bottom: 1px solid var(--studio-muted);
+}
+.heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--studio-muted);
+  margin: 0 0 8px 0;
+}
+.tileList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}

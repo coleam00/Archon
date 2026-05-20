@@ -1,0 +1,48 @@
+name: archon-comprehensive-pr-review
+description: |
+  Use when: User wants a comprehensive code review of a pull request with automatic fixes.
+  Triggers: "review this PR", "review PR #123", "comprehensive review", "full PR review",
+            "review and fix", "check this PR", "code review".
+  Does: Syncs PR with main (rebase if needed) -> runs 5 specialized review agents in parallel ->
+        synthesizes findings -> auto-fixes CRITICAL/HIGH issues -> reports remaining issues.
+  NOT for: Quick questions about a PR, checking CI status, simple "what changed" queries.
+
+  This workflow produces artifacts in $ARTIFACTS_DIR/../reviews/pr-{number}/ and posts
+  a comprehensive review comment to the GitHub PR.
+
+nodes:
+  - id: scope
+    command: archon-pr-review-scope
+
+  - id: sync
+    command: archon-sync-pr-with-main
+    depends_on: [scope]
+
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [sync]
+
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [sync]
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [sync]
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [sync]
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [sync]
+
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    trigger_rule: one_success
+
+  - id: implement-fixes
+    command: archon-implement-review-fixes
+    depends_on: [synthesize]

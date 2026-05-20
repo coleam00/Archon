@@ -1,0 +1,173 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--studio-surface);
+  color: var(--studio-fg);
+}
+
+/* Collapsed bar */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: 12px;
+  width: 100%;
+  text-align: left;
+}
+
+.bar:hover {
+  background: color-mix(in srgb, var(--studio-muted) 15%, transparent);
+}
+
+.chev {
+  margin-left: auto;
+  opacity: 0.6;
+}
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--studio-muted);
+  border-top-color: var(--studio-fg);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Severity pills in bar */
+.pill {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.pill_error {
+  color: #f87171;
+}
+.pill_warning {
+  color: #fbbf24;
+}
+.pill_info {
+  color: #60a5fa;
+}
+
+/* Expanded body */
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--studio-muted);
+  flex-shrink: 0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--studio-muted);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--studio-fg);
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.chip:hover {
+  opacity: 1;
+}
+
+.chip_active {
+  opacity: 1;
+  background: color-mix(in srgb, var(--studio-muted) 30%, transparent);
+}
+
+/* Issue list */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.row:hover {
+  background: color-mix(in srgb, var(--studio-muted) 15%, transparent);
+}
+
+.sev {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.row_error .sev {
+  color: #f87171;
+}
+.row_warning .sev {
+  color: #fbbf24;
+}
+.row_info .sev {
+  color: #60a5fa;
+}
+
+.rule {
+  font-size: 10px;
+  color: var(--studio-muted);
+  flex-shrink: 0;
+}
+
+.msg {
+  flex: 1;
+}
+
+.target {
+  font-size: 10px;
+  color: var(--studio-muted);
+  flex-shrink: 0;
+}
+
+.empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--studio-muted);
+}

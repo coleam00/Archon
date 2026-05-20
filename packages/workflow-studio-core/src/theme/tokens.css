@@ -1,0 +1,88 @@
+:root[data-studio-theme='archon-dark'] {
+  --studio-bg: #0a0d18;
+  --studio-surface: #0e1320;
+  --studio-fg: #e2e8f0;
+  --studio-muted: #94a3b8;
+  --studio-accent: #7c3aed;
+  --studio-when: #a855f7;
+  --studio-error: #ef4444;
+  --studio-warn: #f59e0b;
+  --studio-success: #22c55e;
+  --node-command: #16a34a;
+  --node-prompt: #7c3aed;
+  --node-bash: #f59e0b;
+  --node-script: #a16207;
+  --node-loop: #facc15;
+  --node-approval: #fb923c;
+  --node-cancel: #ef4444;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+}
+
+:root[data-studio-theme='light'] {
+  --studio-bg: #ffffff;
+  --studio-surface: #f8fafc;
+  --studio-fg: #0f172a;
+  --studio-muted: #475569;
+  --studio-accent: #6d28d9;
+  --studio-when: #9333ea;
+  --studio-error: #dc2626;
+  --studio-warn: #d97706;
+  --studio-success: #16a34a;
+  --node-command: #15803d;
+  --node-prompt: #6d28d9;
+  --node-bash: #d97706;
+  --node-script: #92400e;
+  --node-loop: #ca8a04;
+  --node-approval: #ea580c;
+  --node-cancel: #dc2626;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+}
+
+:root[data-studio-theme='high-contrast'] {
+  --studio-bg: #000000;
+  --studio-surface: #000000;
+  --studio-fg: #ffffff;
+  --studio-muted: #cccccc;
+  --studio-accent: #ffff00;
+  --studio-when: #ff00ff;
+  --studio-error: #ff0000;
+  --studio-warn: #ff8800;
+  --studio-success: #00ff00;
+  --node-command: #00ff00;
+  --node-prompt: #ffff00;
+  --node-bash: #ff8800;
+  --node-script: #ff8800;
+  --node-loop: #ffff00;
+  --node-approval: #ff8800;
+  --node-cancel: #ff0000;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+}
+
+:root[data-studio-theme='inherit'] {
+  /* Defer to host CSS variables — used when embedded in Archon. */
+  --studio-bg: var(--background, #0a0d18);
+  --studio-surface: var(--card, #0e1320);
+  --studio-fg: var(--foreground, #e2e8f0);
+  --studio-muted: var(--muted-foreground, #94a3b8);
+  --studio-accent: var(--primary, #7c3aed);
+  --studio-when: var(--primary, #a855f7);
+  --studio-error: var(--destructive, #ef4444);
+  --studio-warn: #f59e0b;
+  --studio-success: #22c55e;
+  --node-command: var(--chart-1, #16a34a);
+  --node-prompt: var(--chart-2, #7c3aed);
+  --node-bash: var(--chart-3, #f59e0b);
+  --node-script: var(--chart-4, #a16207);
+  --node-loop: var(--chart-5, #facc15);
+  --node-approval: var(--chart-3, #fb923c);
+  --node-cancel: var(--destructive, #ef4444);
+}
+
+/* Validation focus flash — applied transiently via JS after scrollIntoView. */
+.flash {
+  outline: 2px solid var(--studio-warn, gold);
+  transition: outline-color 1s ease;
+}

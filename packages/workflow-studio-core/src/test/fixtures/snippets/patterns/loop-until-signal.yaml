@@ -1,0 +1,13 @@
+name: loop-until-signal
+description: Loop with iteration cap that stops when AI output contains the completion signal.
+nodes:
+  - id: iterate
+    loop:
+      max_iterations: 5
+      until: 'COMPLETE'
+      prompt: |
+        Make incremental progress on the task. When fully done, end your reply with the word COMPLETE.
+  - id: followup
+    prompt: |
+      Summarise the result from $iterate.output.
+    depends_on: [iterate]

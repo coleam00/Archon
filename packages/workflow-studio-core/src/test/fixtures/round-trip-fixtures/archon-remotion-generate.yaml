@@ -1,0 +1,128 @@
+name: archon-remotion-generate
+description: |
+  Use when: User wants to generate or modify a Remotion video composition using AI.
+  Triggers: "create a video", "generate video", "remotion", "make an animation",
+            "video about", "animate".
+  Does: AI writes Remotion React code -> renders preview stills -> renders full video ->
+        summarizes the output.
+  Requires: A Remotion project in the working directory (src/index.ts, src/Root.tsx).
+  Optional: Install the remotion-best-practices skill for higher quality output:
+            npx skills add remotion-dev/skills
+
+nodes:
+  # ── Layer 0: Check project structure ──────────────────────────────────
+  - id: check-project
+    bash: |
+      if [ ! -f "src/index.ts" ] || [ ! -f "src/Root.tsx" ]; then
+        echo "ERROR: Not a Remotion project. Expected src/index.ts and src/Root.tsx."
+        echo "Run 'npx create-video@latest' first, then run this workflow from that directory."
+        exit 1
+      fi
+      echo "Remotion project detected."
+      npx remotion compositions src/index.ts 2>&1 | tail -5
+      echo ""
+      echo "PROJECT_READY"
+    timeout: 60000
+
+  # ── Layer 1: Generate composition code ────────────────────────────────
+  - id: generate
+    prompt: |
+      You are working in a Remotion video project. The project root is the current directory.
+
+      Find and read the existing composition files to understand the project structure.
+      Look in src/ for Root.tsx and any composition components.
+
+      Now create or modify the composition to match this request:
+
+      $ARGUMENTS
+
+      Rules:
+      - Use useCurrentFrame() and interpolate()/spring() for ALL animations
+      - Never use CSS transitions, Math.random(), setTimeout, or Date.now()
+      - Use AbsoluteFill for layout, Sequence for scene timing
+      - Use the <Img> component from 'remotion' (not native <img>) for images
+      - Keep dimensions 1920x1080 at 30 fps unless the user specifies otherwise
+      - Update the Zod schema and defaultProps in Root.tsx if you change props
+      - Use even numbers for width/height (required for MP4)
+      - Always clamp interpolations: extrapolateLeft: 'clamp', extrapolateRight: 'clamp'
+
+      After writing the code, read it back to verify it looks correct.
+    depends_on: [check-project]
+    skills:
+      - remotion-best-practices
+    allowed_tools:
+      - Read
+      - Write
+      - Edit
+      - Glob
+
+  # ── Layer 2: Render preview stills ────────────────────────────────────
+  - id: render-preview
+    bash: |
+      mkdir -p out
+      COMP_ID=$(npx remotion compositions src/index.ts 2>&1 | grep -E '^\S' | head -1 | awk '{print $1}')
+      if [ -z "$COMP_ID" ]; then
+        echo "RENDER_FAILED: Could not detect composition ID"
+        exit 1
+      fi
+      echo "Composition: $COMP_ID"
+
+      DURATION=$(npx remotion compositions src/index.ts 2>&1 | grep -E '^\S' | head -1 | awk '{print $4}')
+      MID_FRAME=$(( ${DURATION:-150} / 2 ))
+      LATE_FRAME=$(( ${DURATION:-150} * 3 / 4 ))
+
+      echo "Rendering preview stills at frames 1, $MID_FRAME, $LATE_FRAME..."
+      npx remotion still src/index.ts "$COMP_ID" out/preview-early.png --frame=1 2>&1 | tail -2
+      npx remotion still src/index.ts "$COMP_ID" out/preview-mid.png --frame=$MID_FRAME 2>&1 | tail -2
+      npx remotion still src/index.ts "$COMP_ID" out/preview-late.png --frame=$LATE_FRAME 2>&1 | tail -2
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "RENDER_SUCCESS"
+        ls -la out/preview-*.png
+      else
+        echo "RENDER_FAILED"
+      fi
+    depends_on: [generate]
+    timeout: 120000
+
+  # ── Layer 3: Render full video ────────────────────────────────────────
+  - id: render-video
+    bash: |
+      COMP_ID=$(npx remotion compositions src/index.ts 2>&1 | grep -E '^\S' | head -1 | awk '{print $1}')
+      echo "Rendering full video: $COMP_ID"
+      npx remotion render src/index.ts "$COMP_ID" out/video.mp4 --codec=h264 --crf=18 2>&1 | tail -10
+      RESULT=$?
+
+      if [ $RESULT -eq 0 ]; then
+        echo ""
+        echo "VIDEO_RENDER_SUCCESS"
+        ls -la out/video.mp4
+      else
+        echo "VIDEO_RENDER_FAILED"
+      fi
+    depends_on: [render-preview]
+    timeout: 300000
+
+  # ── Layer 4: Summary ──────────────────────────────────────────────────
+  - id: summary
+    prompt: |
+      A Remotion video was generated and rendered.
+
+      Original request: $ARGUMENTS
+
+      Preview render: $render-preview.output
+      Video render: $render-video.output
+
+      Read the generated composition code and the preview stills (out/preview-early.png,
+      out/preview-mid.png, out/preview-late.png) to verify the output.
+
+      Summarize:
+      1. What the video contains (based on code and stills)
+      2. Whether the renders succeeded
+      3. Where the output file is (out/video.mp4)
+    depends_on: [render-video]
+    allowed_tools:
+      - Read
+    model: haiku

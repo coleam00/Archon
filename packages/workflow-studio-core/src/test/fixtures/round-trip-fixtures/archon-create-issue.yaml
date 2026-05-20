@@ -1,0 +1,596 @@
+name: archon-create-issue
+description: |
+  Use when: User wants to report a bug or problem as a GitHub issue with automated reproduction.
+  Triggers: "create issue", "file a bug", "report this bug", "open an issue for",
+            "create github issue", "report issue", "log this bug".
+  Does: Classifies problem area (haiku) -> gathers context in parallel (templates, git state, duplicates) ->
+        investigates relevant code -> reproduces the issue using area-specific tools (agent-browser, CLI, DB queries) ->
+        gates on reproduction success -> creates issue with full evidence OR reports back if cannot reproduce.
+  NOT for: Feature requests, enhancements, or non-bug work. Only for bugs/problems.
+
+  Reproduction gating: If the issue cannot be reproduced, the workflow does NOT create an issue.
+  Instead, it reports what was tried and suggests next steps to the user.
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: CLASSIFY — Haiku classification of user's problem
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: classify
+    prompt: |
+      You are a problem classifier for the Archon codebase. Analyze the user's
+      description and determine the issue type and which area of the system is affected.
+
+      ## User's Description
+      $ARGUMENTS
+
+      ## Area Definitions
+      | Area | Packages | Indicators |
+      |------|----------|------------|
+      | web-ui | @archon/web, @archon/server (routes, web adapter) | UI rendering, SSE streaming, React components, browser behavior |
+      | api-server | @archon/server (routes, middleware) | HTTP endpoints, response codes, request handling |
+      | cli | @archon/cli | CLI commands, workflow invocation from terminal, output formatting |
+      | isolation | @archon/isolation, @archon/git | Worktrees, branch operations, cleanup, environment lifecycle |
+      | workflows | @archon/workflows | YAML parsing, DAG execution, variable substitution, node types |
+      | database | @archon/core (db/) | SQLite/PostgreSQL queries, schema, data integrity, migrations |
+      | adapters | @archon/adapters | Slack/Telegram/GitHub/Discord message handling, auth, polling |
+      | core | @archon/core (orchestrator, handlers, clients) | Message routing, session management, AI client streaming |
+      | other | Any package not covered above | Cross-cutting concerns, build tooling, config, unknown area |
+
+      ## Classification Rules
+      - Choose the MOST SPECIFIC area. "SSE disconnects" = web-ui (not api-server).
+      - If ambiguous between two areas, pick the one closer to the user-facing symptom.
+      - Use "other" only when the problem genuinely doesn't fit any specific area.
+      - needs_server: Set to "true" if reproducing requires a running Archon server.
+        Typically true for: web-ui, api-server, core, adapters.
+        Typically false for: cli, isolation, workflows, database.
+        For "other": use your judgment based on the description.
+      - repro_hint: Extract the user's reproduction steps into a concise instruction.
+        If no explicit steps given, infer the most likely way to trigger the issue.
+
+      Provide reasoning for your classification.
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: ["bug", "regression", "crash", "performance", "configuration"]
+        area:
+          type: string
+          enum: ["web-ui", "api-server", "cli", "isolation", "workflows", "database", "adapters", "core", "other"]
+        title:
+          type: string
+        keywords:
+          type: string
+        repro_hint:
+          type: string
+        needs_server:
+          type: string
+          enum: ["true", "false"]
+      required: [type, area, title, keywords, repro_hint, needs_server]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: PARALLEL CONTEXT GATHERING
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: fetch-template
+    bash: |
+      # Search for GitHub issue templates in standard locations
+      TEMPLATES_FOUND=0
+
+      # Check for issue template directory (YAML-based templates)
+      if [ -d ".github/ISSUE_TEMPLATE" ]; then
+        echo "=== Issue Templates Found ==="
+        for f in .github/ISSUE_TEMPLATE/*.md .github/ISSUE_TEMPLATE/*.yaml .github/ISSUE_TEMPLATE/*.yml; do
+          if [ -f "$f" ]; then
+            TEMPLATES_FOUND=$((TEMPLATES_FOUND + 1))
+            echo "--- Template: $f ---"
+            cat "$f"
+            echo ""
+          fi
+        done
+      fi
+
+      # Check for single issue template
+      for f in .github/ISSUE_TEMPLATE.md docs/ISSUE_TEMPLATE.md; do
+        if [ -f "$f" ]; then
+          TEMPLATES_FOUND=$((TEMPLATES_FOUND + 1))
+          echo "--- Template: $f ---"
+          cat "$f"
+        fi
+      done
+
+      if [ "$TEMPLATES_FOUND" -eq 0 ]; then
+        echo "No issue templates found — will use standard format"
+      fi
+    depends_on: [classify]
+
+  - id: git-context
+    bash: |
+      echo "=== Branch ==="
+      git branch --show-current
+
+      echo "=== Recent Commits (last 15) ==="
+      git log --oneline -15
+
+      echo "=== Working Tree Status ==="
+      git status --short
+
+      echo "=== Modified Files (last 3 commits) ==="
+      git diff --name-only HEAD~3..HEAD 2>/dev/null || echo "(fewer than 3 commits)"
+
+      echo "=== Environment ==="
+      echo "Node: $(node --version 2>/dev/null || echo 'N/A')"
+      echo "Bun: $(bun --version 2>/dev/null || echo 'N/A')"
+      echo "OS: $(uname -s 2>/dev/null || echo 'Windows') $(uname -r 2>/dev/null || ver 2>/dev/null || echo '')"
+      echo "Platform: $(uname -m 2>/dev/null || echo 'unknown')"
+    depends_on: [classify]
+
+  - id: dedup-check
+    bash: |
+      KEYWORDS=$classify.output.keywords
+      echo "=== Searching for duplicates: $KEYWORDS ==="
+
+      echo "--- Open Issues ---"
+      gh issue list --search "$KEYWORDS" --state open --limit 5 --json number,title,url,labels 2>/dev/null || echo "No open matches"
+
+      echo "--- Recently Closed ---"
+      gh issue list --search "$KEYWORDS" --state closed --limit 3 --json number,title,url,labels 2>/dev/null || echo "No closed matches"
+    depends_on: [classify]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: INVESTIGATE — Search codebase for related code
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: investigate
+    prompt: |
+      You are a codebase investigator. Search for code related to the reported problem.
+
+      ## Problem
+      - **Area**: $classify.output.area
+      - **Type**: $classify.output.type
+      - **Title**: $classify.output.title
+      - **Reproduction hint**: $classify.output.repro_hint
+
+      ## Git Context
+      $git-context.output
+
+      ## Instructions
+
+      1. Based on the area, search the relevant packages:
+         - web-ui: `packages/web/src/`, `packages/server/src/adapters/web/`, `packages/server/src/routes/`
+         - api-server: `packages/server/src/routes/`, `packages/server/src/`
+         - cli: `packages/cli/src/`
+         - isolation: `packages/isolation/src/`, `packages/git/src/`
+         - workflows: `packages/workflows/src/`
+         - database: `packages/core/src/db/`
+         - adapters: `packages/adapters/src/`
+         - core: `packages/core/src/orchestrator/`, `packages/core/src/handlers/`
+         - other: search broadly based on keywords — check `packages/*/src/`, config files, build scripts
+
+      2. Find: entry points, error handling paths, related type definitions, recent changes
+         to the affected area (check git log for the specific files).
+
+      3. Write your findings to `$ARTIFACTS_DIR/issue-context.md` with this structure:
+         ```
+         # Codebase Investigation
+         ## Relevant Files
+         - `file:line` — description of what's there
+         ## Error Handling
+         - How errors are currently handled in this area
+         ## Recent Changes
+         - Any recent commits touching this code
+         ## Suspected Root Cause
+         - Based on code analysis, where the bug likely is
+         ```
+
+      Be thorough but focused. Only include files directly relevant to the reported problem.
+    depends_on: [classify, git-context]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: REPRODUCE — Area-specific issue reproduction
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: start-server
+    bash: |
+      # Allocate a free port using Bun's OS assignment
+      PORT=$(bun -e "const s = Bun.serve({port: 0, fetch: () => new Response('')}); console.log(s.port); s.stop()")
+      echo "$PORT" > "$ARTIFACTS_DIR/.server-port"
+
+      # Start dev server in background
+      PORT=$PORT bun run dev:server > "$ARTIFACTS_DIR/.server-log" 2>&1 &
+      SERVER_PID=$!
+      echo "$SERVER_PID" > "$ARTIFACTS_DIR/.server-pid"
+
+      # Wait for server to be ready (up to 30s)
+      for i in $(seq 1 30); do
+        if curl -s "http://localhost:$PORT/api/health" > /dev/null 2>&1; then
+          echo "Server ready on port $PORT (PID: $SERVER_PID)"
+          exit 0
+        fi
+        sleep 1
+      done
+
+      echo "WARNING: Server may not be fully ready after 30s (port $PORT, PID $SERVER_PID)"
+      echo "Continuing anyway — reproduce node will handle connection errors"
+    depends_on: [classify]
+    when: "$classify.output.needs_server == 'true'"
+    timeout: 45000
+
+  - id: reproduce
+    prompt: |
+      You are an issue reproduction specialist. Your job is to reproduce the reported
+      problem and capture evidence (screenshots, command output, error messages).
+
+      ## Problem Context
+      - **Area**: $classify.output.area
+      - **Type**: $classify.output.type
+      - **Title**: $classify.output.title
+      - **Reproduction hint**: $classify.output.repro_hint
+
+      ## Investigation Findings
+      $investigate.output
+
+      ## Server Info
+      If a server was started, read the port from: `cat "$ARTIFACTS_DIR/.server-port"`
+      If the file doesn't exist, no server is running (area doesn't need one).
+
+      ---
+
+      ## Reproduction Playbooks
+
+      Follow the playbook matching the area. Capture ALL evidence to `$ARTIFACTS_DIR/`.
+
+      ### web-ui
+      1. Read the server port: `PORT=$(cat "$ARTIFACTS_DIR/.server-port" | tr -d '\n')`
+      2. Open the app: `agent-browser open http://localhost:$PORT`
+      3. Take a baseline screenshot: `agent-browser screenshot "$ARTIFACTS_DIR/repro-01-baseline.png"`
+      4. Get interactive elements: `agent-browser snapshot -i`
+      5. Navigate to the area related to the issue (use @refs from snapshot)
+      6. Perform the actions described in the repro_hint
+      7. Screenshot each significant state: `agent-browser screenshot "$ARTIFACTS_DIR/repro-02-action.png"`
+      8. If an error appears, capture it: `agent-browser get text @errorElement`
+      9. Check browser console: `agent-browser console`
+      10. Check for JS errors: `agent-browser errors`
+      11. Final screenshot: `agent-browser screenshot "$ARTIFACTS_DIR/repro-03-result.png"`
+      12. Close browser: `agent-browser close`
+
+      ### api-server
+      1. Read the server port: `PORT=$(cat "$ARTIFACTS_DIR/.server-port" | tr -d '\n')`
+      2. Create a test conversation: `curl -s -X POST http://localhost:$PORT/api/conversations -H "Content-Type: application/json" -d '{}'`
+      3. Hit the problematic endpoint based on the repro_hint
+      4. Capture response codes and bodies: `curl -s -w "\nHTTP_CODE: %{http_code}\n" ...`
+      5. For SSE issues: `curl -s -N http://localhost:$PORT/api/stream/<id>` (timeout after 10s)
+      6. Check server logs: `cat "$ARTIFACTS_DIR/.server-log" | tail -50`
+      7. Save all curl output to `$ARTIFACTS_DIR/repro-api-responses.txt`
+
+      ### cli
+      1. Run the CLI command that should trigger the issue
+      2. Capture stdout and stderr separately:
+         `bun run cli <command> > "$ARTIFACTS_DIR/repro-cli-stdout.txt" 2> "$ARTIFACTS_DIR/repro-cli-stderr.txt"; echo "EXIT_CODE: $?" >> "$ARTIFACTS_DIR/repro-cli-stdout.txt"`
+      3. If workflow-related: `bun run cli workflow list --json > "$ARTIFACTS_DIR/repro-workflow-list.json" 2>&1`
+      4. If the command hangs, use timeout: `timeout 30 bun run cli <command>`
+      5. Check for error messages in output
+
+      ### isolation
+      1. Check current state: `bun run cli isolation list > "$ARTIFACTS_DIR/repro-isolation-list.txt" 2>&1`
+      2. Check git worktrees: `git worktree list > "$ARTIFACTS_DIR/repro-worktree-list.txt"`
+      3. Check branches: `git branch -a > "$ARTIFACTS_DIR/repro-branches.txt"`
+      4. Try the operation that should fail (based on repro_hint)
+      5. Capture the error output
+      6. Query isolation DB: `sqlite3 ~/.archon/archon.db "SELECT * FROM remote_agent_isolation_environments ORDER BY created_at DESC LIMIT 10" > "$ARTIFACTS_DIR/repro-isolation-db.txt" 2>&1`
+
+      ### workflows
+      1. List workflows: `bun run cli workflow list --json > "$ARTIFACTS_DIR/repro-workflow-list.json" 2>&1`
+      2. If a specific workflow is mentioned, try running it:
+         `bun run cli workflow run <name> --no-worktree "test input" > "$ARTIFACTS_DIR/repro-workflow-run.txt" 2>&1`
+      3. If YAML parsing is the issue, try loading the definition directly
+      4. Check for error messages in execution output
+
+      ### database
+      1. Check DB exists: `ls -la ~/.archon/archon.db 2>/dev/null`
+      2. Run targeted queries against affected tables:
+         - `sqlite3 ~/.archon/archon.db ".schema <table>" > "$ARTIFACTS_DIR/repro-db-schema.txt"`
+         - `sqlite3 ~/.archon/archon.db "SELECT COUNT(*) FROM <table>" > "$ARTIFACTS_DIR/repro-db-counts.txt"`
+      3. Check for the specific data condition described in the repro_hint
+      4. If PostgreSQL: use `psql $DATABASE_URL -c "..."` instead
+
+      ### adapters
+      1. Read the server port: `PORT=$(cat "$ARTIFACTS_DIR/.server-port" | tr -d '\n')`
+      2. Check adapter configuration: look for relevant env vars in `.env`
+      3. Check server startup logs: `cat "$ARTIFACTS_DIR/.server-log" | grep -i "adapter\|slack\|telegram\|github\|discord" | head -20`
+      4. If the adapter fails to initialize, capture the error
+      5. Test message routing via web API as a proxy:
+         `curl -s -X POST http://localhost:$PORT/api/conversations/<id>/message -H "Content-Type: application/json" -d '{"message":"/status"}'`
+
+      ### core
+      1. Read the server port: `PORT=$(cat "$ARTIFACTS_DIR/.server-port" | tr -d '\n')`
+      2. Create a conversation: `curl -s -X POST http://localhost:$PORT/api/conversations -H "Content-Type: application/json" -d '{}'`
+      3. Send a message that triggers the issue:
+         `curl -s -X POST http://localhost:$PORT/api/conversations/<id>/message -H "Content-Type: application/json" -d '{"message":"<repro_hint>"}'`
+      4. Poll for responses: `curl -s http://localhost:$PORT/api/conversations/<id>/messages`
+      5. Check session state in DB: `sqlite3 ~/.archon/archon.db "SELECT * FROM remote_agent_sessions WHERE conversation_id='<id>'" 2>/dev/null`
+      6. Check server logs: `cat "$ARTIFACTS_DIR/.server-log" | tail -50`
+
+      ### other
+      1. Run `bun run validate` to check for any obvious failures — capture output:
+         `bun run validate > "$ARTIFACTS_DIR/repro-validate.txt" 2>&1; echo "EXIT_CODE: $?" >> "$ARTIFACTS_DIR/repro-validate.txt"`
+      2. Search the codebase for keywords from the repro_hint:
+         - Use Grep/Glob to find related files
+         - Check recent git log for relevant changes
+      3. If the description implies a build or config issue:
+         - Check `package.json` scripts, `tsconfig.json`, `.env.example`
+         - Try running the relevant build/dev command
+      4. If the description implies a runtime issue:
+         - Start the server (if `.server-port` file exists) and try to trigger the behavior
+         - Check logs for errors
+      5. Document everything you tried, even if nothing reproduces clearly
+
+      ---
+
+      ## Output
+
+      After following the playbook, write your findings to `$ARTIFACTS_DIR/reproduction-results.md`:
+
+      ```markdown
+      # Reproduction Results
+
+      ## Status: [REPRODUCED | NOT_REPRODUCED | PARTIAL]
+
+      ## Steps Taken
+      1. [step]
+      2. [step]
+
+      ## Expected Behavior
+      [what should happen]
+
+      ## Actual Behavior
+      [what actually happened — or "could not trigger the reported behavior"]
+
+      ## Evidence Files
+      - `$ARTIFACTS_DIR/repro-*.png` — screenshots (if web-ui)
+      - `$ARTIFACTS_DIR/repro-*.txt` — command output
+      - `$ARTIFACTS_DIR/repro-*.json` — structured data
+
+      ## Environment
+      [OS, versions, relevant config]
+
+      ## Notes
+      [any additional observations, suspected root cause refinements]
+      ```
+
+      CRITICAL: The Status line MUST be exactly one of: REPRODUCED, NOT_REPRODUCED, PARTIAL.
+      This value is read by a downstream bash node to decide whether to create the issue.
+
+      Even if you cannot fully reproduce the issue, document what you tried
+      and what you observed. Partial reproduction is still valuable evidence.
+    depends_on: [classify, git-context, investigate, start-server]
+    context: fresh
+    skills:
+      - agent-browser
+    trigger_rule: one_success
+    idle_timeout: 300000
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: CLEANUP + GATE
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: cleanup-server
+    bash: |
+      SERVER_PID=$(cat "$ARTIFACTS_DIR/.server-pid" 2>/dev/null | tr -d '\n')
+      SERVER_PORT=$(cat "$ARTIFACTS_DIR/.server-port" 2>/dev/null | tr -d '\n')
+
+      if [ -z "$SERVER_PID" ]; then
+        echo "No server was started — skipping cleanup"
+        exit 0
+      fi
+
+      echo "Cleaning up server PID $SERVER_PID on port $SERVER_PORT..."
+
+      # Kill by PID (cross-platform)
+      kill "$SERVER_PID" 2>/dev/null || taskkill //F //T //PID "$SERVER_PID" 2>/dev/null || true
+
+      # Kill by port (fallback)
+      if [ -n "$SERVER_PORT" ]; then
+        fuser -k "$SERVER_PORT/tcp" 2>/dev/null || true
+        lsof -ti:"$SERVER_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+        netstat -ano 2>/dev/null | grep ":$SERVER_PORT " | grep LISTENING | awk '{print $5}' | sort -u | while read pid; do
+          taskkill //F //T //PID "$pid" 2>/dev/null || true
+        done
+      fi
+
+      # Close any agent-browser session
+      agent-browser close 2>/dev/null || true
+
+      sleep 1
+      echo "Cleanup complete"
+    depends_on: [reproduce]
+    trigger_rule: all_done
+
+  - id: check-reproduction
+    bash: |
+      # Read the reproduction status from the results file
+      if [ ! -f "$ARTIFACTS_DIR/reproduction-results.md" ]; then
+        echo "NOT_REPRODUCED"
+        exit 0
+      fi
+
+      STATUS=$(grep -oE '(NOT_REPRODUCED|REPRODUCED|PARTIAL)' "$ARTIFACTS_DIR/reproduction-results.md" | head -1)
+
+      if [ -z "$STATUS" ]; then
+        echo "NOT_REPRODUCED"
+      else
+        echo "$STATUS"
+      fi
+    depends_on: [cleanup-server]
+    trigger_rule: all_done
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 6: BRANCH ON REPRODUCTION RESULT
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: report-failure
+    prompt: |
+      The issue could not be reproduced. Report this to the user with actionable detail.
+
+      ## Problem Description
+      - **Title**: $classify.output.title
+      - **Area**: $classify.output.area
+      - **Type**: $classify.output.type
+      - **Reproduction hint**: $classify.output.repro_hint
+
+      ## What Was Tried
+      $reproduce.output
+
+      ## Investigation Findings
+      $investigate.output
+
+      ## Instructions
+
+      Report to the user clearly:
+
+      1. **State upfront**: "Could not reproduce the reported issue. No GitHub issue was created."
+
+      2. **Summarize what was tried**: List the specific steps the reproduce node took,
+         based on the area playbook. Be concrete — "Started server on port X, navigated to Y,
+         clicked Z — no error appeared."
+
+      3. **Share what was found**: Include relevant findings from the investigation
+         (code references, recent changes, suspected areas).
+
+      4. **Suggest next steps**:
+         - Ask the user to provide more specific reproduction steps
+         - Mention any environment-specific factors that might matter
+           (OS, browser, database state, specific data conditions)
+         - If the investigation found suspicious code, mention it as a lead
+         - Suggest running with debug logging: `LOG_LEVEL=debug bun run dev`
+
+      5. **Offer to retry**: "If you can provide more specific steps, run the workflow
+         again with those details."
+
+      Do NOT create a GitHub issue. The purpose of this node is to communicate back to the
+      user so they can provide better information or investigate manually.
+    depends_on: [check-reproduction]
+    when: "$check-reproduction.output == 'NOT_REPRODUCED'"
+    context: fresh
+
+  - id: draft-issue
+    prompt: |
+      You are a technical writer drafting a GitHub issue. Assemble all gathered
+      context into a clear, well-structured issue body.
+
+      ## Classification
+      - **Type**: $classify.output.type
+      - **Area**: $classify.output.area
+      - **Title**: $classify.output.title
+
+      ## Issue Template
+      If templates were found, use the most appropriate one as the structure:
+      $fetch-template.output
+
+      ## Duplicate Check Results
+      $dedup-check.output
+
+      ## Codebase Investigation
+      $investigate.output
+
+      ## Reproduction Results
+      $reproduce.output
+
+      ## Instructions
+
+      1. **Check duplicates first**: If the dedup-check found a clearly matching open issue,
+         note this prominently at the top. Still draft the issue but add a note suggesting
+         it may be a duplicate of #XYZ.
+
+      2. **Use the template** if one was found for bug reports. Fill every section with real data.
+
+      3. **Structure** (if no template):
+         ```markdown
+         ## Description
+         [Clear 1-2 sentence description]
+
+         ## Steps to Reproduce
+         [Numbered steps from reproduction results]
+
+         ## Expected Behavior
+         [What should happen]
+
+         ## Actual Behavior
+         [What actually happened, with evidence]
+
+         ## Environment
+         - OS: [from git-context]
+         - Bun: [version]
+         - Node: [version]
+         - Branch: [current branch]
+
+         ## Relevant Code
+         [Key file:line references from investigation]
+
+         ## Additional Context
+         [Screenshots, logs, database state — reference artifact files]
+         ```
+
+      4. **Include reproduction evidence**:
+         - If REPRODUCED: include full steps and all evidence
+         - If PARTIAL: include what was observed, note incomplete reproduction
+
+      5. **Suggest labels** based on classification:
+         - Area label: `area: web`, `area: cli`, `area: workflows`, etc.
+         - Type label: `bug`, `regression`, `performance`, etc.
+
+      6. Write the complete issue body to `$ARTIFACTS_DIR/issue-draft.md`
+
+      7. Write a one-line suggested title to `$ARTIFACTS_DIR/.issue-title`
+
+      8. Write suggested labels (comma-separated) to `$ARTIFACTS_DIR/.issue-labels`
+    depends_on: [check-reproduction, fetch-template, dedup-check, investigate]
+    when: "$check-reproduction.output != 'NOT_REPRODUCED'"
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 7: CREATE ISSUE
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: create-issue
+    prompt: |
+      Create the GitHub issue using the drafted content.
+
+      ## Instructions
+
+      1. Read the draft: `cat "$ARTIFACTS_DIR/issue-draft.md"`
+      2. Read the title: `cat "$ARTIFACTS_DIR/.issue-title"`
+      3. Read suggested labels: `cat "$ARTIFACTS_DIR/.issue-labels"`
+
+      4. Check which labels actually exist in the repo:
+         ```bash
+         gh label list --json name -q '.[].name' | head -50
+         ```
+         Only use labels that exist. Skip any suggested label that doesn't match.
+
+      5. Create the issue:
+         ```bash
+         gh issue create \
+           --title "$(cat "$ARTIFACTS_DIR/.issue-title")" \
+           --body-file "$ARTIFACTS_DIR/issue-draft.md" \
+           --label "label1,label2"
+         ```
+
+      6. Capture the result:
+         ```bash
+         ISSUE_URL=$(gh issue list --limit 1 --json url -q '.[0].url')
+         echo "$ISSUE_URL" > "$ARTIFACTS_DIR/.issue-url"
+         ```
+
+      7. Report to the user:
+         - Issue URL
+         - Title
+         - Labels applied
+         - Whether duplicates were found
+         - Summary of reproduction results (reproduced/partial)
+    depends_on: [draft-issue]
+    context: fresh

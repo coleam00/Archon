@@ -1,0 +1,15 @@
+name: classify-then-branch
+description: Classify input, branch on result.
+nodes:
+  - id: classify
+    command: classify
+  - id: branch-yes
+    prompt: |
+      $classify.output indicates yes — proceed with the affirmative path.
+    depends_on: [classify]
+    when: "$classify.output == 'yes'"
+  - id: branch-no
+    prompt: |
+      $classify.output indicates no — handle the negative path.
+    depends_on: [classify]
+    when: "$classify.output == 'no'"

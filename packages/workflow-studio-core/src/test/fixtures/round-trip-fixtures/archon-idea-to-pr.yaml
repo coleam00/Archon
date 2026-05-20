@@ -1,0 +1,150 @@
+name: archon-idea-to-pr
+description: |
+  Use when: You have a feature idea or description and want end-to-end development.
+  Input: Feature description in natural language, or path to a PRD file
+  Output: PR ready for merge with comprehensive review completed
+
+  Full workflow:
+  1. Create comprehensive implementation plan with codebase analysis
+  2. Setup branch and extract scope limits
+  3. Verify plan research is still valid
+  4. Implement all tasks with type-checking
+  5. Run full validation suite
+  6. Create PR with template, mark ready
+  7. Comprehensive code review (5 parallel agents with scope limit awareness)
+  8. Synthesize and fix review findings
+  9. Final summary with decision matrix -> GitHub comment + follow-up recommendations
+
+  NOT for: Executing existing plans (use archon-plan-to-pr), quick fixes, standalone reviews.
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 0: CREATE PLAN
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: create-plan
+    command: archon-create-plan
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 1: SETUP
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: plan-setup
+    command: archon-plan-setup
+    depends_on: [create-plan]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 2: CONFIRM PLAN
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: confirm-plan
+    command: archon-confirm-plan
+    depends_on: [plan-setup]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 3: IMPLEMENT
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: implement-tasks
+    command: archon-implement-tasks
+    depends_on: [confirm-plan]
+    context: fresh
+    model: opus[1m]
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 4: VALIDATE
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: validate
+    command: archon-validate
+    depends_on: [implement-tasks]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 5: FINALIZE PR
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: finalize-pr
+    command: archon-finalize-pr
+    depends_on: [validate]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 6: CODE REVIEW
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [finalize-pr]
+
+  - id: review-scope
+    command: archon-pr-review-scope
+    depends_on: [verify-pr-base]
+    context: fresh
+
+  - id: sync
+    command: archon-sync-pr-with-main
+    depends_on: [review-scope]
+    context: fresh
+
+  - id: code-review
+    command: archon-code-review-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: error-handling
+    command: archon-error-handling-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: test-coverage
+    command: archon-test-coverage-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: comment-quality
+    command: archon-comment-quality-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: docs-impact
+    command: archon-docs-impact-agent
+    depends_on: [sync]
+    context: fresh
+
+  - id: synthesize
+    command: archon-synthesize-review
+    depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
+    trigger_rule: one_success
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 7: FIX REVIEW ISSUES
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: implement-fixes
+    command: archon-implement-review-fixes
+    depends_on: [synthesize]
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════════
+  # PHASE 8: FINAL SUMMARY & FOLLOW-UP
+  # ═══════════════════════════════════════════════════════════════════
+
+  - id: workflow-summary
+    command: archon-workflow-summary
+    depends_on: [implement-fixes]
+    context: fresh

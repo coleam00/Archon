@@ -1,0 +1,751 @@
+name: archon-ralph-dag
+description: |
+  Use when: User wants to run a Ralph implementation loop.
+  Triggers: "ralph", "run ralph", "ralph dag", "run ralph dag".
+
+  DAG workflow that:
+  1. Detects input: existing prd.json, existing prd.md (needs stories), or raw idea
+  2. Generates prd.md + prd.json if needed (explores codebase, breaks into stories)
+  3. Validates PRD files, reads project context, installs dependencies
+  4. Runs Ralph loop (fresh context per iteration) implementing one story per iteration
+  5. Creates PR and reports completion
+
+  Accepts: An idea description, a path to an existing prd.md, or a directory with prd.md + prd.json
+
+provider: claude
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 1: DETECT INPUT
+  # Determines what the user provided: full PRD, partial PRD, or idea
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: detect-input
+    model: haiku
+    prompt: |
+      # Detect Ralph Input
+
+      **User input**: $ARGUMENTS
+
+      Determine what the user provided and prepare the PRD directory. Follow these steps exactly:
+
+      ## Step 1: Detect worktree
+
+      Run `git worktree list --porcelain` to check if you're in a worktree.
+      If you see multiple entries, you ARE in a worktree. The first entry (the one without "branch" pointing to your current branch) is the **main repo root**. Save it — you'll need it to find files.
+
+      ## Step 2: Classify the input
+
+      Look at the user input above. It's one of three things:
+
+      **Case A — Ralph directory path** (contains `.archon/ralph/`):
+      Extract the directory. Check if both `prd.json` and `prd.md` exist there (try locally first, then in the main repo root if in a worktree).
+
+      **Case B — File path** (ends in `.md`):
+      This is an external PRD file. Find it:
+      1. Try the path as-is (relative to cwd)
+      2. Try it as an absolute path
+      3. If in a worktree, try it relative to the **main repo root** from Step 1
+      Once found, read the file to confirm it's a PRD.
+
+      **Case C — Free text**:
+      Not a file path — it's a feature idea.
+
+      ## Step 3: Auto-discover existing ralph PRDs
+
+      If the input didn't point to a specific path, check if `.archon/ralph/` contains any `prd.json` files:
+      ```bash
+      find .archon/ralph -name "prd.json" -type f 2>/dev/null
+      ```
+
+      ## Step 4: Take action based on classification
+
+      **If Case A and both files exist** → output `ready` (no further action needed)
+
+      **If Case B (external PRD found)**:
+      1. Derive a kebab-case slug from the PRD filename or title (e.g., `workflow-lifecycle-overhaul`)
+      2. Create the ralph directory: `mkdir -p .archon/ralph/{slug}`
+      3. Copy the PRD content to `.archon/ralph/{slug}/prd.md`
+      4. Output `external_prd` with the new prd_dir
+
+      **If Case C or auto-discovered ralph dir has prd.md but no prd.json** → output `needs_generation`
+
+      ## Output
+
+      Your final output MUST be exactly one JSON object:
+      ```json
+      {"input_type": "ready|external_prd|needs_generation", "prd_dir": ".archon/ralph/{slug}"}
+      ```
+    output_format:
+      type: object
+      properties:
+        input_type:
+          type: string
+          enum: [ready, external_prd, needs_generation]
+        prd_dir:
+          type: string
+      required: [input_type, prd_dir]
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 2: GENERATE PRD
+  # Scenario 1: User has an idea → generate prd.md + prd.json
+  # Scenario 2: User has prd.md → generate prd.json with stories
+  # Skipped if prd.json already exists
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: generate-prd
+    depends_on: [detect-input]
+    when: "$detect-input.output.input_type != 'ready'"
+    command: archon-ralph-generate
+    context: fresh
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 3: VALIDATE & SETUP
+  # Finds PRD directory, reads all state files, installs deps,
+  # verifies the environment is ready for implementation.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate-prd
+    depends_on: [detect-input, generate-prd]
+    trigger_rule: one_success
+    bash: |
+      set -e
+
+      # ── 1. Find PRD directory (passed from detect-input) ──────
+      PRD_DIR=$detect-input.output.prd_dir
+
+      # If detect-input didn't know the PRD dir (generated from scratch), discover it
+      if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
+        FOUND=$(find .archon/ralph -name "prd.json" -type f 2>/dev/null | head -1)
+        if [ -n "$FOUND" ]; then
+          PRD_DIR=$(dirname "$FOUND")
+        fi
+      fi
+
+      if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
+        echo "ERROR: No prd.json found after generation step."
+        echo "Check the generate-prd node output for errors."
+        exit 1
+      fi
+
+      if [ ! -f "$PRD_DIR/prd.md" ]; then
+        echo "ERROR: prd.md not found in $PRD_DIR"
+        exit 1
+      fi
+
+      # ── 2. Install dependencies (worktrees lack node_modules) ──
+      if [ -f "bun.lock" ] || [ -f "bun.lockb" ]; then
+        echo "Installing dependencies (bun)..."
+        bun install --frozen-lockfile 2>&1 | tail -3
+      elif [ -f "package-lock.json" ]; then
+        echo "Installing dependencies (npm)..."
+        npm ci 2>&1 | tail -3
+      elif [ -f "yarn.lock" ]; then
+        echo "Installing dependencies (yarn)..."
+        yarn install --frozen-lockfile 2>&1 | tail -3
+      elif [ -f "pnpm-lock.yaml" ]; then
+        echo "Installing dependencies (pnpm)..."
+        pnpm install --frozen-lockfile 2>&1 | tail -3
+      fi
+
+      # ── 3. Git state ──────────────────────────────────────────
+      echo "BRANCH=$(git branch --show-current)"
+      echo "GIT_ROOT=$(git rev-parse --show-toplevel)"
+
+      # ── 4. Output PRD context ─────────────────────────────────
+      echo "PRD_DIR=$PRD_DIR"
+      echo "=== PRD_JSON_START ==="
+      cat "$PRD_DIR/prd.json"
+      echo ""
+      echo "=== PRD_JSON_END ==="
+      echo "=== PRD_MD_START ==="
+      cat "$PRD_DIR/prd.md"
+      echo ""
+      echo "=== PRD_MD_END ==="
+      echo "=== PROGRESS_START ==="
+      if [ -f "$PRD_DIR/progress.txt" ]; then
+        cat "$PRD_DIR/progress.txt"
+      else
+        echo "(no progress yet)"
+      fi
+      echo ""
+      echo "=== PROGRESS_END ==="
+
+      # ── 5. Summary ────────────────────────────────────────────
+      TOTAL=$(grep -c '"passes"' "$PRD_DIR/prd.json" || true)
+      DONE=$(grep -c '"passes": true' "$PRD_DIR/prd.json" || true)
+      TOTAL=${TOTAL:-0}
+      DONE=${DONE:-0}
+      echo "STORIES_TOTAL=$TOTAL"
+      echo "STORIES_DONE=$DONE"
+      echo "STORIES_REMAINING=$(( TOTAL - DONE ))"
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 4: RALPH IMPLEMENTATION LOOP
+  # Fresh context each iteration. Reads PRD state from disk.
+  # One story per iteration. Validates before committing.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: implement
+    depends_on: [validate-prd]
+    idle_timeout: 600000
+    model: opus[1m]
+    loop:
+      prompt: |
+        # Ralph Agent — Autonomous Story Implementation
+
+        You are an autonomous coding agent in a FRESH session — you have no memory of previous iterations.
+        Your job: Read state from disk, implement ONE story, validate, commit, update tracking, exit.
+
+        **Golden Rule**: If validation fails, fix it before committing. Never commit broken code. Never skip validation.
+
+        ---
+
+        ## Phase 0: CONTEXT — Load Project State
+
+        The upstream setup node produced this context:
+
+        $validate-prd.output
+
+        **User message**: $USER_MESSAGE
+
+        ---
+
+        ### 0.1 Parse PRD Directory
+
+        Extract the `PRD_DIR=...` line from the context above. This is the directory containing your PRD files.
+        Store this path — use it for ALL file operations below.
+
+        ### 0.2 Read Current State (from disk, not from context above)
+
+        The context above is a snapshot from before the loop started. Previous iterations may have changed files.
+        **You MUST re-read from disk to get the current state:**
+
+        1. **Read `{prd-dir}/progress.txt`** — your only link to previous iterations
+           - Check the `## Codebase Patterns` section FIRST for learnings from prior iterations
+           - Check recent entries for gotchas to avoid
+        2. **Read `{prd-dir}/prd.json`** — the source of truth for story completion state
+        3. **Read `{prd-dir}/prd.md`** — full requirements, technical patterns, acceptance criteria
+
+        ### 0.3 Read Project Rules
+
+        ```bash
+        cat CLAUDE.md
+        ```
+
+        Note all coding standards, patterns, and rules. Follow them exactly.
+
+        **PHASE_0_CHECKPOINT:**
+        - [ ] PRD directory identified
+        - [ ] progress.txt read (or noted as absent)
+        - [ ] prd.json read — know which stories pass/fail
+        - [ ] prd.md read — understand requirements
+        - [ ] CLAUDE.md rules noted
+
+        ---
+
+        ## Phase 1: SELECT — Pick Next Story
+
+        ### 1.1 Find Eligible Story
+
+        From `prd.json`, find the **highest priority** story where:
+        - `passes` is `false`
+        - ALL stories in `dependsOn` have `passes: true`
+
+        **If ALL stories have `passes: true`** → Skip to Phase 6 (Completion).
+
+        **If no eligible stories exist** (all remaining are blocked):
+        ```
+        BLOCKED: No eligible stories. Remaining stories and their blockers:
+        - {story-id}: blocked by {dep-id} (passes: false)
+        ```
+        End normally. The loop will terminate on max_iterations.
+
+        ### 1.2 Announce Selection
+
+        ```
+        ── Story Selected ──────────────────────────────────
+        ID: {story-id}
+        Title: {story-title}
+        Priority: {priority}
+        Dependencies: {deps or "none"}
+
+        Acceptance Criteria:
+        - {criterion 1}
+        - {criterion 2}
+        - ...
+        ────────────────────────────────────────────────────
+        ```
+
+        After announcing the selected story, emit the story started event:
+        ```bash
+        bun run cli workflow event emit --run-id $WORKFLOW_ID --type ralph_story_started --data '{"story_id":"{story-id}","title":"{story-title}"}' || true
+        ```
+
+        **PHASE_1_CHECKPOINT:**
+        - [ ] Eligible story found (or all complete / all blocked)
+        - [ ] Acceptance criteria understood
+        - [ ] Dependencies verified as complete
+
+        ---
+
+        ## Phase 2: IMPLEMENT — Code the Story
+
+        ### 2.1 Explore Before Coding
+
+        Before writing any code:
+        1. Read all files you plan to modify — understand current state
+        2. Check `## Codebase Patterns` in progress.txt for discovered patterns
+        3. Look for similar implementations in the codebase to mirror
+        4. Read the `technicalNotes` field from the story in prd.json
+
+        ### 2.2 Implementation Rules
+
+        **DO:**
+        - Implement ONLY the selected story — one story per iteration
+        - Follow existing code patterns exactly (naming, structure, imports, error handling)
+        - Match the project's coding standards from CLAUDE.md
+        - Write or update tests as required by acceptance criteria
+        - Keep changes minimal and focused
+
+        **DON'T:**
+        - Refactor unrelated code
+        - Add improvements not in the acceptance criteria
+        - Change formatting of lines you didn't modify
+        - Install new dependencies without justification from prd.md
+        - Touch files unrelated to this story
+        - Over-engineer — do the simplest thing that satisfies the criteria
+
+        ### 2.3 Verify Types After Each File
+
+        After modifying each file, run:
+        ```bash
+        bun run type-check
+        ```
+
+        **If types fail:**
+        1. Read the error carefully
+        2. Fix the type issue in your code
+        3. Re-run type-check
+        4. Do NOT proceed to the next file until types pass
+
+        **PHASE_2_CHECKPOINT:**
+        - [ ] Only the selected story was implemented
+        - [ ] Types compile after each file change
+        - [ ] Tests written/updated as needed
+        - [ ] No unrelated changes
+
+        ---
+
+        ## Phase 3: VALIDATE — Full Verification
+
+        ### 3.1 Static Analysis
+
+        ```bash
+        bun run type-check && bun run lint
+        ```
+
+        **Must pass with zero errors and zero warnings.**
+
+        **If lint fails:**
+        1. Run `bun run lint:fix` for auto-fixable issues
+        2. Manually fix remaining issues
+        3. Re-run lint
+        4. Proceed only when clean
+
+        ### 3.2 Tests
+
+        ```bash
+        bun run test
+        ```
+
+        **All tests must pass.**
+
+        **If tests fail:**
+        1. Read the failure output
+        2. Determine: bug in your implementation or pre-existing failure?
+        3. If your bug → fix the implementation (not the test)
+        4. If pre-existing → note it but don't fix unrelated tests
+        5. Re-run tests
+        6. Repeat until green
+
+        ### 3.3 Format Check
+
+        ```bash
+        bun run format:check
+        ```
+
+        **If formatting fails:**
+        ```bash
+        bun run format
+        ```
+
+        ### 3.4 Verify Acceptance Criteria
+
+        Go through EACH acceptance criterion from the story:
+        - Is it satisfied by your implementation?
+        - Can you verify it (read the code, run a command, check a file)?
+
+        If a criterion is NOT met, go back to Phase 2 and fix it.
+
+        **PHASE_3_CHECKPOINT:**
+        - [ ] Type-check passes
+        - [ ] Lint passes (0 errors, 0 warnings)
+        - [ ] All tests pass
+        - [ ] Format is clean
+        - [ ] Every acceptance criterion verified
+
+        ---
+
+        ## Phase 4: COMMIT — Save Changes
+
+        ### 4.1 Review Staged Changes
+
+        ```bash
+        git add -A
+        git status
+        git diff --cached --stat
+        ```
+
+        Verify only expected files are staged. If unexpected files appear, investigate before committing.
+
+        ### 4.2 Write Commit Message
+
+        ```bash
+        git commit -m "$(cat <<'EOF'
+        feat: {story-title}
+
+        Implements {story-id} from PRD.
+
+        Changes:
+        - {change 1}
+        - {change 2}
+        - {change 3}
+        EOF
+        )"
+        ```
+
+        **Commit message rules:**
+        - Prefix: `feat:` for features, `fix:` for bugs, `refactor:` for refactors
+        - Title: the story title (not the PRD name)
+        - Body: list the actual changes made
+        - Do NOT include AI attribution
+
+        **PHASE_4_CHECKPOINT:**
+        - [ ] Only expected files committed
+        - [ ] Commit message is clear and accurate
+        - [ ] Working directory is clean after commit
+
+        ---
+
+        ## Phase 5: TRACK — Update Progress Files
+
+        ### 5.1 Update prd.json
+
+        Set `passes: true` and add a note for the completed story:
+
+        ```json
+        {
+          "id": "{story-id}",
+          "passes": true,
+          "notes": "Implemented in iteration {N}. Files: {list}."
+        }
+        ```
+
+        After updating prd.json, emit the story completed event:
+        ```bash
+        bun run cli workflow event emit --run-id $WORKFLOW_ID --type ralph_story_completed --data '{"story_id":"{story-id}","title":"{story-title}"}' || true
+        ```
+
+        ### 5.2 Update progress.txt
+
+        **Append** to `{prd-dir}/progress.txt`:
+
+        ```
+        ## {ISO Date} — {story-id}: {story-title}
+
+        **Status**: PASSED
+        **Files changed**:
+        - {file1} — {what changed}
+        - {file2} — {what changed}
+
+        **Acceptance criteria verified**:
+        - [x] {criterion 1}
+        - [x] {criterion 2}
+
+        **Learnings**:
+        - {Any pattern discovered}
+        - {Any gotcha encountered}
+        - {Any deviation from expected approach}
+
+        ---
+        ```
+
+        ### 5.3 Update Codebase Patterns (if applicable)
+
+        If you discovered a **reusable pattern** that future iterations should know about, **prepend** it to the `## Codebase Patterns` section at the TOP of progress.txt.
+
+        Format:
+        ```
+        ## Codebase Patterns
+
+        ### {Pattern Name}
+        - **Where**: `{file:lines}`
+        - **Pattern**: {description}
+        - **Example**: `{code snippet}`
+        ```
+
+        If the `## Codebase Patterns` section doesn't exist yet, create it at the top of the file.
+
+        **PHASE_5_CHECKPOINT:**
+        - [ ] prd.json updated with `passes: true`
+        - [ ] progress.txt appended with iteration details
+        - [ ] Codebase patterns updated (if applicable)
+
+        ---
+
+        ## Phase 6: COMPLETE — Check All Stories
+
+        ### 6.1 Re-read prd.json
+
+        ```bash
+        cat {prd-dir}/prd.json
+        ```
+
+        Count stories where `passes: false`.
+
+        ### 6.2 If ALL Stories Pass
+
+        1. **Push the branch:**
+           ```bash
+           git push -u origin HEAD
+           ```
+
+        2. **Read the PR template:**
+           Look for a PR template in the repo — check `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and `docs/pull_request_template.md`. Read whichever one exists.
+
+           If a template was found, fill in **every section** using the context from this implementation. Don't skip sections or leave placeholders — fill them honestly based on the actual changes (summary, architecture, validation evidence, security, compatibility, rollback, etc.).
+
+           If no template was found, write a summary with: problem, what changed, stories table, and validation evidence.
+
+        3. **Create a draft PR** using `gh pr create --draft --base $BASE_BRANCH --title "feat: {PRD feature name}"` with the filled-in template as the body. Use a HEREDOC for the body.
+
+        4. **Output completion signal:**
+           ```
+           <promise>COMPLETE</promise>
+           ```
+
+        ### 6.3 If Stories Remain
+
+        Report status and end normally:
+        ```
+        ── Iteration Complete ──────────────────────────────
+        Story completed: {story-id} — {story-title}
+        Stories remaining: {count}
+        Next eligible: {next-story-id} — {next-story-title}
+        ────────────────────────────────────────────────────
+        ```
+
+        The loop engine will start the next iteration with a fresh context.
+
+        ---
+
+        ## Handling Edge Cases
+
+        ### Validation fails repeatedly
+        - If type-check or tests fail 3+ times on the same error, step back
+        - Re-read the acceptance criteria — you may be misunderstanding the requirement
+        - Check if the story is too large (needs breaking down)
+        - Note the blocker in progress.txt and end the iteration
+
+        ### Story is too large for one iteration
+        - Implement the minimum viable subset that satisfies the most critical acceptance criteria
+        - Set `passes: true` only if ALL criteria are met
+        - If you can't meet all criteria, leave `passes: false` and note what's done in progress.txt
+        - The next iteration will pick it up and continue
+
+        ### Pre-existing test failures
+        - If tests were failing BEFORE your changes, note them but don't fix unrelated code
+        - Run only the test files related to your changes if the full suite has pre-existing issues
+        - Document pre-existing failures in progress.txt
+
+        ### Dependency install fails
+        - Check if `bun.lock` or equivalent exists
+        - Try `bun install` without `--frozen-lockfile`
+        - Note the issue in progress.txt
+
+        ### Git state is dirty at iteration start
+        - This shouldn't happen (fresh worktree), but if it does:
+        - Run `git status` to understand what's dirty
+        - If it's leftover from a failed previous iteration, commit or stash
+        - Never discard changes silently
+
+        ### Blocked stories — all remaining have unmet dependencies
+        - Report the dependency chain in your output
+        - Check if a dependency was incorrectly left as `passes: false`
+        - If a dependency should be `passes: true` (the code exists and works), fix prd.json
+        - Otherwise, end the iteration — the loop will exhaust max_iterations
+
+        ---
+
+        ## File Format Reference
+
+        ### prd.json Schema
+
+        ```json
+        {
+          "feature": "Feature Name",
+          "issueNumber": 123,
+          "userStories": [
+            {
+              "id": "US-001",
+              "title": "Short title",
+              "description": "As a..., I want..., so that...",
+              "acceptanceCriteria": ["criterion 1", "criterion 2"],
+              "technicalNotes": "Implementation hints",
+              "dependsOn": ["US-000"],
+              "priority": 1,
+              "passes": false,
+              "notes": ""
+            }
+          ]
+        }
+        ```
+
+        ### progress.txt Format
+
+        ```
+        ## Codebase Patterns
+
+        ### {Pattern Name}
+        - Where: `file:lines`
+        - Pattern: description
+        - Example: `code`
+
+        ---
+
+        ## {Date} — {story-id}: {title}
+
+        **Status**: PASSED
+        **Files changed**: ...
+        **Acceptance criteria verified**: ...
+        **Learnings**: ...
+
+        ---
+        ```
+
+        ---
+
+        ## Success Criteria
+
+        - **ONE_STORY**: Exactly one story implemented per iteration
+        - **VALIDATED**: Type-check + lint + tests + format all pass before commit
+        - **COMMITTED**: Changes committed with clear message
+        - **TRACKED**: prd.json and progress.txt updated accurately
+        - **PATTERNS_SHARED**: Discovered patterns added to progress.txt for future iterations
+        - **NO_SCOPE_CREEP**: No unrelated changes, no refactoring, no "improvements"
+      until: COMPLETE
+      max_iterations: 15
+      fresh_context: true
+
+  - id: verify-pr-base
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [implement]
+
+  # ═══════════════════════════════════════════════════════════════
+  # NODE 5: COMPLETION REPORT
+  # Reads final state and produces a summary.
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: report
+    depends_on: [verify-pr-base]
+    prompt: |
+      # Completion Report
+
+      The Ralph implementation loop has finished. Generate a completion report.
+
+      ## Context
+
+      **Loop output (last iteration):**
+
+      $implement.output
+
+      **Setup context:**
+
+      $validate-prd.output
+
+      ---
+
+      ## Instructions
+
+      ### 1. Read Final State
+
+      Extract the `PRD_DIR=...` from the setup context above.
+      Read the CURRENT files from disk:
+
+      ```bash
+      cat {prd-dir}/prd.json
+      cat {prd-dir}/progress.txt
+      ```
+
+      ### 2. Gather Git Info
+
+      ```bash
+      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
+      ```
+
+      ### 3. Check PR Status
+
+      ```bash
+      gh pr view HEAD --json url,number,state 2>/dev/null || echo "No PR found"
+      ```
+
+      ### 4. Generate Report
+
+      Output this format:
+
+      ```
+      ═══════════════════════════════════════════════════════
+      RALPH DAG — COMPLETION REPORT
+      ═══════════════════════════════════════════════════════
+
+      Feature: {feature name from prd.json}
+      PRD: {prd-dir}
+      Branch: {branch name}
+      PR: {url or "not created"}
+
+      ── Stories ─────────────────────────────────────────
+
+      | ID | Title | Status |
+      |----|-------|--------|
+      {for each story from prd.json}
+
+      Total: {N}/{M} stories passing
+
+      ── Commits ─────────────────────────────────────────
+
+      {git log output}
+
+      ── Files Changed ─────────────────────────────────
+
+      {git diff --stat output}
+
+      ── Patterns Discovered ─────────────────────────────
+
+      {from ## Codebase Patterns in progress.txt, or "None"}
+
+      ═══════════════════════════════════════════════════════
+      ```
+
+      Keep it factual. No commentary — just the data.

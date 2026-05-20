@@ -1,0 +1,48 @@
+.shell {
+  display: grid;
+  grid-template-rows: 56px 1fr var(--studio-drawer-h, 36px);
+  grid-template-columns: 240px 1fr 320px;
+  grid-template-areas:
+    'toolbar  toolbar  toolbar'
+    'library  canvas   inspector'
+    'drawer   drawer   drawer';
+  height: 100%;
+  width: 100%;
+  background: var(--studio-bg);
+  color: var(--studio-fg);
+}
+.toolbar {
+  grid-area: toolbar;
+}
+.library {
+  grid-area: library;
+  border-right: 1px solid var(--studio-muted);
+  /* min-height:0 is required for grid children that contain overflow:auto
+     descendants. Without it, the grid row grows to fit intrinsic content
+     (7 variants + N commands + 6 snippets), which makes the whole page
+     scroll. With it, the inner <NodeLibrary> aside's overflow-y:auto
+     handles overflow internally and the canvas+controls stay anchored. */
+  min-height: 0;
+  overflow: hidden;
+}
+.canvas {
+  grid-area: canvas;
+  min-width: 0;
+  min-height: 0;
+}
+.inspector {
+  grid-area: inspector;
+  border-left: 1px solid var(--studio-muted);
+  min-height: 0;
+  overflow: hidden;
+}
+.drawer {
+  grid-area: drawer;
+  border-top: 1px solid var(--studio-muted);
+  min-height: 0;
+  overflow: hidden;
+  background: var(--studio-surface);
+}
+.shell[data-drawer='expanded'] {
+  --studio-drawer-h: 240px;
+}

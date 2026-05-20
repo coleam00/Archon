@@ -1,0 +1,15 @@
+name: archon-resolve-conflicts
+description: |
+  Use when: PR has merge conflicts that need resolution.
+  Triggers: "resolve conflicts", "fix merge conflicts", "rebase this PR", "resolve this",
+            "fix conflicts", "merge conflicts", "rebase and fix".
+  Does: Fetches latest base branch -> analyzes conflicts -> auto-resolves simple conflicts ->
+        presents options for complex conflicts -> commits and pushes resolution.
+  NOT for: PRs without conflicts, general rebasing without conflicts, squashing commits.
+
+  This workflow helps resolve merge conflicts by analyzing the conflicting changes,
+  automatically resolving where intent is clear, and presenting options for complex conflicts.
+
+nodes:
+  - id: resolve
+    command: archon-resolve-merge-conflicts

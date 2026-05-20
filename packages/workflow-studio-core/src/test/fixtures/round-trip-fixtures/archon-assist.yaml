@@ -1,0 +1,10 @@
+name: archon-assist
+description: |
+  Use when: No other workflow matches the request.
+  Handles: Questions, debugging, exploration, one-off tasks, explanations, CI failures, general help.
+  Capability: Full Claude Code agent with all tools available.
+  Note: Will inform user when assist mode is used for tracking.
+
+nodes:
+  - id: assist
+    command: archon-assist

@@ -1,0 +1,248 @@
+name: archon-workflow-builder
+description: |
+  Use when: User wants to create a new custom workflow for their project.
+  Triggers: "build me a workflow", "create a workflow", "generate a workflow",
+            "new workflow", "make a workflow for", "workflow builder".
+  Does: Scans codebase -> extracts intent (JSON) -> generates YAML -> validates -> saves.
+  NOT for: Editing existing workflows or creating non-workflow files.
+
+nodes:
+  - id: scan-codebase
+    bash: |
+      echo "=== Existing Commands ==="
+      if [ -d ".archon/commands" ]; then
+        find .archon/commands -type f -name "*.md" 2>/dev/null | head -30
+      else
+        echo "(no .archon/commands/ directory)"
+      fi
+
+      echo ""
+      echo "=== Existing Workflows ==="
+      if [ -d ".archon/workflows" ]; then
+        find .archon/workflows -type f \( -name "*.yaml" -o -name "*.yml" \) 2>/dev/null | head -30
+      else
+        echo "(no .archon/workflows/ directory)"
+      fi
+
+      echo ""
+      echo "=== Package Info ==="
+      if [ -f "package.json" ]; then
+        grep -E '"name"|"scripts"' package.json | head -10
+      else
+        echo "(no package.json)"
+      fi
+
+      echo ""
+      echo "=== Project Context (CLAUDE.md first 50 lines) ==="
+      if [ -f "CLAUDE.md" ]; then
+        head -50 CLAUDE.md
+      else
+        echo "(no CLAUDE.md)"
+      fi
+
+  - id: extract-intent
+    prompt: |
+      You are a workflow design classifier. Given a user's description of what they want
+      a workflow to do, extract structured intent.
+
+      ## User's Request
+      $ARGUMENTS
+
+      ## Codebase Context
+      $scan-codebase.output
+
+      ## Instructions
+
+      Analyze the user's request and the existing codebase to determine:
+      1. A kebab-case workflow name (e.g., "lint-and-test", "deploy-staging")
+      2. A description following the Archon pattern (Use when / Triggers / Does / NOT for)
+      3. Trigger phrases the router should match
+      4. A list of proposed nodes with their types and purposes
+      5. Whether this should be a simple DAG or include a loop node
+
+      Be specific and concrete. Each proposed node should have a clear type
+      (bash, prompt, command, script, loop, or approval) and a one-line
+      description of what it does.
+    model: haiku
+    allowed_tools: []
+    output_format:
+      type: object
+      properties:
+        workflow_name:
+          type: string
+        description:
+          type: string
+        trigger_phrases:
+          type: string
+        proposed_nodes:
+          type: string
+        execution_mode:
+          type: string
+          enum: ["dag", "loop"]
+      required: [workflow_name, description, trigger_phrases, proposed_nodes, execution_mode]
+    depends_on: [scan-codebase]
+
+  - id: generate-yaml
+    prompt: |
+      You are an Archon workflow author. Generate a complete, valid workflow YAML file
+      based on the structured intent provided.
+
+      ## Intent
+      - **Name**: $extract-intent.output.workflow_name
+      - **Description**: $extract-intent.output.description
+      - **Trigger Phrases**: $extract-intent.output.trigger_phrases
+      - **Proposed Nodes**: $extract-intent.output.proposed_nodes
+      - **Execution Mode**: $extract-intent.output.execution_mode
+
+      ## Original User Request
+      $ARGUMENTS
+
+      ## Archon Workflow YAML Schema Reference
+
+      A workflow YAML file has this structure:
+
+      ```yaml
+      name: workflow-name
+      description: |
+        Use when: ...
+        Triggers: ...
+        Does: ...
+        NOT for: ...
+
+      # Optional top-level settings:
+      # provider: claude    (or codex)
+      # model: sonnet       (or haiku, opus, etc.)
+      # interactive: true   (forces foreground execution in web UI)
+
+      nodes:
+        - id: node-id-kebab-case
+          # Choose ONE of: prompt, bash, command, script, loop, approval
+
+          # --- prompt node (AI-executed) ---
+          prompt: |
+            Instructions for the AI...
+          # Optional: model, allowed_tools, denied_tools, output_format, context, idle_timeout
+
+          # --- bash node (shell script, no AI, stdout = $<nodeId>.output) ---
+          bash: |
+            #!/bin/bash
+            set -e
+            echo "result"
+
+          # --- command node (references a .archon/commands/ file) ---
+          command: command-name
+
+          # --- script node (TypeScript via bun, or Python via uv — no AI, stdout = $<nodeId>.output) ---
+          # Use for deterministic data transforms the shell would mangle (JSON parsing, etc.)
+          script: |
+            // JSON is valid JS expression syntax — assign directly (String.raw breaks on backticks)
+            const data = $other-node.output;
+            console.log(JSON.stringify({ count: data.items.length }));
+          runtime: bun                       # required: 'bun' (.ts/.js) or 'uv' (.py)
+          # deps: [requests]                 # uv only
+          # Or reference a named script in .archon/scripts/:
+          # script: extract-labels           # no extension; bun resolves .ts/.js, uv resolves .py
+
+          # --- loop node (iterative AI execution) ---
+          loop:
+            prompt: |
+              Instructions repeated each iteration...
+            until: COMPLETION_SIGNAL
+            max_iterations: 10
+            fresh_context: true  # optional: reset context each iteration
+
+          # --- approval node (human gate — pauses workflow) ---
+          approval:
+            message: "Review the plan above. Approve to continue."
+            # capture_response: true         # store reviewer comment as $<nodeId>.output
+
+          # Common options for all node types:
+          depends_on: [other-node-id]       # DAG edges
+          when: "$<other-node>.output == 'value'"  # conditional execution
+          trigger_rule: all_success          # all_success | one_success | all_done
+          timeout: 120000                    # ms, for bash and script nodes
+      ```
+
+      ## Variable Reference
+      - `$ARGUMENTS` — user's input text
+      - `$ARTIFACTS_DIR` — pre-created directory for workflow artifacts
+      - `$<nodeId>.output` — stdout from a bash/script node or AI response from a prompt node
+      - `$<nodeId>.output.field` — JSON field from a node with output_format
+      - `$BASE_BRANCH` — base git branch
+
+      ## Rules
+      1. The `name:` field MUST match: $extract-intent.output.workflow_name
+      2. The `description:` MUST follow the "Use when / Triggers / Does / NOT for" pattern
+      3. Every node MUST have a unique kebab-case `id`
+      4. Use `depends_on` to define execution order
+      5. Use `bash` nodes for deterministic shell operations (file checks, git commands, installs)
+      6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps)
+         — stdout is captured as output, stderr is forwarded as a warning.
+         `$nodeId.output` is NOT shell-quoted in script bodies.
+         - **TypeScript/bun**: assign directly — `const data = $nodeId.output;`
+           (JSON is valid JS expression syntax; avoid String.raw — it breaks on backticks)
+         - **Python/uv**: use json.loads — `import json; data = json.loads("""$nodeId.output""")`
+         Never interpolate into shell syntax.
+      7. Use `prompt` nodes for AI reasoning tasks
+      8. Use `approval` nodes to pause for human review at risky gates (plan→execute boundary, destructive actions)
+      9. Use `output_format` on prompt nodes when downstream nodes need structured data
+      10. Use `allowed_tools: []` on classification/analysis nodes that don't need tools
+      11. Use `denied_tools: [Edit, Bash]` when a node should only use Write (not edit existing files)
+      12. Prefer `model: haiku` for simple classification tasks to save cost
+
+      ## Output
+
+      Write the complete workflow YAML to: `$ARTIFACTS_DIR/generated-workflow.yaml`
+
+      Use the Write tool. Do NOT use Edit or Bash. The file must be valid YAML and follow
+      all the patterns above.
+    denied_tools: [Edit, Bash]
+    depends_on: [extract-intent]
+
+  - id: validate-yaml
+    bash: |
+      FILE="$ARTIFACTS_DIR/generated-workflow.yaml"
+
+      if [ ! -f "$FILE" ]; then
+        echo "ERROR: generated-workflow.yaml not found at $FILE"
+        exit 1
+      fi
+
+      if [ ! -s "$FILE" ]; then
+        echo "ERROR: generated-workflow.yaml is empty"
+        exit 1
+      fi
+
+      if ! grep -q "^name:" "$FILE"; then
+        echo "ERROR: missing 'name:' field"
+        exit 1
+      fi
+
+      if ! grep -q "^nodes:" "$FILE"; then
+        echo "ERROR: missing 'nodes:' field"
+        exit 1
+      fi
+
+      echo "VALID"
+    depends_on: [generate-yaml]
+
+  - id: save-or-report
+    prompt: |
+      You are a workflow installer. Save the generated workflow and report to the user.
+
+      ## Workflow Details
+      - **Name**: $extract-intent.output.workflow_name
+      - **Trigger Phrases**: $extract-intent.output.trigger_phrases
+
+      ## Instructions
+
+      1. Read the generated workflow from `$ARTIFACTS_DIR/generated-workflow.yaml`
+      2. Create the directory `.archon/workflows/` if it doesn't exist (use Bash: `mkdir -p .archon/workflows/`)
+      3. Save the workflow to `.archon/workflows/$extract-intent.output.workflow_name.yaml`
+         Use the Write tool to write the file.
+      4. Report to the user:
+         - Workflow name and file location
+         - Trigger phrases that will invoke it
+         - How to run it: `bun run cli workflow run $extract-intent.output.workflow_name "your input"`
+         - How to test it: `bun run cli validate workflows $extract-intent.output.workflow_name`
+    depends_on: [validate-yaml]

@@ -1,0 +1,298 @@
+name: archon-interactive-prd
+description: |
+  Use when: User wants to create a PRD through guided conversation.
+  Triggers: "create a prd", "new prd", "interactive prd", "plan a feature",
+            "product requirements", "write a prd".
+  NOT for: Autonomous PRD generation without human input (use archon-ralph-generate).
+
+  Interactive workflow that guides the user through problem-first PRD creation:
+  1. Understand the idea → ask foundation questions → wait for answers
+  2. Research market & codebase → ask deep dive questions → wait for answers
+  3. Assess technical feasibility → ask scope questions → wait for answers
+  4. Generate PRD → validate technical claims against codebase → output
+
+provider: claude
+interactive: true
+
+nodes:
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 1: INITIATE — Understand the idea
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: initiate
+    model: sonnet
+    prompt: |
+      You are a sharp product manager starting a PRD creation process.
+      You think from first principles — start with primitives, not features.
+
+      The user wants to build: $ARGUMENTS
+
+      If the input is clear, restate your understanding in 2-3 sentences and confirm:
+      "I understand you want to build: {restated understanding}. Is this correct?"
+
+      If the input is vague or empty, ask:
+      "What do you want to build? Describe the product, feature, or capability."
+
+      Then present the Foundation Questions (all at once — the user will answer in the next step):
+
+      **Foundation Questions:**
+
+      1. **Who** has this problem? Be specific — not just "users" but what type of person/role?
+      2. **What** problem are they facing? Describe the observable pain, not the assumed need.
+      3. **Why** can't they solve it today? What alternatives exist and why do they fail?
+      4. **Why now?** What changed that makes this worth building?
+      5. **How** will you know if you solved it? What would success look like?
+
+      Keep it conversational. Don't generate any PRD content yet.
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 1: User answers foundation questions
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: foundation-gate
+    approval:
+      message: "Answer the foundation questions above. Your answers will guide the research phase."
+      capture_response: true
+    depends_on: [initiate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 2: GROUNDING — Research market & codebase
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: research
+    model: sonnet
+    prompt: |
+      You are researching context for a PRD. Think from first principles —
+      what already exists before proposing anything new.
+
+      **The idea**: $ARGUMENTS
+
+      **User's foundation answers**:
+      $foundation-gate.output
+
+      Research the landscape:
+
+      1. Search the web for similar products, competitors, and how others solve this problem
+      2. **Explore the codebase deeply** — find related existing functionality, APIs, UI components,
+         database tables, and patterns. Read actual files, don't assume. Note exact file paths and
+         what each file does.
+      3. Look for common patterns, anti-patterns, and recent trends
+
+      **First principles rule**: Before suggesting anything new, verify what already exists.
+      If there's an existing API endpoint, UI page, or component that partially solves the
+      problem, note it explicitly. The best solution extends what exists, not replaces it.
+
+      Present a summary to the user:
+
+      **What I found:**
+      - {Market insights — similar products, competitor approaches}
+      - {What already exists in the codebase — specific files, endpoints, components}
+      - {Key insight that might change the approach}
+
+      Then ask the **Deep Dive Questions**:
+
+      1. **Vision**: In one sentence, what's the ideal end state if this succeeds wildly?
+      2. **Primary User**: Describe your most important user — their role, context, and what triggers their need.
+      3. **Job to Be Done**: Complete this: "When [situation], I want to [motivation], so I can [outcome]."
+      4. **Non-Users**: Who is explicitly NOT the target?
+      5. **Constraints**: What limitations exist? (time, budget, technical, regulatory)
+
+      Does the research change or refine your thinking? Answer the deep dive questions.
+    depends_on: [foundation-gate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 2: User answers deep dive questions
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: deepdive-gate
+    approval:
+      message: "Answer the deep dive questions above (vision, primary user, JTBD, constraints). Add any adjustments from the research."
+      capture_response: true
+    depends_on: [research]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 3: TECHNICAL GROUNDING — Feasibility from what exists
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: technical
+    model: sonnet
+    prompt: |
+      You are assessing technical feasibility for a PRD.
+      Think from first principles — start with what exists, not what you'd build from scratch.
+
+      **The idea**: $ARGUMENTS
+      **Foundation answers**: $foundation-gate.output
+      **Deep dive answers**: $deepdive-gate.output
+
+      **CRITICAL**: Explore the codebase by READING actual files. Do not guess or assume.
+      For every claim you make about the codebase, cite the exact file and line.
+
+      1. **What already exists** that partially solves this problem?
+         - Read existing API endpoints, DB queries, UI components
+         - Note exact function names, table schemas, component names
+         - What data is already being collected/stored?
+      2. **What's the smallest change** to the existing system that solves the core problem?
+         - Prefer extending existing files over creating new ones
+         - Prefer using existing endpoints over creating new ones
+         - Prefer adding to existing UI pages over new pages
+      3. **What are the actual primitives** we need?
+         - A new DB query? An existing one that needs a parameter?
+         - A new component? Or an existing component that needs a prop?
+         - A new endpoint? Or an existing endpoint that already returns the data?
+      4. **What's the risk?**
+         - Where could this go wrong?
+         - What assumptions need validation?
+
+      Present a summary:
+
+      **What Already Exists (verified by reading code):**
+      - {endpoint/component/query} at `{file:line}` — {what it does}
+      - {endpoint/component/query} at `{file:line}` — {what it does}
+
+      **Smallest Change to Solve the Problem:**
+      - {change 1}: {extend/modify} `{file}` — {what to do}
+      - {change 2}: {extend/modify} `{file}` — {what to do}
+
+      **Technical Context:**
+      - Feasibility: {HIGH/MEDIUM/LOW} because {reason}
+      - Key risk: {main concern}
+      - Estimated phases: {rough breakdown}
+
+      Then ask the **Scope Questions**:
+
+      1. **MVP Definition**: What's the absolute minimum to test if this works?
+      2. **Must Have vs Nice to Have**: What 2-3 things MUST be in v1? What can wait?
+      3. **Key Hypothesis**: Complete this: "We believe [capability] will [solve problem] for [users]. We'll know we're right when [measurable outcome]."
+      4. **Out of Scope**: What are you explicitly NOT building?
+      5. **Open Questions**: What uncertainties could change the approach?
+    depends_on: [deepdive-gate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # GATE 3: User answers scope questions
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: scope-gate
+    approval:
+      message: "Answer the scope questions above (MVP, must-haves, hypothesis, exclusions). This is the final input before PRD generation."
+      capture_response: true
+    depends_on: [technical]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 4: GENERATE — Write the PRD
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: generate
+    model: sonnet
+    prompt: |
+      You are generating a PRD from the user's guided inputs.
+
+      **The idea**: $ARGUMENTS
+      **Foundation answers**: $foundation-gate.output
+      **Deep dive answers**: $deepdive-gate.output
+      **Scope answers**: $scope-gate.output
+
+      Generate a complete PRD file at `$ARTIFACTS_DIR/prds/{kebab-case-name}.prd.md`.
+
+      First create the directory:
+      ```bash
+      mkdir -p $ARTIFACTS_DIR/prds
+      ```
+
+      **First principles rule**: Before writing the Technical Approach section, READ the
+      actual codebase files you're referencing. Verify:
+      - File paths exist
+      - Function/component names are correct
+      - API endpoints you reference actually exist (or note they need to be created)
+      - DB table and column names match the schema
+      - Event type names match the constants in the code
+
+      The PRD must include ALL of these sections, filled from the user's answers:
+
+      1. **Problem Statement** — from foundation answers (who/what/why)
+      2. **Evidence** — from research findings and user's evidence
+      3. **Proposed Solution** — synthesized from all inputs. Prefer extending existing
+         primitives over creating new ones.
+      4. **Key Hypothesis** — from scope answers
+      5. **What We're NOT Building** — from scope answers
+      6. **Success Metrics** — from foundation "how will you know" + scope
+      7. **Open Questions** — from scope answers
+      8. **Users & Context** — from deep dive (primary user, JTBD, non-users)
+      9. **Solution Detail** — MoSCoW table from scope must-haves, MVP definition
+      10. **Technical Approach** — from technical feasibility. MUST reference actual
+          verified file paths, function names, and schemas. Mark anything unverified
+          as "needs verification".
+      11. **Implementation Phases** — from technical breakdown, with status table
+          and parallel opportunities
+      12. **Decisions Log** — key decisions made during the conversation
+
+      **Rules:**
+      - If info is missing, write "TBD — needs research" not filler
+      - Be specific and concrete, not generic
+      - Every file path in Technical Approach must be verified by reading the file
+      - Prefer "extend X" over "create new Y" in implementation phases
+
+      After writing the file, output the file path only — the validator will check it.
+    depends_on: [scope-gate]
+
+  # ═══════════════════════════════════════════════════════════════
+  # PHASE 5: VALIDATE — Check technical claims against codebase
+  # ═══════════════════════════════════════════════════════════════
+
+  - id: validate
+    model: sonnet
+    prompt: |
+      You are a technical validator checking a PRD for accuracy.
+
+      Read the PRD file that was just generated. The generate node output the file path:
+      $generate.output
+
+      Find the PRD file — check `$ARTIFACTS_DIR/prds/` for the most recently created `.prd.md` file:
+      ```bash
+      ls -t $ARTIFACTS_DIR/prds/*.prd.md | head -1
+      ```
+
+      Read the entire PRD, then verify EVERY technical claim against the actual codebase:
+
+      **Check 1: File paths** — For every file referenced in "Technical Approach" and
+      "Implementation Phases", verify it exists. If it doesn't, note the correction.
+
+      **Check 2: API endpoints** — For every endpoint mentioned, check if it already exists
+      in `packages/server/src/routes/api.ts`. If it does, the PRD should say "extend" not "create".
+      If the PRD proposes a new endpoint for data that an existing endpoint already returns,
+      flag it.
+
+      **Check 3: DB schemas** — For every table/column referenced, verify the actual names
+      in the migration files or schema code. Check event type names against the
+      `WORKFLOW_EVENT_TYPES` constant.
+
+      **Check 4: UI components** — For every component referenced, verify it exists.
+      If the PRD proposes a new page but an existing page already serves a similar purpose,
+      flag it.
+
+      **Check 5: Function/type names** — Verify function names, type names, and interface
+      names are correct.
+
+      After checking, if there are ANY corrections needed:
+      1. Edit the PRD file directly — fix incorrect names, paths, and references
+      2. Add a `## Validation Notes` section at the bottom documenting what was corrected
+
+      If everything checks out, add:
+      ```
+      ## Validation Notes
+
+      All technical references verified against codebase. No corrections needed.
+      ```
+
+      Output a summary of what was checked and corrected:
+
+      ```
+      ## PRD Validated
+
+      **File**: `{prd-path}`
+      **Checks**: {N} file paths, {N} endpoints, {N} DB references, {N} components
+      **Corrections**: {count}
+      {list corrections if any}
+
+      To start implementation: `/prp-plan {prd-path}`
+      ```
+    depends_on: [generate]

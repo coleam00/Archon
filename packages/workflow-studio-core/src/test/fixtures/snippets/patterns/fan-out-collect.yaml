@@ -1,0 +1,18 @@
+name: fan-out-collect
+description: Three parallel workers feeding a single collector.
+nodes:
+  - id: dispatch
+    command: dispatch-work
+  - id: worker-a
+    prompt: 'Process slice A from $dispatch.output'
+    depends_on: [dispatch]
+  - id: worker-b
+    prompt: 'Process slice B from $dispatch.output'
+    depends_on: [dispatch]
+  - id: worker-c
+    prompt: 'Process slice C from $dispatch.output'
+    depends_on: [dispatch]
+  - id: collect
+    prompt: |
+      Combine results: $worker-a.output, $worker-b.output, $worker-c.output
+    depends_on: [worker-a, worker-b, worker-c]

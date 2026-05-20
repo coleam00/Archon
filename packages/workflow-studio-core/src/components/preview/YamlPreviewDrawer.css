@@ -1,0 +1,78 @@
+.yaml-preview-drawer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--studio-fg);
+  background: var(--studio-bg);
+}
+
+.yaml-preview-drawer__header {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--studio-muted);
+  background: var(--studio-surface, var(--studio-bg));
+}
+
+.yaml-preview-drawer__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.yaml-preview-drawer__title-row h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--studio-fg);
+}
+
+.yaml-preview-drawer__note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--studio-muted-fg, #8b8b94);
+}
+
+.yaml-preview-drawer__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.yaml-preview-drawer__actions button {
+  appearance: none;
+  background: transparent;
+  color: var(--studio-fg);
+  border: 1px solid var(--studio-muted);
+  border-radius: var(--radius-sm, 4px);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.yaml-preview-drawer__actions button:hover {
+  background: var(--studio-bg-elevated, rgba(255, 255, 255, 0.04));
+}
+
+/* The CmEditor host is the second child of .yaml-preview-drawer. Make it fill
+   the remaining space and clip; CM6's own .cm-scroller handles overflow. */
+.yaml-preview-drawer > div[role='textbox'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+}
+
+.yaml-preview-drawer .cm-editor {
+  height: 100%;
+}
+
+.yaml-preview-drawer .cm-scroller {
+  overflow: auto;
+}

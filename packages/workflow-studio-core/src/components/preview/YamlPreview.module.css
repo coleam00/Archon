@@ -1,0 +1,7 @@
+:global(.cm-yaml-selected) {
+  background: rgba(56, 139, 253, 0.18);
+  box-shadow: inset 2px 0 0 rgba(56, 139, 253, 0.9);
+}
+:global(.cm-yaml-hovered) {
+  background: rgba(56, 139, 253, 0.08);
+}
