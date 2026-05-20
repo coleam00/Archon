@@ -46,7 +46,10 @@ export async function resolveDefaultAssistant(repoPath: string): Promise<string>
   // clone.ts logic used dynamic imports for exactly this reason.
   try {
     const { loadConfig } = await import('./config-loader');
-    const config = await loadConfig();
+    // Pass repoPath so the repo's own .archon/config.yaml is merged on top of
+    // the global config — without it, a repo-level `assistant: pi` would be
+    // silently ignored during registration.
+    const config = await loadConfig(repoPath);
     if (config.assistant) {
       getLog().debug({ provider: config.assistant }, 'assistant_default_from_config');
       return config.assistant;

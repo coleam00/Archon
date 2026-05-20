@@ -67,6 +67,8 @@ describe('resolveDefaultAssistant', () => {
     >);
 
     expect(await resolveDefaultAssistant('/repo')).toBe('pi');
+    // Contract: must pass repoPath so the repo's own .archon/config.yaml is merged.
+    expect(spyLoadConfig).toHaveBeenCalledWith('/repo');
   });
 
   test('falls back to first built-in provider when loadConfig fails and no SDK folder exists', async () => {
