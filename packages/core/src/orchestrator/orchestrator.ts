@@ -276,8 +276,10 @@ export async function dispatchBackgroundWorkflow(
 
   // 3. Resolve isolation for this worker (each background workflow gets its own worktree).
   // Isolation failure is fatal — never run a workflow in a shared/parent worktree.
+  // However, if the workflow explicitly disables worktrees, skip isolation entirely
+  // and run in the parent's working directory (worktree.enabled: false in YAML).
   let workerCwd: string;
-  if (ctx.codebaseId) {
+  if (ctx.codebaseId && workflow.worktree?.enabled !== false) {
     const codebase = await getCodebase(ctx.codebaseId);
     if (!codebase) {
       throw new Error(
@@ -299,7 +301,8 @@ export async function dispatchBackgroundWorkflow(
       );
     });
   } else {
-    // No codebase — run in parent's cwd (no isolation needed for non-repo workflows)
+    // Either no codebase, or workflow opts out of worktree isolation.
+    // Run in the parent's working directory.
     workerCwd = ctx.cwd;
   }
 
