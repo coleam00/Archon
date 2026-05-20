@@ -571,12 +571,42 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                 );
               }
 
+              if (provider.id === 'pi') {
+                return (
+                  <div
+                    key={provider.id}
+                    className="grid grid-cols-[140px_1fr] items-center gap-2 text-sm"
+                  >
+                    <div className="font-medium">{provider.displayName}</div>
+                    <div className="text-muted-foreground">
+                      Community provider &mdash; ~20 LLM backends
+                    </div>
+                    <label htmlFor="pi-model">Model</label>
+                    <div>
+                      <Input
+                        id="pi-model"
+                        value={(providerSettings.model as string | undefined) ?? ''}
+                        onChange={e => {
+                          updateProviderSettings('pi', { model: e.target.value });
+                        }}
+                        placeholder="google/gemini-2.5-pro"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Format:{' '}
+                        <code className="font-mono">&lt;pi-provider&gt;/&lt;model-id&gt;</code>{' '}
+                        &mdash; e.g. <code className="font-mono">anthropic/claude-haiku-4-5</code>,{' '}
+                        <code className="font-mono">openrouter/qwen/qwen3-coder</code>
+                      </p>
+                    </div>
+                  </div>
+                );
+              }
+
               return (
                 <div key={provider.id} className="rounded-md border border-border p-3 text-sm">
                   <div className="font-medium">{provider.displayName}</div>
                   <div className="mt-1 text-muted-foreground">
-                    Provider-specific settings are stored generically for Phase 2. This provider
-                    does not have a dedicated editor yet.
+                    This provider does not have a dedicated settings panel yet.
                   </div>
                   {Object.keys(providerSettings).length > 0 && (
                     <pre className="mt-2 overflow-x-auto rounded bg-muted p-2 text-xs">

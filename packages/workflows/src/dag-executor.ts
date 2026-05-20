@@ -287,7 +287,7 @@ export function substituteNodeOutputRefs(
         if (typeof value === 'number' || typeof value === 'boolean') return String(value);
         // arrays and objects: JSON-stringify. Bash passes substitution as a single
         // argument, so downstream tools (jq, etc.) receive a JSON literal they can parse.
-        if (Array.isArray(value) || typeof value === 'object') {
+        if (value !== null && (Array.isArray(value) || typeof value === 'object')) {
           return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
         }
         return escapedForBash ? "''" : ''; // undefined, symbol, bigint → empty (null is caught above by typeof check)

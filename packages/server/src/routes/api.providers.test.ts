@@ -183,7 +183,7 @@ describe('GET /api/providers', () => {
     expect(Array.isArray(body.providers)).toBe(true);
   });
 
-  test('includes built-in providers', async () => {
+  test('claude and codex are flagged builtIn', async () => {
     const response = await app.request('/api/providers');
     const body = (await response.json()) as {
       providers: { id: string; builtIn: boolean }[];
@@ -191,7 +191,10 @@ describe('GET /api/providers', () => {
     const ids = body.providers.map(p => p.id);
     expect(ids).toContain('claude');
     expect(ids).toContain('codex');
-    expect(body.providers.every(p => p.builtIn)).toBe(true);
+    const claude = body.providers.find(p => p.id === 'claude');
+    const codex = body.providers.find(p => p.id === 'codex');
+    expect(claude?.builtIn).toBe(true);
+    expect(codex?.builtIn).toBe(true);
   });
 
   test('returns correct shape per provider (no factory or isModelCompatible)', async () => {

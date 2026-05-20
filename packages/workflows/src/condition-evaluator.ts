@@ -84,7 +84,8 @@ function resolveOutputRef(
     const value = parsed[field];
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+    if (value !== null && (Array.isArray(value) || typeof value === 'object'))
+      return JSON.stringify(value);
     return ''; // null, undefined, symbol, bigint → empty
   } catch {
     getLog().warn(
