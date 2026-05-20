@@ -201,8 +201,9 @@ function applyToolRestrictions(
 
 /**
  * Translate Archon's `nodeConfig.mcp` (JSON-file path) to Copilot's
- * `SessionConfig.mcpServers`. Reuses Claude's `loadMcpConfig` so env-var
- * expansion and missing-var detection behave consistently across providers.
+ * `SessionConfig.mcpServers`. Reuses the shared `loadMcpConfig` helper so
+ * env-var expansion and missing-var detection behave consistently across
+ * providers.
  */
 async function applyMcpServers(
   sessionConfig: SessionConfig,
