@@ -15,16 +15,9 @@ import { useWorkflowStore } from '@/stores/workflow-store';
 import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
-import type {
-  WorkflowState,
-  ArtifactType,
-  WorkflowRunStatus,
-  DagNodeState,
-  WorkflowStepStatus,
-  LoopIterationInfo,
-} from '@/lib/types';
-
-import type { WorkflowEventResponse } from '@/lib/api';
+import { buildWorkflowRunQueryData } from '@/lib/workflow-run-query';
+import type { WorkflowRunStatus, WorkflowState } from '@/lib/types';
+import type { WorkflowRunQueryData } from '@/lib/workflow-run-query';
 
 /** Tool call event extracted from workflow_events for display in WorkflowLogs. */
 export interface ToolEvent {
@@ -41,15 +34,6 @@ const TERMINAL_STATUSES: readonly WorkflowRunStatus[] = ['completed', 'failed', 
 
 function isTerminal(status: WorkflowRunStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
-}
-
-interface WorkflowRunQueryData {
-  workflowState: WorkflowState;
-  workerPlatformId: string | null;
-  parentPlatformId: string | null;
-  conversationPlatformId: string | null;
-  codebaseId: string | null;
-  events: WorkflowEventResponse[];
 }
 
 interface WorkflowExecutionProps {
@@ -103,108 +87,10 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     queryKey: ['workflowRun', runId],
     queryFn: async (): Promise<WorkflowRunQueryData> => {
       const data = await getWorkflowRun(runId);
-      return {
-        workflowState: {
-          runId: data.run.id,
-          workflowName: data.run.workflow_name,
-          status: data.run.status,
-          dagNodes: ((): DagNodeState[] => {
-            const nodeMap = new Map<string, DagNodeState>();
-            for (const e of data.events.filter(ev => ev.event_type.startsWith('node_'))) {
-              const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
-              if (!nodeId) continue;
-              const status =
-                e.event_type === 'node_started'
-                  ? 'running'
-                  : e.event_type === 'node_completed'
-                    ? 'completed'
-                    : e.event_type === 'node_failed'
-                      ? 'failed'
-                      : 'skipped';
-              const existing = nodeMap.get(nodeId);
-              // Keep the latest non-running status (completed/failed/skipped override running)
-              if (!existing || status !== 'running') {
-                nodeMap.set(nodeId, {
-                  nodeId,
-                  name: nodeId,
-                  status: status as WorkflowStepStatus,
-                  duration: e.data.duration_ms as number | undefined,
-                  error: e.data.error as string | undefined,
-                  reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
-                });
-              }
-            }
-
-            // Second pass: enrich loop nodes with iteration data
-            for (const e of data.events.filter(ev => ev.event_type.startsWith('loop_iteration_'))) {
-              const nodeId = e.step_name ?? '';
-              if (!nodeId) continue;
-              const existing = nodeMap.get(nodeId);
-              if (!existing) continue; // No node_started event yet — skip (events ordered in DB)
-
-              const iteration = e.data.iteration as number | undefined;
-              const maxIter = e.data.maxIterations as number | undefined;
-              if (iteration === undefined) continue;
-
-              let iterStatus: LoopIterationInfo['status'];
-              if (e.event_type === 'loop_iteration_started') {
-                iterStatus = 'running';
-              } else if (e.event_type === 'loop_iteration_completed') {
-                iterStatus = 'completed';
-              } else {
-                iterStatus = 'failed';
-              }
-
-              const existingIters: LoopIterationInfo[] = existing.iterations ?? [];
-              const iterIdx = existingIters.findIndex(it => it.iteration === iteration);
-              const iterState: LoopIterationInfo = {
-                iteration,
-                status: iterStatus,
-                duration: e.data.duration_ms as number | undefined,
-              };
-              const newIters = [...existingIters];
-              if (iterIdx >= 0) {
-                newIters[iterIdx] = iterState;
-              } else {
-                newIters.push(iterState);
-              }
-
-              nodeMap.set(nodeId, {
-                ...existing,
-                currentIteration: iteration,
-                maxIterations: maxIter ?? existing.maxIterations,
-                iterations: newIters,
-              });
-            }
-
-            return Array.from(nodeMap.values());
-          })(),
-          artifacts: data.events
-            .filter(e => e.event_type === 'workflow_artifact')
-            .map(e => {
-              const d = e.data;
-              return {
-                type: (d.artifactType as ArtifactType) ?? 'commit',
-                label: (d.label as string) ?? '',
-                url: d.url as string | undefined,
-                path: d.path as string | undefined,
-              };
-            })
-            .filter(a => a.label || a.url || a.path),
-          startedAt: new Date(ensureUtc(data.run.started_at)).getTime(),
-          completedAt: data.run.completed_at
-            ? new Date(ensureUtc(data.run.completed_at)).getTime()
-            : undefined,
-        },
-        workerPlatformId: data.run.worker_platform_id ?? null,
-        parentPlatformId: data.run.parent_platform_id ?? null,
-        conversationPlatformId: data.run.conversation_platform_id ?? null,
-        codebaseId: data.run.codebase_id ?? null,
-        events: data.events,
-      };
+      return buildWorkflowRunQueryData(runId, data);
     },
     refetchInterval: (query): number | false => {
-      const status = query.state.data?.workflowState.status;
+      const status = query.state.data?.workflowState?.status;
       if (status && isTerminal(status)) return false;
       return 3000;
     },
