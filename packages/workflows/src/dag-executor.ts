@@ -2308,6 +2308,7 @@ async function executeLoopNode(
         runId: workflowRun.id,
         nodeId: node.id,
         message: loop.gate_message,
+        approvalType: 'interactive_loop',
       });
       // Return completed — the between-layer status check sees 'paused' and halts cleanly.
       // This mirrors the approval-node pattern, preventing false "DAG nodes failed" warnings
@@ -2510,6 +2511,7 @@ async function executeApprovalNode(
     runId: workflowRun.id,
     nodeId: node.id,
     message: renderedMessage,
+    approvalType: 'approval',
   });
 
   // Return completed — the between-layer status check will see 'paused' and break.
