@@ -85,13 +85,13 @@ describe('applySnapshot / revertSnapshot', () => {
     // Redo: should come back to 2 nodes
     useBuilderStore.getState().applyRedo();
     expect(useBuilderStore.getState().nodes).toHaveLength(2);
-    expect(useBuilderStore.getState().nodes.map((n: any) => n.id)).toContain('b');
+    expect(useBuilderStore.getState().nodes.map(n => n.id)).toContain('b');
   });
 
   it('undo then applySnapshot restores the previous state', () => {
     // Setup: two nodes, push snapshot, delete one, undo
     useBuilderStore.setState({
-      nodes: [makeNode('a'), makeNode('b')] as any,
+      nodes: [makeNode('a'), makeNode('b')],
       positions: { a: { x: 0, y: 0 }, b: { x: 10, y: 10 } },
     });
     useUndoStore.getState().push({
