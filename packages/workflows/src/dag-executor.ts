@@ -5,8 +5,9 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
+import { writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { isAbsolute, resolve as resolvePath } from 'path';
+import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync } from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import type {
@@ -234,6 +235,34 @@ function shellQuote(value: string): string {
 }
 
 /**
+ * Shell-quote a value for bash, or write it to a file and return a $(cat ...) reference
+ * when the value exceeds the inline size threshold.
+ */
+function shellQuoteOrFile(
+  value: string,
+  nodeId: string,
+  field: string | undefined,
+  outputFileDir: string | undefined
+): string {
+  if (outputFileDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
+    const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
+    const filePath = joinPath(outputFileDir, filename);
+    try {
+      writeFileSync(filePath, value);
+      return `$(cat ${shellQuote(filePath)})`;
+    } catch (fileErr) {
+      const err = fileErr as Error;
+      getLog().error(
+        { err, nodeId, field, valueSize: value.length, filePath },
+        'dag.large_output_file_write_failed'
+      );
+      return shellQuote(value); // fallback: inline (pre-file-spill behavior)
+    }
+  }
+  return shellQuote(value);
+}
+
+/**
  * Substitute $node_id.output and $node_id.output.field references in a prompt.
  * Called AFTER the standard substituteWorkflowVariables pass.
  *
@@ -244,7 +273,8 @@ function shellQuote(value: string): string {
 export function substituteNodeOutputRefs(
   prompt: string,
   nodeOutputs: Map<string, NodeOutput>,
-  escapedForBash = false
+  escapedForBash = false,
+  outputFileDir?: string
 ): string {
   return prompt.replace(
     /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
@@ -255,7 +285,9 @@ export function substituteNodeOutputRefs(
         return escapedForBash ? "''" : '';
       }
       if (!field) {
-        return escapedForBash ? shellQuote(nodeOutput.output) : nodeOutput.output;
+        return escapedForBash
+          ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
+          : nodeOutput.output;
       }
       // Prefer the provider-supplied structured payload when present. Providers that emit
       // fence-wrapped or preamble-prefixed JSON (Pi/Minimax) parse it onto the result chunk
@@ -270,17 +302,20 @@ export function substituteNodeOutputRefs(
         !Array.isArray(structured)
       ) {
         const value = (structured as Record<string, unknown>)[field];
-        if (typeof value === 'string') return escapedForBash ? shellQuote(value) : value;
+        if (typeof value === 'string')
+          return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
         if (typeof value === 'number' || typeof value === 'boolean') return String(value);
         if (Array.isArray(value) || typeof value === 'object') {
-          return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
+          const json = JSON.stringify(value);
+          return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
         }
         return escapedForBash ? "''" : '';
       }
       try {
         const parsed = JSON.parse(nodeOutput.output) as Record<string, unknown>;
         const value = parsed[field];
-        if (typeof value === 'string') return escapedForBash ? shellQuote(value) : value;
+        if (typeof value === 'string')
+          return escapedForBash ? shellQuoteOrFile(value, nodeId, field, outputFileDir) : value;
         // numbers and booleans from JSON.parse are shell-safe without quoting:
         // JSON disallows NaN/Infinity, so String(number) contains only digits, sign, and '.'.
         // String(boolean) is 'true' or 'false' — no shell metacharacters.
@@ -288,7 +323,8 @@ export function substituteNodeOutputRefs(
         // arrays and objects: JSON-stringify. Bash passes substitution as a single
         // argument, so downstream tools (jq, etc.) receive a JSON literal they can parse.
         if (Array.isArray(value) || typeof value === 'object') {
-          return escapedForBash ? shellQuote(JSON.stringify(value)) : JSON.stringify(value);
+          const json = JSON.stringify(value);
+          return escapedForBash ? shellQuoteOrFile(json, nodeId, field, outputFileDir) : json;
         }
         return escapedForBash ? "''" : ''; // undefined, symbol, bigint → empty (null is caught above by typeof check)
       } catch (jsonErr) {
@@ -1240,6 +1276,10 @@ async function executeNodeInternal(
 /** Default timeout for subprocess nodes (bash, script): 2 minutes */
 const SUBPROCESS_DEFAULT_TIMEOUT = 120_000;
 
+/** Threshold (bytes) above which $nodeId.output values are written to a temp file
+ *  instead of inlined as bash -c arguments, to avoid silent data corruption. */
+const NODE_OUTPUT_FILE_THRESHOLD = 32_768;
+
 /**
  * Execute a bash (shell script) DAG node.
  * Runs the script via `bash -c`, captures stdout as node output.
@@ -1302,7 +1342,7 @@ async function executeBashNode(
     undefined,
     { shellSafe: true }
   );
-  const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true);
+  const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, logDir);
 
   const timeout = node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT;
   const subprocessEnv: NodeJS.ProcessEnv = {
@@ -2142,7 +2182,8 @@ async function executeLoopNode(
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
           nodeOutputs,
-          true // escapedForBash
+          true, // escapedForBash
+          logDir
         );
         await execFileAsync('bash', ['-c', substitutedBash], {
           cwd,

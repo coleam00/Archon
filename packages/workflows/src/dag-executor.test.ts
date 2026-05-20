@@ -828,6 +828,67 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
   });
 });
 
+describe('substituteNodeOutputRefs -- large output file substitution', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = join(tmpdir(), `archon-test-large-output-${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('inlines small output even when outputFileDir is provided', () => {
+    const outputs = new Map([['a', makeOutput('completed', 'small')]]);
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, true, tempDir);
+    expect(result).toBe("echo 'small'");
+  });
+
+  it('writes large output (>=32KB) to file and returns $(cat ...) reference', async () => {
+    const largeOutput = 'x'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, true, tempDir);
+    expect(result).toContain('$(cat ');
+    expect(result).toContain('a.nodeoutput');
+    // Verify file was written with correct content
+    const { readFile: readFileAsync } = await import('fs/promises');
+    const written = await readFileAsync(join(tempDir, 'a.nodeoutput'), 'utf-8');
+    expect(written).toBe(largeOutput);
+  });
+
+  it('writes large field value to file with field name in filename', async () => {
+    const largeValue = 'y'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ data: largeValue }))]]);
+    const result = substituteNodeOutputRefs('echo $a.output.data', outputs, true, tempDir);
+    expect(result).toContain('$(cat ');
+    expect(result).toContain('a.data.nodeoutput');
+    const { readFile: readFileAsync } = await import('fs/promises');
+    const written = await readFileAsync(join(tempDir, 'a.data.nodeoutput'), 'utf-8');
+    expect(written).toBe(largeValue);
+  });
+
+  it('does not write to file when escapedForBash=false even for large output', () => {
+    const largeOutput = 'x'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, false, tempDir);
+    expect(result).toBe(`echo ${largeOutput}`);
+    expect(result).not.toContain('$(cat ');
+  });
+
+  it('falls back to shell-quoting when file write fails', () => {
+    const largeOutput = 'x'.repeat(33_000);
+    const outputs = new Map([['a', makeOutput('completed', largeOutput)]]);
+    // Use a non-existent directory to trigger writeFileSync failure
+    const badDir = '/nonexistent-path-that-does-not-exist';
+    const result = substituteNodeOutputRefs('echo $a.output', outputs, true, badDir);
+    // Should fall back to inline shell-quoting instead of crashing
+    expect(result).not.toContain('$(cat ');
+    expect(result).toBe(`echo '${largeOutput}'`);
+  });
+});
+
 describe('substituteNodeOutputRefs -- structuredOutput preference', () => {
   it('prefers structuredOutput.field over JSON.parse(output)', () => {
     // Pi-shape: prose output text with structuredOutput populated by tryParseStructuredOutput.
