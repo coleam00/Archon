@@ -17,6 +17,7 @@ import {
 } from '@archon/paths';
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
+import { resolveDefaultAssistant } from '../config/resolve-assistant';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -138,33 +139,7 @@ async function registerRepoAtPath(
   name: string,
   repositoryUrl: string | null
 ): Promise<RegisterResult> {
-  // Resolve default assistant: config preference → SDK folder detection → provider registry fallback.
-  const { getRegisteredProviders } = await import('@archon/providers');
-  const { loadConfig } = await import('../config/config-loader');
-  const defaultProvider = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
-  let suggestedAssistant = defaultProvider;
-  try {
-    const config = await loadConfig();
-    suggestedAssistant = config.assistant;
-  } catch (err) {
-    getLog().warn({ err }, 'config_load_failed_using_builtin_default');
-  }
-  const codexFolder = join(targetPath, '.codex');
-  const claudeFolder = join(targetPath, '.claude');
-
-  try {
-    await access(codexFolder);
-    suggestedAssistant = 'codex';
-    getLog().debug({ path: codexFolder }, 'assistant_detected_codex');
-  } catch {
-    try {
-      await access(claudeFolder);
-      suggestedAssistant = 'claude';
-      getLog().debug({ path: claudeFolder }, 'assistant_detected_claude');
-    } catch {
-      getLog().debug({ provider: suggestedAssistant }, 'assistant_default_from_config');
-    }
-  }
+  const suggestedAssistant = await resolveDefaultAssistant(targetPath);
 
   // Check if a codebase with this name already exists (dedup by project identity)
   const existing = await codebaseDb.findCodebaseByName(name);

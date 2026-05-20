@@ -18,17 +18,7 @@ export async function createCodebase(data: {
   default_cwd: string;
   ai_assistant_type?: string;
 }): Promise<Codebase> {
-  const { getRegisteredProviders } = await import('@archon/providers');
-  const { loadConfig } = await import('../config/config-loader');
-  let configAssistant: string | undefined;
-  try {
-    const config = await loadConfig();
-    configAssistant = config.assistant;
-  } catch {
-    // Config may not be available (e.g. tests); fall through to provider detection
-  }
-  const registeredDefault = getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
-  const assistantType = data.ai_assistant_type ?? configAssistant ?? registeredDefault;
+  const assistantType = data.ai_assistant_type ?? 'claude';
   const result = await pool.query<Codebase>(
     'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
     [data.name, data.repository_url ?? null, data.default_cwd, assistantType]

@@ -12,31 +12,6 @@ mock.module('./connection', () => ({
   getDialect: () => mockPostgresDialect,
 }));
 
-// Mock @archon/providers for the dynamic import in createCodebase
-const mockGetRegisteredProviders = mock(() => [
-  { id: 'claude', builtIn: true },
-  { id: 'codex', builtIn: true },
-]);
-mock.module('@archon/providers', () => ({
-  getRegisteredProviders: mockGetRegisteredProviders,
-  isRegisteredProvider: (id: string) => ['claude', 'codex'].includes(id),
-  getRegisteredProviderNames: () => ['claude', 'codex'],
-  registerBuiltinProviders: () => {},
-  registerCommunityProviders: () => {},
-  registerProvider: () => {},
-}));
-
-// Import real config-loader so the mock preserves all exports.
-// mock.module is process-global and irrevocable in Bun — an incomplete mock
-// here would hide exports like loadGlobalConfig from other test files in the
-// same batch (config-loader.test.ts).
-import * as realConfigLoader from '../config/config-loader';
-const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
-mock.module('../config/config-loader', () => ({
-  ...realConfigLoader,
-  loadConfig: mockLoadConfig,
-}));
-
 import {
   createCodebase,
   getCodebase,
@@ -53,14 +28,6 @@ import {
 describe('codebases', () => {
   beforeEach(() => {
     mockQuery.mockClear();
-    mockGetRegisteredProviders.mockClear();
-    mockLoadConfig.mockClear();
-    // Restore defaults
-    mockGetRegisteredProviders.mockImplementation(() => [
-      { id: 'claude', builtIn: true },
-      { id: 'codex', builtIn: true },
-    ]);
-    mockLoadConfig.mockImplementation(() => Promise.resolve({ assistant: 'claude' }));
   });
 
   const mockCodebase: Codebase = {
@@ -111,38 +78,7 @@ describe('codebases', () => {
       );
     });
 
-    test('defaults ai_assistant_type from config.assistant', async () => {
-      mockLoadConfig.mockImplementation(() => Promise.resolve({ assistant: 'codex' }));
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['codex']));
-    });
-
-    test('falls back to builtIn provider when config.assistant is unavailable', async () => {
-      mockLoadConfig.mockImplementation(() => {
-        throw new Error('no config');
-      });
-      mockGetRegisteredProviders.mockImplementation(() => [{ id: 'pi', builtIn: true }]);
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['pi']));
-    });
-
-    test('falls back to hardcoded claude when registry is empty and config fails', async () => {
-      mockLoadConfig.mockImplementation(() => {
-        throw new Error('no config');
-      });
-      mockGetRegisteredProviders.mockImplementation(() => []);
+    test('defaults ai_assistant_type to claude', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
 
       await createCodebase({
