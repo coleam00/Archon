@@ -24,6 +24,10 @@
  */
 import { access, readFile, readdir, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
+import { execFile as execFileCb } from 'child_process';
+import { promisify } from 'util';
+
+const execFile = promisify(execFileCb);
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
@@ -48,6 +52,31 @@ async function ensureDir(dir: string, label: string): Promise<void> {
       `${label} directory not found: ${dir}\n` +
         `Run this script from the repo root (cwd was ${process.cwd()}), ` +
         'or verify the .archon/ tree exists.'
+    );
+  }
+}
+
+async function assertNoUntrackedFiles(dir: string, label: string): Promise<void> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFile('git', ['ls-files', '--others', '--exclude-standard', dir], {
+      cwd: REPO_ROOT,
+    }));
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      // git binary not found — skip the check (unlikely for a dev environment).
+      return;
+    }
+    throw err;
+  }
+  const untracked = stdout.trim().split('\n').filter(Boolean);
+  if (untracked.length > 0) {
+    const list = untracked.map(f => `  ${f}`).join('\n');
+    throw new Error(
+      `${label} contains untracked files that would be embedded into the binary bundle:\n${list}\n\n` +
+        'Untracked file in defaults/ — stage and commit (git add + git commit),\n' +
+        'or move to .archon/workflows/ (project-scope) or ~/.archon/workflows/ (home-scope).'
     );
   }
 }
@@ -135,6 +164,11 @@ async function main(): Promise<void> {
   await Promise.all([
     ensureDir(COMMANDS_DIR, 'Commands defaults'),
     ensureDir(WORKFLOWS_DIR, 'Workflows defaults'),
+  ]);
+
+  await Promise.all([
+    assertNoUntrackedFiles(COMMANDS_DIR, 'Commands defaults (.archon/commands/defaults/)'),
+    assertNoUntrackedFiles(WORKFLOWS_DIR, 'Workflows defaults (.archon/workflows/defaults/)'),
   ]);
 
   const [commands, workflows] = await Promise.all([

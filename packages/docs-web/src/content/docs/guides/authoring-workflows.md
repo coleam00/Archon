@@ -41,6 +41,8 @@ nodes:
 > ```
 > Same-named files in `.archon/workflows/` override the bundled defaults.
 
+> **`defaults/` is maintainer-territory:** `.archon/workflows/defaults/` and `.archon/commands/defaults/` are reserved for workflows/commands shipped with Archon itself — they are embedded into the binary at build time and every file there must be committed in git. For your own drafts use `.archon/workflows/` (project-scoped, committed to your repo) or `~/.archon/workflows/` (home-scoped, personal). Running `bun run generate:bundled` (or `bun run validate`) will exit with an error if it finds any untracked files in `defaults/`.
+
 ---
 
 ## File Location
