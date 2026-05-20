@@ -131,6 +131,8 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
   const [fileError, setFileError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isComposingRef = useRef(false);
+  const ignoreNextEnterRef = useRef(false);
 
   useImperativeHandle(ref, () => ({
     focus: (): void => {
@@ -186,10 +188,31 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
   }, [value, disabled, onSend, files]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    const nativeEvent = e.nativeEvent;
+    if (
+      e.key === 'Enter' &&
+      (isComposingRef.current || ignoreNextEnterRef.current || nativeEvent.isComposing)
+    ) {
+      ignoreNextEnterRef.current = false;
+      return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleCompositionStart = (): void => {
+    isComposingRef.current = true;
+  };
+
+  const handleCompositionEnd = (): void => {
+    isComposingRef.current = false;
+    ignoreNextEnterRef.current = true;
+    setTimeout(() => {
+      ignoreNextEnterRef.current = false;
+    }, 0);
   };
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
@@ -310,6 +333,8 @@ const messageInput = forwardRef<MessageInputHandle, MessageInputProps>(function 
             value={value}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             onPaste={handlePaste}
             disabled={disabled}
             placeholder={dragging ? 'Drop files here...' : (disabledReason ?? 'Message Archon...')}
