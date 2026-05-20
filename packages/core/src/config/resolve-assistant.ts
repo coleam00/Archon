@@ -1,7 +1,6 @@
 import { access } from 'fs/promises';
 import { join } from 'path';
 import { createLogger } from '@archon/paths';
-import { loadConfig } from './config-loader';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -39,7 +38,14 @@ export async function resolveDefaultAssistant(repoPath: string): Promise<string>
     // fall through
   }
 
+  // Lazy-load config-loader and @archon/providers so this module doesn't eagerly
+  // pull in their chains at every import site. config-loader.ts eagerly imports
+  // @archon/providers, which transitively pulls in claude/codex binary-resolver
+  // and their BUNDLED_IS_BINARY dependency on @archon/paths — that breaks adapter
+  // tests on Linux that mock @archon/paths without BUNDLED_IS_BINARY. The original
+  // clone.ts logic used dynamic imports for exactly this reason.
   try {
+    const { loadConfig } = await import('./config-loader');
     const config = await loadConfig();
     if (config.assistant) {
       getLog().debug({ provider: config.assistant }, 'assistant_default_from_config');
@@ -49,10 +55,6 @@ export async function resolveDefaultAssistant(repoPath: string): Promise<string>
     getLog().warn({ err }, 'config_load_failed_using_builtin_default');
   }
 
-  // Lazy-load @archon/providers so this module doesn't eagerly pull in provider
-  // SDK chains (and their @archon/paths BUNDLED_IS_BINARY dependency) at every
-  // import site. The original clone.ts logic also used a dynamic import for
-  // exactly this reason.
   const { getRegisteredProviders } = await import('@archon/providers');
   return getRegisteredProviders().find(p => p.builtIn)?.id ?? 'claude';
 }
