@@ -8,6 +8,7 @@ const isWindows = process.platform === 'win32';
 
 import {
   isDocker,
+  shouldStoreArtifactsInWorktree,
   getArchonHome,
   getArchonWorkspacesPath,
   ensureArchonWorkspacesPath,
@@ -39,7 +40,14 @@ import {
 } from './archon-paths';
 
 /** All env vars that path functions depend on */
-const ENV_VARS = ['WORKSPACE_PATH', 'WORKTREE_BASE', 'ARCHON_HOME', 'ARCHON_DOCKER', 'HOME'];
+const ENV_VARS = [
+  'WORKSPACE_PATH',
+  'WORKTREE_BASE',
+  'ARCHON_HOME',
+  'ARCHON_DOCKER',
+  'ARCHON_STORE_ARTIFACTS_IN_WORKTREE',
+  'HOME',
+];
 
 /**
  * Save and restore environment variables around each test.
@@ -101,6 +109,43 @@ describe('archon-paths', () => {
       delete process.env.ARCHON_DOCKER;
       process.env.HOME = homedir();
       expect(isDocker()).toBe(false);
+    });
+  });
+
+  describe('shouldStoreArtifactsInWorktree', () => {
+    test('returns false by default (env var not set)', () => {
+      delete process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE;
+      expect(shouldStoreArtifactsInWorktree()).toBe(false);
+    });
+
+    test('returns true when env var is "true"', () => {
+      process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE = 'true';
+      expect(shouldStoreArtifactsInWorktree()).toBe(true);
+    });
+
+    test('returns true when env var is "TRUE" (case insensitive)', () => {
+      process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE = 'TRUE';
+      expect(shouldStoreArtifactsInWorktree()).toBe(true);
+    });
+
+    test('returns true when env var is "1"', () => {
+      process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE = '1';
+      expect(shouldStoreArtifactsInWorktree()).toBe(true);
+    });
+
+    test('returns false when env var is "false"', () => {
+      process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE = 'false';
+      expect(shouldStoreArtifactsInWorktree()).toBe(false);
+    });
+
+    test('returns false when env var is "0"', () => {
+      process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE = '0';
+      expect(shouldStoreArtifactsInWorktree()).toBe(false);
+    });
+
+    test('returns false for any other value', () => {
+      process.env.ARCHON_STORE_ARTIFACTS_IN_WORKTREE = 'yes';
+      expect(shouldStoreArtifactsInWorktree()).toBe(false);
     });
   });
 
