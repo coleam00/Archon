@@ -688,7 +688,7 @@ GitHub always run workflows in foreground mode regardless of this setting.
 ### Provider Validation
 
 Workflows are validated at load time for **provider identity only**:
-- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`).
+- Both the workflow-level `provider:` and any per-node `provider:` overrides must name a registered provider (`claude`, `codex`, `pi`, `copilot`).
 - Validation errors are shown in `/workflow list`.
 
 Example validation error:
