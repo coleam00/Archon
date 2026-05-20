@@ -2646,9 +2646,22 @@ export async function executeDagWorkflow(
         try {
           // 0. Skip if this node completed successfully in a prior run (resume path).
           // `always_run: true` opts the node out of resume caching — re-execute even
-          // when the prior run completed it. See #1391.
+          // when the prior run completed it.
           if (priorCompletedNodes?.has(node.id) && node.always_run) {
             getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'node_always_run_reset',
+                step_name: node.id,
+                data: { prior_output: priorCompletedNodes.get(node.id) ?? '' },
+              })
+              .catch((err: Error) => {
+                getLog().error(
+                  { err, workflowRunId: workflowRun.id, eventType: 'node_always_run_reset' },
+                  'workflow_event_persist_failed'
+                );
+              });
           }
           if (priorCompletedNodes?.has(node.id) && !node.always_run) {
             getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');

@@ -4840,7 +4840,7 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
     // Producer re-runs (instead of being skipped) AND consumer runs => 2 sendQuery calls
     expect(mockSendQueryDag.mock.calls.length).toBe(2);
 
-    // No skip event written for the always_run node
+    // No skip event written for the always_run node — but a reset event IS written for audit
     const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
     const skippedEvent = eventCalls.find(
       (call: unknown[]) =>
@@ -4848,6 +4848,16 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
         (call[0] as { step_name: string }).step_name === 'producer'
     );
     expect(skippedEvent).toBeUndefined();
+
+    const resetEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_always_run_reset' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(resetEvent).toBeDefined();
+    expect((resetEvent![0] as { data: { prior_output: string } }).data.prior_output).toBe(
+      'cached stale output'
+    );
   });
 
   it('still skips non-always_run nodes in the same priorCompletedNodes set', async () => {
