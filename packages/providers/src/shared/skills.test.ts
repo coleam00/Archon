@@ -5,19 +5,30 @@ import { join } from 'node:path';
 
 import { resolveSkillDirectories } from './skills';
 
+type FakeWorld = {
+  root: string;
+  cwd: string;
+  home: string;
+  stageSkill: (under: 'cwd' | 'home', subdir: '.agents' | '.claude', name: string) => string;
+};
+
 /**
  * Stages a temp cwd and HOME so the resolver's filesystem reads are isolated
  * per test. Each test gets its own `cwd/.agents/skills/` etc. tree to populate
  * as needed.
  */
-function makeFakeWorld() {
+function makeFakeWorld(): FakeWorld {
   const root = mkdtempSync(join(tmpdir(), 'archon-skills-test-'));
   const cwd = join(root, 'project');
   const home = join(root, 'home');
   mkdirSync(cwd, { recursive: true });
   mkdirSync(home, { recursive: true });
 
-  const stageSkill = (under: 'cwd' | 'home', subdir: '.agents' | '.claude', name: string) => {
+  const stageSkill = (
+    under: 'cwd' | 'home',
+    subdir: '.agents' | '.claude',
+    name: string
+  ): string => {
     const base = under === 'cwd' ? cwd : home;
     const dir = join(base, subdir, 'skills', name);
     mkdirSync(dir, { recursive: true });
@@ -87,7 +98,7 @@ describe('resolveSkillDirectories', () => {
 
   test('prefers cwd over home when the same name exists in both', () => {
     const cwdDir = fake.stageSkill('cwd', '.agents', 'delta');
-    fake.stageSkill('home', '.claude', 'delta');
+    fake.stageSkill('home', '.agents', 'delta');
     const result = resolveSkillDirectories(fake.cwd, ['delta']);
     expect(result.paths).toEqual([cwdDir]);
     expect(result.missing).toEqual([]);
