@@ -10,6 +10,7 @@
  * Config-file path is intentionally NOT honored in dev mode (still binary-only).
  */
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
+import { join } from 'node:path';
 import { createMockLogger } from '../test/mocks/logger';
 
 mock.module('@archon/paths', () => ({
@@ -18,6 +19,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import * as resolver from './binary-resolver';
+import { CLAUDE_BINARY_NAME } from './binary-resolver';
 
 describe('resolveClaudeBinaryPath (dev mode)', () => {
   const originalEnv = process.env.CLAUDE_BIN_PATH;
@@ -80,5 +82,35 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
     process.env.CLAUDE_BIN_PATH = '';
     const result = await resolver.resolveClaudeBinaryPath();
     expect(result).toBeUndefined();
+  });
+
+  test('expands a CLAUDE_BIN_PATH directory to its inner claude/claude.exe in dev mode', async () => {
+    // validateAndExpand runs BEFORE the BUNDLED_IS_BINARY guard, so dev-mode
+    // users who set CLAUDE_BIN_PATH to the npm platform-package directory
+    // must also get expansion. Pin the contract so a future refactor that
+    // reorders these checks fails loudly.
+    const dir = '/opt/claude-code-package';
+    const expectedFile = join(dir, CLAUDE_BINARY_NAME);
+    process.env.CLAUDE_BIN_PATH = dir;
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((p: string) => {
+      if (p === dir) return 'directory';
+      if (p === expectedFile) return 'file';
+      return 'missing';
+    });
+
+    const result = await resolver.resolveClaudeBinaryPath();
+    expect(result).toBe(expectedFile);
+  });
+
+  test('throws a directory-specific error when CLAUDE_BIN_PATH is a directory missing the executable in dev mode', async () => {
+    const dir = '/some/empty/dir';
+    process.env.CLAUDE_BIN_PATH = dir;
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((p: string) =>
+      p === dir ? 'directory' : 'missing'
+    );
+
+    const promise = resolver.resolveClaudeBinaryPath();
+    await expect(promise).rejects.toThrow('CLAUDE_BIN_PATH');
+    await expect(promise).rejects.toThrow('which is a directory');
   });
 });

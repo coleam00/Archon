@@ -28,53 +28,53 @@ export function fileExists(path: string): boolean {
   return _existsSync(path);
 }
 
+/** Platform-specific Claude Code binary filename: `claude.exe` on Windows, `claude` elsewhere. */
+export const CLAUDE_BINARY_NAME = process.platform === 'win32' ? 'claude.exe' : 'claude';
+
+export type PathKind = 'file' | 'directory' | 'missing';
+
 /**
  * Classify a configured path. The Claude Agent SDK requires a spawnable file:
  * a directory passes `existsSync` but fails downstream as ENOENT inside the
  * SDK's `child_process.spawn`, surfaced as the misleading "native binary not
- * found" error. Wrapped for spyOn parity with `fileExists`.
+ * found" error.
  *
- * Non-file, non-directory entries (sockets, FIFOs, etc.) are reported as
- * 'missing' so the caller's "set to X but unusable" error path fires.
+ * Non-file, non-directory entries (sockets, FIFOs, etc.) report as 'missing'
+ * so the caller's "set to X but unusable" error path fires. Stat errors other
+ * than ENOENT/ENOTDIR (e.g. EACCES) are logged before being collapsed to
+ * 'missing' so operators have a triage breadcrumb for permission issues that
+ * would otherwise surface as a misleading "file does not exist".
  */
-export function pathKind(path: string): 'file' | 'directory' | 'missing' {
+export function pathKind(path: string): PathKind {
   try {
     const stat = _statSync(path);
     if (stat.isFile()) return 'file';
     if (stat.isDirectory()) return 'directory';
     return 'missing';
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      getLog().warn({ err, path, code }, 'claude.path_stat_failed');
+    }
     return 'missing';
   }
 }
 
 /**
- * If a configured path is a directory, expand to the platform-appropriate
- * child executable (`claude.exe` on Windows, `claude` on Unix). Common when
- * users point at the npm platform-package directory
- * (`@anthropic-ai/claude-code-<platform>`), which contains the binary inside.
- * Returns the expanded file path if present, otherwise undefined.
- */
-function expandDirectoryToExecutable(dir: string): string | undefined {
-  const candidate = join(dir, process.platform === 'win32' ? 'claude.exe' : 'claude');
-  return pathKind(candidate) === 'file' ? candidate : undefined;
-}
-
-/**
- * Validate a user-supplied path and, if a directory is given, expand to the
- * platform-appropriate child executable. Distinguishes missing paths from
- * directories-without-the-expected-binary so the error message tells the user
- * what to fix.
+ * Distinguishes missing paths from directories-without-the-expected-binary so
+ * the error message tells the user what to fix. Users commonly point at the
+ * npm platform-package directory (`@anthropic-ai/claude-code-<platform>`),
+ * which contains the binary inside — expand to the contained executable
+ * transparently in that case.
  */
 function validateAndExpand(rawPath: string, sourceLabel: string): string {
   const kind = pathKind(rawPath);
   if (kind === 'file') return rawPath;
   if (kind === 'directory') {
-    const expanded = expandDirectoryToExecutable(rawPath);
-    if (expanded) return expanded;
-    const expected = process.platform === 'win32' ? 'claude.exe' : 'claude';
+    const candidate = join(rawPath, CLAUDE_BINARY_NAME);
+    if (pathKind(candidate) === 'file') return candidate;
     throw new Error(
-      `${sourceLabel} is set to "${rawPath}", which is a directory, but it does not contain ${expected}.\n` +
+      `${sourceLabel} is set to "${rawPath}", which is a directory, but it does not contain ${CLAUDE_BINARY_NAME}.\n` +
         'Please point this setting at the Claude Code executable itself (native binary\n' +
         'from the curl/PowerShell installer, or cli.js from an npm global install).'
     );
@@ -155,11 +155,8 @@ export async function resolveClaudeBinaryPath(
   // the recommended install path don't need any env var or config entry;
   // users who deviate (npm global, custom path, etc.) still set one of
   // the higher-priority sources above.
-  const nativeInstallerPath =
-    process.platform === 'win32'
-      ? join(homedir(), '.local', 'bin', 'claude.exe')
-      : join(homedir(), '.local', 'bin', 'claude');
-  if (fileExists(nativeInstallerPath)) {
+  const nativeInstallerPath = join(homedir(), '.local', 'bin', CLAUDE_BINARY_NAME);
+  if (pathKind(nativeInstallerPath) === 'file') {
     getLog().info(
       { binaryPath: nativeInstallerPath, source: 'autodetect' },
       'claude.binary_resolved'

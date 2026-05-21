@@ -67,8 +67,10 @@ assistants:
       - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
     # Optional: absolute path to the Claude Code executable.
     # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
-    # Accepts the native binary (~/.local/bin/claude from the curl installer)
-    # or the npm-installed cli.js. Source/dev mode auto-resolves.
+    # Accepts the native binary (~/.local/bin/claude from the curl installer),
+    # the npm-installed cli.js, or the npm platform-package directory
+    # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
+    # Source/dev mode auto-resolves.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.3-codex
