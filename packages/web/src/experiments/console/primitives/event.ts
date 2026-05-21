@@ -131,23 +131,23 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
-  if (et === 'tool_started' || et === 'tool_completed') {
-    const toolName = readString(data, 'toolName');
-    const argsJson = data.args;
+  if (et === 'tool_called' || et === 'tool_completed') {
+    // Server writes snake_case fields (tool_name, tool_input, duration_ms);
+    // the start event carries the input, the completed event carries only
+    // the duration. RunStream pairs them by step + order to fill durationMs.
+    const toolName = readString(data, 'tool_name');
+    const toolInput = data.tool_input;
     const argsSummary = readString(data, 'argsSummary');
-    const ok = et === 'tool_completed';
     return {
       ...base,
       kind: 'tool_call',
       tool: toolName,
       argsSummary,
-      args: argsJson,
+      args: toolInput,
       result:
-        et === 'tool_started'
+        et === 'tool_called'
           ? null
-          : ok
-            ? { ok: true, durationMs: readNumberOrNull(data, 'durationMs') ?? 0 }
-            : { ok: false, message: readString(data, 'error') },
+          : { ok: true, durationMs: readNumberOrNull(data, 'duration_ms') ?? 0 },
     };
   }
 

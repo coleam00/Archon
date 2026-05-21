@@ -4,7 +4,12 @@ import { ToolCallItem } from './ToolCallItem';
 import { NodeDivider } from './NodeDivider';
 import { ArtifactItem } from './ArtifactItem';
 import type { InlineToolCall, Message } from '../primitives/message';
-import type { RunEvent, NodeTransitionEvent, ArtifactEvent } from '../primitives/event';
+import type {
+  RunEvent,
+  NodeTransitionEvent,
+  ArtifactEvent,
+  ToolCallEvent,
+} from '../primitives/event';
 
 interface RunStreamProps {
   messages: Message[];
@@ -32,17 +37,69 @@ type TimelineEntry =
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent };
 
 /**
+ * Pairs `tool_called` events with their matching `tool_completed` so each
+ * call surfaces as a single InlineToolCall with input + duration.
+ *
+ * Pairing key: step name. The orchestrator emits the events sequentially
+ * within a step, so taking the next unclaimed `tool_completed` after each
+ * `tool_called` for the same step is correct.
+ *
+ * Returns one InlineToolCall per `tool_called` event, in event order. The
+ * `tool_completed` event contributes only `durationMs`.
+ */
+interface PairedToolCall {
+  id: string;
+  timestamp: string;
+  call: InlineToolCall;
+}
+
+function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
+  const toolEvents = events.filter((e): e is ToolCallEvent => e.kind === 'tool_call');
+  // Track unclaimed completed events per step so each call gets exactly one.
+  const completedByStep = new Map<string, ToolCallEvent[]>();
+  for (const e of toolEvents) {
+    if (e.result === null) continue; // start event; skip here
+    const key = e.nodeId ?? '';
+    const list = completedByStep.get(key) ?? [];
+    list.push(e);
+    completedByStep.set(key, list);
+  }
+
+  const paired: PairedToolCall[] = [];
+  for (const e of toolEvents) {
+    if (e.result !== null) continue; // only seed from start events
+    const key = e.nodeId ?? '';
+    const pool = completedByStep.get(key);
+    const match = pool !== undefined && pool.length > 0 ? pool.shift() : undefined;
+    const input =
+      typeof e.args === 'object' && e.args !== null ? (e.args as Record<string, unknown>) : {};
+    paired.push({
+      id: e.id,
+      timestamp: e.timestamp,
+      call: {
+        name: e.tool || '(unknown)',
+        input,
+        durationMs: match?.result?.ok === true ? match.result.durationMs : undefined,
+      },
+    });
+  }
+  return paired;
+}
+
+/**
  * Merges conversation messages + workflow events into a single timeline.
  *
- * Tool calls live inside each message's metadata. We break them out into
- * their own timeline entries (keyed under the message's timestamp, with a
- * tiny per-tool offset for stable ordering) so each one renders as its own
- * small card and the `showToolCalls` toggle can hide them cleanly.
+ * Tool-call source-of-truth depends on the workflow's provider:
+ *   - Claude runs persist tool calls in `message.metadata.toolCalls`
+ *   - Pi / Codex / bash nodes persist them as `tool_called`/`tool_completed`
+ *     workflow events
+ *
+ * When any message has inline tool calls we treat the conversation as
+ * authoritative (avoids double-display on Claude). Otherwise we surface the
+ * paired workflow tool events.
  *
  * What we deliberately skip here:
- *   - `tool_call` *events* from workflow_events — conversation metadata is
- *     authoritative, rendering both would double-display.
- *   - `approval` events — the RunDetailPage renders an inline ApprovalPanel
+ *   - `approval` events — RunDetailPage renders an inline ApprovalPanel
  *     below the stream instead.
  *   - `text` / `error` events — messages are the source of truth for text;
  *     errors surface via the run status + action bar.
@@ -55,12 +112,14 @@ export function RunStream({
 }: RunStreamProps): ReactElement {
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
+    let inlineToolCount = 0;
     for (const m of messages) {
       if (!isMeaningful(m)) continue;
       if (!showSystem && m.role === 'system') continue;
       const base = new Date(m.timestamp).getTime();
       entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
       m.toolCalls.forEach((call, idx) => {
+        inlineToolCount += 1;
         entries.push({
           kind: 'tool',
           key: `t:${m.id}:${idx.toString()}`,
@@ -72,6 +131,20 @@ export function RunStream({
         });
       });
     }
+
+    // If no inline tool calls came from messages, surface workflow tool events.
+    if (inlineToolCount === 0) {
+      for (const t of pairToolEvents(events)) {
+        entries.push({
+          kind: 'tool',
+          key: `wt:${t.id}`,
+          at: new Date(t.timestamp).getTime(),
+          call: t.call,
+          timestamp: t.timestamp,
+        });
+      }
+    }
+
     for (const e of events) {
       const at = new Date(e.timestamp).getTime();
       if (e.kind === 'node_transition') {

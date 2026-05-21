@@ -185,7 +185,14 @@ export function RunDetailPage(): ReactElement {
 
   const { run, events } = detail;
   const messageList = messages ?? [];
-  const toolCallCount = messageList.reduce((acc, m) => acc + m.toolCalls.length, 0);
+  const inlineToolCount = messageList.reduce((acc, m) => acc + m.toolCalls.length, 0);
+  // Mirror RunStream's source-of-truth rule: when no inline tool calls exist
+  // on messages, the workflow tool_called events become the canonical count.
+  const workflowToolCount =
+    inlineToolCount === 0
+      ? events.filter(e => e.kind === 'tool_call' && e.result === null).length
+      : 0;
+  const toolCallCount = inlineToolCount + workflowToolCount;
 
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
