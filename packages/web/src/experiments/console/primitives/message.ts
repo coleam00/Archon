@@ -18,6 +18,26 @@ export interface InlineError {
   classification?: string;
 }
 
+/**
+ * Framework-emitted messages carry a `category` in their metadata identifying
+ * what they are (e.g. `workflow_dispatch_status` for the rocket-emoji
+ * dispatch line, `workflow_status` for "starting workflow" prose). These
+ * read as system chatter — the SDK / orchestrator narrating, not the agent
+ * itself — and are hidden by default, surfaced as compact rows under the
+ * System toggle.
+ */
+const SYSTEM_CATEGORY_PREFIXES = ['workflow_', 'system_'] as const;
+
+export function isSystemCategory(category: string | null): boolean {
+  if (category === null) return false;
+  return SYSTEM_CATEGORY_PREFIXES.some(p => category.startsWith(p));
+}
+
+export interface WorkflowDispatchMeta {
+  workflowName: string;
+  workerConversationId?: string;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -25,6 +45,10 @@ export interface Message {
   timestamp: string;
   toolCalls: InlineToolCall[];
   error: InlineError | null;
+  /** Framework category from metadata (e.g. workflow_dispatch_status). */
+  category: string | null;
+  /** Parsed workflowDispatch payload, if present on this message. */
+  dispatch: WorkflowDispatchMeta | null;
 }
 
 interface RawMessage {
@@ -43,6 +67,11 @@ interface ParsedMetadata {
     output?: string;
     duration?: number;
   }[];
+  category?: string;
+  workflowDispatch?: {
+    workflowName: string;
+    workerConversationId?: string;
+  };
 }
 
 function parseMetadata(raw: string): ParsedMetadata {
@@ -74,6 +103,13 @@ export function toMessage(raw: RawMessage): Message {
           classification: meta.error.classification,
         }
       : null;
+  const dispatch: WorkflowDispatchMeta | null =
+    meta.workflowDispatch !== undefined
+      ? {
+          workflowName: meta.workflowDispatch.workflowName,
+          workerConversationId: meta.workflowDispatch.workerConversationId,
+        }
+      : null;
   return {
     id: raw.id,
     role: toMessageRole(raw.role),
@@ -81,5 +117,7 @@ export function toMessage(raw: RawMessage): Message {
     timestamp: raw.created_at,
     toolCalls,
     error,
+    category: meta.category ?? null,
+    dispatch,
   };
 }

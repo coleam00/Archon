@@ -4,6 +4,7 @@ import { ToolCallItem } from './ToolCallItem';
 import { NodeDivider } from './NodeDivider';
 import { ArtifactItem } from './ArtifactItem';
 import type { InlineToolCall, Message } from '../primitives/message';
+import { isSystemCategory } from '../primitives/message';
 import type {
   RunEvent,
   NodeTransitionEvent,
@@ -33,12 +34,19 @@ function isMeaningful(m: Message): boolean {
   return false;
 }
 
+interface SystemRow {
+  label: string;
+  detail: string;
+  timestamp: string;
+}
+
 type TimelineEntry =
   | { kind: 'message'; key: string; at: number; message: Message }
   | { kind: 'tool'; key: string; at: number; call: InlineToolCall; timestamp: string }
-  | { kind: 'node'; key: string; at: number; event: NodeTransitionEvent }
+  | { kind: 'node'; key: string; at: number; event: NodeTransitionEvent; showDetail: boolean }
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
-  | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent };
+  | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
+  | { kind: 'system_row'; key: string; at: number; row: SystemRow };
 
 /**
  * Pairs `tool_called` events with their matching `tool_completed` so each
@@ -118,10 +126,57 @@ export function RunStream({
     const entries: TimelineEntry[] = [];
     let inlineToolCount = 0;
     for (const m of messages) {
-      if (!isMeaningful(m)) continue;
-      // System messages are filtered later by `visible`; keep them in the
-      // timeline so the toggle can flip without rebuilding.
       const base = new Date(m.timestamp).getTime();
+      const meaningful = isMeaningful(m);
+      const isSystemy = isSystemCategory(m.category) || m.role === 'system';
+
+      if (isSystemy) {
+        // Framework chatter — surface as a compact system row instead of
+        // rendering as agent prose. Dispatch metadata gets its own row when
+        // present so the workflow name shows up explicitly.
+        if (m.dispatch !== null) {
+          entries.push({
+            kind: 'system_row',
+            key: `sm:dispatch:${m.id}`,
+            at: base,
+            row: {
+              label: 'Workflow dispatch',
+              detail: m.dispatch.workflowName,
+              timestamp: m.timestamp,
+            },
+          });
+        } else {
+          entries.push({
+            kind: 'system_row',
+            key: `sm:${m.id}`,
+            at: base,
+            row: {
+              label: m.category ?? 'System',
+              detail: m.content.split('\n')[0]?.slice(0, 160) ?? '',
+              timestamp: m.timestamp,
+            },
+          });
+        }
+        continue;
+      }
+
+      if (!meaningful) {
+        // Empty / no-signal messages — usually plumbing the SDK emits. Hide
+        // by default; behind System the user gets a noise row to see the
+        // gap that would otherwise be invisible.
+        entries.push({
+          kind: 'system_row',
+          key: `sm:noise:${m.id}`,
+          at: base,
+          row: {
+            label: 'Noise',
+            detail: `${m.role} · no content`,
+            timestamp: m.timestamp,
+          },
+        });
+        continue;
+      }
+
       entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
       m.toolCalls.forEach((call, idx) => {
         inlineToolCount += 1;
@@ -153,7 +208,7 @@ export function RunStream({
     for (const e of events) {
       const at = new Date(e.timestamp).getTime();
       if (e.kind === 'node_transition') {
-        entries.push({ kind: 'node', key: `n:${e.id}`, at, event: e });
+        entries.push({ kind: 'node', key: `n:${e.id}`, at, event: e, showDetail: showSystem });
       } else if (e.kind === 'artifact') {
         entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
       } else if (e.kind === 'system' || e.kind === 'error') {
@@ -162,12 +217,12 @@ export function RunStream({
     }
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events]);
+  }, [messages, events, showSystem]);
 
   const visible = timeline.filter(e => {
     if (e.kind === 'tool' && !showToolCalls) return false;
     if (e.kind === 'system' && !showSystem) return false;
-    if (e.kind === 'message' && e.message.role === 'system' && !showSystem) return false;
+    if (e.kind === 'system_row' && !showSystem) return false;
     return true;
   });
 
@@ -199,6 +254,9 @@ export function RunStream({
               transition={entry.event.transition}
               durationMs={entry.event.durationMs}
               timestamp={entry.event.timestamp}
+              skipReason={entry.event.skipReason}
+              skipExpr={entry.event.skipExpr}
+              showDetail={entry.showDetail}
             />
           );
         }
@@ -218,6 +276,24 @@ export function RunStream({
                 detail.length > 0 ? (
                   <span className="truncate font-mono text-[11px] text-text-secondary">
                     {detail}
+                  </span>
+                ) : null
+              }
+            />
+          );
+        }
+        if (entry.kind === 'system_row') {
+          return (
+            <StreamCard
+              key={entry.key}
+              timestamp={entry.row.timestamp}
+              kind="system"
+              compact
+              label={entry.row.label}
+              headerRight={
+                entry.row.detail.length > 0 ? (
+                  <span className="truncate font-mono text-[11px] text-text-secondary">
+                    {entry.row.detail}
                   </span>
                 ) : null
               }

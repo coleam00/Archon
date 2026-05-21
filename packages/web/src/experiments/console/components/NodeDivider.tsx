@@ -7,6 +7,12 @@ interface NodeDividerProps {
   transition: 'started' | 'completed' | 'failed' | 'skipped';
   durationMs: number | null;
   timestamp: string;
+  /** Only set for `skipped` — `when_condition` / `trigger_rule`. */
+  skipReason?: string | null;
+  /** Only set for `skipped` — the evaluated gating expression. */
+  skipExpr?: string | null;
+  /** When true, surface skip reason + expression inline. */
+  showDetail?: boolean;
 }
 
 const TRANSITION_LABEL: Record<NodeDividerProps['transition'], string> = {
@@ -36,6 +42,9 @@ export function NodeDivider({
   transition,
   durationMs,
   timestamp,
+  skipReason,
+  skipExpr,
+  showDetail = false,
 }: NodeDividerProps): ReactElement {
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
@@ -45,25 +54,46 @@ export function NodeDivider({
       ? ` · ${formatElapsed(Math.floor(durationMs / 1000))}`
       : '';
 
+  const hasSkipDetail =
+    transition === 'skipped' &&
+    showDetail &&
+    skipReason !== null &&
+    skipReason !== undefined &&
+    skipReason.length > 0;
+
   return (
-    <div id={`node-transition-${nodeName}`} className="flex items-center gap-3 py-3">
-      <time
-        dateTime={timestamp}
-        title={wallClock}
-        className="w-14 shrink-0 font-mono text-[10px] tabular-nums text-text-tertiary"
-      >
-        {displayed}
-      </time>
-      <span className="font-mono text-[11px] text-text-primary">{nodeName}</span>
-      <div
-        className="h-px flex-1"
-        style={{ backgroundColor: 'color-mix(in oklch, var(--border), transparent 50%)' }}
-        aria-hidden
-      />
-      <span className={`font-mono text-[11px] ${TRANSITION_COLOR[transition]}`}>
-        {TRANSITION_LABEL[transition]}
-        {dur}
-      </span>
+    <div id={`node-transition-${nodeName}`} className="flex flex-col gap-1 py-3">
+      <div className="flex items-center gap-3">
+        <time
+          dateTime={timestamp}
+          title={wallClock}
+          className="w-14 shrink-0 font-mono text-[10px] tabular-nums text-text-tertiary"
+        >
+          {displayed}
+        </time>
+        <span className="font-mono text-[11px] text-text-primary">{nodeName}</span>
+        <div
+          className="h-px flex-1"
+          style={{ backgroundColor: 'color-mix(in oklch, var(--border), transparent 50%)' }}
+          aria-hidden
+        />
+        <span className={`font-mono text-[11px] ${TRANSITION_COLOR[transition]}`}>
+          {TRANSITION_LABEL[transition]}
+          {dur}
+        </span>
+      </div>
+      {hasSkipDetail ? (
+        <div className="ml-[68px] flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-text-tertiary">
+          <span>reason</span>
+          <span className="text-text-secondary">{skipReason}</span>
+          {skipExpr !== null && skipExpr !== undefined && skipExpr.length > 0 ? (
+            <>
+              <span>expr</span>
+              <span className="text-text-secondary">{skipExpr}</span>
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

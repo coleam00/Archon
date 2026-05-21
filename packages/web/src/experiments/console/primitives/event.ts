@@ -50,6 +50,10 @@ export interface NodeTransitionEvent extends RunEventBase {
   nodeName: string;
   transition: 'started' | 'completed' | 'failed' | 'skipped';
   durationMs: number | null;
+  /** Only populated for `skipped` — `when_condition` or `trigger_rule`. */
+  skipReason: string | null;
+  /** Only populated for `skipped` — the evaluated expression that gated it. */
+  skipExpr: string | null;
 }
 
 export interface ApprovalEvent extends RunEventBase {
@@ -142,6 +146,8 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       nodeName: readString(data, 'name') || (raw.step_name ?? ''),
       transition,
       durationMs: readNumberOrNull(data, 'duration'),
+      skipReason: transition === 'skipped' ? readStringOrNull(data, 'reason') : null,
+      skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
     };
   }
 

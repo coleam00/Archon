@@ -20,39 +20,55 @@ interface StreamCardProps {
 // (presence / authorship); the agent's voice reads as teal (execution).
 // Tool/system/artifact/error stay semantic — they signal kind-of-event, not
 // who-is-speaking.
-const KIND_STYLES: Record<
-  StreamCardProps['kind'],
-  { label: string; pill: string; border: string }
-> = {
+//
+// border-color is set inline (not via Tailwind class) because the console's
+// wildcard `border-color: var(--border)` rule outweighs utility-class color
+// in the cascade and would otherwise repaint everything charcoal.
+interface KindStyle {
+  label: string;
+  pill: string;
+  borderClass: string;
+  borderColor: string;
+}
+
+const KIND_STYLES: Record<StreamCardProps['kind'], KindStyle> = {
   user: {
     label: 'You',
     pill: 'bg-[color:var(--accent-soft)] text-[color:var(--brand-magenta)]',
-    border: 'border-border',
+    borderClass: 'border',
+    borderColor: 'var(--border)',
   },
   assistant: {
     label: 'Agent',
     pill: 'bg-[color:var(--success-soft,oklch(0.755_0.165_168/0.14))] text-[color:var(--brand-teal)]',
-    border: 'border-border',
+    borderClass: 'border',
+    borderColor: 'var(--border)',
   },
   system: {
     label: 'System',
-    pill: 'bg-surface-elevated text-text-tertiary',
-    border: 'border-border',
+    pill: 'bg-[color:var(--success-soft,oklch(0.755_0.165_168/0.14))] text-[color:var(--brand-teal)]',
+    // Top-only teal hairline anchors system rows as framework bookends
+    // without shouting. Other sides are intentionally omitted.
+    borderClass: 'border-t',
+    borderColor: 'color-mix(in oklch, var(--brand-teal), transparent 55%)',
   },
   tool: {
     label: 'Tool',
     pill: 'bg-surface-inset text-text-secondary',
-    border: 'border-border/60',
+    borderClass: 'border',
+    borderColor: 'color-mix(in oklch, var(--border), transparent 40%)',
   },
   artifact: {
     label: 'Artifact',
     pill: 'bg-success/15 text-success',
-    border: 'border-success/30',
+    borderClass: 'border',
+    borderColor: 'color-mix(in oklch, var(--success), transparent 70%)',
   },
   error: {
     label: 'Error',
     pill: 'bg-error/15 text-error',
-    border: 'border-error/30',
+    borderClass: 'border',
+    borderColor: 'color-mix(in oklch, var(--error), transparent 60%)',
   },
 };
 
@@ -76,7 +92,8 @@ export function StreamCard({
   return (
     <article
       onClick={onClick}
-      className={`rounded border ${style.border} bg-surface px-3 ${
+      style={{ borderColor: style.borderColor }}
+      className={`rounded ${style.borderClass} bg-surface px-3 ${
         compact ? 'py-1.5' : 'py-2'
       } ${onClick !== undefined ? 'cursor-pointer transition-colors hover:bg-surface-hover' : ''}`}
     >
