@@ -1704,4 +1704,37 @@ describe('sendQuery decomposition behaviors', () => {
     expect(capturedSignal).not.toBe(callerController.signal);
     expect(capturedSignal?.aborted).toBe(true);
   }, 5_000);
+
+  // Regression for issue #1735.
+  // The retry loop's finally previously called attemptController.abort() as
+  // a "downstream cleanup" gesture. After a successful runStreamed completion,
+  // codex-sdk's own finally has already executed child.removeAllListeners()
+  // and child.kill(). Calling abort() afterwards trips Node's internal
+  // spawn({ signal }) listener (registered when the child was spawned), which
+  // calls abortChildProcess -> emitError on the now-listenerless child,
+  // surfacing as an uncaught process-level AbortError.
+  test('per-attempt signal is not aborted after a clean completion', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mockRunStreamed.mockImplementation((_prompt: unknown, opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      return Promise.resolve({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'done', id: '1' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) {
+      chunks.push(chunk);
+    }
+
+    expect(mockRunStreamed).toHaveBeenCalledTimes(1);
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+  }, 5_000);
 });

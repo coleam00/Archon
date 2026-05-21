@@ -842,10 +842,6 @@ export class CodexProvider implements IAgentProvider {
         if (requestOptions?.abortSignal) {
           requestOptions.abortSignal.removeEventListener('abort', onCallerAbort);
         }
-        // Signal to any downstream consumers that this attempt is done.
-        // Next iteration creates a fresh controller; caller's signal state
-        // is unchanged.
-        attemptController.abort();
       }
     }
 
