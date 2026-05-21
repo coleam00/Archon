@@ -3,7 +3,7 @@ import { useParams } from 'react-router';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { RunStream } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
-import { StreamToolbar } from '../components/StreamToolbar';
+import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
 import { RunGraphPanel } from '../components/RunGraphPanel';
@@ -38,7 +38,7 @@ interface RunDetailView {
 const TOGGLE_KEYS = {
   toolCalls: 'archon.console.showToolCalls',
   system: 'archon.console.showSystem',
-  graph: 'archon.console.showGraph',
+  view: 'archon.console.detailView',
 } as const;
 
 function readToggle(key: string, defaultOn: boolean): boolean {
@@ -59,6 +59,23 @@ function writeToggle(key: string, value: boolean): void {
   }
 }
 
+function readView(): DetailView {
+  try {
+    const stored = localStorage.getItem(TOGGLE_KEYS.view);
+    return stored === 'graph' ? 'graph' : 'log';
+  } catch {
+    return 'log';
+  }
+}
+
+function writeView(v: DetailView): void {
+  try {
+    localStorage.setItem(TOGGLE_KEYS.view, v);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function RunDetailPage(): ReactElement {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -68,12 +85,7 @@ export function RunDetailPage(): ReactElement {
   const [showSystem, setShowSystem] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.system, false)
   );
-  const [showGraph, setShowGraph] = useState<boolean>(() => {
-    // Default: graph on at ≥1280px, off below.
-    if (typeof window === 'undefined') return false;
-    const stored = readToggle(TOGGLE_KEYS.graph, window.innerWidth >= 1280);
-    return stored;
-  });
+  const [view, setView] = useState<DetailView>(() => readView());
 
   // Hoisted above any early returns so the hook order stays stable.
   const scrollToNode = useCallback((nodeId: string): void => {
@@ -194,75 +206,91 @@ export function RunDetailPage(): ReactElement {
       : 0;
   const toolCallCount = inlineToolCount + workflowToolCount;
 
+  const toolbar = (
+    <StreamToolbar
+      view={view}
+      onChangeView={next => {
+        setView(next);
+        writeView(next);
+      }}
+      showToolCalls={showToolCalls}
+      onToggleToolCalls={next => {
+        setShowToolCalls(next);
+        writeToggle(TOGGLE_KEYS.toolCalls, next);
+      }}
+      showSystem={showSystem}
+      onToggleSystem={next => {
+        setShowSystem(next);
+        writeToggle(TOGGLE_KEYS.system, next);
+      }}
+      toolCallCount={toolCallCount}
+      messageCount={messageList.length}
+    />
+  );
+
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
       <section className="flex h-full flex-col">
         <RunDetailHeader run={run} projectId={projectId} projectName={project?.name ?? projectId} />
 
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-            {/* Stream content centered inside its flex-1 lane with a readable
-                max-width. On wide screens margins land on both sides; the
-                graph (if visible) anchors to the right viewport edge. */}
-            <div className="mx-auto w-full max-w-[820px] px-6">
-              {/* Sticky under RunDetailHeader so toggles stay reachable
-                    while the stream scrolls underneath. */}
-              <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">
-                <StreamToolbar
-                  showToolCalls={showToolCalls}
-                  onToggleToolCalls={next => {
-                    setShowToolCalls(next);
-                    writeToggle(TOGGLE_KEYS.toolCalls, next);
-                  }}
-                  showSystem={showSystem}
-                  onToggleSystem={next => {
-                    setShowSystem(next);
-                    writeToggle(TOGGLE_KEYS.system, next);
-                  }}
-                  showGraph={showGraph}
-                  onToggleGraph={next => {
-                    setShowGraph(next);
-                    writeToggle(TOGGLE_KEYS.graph, next);
-                  }}
-                  toolCallCount={toolCallCount}
-                  messageCount={messageList.length}
-                />
-              </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {view === 'log' ? (
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+              <div className="w-full px-6">
+                <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
 
-              <div className="py-4">
-                <RunStream
-                  messages={messageList}
-                  events={events}
-                  showToolCalls={showToolCalls}
-                  showSystem={showSystem}
-                />
+                <div className="py-4">
+                  <RunStream
+                    messages={messageList}
+                    events={events}
+                    showToolCalls={showToolCalls}
+                    showSystem={showSystem}
+                  />
 
-                {run.status === 'paused' && run.approval !== null && run.approval !== undefined ? (
-                  <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
-                    <div className="mb-2 flex items-center gap-2">
-                      <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
-                      <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
-                        Waiting for approval
-                      </span>
+                  {run.status === 'paused' &&
+                  run.approval !== null &&
+                  run.approval !== undefined ? (
+                    <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className="h-2 w-2 animate-pulse rounded-full bg-warning"
+                        />
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
+                          Waiting for approval
+                        </span>
+                      </div>
+                      <ApprovalContext run={run} />
+                      <div className="mt-2">
+                        <ApprovalPanel run={run} />
+                      </div>
                     </div>
-                    <ApprovalContext run={run} />
-                    <div className="mt-2">
-                      <ApprovalPanel run={run} />
-                    </div>
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
               </div>
             </div>
-          </div>
-
-          {showGraph && project !== undefined && project !== null ? (
-            <RunGraphPanel
-              workflowName={run.workflow}
-              projectCwd={project.path}
-              events={events}
-              onNodeSelect={scrollToNode}
-            />
-          ) : null}
+          ) : (
+            <>
+              <div className="px-6">{toolbar}</div>
+              {project !== undefined && project !== null ? (
+                <RunGraphPanel
+                  workflowName={run.workflow}
+                  projectCwd={project.path}
+                  events={events}
+                  onNodeSelect={(nodeId): void => {
+                    setView('log');
+                    writeView('log');
+                    // Defer scroll until the log view has mounted.
+                    requestAnimationFrame(() => {
+                      scrollToNode(nodeId);
+                    });
+                  }}
+                />
+              ) : (
+                <div className="p-6 text-[12px] text-text-tertiary">Loading project…</div>
+              )}
+            </>
+          )}
         </div>
 
         <RunActionBar run={run} />

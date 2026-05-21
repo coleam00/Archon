@@ -13,7 +13,8 @@ export type RunEventKind =
   | 'artifact'
   | 'node_transition'
   | 'approval'
-  | 'error';
+  | 'error'
+  | 'system';
 
 interface RunEventBase {
   id: string;
@@ -66,13 +67,26 @@ export interface ErrorEvent extends RunEventBase {
   recoverable: boolean;
 }
 
+/**
+ * Workflow-lifecycle events: `workflow_started`, `workflow_completed`,
+ * `workflow_failed`, and any other framework-level signals worth surfacing
+ * behind the "System" toggle. These don't belong in the user/agent thread
+ * but are useful when diagnosing a run.
+ */
+export interface SystemEvent extends RunEventBase {
+  kind: 'system';
+  label: string;
+  detail: string;
+}
+
 export type RunEvent =
   | TextEvent
   | ToolCallEvent
   | ArtifactEvent
   | NodeTransitionEvent
   | ApprovalEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | SystemEvent;
 
 // Server row shape (workflow_events table).
 interface RawWorkflowEvent {
@@ -185,12 +199,32 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
-  if (et === 'error' || et === 'workflow_failed') {
+  if (et === 'error') {
     return {
       ...base,
       kind: 'error',
       message: readString(data, 'error') || readString(data, 'message'),
       recoverable: Boolean(data.recoverable),
+    };
+  }
+
+  if (et === 'workflow_started' || et === 'workflow_completed' || et === 'workflow_failed') {
+    const label =
+      et === 'workflow_started'
+        ? 'Workflow started'
+        : et === 'workflow_completed'
+          ? 'Workflow completed'
+          : 'Workflow failed';
+    const detail =
+      readString(data, 'name') ||
+      readString(data, 'workflow') ||
+      readString(data, 'message') ||
+      readString(data, 'error');
+    return {
+      ...base,
+      kind: 'system',
+      label,
+      detail,
     };
   }
 

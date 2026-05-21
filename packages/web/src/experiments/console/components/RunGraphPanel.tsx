@@ -19,13 +19,12 @@ interface RunGraphPanelProps {
   onNodeSelect?: (nodeId: string) => void;
 }
 
-// Compact node dimensions — sidebar-friendly. dagre positions by center.
-// Tuned so 3 parallel nodes fit inside a 380px panel without horizontal scroll.
-const NODE_W = 104;
-const NODE_H = 28;
-const RANK_SEP = 32;
-const NODE_SEP = 10;
-const PADDING = 16;
+// Full-canvas node dimensions. dagre positions by center.
+const NODE_W = 160;
+const NODE_H = 40;
+const RANK_SEP = 56;
+const NODE_SEP = 20;
+const PADDING = 24;
 
 interface LaidOutNode extends WorkflowGraphNodeWithStatus {
   x: number;
@@ -149,9 +148,12 @@ function kindGlyph(k: WorkflowNodeKind): string {
 }
 
 /**
- * Compact DAG sidebar. Uses dagre (rankdir=TB) so parallel nodes sit side by
- * side and fan-in/out are visible. Loop nodes show a ↻ glyph; approval nodes
- * show ◈. Click a node to jump the stream to that node's transition.
+ * Full-canvas DAG view. Uses dagre (rankdir=TB) so parallel nodes sit side
+ * by side and fan-in/out are visible. Loop nodes show a ↻ glyph; approval
+ * nodes show ◈. Click a node to jump the stream to that node's transition.
+ *
+ * Renders as a full-width content panel — the calling layout provides the
+ * outer flex container (no internal border/aside).
  */
 export function RunGraphPanel({
   workflowName,
@@ -172,22 +174,14 @@ export function RunGraphPanel({
 
   if (error !== undefined) {
     return (
-      <aside className="flex h-full w-[420px] shrink-0 flex-col border-l border-border bg-surface-inset">
-        <Header />
-        <div className="p-3 font-mono text-[11px] text-error">
-          Could not load graph: {error.message}
-        </div>
-      </aside>
+      <div className="p-6 font-mono text-[12px] text-error">
+        Could not load graph: {error.message}
+      </div>
     );
   }
 
   if (laid === null) {
-    return (
-      <aside className="flex h-full w-[420px] shrink-0 flex-col border-l border-border bg-surface-inset">
-        <Header />
-        <div className="p-3 text-[11px] text-text-tertiary">Loading graph…</div>
-      </aside>
-    );
+    return <div className="p-6 text-[12px] text-text-tertiary">Loading graph…</div>;
   }
 
   const { nodes, edges, width, height } = laid;
@@ -197,50 +191,35 @@ export function RunGraphPanel({
   };
 
   return (
-    <aside className="flex h-full w-[420px] shrink-0 flex-col border-l border-border bg-surface-inset">
-      <Header />
-      <div className="flex-1 overflow-auto p-2">
-        <div className="relative" style={svgStyle}>
-          <svg
-            className="absolute inset-0"
-            width={svgStyle.width}
-            height={svgStyle.height}
-            aria-hidden
-          >
-            {edges.map(e => (
-              <path
-                key={`${e.from}→${e.to}`}
-                d={polyline(e.points)}
-                fill="none"
-                stroke="color-mix(in oklch, var(--border), transparent 30%)"
-                strokeWidth={1}
-              />
-            ))}
-          </svg>
-          {nodes.map(n => (
-            <GraphNode
-              key={n.id}
-              node={n}
-              onClick={() => {
-                onNodeSelect?.(n.id);
-              }}
+    <div className="flex h-full w-full justify-center overflow-auto bg-surface-inset p-6">
+      <div className="relative" style={svgStyle}>
+        <svg
+          className="absolute inset-0"
+          width={svgStyle.width}
+          height={svgStyle.height}
+          aria-hidden
+        >
+          {edges.map(e => (
+            <path
+              key={`${e.from}→${e.to}`}
+              d={polyline(e.points)}
+              fill="none"
+              stroke="color-mix(in oklch, var(--border), transparent 30%)"
+              strokeWidth={1.5}
             />
           ))}
-        </div>
+        </svg>
+        {nodes.map(n => (
+          <GraphNode
+            key={n.id}
+            node={n}
+            onClick={() => {
+              onNodeSelect?.(n.id);
+            }}
+          />
+        ))}
       </div>
-    </aside>
-  );
-}
-
-function Header(): ReactElement {
-  return (
-    <header className="relative flex items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
-      <span>Graph</span>
-      <span
-        aria-hidden
-        className="brand-bar pointer-events-none absolute inset-x-0 bottom-0 h-px opacity-60"
-      />
-    </header>
+    </div>
   );
 }
 
@@ -268,10 +247,10 @@ function GraphNode({ node, onClick }: GraphNodeProps): ReactElement {
       className={`absolute flex items-center gap-2 overflow-hidden rounded border px-2 text-left transition-colors hover:brightness-110 ${running ? 'animate-pulse' : ''}`}
       style={style}
     >
-      <span aria-hidden className="shrink-0 font-mono text-[11px] text-text-tertiary">
+      <span aria-hidden className="shrink-0 font-mono text-[13px] text-text-tertiary">
         {kindGlyph(node.kind)}
       </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-primary">
+      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-primary">
         {node.id}
       </span>
     </button>

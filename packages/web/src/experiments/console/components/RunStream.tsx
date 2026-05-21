@@ -9,7 +9,10 @@ import type {
   NodeTransitionEvent,
   ArtifactEvent,
   ToolCallEvent,
+  SystemEvent,
+  ErrorEvent,
 } from '../primitives/event';
+import { StreamCard } from './StreamCard';
 
 interface RunStreamProps {
   messages: Message[];
@@ -34,7 +37,8 @@ type TimelineEntry =
   | { kind: 'message'; key: string; at: number; message: Message }
   | { kind: 'tool'; key: string; at: number; call: InlineToolCall; timestamp: string }
   | { kind: 'node'; key: string; at: number; event: NodeTransitionEvent }
-  | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent };
+  | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
+  | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent };
 
 /**
  * Pairs `tool_called` events with their matching `tool_completed` so each
@@ -115,7 +119,8 @@ export function RunStream({
     let inlineToolCount = 0;
     for (const m of messages) {
       if (!isMeaningful(m)) continue;
-      if (!showSystem && m.role === 'system') continue;
+      // System messages are filtered later by `visible`; keep them in the
+      // timeline so the toggle can flip without rebuilding.
       const base = new Date(m.timestamp).getTime();
       entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
       m.toolCalls.forEach((call, idx) => {
@@ -151,13 +156,20 @@ export function RunStream({
         entries.push({ kind: 'node', key: `n:${e.id}`, at, event: e });
       } else if (e.kind === 'artifact') {
         entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
+      } else if (e.kind === 'system' || e.kind === 'error') {
+        entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
       }
     }
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events, showSystem]);
+  }, [messages, events]);
 
-  const visible = showToolCalls ? timeline : timeline.filter(e => e.kind !== 'tool');
+  const visible = timeline.filter(e => {
+    if (e.kind === 'tool' && !showToolCalls) return false;
+    if (e.kind === 'system' && !showSystem) return false;
+    if (e.kind === 'message' && e.message.role === 'system' && !showSystem) return false;
+    return true;
+  });
 
   if (visible.length === 0) {
     return (
@@ -187,6 +199,28 @@ export function RunStream({
               transition={entry.event.transition}
               durationMs={entry.event.durationMs}
               timestamp={entry.event.timestamp}
+            />
+          );
+        }
+        if (entry.kind === 'system') {
+          const ev = entry.event;
+          const isError = ev.kind === 'error';
+          const label = isError ? 'Error' : ev.label;
+          const detail = isError ? ev.message : ev.detail;
+          return (
+            <StreamCard
+              key={entry.key}
+              timestamp={ev.timestamp}
+              kind={isError ? 'error' : 'system'}
+              compact
+              label={label}
+              headerRight={
+                detail.length > 0 ? (
+                  <span className="truncate font-mono text-[11px] text-text-secondary">
+                    {detail}
+                  </span>
+                ) : null
+              }
             />
           );
         }
