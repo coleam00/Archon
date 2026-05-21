@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { statusLabel, statusTextClass } from '../lib/run-status';
 
 interface RunDetailHeaderProps {
@@ -108,8 +108,16 @@ export function RunDetailHeader({
       {/* Origin */}
       <OriginBadge origin={run.origin} />
 
-      {/* Elapsed — right-aligned */}
+      {/* Cost + elapsed — right-aligned */}
       <div className="ml-auto flex items-center gap-3">
+        {typeof run.costUsd === 'number' ? (
+          <span
+            className="font-mono text-[12px] tabular-nums text-text-secondary"
+            title="Total agent cost"
+          >
+            {formatCost(run.costUsd)}
+          </span>
+        ) : null}
         <span className="font-mono text-[12px] tabular-nums text-text-tertiary">{elapsed}</span>
       </div>
     </header>

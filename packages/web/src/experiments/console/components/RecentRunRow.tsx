@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { statusTextClass } from '../lib/run-status';
 
 interface RecentRunRowProps {
@@ -59,6 +59,12 @@ export function RecentRunRow({ run, showProject = false }: RecentRunRowProps): R
         {shortRunId(run.id)}
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-text-tertiary">{elapsed}</span>
+      <span
+        className="hidden w-16 shrink-0 text-right tabular-nums text-text-secondary md:inline"
+        title={typeof run.costUsd === 'number' ? 'Total agent cost' : undefined}
+      >
+        {typeof run.costUsd === 'number' ? formatCost(run.costUsd) : ''}
+      </span>
       <OriginBadge origin={run.origin} />
       <span
         aria-hidden

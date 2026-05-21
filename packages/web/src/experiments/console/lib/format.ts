@@ -61,6 +61,17 @@ export function formatClock(iso: string): string {
  * segments otherwise. Falls back to the input string when it can't extract
  * a sensible short form.
  */
+/**
+ * Compact USD cost — under a dollar shows cents, over a dollar shows two
+ * decimals. Sub-cent values still surface (rounded to 4 decimals) so cheap
+ * runs don't look free.
+ */
+export function formatCost(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  if (usd >= 0.01) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(4)}`;
+}
+
 export function formatProjectLocator(project: {
   repositoryUrl: string | null;
   path: string;

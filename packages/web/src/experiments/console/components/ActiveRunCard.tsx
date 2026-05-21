@@ -6,7 +6,7 @@ import { OriginBadge } from './OriginBadge';
 import { ApprovalPanel } from './ApprovalPanel';
 import { ApprovalContext } from './ApprovalContext';
 import type { Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { statusTextClass, statusLabel } from '../lib/run-status';
 
 interface ActiveRunCardProps {
@@ -69,6 +69,14 @@ export function ActiveRunCard({ run, showProject = false }: ActiveRunCardProps):
           ) : null}
           <div className="ml-auto flex items-center gap-2">
             <OriginBadge origin={run.origin} />
+            {typeof run.costUsd === 'number' ? (
+              <span
+                className="font-mono text-[11px] tabular-nums text-text-secondary"
+                title="Total agent cost"
+              >
+                {formatCost(run.costUsd)}
+              </span>
+            ) : null}
             <span className="font-mono text-[11px] tabular-nums text-text-tertiary">{elapsed}</span>
           </div>
         </div>

@@ -6,6 +6,9 @@ export interface Run {
   id: string;
   projectId: string | null;
   projectName: string | null;
+  /** Total USD cost from the agent SDK. Populated for completed Claude runs;
+   *  Pi/Codex runs may not report cost. Null when the run hasn't recorded any. */
+  costUsd: number | null;
   /** DB id of the conversation this run belongs to. */
   conversationId: string | null;
   /**
@@ -82,6 +85,12 @@ function normalizeOrigin(s: string | null | undefined): RunOrigin {
   }
 }
 
+function readCost(meta: Record<string, unknown> | undefined): number | null {
+  if (meta === undefined) return null;
+  const raw = meta.total_cost_usd;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
 export function toRun(raw: RawWorkflowRun): Run {
   const approval = raw.metadata?.approval;
   const parsedApproval =
@@ -103,6 +112,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     id: raw.id,
     projectId: raw.codebase_id,
     projectName: raw.codebase_name ?? null,
+    costUsd: readCost(raw.metadata),
     conversationId: raw.conversation_id ?? null,
     conversationPlatformId: raw.conversation_platform_id ?? null,
     workflow: raw.workflow_name,
