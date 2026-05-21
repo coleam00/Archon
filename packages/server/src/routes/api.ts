@@ -2005,13 +2005,15 @@ export function registerApiRoutes(
         data: { decision: 'approved', comment },
       });
       // For interactive loops, store user input; for standard approvals, mark as approved
-      // and clear any rejection state.
+      // and clear any rejection state. Do NOT set status to 'failed' here — the auto-resume
+      // dispatch below will pick up the paused run and continue execution. Only if
+      // auto-resume is not possible (no parent conversation, non-web platform) do we
+      // mark the run as failed so the user knows to re-run manually.
       const metadataUpdate =
         approval.type === 'interactive_loop'
           ? { loop_user_input: comment }
           : { approval_response: 'approved', rejection_reason: '', rejection_count: 0 };
       await workflowDb.updateWorkflowRun(runId, {
-        status: 'failed',
         metadata: metadataUpdate,
       });
 
@@ -2023,10 +2025,43 @@ export function registerApiRoutes(
       // the pre-created run) and a web-platform parent (guarded in the helper).
       const autoResumed = await tryAutoResumeAfterGate(run, 'approve');
 
+      // For CLI-spawned workflows (no parent conversation), auto-resume the DAG
+      // by invoking the Archon CLI in the background. The CLI process already
+      // exited after hitting the pause gate, so we re-spawn it with --resume.
+      if (!autoResumed && run.working_path) {
+        try {
+          const { exec } = await import('child_process');
+          const archonBin = process.env.ARCHON_BIN ?? 'archon';
+          // Run from the canonical codebase path (not the worktree) so the CLI's
+          // findResumableRun can match by codebase_id and locate the worktree.
+          const codebasePath = run.working_path.replace(/\/worktrees\/archon\/.*$/, '');
+          const resumeCmd = `${archonBin} workflow run ${run.workflow_name} --resume --cwd ${JSON.stringify(codebasePath)}`;
+          getLog().info(
+            { runId: run.id, workflowName: run.workflow_name, cmd: resumeCmd, codebasePath },
+            'api.workflow_approve_cli_resume_dispatched'
+          );
+          // Fire-and-forget: the CLI runs independently of the HTTP response.
+          exec(resumeCmd, { cwd: codebasePath }, (error, stdout, stderr) => {
+            if (error) {
+              getLog().error(
+                { err: error, runId: run.id, stderr: stderr.slice(-500) },
+                'api.cli_resume_failed'
+              );
+            } else {
+              getLog().info({ runId: run.id, stdout: stdout.slice(-500) }, 'api.cli_resume_succeeded');
+            }
+          });
+        } catch (err) {
+          getLog().warn({ err: err as Error, runId: run.id }, 'api.cli_resume_setup_failed');
+        }
+      }
+
       return c.json({
         success: true,
         message: autoResumed
           ? `Workflow approved: ${run.workflow_name}. Resuming workflow.`
+          : run.working_path
+          ? `Workflow approved: ${run.workflow_name}. Resuming from server.`
           : `Workflow approved: ${run.workflow_name}. Send a message to continue.`,
       });
     } catch (error) {

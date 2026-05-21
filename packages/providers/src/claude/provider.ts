@@ -626,6 +626,93 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
 // ─── Stream Normalizer ───────────────────────────────────────────────────
 
 /**
+ * Timeout for detecting silent subprocess death at the stream level.
+ *
+ * When the Claude subprocess dies, the SDK's async generator hangs forever
+ * on the next `.next()` call — no events, no errors, no `.done`. The DAG
+ * executor's `withIdleTimeout` (30 min) is the current escape hatch, but
+ * that's 30 minutes of dead waiting.
+ *
+ * This wrapper races each `.next()` call against a shorter timeout (default
+ * 3 min). If the timeout wins, the subprocess is considered dead and a
+ * synthetic error event is emitted so the DAG executor fails the node
+ * immediately instead of hanging.
+ *
+ * Configurable via `ARCHON_STREAM_DEATH_TIMEOUT_MS` env var.
+ */
+function getStreamDeathTimeoutMs(): number {
+  const raw = process.env.ARCHON_STREAM_DEATH_TIMEOUT_MS;
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 3 * 60 * 1000; // 3 minutes
+}
+
+/**
+ * Wraps an SDK event generator with silent subprocess death detection.
+ *
+ * Races each `.next()` call against a stream-death timeout. If the
+ * subprocess is alive and producing events, `.next()` resolves before
+ * the timeout. If the subprocess has died (SDK generator hangs), the
+ * timeout wins and we emit a synthetic error event.
+ *
+ * @param events - Raw SDK event generator from query()
+ * @param cwd - Working directory (logged for diagnostics)
+ * @param abortController - AbortController to signal subprocess termination
+ */
+async function* withSubprocessDeathDetection<T extends { type: string }>(
+  events: AsyncGenerator<T>,
+  cwd: string,
+  abortController: AbortController
+): AsyncGenerator<T> {
+  const deathTimeoutMs = getStreamDeathTimeoutMs();
+
+  while (true) {
+    // Race the SDK's .next() against a death-detection timeout.
+    // If the subprocess is alive, .next() resolves with an event
+    // (or {done: true} when the stream ends) before the timeout.
+    // If the subprocess has died, .next() hangs and the timeout wins.
+    const timeoutId = setTimeout(() => {}, 0); // placeholder
+    const deathPromise = new Promise<IteratorResult<T>>(resolve => {
+      const id = setTimeout(() => {
+        getLog().error(
+          { cwd, timeoutMs: deathTimeoutMs },
+          'claude.stream_death_timeout'
+        );
+        abortController.abort();
+        resolve({
+          done: true,
+          value: {
+            type: 'result',
+            sessionId: undefined,
+            isError: true,
+            errorSubtype: 'subprocess_dead',
+            errors: [
+              `Claude Code subprocess appears to have died. ` +
+                `No SDK events received within ${deathTimeoutMs / 1000}s. ` +
+                'The SDK async generator did not emit a result event before the process terminated.',
+            ],
+            stopReason: 'subprocess_exit',
+          } as unknown as T,
+        });
+      }, deathTimeoutMs);
+      // Store the timeout ID so we can cancel it if .next() wins
+      (timeoutId as unknown as { _id: ReturnType<typeof setTimeout> })._id = id;
+    });
+
+    const result = await Promise.race([events.next(), deathPromise]);
+
+    // Cancel the death timeout — .next() won the race
+    const storedId = (timeoutId as unknown as { _id: ReturnType<typeof setTimeout> })._id;
+    if (storedId) clearTimeout(storedId);
+
+    if (result.done) return;
+    yield result.value;
+  }
+}
+
+/**
  * Normalize raw Claude SDK events into Archon MessageChunks.
  * Drains the tool result queue between events (populated by SDK hooks).
  */
@@ -929,14 +1016,26 @@ export class ClaudeProvider implements IAgentProvider {
       }
 
       try {
-        // 4. Run query with first-event timeout protection
+        // 4. Run query with subprocess death detection + first-event timeout
         const rawEvents = query({ prompt, options });
+
+        // Wrap with subprocess death detection — polls OS process table
+        // between SDK events and injects a synthetic error if the Claude
+        // subprocess disappears without the SDK emitting a result event.
+        // This prevents the DAG executor's `for await` loop from hanging
+        // for 30 minutes (STEP_IDLE_TIMEOUT_MS) on a dead subprocess.
+        const deathAwareEvents = withSubprocessDeathDetection(
+          rawEvents,
+          cwd,
+          controller
+        );
+
         const timeoutMs = getFirstEventTimeoutMs();
         const diagnostics = buildFirstEventHangDiagnostics(
           options.env as Record<string, string>,
           options.model
         );
-        const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
+        const events = withFirstMessageTimeout(deathAwareEvents, controller, timeoutMs, diagnostics);
 
         // 5. Stream normalized events
         yield* streamClaudeMessages(events, toolResultQueue);

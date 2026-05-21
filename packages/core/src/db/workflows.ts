@@ -309,17 +309,26 @@ export async function findResumableRun(
 ): Promise<WorkflowRun | null> {
   const dialect = getDialect();
   try {
+    // Match by codebase_id rather than exact working_path, because CLI-spawned
+    // runs store the worktree path (e.g. ~/.archon/workspaces/.../worktrees/archon/...)
+    // while --resume is called from the canonical codebase path.
+    // Find the codebase_id from any run of this workflow, then get the most recent
+    // failed/paused run for that workflow + codebase.
     const result = await pool.query<WorkflowRun>(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
-         AND working_path = $2
+         AND codebase_id = (
+           SELECT codebase_id FROM remote_agent_workflow_runs
+           WHERE workflow_name = $1
+           ORDER BY started_at DESC LIMIT 1
+         )
          AND (
            status IN ('failed', 'paused')
            OR (status = 'running' AND (last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(3)}))
          )
        ORDER BY started_at DESC
        LIMIT 1`,
-      [workflowName, workingPath, 1]
+      [workflowName, workflowName, 1]
     );
     const row = result.rows[0];
     return row ? normalizeWorkflowRun(row) : null;
