@@ -2,6 +2,8 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
 } from 'react';
@@ -19,6 +21,18 @@ interface DraftRunCardProps {
 type Mode = 'collapsed' | 'expanded';
 
 const LAST_WORKFLOW_KEY = 'archon.console.lastWorkflow';
+
+const MAX_FILES = 5;
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+/** Client-side accept hint; the server is the security boundary. */
+const ACCEPT_HINT =
+  'text/*,image/*,application/pdf,.md,.json,.yaml,.yml,.toml,.ts,.tsx,.js,.jsx,.py,.go,.rs,.sh,.sql,.html,.css';
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n.toString()} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function readLastWorkflow(): string {
   try {
@@ -53,11 +67,36 @@ function writeLastWorkflow(name: string): void {
  */
 export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): ReactElement {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [mode, setMode] = useState<Mode>('collapsed');
   const [workflowName, setWorkflowName] = useState<string>(() => readLastWorkflow());
   const [context, setContext] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const addFiles = (incoming: File[]): void => {
+    if (incoming.length === 0) return;
+    const oversize = incoming.find(f => f.size > MAX_FILE_BYTES);
+    if (oversize !== undefined) {
+      setError(`"${oversize.name}" is larger than 10 MB.`);
+      return;
+    }
+    setFiles(prev => {
+      const merged = [...prev, ...incoming];
+      if (merged.length > MAX_FILES) {
+        setError(`Max ${MAX_FILES.toString()} files per run.`);
+        return merged.slice(0, MAX_FILES);
+      }
+      setError(null);
+      return merged;
+    });
+  };
+
+  const removeFile = (idx: number): void => {
+    setFiles(prev => prev.filter((_, i) => i !== idx));
+  };
 
   const { data: workflows } = useEntity<Workflow[]>(K.workflows(projectCwd), () =>
     skill.listWorkflows(projectCwd)
@@ -121,11 +160,13 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         projectId,
         workflow: workflowName,
         message: context,
+        files: files.length > 0 ? files : undefined,
       });
       // Dispatch is fire-and-forget — the orchestrator creates the run row
       // asynchronously. Nudge the runs feed so the new card appears as soon
       // as the row exists, instead of waiting for the next 3s poll tick.
       setContext('');
+      setFiles([]);
       setMode('collapsed');
       invalidate('runs');
     } catch (err: unknown) {
@@ -137,6 +178,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
 
   const collapse = (): void => {
     setMode('collapsed');
+    setFiles([]);
     setError(null);
   };
 
@@ -149,6 +191,41 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     if (e.key === 'Escape') {
       e.preventDefault();
       collapse();
+    }
+  };
+
+  const onDragOver = (e: ReactDragEvent<HTMLDivElement>): void => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!dragOver) setDragOver(true);
+  };
+
+  const onDragLeave = (e: ReactDragEvent<HTMLDivElement>): void => {
+    // Only un-flag when leaving the bounding rect, not on each child crossover.
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setDragOver(false);
+  };
+
+  const onDrop = (e: ReactDragEvent<HTMLDivElement>): void => {
+    e.preventDefault();
+    setDragOver(false);
+    const dropped = Array.from(e.dataTransfer.files);
+    if (dropped.length > 0) addFiles(dropped);
+  };
+
+  const onPaste = (e: ReactClipboardEvent<HTMLTextAreaElement>): void => {
+    const items = Array.from(e.clipboardData.items);
+    const pastedFiles: File[] = [];
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f !== null) pastedFiles.push(f);
+      }
+    }
+    if (pastedFiles.length > 0) {
+      e.preventDefault();
+      addFiles(pastedFiles);
     }
   };
 
@@ -191,11 +268,24 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         // bounds).
         borderColor: 'color-mix(in oklch, var(--brand-magenta), transparent 60%)',
       }}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
       <span
         aria-hidden
         className="brand-bar pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l"
       />
+      {dragOver ? (
+        <div
+          aria-hidden
+          className="brand-bar-soft pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded"
+        >
+          <span className="rounded border border-[color:var(--brand-magenta)] bg-surface px-3 py-1.5 font-mono text-[11px] text-[color:var(--brand-magenta)]">
+            drop files to attach
+          </span>
+        </div>
+      ) : null}
       <div className="pl-5 pr-4 py-3">
         {/* Header: status dot + DRAFT label + workflow picker + close */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -234,6 +324,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
               if (error !== null) setError(null);
             }}
             onKeyDown={onTextareaKey}
+            onPaste={onPaste}
             placeholder={
               workflowName.length > 0
                 ? `what should \`${workflowName}\` work on?`
@@ -244,10 +335,70 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             className="min-h-[52px] w-full resize-none rounded border border-border bg-surface-inset px-3 py-2 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
           />
 
+          {files.length > 0 ? (
+            <ul className="mt-2 flex flex-wrap gap-1.5">
+              {files.map((f, idx) => (
+                <li
+                  key={`${f.name}:${idx.toString()}`}
+                  className="flex items-center gap-1.5 rounded border border-border bg-surface-inset px-2 py-1 font-mono text-[11px] text-text-secondary"
+                >
+                  <span aria-hidden>📎</span>
+                  <span className="max-w-[160px] truncate">{f.name}</span>
+                  <span className="text-text-tertiary">{formatBytes(f.size)}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      removeFile(idx);
+                    }}
+                    disabled={submitting}
+                    className="ml-1 rounded p-0.5 text-text-tertiary transition-colors hover:bg-error/10 hover:text-error disabled:opacity-40"
+                    aria-label={`Remove ${f.name}`}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPT_HINT}
+            className="hidden"
+            onChange={e => {
+              const picked = e.target.files === null ? [] : Array.from(e.target.files);
+              addFiles(picked);
+              // Allow re-picking the same file: reset so onChange fires next time.
+              e.target.value = '';
+            }}
+          />
+
           <div className="mt-2 flex items-center justify-between gap-2">
-            <span className="font-mono text-[10px] text-text-tertiary">
-              ↵ start · ⇧↵ newline · esc cancel
-            </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  fileInputRef.current?.click();
+                }}
+                disabled={submitting || files.length >= MAX_FILES}
+                className="flex items-center gap-1 rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
+                title={
+                  files.length >= MAX_FILES
+                    ? `Max ${MAX_FILES.toString()} files attached`
+                    : 'Attach files · drop or paste also work'
+                }
+                aria-label="Attach files"
+              >
+                <span aria-hidden className="text-[12px]">
+                  📎
+                </span>
+              </button>
+              <span className="font-mono text-[10px] text-text-tertiary">
+                ↵ start · ⇧↵ newline · esc cancel
+              </span>
+            </div>
             <button
               type="button"
               onClick={() => void submit()}

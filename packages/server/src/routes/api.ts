@@ -85,7 +85,6 @@ import {
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
   dashboardRunsResponseSchema,
-  runWorkflowBodySchema,
   dashboardRunsQuerySchema,
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
@@ -543,17 +542,21 @@ const deleteEnvVarRoute = createRoute({
 // Workflow run route configs
 // =========================================================================
 
+// Body validation is handled manually in the handler (multipart vs JSON
+// branching), mirroring sendMessageRoute. The OpenAPI spec describes the
+// shapes via the description; declaring `request.body` would force JSON
+// validation to run on multipart payloads and reject them.
 const runWorkflowRoute = createRoute({
   method: 'post',
   path: '/api/workflows/{name}/run',
   tags: ['Workflows'],
-  summary: 'Run a workflow via the orchestrator',
+  summary: 'Run a workflow via the orchestrator (JSON or multipart with file uploads)',
+  description:
+    'Accepts `application/json` with `{ conversationId, message }` or ' +
+    '`multipart/form-data` with `conversationId`, `message`, and optional file ' +
+    'attachments (max 5 files, 10 MB each).',
   request: {
     params: z.object({ name: z.string() }),
-    body: {
-      content: { 'application/json': { schema: runWorkflowBodySchema } },
-      required: true,
-    },
   },
   responses: {
     200: {
@@ -966,6 +969,91 @@ export function registerApiRoutes(
       }
     }
     return false;
+  }
+
+  /**
+   * Persist multipart-uploaded files to the conversation's upload directory.
+   * Shared by /api/conversations/:id/message and /api/workflows/:name/run.
+   * Returns the saved file metadata + the directory chosen so the caller can
+   * pass both to dispatchToOrchestrator for cleanup inside the lock handler.
+   *
+   * Throws a Response-shaped error via the `errorResponse` callback when
+   * validation fails; the caller then short-circuits and returns it.
+   */
+  async function persistUploadedFiles(
+    conversationId: string,
+    fileEntries: File[]
+  ): Promise<
+    | { ok: true; savedFiles: AttachedFile[]; uploadDir: string }
+    | { ok: false; status: 400 | 500; error: string }
+  > {
+    if (fileEntries.length > MAX_FILES_PER_MESSAGE) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Maximum ${MAX_FILES_PER_MESSAGE.toString()} files per message`,
+      };
+    }
+
+    const archonHome = getArchonHome();
+    const uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
+    if (!uploadDir.startsWith(archonHome + sep)) {
+      return { ok: false, status: 400, error: 'Invalid conversation ID' };
+    }
+
+    // Validate all files before writing any to disk.
+    for (const entry of fileEntries) {
+      const displayName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+      if (!isAllowedUploadType(entry.type, entry.name)) {
+        return {
+          ok: false,
+          status: 400,
+          error: `File "${displayName}" has an unsupported type: ${entry.type}`,
+        };
+      }
+      if (entry.size > MAX_UPLOAD_BYTES) {
+        return {
+          ok: false,
+          status: 400,
+          error: `File "${displayName}" exceeds the 10 MB size limit`,
+        };
+      }
+    }
+
+    const savedFiles: AttachedFile[] = [];
+    try {
+      await mkdir(uploadDir, { recursive: true });
+      for (const entry of fileEntries) {
+        const fileId = randomUUID();
+        const safeName = basename(entry.name).replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filePath = join(uploadDir, `${fileId}_${safeName}`);
+        await writeFile(filePath, Buffer.from(await entry.arrayBuffer()));
+        const normalizedMime =
+          entry.type.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+        savedFiles.push({
+          path: filePath,
+          name: safeName || fileId,
+          mimeType: normalizedMime,
+          size: entry.size,
+        });
+      }
+    } catch (writeErr: unknown) {
+      for (const f of savedFiles) {
+        await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+          if (err.code !== 'ENOENT') {
+            getLog().warn({ err, filePath: f.path, conversationId }, 'upload.rollback_failed');
+          }
+        });
+      }
+      getLog().error({ err: writeErr, conversationId }, 'upload.write_failed');
+      return {
+        ok: false,
+        status: 500,
+        error: 'Failed to save uploaded file. Check available disk space.',
+      };
+    }
+
+    return { ok: true, savedFiles, uploadDir };
   }
 
   async function dispatchToOrchestrator(
@@ -1796,14 +1884,89 @@ export function registerApiRoutes(
   });
 
   // POST /api/workflows/:name/run - Run a workflow via the orchestrator
+  //
+  // Accepts either:
+  //   - application/json: { conversationId, message }
+  //   - multipart/form-data: conversationId + message + files[] (≤5, ≤10MB each)
+  //
+  // Multipart matches /api/conversations/:id/message so the console's draft
+  // run input can attach screenshots / stack traces / paste-blobs the same
+  // way a freeform chat message can.
   registerOpenApiRoute(runWorkflowRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
     if (!isValidCommandName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');
     }
+
+    let message: string;
+    let conversationId: string;
+    let savedFiles: AttachedFile[] = [];
+    let uploadDir = '';
+
+    const contentType = c.req.header('content-type') ?? '';
+
+    if (contentType.includes('multipart/form-data')) {
+      let body: Record<string, string | File | (string | File)[]>;
+      try {
+        body = await c.req.parseBody({ all: true });
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr }, 'run_workflow.multipart_parse_failed');
+        return apiError(c, 400, 'Invalid multipart form data');
+      }
+
+      const rawMessage = body.message;
+      const rawConv = body.conversationId;
+      if (typeof rawMessage !== 'string' || !rawMessage) {
+        return apiError(c, 400, 'message must be a non-empty string');
+      }
+      if (typeof rawConv !== 'string' || !rawConv || !/^[\w-]+$/.test(rawConv)) {
+        return apiError(c, 400, 'conversationId must be a non-empty alphanumeric string');
+      }
+      message = rawMessage;
+      conversationId = rawConv;
+
+      const rawFiles = body.files;
+      const fileList: (string | File)[] = Array.isArray(rawFiles)
+        ? rawFiles
+        : rawFiles !== undefined
+          ? [rawFiles]
+          : [];
+      const fileEntries = fileList.filter((e): e is File => e instanceof File);
+
+      if (fileEntries.length > 0) {
+        const result = await persistUploadedFiles(conversationId, fileEntries);
+        if (!result.ok) {
+          return apiError(c, result.status, result.error);
+        }
+        savedFiles = result.savedFiles;
+        uploadDir = result.uploadDir;
+        getLog().info(
+          { conversationId, fileCount: savedFiles.length, workflowName },
+          'run_workflow.files_uploaded'
+        );
+      }
+    } else {
+      let body: { conversationId?: unknown; message?: unknown };
+      try {
+        body = await c.req.json();
+      } catch (parseErr: unknown) {
+        getLog().warn({ err: parseErr }, 'run_workflow.json_parse_failed');
+        return apiError(c, 400, 'Invalid JSON in request body');
+      }
+      if (typeof body.conversationId !== 'string' || !body.conversationId) {
+        return apiError(c, 400, 'conversationId must be a non-empty string');
+      }
+      if (typeof body.message !== 'string' || !body.message) {
+        return apiError(c, 400, 'message must be a non-empty string');
+      }
+      conversationId = body.conversationId;
+      message = body.message;
+    }
+
     try {
-      const { conversationId, message } = getValidatedBody(c, runWorkflowBodySchema);
-      // Persist user message and register DB ID (same as message endpoint)
+      // Persist user message and register DB ID (same as message endpoint).
+      // File metadata (name/mime/size — no path, since the on-disk file is
+      // ephemeral) goes into message metadata when present.
       let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
       try {
         conv = await conversationDb.findConversationByPlatformId(conversationId);
@@ -1811,13 +1974,16 @@ export function registerApiRoutes(
         getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
       }
       if (conv) {
+        const meta =
+          savedFiles.length > 0
+            ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
+            : undefined;
         try {
-          await messageDb.addMessage(conv.id, 'user', message);
+          await messageDb.addMessage(conv.id, 'user', message, meta);
         } catch (e: unknown) {
           getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
         }
         webAdapter.setConversationDbId(conversationId, conv.id);
-        // Generate title for sidebar (fire-and-forget)
         if (!conv.title) {
           void generateAndSetTitle(
             conv.id,
@@ -1830,7 +1996,14 @@ export function registerApiRoutes(
       }
 
       const fullMessage = `/workflow run ${workflowName} ${message}`;
-      const result = await dispatchToOrchestrator(conversationId, fullMessage);
+      const extraContext = savedFiles.length > 0 ? { attachedFiles: savedFiles } : undefined;
+      const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
+      const result = await dispatchToOrchestrator(
+        conversationId,
+        fullMessage,
+        extraContext,
+        filesToCleanup
+      );
       return c.json(result);
     } catch (error) {
       getLog().error({ err: error }, 'run_workflow_failed');
