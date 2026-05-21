@@ -1,6 +1,7 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ProjectRow } from './ProjectRow';
+import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -23,6 +24,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId?: string }>();
   const scope = projectId ?? 'all';
+  const [envProject, setEnvProject] = useState<Project | null>(null);
 
   const { data: projects, error } = useEntity<Project[]>(K.projects, () => skill.listProjects());
 
@@ -81,6 +83,9 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
               void handleRemove(p.id);
               if (scope === p.id) navigate('/console');
             }}
+            onEditEnv={() => {
+              setEnvProject(p);
+            }}
           />
         ))}
       </div>
@@ -100,6 +105,15 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         </span>
         <span className="text-[13px]">Add project</span>
       </button>
+
+      <EnvVarsDialog
+        projectId={envProject?.id ?? ''}
+        projectName={envProject?.name ?? ''}
+        open={envProject !== null}
+        onClose={() => {
+          setEnvProject(null);
+        }}
+      />
     </nav>
   );
 }

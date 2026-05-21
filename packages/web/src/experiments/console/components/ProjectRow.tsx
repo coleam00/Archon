@@ -9,6 +9,7 @@ interface ProjectRowProps {
   selected: boolean;
   onClick: () => void;
   onRemove?: () => void;
+  onEditEnv?: () => void;
   activityDot?: 'running' | 'paused' | 'failed' | null;
 }
 
@@ -22,6 +23,7 @@ export function ProjectRow({
   selected,
   onClick,
   onRemove,
+  onEditEnv,
   activityDot = null,
 }: ProjectRowProps): ReactElement {
   const displayName = useDisplayName(project.id, project.name);
@@ -123,6 +125,24 @@ export function ProjectRow({
           {formatProjectLocator(project)}
         </span>
       </div>
+      {onEditEnv !== undefined && (selected || activityDot === null) ? (
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            onEditEnv();
+          }}
+          title="Environment variables"
+          aria-label="Environment variables"
+          className={`shrink-0 rounded p-1 font-mono text-[11px] leading-none transition-opacity ${
+            selected
+              ? 'text-text-tertiary opacity-70 hover:bg-surface-hover hover:text-text-primary hover:opacity-100'
+              : 'text-text-tertiary opacity-0 group-hover:opacity-70 group-hover:hover:bg-surface-hover group-hover:hover:opacity-100'
+          }`}
+        >
+          ⚙
+        </button>
+      ) : null}
       {activityDot !== null ? (
         <span
           aria-hidden="true"

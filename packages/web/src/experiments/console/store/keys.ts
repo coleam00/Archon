@@ -17,4 +17,5 @@ export const K = {
   messages: (conversationId: string): string => `messages:${conversationId}`,
   countsGlobal: 'counts:global' as const,
   pendingRuns: 'pendingRuns' as const,
+  envVars: (projectId: string): string => `envVars:${projectId}`,
 } as const;

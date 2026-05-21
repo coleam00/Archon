@@ -13,5 +13,6 @@ export * from './worktrees';
 export * from './runs';
 export * from './startRun';
 export * from './messages';
+export * from './envVars';
 
 export { HttpError } from '../lib/http';
