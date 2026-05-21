@@ -1704,4 +1704,46 @@ describe('sendQuery decomposition behaviors', () => {
     expect(capturedSignal).not.toBe(callerController.signal);
     expect(capturedSignal?.aborted).toBe(true);
   }, 5_000);
+
+  // Regression for issue #1735.
+  // After the codex-sdk's finally calls child.removeAllListeners() + child.kill(),
+  // calling attemptController.abort() would fire Node's internal spawn-signal
+  // abort listener on the now-listenerless child, surfacing an uncaught AbortError.
+  // The fix removes the explicit abort() — the per-attempt controller is short-lived
+  // and goes out of scope naturally.
+  test('successful attempt does not throw from stale abort cleanup (#1735)', async () => {
+    mockRunStreamed.mockImplementation((_prompt, opts: { signal?: AbortSignal }) => {
+      return Promise.resolve({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: 'done', id: '1' },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+    });
+
+    // Listen for uncaught errors that would surface from the stale abort.
+    const uncaughtErrors: Error[] = [];
+    const handler = (err: Error): void => {
+      uncaughtErrors.push(err);
+    };
+    process.on('uncaughtException', handler);
+
+    try {
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      // Give the event loop a tick for any deferred error events.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(uncaughtErrors).toHaveLength(0);
+    } finally {
+      process.removeListener('uncaughtException', handler);
+    }
+  }, 5_000);
 });
