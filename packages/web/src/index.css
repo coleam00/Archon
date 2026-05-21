@@ -183,6 +183,13 @@ body {
 .chat-markdown p {
   margin-top: 0.5em;
   margin-bottom: 0.5em;
+  overflow-wrap: break-word;
+}
+
+.chat-markdown li,
+.chat-markdown td,
+.chat-markdown a {
+  overflow-wrap: break-word;
 }
 
 .chat-markdown p:first-child {
