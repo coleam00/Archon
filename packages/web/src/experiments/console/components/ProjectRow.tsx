@@ -4,19 +4,28 @@ import { useDisplayName, setDisplayName } from '../lib/display-name';
 import { formatProjectLocator } from '../lib/format';
 import type { Project } from '../primitives/project';
 
+export type ActivityDot = 'running' | 'paused' | 'failed';
+
 interface ProjectRowProps {
   project: Project;
   selected: boolean;
   onClick: () => void;
   onRemove?: () => void;
   onEditEnv?: () => void;
-  activityDot?: 'running' | 'paused' | 'failed' | null;
+  activityDot?: ActivityDot | null;
 }
 
 /**
- * Wide rail row: colored dot · two lines (title + locator). Title is the
- * project's API name unless the user has set an override via double-click.
- * Right-click opens the remove confirmation (same UX as the previous tile).
+ * Rail row: avatar · two lines (title + locator) · hover-actions · status.
+ *
+ * Avatar is the first letter of the project name on a hash-derived
+ * background — scannable identity that can never be confused with the
+ * activity status dot on the right. Double-click the title to rename;
+ * the override is local-only and the path stays put as the subtitle.
+ *
+ * `activityDot` is what the right-side pulse is. It only renders when
+ * the project has running / paused / failed runs; idle projects have
+ * nothing on the right.
  */
 export function ProjectRow({
   project,
@@ -29,6 +38,7 @@ export function ProjectRow({
   const displayName = useDisplayName(project.id, project.name);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(displayName);
+  const [menuOpen, setMenuOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -37,6 +47,18 @@ export function ProjectRow({
       inputRef.current?.select();
     }
   }, [editing, displayName]);
+
+  // Close the ⋯ menu on outside click.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (): void => {
+      setMenuOpen(false);
+    };
+    window.addEventListener('click', close);
+    return (): void => {
+      window.removeEventListener('click', close);
+    };
+  }, [menuOpen]);
 
   const commit = (): void => {
     if (draft.trim() === project.name) setDisplayName(project.id, '');
@@ -47,22 +69,22 @@ export function ProjectRow({
     setEditing(false);
   };
 
-  const dotStyle: CSSProperties = { backgroundColor: tileColor(project.id) };
-  const ring = selected
-    ? 'ring-2 ring-accent-bright ring-offset-2 ring-offset-surface-inset'
-    : 'ring-0';
-  const bg = selected ? 'bg-surface-elevated' : 'bg-transparent hover:bg-surface-hover';
+  const avatarChar =
+    displayName
+      .replace(/[^A-Za-z0-9]/g, '')
+      .slice(0, 1)
+      .toUpperCase() || '·';
+  const avatarStyle: CSSProperties = {
+    backgroundColor: tileColor(project.id),
+  };
 
   return (
     <div
-      onClick={editing ? undefined : onClick}
+      onClick={editing || menuOpen ? undefined : onClick}
       onContextMenu={e => {
         if (onRemove === undefined || editing) return;
         e.preventDefault();
-        const confirmed = window.confirm(
-          `Remove project "${displayName}"?\n\nLocal files and worktrees are not deleted.`
-        );
-        if (confirmed) onRemove();
+        setMenuOpen(true);
       }}
       role="button"
       tabIndex={editing ? -1 : 0}
@@ -74,14 +96,31 @@ export function ProjectRow({
         }
       }}
       aria-pressed={selected}
-      title={`${displayName} · double-click to rename · right-click to remove`}
-      className={`group relative flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors ${bg} ${ring}`}
+      title={`${displayName} · double-click to rename`}
+      className={`group relative flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+        selected ? 'bg-surface-elevated' : 'bg-transparent hover:bg-surface-hover'
+      }`}
     >
+      {/* Brand gradient strip — the unmistakable "this is selected" cue.
+          rounded-l matches the row's own corner radius so the strip blends
+          into the corners (no overflow-hidden needed; that would clip the
+          ⋯ dropdown menu below). */}
+      {selected ? (
+        <span
+          aria-hidden
+          className="brand-bar pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l-md"
+        />
+      ) : null}
+
+      {/* Identity avatar — initial on a hash-coloured square. */}
       <span
         aria-hidden="true"
-        style={dotStyle}
-        className="mt-1 h-2 w-2 shrink-0 self-start rounded-full"
-      />
+        style={avatarStyle}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-semibold text-white/95"
+      >
+        {avatarChar}
+      </span>
+
       <div className="flex min-w-0 flex-1 flex-col leading-tight">
         {editing ? (
           <input
@@ -116,7 +155,9 @@ export function ProjectRow({
               e.stopPropagation();
               setEditing(true);
             }}
-            className="truncate text-[13px] font-medium text-text-primary"
+            className={`truncate text-[13px] font-medium ${
+              selected ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
+            }`}
           >
             {displayName}
           </span>
@@ -125,32 +166,90 @@ export function ProjectRow({
           {formatProjectLocator(project)}
         </span>
       </div>
-      {onEditEnv !== undefined && (selected || activityDot === null) ? (
-        <button
-          type="button"
-          onClick={e => {
-            e.stopPropagation();
-            onEditEnv();
-          }}
-          title="Environment variables"
-          aria-label="Environment variables"
-          className={`shrink-0 rounded p-1 font-mono text-[11px] leading-none transition-opacity ${
-            selected
-              ? 'text-text-tertiary opacity-70 hover:bg-surface-hover hover:text-text-primary hover:opacity-100'
-              : 'text-text-tertiary opacity-0 group-hover:opacity-70 group-hover:hover:bg-surface-hover group-hover:hover:opacity-100'
-          }`}
-        >
-          ⚙
-        </button>
-      ) : null}
+
+      {/* Hover actions: env vars + ⋯ menu. Always-visible on selected row
+          so power features (env, remove) are one click away in the active
+          context. */}
+      <div
+        className={`flex shrink-0 items-center gap-0.5 transition-opacity ${
+          selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        }`}
+      >
+        {onEditEnv !== undefined ? (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              onEditEnv();
+            }}
+            title="Environment variables"
+            aria-label="Environment variables"
+            className="rounded p-1 font-mono text-[11px] leading-none text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          >
+            ⚙
+          </button>
+        ) : null}
+        {onRemove !== undefined ? (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                setMenuOpen(v => !v);
+              }}
+              title="More actions"
+              aria-label="More actions"
+              aria-expanded={menuOpen}
+              className="rounded p-1 font-mono text-[11px] leading-none text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            >
+              ⋯
+            </button>
+            {menuOpen ? (
+              <div
+                role="menu"
+                onClick={e => {
+                  e.stopPropagation();
+                }}
+                className="absolute right-0 top-full z-10 mt-1 min-w-[160px] rounded-md border border-border bg-surface-elevated p-1 shadow-lg"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={e => {
+                    e.stopPropagation();
+                    setMenuOpen(false);
+                    const confirmed = window.confirm(
+                      `Remove project "${displayName}"?\n\nLocal files and worktrees are not deleted.`
+                    );
+                    if (confirmed) onRemove();
+                  }}
+                  className="block w-full rounded px-2 py-1 text-left text-[12px] text-error transition-colors hover:bg-error/10"
+                >
+                  Remove project
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {/* Real activity indicator — only shown when the project actually has
+          something in flight. Idle projects = no dot. */}
       {activityDot !== null ? (
         <span
           aria-hidden="true"
+          title={
+            activityDot === 'running'
+              ? 'Running'
+              : activityDot === 'paused'
+                ? 'Waiting for approval'
+                : 'Last run failed'
+          }
           className={`h-2 w-2 shrink-0 rounded-full ${
             activityDot === 'running'
-              ? 'bg-[color:var(--running)]'
+              ? 'animate-pulse bg-[color:var(--running)]'
               : activityDot === 'paused'
-                ? 'bg-warning animate-pulse'
+                ? 'animate-pulse bg-warning'
                 : 'bg-error'
           }`}
         />

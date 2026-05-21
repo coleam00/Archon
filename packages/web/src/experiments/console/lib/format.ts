@@ -72,17 +72,24 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(4)}`;
 }
 
+/**
+ * Compact project subtitle. Prefer the local filesystem path because it's
+ * what the user actually navigates to (and what worktrees / artifacts hang
+ * off), and because after a rename the owner/repo derivation often reads as
+ * a duplicate of the original name. `/Users/<name>/` and `/home/<name>/`
+ * are shortened to `~/` for readability.
+ */
 export function formatProjectLocator(project: {
   repositoryUrl: string | null;
   path: string;
 }): string {
+  if (project.path.length > 0) {
+    return project.path.replace(/^\/(?:Users|home)\/[^/]+\//, '~/');
+  }
   if (project.repositoryUrl !== null && project.repositoryUrl.length > 0) {
-    // Matches `…[:/]owner/repo[.git]` for github / gitlab / gitea / ssh forms.
     const m = /[/:]([^/:]+\/[^/:]+?)(?:\.git)?$/.exec(project.repositoryUrl);
     if (m !== null) return m[1];
     return project.repositoryUrl;
   }
-  const segs = project.path.split('/').filter(s => s.length > 0);
-  if (segs.length <= 2) return project.path;
-  return `…/${segs.slice(-2).join('/')}`;
+  return '';
 }
