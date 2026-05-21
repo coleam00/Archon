@@ -594,6 +594,7 @@ curl http://localhost:3637/api/conversations/<conversationId>/messages
 - **AI Providers**: Implement `IAgentProvider`, session management, streaming
 - **Slash Commands**: Add to command-handler.ts, update database, no AI
 - **Database Operations**: Use `IDatabase` interface (supports PostgreSQL and SQLite via adapters)
+- **Plan insertion points**: Use stable text anchors (e.g., "after the `it('throws on ...')` test block"), never raw line numbers — line numbers drift on every preceding edit.
 
 ### SDK Type Patterns
 

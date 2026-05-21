@@ -2659,6 +2659,79 @@ describe('loadMcpConfig', () => {
       'MCP config figma.headers.Authorization must be a string'
     );
   });
+
+  it('expands ${VAR_NAME} brace-form in env values', async () => {
+    process.env.TEST_MCP_TOKEN_1612 = 'braced-secret';
+    const config = { github: { command: 'npx', env: { TOKEN: '${TEST_MCP_TOKEN_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.github as Record<string, unknown>;
+    expect(server.env).toEqual({ TOKEN: 'braced-secret' });
+
+    delete process.env.TEST_MCP_TOKEN_1612;
+  });
+
+  it('expands ${VAR_NAME} brace-form in headers values', async () => {
+    process.env.TEST_API_KEY_1612 = 'braced-key';
+    const config = {
+      api: {
+        type: 'http',
+        url: 'https://example.com',
+        headers: { Authorization: 'Bearer ${TEST_API_KEY_1612}' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.api as Record<string, unknown>;
+    expect(server.headers).toEqual({ Authorization: 'Bearer braced-key' });
+
+    delete process.env.TEST_API_KEY_1612;
+  });
+
+  it('replaces undefined brace-form vars with empty string and reports them', async () => {
+    delete process.env.NONEXISTENT_VAR_1612;
+    const config = { svc: { command: 'npx', env: { KEY: '${NONEXISTENT_VAR_1612}' } } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.env).toEqual({ KEY: '' });
+    expect(result.missingVars).toContain('NONEXISTENT_VAR_1612');
+  });
+
+  it('expands mixed bare and brace-form vars in the same string', async () => {
+    process.env.TEST_HOST_1612 = 'db.example.com';
+    process.env.TEST_PORT_1612 = '5432';
+    const config = {
+      db: {
+        command: 'npx',
+        env: { DSN: 'postgres://$TEST_HOST_1612:${TEST_PORT_1612}/mydb' },
+      },
+    };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.db as Record<string, unknown>;
+    expect(server.env).toEqual({ DSN: 'postgres://db.example.com:5432/mydb' });
+
+    delete process.env.TEST_HOST_1612;
+    delete process.env.TEST_PORT_1612;
+  });
+
+  it('does not expand brace-form vars in command or args fields', async () => {
+    process.env.TEST_CMD_1612 = 'should-not-expand';
+    const config = { svc: { command: '${TEST_CMD_1612}', args: ['${TEST_CMD_1612}'] } };
+    await writeFile(join(testDir, 'mcp.json'), JSON.stringify(config));
+
+    const result = await loadMcpConfig('mcp.json', testDir);
+    const server = result.servers.svc as Record<string, unknown>;
+    expect(server.command).toBe('${TEST_CMD_1612}');
+    expect(server.args).toEqual(['${TEST_CMD_1612}']);
+
+    delete process.env.TEST_CMD_1612;
+  });
 });
 
 // ---------------------------------------------------------------------------
