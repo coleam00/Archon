@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { mkdir, rm, writeFile, lstat, readlink } from 'fs/promises';
 
 const isWindows = process.platform === 'win32';
@@ -93,12 +93,19 @@ describe('archon-paths', () => {
       expect(isWSL()).toBe(true);
     });
 
-    test('returns false when WSL_DISTRO_NAME is unset and not on a WSL kernel', () => {
+    test('falls back to /proc/sys/kernel/osrelease when WSL_DISTRO_NAME is unset', () => {
       delete process.env.WSL_DISTRO_NAME;
-      // /proc/sys/kernel/osrelease on real Linux CI doesn't contain "microsoft";
-      // on a WSL host this assertion is naturally true via the env-var branch above.
-      // Skip the strict check here — just verify it doesn't throw.
-      expect(typeof isWSL()).toBe('boolean');
+      // Derive the expectation from the same source as the implementation:
+      // real Linux CI → no "microsoft" → false; WSL2 host → "microsoft" → true.
+      let expected = false;
+      try {
+        expected = readFileSync('/proc/sys/kernel/osrelease', 'utf8')
+          .toLowerCase()
+          .includes('microsoft');
+      } catch {
+        expected = false;
+      }
+      expect(isWSL()).toBe(expected);
     });
   });
 
