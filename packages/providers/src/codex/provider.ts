@@ -842,10 +842,12 @@ export class CodexProvider implements IAgentProvider {
         if (requestOptions?.abortSignal) {
           requestOptions.abortSignal.removeEventListener('abort', onCallerAbort);
         }
-        // Signal to any downstream consumers that this attempt is done.
-        // Next iteration creates a fresh controller; caller's signal state
-        // is unchanged.
-        attemptController.abort();
+        // The per-attempt AbortController is short-lived and goes out of
+        // scope at iteration end — no explicit abort() cleanup needed.
+        // Calling abort() here would race with the codex-sdk's own finally
+        // (which calls child.removeAllListeners() + child.kill()), firing
+        // Node's internal spawn-signal abort listener on a listenerless
+        // child and surfacing an uncaught AbortError.  See #1735.
       }
     }
 
