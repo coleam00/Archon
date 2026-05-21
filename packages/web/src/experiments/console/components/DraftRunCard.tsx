@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
 } from 'react';
+import { useSearchParams } from 'react-router';
 import { WorkflowPicker } from './WorkflowPicker';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
@@ -68,6 +69,7 @@ function writeLastWorkflow(name: string): void {
 export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): ReactElement {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [mode, setMode] = useState<Mode>('collapsed');
   const [workflowName, setWorkflowName] = useState<string>(() => readLastWorkflow());
   const [context, setContext] = useState('');
@@ -75,6 +77,25 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Pre-fill from `?rerun=1&workflow=…&message=…` query params (set by the
+  // ↻ rerun button on RecentRunRow). Reacts to searchParams so the card
+  // expands whether you arrive by navigation (same project, params change
+  // only) or by a fresh mount. Strips the params on entry so reload
+  // doesn't re-trigger and so the URL stays clean.
+  useEffect(() => {
+    if (searchParams.get('rerun') !== '1') return;
+    const wf = searchParams.get('workflow');
+    const msg = searchParams.get('message');
+    if (wf !== null && wf.length > 0) setWorkflowName(wf);
+    if (msg !== null) setContext(msg);
+    setMode('expanded');
+    const next = new URLSearchParams(searchParams);
+    next.delete('rerun');
+    next.delete('workflow');
+    next.delete('message');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const addFiles = (incoming: File[]): void => {
     if (incoming.length === 0) return;

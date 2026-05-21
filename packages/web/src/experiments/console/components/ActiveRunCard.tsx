@@ -7,6 +7,7 @@ import { ApprovalPanel } from './ApprovalPanel';
 import { ApprovalContext } from './ApprovalContext';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { useIsDocker, openInIde } from '../lib/health';
 import { statusTextClass, statusLabel } from '../lib/run-status';
 
 interface ActiveRunCardProps {
@@ -30,8 +31,11 @@ interface ActiveRunCardProps {
  */
 export function ActiveRunCard({ run, showProject = false }: ActiveRunCardProps): ReactElement {
   const navigate = useNavigate();
+  const isDocker = useIsDocker();
   const elapsed = formatElapsed(elapsedSince(run.startedAt));
   const canOpen = run.projectId !== null && !run.id.startsWith('demo-');
+  const canOpenIde =
+    !isDocker && run.workingPath !== null && run.workingPath !== '' && !run.id.startsWith('demo-');
 
   const onCardClick = (): void => {
     if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
@@ -78,6 +82,22 @@ export function ActiveRunCard({ run, showProject = false }: ActiveRunCardProps):
               </span>
             ) : null}
             <span className="font-mono text-[11px] tabular-nums text-text-tertiary">{elapsed}</span>
+            {canOpenIde && run.workingPath !== null ? (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation();
+                  if (run.workingPath !== null) openInIde(run.workingPath);
+                }}
+                title={`Open ${run.workingPath} in IDE`}
+                aria-label="Open in IDE"
+                className="rounded p-1 text-text-tertiary opacity-0 transition-all hover:bg-surface-hover hover:text-text-primary group-hover:opacity-100"
+              >
+                <span aria-hidden className="font-mono text-[12px] leading-none">
+                  ↗
+                </span>
+              </button>
+            ) : null}
           </div>
         </div>
 

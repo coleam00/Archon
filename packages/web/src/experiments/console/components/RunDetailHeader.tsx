@@ -4,6 +4,7 @@ import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { useIsDocker, openInIde } from '../lib/health';
 import { statusLabel, statusTextClass } from '../lib/run-status';
 
 interface RunDetailHeaderProps {
@@ -34,6 +35,8 @@ export function RunDetailHeader({
   const elapsed = useLiveElapsed(run);
   const isPaused = run.status === 'paused';
   const isRunning = run.status === 'running';
+  const isDocker = useIsDocker();
+  const canOpenIde = !isDocker && run.workingPath !== null && run.workingPath !== '';
 
   const copyRunId = async (): Promise<void> => {
     try {
@@ -108,7 +111,7 @@ export function RunDetailHeader({
       {/* Origin */}
       <OriginBadge origin={run.origin} />
 
-      {/* Cost + elapsed — right-aligned */}
+      {/* Cost + elapsed + IDE — right-aligned */}
       <div className="ml-auto flex items-center gap-3">
         {typeof run.costUsd === 'number' ? (
           <span
@@ -119,6 +122,21 @@ export function RunDetailHeader({
           </span>
         ) : null}
         <span className="font-mono text-[12px] tabular-nums text-text-tertiary">{elapsed}</span>
+        {canOpenIde && run.workingPath !== null ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (run.workingPath !== null) openInIde(run.workingPath);
+            }}
+            title={`Open ${run.workingPath} in IDE`}
+            aria-label="Open in IDE"
+            className="rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          >
+            <span aria-hidden className="font-mono text-[12px] leading-none">
+              ↗
+            </span>
+          </button>
+        ) : null}
       </div>
     </header>
   );

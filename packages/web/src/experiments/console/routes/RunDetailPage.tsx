@@ -10,7 +10,7 @@ import { RunGraphPanel } from '../components/RunGraphPanel';
 import { ArtifactPanel } from '../components/ArtifactPanel';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
-import { useEntity } from '../store/cache';
+import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import type { Run } from '../primitives/run';
@@ -132,6 +132,26 @@ export function RunDetailPage(): ReactElement {
   // state. Auto-reconnects on disconnect. The hook itself no-ops while the
   // conversation id is still unknown.
   useRunStreamSSE(conversationPlatformId, runId ?? null);
+
+  // SSE-drop safety net: if the stream silently dies (network hiccup,
+  // sleep/wake, mobile transitions) the EventSource will reconnect but we
+  // may have missed terminal events in the meantime. A 30s heartbeat refetch
+  // while status is non-terminal catches that without being polling proper —
+  // it stops the moment the run hits a terminal state.
+  const status = detail?.run.status;
+  useEffect(() => {
+    if (runId === undefined) return;
+    if (status !== 'running' && status !== 'paused') return;
+    const id = setInterval(() => {
+      invalidate(K.run(runId));
+      if (conversationPlatformId !== null) {
+        invalidate(K.messages(conversationPlatformId));
+      }
+    }, 30000);
+    return (): void => {
+      clearInterval(id);
+    };
+  }, [runId, status, conversationPlatformId]);
 
   // Surface the artifact count on the tab even when the user hasn't visited
   // the panel yet. Cheap call — the server walks one directory. Must live

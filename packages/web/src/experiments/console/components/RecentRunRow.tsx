@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { useIsDocker, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
 
 interface RecentRunRowProps {
@@ -25,12 +26,30 @@ const STATUS_GLYPH: Record<string, string> = {
  */
 export function RecentRunRow({ run, showProject = false }: RecentRunRowProps): ReactElement {
   const navigate = useNavigate();
+  const isDocker = useIsDocker();
   const elapsed = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
   const canOpen = run.projectId !== null && !run.id.startsWith('demo-');
+  const canOpenIde =
+    !isDocker && run.workingPath !== null && run.workingPath !== '' && !run.id.startsWith('demo-');
+  const canRerun =
+    run.projectId !== null &&
+    run.workflow !== '' &&
+    !run.id.startsWith('demo-') &&
+    (run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled');
   const glyph = STATUS_GLYPH[run.status] ?? '·';
 
   const onClick = (): void => {
     if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
+  };
+
+  const onRerun = (): void => {
+    if (!canRerun || run.projectId === null) return;
+    const params = new URLSearchParams({
+      rerun: '1',
+      workflow: run.workflow,
+    });
+    if (run.userMessage.length > 0) params.set('message', run.userMessage);
+    navigate(`/console/p/${run.projectId}?${params.toString()}`);
   };
 
   return (
@@ -66,12 +85,43 @@ export function RecentRunRow({ run, showProject = false }: RecentRunRowProps): R
         {typeof run.costUsd === 'number' ? formatCost(run.costUsd) : ''}
       </span>
       <OriginBadge origin={run.origin} />
-      <span
-        aria-hidden
-        className="w-3 shrink-0 text-text-tertiary opacity-0 transition-opacity group-hover:opacity-100"
-      >
-        →
-      </span>
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        {canRerun ? (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              onRerun();
+            }}
+            title={`Rerun ${run.workflow} with the same message`}
+            aria-label="Rerun"
+            className="rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          >
+            <span aria-hidden className="text-[12px] leading-none">
+              ↻
+            </span>
+          </button>
+        ) : null}
+        {canOpenIde && run.workingPath !== null ? (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              if (run.workingPath !== null) openInIde(run.workingPath);
+            }}
+            title={`Open ${run.workingPath} in IDE`}
+            aria-label="Open in IDE"
+            className="rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          >
+            <span aria-hidden className="font-mono text-[12px] leading-none">
+              ↗
+            </span>
+          </button>
+        ) : null}
+        <span aria-hidden className="w-3 text-text-tertiary">
+          →
+        </span>
+      </div>
     </div>
   );
 }
