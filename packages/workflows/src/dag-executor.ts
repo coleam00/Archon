@@ -2593,12 +2593,23 @@ export async function executeDagWorkflow(
 
   // Pre-populate nodeOutputs from prior run so already-completed nodes are
   // treated as done for trigger-rule and $nodeId.output substitution purposes.
+  // Nodes flagged `always_run: true` are excluded — they re-execute on resume
+  // and downstream consumers must see the fresh output, not the cached one.
   if (priorCompletedNodes && priorCompletedNodes.size > 0) {
+    const alwaysRunIds = new Set(workflow.nodes.filter(n => n.always_run).map(n => n.id));
+    let prepopulatedCount = 0;
     for (const [nodeId, output] of priorCompletedNodes) {
+      if (alwaysRunIds.has(nodeId)) continue;
       nodeOutputs.set(nodeId, { state: 'completed', output });
+      prepopulatedCount++;
     }
     getLog().info(
-      { workflowRunId: workflowRun.id, priorCompletedCount: priorCompletedNodes.size },
+      {
+        workflowRunId: workflowRun.id,
+        priorCompletedCount: priorCompletedNodes.size,
+        prepopulatedCount,
+        alwaysRunResumedCount: priorCompletedNodes.size - prepopulatedCount,
+      },
       'dag.workflow_resume_prepopulated'
     );
   }
@@ -2633,8 +2644,26 @@ export async function executeDagWorkflow(
     const layerResults = await Promise.allSettled(
       layer.map(async (node): Promise<{ nodeId: string; output: NodeExecutionResult }> => {
         try {
-          // 0. Skip if this node completed successfully in a prior run (resume path)
-          if (priorCompletedNodes?.has(node.id)) {
+          // 0. Skip if this node completed successfully in a prior run (resume path).
+          // `always_run: true` opts the node out of resume caching — re-execute even
+          // when the prior run completed it.
+          if (priorCompletedNodes?.has(node.id) && node.always_run) {
+            getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+            deps.store
+              .createWorkflowEvent({
+                workflow_run_id: workflowRun.id,
+                event_type: 'node_always_run_reset',
+                step_name: node.id,
+                data: { prior_output: priorCompletedNodes.get(node.id) ?? '' },
+              })
+              .catch((err: Error) => {
+                getLog().error(
+                  { err, workflowRunId: workflowRun.id, eventType: 'node_always_run_reset' },
+                  'workflow_event_persist_failed'
+                );
+              });
+          }
+          if (priorCompletedNodes?.has(node.id) && !node.always_run) {
             getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
             await logNodeSkip(logDir, workflowRun.id, node.id, 'prior_success').catch(
               (err: Error) => {

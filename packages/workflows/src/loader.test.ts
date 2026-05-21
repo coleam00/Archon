@@ -676,6 +676,31 @@ nodes:
       // Should fail validation due to null description
       expect(workflows).toHaveLength(0);
     });
+
+    it('parses always_run: true on a node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      const yaml = `name: always-run-test
+description: Producer opts out of resume caching
+nodes:
+  - id: persist
+    bash: 'echo hi'
+    always_run: true
+  - id: consumer
+    command: consume
+    depends_on: [persist]
+`;
+      await writeFile(join(workflowDir, 'always-run.yaml'), yaml);
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      const workflows = result.workflows.map(ws => ws.workflow);
+
+      expect(workflows).toHaveLength(1);
+      expect(workflows[0].nodes[0].id).toBe('persist');
+      expect(workflows[0].nodes[0].always_run).toBe(true);
+      expect(workflows[0].nodes[1].always_run).toBeUndefined();
+    });
   });
 
   describe('multi-source loading', () => {

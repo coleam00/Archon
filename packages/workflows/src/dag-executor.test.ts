@@ -4769,6 +4769,199 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
   });
 });
 
+describe('executeDagWorkflow -- always_run resume opt-out', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-always-run-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    const commandsDir = join(testDir, '.archon', 'commands');
+    await mkdir(commandsDir, { recursive: true });
+    await writeFile(join(commandsDir, 'producer.md'), 'Producer prompt');
+    await writeFile(join(commandsDir, 'consumer.md'), 'Consumer prompt $producer.output');
+
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'fresh output' };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  it('re-runs node flagged always_run even when present in priorCompletedNodes', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const priorCompletedNodes = new Map([['producer', 'cached stale output']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-always-run',
+      testDir,
+      {
+        name: 'always-run-producer',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'consumer', command: 'consumer', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Producer re-runs (instead of being skipped) AND consumer runs => 2 sendQuery calls
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+
+    // No skip event written for the always_run node — but a reset event IS written for audit
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const skippedEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(skippedEvent).toBeUndefined();
+
+    const resetEvent = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_always_run_reset' &&
+        (call[0] as { step_name: string }).step_name === 'producer'
+    );
+    expect(resetEvent).toBeDefined();
+    expect((resetEvent![0] as { data: { prior_output: string } }).data.prior_output).toBe(
+      'cached stale output'
+    );
+  });
+
+  it('still skips non-always_run nodes in the same priorCompletedNodes set', async () => {
+    await writeFile(join(testDir, '.archon', 'commands', 'cached.md'), 'Cached prompt');
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const priorCompletedNodes = new Map([
+      ['producer', 'cached stale output'],
+      ['cached', 'cached output'],
+    ]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-mixed',
+      testDir,
+      {
+        name: 'mixed',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'cached', command: 'cached' },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Only producer re-runs; cached node stays skipped
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const cachedSkipped = eventCalls.find(
+      (call: unknown[]) =>
+        (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+        (call[0] as { step_name: string }).step_name === 'cached'
+    );
+    expect(cachedSkipped).toBeDefined();
+  });
+
+  it('downstream consumer reads fresh producer output (not the pre-populated cached value)', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    const seenPrompts: string[] = [];
+    let queryCount = 0;
+    mockSendQueryDag.mockImplementation(function* (prompt: string) {
+      seenPrompts.push(prompt);
+      queryCount++;
+      // First call is the always_run producer; subsequent calls are consumers
+      yield {
+        type: 'assistant',
+        content: queryCount === 1 ? 'fresh producer output' : 'consumer result',
+      };
+      yield { type: 'result', sessionId: 'session-id' };
+    });
+
+    const priorCompletedNodes = new Map([['producer', 'STALE_CACHED_VALUE']]);
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-fresh-output',
+      testDir,
+      {
+        name: 'always-run-fresh',
+        nodes: [
+          { id: 'producer', command: 'producer', always_run: true },
+          { id: 'consumer', prompt: 'See: $producer.output', depends_on: ['producer'] },
+        ],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig,
+      undefined,
+      undefined,
+      priorCompletedNodes
+    );
+
+    // Consumer's prompt should contain the fresh producer output, not the stale cached value
+    const consumerPrompt = seenPrompts[1];
+    expect(consumerPrompt).toContain('fresh producer output');
+    expect(consumerPrompt).not.toContain('STALE_CACHED_VALUE');
+  });
+});
+
 describe('executeDagWorkflow -- break after result (no hang on subprocess exit)', () => {
   let testDir: string;
 
