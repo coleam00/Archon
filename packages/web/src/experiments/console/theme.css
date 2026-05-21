@@ -71,9 +71,13 @@
      - warning   amber
      - error     hot red */
   --running: oklch(0.72 0.155 245);
+  --running-soft: oklch(0.72 0.155 245 / 0.14);
   --success: var(--brand-teal);
+  --success-soft: oklch(0.755 0.165 168 / 0.14);
   --warning: oklch(0.8 0.14 85);
+  --warning-soft: oklch(0.8 0.14 85 / 0.14);
   --error: oklch(0.68 0.215 18);
+  --error-soft: oklch(0.68 0.215 18 / 0.14);
 
   /* shadcn-compatible overrides */
   --background: oklch(0.145 0.006 265);

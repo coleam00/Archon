@@ -44,7 +44,13 @@ export function RunDetailHeader({
   };
 
   return (
-    <header className="sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-surface px-6 py-3">
+    <header className="relative sticky top-0 z-10 flex flex-wrap items-center gap-x-4 gap-y-2 bg-surface px-6 py-3">
+      {/* Brand thread along the bottom edge — anchors the detail view. */}
+      <span
+        aria-hidden
+        className="brand-bar pointer-events-none absolute inset-x-0 bottom-0 h-px opacity-60"
+      />
+
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 font-mono text-[12px]">
         <Link
@@ -59,11 +65,11 @@ export function RunDetailHeader({
         <button
           type="button"
           onClick={() => void copyRunId()}
-          className="flex items-center gap-1 text-text-primary transition-colors hover:text-accent-bright"
+          className="flex items-center gap-1 font-semibold transition-opacity hover:opacity-80"
           title="Copy full run id"
         >
-          {shortRunId(run.id)}
-          <span aria-hidden className="font-mono text-[10px] opacity-60">
+          <span className="brand-text">{shortRunId(run.id)}</span>
+          <span aria-hidden className="font-mono text-[10px] text-text-tertiary">
             ⧉
           </span>
         </button>

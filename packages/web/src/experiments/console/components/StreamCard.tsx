@@ -16,18 +16,22 @@ interface StreamCardProps {
   onClick?: () => void;
 }
 
+// Role pills carry the brand duotone: the user's voice reads as magenta
+// (presence / authorship); the agent's voice reads as teal (execution).
+// Tool/system/artifact/error stay semantic — they signal kind-of-event, not
+// who-is-speaking.
 const KIND_STYLES: Record<
   StreamCardProps['kind'],
   { label: string; pill: string; border: string }
 > = {
   user: {
     label: 'You',
-    pill: 'bg-surface-elevated text-text-primary',
+    pill: 'bg-[color:var(--accent-soft)] text-[color:var(--brand-magenta)]',
     border: 'border-border',
   },
   assistant: {
     label: 'Agent',
-    pill: 'bg-surface-elevated text-text-primary',
+    pill: 'bg-[color:var(--success-soft,oklch(0.755_0.165_168/0.14))] text-[color:var(--brand-teal)]',
     border: 'border-border',
   },
   system: {

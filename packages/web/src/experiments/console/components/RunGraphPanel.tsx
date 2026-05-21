@@ -234,8 +234,12 @@ export function RunGraphPanel({
 
 function Header(): ReactElement {
   return (
-    <header className="flex items-center justify-between border-b border-border/60 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-tertiary">
+    <header className="relative flex items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-secondary">
       <span>Graph</span>
+      <span
+        aria-hidden
+        className="brand-bar pointer-events-none absolute inset-x-0 bottom-0 h-px opacity-60"
+      />
     </header>
   );
 }
