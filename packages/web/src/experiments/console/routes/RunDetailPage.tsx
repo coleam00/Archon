@@ -8,7 +8,8 @@ import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
 import { RunGraphPanel } from '../components/RunGraphPanel';
 import { StreamContextProvider } from '../lib/stream-context';
-import { useEntity, set as setCache } from '../store/cache';
+import { useRunStreamSSE } from '../lib/sse';
+import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import type { Run } from '../primitives/run';
@@ -124,36 +125,11 @@ export function RunDetailPage(): ReactElement {
         : Promise.resolve([])
   );
 
-  // Polling: refetch run detail + messages every 3s while running / paused.
-  useEffect(() => {
-    if (runId === undefined) return;
-    const alive = detail?.run.status === 'running' || detail?.run.status === 'paused';
-    if (!alive) return;
-
-    const handle = setInterval(() => {
-      void skill
-        .getRun(runId)
-        .then(next => {
-          setCache(K.run(runId), next);
-        })
-        .catch(() => {
-          /* swallow — will surface via useEntity */
-        });
-      if (conversationPlatformId !== null) {
-        void skill
-          .listMessages(conversationPlatformId)
-          .then(next => {
-            setCache(K.messages(conversationPlatformId), next);
-          })
-          .catch(() => {
-            /* swallow */
-          });
-      }
-    }, 3000);
-    return (): void => {
-      clearInterval(handle);
-    };
-  }, [runId, conversationPlatformId, detail?.run.status]);
+  // Live updates: subscribe to the conversation SSE stream. Events here
+  // invalidate the run and messages caches; useEntity refetches authoritative
+  // state. Auto-reconnects on disconnect. The hook itself no-ops while the
+  // conversation id is still unknown.
+  useRunStreamSSE(conversationPlatformId, runId ?? null);
 
   // Auto-scroll to bottom on new content IF user is already near the bottom.
   const lastBottomRef = useRef(true);

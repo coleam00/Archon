@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import { useParams, useSearchParams } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
 import { FilterChips, type Filter } from '../components/FilterChips';
 import { DraftRunCard } from '../components/DraftRunCard';
-import { useEntity, set as setCache } from '../store/cache';
+import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
+import { useDashboardSSE } from '../lib/sse';
 import * as skill from '../skills';
 import type { Run } from '../primitives/run';
 import type { RunCounts } from '../skills/runs';
@@ -246,22 +247,10 @@ export function RunsPage(): ReactElement {
     skill.listRuns(scope === 'all' ? {} : { codebaseId: scope })
   );
 
-  // Polling fallback every 3s until SSE lands in M4.
-  useEffect(() => {
-    const handle = setInterval((): void => {
-      void skill
-        .listRuns(scope === 'all' ? {} : { codebaseId: scope })
-        .then((next: FeedData): void => {
-          setCache(K.runs(scope), next);
-        })
-        .catch((): void => {
-          /* swallow — errors surface via useEntity on next fetch */
-        });
-    }, 3000);
-    return (): void => {
-      clearInterval(handle);
-    };
-  }, [scope]);
+  // Dashboard SSE keeps the runs feed in sync: every workflow_status /
+  // dag_node event invalidates the active runs:* cache keys, triggering a
+  // refetch through useEntity. Replaces the 3s polling loop.
+  useDashboardSSE();
 
   // Scoped project (drives the DraftRunCard inside the feed when not ALL).
   const { data: project } = useEntity<Project>(
