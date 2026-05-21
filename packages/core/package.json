@@ -17,6 +17,7 @@
     "./orchestrator": "./src/orchestrator/orchestrator.ts",
     "./handlers": "./src/handlers/command-handler.ts",
     "./config": "./src/config/index.ts",
+    "./config/resolve-assistant": "./src/config/resolve-assistant.ts",
     "./utils/*": "./src/utils/*.ts",
     "./services/*": "./src/services/*.ts",
     "./state/*": "./src/state/*.ts"

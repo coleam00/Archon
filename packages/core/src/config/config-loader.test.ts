@@ -15,16 +15,16 @@ mock.module('@archon/paths', () => ({
   getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
 }));
 
-// Mock for reading/writing config files (replaces fs/promises mock)
-const mockReadConfigFile = mock(() => Promise.resolve(''));
-const mockWriteConfigFile = mock(() => Promise.resolve());
+// Mock fs/promises so that readConfigFile/writeConfigFile (which call fsReadFile/writeFile
+// internally) are intercepted regardless of Bun version mock.module semantics.
+const mockFsReadFile = mock(() => Promise.resolve(''));
+const mockFsWriteFile = mock(() => Promise.resolve());
+const mockFsMkdir = mock(() => Promise.resolve(undefined));
 
-// Import real config-loader to spread its exports, then override readConfigFile/writeConfigFile
-import * as realConfigLoader from './config-loader';
-mock.module('./config-loader', () => ({
-  ...realConfigLoader,
-  readConfigFile: mockReadConfigFile,
-  writeConfigFile: mockWriteConfigFile,
+mock.module('fs/promises', () => ({
+  readFile: mockFsReadFile,
+  writeFile: mockFsWriteFile,
+  mkdir: mockFsMkdir,
 }));
 
 import {
@@ -51,8 +51,8 @@ describe('config-loader', () => {
 
   beforeEach(() => {
     clearConfigCache();
-    mockReadConfigFile.mockReset();
-    mockWriteConfigFile.mockReset();
+    mockFsReadFile.mockReset();
+    mockFsWriteFile.mockReset();
 
     // Save original env vars
     envVars.forEach(key => {
@@ -71,23 +71,23 @@ describe('config-loader', () => {
       }
     });
 
-    // No need to restore - we're mocking at config-loader level, not fs/promises
-    mockReadConfigFile.mockClear();
-    mockWriteConfigFile.mockClear();
+    // Clear mock state between tests
+    mockFsReadFile.mockClear();
+    mockFsWriteFile.mockClear();
   });
 
   describe('loadGlobalConfig', () => {
     test('returns empty object when file does not exist', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadGlobalConfig();
       expect(config).toEqual({});
     });
 
     test('parses valid YAML config', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 defaultAssistant: codex
 streaming:
   telegram: batch
@@ -102,22 +102,22 @@ concurrency:
     });
 
     test('caches config on subsequent calls', async () => {
-      mockReadConfigFile.mockResolvedValue('defaultAssistant: claude');
+      mockFsReadFile.mockResolvedValue('defaultAssistant: claude');
 
       await loadGlobalConfig();
       await loadGlobalConfig();
 
       // Should only read file once
-      expect(mockReadConfigFile).toHaveBeenCalledTimes(1);
+      expect(mockFsReadFile).toHaveBeenCalledTimes(1);
     });
 
     test('reloads config when forceReload is true', async () => {
-      mockReadConfigFile.mockResolvedValue('defaultAssistant: claude');
+      mockFsReadFile.mockResolvedValue('defaultAssistant: claude');
 
       await loadGlobalConfig();
       await loadGlobalConfig(true);
 
-      expect(mockReadConfigFile).toHaveBeenCalledTimes(2);
+      expect(mockFsReadFile).toHaveBeenCalledTimes(2);
     });
 
     test('logs error for invalid YAML syntax', async () => {
@@ -125,7 +125,7 @@ concurrency:
 
       // Simulate YAML parse error (SyntaxError has no .code property)
       const syntaxError = new SyntaxError('YAML Parse error: Multiline implicit key');
-      mockReadConfigFile.mockRejectedValue(syntaxError);
+      mockFsReadFile.mockRejectedValue(syntaxError);
 
       const config = await loadGlobalConfig();
 
@@ -144,7 +144,7 @@ concurrency:
 
       const permError = new Error('Permission denied') as NodeJS.ErrnoException;
       permError.code = 'EACCES';
-      mockReadConfigFile.mockRejectedValue(permError);
+      mockFsReadFile.mockRejectedValue(permError);
 
       const config = await loadGlobalConfig();
 
@@ -161,7 +161,7 @@ concurrency:
 
   describe('loadRepoConfig', () => {
     test('loads from .archon/config.yaml', async () => {
-      mockReadConfigFile.mockResolvedValue('assistant: codex');
+      mockFsReadFile.mockResolvedValue('assistant: codex');
 
       const config = await loadRepoConfig('/test/repo');
       expect(config.assistant).toBe('codex');
@@ -170,7 +170,7 @@ concurrency:
     test('returns empty object when no config found', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadRepoConfig('/test/repo');
       expect(config).toEqual({});
@@ -181,7 +181,7 @@ concurrency:
 
       // Simulate YAML parse error (SyntaxError has no .code property)
       const syntaxError = new SyntaxError('YAML Parse error: Multiline implicit key');
-      mockReadConfigFile.mockRejectedValue(syntaxError);
+      mockFsReadFile.mockRejectedValue(syntaxError);
 
       const config = await loadRepoConfig('/test/repo');
 
@@ -200,7 +200,7 @@ concurrency:
 
       const permError = new Error('Permission denied') as NodeJS.ErrnoException;
       permError.code = 'EACCES';
-      mockReadConfigFile.mockRejectedValue(permError);
+      mockFsReadFile.mockRejectedValue(permError);
 
       const config = await loadRepoConfig('/test/repo');
 
@@ -219,7 +219,7 @@ concurrency:
     test('returns defaults when no configs exist', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadConfig();
 
@@ -234,7 +234,7 @@ concurrency:
     });
 
     test('env vars override config files', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 defaultAssistant: claude
 streaming:
   telegram: stream
@@ -250,20 +250,20 @@ streaming:
     });
 
     test('throws on unknown DEFAULT_AI_ASSISTANT env var', async () => {
-      mockReadConfigFile.mockResolvedValue('');
+      mockFsReadFile.mockResolvedValue('');
       process.env.DEFAULT_AI_ASSISTANT = 'nonexistent-provider';
 
       await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
     });
 
     test('throws on unknown defaultAssistant in global config', async () => {
-      mockReadConfigFile.mockResolvedValue('defaultAssistant: nonexistent-provider');
+      mockFsReadFile.mockResolvedValue('defaultAssistant: nonexistent-provider');
 
       await expect(loadConfig()).rejects.toThrow(/not a registered provider/);
     });
 
     test('throws on unknown assistant in repo config', async () => {
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         const normalized = path.replace(/\\/g, '/');
         if (normalized.includes('/tmp/test-repo/.archon/config.yaml')) {
           return 'assistant: nonexistent-provider';
@@ -282,7 +282,7 @@ streaming:
       };
 
       let globalConfigRead = false;
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         // First check for repo-specific config path (contains /repo/.archon/)
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return 'assistant: codex';
@@ -308,7 +308,7 @@ streaming:
       };
 
       let globalConfigRead = false;
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `assistants:\n  codex:\n    webSearchMode: live\n    additionalDirectories:\n      - /repo\n`;
         }
@@ -335,7 +335,7 @@ streaming:
         return normalizedPath.includes(pattern);
       };
 
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
 worktree:
@@ -357,7 +357,7 @@ worktree:
         return normalizedPath.includes(pattern);
       };
 
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
 worktree:
@@ -376,7 +376,7 @@ worktree:
     test('baseBranch is undefined when not configured', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadConfig('/test/repo');
       expect(config.baseBranch).toBeUndefined();
@@ -388,7 +388,7 @@ worktree:
         return normalizedPath.includes(pattern);
       };
 
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
 docs:
@@ -410,7 +410,7 @@ docs:
         return normalizedPath.includes(pattern);
       };
 
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
 docs:
@@ -429,7 +429,7 @@ docs:
     test('docsPath is undefined when docs config is absent', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadConfig('/test/repo');
       expect(config.docsPath).toBeUndefined();
@@ -439,7 +439,7 @@ docs:
       const pathMatches = (path: string, pattern: string): boolean =>
         path.replace(/\\/g, '/').includes(pattern);
 
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `
 env:
@@ -459,7 +459,7 @@ env:
     test('envVars is undefined when repo config has no env section', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadConfig('/test/repo');
       expect(config.envVars).toBeUndefined();
@@ -468,7 +468,7 @@ env:
     test('paths use archon defaults', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       const config = await loadConfig();
 
@@ -479,7 +479,7 @@ env:
 
   describe('settingSources config', () => {
     test('merges settingSources from global config', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 assistants:
   claude:
     settingSources:
@@ -491,7 +491,7 @@ assistants:
     });
 
     test('defaults to undefined settingSources when not configured', async () => {
-      mockReadConfigFile.mockResolvedValue('');
+      mockFsReadFile.mockResolvedValue('');
       const config = await loadConfig();
       expect(config.assistants.claude.settingSources).toBeUndefined();
     });
@@ -503,7 +503,7 @@ assistants:
       };
 
       let globalConfigRead = false;
-      mockReadConfigFile.mockImplementation(async (path: string) => {
+      mockFsReadFile.mockImplementation(async (path: string) => {
         if (pathMatches(path, '/repo/.archon/config.yaml')) {
           return `assistants:\n  claude:\n    settingSources:\n      - project\n`;
         }
@@ -521,7 +521,7 @@ assistants:
     });
 
     test('toSafeConfig does not expose settingSources (server-internal field)', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 assistants:
   claude:
     settingSources:
@@ -536,7 +536,7 @@ assistants:
 
   describe('updateGlobalConfig', () => {
     test('merges assistant config into existing file', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 defaultAssistant: claude
 assistants:
   claude:
@@ -547,13 +547,13 @@ assistants:
         assistants: { claude: { model: 'opus' } },
       });
 
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const writtenContent = mockWriteConfigFile.mock.calls[0]?.[1] as string;
+      expect(mockFsWriteFile).toHaveBeenCalledTimes(1);
+      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
       expect(writtenContent).toContain('opus');
     });
 
     test('preserves existing non-updated fields', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 defaultAssistant: codex
 botName: MyBot
 assistants:
@@ -566,8 +566,8 @@ assistants:
         defaultAssistant: 'claude',
       });
 
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const writtenContent = mockWriteConfigFile.mock.calls[0]?.[1] as string;
+      expect(mockFsWriteFile).toHaveBeenCalledTimes(1);
+      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
       expect(writtenContent).toContain('claude');
       expect(writtenContent).toContain('MyBot');
     });
@@ -575,22 +575,22 @@ assistants:
     test('creates config when file does not exist', async () => {
       const error = new Error('ENOENT') as NodeJS.ErrnoException;
       error.code = 'ENOENT';
-      mockReadConfigFile.mockRejectedValue(error);
+      mockFsReadFile.mockRejectedValue(error);
 
       await updateGlobalConfig({
         defaultAssistant: 'codex',
       });
 
-      expect(mockWriteConfigFile).toHaveBeenCalled();
-      const writtenContent = mockWriteConfigFile.mock.calls[0]?.[1] as string;
+      expect(mockFsWriteFile).toHaveBeenCalled();
+      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
       expect(writtenContent).toContain('codex');
     });
 
     test('throws on permission errors', async () => {
-      mockReadConfigFile.mockResolvedValue('');
+      mockFsReadFile.mockResolvedValue('');
       const permError = new Error('Permission denied') as NodeJS.ErrnoException;
       permError.code = 'EACCES';
-      mockWriteConfigFile.mockRejectedValue(permError);
+      mockFsWriteFile.mockRejectedValue(permError);
 
       await expect(updateGlobalConfig({ defaultAssistant: 'codex' })).rejects.toThrow(
         'Permission denied'
@@ -600,21 +600,21 @@ assistants:
 
   describe('toSafeConfig', () => {
     test('strips paths from MergedConfig', async () => {
-      mockReadConfigFile.mockResolvedValue('');
+      mockFsReadFile.mockResolvedValue('');
       const config = await loadConfig();
       const safe = toSafeConfig(config);
       expect(safe).not.toHaveProperty('paths');
     });
 
     test('strips entire commands object from MergedConfig', async () => {
-      mockReadConfigFile.mockResolvedValue('');
+      mockFsReadFile.mockResolvedValue('');
       const config = await loadConfig();
       const safe = toSafeConfig(config);
       expect(safe).not.toHaveProperty('commands');
     });
 
     test('strips additionalDirectories from assistants.codex', async () => {
-      mockReadConfigFile.mockResolvedValue(`
+      mockFsReadFile.mockResolvedValue(`
 assistants:
   codex:
     additionalDirectories:
@@ -626,7 +626,7 @@ assistants:
     });
 
     test('preserves non-sensitive fields', async () => {
-      mockReadConfigFile.mockResolvedValue('defaultAssistant: codex');
+      mockFsReadFile.mockResolvedValue('defaultAssistant: codex');
       const config = await loadConfig();
       const safe = toSafeConfig(config);
       expect(typeof safe.botName).toBe('string');
