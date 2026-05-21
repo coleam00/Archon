@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - MCP server support for Codex workflow nodes via the shared `loadMcpConfig` module — pass `mcp: <path>` on a Codex node and the config is translated to Codex's `mcp_servers` overrides at runtime. MCP client errors are surfaced to the workflow author as `system` chunks when MCP is explicitly configured for the node (#1459).
 
+### Fixed
+
+- **`workflow approve/resume/reject` no longer fail with "Workflow not found" when the run's working path is a worktree or workspace clone.** Resume, approve, and reject now use `codebase.default_cwd` for workflow YAML discovery, falling back to `working_path` when no codebase record is found. Fixes #1663 (#1743).
+
 ## [0.3.12] - 2026-05-14
 
 Orchestrator prompt-cache fix, SDK termination edge cases, marketplace expansion, and broad workflow fixes.

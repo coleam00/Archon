@@ -62,10 +62,10 @@ export interface WorkflowRunOptions {
   fromBranch?: string;
   noWorktree?: boolean;
   resume?: boolean;
-  codebaseId?: string; // Passed by resume/approve to skip path-based lookup
+  codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
   /**
-   * Override the directory used for workflow YAML discovery. Resume/approve
-   * pass `codebase.default_cwd` here so the source repo is searched even when
+   * Override the directory used for workflow YAML discovery.
+   * Pass `codebase.default_cwd` here so the source repo is searched even when
    * `working_path` is a worktree or workspace clone that lacks the file.
    */
   discoveryCwd?: string;
@@ -1027,7 +1027,14 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
   if (run.codebase_id) {
     try {
       const codebase = await codebaseDb.getCodebase(run.codebase_id);
-      if (codebase) discoveryCwd = codebase.default_cwd;
+      if (codebase) {
+        discoveryCwd = codebase.default_cwd;
+      } else {
+        getLog().warn(
+          { runId, codebaseId: run.codebase_id },
+          'cli.workflow_resume_codebase_not_found'
+        );
+      }
     } catch (error) {
       const err = error as Error;
       getLog().warn(
@@ -1036,6 +1043,7 @@ export async function workflowResumeCommand(runId: string): Promise<void> {
       );
     }
   }
+  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
 
   // Re-execute via workflowRunCommand with --resume.
   // The executor's implicit findResumableRun detects the prior failed run
@@ -1110,7 +1118,14 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
   if (result.codebaseId) {
     try {
       const codebase = await codebaseDb.getCodebase(result.codebaseId);
-      if (codebase) discoveryCwd = codebase.default_cwd;
+      if (codebase) {
+        discoveryCwd = codebase.default_cwd;
+      } else {
+        getLog().warn(
+          { runId, codebaseId: result.codebaseId },
+          'cli.workflow_approve_codebase_not_found'
+        );
+      }
     } catch (error) {
       const err = error as Error;
       getLog().warn(
@@ -1119,6 +1134,7 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
       );
     }
   }
+  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
 
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
@@ -1141,7 +1157,9 @@ export async function workflowApproveCommand(runId: string, comment?: string): P
 }
 
 /**
- * Reject a paused workflow run by ID (marks it as cancelled).
+ * Reject a paused workflow run by ID.
+ * If the workflow has an on_reject prompt, auto-resumes with the rejection feedback;
+ * otherwise marks the run as cancelled.
  */
 export async function workflowRejectCommand(runId: string, reason?: string): Promise<void> {
   const result = await rejectWorkflow(runId, reason);
@@ -1188,7 +1206,14 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
   if (result.codebaseId) {
     try {
       const codebase = await codebaseDb.getCodebase(result.codebaseId);
-      if (codebase) discoveryCwd = codebase.default_cwd;
+      if (codebase) {
+        discoveryCwd = codebase.default_cwd;
+      } else {
+        getLog().warn(
+          { runId, codebaseId: result.codebaseId },
+          'cli.workflow_reject_codebase_not_found'
+        );
+      }
     } catch (error) {
       const err = error as Error;
       getLog().warn(
@@ -1197,6 +1222,7 @@ export async function workflowRejectCommand(runId: string, reason?: string): Pro
       );
     }
   }
+  if (discoveryCwd) console.log(`Discovery path: ${discoveryCwd}`);
 
   try {
     await workflowRunCommand(result.workingPath, result.workflowName, result.userMessage ?? '', {
