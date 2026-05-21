@@ -59,7 +59,7 @@ In compiled Archon binaries, if `claude` is not on the default install path Arch
 
 If none of the three resolves in a compiled binary, Archon throws with install instructions on first Claude query.
 
-The Claude Agent SDK accepts either the native compiled binary or a JS `cli.js`.
+The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the npm platform-package directory (e.g. `@anthropic-ai/claude-code-win32-x64`) — directories are auto-expanded to the contained `claude`/`claude.exe`.
 
 **Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
 
@@ -71,6 +71,7 @@ The Claude Agent SDK accepts either the native compiled binary or a JS `cli.js`.
 | Native PowerShell installer (Windows) | `%USERPROFILE%\.local\bin\claude.exe` |
 | Homebrew cask | `$(brew --prefix)/bin/claude` (symlink) |
 | npm global install | `$(npm root -g)/@anthropic-ai/claude-code/cli.js` |
+| npm platform-package directory (Windows) | `$(npm root -g)/@anthropic-ai/claude-code-win32-x64` — directory accepted, auto-expanded to `claude.exe` |
 | Windows winget | Resolvable via `where claude` |
 | Docker (`ghcr.io/coleam00/archon`) | Pre-set via `ENV CLAUDE_BIN_PATH` in the image — no action required |
 

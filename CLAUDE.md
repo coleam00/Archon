@@ -487,7 +487,10 @@ assistants:
       - user         # User-level ~/.claude/ (included in default; omit both to restrict to project-only)
     claudeBinaryPath: /absolute/path/to/claude  # Optional: Claude Code executable.
                                                 # Native binary (curl installer at
-                                                # ~/.local/bin/claude) or npm cli.js.
+                                                # ~/.local/bin/claude), npm cli.js, or
+                                                # the npm platform-package directory
+                                                # (e.g. @anthropic-ai/claude-code-win32-x64)
+                                                # which is auto-expanded to claude/claude.exe.
                                                 # Required in compiled binaries if
                                                 # CLAUDE_BIN_PATH env var is not set.
   codex:
