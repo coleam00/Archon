@@ -218,9 +218,19 @@ describe('pathKind', () => {
     expect(resolver.pathKind('/definitely/does/not/exist/anywhere/12345')).toBe('missing');
   });
 
-  // `pathKind` is a thin wrapper around `statSync`; the file/directory
-  // discrimination itself is tested via the resolver-level tests above
-  // (which spy on pathKind). The integration concern that *can't* be tested
-  // there — that the wrapper actually catches ENOENT instead of throwing —
-  // is asserted here.
+  test('returns "missing" for a broken symlink without throwing', async () => {
+    // statSync follows symlinks by default — broken targets raise ENOENT,
+    // which must be caught and reported as 'missing' so the resolver's
+    // "file does not exist" path fires instead of an uncaught exception.
+    const { mkdtempSync, symlinkSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'archon-pathkind-'));
+    const link = join(dir, 'broken-link');
+    try {
+      symlinkSync(join(dir, 'nonexistent-target'), link);
+      expect(resolver.pathKind(link)).toBe('missing');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
