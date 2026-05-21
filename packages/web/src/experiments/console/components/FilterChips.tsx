@@ -38,7 +38,7 @@ export function FilterChips({ value, onChange, counts }: FilterChipsProps): Reac
             onClick={() => {
               onChange(filter);
             }}
-            className={`rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${
+            className={`relative rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${
               active
                 ? 'bg-surface-elevated text-text-primary'
                 : 'text-text-tertiary hover:text-text-primary'
@@ -47,6 +47,12 @@ export function FilterChips({ value, onChange, counts }: FilterChipsProps): Reac
           >
             {label}
             <span className="ml-1.5 font-mono tabular-nums text-text-tertiary">{n}</span>
+            {active ? (
+              <span
+                aria-hidden
+                className="brand-bar pointer-events-none absolute inset-x-1 -bottom-0.5 h-0.5 rounded-full"
+              />
+            ) : null}
           </button>
         );
       })}

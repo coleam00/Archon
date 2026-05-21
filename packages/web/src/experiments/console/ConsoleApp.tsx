@@ -24,7 +24,7 @@ export function ConsoleApp(): ReactElement {
     <div className="console-root flex h-screen w-screen flex-col bg-surface text-text-primary">
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold tracking-tight">Archon</span>
+          <span className="brand-text text-base font-semibold tracking-tight">Archon</span>
           <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
             console · spike
           </span>

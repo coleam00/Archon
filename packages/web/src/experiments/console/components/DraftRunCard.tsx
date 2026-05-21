@@ -185,14 +185,18 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     <article
       className="relative rounded border bg-surface"
       style={{
-        // 4-px accent strip as a left border so we can keep `overflow: visible`
-        // on the card — the workflow picker's dropdown escapes these bounds.
-        borderColor: 'color-mix(in oklch, var(--accent-bright), transparent 60%)',
-        borderLeftWidth: 4,
-        borderLeftColor: 'var(--accent-bright)',
+        // Soft-magenta hairline border on all four sides; the brand-gradient
+        // strip is painted as an absolute child so the card can keep
+        // `overflow: visible` (the workflow picker's dropdown escapes these
+        // bounds).
+        borderColor: 'color-mix(in oklch, var(--brand-magenta), transparent 60%)',
       }}
     >
-      <div className="px-4 py-3">
+      <span
+        aria-hidden
+        className="brand-bar pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l"
+      />
+      <div className="pl-5 pr-4 py-3">
         {/* Header: status dot + DRAFT label + workflow picker + close */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full bg-accent-bright" />
@@ -248,7 +252,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
               type="button"
               onClick={() => void submit()}
               disabled={submitting || workflowName.length === 0}
-              className="flex items-center gap-1 rounded bg-accent-bright px-3 py-1.5 text-[12px] font-medium text-white/95 transition-all hover:brightness-110 active:brightness-95 disabled:opacity-50"
+              className="brand-bar flex items-center gap-1 rounded px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition-all hover:brightness-110 active:brightness-95 disabled:opacity-50"
             >
               {submitting ? 'Starting…' : 'Start run'}
               <span aria-hidden className="font-mono text-[10px] opacity-70">

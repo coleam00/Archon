@@ -44,7 +44,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         aria-pressed={allSelected}
         className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors ${
           allSelected
-            ? 'bg-surface-elevated text-accent-bright ring-2 ring-accent-bright ring-offset-2 ring-offset-surface-inset'
+            ? 'brand-bar-soft text-text-primary'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
         }`}
       >
