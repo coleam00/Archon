@@ -21,12 +21,12 @@ import * as resolver from './binary-resolver';
 
 describe('resolveClaudeBinaryPath (dev mode)', () => {
   const originalEnv = process.env.CLAUDE_BIN_PATH;
-  let fileExistsSpy: ReturnType<typeof spyOn> | undefined;
+  let pathKindSpy: ReturnType<typeof spyOn> | undefined;
 
   beforeEach(() => {
     delete process.env.CLAUDE_BIN_PATH;
-    fileExistsSpy?.mockRestore();
-    fileExistsSpy = undefined;
+    pathKindSpy?.mockRestore();
+    pathKindSpy = undefined;
   });
 
   afterAll(() => {
@@ -35,7 +35,7 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
     } else {
       delete process.env.CLAUDE_BIN_PATH;
     }
-    fileExistsSpy?.mockRestore();
+    pathKindSpy?.mockRestore();
   });
 
   test('returns undefined when nothing is configured', async () => {
@@ -50,7 +50,7 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
 
   test('honors CLAUDE_BIN_PATH env var when file exists', async () => {
     process.env.CLAUDE_BIN_PATH = '/usr/local/bin/claude';
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
 
     const result = await resolver.resolveClaudeBinaryPath();
     expect(result).toBe('/usr/local/bin/claude');
@@ -58,7 +58,7 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
 
   test('throws when CLAUDE_BIN_PATH is set but file does not exist', async () => {
     process.env.CLAUDE_BIN_PATH = '/nonexistent/claude';
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
 
     await expect(resolver.resolveClaudeBinaryPath()).rejects.toThrow(
       'CLAUDE_BIN_PATH is set to "/nonexistent/claude" but the file does not exist'
@@ -67,7 +67,7 @@ describe('resolveClaudeBinaryPath (dev mode)', () => {
 
   test('env var wins over config path in dev mode', async () => {
     process.env.CLAUDE_BIN_PATH = '/env/claude';
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
+    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
 
     const result = await resolver.resolveClaudeBinaryPath('/config/claude');
     expect(result).toBe('/env/claude');
