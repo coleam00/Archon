@@ -18,4 +18,5 @@ export const K = {
   countsGlobal: 'counts:global' as const,
   pendingRuns: 'pendingRuns' as const,
   envVars: (projectId: string): string => `envVars:${projectId}`,
+  artifacts: (runId: string): string => `artifacts:${runId}`,
 } as const;

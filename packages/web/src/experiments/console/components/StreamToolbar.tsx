@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 
-export type DetailView = 'log' | 'graph';
+export type DetailView = 'log' | 'graph' | 'artifacts';
 
 interface StreamToolbarProps {
   view: DetailView;
@@ -11,6 +11,7 @@ interface StreamToolbarProps {
   onToggleSystem: (next: boolean) => void;
   toolCallCount: number;
   messageCount: number;
+  artifactCount: number | null;
 }
 
 interface CheckboxProps {
@@ -39,9 +40,10 @@ interface TabProps {
   label: string;
   active: boolean;
   onClick: () => void;
+  count?: number | null;
 }
 
-function Tab({ label, active, onClick }: TabProps): ReactElement {
+function Tab({ label, active, onClick, count }: TabProps): ReactElement {
   return (
     <button
       type="button"
@@ -52,6 +54,9 @@ function Tab({ label, active, onClick }: TabProps): ReactElement {
       }`}
     >
       {label}
+      {typeof count === 'number' ? (
+        <span className="ml-1.5 font-mono tabular-nums text-text-tertiary">{count.toString()}</span>
+      ) : null}
       {active ? (
         <span
           aria-hidden
@@ -71,6 +76,7 @@ export function StreamToolbar({
   onToggleSystem,
   toolCallCount,
   messageCount,
+  artifactCount,
 }: StreamToolbarProps): ReactElement {
   const isLog = view === 'log';
   return (
@@ -88,6 +94,14 @@ export function StreamToolbar({
           active={view === 'graph'}
           onClick={() => {
             onChangeView('graph');
+          }}
+        />
+        <Tab
+          label="Artifacts"
+          count={artifactCount}
+          active={view === 'artifacts'}
+          onClick={() => {
+            onChangeView('artifacts');
           }}
         />
       </div>

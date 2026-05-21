@@ -106,3 +106,31 @@ export async function abandonRun(id: string): Promise<void> {
     body: JSON.stringify({}),
   });
 }
+
+export interface ArtifactFile {
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
+
+interface ArtifactListResponse {
+  files: ArtifactFile[];
+}
+
+export async function listRunArtifacts(runId: string): Promise<ArtifactFile[]> {
+  const res = await requestJson<ArtifactListResponse>(
+    `/api/runs/${encodeURIComponent(runId)}/artifacts`
+  );
+  return res.files;
+}
+
+/** Fetch a single artifact file as text (markdown or plain). */
+export async function fetchArtifact(runId: string, path: string): Promise<string> {
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const res = await fetch(`/api/artifacts/${encodeURIComponent(runId)}/${encodedPath}`);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Failed to fetch artifact: ${res.status.toString()}`);
+  }
+  return res.text();
+}

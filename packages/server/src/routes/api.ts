@@ -6,7 +6,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
-import { rm, readFile, writeFile, unlink, mkdir } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { normalize, join, sep, basename } from 'path';
 import { randomUUID } from 'crypto';
@@ -2553,6 +2553,83 @@ export function registerApiRoutes(
       getLog().error({ err }, 'commands.list_failed');
       return apiError(c, 500, 'Failed to list commands');
     }
+  });
+
+  // GET /api/runs/:runId/artifacts - List artifact files for a run
+  // Walks the run's artifact directory and returns relative file paths with
+  // size + mtime. Used by the console's Artifacts tab; the existing
+  // `workflow_artifact` event stream is too sparse (bash/script nodes write
+  // straight to $ARTIFACTS_DIR without emitting an event) to drive a file
+  // browser on its own.
+  app.get('/api/runs/:runId/artifacts', async c => {
+    const runId = c.req.param('runId');
+    if (!/^[A-Za-z0-9_-]+$/.test(runId)) {
+      return apiError(c, 400, 'Invalid run id');
+    }
+
+    let run: Awaited<ReturnType<typeof workflowDb.getWorkflowRun>>;
+    try {
+      run = await workflowDb.getWorkflowRun(runId);
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'artifacts.run_lookup_failed');
+      return apiError(c, 500, 'Failed to look up workflow run');
+    }
+    if (!run) return apiError(c, 404, 'Workflow run not found');
+
+    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    if (!codebase?.name) return c.json({ files: [] });
+    const nameParts = codebase.name.split('/');
+    if (nameParts.length < 2) return c.json({ files: [] });
+    const [owner, repo] = nameParts;
+
+    const artifactDir = getRunArtifactsPath(owner, repo, runId);
+
+    interface FileEntry {
+      path: string;
+      size: number;
+      modifiedAt: string;
+    }
+    const files: FileEntry[] = [];
+
+    async function walk(dir: string, rel: string): Promise<void> {
+      let entries: { name: string; isDirectory: () => boolean; isFile: () => boolean }[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      for (const entry of entries) {
+        // Skip dotfiles — they're workflow-internal scratch (.pr-number, etc.)
+        if (entry.name.startsWith('.')) continue;
+        const child = join(dir, entry.name);
+        const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`;
+        if (entry.isDirectory()) {
+          await walk(child, childRel);
+        } else if (entry.isFile()) {
+          try {
+            const s = await stat(child);
+            files.push({
+              path: childRel,
+              size: s.size,
+              modifiedAt: s.mtime.toISOString(),
+            });
+          } catch {
+            /* skip unreadable entries */
+          }
+        }
+      }
+    }
+
+    try {
+      await walk(artifactDir, '');
+    } catch (error) {
+      getLog().error({ err: error, runId, artifactDir }, 'artifacts.walk_failed');
+      return apiError(c, 500, 'Failed to list artifacts');
+    }
+
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    return c.json({ files });
   });
 
   // GET /api/artifacts/:runId/* - Serve workflow artifact file contents

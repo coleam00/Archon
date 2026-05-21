@@ -7,6 +7,7 @@ import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
 import { RunGraphPanel } from '../components/RunGraphPanel';
+import { ArtifactPanel } from '../components/ArtifactPanel';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
 import { useEntity } from '../store/cache';
@@ -16,6 +17,7 @@ import type { Run } from '../primitives/run';
 import type { RunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
+import type { ArtifactFile } from '../skills/runs';
 
 interface RunDetailView {
   run: Run;
@@ -131,6 +133,15 @@ export function RunDetailPage(): ReactElement {
   // conversation id is still unknown.
   useRunStreamSSE(conversationPlatformId, runId ?? null);
 
+  // Surface the artifact count on the tab even when the user hasn't visited
+  // the panel yet. Cheap call — the server walks one directory. Must live
+  // above any early return so the hook order stays stable across renders.
+  const { data: artifactFiles } = useEntity<ArtifactFile[]>(
+    runId !== undefined ? K.artifacts(runId) : 'noop:no-run-id',
+    () =>
+      runId !== undefined ? skill.listRunArtifacts(runId) : Promise.resolve([] as ArtifactFile[])
+  );
+
   // Auto-scroll to bottom on new content IF user is already near the bottom.
   const lastBottomRef = useRef(true);
   useEffect(() => {
@@ -201,6 +212,7 @@ export function RunDetailPage(): ReactElement {
       }}
       toolCallCount={toolCallCount}
       messageCount={messageList.length}
+      artifactCount={artifactFiles?.length ?? null}
     />
   );
 
@@ -245,7 +257,7 @@ export function RunDetailPage(): ReactElement {
                 </div>
               </div>
             </div>
-          ) : (
+          ) : view === 'graph' ? (
             <>
               <div className="px-6">{toolbar}</div>
               {project !== undefined && project !== null ? (
@@ -265,6 +277,11 @@ export function RunDetailPage(): ReactElement {
               ) : (
                 <div className="p-6 text-[12px] text-text-tertiary">Loading project…</div>
               )}
+            </>
+          ) : (
+            <>
+              <div className="px-6">{toolbar}</div>
+              <ArtifactPanel runId={runId} />
             </>
           )}
         </div>
