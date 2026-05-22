@@ -140,6 +140,7 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
           />
           <button
             type="button"
+            data-keymap-approve
             onClick={() => void approve()}
             disabled={busy}
             className="flex shrink-0 items-center gap-1 rounded border border-success/40 bg-success/15 px-3 text-[12px] font-medium text-success transition-colors hover:bg-success/25 disabled:opacity-50"
@@ -152,6 +153,7 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
           </button>
           <button
             type="button"
+            data-keymap-reject
             onClick={() => {
               setMode('rejecting');
               setError(null);

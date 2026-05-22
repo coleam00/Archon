@@ -13,6 +13,7 @@ import { statusTextClass, statusLabel } from '../lib/run-status';
 interface ActiveRunCardProps {
   run: Run;
   showProject?: boolean;
+  selected?: boolean;
 }
 
 /**
@@ -29,7 +30,11 @@ interface ActiveRunCardProps {
  *   - Inline ApprovalPanel with context input + Approve/Reject
  *   - User can resolve without leaving the feed
  */
-export function ActiveRunCard({ run, showProject = false }: ActiveRunCardProps): ReactElement {
+export function ActiveRunCard({
+  run,
+  showProject = false,
+  selected = false,
+}: ActiveRunCardProps): ReactElement {
   const navigate = useNavigate();
   const isDocker = useIsDocker();
   const elapsed = formatElapsed(elapsedSince(run.startedAt));
@@ -43,6 +48,7 @@ export function ActiveRunCard({ run, showProject = false }: ActiveRunCardProps):
 
   return (
     <article
+      data-run-id={run.id}
       onClick={onCardClick}
       role={canOpen ? 'button' : undefined}
       tabIndex={canOpen ? 0 : undefined}
@@ -56,9 +62,9 @@ export function ActiveRunCard({ run, showProject = false }: ActiveRunCardProps):
             }
           : undefined
       }
-      className={`group relative overflow-hidden rounded border border-border bg-surface transition-colors hover:bg-surface-hover ${
-        canOpen ? 'cursor-pointer focus-visible:outline-none' : ''
-      }`}
+      className={`group relative overflow-hidden rounded border bg-surface transition-colors hover:bg-surface-hover ${
+        selected ? 'border-accent-bright/70 ring-2 ring-accent-bright/40' : 'border-border'
+      } ${canOpen ? 'cursor-pointer focus-visible:outline-none' : ''}`}
     >
       <StatusStrip status={run.status} />
       <div className="pl-4 pr-4 py-3">

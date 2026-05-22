@@ -1,5 +1,5 @@
-import { useMemo, useState, type ReactElement } from 'react';
-import { useParams, useSearchParams } from 'react-router';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
@@ -8,6 +8,7 @@ import { DraftRunCard } from '../components/DraftRunCard';
 import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useDashboardSSE } from '../lib/sse';
+import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
 import type { Run } from '../primitives/run';
 import type { RunCounts } from '../skills/runs';
@@ -183,6 +184,7 @@ interface RunsFeedProps {
   runs: Run[];
   showProject: boolean;
   draftProject: { id: string; path: string } | null;
+  selectedRunId: string | null;
 }
 
 /**
@@ -195,7 +197,7 @@ interface RunsFeedProps {
  * card shape as a paused-approval card, just waiting for YOU instead of
  * the agent. Starting a new run is "another card in the list."
  */
-function RunsFeed({ runs, showProject, draftProject }: RunsFeedProps): ReactElement {
+function RunsFeed({ runs, showProject, draftProject, selectedRunId }: RunsFeedProps): ReactElement {
   const active = runs.filter(r => r.status === 'running' || r.status === 'paused');
   const recent = runs.filter(
     r => r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled'
@@ -213,7 +215,12 @@ function RunsFeed({ runs, showProject, draftProject }: RunsFeedProps): ReactElem
               <DraftRunCard projectId={draftProject.id} projectCwd={draftProject.path} />
             ) : null}
             {active.map(run => (
-              <ActiveRunCard key={run.id} run={run} showProject={showProject} />
+              <ActiveRunCard
+                key={run.id}
+                run={run}
+                showProject={showProject}
+                selected={run.id === selectedRunId}
+              />
             ))}
           </div>
         </section>
@@ -224,7 +231,12 @@ function RunsFeed({ runs, showProject, draftProject }: RunsFeedProps): ReactElem
           <SectionHeader label="Recent" count={recent.length} />
           <div className="flex flex-col overflow-hidden rounded border border-border/60">
             {recent.map(run => (
-              <RecentRunRow key={run.id} run={run} showProject={showProject} />
+              <RecentRunRow
+                key={run.id}
+                run={run}
+                showProject={showProject}
+                selected={run.id === selectedRunId}
+              />
             ))}
           </div>
         </section>
@@ -235,6 +247,7 @@ function RunsFeed({ runs, showProject, draftProject }: RunsFeedProps): ReactElem
 
 export function RunsPage(): ReactElement {
   const { projectId } = useParams<{ projectId?: string }>();
+  const navigate = useNavigate();
   const scope: Scope = projectId ?? 'all';
   const [searchParams] = useSearchParams();
   const demoMode = searchParams.get('demo') === '1';
@@ -243,6 +256,9 @@ export function RunsPage(): ReactElement {
   // retrospective view, not the first thing to see.
   const [filter, setFilter] = useState<Filter>('running');
   const [query, setQuery] = useState('');
+  // Selection index for j/k navigation. -1 = nothing selected.
+  const [selectedIndex, setSelectedIndex] = useState<number>(-1);
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   const { data, loading, error } = useEntity<FeedData>(K.runs(scope), () =>
     skill.listRuns(scope === 'all' ? {} : { codebaseId: scope })
@@ -279,6 +295,131 @@ export function RunsPage(): ReactElement {
   const hasScopedProject = scope !== 'all' && project !== undefined && project !== null;
   const draftProject = hasScopedProject ? { id: project.id, path: project.path } : null;
 
+  // Clamp selection when the visible run set changes so j/k never lands on
+  // an out-of-range index after a filter / search shrinks the list.
+  useEffect(() => {
+    if (selectedIndex >= runs.length) setSelectedIndex(runs.length - 1);
+  }, [runs.length, selectedIndex]);
+
+  const selectedRun = selectedIndex >= 0 ? (runs[selectedIndex] ?? null) : null;
+  const selectedRunId = selectedRun?.id ?? null;
+
+  // Scroll the selected row into view after j/k moves the index. The
+  // RecentRunRow / ActiveRunCard emit a data attribute we can target.
+  // CSS.escape guards against ids containing CSS-special chars (`:`, `.`,
+  // etc.) — without it the selector throws SyntaxError.
+  useEffect(() => {
+    if (selectedRunId === null) return;
+    const el = document.querySelector(`[data-run-id="${CSS.escape(selectedRunId)}"]`);
+    if (el !== null) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedRunId]);
+
+  const open = (id: string, projId: string | null): void => {
+    if (projId === null) return;
+    navigate(`/console/p/${projId}/r/${id}`);
+  };
+
+  const bindings = useMemo<readonly Binding[]>(
+    () => [
+      {
+        keys: ['j'],
+        label: 'Move down',
+        run: (): void => {
+          if (runs.length === 0) return;
+          setSelectedIndex(i => Math.min(runs.length - 1, (i < 0 ? -1 : i) + 1));
+        },
+      },
+      {
+        keys: ['k'],
+        label: 'Move up',
+        run: (): void => {
+          if (runs.length === 0) return;
+          setSelectedIndex(i => Math.max(0, (i < 0 ? runs.length : i) - 1));
+        },
+      },
+      {
+        keys: ['g', 'g'],
+        label: 'Jump to first',
+        run: (): void => {
+          if (runs.length > 0) setSelectedIndex(0);
+        },
+      },
+      {
+        keys: ['G'],
+        label: 'Jump to last',
+        run: (): void => {
+          if (runs.length > 0) setSelectedIndex(runs.length - 1);
+        },
+      },
+      {
+        keys: ['Enter'],
+        label: 'Open selected',
+        when: (): boolean => selectedRun !== null,
+        run: (): void => {
+          if (selectedRun !== null) open(selectedRun.id, selectedRun.projectId);
+        },
+      },
+      {
+        keys: ['Escape'],
+        label: 'Clear selection',
+        when: (): boolean => selectedIndex !== -1,
+        run: (): void => {
+          setSelectedIndex(-1);
+        },
+      },
+      {
+        keys: ['/'],
+        label: 'Focus search',
+        run: (): void => {
+          searchRef.current?.focus();
+          searchRef.current?.select();
+        },
+      },
+      {
+        keys: ['1'],
+        label: 'Filter: running',
+        run: (): void => {
+          setFilter('running');
+          setSelectedIndex(-1);
+        },
+      },
+      {
+        keys: ['2'],
+        label: 'Filter: paused',
+        run: (): void => {
+          setFilter('paused');
+          setSelectedIndex(-1);
+        },
+      },
+      {
+        keys: ['3'],
+        label: 'Filter: failed',
+        run: (): void => {
+          setFilter('failed');
+          setSelectedIndex(-1);
+        },
+      },
+      {
+        keys: ['4'],
+        label: 'Filter: completed',
+        run: (): void => {
+          setFilter('completed');
+          setSelectedIndex(-1);
+        },
+      },
+      {
+        keys: ['5'],
+        label: 'Filter: all',
+        run: (): void => {
+          setFilter('all');
+          setSelectedIndex(-1);
+        },
+      },
+    ],
+    [runs, selectedIndex, selectedRun]
+  );
+  useKeymap({ bindings });
+
   return (
     <section className="flex h-full flex-col">
       <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
@@ -295,10 +436,19 @@ export function RunsPage(): ReactElement {
             </p>
           </div>
           <input
+            ref={searchRef}
             type="text"
             value={query}
             onChange={e => {
               setQuery(e.target.value);
+            }}
+            onKeyDown={e => {
+              // Esc unfocuses + clears so `/` → type → esc returns control
+              // to the global keymap without trapping the user in the box.
+              if (e.key === 'Escape') {
+                e.currentTarget.blur();
+                setQuery('');
+              }
             }}
             placeholder="Search workflow, project, run id…"
             className="h-9 w-64 rounded border border-border bg-surface px-3 font-mono text-xs text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none"
@@ -331,7 +481,12 @@ export function RunsPage(): ReactElement {
             hint={scope === 'all' ? 'Start one from a project.' : undefined}
           />
         ) : (
-          <RunsFeed runs={runs} showProject={scope === 'all'} draftProject={draftProject} />
+          <RunsFeed
+            runs={runs}
+            showProject={scope === 'all'}
+            draftProject={draftProject}
+            selectedRunId={selectedRunId}
+          />
         )}
       </div>
     </section>

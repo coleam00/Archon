@@ -9,6 +9,7 @@ import { statusTextClass } from '../lib/run-status';
 interface RecentRunRowProps {
   run: Run;
   showProject?: boolean;
+  selected?: boolean;
 }
 
 const STATUS_GLYPH: Record<string, string> = {
@@ -24,7 +25,11 @@ const STATUS_GLYPH: Record<string, string> = {
  * Failed rows keep the error-red glyph and status text so they still catch
  * the eye in a sea of muted completed rows.
  */
-export function RecentRunRow({ run, showProject = false }: RecentRunRowProps): ReactElement {
+export function RecentRunRow({
+  run,
+  showProject = false,
+  selected = false,
+}: RecentRunRowProps): ReactElement {
   const navigate = useNavigate();
   const isDocker = useIsDocker();
   const elapsed = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
@@ -54,11 +59,12 @@ export function RecentRunRow({ run, showProject = false }: RecentRunRowProps): R
 
   return (
     <div
+      data-run-id={run.id}
       onClick={onClick}
       role={canOpen ? 'button' : undefined}
       className={`group flex h-9 items-center gap-3 border-b border-border/40 px-3 font-mono text-[12px] transition-colors hover:bg-surface-hover ${
-        canOpen ? 'cursor-pointer' : ''
-      }`}
+        selected ? 'bg-surface-hover ring-2 ring-inset ring-accent-bright/40' : ''
+      } ${canOpen ? 'cursor-pointer' : ''}`}
     >
       <span aria-hidden className={`w-3 shrink-0 text-center ${statusTextClass[run.status]}`}>
         {glyph}

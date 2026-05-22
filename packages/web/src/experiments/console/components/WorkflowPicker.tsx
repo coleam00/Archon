@@ -16,6 +16,12 @@ interface WorkflowPickerProps {
   value: string;
   onChange: (workflowName: string) => void;
   disabled?: boolean;
+  /**
+   * Fires whenever the dropdown closes (any path: pick, Esc, click-outside).
+   * Used by the parent card to move focus back to the context textarea after
+   * a keymap-driven pick flow.
+   */
+  onClose?: () => void;
 }
 
 function sourceBadgeClass(source: Workflow['source']): string {
@@ -65,8 +71,15 @@ export function WorkflowPicker({
   value,
   onChange,
   disabled = false,
+  onClose,
 }: WorkflowPickerProps): ReactElement {
   const [open, setOpen] = useState(false);
+  // Funnel every close path through one wrapper. A separate onClose effect
+  // would false-fire on re-renders that toggle `open` for other reasons.
+  const closePicker = (): void => {
+    setOpen(false);
+    onClose?.();
+  };
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
   const [anchor, setAnchor] = useState<AnchorPosition | null>(null);
@@ -123,7 +136,7 @@ export function WorkflowPicker({
       if (t === null) return;
       if (triggerRef.current?.contains(t) === true) return;
       if (panelRef.current?.contains(t) === true) return;
-      setOpen(false);
+      closePicker();
     };
     document.addEventListener('mousedown', onDoc);
     return (): void => {
@@ -170,7 +183,7 @@ export function WorkflowPicker({
   const handleSearchKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      setOpen(false);
+      closePicker();
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -188,7 +201,7 @@ export function WorkflowPicker({
       const pick = filtered[cursor];
       if (pick !== undefined) {
         onChange(pick.name);
-        setOpen(false);
+        closePicker();
       }
       return;
     }
@@ -212,9 +225,12 @@ export function WorkflowPicker({
       <button
         ref={triggerRef}
         type="button"
+        data-keymap-workflow-trigger
         disabled={disabled}
         onClick={() => {
-          if (!disabled) setOpen(o => !o);
+          if (disabled) return;
+          if (open) closePicker();
+          else setOpen(true);
         }}
         onKeyDown={handleTriggerKey}
         className="flex h-9 min-w-[140px] items-center gap-2 rounded border border-border bg-surface px-3 text-sm text-text-primary transition-colors hover:bg-surface-hover disabled:opacity-50"
@@ -271,7 +287,7 @@ export function WorkflowPicker({
                         aria-selected={selected}
                         onClick={() => {
                           onChange(w.name);
-                          setOpen(false);
+                          closePicker();
                         }}
                         onMouseEnter={() => {
                           setCursor(i);

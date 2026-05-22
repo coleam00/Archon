@@ -69,6 +69,10 @@ function writeLastWorkflow(name: string): void {
 export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): ReactElement {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // One-shot flag set by the global `n` keybind. When true, expanding the
+  // card auto-opens the workflow picker (so the user can filter + pick
+  // before touching the context box).
+  const summonedRef = useRef(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const [mode, setMode] = useState<Mode>('collapsed');
   const [workflowName, setWorkflowName] = useState<string>(() => readLastWorkflow());
@@ -139,7 +143,8 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     if (pick !== undefined) setWorkflowName(pick.name);
   }, [sortedWorkflows, workflowName]);
 
-  // Global `N` keybind: expand + focus.
+  // Global `N` keybind: expand + open the workflow picker so the user can
+  // pick a workflow without first reaching for the mouse.
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       const target = e.target as HTMLElement | null;
@@ -149,6 +154,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       if (typingElsewhere) return;
       if (e.key === 'n' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
+        summonedRef.current = true;
         setMode('expanded');
       }
     };
@@ -158,14 +164,23 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     };
   }, []);
 
-  // Focus the textarea whenever we enter expanded mode.
+  // After entering expanded mode, either open the workflow picker (when
+  // summoned via `n`) or focus the textarea (every other path: click, rerun
+  // query params). The summon-open is fire-and-forget — closing the picker
+  // hands focus to the textarea via the WorkflowPicker.onClose callback.
   useEffect(() => {
-    if (mode === 'expanded') {
-      // Defer by one frame so the textarea exists + layout is flushed.
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
-    }
+    if (mode !== 'expanded') return;
+    requestAnimationFrame(() => {
+      if (summonedRef.current) {
+        summonedRef.current = false;
+        const trigger = document.querySelector<HTMLButtonElement>('[data-keymap-workflow-trigger]');
+        if (trigger !== null && !trigger.disabled) {
+          trigger.click();
+          return;
+        }
+      }
+      inputRef.current?.focus();
+    });
   }, [mode]);
 
   const submit = async (): Promise<void> => {
@@ -323,6 +338,11 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             value={workflowName}
             onChange={setWorkflowName}
             disabled={submitting}
+            onClose={() => {
+              requestAnimationFrame(() => {
+                inputRef.current?.focus();
+              });
+            }}
           />
           <button
             type="button"

@@ -1,12 +1,16 @@
-import { useState, type ReactElement } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import { Routes, Route, Link, useNavigate } from 'react-router';
 import { ProjectRail } from './components/ProjectRail';
 import { AddProjectDialog } from './components/AddProjectDialog';
+import { ProjectPalette } from './components/ProjectPalette';
+import { KeymapHelp } from './components/KeymapHelp';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
 import { PreviewPage } from './routes/PreviewPage';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
+import { useKeymap, type Binding } from './lib/keymap';
+import { SHORTCUTS } from './lib/shortcuts';
 import './theme.css';
 
 /**
@@ -18,7 +22,35 @@ import './theme.css';
  */
 export function ConsoleApp(): ReactElement {
   const [addOpen, setAddOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const navigate = useNavigate();
+
+  // `n` (new run) is owned by DraftRunCard's own window listener — only
+  // mounted when a project is scoped — and stays there.
+  const globalBindings = useMemo<readonly Binding[]>(
+    () => [
+      {
+        keys: ['p'],
+        label: 'Pick a project',
+        run: (): void => {
+          setPaletteOpen(true);
+        },
+      },
+      {
+        keys: ['?'],
+        label: 'Show help',
+        run: (): void => {
+          setHelpOpen(v => !v);
+        },
+      },
+    ],
+    []
+  );
+  useKeymap({
+    bindings: globalBindings,
+    enabled: !addOpen && !paletteOpen && !helpOpen,
+  });
 
   return (
     <div className="console-root flex h-screen w-screen flex-col bg-surface text-text-primary">
@@ -75,6 +107,21 @@ export function ConsoleApp(): ReactElement {
           invalidate(K.projects);
           navigate(`/console/p/${project.id}`);
         }}
+      />
+
+      <ProjectPalette
+        open={paletteOpen}
+        onClose={() => {
+          setPaletteOpen(false);
+        }}
+      />
+
+      <KeymapHelp
+        open={helpOpen}
+        onClose={() => {
+          setHelpOpen(false);
+        }}
+        groups={SHORTCUTS}
       />
     </div>
   );

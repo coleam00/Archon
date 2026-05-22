@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
-import { useParams } from 'react-router';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useNavigate, useParams } from 'react-router';
+import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { RunStream } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
@@ -82,6 +83,7 @@ function writeView(v: DetailView): void {
 
 export function RunDetailPage(): ReactElement {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
+  const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.toolCalls, true)
@@ -177,6 +179,87 @@ export function RunDetailPage(): ReactElement {
     if (el === null || !lastBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
   }, [messages?.length, detail?.events.length]);
+
+  // Keymap bindings: hoisted above early returns so the hook order is stable
+  // across all render paths (loading, error, ready).
+  const detailStatus = detail?.run.status ?? null;
+  const isPaused = detailStatus === 'paused';
+  const goBack = useCallback((): void => {
+    if (projectId !== undefined) navigate(`/console/p/${projectId}`);
+    else navigate('/console');
+  }, [navigate, projectId]);
+  const setViewPersist = useCallback((next: DetailView): void => {
+    setView(next);
+    writeView(next);
+  }, []);
+  const toggleToolCalls = useCallback((): void => {
+    setShowToolCalls(v => {
+      const next = !v;
+      writeToggle(TOGGLE_KEYS.toolCalls, next);
+      return next;
+    });
+  }, []);
+  const toggleSystem = useCallback((): void => {
+    setShowSystem(v => {
+      const next = !v;
+      writeToggle(TOGGLE_KEYS.system, next);
+      return next;
+    });
+  }, []);
+  // Approve/Reject keymap bindings fire the matching button's click event
+  // rather than lifting ApprovalPanel's internal state — keeps the panel
+  // self-contained and avoids prop drilling for a paused-only shortcut.
+  const clickApprove = useCallback((): void => {
+    const el = document.querySelector<HTMLButtonElement>('[data-keymap-approve]');
+    if (el !== null && !el.disabled) el.click();
+  }, []);
+  const clickReject = useCallback((): void => {
+    const el = document.querySelector<HTMLButtonElement>('[data-keymap-reject]');
+    if (el !== null && !el.disabled) el.click();
+  }, []);
+  const bindings = useMemo<readonly Binding[]>(
+    () => [
+      {
+        keys: ['1'],
+        label: 'Log tab',
+        run: (): void => {
+          setViewPersist('log');
+        },
+      },
+      {
+        keys: ['2'],
+        label: 'Graph tab',
+        run: (): void => {
+          setViewPersist('graph');
+        },
+      },
+      {
+        keys: ['3'],
+        label: 'Artifacts tab',
+        run: (): void => {
+          setViewPersist('artifacts');
+        },
+      },
+      { keys: ['t'], label: 'Toggle tool calls', run: toggleToolCalls },
+      { keys: ['s'], label: 'Toggle system', run: toggleSystem },
+      {
+        keys: ['a'],
+        label: 'Approve',
+        when: (): boolean => isPaused,
+        run: clickApprove,
+      },
+      {
+        keys: ['r'],
+        label: 'Reject',
+        when: (): boolean => isPaused,
+        run: clickReject,
+      },
+      { keys: ['Escape'], label: 'Back to runs', run: goBack },
+      { keys: ['h'], label: 'Back to runs', run: goBack },
+    ],
+    [isPaused, goBack, setViewPersist, toggleToolCalls, toggleSystem, clickApprove, clickReject]
+  );
+  useKeymap({ bindings });
 
   if (projectId === undefined || runId === undefined) {
     return (
