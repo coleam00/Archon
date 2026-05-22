@@ -80,7 +80,7 @@ export function TopNav(): React.ReactElement {
               'linear-gradient(135deg, oklch(0.640 0.295 330) 0%, oklch(0.560 0.215 305) 50%, oklch(0.755 0.165 168) 100%)',
           }}
         >
-          <span>Try the new console</span>
+          <span>Try the new console UI</span>
           <span
             aria-hidden
             className="inline-block transition-transform group-hover:translate-x-0.5"
