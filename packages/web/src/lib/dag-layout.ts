@@ -1,7 +1,14 @@
-import type { Edge } from '@xyflow/react';
+import type { Edge, Node } from '@xyflow/react';
 import dagre from '@dagrejs/dagre';
 import type { DagNode } from '@/lib/api';
-import type { DagFlowNode } from '@/components/workflows/DagNodeComponent';
+
+/**
+ * Layout-only node shape consumed by `layoutWithDagre`. The downstream consumer
+ * (`WorkflowDagViewer`) overwrites `data` and `type` with `AdaptedNodeData` /
+ * `'adaptedExecutionNode'` before handing nodes to ReactFlow, so this shape
+ * only needs id + position fidelity through the dagre pass.
+ */
+type DagFlowNode = Node;
 
 export const NODE_WIDTH = 180;
 export const NODE_HEIGHT = 80;
@@ -43,31 +50,6 @@ export function layoutWithDagre(
   }
 }
 
-export function resolveNodeDisplay(dn: DagNode): {
-  label: string;
-  nodeType: 'command' | 'prompt' | 'bash';
-  promptText?: string;
-  bashScript?: string;
-  bashTimeout?: number;
-} {
-  if ('bash' in dn && dn.bash) {
-    return {
-      label: 'Shell',
-      nodeType: 'bash',
-      bashScript: dn.bash,
-      bashTimeout: dn.timeout,
-    };
-  }
-  if ('command' in dn && dn.command) {
-    return { label: dn.command, nodeType: 'command' };
-  }
-  return {
-    label: 'Prompt',
-    nodeType: 'prompt',
-    promptText: dn.prompt,
-  };
-}
-
 export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
   nodes: DagFlowNode[];
   edges: Edge[];
@@ -76,10 +58,7 @@ export function dagNodesToReactFlow(dagNodes: readonly DagNode[]): {
     id: dn.id,
     type: 'dagNode',
     position: { x: 0, y: i * 100 },
-    data: {
-      ...dn,
-      ...resolveNodeDisplay(dn),
-    },
+    data: {},
   }));
 
   const edges: Edge[] = [];
