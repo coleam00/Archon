@@ -62,23 +62,39 @@
 }
 
 :root[data-studio-theme='inherit'] {
-  /* Defer to host CSS variables — used when embedded in Archon. */
+  /* Defer to host CSS variables — used when embedded in Archon.
+   * Studio-namespaced tokens alias host tokens with a different name (no
+   * circular reference). Host-namespaced tokens (--node-*, --radius-*)
+   * are intentionally NOT redeclared here: a self-referencing var() like
+   * `--node-command: var(--node-command, fallback)` is invalid CSS and
+   * silently overrides the host with the fallback. Letting them cascade
+   * naturally from the host's :root (or the studio defaults below) is
+   * the correct behavior. */
   --studio-bg: var(--background, #0a0d18);
   --studio-surface: var(--card, #0e1320);
   --studio-fg: var(--foreground, #e2e8f0);
   --studio-muted: var(--muted-foreground, #94a3b8);
   --studio-accent: var(--primary, #7c3aed);
   --studio-when: var(--primary, #a855f7);
-  --studio-error: var(--destructive, #ef4444);
-  --studio-warn: #f59e0b;
-  --studio-success: #22c55e;
-  --node-command: var(--chart-1, #16a34a);
-  --node-prompt: var(--chart-2, #7c3aed);
-  --node-bash: var(--chart-3, #f59e0b);
-  --node-script: var(--chart-4, #a16207);
-  --node-loop: var(--chart-5, #facc15);
-  --node-approval: var(--chart-3, #fb923c);
-  --node-cancel: var(--destructive, #ef4444);
+  --studio-error: var(--error, #ef4444);
+  --studio-warn: var(--warning, #f59e0b);
+  --studio-success: var(--success, #22c55e);
+}
+
+/* Studio defaults for host-namespaced tokens — applied to any embedder
+ * (or the standalone) that does not define --node-X or --radius-X on :root.
+ * Host rules at :root override these via cascade ordering (host's
+ * index.css imports tokens.css then declares its own :root). */
+:root {
+  --node-command: #16a34a;
+  --node-prompt: #7c3aed;
+  --node-bash: #f59e0b;
+  --node-script: #a16207;
+  --node-loop: #facc15;
+  --node-approval: #fb923c;
+  --node-cancel: #ef4444;
+  --radius-sm: 4px;
+  --radius-md: 6px;
 }
 
 /* Validation focus flash — applied transiently via JS after scrollIntoView. */

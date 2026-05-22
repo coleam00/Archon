@@ -3,12 +3,11 @@
   display: flex;
   background: var(--studio-surface);
   color: var(--studio-fg);
-  border: 1px solid var(--studio-muted);
+  border: 1.5px solid var(--node-border, var(--studio-muted));
   border-radius: var(--radius-md);
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 .node[data-selected='true'] {
-  border-color: var(--studio-accent);
   box-shadow: 0 0 0 2px var(--studio-accent);
 }
 .stripe {

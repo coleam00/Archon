@@ -11,7 +11,10 @@ export type LibraryDragPayload =
        *  match the click handler's id semantics (see Task 48). */
       idHintOverride?: string;
     }
-  | { kind: 'snippet'; category: 'starters' | 'patterns'; name: string };
+  | { kind: 'snippet'; category: 'starters' | 'patterns'; name: string }
+  /** User-defined snippet — YAML is embedded directly because it lives in
+   *  localStorage, not in the bundled fixtures map. */
+  | { kind: 'user-snippet'; name: string; yaml: string };
 
 const VARIANT_IDS = new Set<VariantId>([
   'command',
@@ -62,6 +65,9 @@ export function decodeLibraryDrag(raw: string): LibraryDragPayload | null {
       category: o.category as 'starters' | 'patterns',
       name: o.name,
     };
+  }
+  if (o.kind === 'user-snippet' && typeof o.name === 'string' && typeof o.yaml === 'string') {
+    return { kind: 'user-snippet', name: o.name, yaml: o.yaml };
   }
   return null;
 }

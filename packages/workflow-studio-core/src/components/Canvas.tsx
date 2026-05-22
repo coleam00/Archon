@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
   ReactFlow,
   Background,
@@ -9,9 +9,11 @@ import {
   type Node as RFNode,
   type NodeProps,
 } from '@xyflow/react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import '@xyflow/react/dist/style.css';
 import './Canvas.css';
 
+import { SHORTCUTS } from '../shortcuts';
 import { useBuilderStore } from '../store/builder-store';
 import { withUndo } from '../store/undo-store';
 import { deriveFlow, type DagNodeData } from './canvas/deriveFlow';
@@ -30,6 +32,12 @@ import {
 } from './canvas/canvasHandlers';
 import { computeGuides } from '../smart-guides';
 import { SmartGuidesLayer } from './SmartGuidesLayer';
+import { CanvasContextMenu } from './CanvasContextMenu';
+
+// Hoisted to module scope so the array reference is stable across renders —
+// passing a fresh array to React Flow every render forces RF to re-init its
+// key-handling state machine.
+const MULTI_SELECTION_KEY_CODE: string[] = ['Meta', 'Shift', 'Control'];
 
 export function Canvas(): JSX.Element {
   const positions = usePositionContext();
@@ -50,6 +58,55 @@ export function Canvas(): JSX.Element {
   const activeGuides = useBuilderStore(s => s.activeGuides);
   const setActiveGuides = useBuilderStore(s => s.setActiveGuides);
   const gridSnap = useBuilderStore(s => s.gridSnap);
+  const canvasMode = useBuilderStore(s => s.canvasMode);
+  const setCanvasMode = useBuilderStore(s => s.setCanvasMode);
+  const interactive = useBuilderStore(s => s.interactive);
+  const toggleInteractive = useBuilderStore(s => s.toggleInteractive);
+  const toggleGridSnap = useBuilderStore(s => s.toggleGridSnap);
+
+  // Canvas hotkeys. enableOnFormTags:false means typing in the inspector
+  // doesn't trigger these single-letter shortcuts.
+  const hkOpts = { enableOnFormTags: false, enableOnContentEditable: false } as const;
+  useHotkeys(
+    SHORTCUTS.modePan,
+    e => {
+      e.preventDefault();
+      setCanvasMode('pan');
+    },
+    hkOpts
+  );
+  useHotkeys(
+    SHORTCUTS.modeSelect,
+    e => {
+      e.preventDefault();
+      setCanvasMode('select');
+    },
+    hkOpts
+  );
+  useHotkeys(
+    SHORTCUTS.fitView,
+    e => {
+      e.preventDefault();
+      reactFlow.fitView({ duration: 300 });
+    },
+    hkOpts
+  );
+  useHotkeys(
+    SHORTCUTS.toggleInteractive,
+    e => {
+      e.preventDefault();
+      toggleInteractive();
+    },
+    hkOpts
+  );
+  useHotkeys(
+    SHORTCUTS.toggleGrid,
+    e => {
+      e.preventDefault();
+      toggleGridSnap();
+    },
+    hkOpts
+  );
 
   // Build the React Flow nodeTypes map from the variant registry. Each per-variant
   // Renderer is registered under its own variant id; deriveFlow emits `type: variant`,
@@ -185,6 +242,13 @@ export function Canvas(): JSX.Element {
           setPosition: positions.setPosition,
         });
       }
+      if (payload.kind === 'user-snippet') {
+        insertSnippet({
+          yaml: payload.yaml,
+          anchorPosition: flowPos,
+          setPosition: positions.setPosition,
+        });
+      }
     },
     [reactFlow, addNodeFromVariant, positions]
   );
@@ -192,10 +256,36 @@ export function Canvas(): JSX.Element {
   const NODE_W = 200,
     NODE_H = 60;
 
+  // Right-click context menu (PowerPoint-style align/distribute). The menu is
+  // positioned relative to the canvas container, so we use its bounding rect
+  // to convert the MouseEvent's clientX/clientY into local coords.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  const openContextMenu = useCallback(
+    (event: { clientX: number; clientY: number; preventDefault: () => void }, nodeId?: string) => {
+      event.preventDefault();
+      // If right-clicking a node not in the current selection, replace the
+      // selection with that one node so the menu state matches what the user
+      // visually targeted. Matches PowerPoint's right-click behavior.
+      if (nodeId) {
+        const sel = useBuilderStore.getState().selectedNodeIds;
+        if (!sel.includes(nodeId)) setSelection([nodeId]);
+      }
+      const rect = containerRef.current?.getBoundingClientRect();
+      const left = rect?.left ?? 0;
+      const top = rect?.top ?? 0;
+      setContextMenu({ x: event.clientX - left, y: event.clientY - top });
+    },
+    [setSelection]
+  );
+
   return (
     <div
+      ref={containerRef}
       onDrop={onDrop}
       onDragOver={onDragOver}
+      data-canvas-mode={canvasMode}
       style={{ position: 'relative', width: '100%', height: '100%' }}
     >
       <ReactFlow
@@ -216,6 +306,43 @@ export function Canvas(): JSX.Element {
         onPaneClick={() => {
           clearSelection();
         }}
+        onNodeContextMenu={(event, node) => {
+          openContextMenu(event, node.id);
+        }}
+        onPaneContextMenu={event => {
+          openContextMenu(event);
+        }}
+        onSelectionContextMenu={event => {
+          openContextMenu(event);
+        }}
+        onSelectionEnd={() => {
+          // Marquee released. Read RF's selected nodes once and mirror into
+          // our store. Deferred via queueMicrotask so the store write happens
+          // *after* RF finishes its current render commit — writing inside
+          // RF's render (as onSelectionChange does) caused a setState-during-
+          // render feedback loop.
+          queueMicrotask(() => {
+            const selected = reactFlow.getNodes().filter(n => n.selected);
+            const ids = selected.map(n => n.id);
+            const current = useBuilderStore.getState().selectedNodeIds;
+            const sortedNext = [...ids].sort();
+            const sortedCurr = [...current].sort();
+            if (
+              sortedNext.length === sortedCurr.length &&
+              sortedNext.every((id, i) => id === sortedCurr[i])
+            ) {
+              return;
+            }
+            setSelection(ids);
+          });
+        }}
+        selectNodesOnDrag={false}
+        panOnDrag={canvasMode === 'pan' && interactive}
+        selectionOnDrag={canvasMode === 'select' && interactive}
+        multiSelectionKeyCode={MULTI_SELECTION_KEY_CODE}
+        nodesDraggable={interactive}
+        nodesConnectable={interactive}
+        elementsSelectable={interactive}
         onNodeMouseEnter={(_e, node) => {
           setHoveredNodeId(node.id);
         }}
@@ -260,6 +387,15 @@ export function Canvas(): JSX.Element {
         <Controls position="top-left" />
       </ReactFlow>
       <SmartGuidesLayer guides={activeGuides} width={800} height={600} />
+      {contextMenu && (
+        <CanvasContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => {
+            setContextMenu(null);
+          }}
+        />
+      )}
     </div>
   );
 }

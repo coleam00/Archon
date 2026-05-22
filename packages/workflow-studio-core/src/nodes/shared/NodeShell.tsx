@@ -1,5 +1,5 @@
 import { Handle, Position } from '@xyflow/react';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { VariantId } from '../registry';
 import styles from './NodeShell.module.css';
 
@@ -25,7 +25,13 @@ export function NodeShell({
       className={styles.node}
       data-selected={selected ? 'true' : 'false'}
       data-variant={variant}
-      style={{ width: 180, height: 80 }}
+      style={
+        {
+          width: 180,
+          height: 80,
+          '--node-border': `var(--node-${variant})`,
+        } as CSSProperties
+      }
     >
       <div
         className={styles.stripe}

@@ -14,6 +14,13 @@ export const SHORTCUTS = {
   autoArrangeSelection: 'mod+shift+a',
   toggleYamlPreview: 'mod+/',
   toggleGridSnap: "mod+'",
+  // Single-letter canvas shortcuts (react-hotkeys-hook is configured with
+  // enableOnFormTags:false, so these don't fire while typing in the inspector).
+  modePan: 'p',
+  modeSelect: 's',
+  fitView: 'f',
+  toggleInteractive: 't',
+  toggleGrid: 'g',
 } as const;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

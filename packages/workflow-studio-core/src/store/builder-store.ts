@@ -98,11 +98,17 @@ export interface BuilderState {
   activeGuides: Guide[];
   /** Whether snap-to-grid is enabled. */
   gridSnap: boolean;
+  /** Canvas interaction mode: 'pan' = drag pans viewport, 'select' = drag draws marquee. */
+  canvasMode: 'pan' | 'select';
+  /** When false, nodes/edges are locked — no drag, no selection, no new connections. */
+  interactive: boolean;
 
   setNodePosition: (id: string, x: number, y: number) => void;
   setManyPositions: (entries: Iterable<[string, { x: number; y: number }]>) => void;
   setActiveGuides: (guides: Guide[]) => void;
   toggleGridSnap: () => void;
+  setCanvasMode: (mode: 'pan' | 'select') => void;
+  toggleInteractive: () => void;
 
   loadWorkflow: (input: LoadWorkflowInput) => void;
   clearWorkflow: () => void;
@@ -207,6 +213,8 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
     clipboard: null,
     activeGuides: [],
     gridSnap: false,
+    canvasMode: 'select',
+    interactive: true,
 
     setNodePosition: (id, x, y): void => {
       set(s => ({ positions: { ...s.positions, [id]: { x, y } } }));
@@ -221,6 +229,12 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
     },
     toggleGridSnap: (): void => {
       set(s => ({ gridSnap: !s.gridSnap }));
+    },
+    setCanvasMode: (mode): void => {
+      set({ canvasMode: mode });
+    },
+    toggleInteractive: (): void => {
+      set(s => ({ interactive: !s.interactive }));
     },
 
     loadWorkflow: (input): void => {
@@ -381,16 +395,18 @@ export const useBuilderStore = create<BuilderState>((set, get) => {
       // Flow-control base fields (depends_on, when, retry, hooks, sandbox,
       // trigger_rule, idle_timeout) and runtime-relevant lists (mcp, skills,
       // agents, context) are kept regardless.
-      const newBase: Record<string, unknown> = { ...node.base };
+      let newBase: Record<string, unknown> = { ...node.base };
       const parkedFromBase: Record<string, unknown> = {};
       if (!target.capabilities.honorsAiFields) {
+        const kept: Record<string, unknown> = {};
         for (const k of Object.keys(newBase)) {
           if (AI_BASE_KEYS.has(k)) {
             parkedFromBase[k] = newBase[k];
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- key set is gated by AI_BASE_KEYS.has, not user input
-            delete newBase[k];
+          } else {
+            kept[k] = newBase[k];
           }
         }
+        newBase = kept;
       }
 
       const previousDataUnknown = (currentDagShape._unknown as Record<string, unknown>) ?? {};
