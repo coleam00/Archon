@@ -71,8 +71,8 @@ export function TopNav(): React.ReactElement {
             gradient via inline style because the old UI's tokens don't
             include the brand-gradient variables. Sized to read as a
             primary CTA without dominating the nav. */}
-        <a
-          href="/console"
+        <Link
+          to="/console"
           title="Try the redesigned console UI (early access)"
           className="group inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:brightness-110 active:brightness-95"
           style={{
@@ -87,7 +87,7 @@ export function TopNav(): React.ReactElement {
           >
             →
           </span>
-        </a>
+        </Link>
         <span className="text-xs text-text-secondary">
           v{import.meta.env.VITE_APP_VERSION as string}
           {updateCheck?.updateAvailable && updateCheck.releaseUrl && (

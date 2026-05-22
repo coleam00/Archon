@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import { Routes, Route, useNavigate } from 'react-router';
+import { Routes, Route, Link, useNavigate } from 'react-router';
 import { ProjectRail } from './components/ProjectRail';
 import { AddProjectDialog } from './components/AddProjectDialog';
 import { RunsPage } from './routes/RunsPage';
@@ -38,8 +38,8 @@ export function ConsoleApp(): ReactElement {
             console
           </span>
         </div>
-        <a
-          href="/chat"
+        <Link
+          to="/chat"
           title="Switch back to the classic UI"
           className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:bg-surface-hover hover:text-text-primary"
         >
@@ -47,7 +47,7 @@ export function ConsoleApp(): ReactElement {
             ←
           </span>
           Old UI
-        </a>
+        </Link>
       </header>
 
       <div className="flex min-h-0 flex-1">

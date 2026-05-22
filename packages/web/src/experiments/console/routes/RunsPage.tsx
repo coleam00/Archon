@@ -254,9 +254,12 @@ export function RunsPage(): ReactElement {
   useDashboardSSE();
 
   // Scoped project (drives the DraftRunCard inside the feed when not ALL).
-  const { data: project } = useEntity<Project>(
+  // Typed as `Project | null` rather than `Project` so the ALL scope can
+  // legitimately resolve to null without a `null as unknown as Project`
+  // type cast hiding the truth from later readers.
+  const { data: project } = useEntity<Project | null>(
     scope === 'all' ? 'noop:scope-all' : K.project(scope),
-    () => (scope === 'all' ? Promise.resolve(null as unknown as Project) : skill.getProject(scope))
+    () => (scope === 'all' ? Promise.resolve(null) : skill.getProject(scope))
   );
 
   const realRuns = data?.runs ?? [];

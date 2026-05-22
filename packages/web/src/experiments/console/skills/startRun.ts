@@ -65,7 +65,10 @@ export async function startRun({
     } catch {
       /* not JSON */
     }
-    const msg = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
+    // Match requestJson's 200-char truncation so a 502 HTML body doesn't
+    // land in the error toast as raw markup.
+    const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
+    const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
     const path = new URL(url, window.location.origin).pathname;
     throw new HttpError(res.status, path, msg);
   }

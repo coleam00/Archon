@@ -98,18 +98,18 @@ export function RunDetailPage(): ReactElement {
     }
   }, []);
 
-  const { data: project } = useEntity<Project>(
+  // `Project | null` / `RunDetailView | null` rather than the `as unknown as T`
+  // casts the original sentinel used — keeps the null path honest for
+  // downstream readers (they can guard explicitly instead of meeting a
+  // mis-typed value).
+  const { data: project } = useEntity<Project | null>(
     projectId !== undefined ? K.project(projectId) : 'noop:no-project-id',
-    () =>
-      projectId !== undefined
-        ? skill.getProject(projectId)
-        : Promise.resolve(null as unknown as Project)
+    () => (projectId !== undefined ? skill.getProject(projectId) : Promise.resolve(null))
   );
 
-  const { data: detail, error: detailError } = useEntity<RunDetailView>(
+  const { data: detail, error: detailError } = useEntity<RunDetailView | null>(
     runId !== undefined ? K.run(runId) : 'noop:no-run-id',
-    () =>
-      runId !== undefined ? skill.getRun(runId) : Promise.resolve(null as unknown as RunDetailView)
+    () => (runId !== undefined ? skill.getRun(runId) : Promise.resolve(null))
   );
 
   // Messages are tied to the run's conversation — and the /messages endpoint
@@ -194,7 +194,7 @@ export function RunDetailPage(): ReactElement {
     );
   }
 
-  if (detail === undefined) {
+  if (detail === undefined || detail === null) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
         Loading run…
