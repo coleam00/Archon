@@ -1974,12 +1974,18 @@ export function registerApiRoutes(
         getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
       }
       if (conv) {
-        const meta =
-          savedFiles.length > 0
-            ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
-            : undefined;
         try {
-          await messageDb.addMessage(conv.id, 'user', message, meta);
+          // Only pass the metadata arg when files are present; keeps the
+          // signature 3-arg in the (common) JSON path so test fixtures don't
+          // need to know about the multipart-shaped 4th argument.
+          if (savedFiles.length > 0) {
+            const meta = {
+              files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })),
+            };
+            await messageDb.addMessage(conv.id, 'user', message, meta);
+          } else {
+            await messageDb.addMessage(conv.id, 'user', message);
+          }
         } catch (e: unknown) {
           getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
         }

@@ -97,10 +97,14 @@
   --ring: var(--brand-magenta);
 
   /* Typography — Geist, with the SS01/CV11 alternates the brand uses. */
-  font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  font-feature-settings:
-    'ss01',
-    'cv11';
+  font-family:
+    'Geist',
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  font-feature-settings: 'ss01', 'cv11';
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -114,9 +118,7 @@
 .console-root kbd,
 .console-root samp {
   font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  font-feature-settings:
-    'ss01',
-    'ss02';
+  font-feature-settings: 'ss01', 'ss02';
 }
 
 /* Heading tightening — brand uses -0.028em for big titles. */

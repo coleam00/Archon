@@ -122,13 +122,7 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: [
-                '@/components/*',
-                '@/contexts/*',
-                '@/hooks/*',
-                '@/routes/*',
-                '@/stores/*',
-              ],
+              group: ['@/components/*', '@/contexts/*', '@/hooks/*', '@/routes/*', '@/stores/*'],
               message:
                 'The console spike must not import from production web UI modules. See packages/web/src/experiments/console/README.md.',
             },

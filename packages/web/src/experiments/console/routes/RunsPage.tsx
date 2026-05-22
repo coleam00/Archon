@@ -42,6 +42,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
   const base = {
     projectId: project,
     projectName: projName,
+    costUsd: null as number | null,
     conversationId: null as string | null,
     conversationPlatformId: null as string | null,
     workingPath: null,

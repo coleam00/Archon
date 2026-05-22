@@ -66,6 +66,7 @@ export async function startRun({
       /* not JSON */
     }
     const msg = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
-    throw new HttpError(res.status, msg);
+    const path = new URL(url, window.location.origin).pathname;
+    throw new HttpError(res.status, path, msg);
   }
 }

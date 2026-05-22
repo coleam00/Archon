@@ -13,6 +13,7 @@ import type { Run } from '../primitives/run';
 const baseRun: Omit<Run, 'id' | 'workflow' | 'status'> = {
   projectId: 'demo',
   projectName: 'archon-core',
+  costUsd: null,
   conversationId: null,
   conversationPlatformId: null,
   origin: 'cli',
