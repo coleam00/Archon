@@ -122,13 +122,23 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['@/components/*', '@/contexts/*', '@/hooks/*', '@/routes/*', '@/stores/*'],
+              // `**` matches nested paths too; the single `*` form let
+              // experiments couple to `@/components/layout/...` etc.
+              group: [
+                '@/components/**',
+                '@/contexts/**',
+                '@/hooks/**',
+                '@/routes/**',
+                '@/stores/**',
+              ],
               message:
                 'The console spike must not import from production web UI modules. See packages/web/src/experiments/console/README.md.',
             },
             {
+              // Block every named import from `@/lib/api` — only generated
+              // types from `@/lib/api.generated` are allowed (different
+              // module path, not matched by this glob).
               group: ['@/lib/api'],
-              importNames: ['default'],
               message:
                 'Import only types from @/lib/api.generated. Skill calls go through packages/web/src/experiments/console/skills/.',
             },

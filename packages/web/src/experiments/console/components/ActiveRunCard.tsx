@@ -44,8 +44,20 @@ export function ActiveRunCard({ run, showProject = false }: ActiveRunCardProps):
   return (
     <article
       onClick={onCardClick}
+      role={canOpen ? 'button' : undefined}
+      tabIndex={canOpen ? 0 : undefined}
+      onKeyDown={
+        canOpen
+          ? (e): void => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onCardClick();
+              }
+            }
+          : undefined
+      }
       className={`group relative overflow-hidden rounded border border-border bg-surface transition-colors hover:bg-surface-hover ${
-        canOpen ? 'cursor-pointer' : ''
+        canOpen ? 'cursor-pointer focus-visible:outline-none' : ''
       }`}
     >
       <StatusStrip status={run.status} />

@@ -15,6 +15,7 @@
 import { useEffect } from 'react';
 import { invalidate } from '../store/cache';
 import { K } from './../store/keys';
+import { SSE_BASE_URL } from './http';
 
 interface ParsedEvent {
   type?: string;
@@ -40,7 +41,8 @@ function parse(raw: string): ParsedEvent | null {
  */
 export function useDashboardSSE(): void {
   useEffect(() => {
-    const es = new EventSource('/api/stream/__dashboard__');
+    // Use SSE_BASE_URL so dev bypasses the Vite proxy (which buffers SSE).
+    const es = new EventSource(`${SSE_BASE_URL}/api/stream/__dashboard__`);
 
     es.onmessage = (e: MessageEvent<string>): void => {
       const ev = parse(e.data);
@@ -56,10 +58,14 @@ export function useDashboardSSE(): void {
       }
     };
 
-    // EventSource auto-reconnects on transient errors; explicit handling
-    // would only add noise. Permanent close happens on unmount.
+    // EventSource auto-reconnects on transient errors; we only surface a
+    // warn when the connection has permanently closed so dropped streams
+    // aren't completely silent (the 30s safety-net poll in RunDetailPage
+    // covers the actual recovery; this is purely an observability hook).
     es.onerror = (): void => {
-      /* let EventSource recover */
+      if (es.readyState === EventSource.CLOSED) {
+        console.warn('[console-sse] dashboard stream closed');
+      }
     };
 
     return (): void => {
@@ -83,7 +89,9 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
   useEffect(() => {
     if (conversationPlatformId === null || runId === null) return;
 
-    const es = new EventSource(`/api/stream/${encodeURIComponent(conversationPlatformId)}`);
+    const es = new EventSource(
+      `${SSE_BASE_URL}/api/stream/${encodeURIComponent(conversationPlatformId)}`
+    );
 
     let messagesDirty = false;
     let runDirty = false;
@@ -137,7 +145,9 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
     };
 
     es.onerror = (): void => {
-      /* let EventSource recover */
+      if (es.readyState === EventSource.CLOSED) {
+        console.warn('[console-sse] conversation stream closed', { conversationPlatformId });
+      }
     };
 
     return (): void => {

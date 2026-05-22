@@ -8,14 +8,26 @@ const key = (projectId: string): string => `console:displayName:${projectId}`;
 
 const listeners = new Set<() => void>();
 
+// localStorage can throw SecurityError in private-browsing modes or
+// when storage is disabled by policy. Treat any failure as "no override
+// stored" rather than crashing the rail row on mount.
 export function getDisplayName(projectId: string, fallback: string): string {
-  return localStorage.getItem(key(projectId)) ?? fallback;
+  try {
+    return localStorage.getItem(key(projectId)) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export function setDisplayName(projectId: string, value: string): void {
   const trimmed = value.trim();
-  if (trimmed === '') localStorage.removeItem(key(projectId));
-  else localStorage.setItem(key(projectId), trimmed);
+  try {
+    if (trimmed === '') localStorage.removeItem(key(projectId));
+    else localStorage.setItem(key(projectId), trimmed);
+  } catch {
+    // Override won't persist; UI still updates for the current session
+    // because the listeners below still fire.
+  }
   for (const l of listeners) l();
 }
 

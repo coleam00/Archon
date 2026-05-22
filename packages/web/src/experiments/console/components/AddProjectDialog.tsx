@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react';
+import { useState, type FormEvent, type ReactElement } from 'react';
 import * as skill from '../skills';
 import type { Project } from '../primitives/project';
 
@@ -22,7 +22,7 @@ export function AddProjectDialog({
 
   if (!open) return null;
 
-  const onSubmit = async (e: React.FormEvent): Promise<void> => {
+  const onSubmit = async (e: FormEvent): Promise<void> => {
     e.preventDefault();
     setError(null);
     setSubmitting(true);

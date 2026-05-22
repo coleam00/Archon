@@ -61,8 +61,15 @@ export function NodeDivider({
     skipReason !== undefined &&
     skipReason.length > 0;
 
+  // Only the `started` transition carries the scroll-anchor id so the graph
+  // click jumps to the node's entry point, not its later `completed` /
+  // `failed` markers — and so duplicate ids never appear in the DOM when a
+  // node emits multiple transitions.
   return (
-    <div id={`node-transition-${nodeName}`} className="flex flex-col gap-1 py-3">
+    <div
+      id={transition === 'started' ? `node-transition-${nodeName}` : undefined}
+      className="flex flex-col gap-1 py-3"
+    >
       <div className="flex items-center gap-3">
         <time
           dateTime={timestamp}
