@@ -37,6 +37,14 @@ export interface WorkflowBuilderProps {
   onSave?: () => void;
   /** When false, hides the theme picker in the toolbar. Defaults to true. */
   showThemePicker?: boolean;
+  /**
+   * When true, a "Validate" button appears in the toolbar that force-refreshes
+   * validation. The button's loading state is driven by the same internal
+   * useValidation hook, so the caller doesn't pass anything beyond this flag.
+   */
+  showValidateButton?: boolean;
+  /** When provided, a "Share to Marketplace" trailing link appears in the toolbar. */
+  marketplaceUrl?: string;
 }
 
 /**
@@ -49,18 +57,22 @@ function WorkflowBuilderInner({
   positions,
   onSave,
   showThemePicker,
+  showValidateButton,
+  marketplaceUrl,
 }: {
   cwd: string;
   workflowName: string;
   positions: ReturnType<typeof usePositionPersistence>;
   onSave?: () => void;
   showThemePicker?: boolean;
+  showValidateButton?: boolean;
+  marketplaceUrl?: string;
 }): JSX.Element {
   const storeName = useBuilderStore(s => s.workflow?.name ?? workflowName);
   const isYamlOpen = useBuilderStore(s => s.isYamlPreviewOpen);
   const setYamlOpen = useBuilderStore(s => s.setYamlPreviewOpen);
   const [drawerExpanded, setDrawerExpanded] = useState(false);
-  const { issues, isValidating, focusIssue } = useValidation();
+  const { issues, isValidating, focusIssue, revalidate } = useValidation();
 
   const copySelection = useBuilderStore(s => s.copySelection);
   const pasteClipboard = useBuilderStore(s => s.pasteClipboard);
@@ -228,6 +240,9 @@ function WorkflowBuilderInner({
             setYamlOpen(!isYamlOpen);
           }}
           showThemePicker={showThemePicker}
+          onValidate={showValidateButton ? revalidate : undefined}
+          isValidating={showValidateButton ? isValidating : undefined}
+          marketplaceUrl={marketplaceUrl}
         />
       </div>
       <div className={styles.library}>
@@ -262,6 +277,8 @@ export function WorkflowBuilder({
   workflowName,
   onSave,
   showThemePicker,
+  showValidateButton,
+  marketplaceUrl,
 }: WorkflowBuilderProps): JSX.Element {
   const queryClient = useMemo(() => new QueryClient(), []);
   const positions = usePositionPersistence(archonUrl, cwd, workflowName);
@@ -278,6 +295,8 @@ export function WorkflowBuilder({
                 positions={positions}
                 onSave={onSave}
                 showThemePicker={showThemePicker}
+                showValidateButton={showValidateButton}
+                marketplaceUrl={marketplaceUrl}
               />
             </PositionProvider>
           </StudioErrorBoundary>

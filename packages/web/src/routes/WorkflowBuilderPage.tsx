@@ -15,6 +15,9 @@ interface Banner {
 
 const BANNER_TIMEOUT_MS = 3000;
 
+const MARKETPLACE_URL =
+  'https://github.com/coleam00/Archon/blob/main/CONTRIBUTING.md#contributing-workflows-to-the-marketplace';
+
 export function WorkflowBuilderPage(): React.ReactElement {
   const [searchParams] = useSearchParams();
   const editName = searchParams.get('edit');
@@ -107,8 +110,8 @@ export function WorkflowBuilderPage(): React.ReactElement {
           role={banner.kind === 'error' ? 'alert' : 'status'}
           className={
             banner.kind === 'error'
-              ? 'bg-red-900/40 text-red-100 px-4 py-2 text-sm'
-              : 'bg-emerald-900/40 text-emerald-100 px-4 py-2 text-sm'
+              ? 'bg-error/20 text-error px-4 py-2 text-sm'
+              : 'bg-success/20 text-success px-4 py-2 text-sm'
           }
         >
           {banner.message}
@@ -119,9 +122,12 @@ export function WorkflowBuilderPage(): React.ReactElement {
         archonUrl={window.location.origin}
         cwd={cwd}
         workflowName={workflowName}
+        theme="inherit"
         onSave={(): void => {
           void onSave();
         }}
+        showValidateButton
+        marketplaceUrl={MARKETPLACE_URL}
       />
     </div>
   );

@@ -98,6 +98,16 @@ export class ValidationEngine {
     this.notify();
   }
 
+  /**
+   * Force the engine to re-run all tiers against its last input.
+   * No-op when no input has been provided yet. Re-uses the same debounce
+   * + server-tier pipeline as a normal `update()` call.
+   */
+  revalidate(): void {
+    if (!this.input) return;
+    this.update(this.input);
+  }
+
   dispose(): void {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.inflightAbort?.abort();

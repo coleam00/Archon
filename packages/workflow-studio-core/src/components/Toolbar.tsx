@@ -18,6 +18,12 @@ export interface ToolbarProps {
   onToggleYamlPreview?: () => void;
   /** When false, hides the theme picker. Defaults to true. */
   showThemePicker?: boolean;
+  /** When provided, renders a "Validate" button that calls this callback. */
+  onValidate?: () => void;
+  /** When true, the Validate button shows a loading state and is disabled. */
+  isValidating?: boolean;
+  /** When provided, renders a "Share to Marketplace" link that opens in a new tab. */
+  marketplaceUrl?: string;
 }
 
 export function Toolbar({
@@ -29,6 +35,9 @@ export function Toolbar({
   isYamlPreviewOpen,
   onToggleYamlPreview,
   showThemePicker = true,
+  onValidate,
+  isValidating,
+  marketplaceUrl,
 }: ToolbarProps): JSX.Element {
   const selectedNodeIds = useBuilderStore(s => s.selectedNodeIds);
   const alignSelection = useBuilderStore(s => s.alignSelection);
@@ -275,6 +284,25 @@ export function Toolbar({
           YAML
         </button>
       ) : null}
+      {onValidate ? (
+        <button
+          type="button"
+          onClick={onValidate}
+          disabled={!!isValidating}
+          title={isValidating ? 'Validating…' : 'Re-run validation now'}
+          style={{
+            background: 'transparent',
+            color: 'var(--studio-fg)',
+            border: '1px solid var(--studio-muted)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '4px 8px',
+            cursor: isValidating ? 'wait' : 'pointer',
+            opacity: isValidating ? 0.6 : 1,
+          }}
+        >
+          {isValidating ? 'Validating…' : 'Validate'}
+        </button>
+      ) : null}
       <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
         <input
           type="checkbox"
@@ -303,6 +331,24 @@ export function Toolbar({
         >
           Save
         </button>
+      ) : null}
+      {marketplaceUrl ? (
+        <a
+          href={marketplaceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Share this workflow to the Archon Marketplace (opens GitHub)"
+          style={{
+            color: 'var(--studio-fg)',
+            border: '1px solid var(--studio-muted)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '4px 8px',
+            textDecoration: 'none',
+            fontSize: 14,
+          }}
+        >
+          Share ↗
+        </a>
       ) : null}
     </header>
   );

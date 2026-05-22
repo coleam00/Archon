@@ -31,6 +31,8 @@ export interface UseValidationResult extends EngineSnapshot {
    * (so the inspector tab can scroll to the relevant field).
    */
   focusIssue: (issue: Issue) => void;
+  /** Re-run all validation tiers against the current builder store state. */
+  revalidate: () => void;
 }
 
 export function useValidation(): UseValidationResult {
@@ -120,6 +122,12 @@ export function useValidation(): UseValidationResult {
     [] // no deps — reads from getState() which is always current
   );
 
+  // revalidate: re-run all validation tiers against the engine's last input.
+  // Stable identity via useCallback([], []) matches the focusIssue precedent.
+  const revalidate = useCallback((): void => {
+    engineRef.current?.revalidate();
+  }, []);
+
   // Memoise the returned object so consumers observe referential stability
   // matching the engine's snapshot stability (drift 6.4.5). Without this, every
   // parent re-render would hand consumers a fresh object literal, defeating
@@ -132,7 +140,8 @@ export function useValidation(): UseValidationResult {
       ...snapshot,
       hasErrors: snapshot.issues.some(i => i.severity === 'error'),
       focusIssue,
+      revalidate,
     }),
-    [snapshot, focusIssue]
+    [snapshot, focusIssue, revalidate]
   );
 }
