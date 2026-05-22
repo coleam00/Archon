@@ -1,10 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react';
-import { tileColor } from '../lib/icon-color';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useDisplayName, setDisplayName } from '../lib/display-name';
 import { formatProjectLocator } from '../lib/format';
 import type { Project } from '../primitives/project';
-
-export type ActivityDot = 'running' | 'paused' | 'failed';
 
 interface ProjectRowProps {
   project: Project;
@@ -12,20 +9,14 @@ interface ProjectRowProps {
   onClick: () => void;
   onRemove?: () => void;
   onEditEnv?: () => void;
-  activityDot?: ActivityDot | null;
 }
 
 /**
- * Rail row: avatar · two lines (title + locator) · hover-actions · status.
- *
- * Avatar is the first letter of the project name on a hash-derived
- * background — scannable identity that can never be confused with the
- * activity status dot on the right. Double-click the title to rename;
- * the override is local-only and the path stays put as the subtitle.
- *
- * `activityDot` is what the right-side pulse is. It only renders when
- * the project has running / paused / failed runs; idle projects have
- * nothing on the right.
+ * Rail row: title + locator (path) + hover actions. No avatar (the first
+ * letter of `owner/repo` carried no information), no status indicator
+ * (red-because-some-old-run-failed was noise, not signal). Selection is
+ * the gradient strip + elevated background. Double-click the title to
+ * rename; the path stays as a stable subtitle.
  */
 export function ProjectRow({
   project,
@@ -33,7 +24,6 @@ export function ProjectRow({
   onClick,
   onRemove,
   onEditEnv,
-  activityDot = null,
 }: ProjectRowProps): ReactElement {
   const displayName = useDisplayName(project.id, project.name);
   const [editing, setEditing] = useState(false);
@@ -69,15 +59,6 @@ export function ProjectRow({
     setEditing(false);
   };
 
-  const avatarChar =
-    displayName
-      .replace(/[^A-Za-z0-9]/g, '')
-      .slice(0, 1)
-      .toUpperCase() || '·';
-  const avatarStyle: CSSProperties = {
-    backgroundColor: tileColor(project.id),
-  };
-
   return (
     <div
       onClick={editing || menuOpen ? undefined : onClick}
@@ -111,15 +92,6 @@ export function ProjectRow({
           className="brand-bar pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l-md"
         />
       ) : null}
-
-      {/* Identity avatar — initial on a hash-coloured square. */}
-      <span
-        aria-hidden="true"
-        style={avatarStyle}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-semibold text-white/95"
-      >
-        {avatarChar}
-      </span>
 
       <div className="flex min-w-0 flex-1 flex-col leading-tight">
         {editing ? (
@@ -232,28 +204,6 @@ export function ProjectRow({
           </div>
         ) : null}
       </div>
-
-      {/* Real activity indicator — only shown when the project actually has
-          something in flight. Idle projects = no dot. */}
-      {activityDot !== null ? (
-        <span
-          aria-hidden="true"
-          title={
-            activityDot === 'running'
-              ? 'Running'
-              : activityDot === 'paused'
-                ? 'Waiting for approval'
-                : 'Last run failed'
-          }
-          className={`h-2 w-2 shrink-0 rounded-full ${
-            activityDot === 'running'
-              ? 'animate-pulse bg-[color:var(--running)]'
-              : activityDot === 'paused'
-                ? 'animate-pulse bg-warning'
-                : 'bg-error'
-          }`}
-        />
-      ) : null}
     </div>
   );
 }

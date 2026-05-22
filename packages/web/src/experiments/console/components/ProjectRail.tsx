@@ -1,52 +1,19 @@
-import { useMemo, useState, type ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { useNavigate, useLocation } from 'react-router';
-import { ProjectRow, type ActivityDot } from './ProjectRow';
+import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import type { Project } from '../primitives/project';
-import type { Run } from '../primitives/run';
-import type { RunCounts } from '../skills/runs';
 
 interface ProjectRailProps {
   onAddProject: () => void;
 }
 
-interface RunsFeedData {
-  runs: Run[];
-  counts: RunCounts;
-  total: number;
-}
-
 async function handleRemove(projectId: string): Promise<void> {
   await skill.removeProject(projectId);
   invalidate(K.projects);
-}
-
-/**
- * Derive a single at-a-glance status indicator per project from the full
- * runs list. Priority: failed (only when no other in-flight runs) →
- * paused → running → none. We don't show "completed" because every
- * historically-completed run would light up every row in green.
- */
-function deriveActivityByProject(runs: Run[]): Map<string, ActivityDot> {
-  const out = new Map<string, ActivityDot>();
-  for (const r of runs) {
-    if (r.projectId === null) continue;
-    const current = out.get(r.projectId) ?? null;
-    if (r.status === 'running' && current !== 'paused') {
-      out.set(r.projectId, 'running');
-    } else if (r.status === 'paused') {
-      out.set(r.projectId, 'paused');
-    } else if (r.status === 'failed' && current === null) {
-      // Only surface failed when nothing else is in flight; "you have an
-      // active run AND something failed earlier" isn't actionable from the
-      // rail and the active state takes precedence.
-      out.set(r.projectId, 'failed');
-    }
-  }
-  return out;
 }
 
 /** Extract the project id from /console/p/:id (and /console/p/:id/r/:runId). */
@@ -69,14 +36,6 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
   const [envProject, setEnvProject] = useState<Project | null>(null);
 
   const { data: projects, error } = useEntity<Project[]>(K.projects, () => skill.listProjects());
-
-  // Shared cache with the ALL view's runs feed — refetched via SSE
-  // invalidation in lib/sse.ts. Drives the per-row activity dots.
-  const { data: runsFeed } = useEntity<RunsFeedData>(K.runs('all'), () => skill.listRuns({}));
-  const activityByProject = useMemo(
-    () => deriveActivityByProject(runsFeed?.runs ?? []),
-    [runsFeed]
-  );
 
   const allSelected = scope === 'all';
 
@@ -106,18 +65,6 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
             className="brand-bar pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l-md"
           />
         ) : null}
-        <span
-          aria-hidden
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-semibold"
-          style={{
-            background: allSelected
-              ? 'var(--brand-gradient)'
-              : 'color-mix(in oklch, var(--surface-elevated), var(--border) 40%)',
-            color: allSelected ? 'white' : 'var(--text-tertiary)',
-          }}
-        >
-          ∗
-        </span>
         <span>All projects</span>
       </button>
 
@@ -138,7 +85,6 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
             key={p.id}
             project={p}
             selected={scope === p.id}
-            activityDot={activityByProject.get(p.id) ?? null}
             onClick={() => {
               navigate(`/console/p/${p.id}`);
             }}
