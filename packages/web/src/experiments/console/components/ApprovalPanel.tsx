@@ -53,7 +53,7 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
       } else {
         await skill.approveRun(run.id, trimmed.length > 0 ? trimmed : undefined);
       }
-      invalidate('runs:');
+      invalidate('runs');
       invalidate(`run:${run.id}`);
       setComment('');
     } catch (e: unknown) {
@@ -77,7 +77,7 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
       } else {
         await skill.rejectRun(run.id, trimmed);
       }
-      invalidate('runs:');
+      invalidate('runs');
       invalidate(`run:${run.id}`);
       setReason('');
       setMode('idle');

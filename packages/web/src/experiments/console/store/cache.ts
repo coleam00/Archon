@@ -67,12 +67,26 @@ export function patch(key: string, updater: (prev: unknown) => unknown): void {
 }
 
 export function invalidate(keyPrefix: string): void {
+  // Match by exact key OR by `${prefix}:` so callers can pass either a
+  // concrete key (`run:abc`) or a prefix that fans out (`runs`).
+  const matches = (key: string): boolean => key === keyPrefix || key.startsWith(`${keyPrefix}:`);
+
+  // Walk both the data cache AND the errors map. An errored key lives only in
+  // `errors`, so iterating `cache.keys()` alone would leave it permanently
+  // stuck — the loader would never refetch and the UI would require a full
+  // page reload to recover.
+  const toRefresh = new Set<string>();
   for (const key of [...cache.keys()]) {
-    if (key === keyPrefix || key.startsWith(`${keyPrefix}:`)) {
-      cache.delete(key);
-      notify(key);
-      ensureLoad(key);
-    }
+    if (matches(key)) toRefresh.add(key);
+  }
+  for (const key of [...errors.keys()]) {
+    if (matches(key)) toRefresh.add(key);
+  }
+  for (const key of toRefresh) {
+    cache.delete(key);
+    errors.delete(key);
+    notify(key);
+    ensureLoad(key);
   }
 }
 

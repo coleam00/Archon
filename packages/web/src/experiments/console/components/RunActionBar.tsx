@@ -32,7 +32,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
         if (action === 'resume') await skill.resumeRun(run.id);
         if (action === 'abandon') await skill.abandonRun(run.id);
       }
-      invalidate('runs:');
+      invalidate('runs');
       invalidate(K.run(run.id));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Action failed.');
