@@ -114,6 +114,13 @@ export class ValidationEngine {
     // Bump seq so any in-flight validateWorkflow that resolves after dispose
     // sees mySeq !== this.seq and exits without writing to inert state (M1).
     this.seq++;
+    // Emit a final settled-state snapshot BEFORE clearing listeners. Without
+    // this, a consumer unmounting while validation is in-flight would never
+    // observe isValidating returning to false — any cached subscription
+    // snapshot (e.g. held by a parent component or a memoized selector) would
+    // remain stuck on the in-flight value indefinitely.
+    this.isValidating = false;
+    this.notify();
     this.listeners.clear();
   }
 

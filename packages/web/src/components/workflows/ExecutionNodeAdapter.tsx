@@ -1,7 +1,12 @@
 import { useState, type ComponentType, type ReactElement } from 'react';
-// Namespace import so test code can `spyOn(studioCore, 'getVariant')` and
-// have the spy actually intercept the call site here (a direct named binding
-// would be frozen at module-load time and bypass the spy).
+// CLAUDE.md normally prohibits `import *` for main packages; this is a
+// deliberate exception. Bun's `spyOn(module, 'export')` patches the namespace
+// object's binding — for the spy to be observed at the consumer call site,
+// the consumer MUST resolve through the same namespace binding (a direct
+// named import is frozen at module-load time and bypasses the spy). The
+// only call below is `studioCore.getVariant(...)`; the named `BuilderNode`
+// type import on the next line is the project's preferred pattern for the
+// non-spied surface.
 import * as studioCore from '@archon/workflow-studio-core';
 import type { BuilderNode } from '@archon/workflow-studio-core';
 import type { WorkflowRunStatus, WorkflowStepStatus } from '@/lib/types';

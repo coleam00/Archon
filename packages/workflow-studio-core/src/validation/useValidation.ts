@@ -25,6 +25,8 @@ import type { Issue } from './types';
 export interface UseValidationResult extends EngineSnapshot {
   /** True if any issue has severity === 'error'. */
   hasErrors: boolean;
+  /** Up to 3 error messages — convenience for tooltips and the Save-gate. */
+  topErrors: readonly string[];
   /**
    * Navigate the inspector to a specific issue.
    * Sets selectedNodeId (so the canvas focuses the node) and focusedIssue
@@ -139,6 +141,10 @@ export function useValidation(): UseValidationResult {
     () => ({
       ...snapshot,
       hasErrors: snapshot.issues.some(i => i.severity === 'error'),
+      topErrors: snapshot.issues
+        .filter(i => i.severity === 'error')
+        .slice(0, 3)
+        .map(i => i.message),
       focusIssue,
       revalidate,
     }),

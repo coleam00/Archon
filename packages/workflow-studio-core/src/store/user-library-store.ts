@@ -152,3 +152,10 @@ export const useUserLibraryStore = create<UserLibraryState>((set, get) => ({
     }
   },
 }));
+
+// Eagerly load persisted state at module-load time. Without this, any write
+// after a page reload would serialize the empty in-memory snapshot back to
+// localStorage and silently destroy previously-saved user library data.
+// hydrate() is wrapped in try/catch internally via safeRead, so this is safe
+// even in environments where localStorage is unavailable.
+useUserLibraryStore.getState().hydrate();

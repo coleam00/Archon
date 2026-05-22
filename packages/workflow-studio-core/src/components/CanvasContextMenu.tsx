@@ -52,13 +52,14 @@ export function CanvasContextMenu({ x, y, onClose }: CanvasContextMenuProps): JS
     function handleKey(e: KeyboardEvent): void {
       if (e.key === 'Escape') onClose();
     }
+    // Pointer Events cover mouse, touch, and pen — registering both
+    // pointerdown AND mousedown would fire the handler twice per click
+    // (pointerdown precedes mousedown in the dispatch sequence).
     window.addEventListener('pointerdown', handlePointerDown, true);
-    window.addEventListener('mousedown', handlePointerDown as unknown as EventListener, true);
     window.addEventListener('contextmenu', handleContextMenu, true);
     window.addEventListener('keydown', handleKey, true);
     return (): void => {
       window.removeEventListener('pointerdown', handlePointerDown, true);
-      window.removeEventListener('mousedown', handlePointerDown as unknown as EventListener, true);
       window.removeEventListener('contextmenu', handleContextMenu, true);
       window.removeEventListener('keydown', handleKey, true);
     };

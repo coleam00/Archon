@@ -68,7 +68,7 @@ function WorkflowBuilderInner({
   const isYamlOpen = useBuilderStore(s => s.isYamlPreviewOpen);
   const setYamlOpen = useBuilderStore(s => s.setYamlPreviewOpen);
   const [drawerExpanded, setDrawerExpanded] = useState(false);
-  const { issues, isValidating, focusIssue, revalidate } = useValidation();
+  const { issues, isValidating, focusIssue, revalidate, hasErrors, topErrors } = useValidation();
 
   const copySelection = useBuilderStore(s => s.copySelection);
   const pasteClipboard = useBuilderStore(s => s.pasteClipboard);
@@ -210,16 +210,6 @@ function WorkflowBuilderInner({
       positions.setMany(Object.entries(useBuilderStore.getState().positions));
     },
     hotkeyOptions
-  );
-
-  const hasErrors = useMemo(() => issues.some(i => i.severity === 'error'), [issues]);
-  const topErrors = useMemo(
-    () =>
-      issues
-        .filter(i => i.severity === 'error')
-        .slice(0, 3)
-        .map(i => i.message),
-    [issues]
   );
 
   return (
