@@ -2,6 +2,7 @@ import { requestJson } from '../lib/http';
 import { toRun, type Run } from '../primitives/run';
 import { toRunEvent, type RunEvent } from '../primitives/event';
 import type { RunStatus } from '../lib/run-status';
+import type { components } from '@/lib/api.generated';
 
 export interface ListRunsOptions {
   codebaseId?: string;
@@ -107,18 +108,16 @@ export async function abandonRun(id: string): Promise<void> {
   });
 }
 
-export interface ArtifactFile {
-  path: string;
-  size: number;
-  modifiedAt: string;
-}
-
-interface ArtifactListResponse {
-  files: ArtifactFile[];
-}
+/**
+ * Re-exported from the generated OpenAPI types so the console doesn't drift
+ * from the server contract. Schema lives in
+ * packages/server/src/routes/schemas/workflow.schemas.ts.
+ */
+export type ArtifactFile = components['schemas']['ArtifactFile'];
+type ListArtifactsResponse = components['schemas']['ListArtifactsResponse'];
 
 export async function listRunArtifacts(runId: string): Promise<ArtifactFile[]> {
-  const res = await requestJson<ArtifactListResponse>(
+  const res = await requestJson<ListArtifactsResponse>(
     `/api/runs/${encodeURIComponent(runId)}/artifacts`
   );
   return res.files;

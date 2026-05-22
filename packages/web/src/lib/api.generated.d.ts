@@ -747,7 +747,10 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Run a workflow via the orchestrator */
+    /**
+     * Run a workflow via the orchestrator (JSON or multipart with file uploads)
+     * @description Accepts `application/json` with `{ conversationId, message }` or `multipart/form-data` with `conversationId`, `message`, and optional file attachments (max 5 files, 10 MB each).
+     */
     post: {
       parameters: {
         query?: never;
@@ -757,11 +760,7 @@ export interface paths {
         };
         cookie?: never;
       };
-      requestBody: {
-        content: {
-          'application/json': components['schemas']['RunWorkflowBody'];
-        };
-      };
+      requestBody?: never;
       responses: {
         /** @description Accepted */
         200: {
@@ -925,7 +924,7 @@ export interface paths {
     };
     get?: never;
     put?: never;
-    /** Resume a failed workflow run (re-run auto-resumes from completed nodes) */
+    /** Resume a failed workflow run (dispatches resume on the parent web conversation) */
     post: {
       parameters: {
         query?: never;
@@ -1517,6 +1516,7 @@ export interface paths {
       parameters: {
         query?: {
           cwd?: string;
+          source?: 'project' | 'global';
         };
         header?: never;
         path: {
@@ -1565,6 +1565,7 @@ export interface paths {
       parameters: {
         query?: {
           cwd?: string;
+          source?: 'project' | 'global';
         };
         header?: never;
         path: {
@@ -1647,6 +1648,74 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/runs/{runId}/artifacts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a run's artifact files
+     * @description Walks the run's artifact directory and returns relative file paths with size + mtime. Drives the console Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ListArtifactsResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
           headers: {
             [name: string]: unknown;
           };
@@ -2259,6 +2328,7 @@ export interface components {
           args?: string[];
         };
       };
+      always_run?: boolean;
       command?: string;
       prompt?: string;
       bash?: string;
@@ -2348,6 +2418,7 @@ export interface components {
       worktree?: {
         enabled?: boolean;
       };
+      mutates_checkout?: boolean;
       tags?: string[];
       nodes: components['schemas']['DagNode'][];
     };
@@ -2366,10 +2437,6 @@ export interface components {
     WorkflowListResponse: {
       workflows: components['schemas']['WorkflowListEntry'][];
       errors?: components['schemas']['WorkflowLoadError'][];
-    };
-    RunWorkflowBody: {
-      conversationId: string;
-      message: string;
     };
     /** @enum {string} */
     WorkflowRunStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
@@ -2483,6 +2550,14 @@ export interface components {
     };
     CommandListResponse: {
       commands: components['schemas']['CommandEntry'][];
+    };
+    ArtifactFile: {
+      path: string;
+      size: number;
+      modifiedAt: string;
+    };
+    ListArtifactsResponse: {
+      files: components['schemas']['ArtifactFile'][];
     };
     ProviderDefaults: {
       [key: string]: unknown;

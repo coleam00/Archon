@@ -89,6 +89,7 @@ import {
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
   rejectWorkflowRunBodySchema,
+  listArtifactsResponseSchema,
 } from './schemas/workflow.schemas';
 import {
   conversationListResponseSchema,
@@ -564,6 +565,29 @@ const runWorkflowRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const listRunArtifactsRoute = createRoute({
+  method: 'get',
+  path: '/api/runs/{runId}/artifacts',
+  tags: ['Workflows'],
+  summary: "List a run's artifact files",
+  description:
+    "Walks the run's artifact directory and returns relative file paths with size + " +
+    'mtime. Drives the console Artifacts tab. Returns `{ files: [] }` when the run ' +
+    'has no codebase or the codebase name is not in `owner/repo` form.',
+  request: {
+    params: z.object({ runId: z.string() }),
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: listArtifactsResponseSchema } },
+      description: 'OK',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -2734,14 +2758,14 @@ export function registerApiRoutes(
     }
   });
 
-  // GET /api/runs/:runId/artifacts - List artifact files for a run
+  // GET /api/runs/:runId/artifacts - List artifact files for a run.
   // Walks the run's artifact directory and returns relative file paths with
   // size + mtime. Used by the console's Artifacts tab; the existing
   // `workflow_artifact` event stream is too sparse (bash/script nodes write
   // straight to $ARTIFACTS_DIR without emitting an event) to drive a file
   // browser on its own.
-  app.get('/api/runs/:runId/artifacts', async c => {
-    const runId = c.req.param('runId');
+  registerOpenApiRoute(listRunArtifactsRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
     if (!/^[A-Za-z0-9_-]+$/.test(runId)) {
       return apiError(c, 400, 'Invalid run id');
     }
@@ -2755,13 +2779,38 @@ export function registerApiRoutes(
     }
     if (!run) return apiError(c, 404, 'Workflow run not found');
 
-    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    let codebase: Awaited<ReturnType<typeof codebaseDb.getCodebase>> | null = null;
+    if (run.codebase_id) {
+      try {
+        codebase = await codebaseDb.getCodebase(run.codebase_id);
+      } catch (error) {
+        getLog().error(
+          { err: error, runId, codebaseId: run.codebase_id },
+          'artifacts.codebase_lookup_failed'
+        );
+        return apiError(c, 500, 'Failed to look up codebase');
+      }
+    }
     if (!codebase?.name) return c.json({ files: [] });
     const nameParts = codebase.name.split('/');
     if (nameParts.length < 2) return c.json({ files: [] });
-    const [owner, repo] = nameParts;
+    const owner = nameParts[0];
+    const repo = nameParts[1];
+    if (!owner || !repo) return c.json({ files: [] });
 
     const artifactDir = getRunArtifactsPath(owner, repo, runId);
+    // Defense-in-depth: even though registration sanitises codebase names,
+    // ensure the resolved dir stays inside ARCHON_HOME — a maliciously
+    // crafted owner/repo containing `..` would otherwise escape the tree.
+    const archonHome = getArchonHome();
+    const normalisedDir = normalize(artifactDir);
+    if (
+      !normalisedDir.startsWith(normalize(archonHome) + sep) &&
+      normalisedDir !== normalize(archonHome)
+    ) {
+      getLog().warn({ runId, artifactDir, archonHome }, 'artifacts.path_escape_blocked');
+      return apiError(c, 400, 'Invalid artifact path');
+    }
 
     interface FileEntry {
       path: string;
@@ -2793,8 +2842,13 @@ export function registerApiRoutes(
               size: s.size,
               modifiedAt: s.mtime.toISOString(),
             });
-          } catch {
-            /* skip unreadable entries */
+          } catch (err) {
+            // Race with deletion / permission flips: skip ENOENT / EACCES
+            // silently, surface anything else so we don't return a half-list
+            // with no diagnostic.
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT' || code === 'EACCES') continue;
+            throw err;
           }
         }
       }
