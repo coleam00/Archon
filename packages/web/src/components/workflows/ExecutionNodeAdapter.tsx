@@ -24,13 +24,22 @@ export interface ExecutionNodeAdapterProps {
   isRejecting?: boolean;
 }
 
-const STATUS_STYLES: Partial<Record<WorkflowStepStatus, string>> = {
-  completed: 'border-l-2 border-success bg-success/5',
-  running: 'border-l-2 border-accent-bright bg-accent/5 shadow-[0_0_8px_var(--accent)]',
-  failed: 'border-l-2 border-error bg-error/5',
-  skipped: 'opacity-50 border-l-2 border-border',
+// Status decoration is layered ON the studio NodeShell (which is the primary visual:
+// colored variant stripe + variant tag pill from @archon/workflow-studio-core). We
+// use filter: drop-shadow so the halo traces NodeShell's rounded shape; box-shadow
+// would render a misaligned rectangle around the protruding colored stripe.
+const STATUS_FX_CLASS: Partial<Record<WorkflowStepStatus, string>> = {
+  running: 'drop-shadow-[0_0_8px_var(--accent-bright)] animate-pulse [animation-duration:2s]',
+  failed: 'drop-shadow-[0_0_6px_var(--error)]',
+  completed: 'drop-shadow-[0_0_4px_var(--success)]',
+  skipped: 'opacity-50',
+  pending: 'opacity-80',
 };
-const DEFAULT_STYLE = 'border-l-2 border-border bg-surface-elevated';
+
+// NodeShell is fixed at 180x80 in @archon/workflow-studio-core; mirror that width on
+// the wrapper so the optional footer rows (duration, error, approval gate) align
+// cleanly under the shell without stretching past it.
+const SHELL_WIDTH = 180;
 
 // Edit-affordance suppression is via `pointer-events: none`; this leaves the DOM
 // reachable by keyboard tab order. If Phase 5 surfaces a focus issue inside the
@@ -54,7 +63,7 @@ export function ExecutionNodeAdapter(props: ExecutionNodeAdapterProps): ReactEle
   } = props;
 
   const effectiveStatus: WorkflowStepStatus = status ?? 'pending';
-  const style = STATUS_STYLES[effectiveStatus] ?? DEFAULT_STYLE;
+  const fxClass = STATUS_FX_CLASS[effectiveStatus] ?? '';
   const variantDef = studioCore.getVariant(node.variant);
 
   // xyflow v12's NodeProps has ~10 required positional fields (positionAbsoluteX,
@@ -71,27 +80,23 @@ export function ExecutionNodeAdapter(props: ExecutionNodeAdapterProps): ReactEle
 
   const showApprovalGate =
     runStatus === 'paused' && node.variant === 'approval' && approval?.nodeId === node.id;
+  const hasFooterRow =
+    duration !== undefined || (currentIteration !== undefined && maxIterations !== undefined);
 
   return (
     <div
       data-testid="execution-node-adapter"
       data-variant={node.variant}
       data-status={effectiveStatus}
-      className={`rounded-lg border border-border px-3 py-2 min-w-[140px] transition-all duration-300 ${style}${selected ? ' ring-2 ring-accent-bright' : ''}`}
+      className="relative"
+      style={{ width: SHELL_WIDTH }}
     >
-      <div className="flex items-center gap-2">
-        <StatusIcon status={effectiveStatus} />
-        <span className="text-[10px] font-medium text-text-tertiary">
-          {node.variant.toUpperCase()}
-        </span>
-        {duration !== undefined && (
-          <span className="text-[10px] text-text-tertiary ml-auto shrink-0">
-            {formatDurationMs(duration)}
-          </span>
-        )}
-      </div>
+      {/* Studio NodeShell is the primary visual: colored variant stripe + tag pill. */}
+      {/* filter: drop-shadow traces NodeShell's actual rounded shape including its */}
+      {/* protruding stripe (box-shadow on a wrapper would clip to a rectangle). */}
       <div
         data-testid="adapter-renderer-mount"
+        className={`transition-[filter,opacity] duration-300 ${fxClass}`}
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       >
         <Renderer
@@ -106,20 +111,35 @@ export function ExecutionNodeAdapter(props: ExecutionNodeAdapterProps): ReactEle
           zIndex={0}
         />
       </div>
-      {currentIteration !== undefined && maxIterations !== undefined && (
-        <div className="text-[10px] text-text-tertiary mt-0.5">
-          {currentIteration}/{maxIterations} iterations
+
+      {/* Status icon as a corner badge overlaid on the shell's top-right. */}
+      {/* The background+blur+ring keep it legible against the colored variant tag. */}
+      <div className="absolute top-1 right-1 z-10 rounded-full bg-surface/85 backdrop-blur-sm p-0.5 ring-1 ring-border">
+        <StatusIcon status={effectiveStatus} />
+      </div>
+
+      {/* Footer row beneath the shell: iteration counter (left) + duration (right). */}
+      {hasFooterRow && (
+        <div className="mt-1 flex items-center justify-between px-1 text-[10px] text-text-tertiary">
+          <span>
+            {currentIteration !== undefined && maxIterations !== undefined
+              ? `${currentIteration}/${maxIterations}`
+              : ''}
+          </span>
+          {duration !== undefined && <span>{formatDurationMs(duration)}</span>}
         </div>
       )}
+
       {error && (
         <div
           data-testid="adapter-error-tail"
-          className="text-[10px] text-error mt-1 truncate"
+          className="mt-1 text-[10px] text-error truncate"
           title={error}
         >
           {error.slice(0, 60)}
         </div>
       )}
+
       {showApprovalGate && (
         <div style={{ pointerEvents: 'auto' }}>
           <ApprovalGateControls

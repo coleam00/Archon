@@ -60,7 +60,7 @@ function DagNodeItem({
           )}
         </div>
         {node.error && (
-          <div className="text-xs text-red-400 mt-0.5 ml-6 truncate" title={node.error}>
+          <div className="text-xs text-error mt-0.5 ml-6 truncate" title={node.error}>
             {node.error.slice(0, 80)}
           </div>
         )}

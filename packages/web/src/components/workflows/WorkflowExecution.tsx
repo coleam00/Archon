@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { MessageSquare } from 'lucide-react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
 import { StepLogs } from './StepLogs';
@@ -12,9 +12,17 @@ import { ChatInterface } from '@/components/chat/ChatInterface';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { useWorkflowStore } from '@/stores/workflow-store';
-import { getWorkflowRun, getWorkflowRunByWorker, getCodebase, getWorkflow } from '@/lib/api';
+import {
+  getWorkflowRun,
+  getWorkflowRunByWorker,
+  getCodebase,
+  getWorkflow,
+  approveWorkflowRun,
+  rejectWorkflowRun,
+} from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
+import { tryFromWorkflowDefinition } from '@/lib/workflow-conversion';
 import type {
   WorkflowState,
   ArtifactType,
@@ -103,11 +111,30 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     queryKey: ['workflowRun', runId],
     queryFn: async (): Promise<WorkflowRunQueryData> => {
       const data = await getWorkflowRun(runId);
+      // Extract approval state from the latest `approval_requested` event when the run is paused.
+      // Mirrors the SSE store behaviour (workflow-store.ts:209): approval is only meaningful while
+      // status === 'paused'. This closes the reload-while-paused gap so hard-reload surfaces the
+      // Approve/Reject buttons before SSE reconnects. There is no dedicated `workflow_paused`
+      // event — the pause is reflected in `data.run.status` and the approval payload lives on
+      // `approval_requested` (see dag-executor.ts:2529).
+      const approvalForState = ((): { nodeId: string; message: string } | undefined => {
+        if (data.run.status !== 'paused') return undefined;
+        const approvalEvents = data.events.filter(ev => ev.event_type === 'approval_requested');
+        if (approvalEvents.length === 0) return undefined;
+        const latest = approvalEvents.reduce((acc, ev) =>
+          new Date(ev.created_at).getTime() > new Date(acc.created_at).getTime() ? ev : acc
+        );
+        const nodeId = latest.step_name ?? (latest.data.nodeId as string | undefined) ?? '';
+        if (!nodeId) return undefined;
+        const message = (latest.data.message as string | undefined) ?? 'Approval required';
+        return { nodeId, message };
+      })();
       return {
         workflowState: {
           runId: data.run.id,
           workflowName: data.run.workflow_name,
           status: data.run.status,
+          approval: approvalForState,
           dagNodes: ((): DagNodeState[] => {
             const nodeMap = new Map<string, DagNodeState>();
             for (const e of data.events.filter(ev => ev.event_type.startsWith('node_'))) {
@@ -298,8 +325,53 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       ? workflowDefError.message
       : String(workflowDefError)
     : null;
+  // Convert the raw WorkflowDefinition into studio BuilderNodes for the new variant Renderers.
+  // The `as unknown as Record<string, unknown>` cast is required because the generated OpenAPI
+  // type for `workflowDef.workflow` is structurally compatible but nominally distinct from the
+  // open record shape `fromWorkflowDefinition` accepts. Unknown variants throw inside the
+  // helper and degrade to `conversionError` (rendered as a graph-error UI below).
+  const { builderNodes, conversionError } = useMemo(
+    () =>
+      tryFromWorkflowDefinition(
+        workflowDef?.workflow as unknown as Record<string, unknown> | undefined
+      ),
+    [workflowDef?.workflow]
+  );
   // Use workflow definition when available, fall back to dagNodes from run state.
   const isDag = dagDefinitionNodes !== null || (initialData?.dagNodes.length ?? 0) > 0;
+
+  // Approve / reject mutations for paused approval gates. On success, invalidate the workflow
+  // run query so the next poll observes the resumed state.
+  const approveMutation = useMutation({
+    mutationFn: ({ comment }: { comment?: string }) => approveWorkflowRun(runId, comment),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+    },
+    onError: (err: unknown) => {
+      console.error('[WorkflowExecution] approve failed', err);
+    },
+  });
+  const rejectMutation = useMutation({
+    mutationFn: ({ reason }: { reason: string }) => rejectWorkflowRun(runId, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
+    },
+    onError: (err: unknown) => {
+      console.error('[WorkflowExecution] reject failed', err);
+    },
+  });
+  const handleApprove = useCallback(
+    (comment?: string): void => {
+      approveMutation.mutate({ comment });
+    },
+    [approveMutation]
+  );
+  const handleReject = useCallback(
+    (reason: string): void => {
+      rejectMutation.mutate({ reason });
+    },
+    [rejectMutation]
+  );
 
   // When SSE reports a terminal status but React Query data is still stale,
   // invalidate the cache to trigger an immediate re-fetch with correct data.
@@ -359,6 +431,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
 
       currentIteration: liveWorkflow.currentIteration ?? initialData.currentIteration,
       maxIterations: liveWorkflow.maxIterations ?? initialData.maxIterations,
+      // SSE wins on approval when present; REST extraction (from approval_requested events)
+      // is the fallback so the gate buttons appear after a hard reload before SSE reconnects.
+      approval: liveWorkflow.approval ?? initialData.approval,
     };
   })();
 
@@ -552,14 +627,44 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       return (
         <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
           <ResizablePanel defaultSize={60} minSize={30}>
-            {dagDefinitionNodes ? (
+            {conversionError !== null ? (
+              <div className="flex flex-col items-center justify-center h-full text-text-secondary px-4 text-center">
+                <p className="text-error mb-1">Failed to render workflow graph</p>
+                <p className="text-xs mb-3">{conversionError}</p>
+                <button
+                  type="button"
+                  onClick={(): void => {
+                    queryClient
+                      .resetQueries({
+                        queryKey: ['workflowDefinition', initialData?.workflowName, codebaseCwd],
+                      })
+                      .catch((err: unknown) => {
+                        console.error('[WorkflowExecution] Retry resetQueries failed', {
+                          workflowName: initialData?.workflowName,
+                          error: err instanceof Error ? err.message : err,
+                        });
+                      });
+                  }}
+                  className="text-xs text-primary hover:text-accent-bright transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : dagDefinitionNodes ? (
               <WorkflowDagViewer
                 dagNodes={dagDefinitionNodes}
+                builderNodes={builderNodes ?? []}
                 liveStatus={workflow.dagNodes}
                 isRunning={isRunning}
                 currentlyExecuting={currentlyExecuting ?? undefined}
                 selectedNodeId={selectedDagNode}
                 onNodeClick={handleNodeClick}
+                runStatus={workflow.status}
+                approval={workflow.approval}
+                onApprove={handleApprove}
+                onReject={handleReject}
+                isApproving={approveMutation.isPending}
+                isRejecting={rejectMutation.isPending}
               />
             ) : dagDefinitionErrorMessage ? (
               <div className="flex flex-col items-center justify-center h-full text-text-secondary px-4 text-center">

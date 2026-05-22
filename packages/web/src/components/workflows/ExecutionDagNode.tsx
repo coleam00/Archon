@@ -26,10 +26,10 @@ const STATUS_STYLES: Partial<Record<WorkflowStepStatus, string>> = {
 const DEFAULT_STYLE = 'border-l-2 border-border bg-surface-elevated';
 
 const TYPE_COLORS: Record<string, string> = {
-  command: 'text-purple-400',
-  prompt: 'text-accent-bright',
-  bash: 'text-amber-400',
-  loop: 'text-orange-400',
+  command: 'text-node-command',
+  prompt: 'text-node-prompt',
+  bash: 'text-node-bash',
+  loop: 'text-node-loop',
 };
 
 const TYPE_LABELS: Record<string, string> = {

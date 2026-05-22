@@ -8,20 +8,21 @@ import {
   MiniMap,
 } from '@xyflow/react';
 import type { Edge, NodeTypes } from '@xyflow/react';
-import type { DagNodeState, WorkflowStepStatus } from '@/lib/types';
+import type { BuilderNode } from '@archon/workflow-studio-core';
+import type { DagNodeState, WorkflowRunStatus, WorkflowStepStatus } from '@/lib/types';
 import type { DagNode } from '@/lib/api';
-import { dagNodesToReactFlow, resolveNodeDisplay } from '@/lib/dag-layout';
+import { dagNodesToReactFlow } from '@/lib/dag-layout';
 import { formatDurationMs } from '@/lib/format';
 import {
-  executionDagNode,
-  type ExecutionFlowNode,
-  type ExecutionNodeData,
-} from './ExecutionDagNode';
+  adaptedExecutionNode,
+  type AdaptedFlowNode,
+  type AdaptedNodeData,
+} from './AdaptedExecutionNode';
 
 import '@xyflow/react/dist/style.css';
 
 // Defined at module scope — prevents ReactFlow from remounting nodes on every render
-const nodeTypes: NodeTypes = { executionNode: executionDagNode };
+const nodeTypes: NodeTypes = { adaptedExecutionNode };
 
 const STATUS_MINIMAP_COLORS: Partial<Record<WorkflowStepStatus, string>> = {
   completed: 'var(--success)',
@@ -40,20 +41,34 @@ const DEFAULT_EDGE_STROKE = 'var(--border)';
 
 interface WorkflowDagViewerProps {
   dagNodes: readonly DagNode[];
+  builderNodes: readonly BuilderNode[];
   liveStatus: readonly DagNodeState[];
   isRunning: boolean;
   currentlyExecuting?: { nodeName: string; startedAt: number };
   selectedNodeId?: string | null;
   onNodeClick?: (nodeId: string) => void;
+  runStatus?: WorkflowRunStatus;
+  approval?: { nodeId: string; message: string };
+  onApprove?: (comment?: string) => void;
+  onReject?: (reason: string) => void;
+  isApproving?: boolean;
+  isRejecting?: boolean;
 }
 
 export function WorkflowDagViewer({
   dagNodes,
+  builderNodes,
   liveStatus,
   isRunning,
   currentlyExecuting,
   selectedNodeId,
   onNodeClick,
+  runStatus,
+  approval,
+  onApprove,
+  onReject,
+  isApproving,
+  isRejecting,
 }: WorkflowDagViewerProps): React.ReactElement {
   // Compute topology layout ONCE from the workflow definition.
   // Only re-layout when the definition changes (node/edge count), not on status updates.
@@ -71,30 +86,58 @@ export function WorkflowDagViewer({
     return map;
   }, [liveStatus]);
 
+  // Index BuilderNodes by id so we can zip topology nodes with their variant payload.
+  const builderNodeMap = useMemo(() => {
+    return new Map(builderNodes.map(n => [n.id, n]));
+  }, [builderNodes]);
+
   // Overlay live status onto the topology nodes.
   // Creates new node objects only for nodes whose status changed (React.memo handles the rest).
-  const nodes: ExecutionFlowNode[] = useMemo(() => {
-    return baseNodes.map(node => {
+  const nodes: AdaptedFlowNode[] = useMemo(() => {
+    const out: AdaptedFlowNode[] = [];
+    for (const node of baseNodes) {
+      const builderNode = builderNodeMap.get(node.id);
+      if (!builderNode) {
+        // Defensive: every layout node should have a matching BuilderNode because both
+        // derive from the same workflow definition. Skip rather than crash.
+        console.warn('[WorkflowDagViewer] No BuilderNode for layout node', { id: node.id });
+        continue;
+      }
       const live = statusMap.get(node.id);
-      // baseNodes is derived from dagNodes, so this find should always succeed
-      const dagNode = dagNodes.find(dn => dn.id === node.id);
-      const display = dagNode ? resolveNodeDisplay(dagNode) : node.data;
-      return {
+      const data: AdaptedNodeData = {
+        builderNode,
+        status: live?.status,
+        duration: live?.duration,
+        error: live?.error,
+        selected: node.id === selectedNodeId,
+        currentIteration: live?.currentIteration,
+        maxIterations: live?.maxIterations,
+        runStatus,
+        approval,
+        onApprove,
+        onReject,
+        isApproving,
+        isRejecting,
+      };
+      out.push({
         ...node,
-        type: 'executionNode',
-        data: {
-          ...node.data,
-          ...display,
-          status: live?.status,
-          duration: live?.duration,
-          error: live?.error,
-          selected: node.id === selectedNodeId,
-          currentIteration: live?.currentIteration,
-          maxIterations: live?.maxIterations,
-        },
-      } as ExecutionFlowNode;
-    });
-  }, [baseNodes, statusMap, dagNodes, selectedNodeId]);
+        type: 'adaptedExecutionNode',
+        data,
+      });
+    }
+    return out;
+  }, [
+    baseNodes,
+    builderNodeMap,
+    statusMap,
+    selectedNodeId,
+    runStatus,
+    approval,
+    onApprove,
+    onReject,
+    isApproving,
+    isRejecting,
+  ]);
 
   // Color edges based on target node status
   const edges: Edge[] = useMemo(() => {
@@ -147,7 +190,7 @@ export function WorkflowDagViewer({
           <Controls showInteractive={false} className="!bg-surface !border-border" />
           <MiniMap
             nodeColor={(node): string => {
-              const data = node.data as ExecutionNodeData;
+              const data = node.data as AdaptedNodeData;
               return (data.status && STATUS_MINIMAP_COLORS[data.status]) ?? DEFAULT_MINIMAP_COLOR;
             }}
             className="!bg-surface !border-border"
