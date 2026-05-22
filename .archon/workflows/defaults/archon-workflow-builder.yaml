@@ -189,7 +189,6 @@ nodes:
       10. Use `allowed_tools: []` on classification/analysis nodes that don't need tools
       11. Use `denied_tools: [Edit, Bash]` when a node should only use Write (not edit existing files)
       12. Prefer `model: haiku` for simple classification tasks to save cost
-      13. **CRITICAL**: Every generated workflow that accepts user input MUST reference `$ARGUMENTS` (or `$USER_MESSAGE`) in at least one node prompt. For single-node workflows, include it directly in the prompt (e.g., `$ARGUMENTS` on its own line under a `## Input` or `## Request` heading). Without this, the user's invocation message is captured by the harness but never injected into the node's conversation — the agent sees an empty input.
 
       ## Output
 
@@ -222,10 +221,6 @@ nodes:
       if ! grep -q "^nodes:" "$FILE"; then
         echo "ERROR: missing 'nodes:' field"
         exit 1
-      fi
-
-      if ! grep -q '\$ARGUMENTS\|\$USER_MESSAGE' "$FILE"; then
-        echo "WARNING: workflow does not reference \$ARGUMENTS or \$USER_MESSAGE — user input will not be injected into node prompts"
       fi
 
       echo "VALID"
