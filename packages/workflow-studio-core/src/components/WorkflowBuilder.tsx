@@ -35,8 +35,6 @@ export interface WorkflowBuilderProps {
    * there are active validation errors.
    */
   onSave?: () => void;
-  /** When false, hides the theme picker in the toolbar. Defaults to true. */
-  showThemePicker?: boolean;
   /**
    * When true, a "Validate" button appears in the toolbar that force-refreshes
    * validation. The button's loading state is driven by the same internal
@@ -56,7 +54,6 @@ function WorkflowBuilderInner({
   workflowName,
   positions,
   onSave,
-  showThemePicker,
   showValidateButton,
   marketplaceUrl,
 }: {
@@ -64,7 +61,6 @@ function WorkflowBuilderInner({
   workflowName: string;
   positions: ReturnType<typeof usePositionPersistence>;
   onSave?: () => void;
-  showThemePicker?: boolean;
   showValidateButton?: boolean;
   marketplaceUrl?: string;
 }): JSX.Element {
@@ -239,7 +235,6 @@ function WorkflowBuilderInner({
           onToggleYamlPreview={() => {
             setYamlOpen(!isYamlOpen);
           }}
-          showThemePicker={showThemePicker}
           onValidate={showValidateButton ? revalidate : undefined}
           isValidating={showValidateButton ? isValidating : undefined}
           marketplaceUrl={marketplaceUrl}
@@ -276,7 +271,6 @@ export function WorkflowBuilder({
   cwd,
   workflowName,
   onSave,
-  showThemePicker,
   showValidateButton,
   marketplaceUrl,
 }: WorkflowBuilderProps): JSX.Element {
@@ -294,7 +288,6 @@ export function WorkflowBuilder({
                 workflowName={workflowName}
                 positions={positions}
                 onSave={onSave}
-                showThemePicker={showThemePicker}
                 showValidateButton={showValidateButton}
                 marketplaceUrl={marketplaceUrl}
               />

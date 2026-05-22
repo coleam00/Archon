@@ -42,12 +42,10 @@ export type {
   LoadWorkflowInput,
   IssuePath,
 } from './store/builder-store';
-export { useThemeStore } from './store/theme-store';
 export { useUserLibraryStore } from './store/user-library-store';
 export type { UserCommand, UserSnippet } from './store/user-library-store';
 export { useUndoStore, withUndo, resetCoalesceState } from './store/undo-store';
 export type { UndoSnapshot } from './store/undo-store';
-export { ThemePicker } from './components/ThemePicker';
 
 export { extractSubgraph } from './snippets/extractSubgraph';
 export type { ExtractSubgraphResult } from './snippets/extractSubgraph';

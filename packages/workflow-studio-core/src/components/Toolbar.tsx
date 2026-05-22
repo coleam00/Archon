@@ -1,7 +1,13 @@
-import { ThemePicker } from './ThemePicker';
+import type { CSSProperties, ReactNode } from 'react';
 import { useBuilderStore } from '../store/builder-store';
 import { useUndoStore } from '../store/undo-store';
 import { usePositionContext } from '../hooks/PositionContext';
+import {
+  AlignVerticalIcon,
+  AlignHorizontalIcon,
+  SpaceHeightIcon,
+  SpacingWidthIcon,
+} from './icons/AlignmentIcons';
 
 export interface ToolbarProps {
   workflowName: string;
@@ -16,14 +22,91 @@ export interface ToolbarProps {
   isYamlPreviewOpen?: boolean;
   /** When provided, renders the YAML toggle button. */
   onToggleYamlPreview?: () => void;
-  /** When false, hides the theme picker. Defaults to true. */
-  showThemePicker?: boolean;
   /** When provided, renders a "Validate" button that calls this callback. */
   onValidate?: () => void;
   /** When true, the Validate button shows a loading state and is disabled. */
   isValidating?: boolean;
   /** When provided, renders a "Share to Marketplace" link that opens in a new tab. */
   marketplaceUrl?: string;
+}
+
+const buttonBase: CSSProperties = {
+  background: 'transparent',
+  color: 'var(--studio-fg)',
+  border: '1px solid var(--studio-muted)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '4px 8px',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+};
+
+interface ToolButtonProps {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+  disabled?: boolean;
+  pressed?: boolean;
+  title?: string;
+}
+
+function ToolButton({
+  label,
+  onClick,
+  children,
+  disabled,
+  pressed,
+  title,
+}: ToolButtonProps): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title ?? label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        ...buttonBase,
+        background: pressed ? 'var(--studio-accent, #7c3aed)' : 'transparent',
+        color: pressed ? '#fff' : 'var(--studio-fg)',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Inline select/pan-mode icons. The dashed rectangle conveys "selection box"
+// and the hand conveys "drag-to-pan" — these mirror React Flow's two
+// canvas interaction modes (canvasMode in builder-store).
+function SelectModeIcon(): JSX.Element {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeDasharray="3 2"
+      aria-hidden="true"
+    >
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+    </svg>
+  );
+}
+
+function PanModeIcon(): JSX.Element {
+  return (
+    <span aria-hidden="true" style={{ fontSize: 16, lineHeight: 1 }}>
+      ✋
+    </span>
+  );
 }
 
 export function Toolbar({
@@ -34,7 +117,6 @@ export function Toolbar({
   topErrors = [],
   isYamlPreviewOpen,
   onToggleYamlPreview,
-  showThemePicker = true,
   onValidate,
   isValidating,
   marketplaceUrl,
@@ -45,18 +127,21 @@ export function Toolbar({
   const autoArrangeSelection = useBuilderStore(s => s.autoArrangeSelection);
   const gridSnap = useBuilderStore(s => s.gridSnap);
   const toggleGridSnap = useBuilderStore(s => s.toggleGridSnap);
+  const canvasMode = useBuilderStore(s => s.canvasMode);
+  const setCanvasMode = useBuilderStore(s => s.setCanvasMode);
   const applyUndo = useBuilderStore(s => s.applyUndo);
   const applyRedo = useBuilderStore(s => s.applyRedo);
   const undoLabel = useUndoStore(s => s.nextUndoLabel());
   const redoLabel = useUndoStore(s => s.nextRedoLabel());
   const hasSelection = selectedNodeIds.length >= 2;
+  const canDistribute = selectedNodeIds.length >= 3;
   const positionCtx = usePositionContext();
 
-  function syncPositionsBeforeOp(): void {
+  function syncBefore(): void {
     useBuilderStore.getState().setManyPositions(positionCtx.positions);
   }
 
-  function syncPositionsAfterOp(): void {
+  function syncAfter(): void {
     positionCtx.setMany(Object.entries(useBuilderStore.getState().positions));
   }
 
@@ -65,244 +150,139 @@ export function Toolbar({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 16,
+        gap: 8,
         padding: '0 16px',
         background: 'var(--studio-surface)',
         borderBottom: '1px solid var(--studio-muted)',
       }}
     >
       <strong style={{ flex: 1 }}>{workflowName}</strong>
-      <button
-        type="button"
-        aria-label={undoLabel ? `Undo: ${undoLabel}` : 'Undo'}
-        title={undoLabel ? `Undo: ${undoLabel}` : 'Undo'}
+
+      <ToolButton
+        label={undoLabel ? `Undo: ${undoLabel}` : 'Undo'}
         disabled={!undoLabel}
         onClick={() => {
           applyUndo();
-          syncPositionsAfterOp();
-        }}
-        style={{
-          background: 'transparent',
-          color: 'var(--studio-fg)',
-          border: '1px solid var(--studio-muted)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '4px 8px',
-          cursor: undoLabel ? 'pointer' : 'not-allowed',
+          syncAfter();
         }}
       >
         ↶
-      </button>
-      <button
-        type="button"
-        aria-label={redoLabel ? `Redo: ${redoLabel}` : 'Redo'}
-        title={redoLabel ? `Redo: ${redoLabel}` : 'Redo'}
+      </ToolButton>
+
+      <ToolButton
+        label={redoLabel ? `Redo: ${redoLabel}` : 'Redo'}
         disabled={!redoLabel}
         onClick={() => {
           applyRedo();
-          syncPositionsAfterOp();
-        }}
-        style={{
-          background: 'transparent',
-          color: 'var(--studio-fg)',
-          border: '1px solid var(--studio-muted)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '4px 8px',
-          cursor: redoLabel ? 'pointer' : 'not-allowed',
+          syncAfter();
         }}
       >
         ↷
-      </button>
-      <button
-        type="button"
-        onClick={onResetLayout}
-        style={{
-          background: 'transparent',
-          color: 'var(--studio-fg)',
-          border: '1px solid var(--studio-muted)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '4px 8px',
-          cursor: 'pointer',
+      </ToolButton>
+
+      <ToolButton label="Reset layout" onClick={onResetLayout}>
+        Reset layout
+      </ToolButton>
+
+      <ToolButton
+        label="Select mode"
+        pressed={canvasMode === 'select'}
+        onClick={() => {
+          setCanvasMode('select');
         }}
       >
-        Reset layout
-      </button>
-      {hasSelection && (
-        <div role="group" aria-label="Alignment">
-          <button
-            type="button"
-            aria-label="Align left"
-            onClick={() => {
-              syncPositionsBeforeOp();
-              alignSelection('left');
-              syncPositionsAfterOp();
-            }}
-            style={{
-              background: 'transparent',
-              color: 'var(--studio-fg)',
-              border: '1px solid var(--studio-muted)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '4px 8px',
-              cursor: 'pointer',
-            }}
-          >
-            ⬤←
-          </button>
-          <button
-            type="button"
-            aria-label="Align right"
-            onClick={() => {
-              syncPositionsBeforeOp();
-              alignSelection('right');
-              syncPositionsAfterOp();
-            }}
-            style={{
-              background: 'transparent',
-              color: 'var(--studio-fg)',
-              border: '1px solid var(--studio-muted)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '4px 8px',
-              cursor: 'pointer',
-            }}
-          >
-            →⬤
-          </button>
-          <button
-            type="button"
-            aria-label="Align top"
-            onClick={() => {
-              syncPositionsBeforeOp();
-              alignSelection('top');
-              syncPositionsAfterOp();
-            }}
-            style={{
-              background: 'transparent',
-              color: 'var(--studio-fg)',
-              border: '1px solid var(--studio-muted)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '4px 8px',
-              cursor: 'pointer',
-            }}
-          >
-            ⬤↑
-          </button>
-          <button
-            type="button"
-            aria-label="Align bottom"
-            onClick={() => {
-              syncPositionsBeforeOp();
-              alignSelection('bottom');
-              syncPositionsAfterOp();
-            }}
-            style={{
-              background: 'transparent',
-              color: 'var(--studio-fg)',
-              border: '1px solid var(--studio-muted)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '4px 8px',
-              cursor: 'pointer',
-            }}
-          >
-            ↓⬤
-          </button>
-          {selectedNodeIds.length >= 3 && (
-            <>
-              <button
-                type="button"
-                aria-label="Distribute horizontally"
-                onClick={() => {
-                  syncPositionsBeforeOp();
-                  distributeSelection('h');
-                  syncPositionsAfterOp();
-                }}
-                style={{
-                  background: 'transparent',
-                  color: 'var(--studio-fg)',
-                  border: '1px solid var(--studio-muted)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '4px 8px',
-                  cursor: 'pointer',
-                }}
-              >
-                ⇔
-              </button>
-              <button
-                type="button"
-                aria-label="Distribute vertically"
-                onClick={() => {
-                  syncPositionsBeforeOp();
-                  distributeSelection('v');
-                  syncPositionsAfterOp();
-                }}
-                style={{
-                  background: 'transparent',
-                  color: 'var(--studio-fg)',
-                  border: '1px solid var(--studio-muted)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '4px 8px',
-                  cursor: 'pointer',
-                }}
-              >
-                ⇕
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            aria-label="Auto arrange"
-            onClick={() => {
-              syncPositionsBeforeOp();
-              autoArrangeSelection();
-              syncPositionsAfterOp();
-            }}
-            style={{
-              background: 'transparent',
-              color: 'var(--studio-fg)',
-              border: '1px solid var(--studio-muted)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '4px 8px',
-              cursor: 'pointer',
-            }}
-          >
-            ⊞
-          </button>
-        </div>
-      )}
-      {onToggleYamlPreview ? (
-        <button
-          type="button"
-          aria-pressed={!!isYamlPreviewOpen}
-          onClick={onToggleYamlPreview}
-          style={{
-            background: isYamlPreviewOpen ? 'var(--studio-accent, #7c3aed)' : 'transparent',
-            color: isYamlPreviewOpen ? '#fff' : 'var(--studio-fg)',
-            border: '1px solid var(--studio-muted)',
-            borderRadius: 'var(--radius-sm)',
-            padding: '4px 8px',
-            cursor: 'pointer',
+        <SelectModeIcon />
+      </ToolButton>
+
+      <ToolButton
+        label="Pan mode"
+        pressed={canvasMode === 'pan'}
+        onClick={() => {
+          setCanvasMode('pan');
+        }}
+      >
+        <PanModeIcon />
+      </ToolButton>
+
+      <div role="group" aria-label="Alignment" style={{ display: 'flex', gap: 8 }}>
+        <ToolButton
+          label="Align horizontal centers"
+          disabled={!hasSelection}
+          onClick={() => {
+            syncBefore();
+            alignSelection('centerH');
+            syncAfter();
           }}
+        >
+          <AlignVerticalIcon />
+        </ToolButton>
+        <ToolButton
+          label="Align vertical centers"
+          disabled={!hasSelection}
+          onClick={() => {
+            syncBefore();
+            alignSelection('centerV');
+            syncAfter();
+          }}
+        >
+          <AlignHorizontalIcon />
+        </ToolButton>
+        <ToolButton
+          label="Distribute horizontally"
+          disabled={!canDistribute}
+          onClick={() => {
+            syncBefore();
+            distributeSelection('h');
+            syncAfter();
+          }}
+        >
+          <SpacingWidthIcon />
+        </ToolButton>
+        <ToolButton
+          label="Distribute vertically"
+          disabled={!canDistribute}
+          onClick={() => {
+            syncBefore();
+            distributeSelection('v');
+            syncAfter();
+          }}
+        >
+          <SpaceHeightIcon />
+        </ToolButton>
+        <ToolButton
+          label="Auto arrange"
+          disabled={!hasSelection}
+          onClick={() => {
+            syncBefore();
+            autoArrangeSelection();
+            syncAfter();
+          }}
+        >
+          ⊞
+        </ToolButton>
+      </div>
+
+      {onToggleYamlPreview ? (
+        <ToolButton
+          label="Toggle YAML preview"
+          pressed={!!isYamlPreviewOpen}
+          onClick={onToggleYamlPreview}
         >
           YAML
-        </button>
+        </ToolButton>
       ) : null}
+
       {onValidate ? (
-        <button
-          type="button"
-          onClick={onValidate}
+        <ToolButton
+          label={isValidating ? 'Validating' : 'Validate'}
           disabled={!!isValidating}
           title={isValidating ? 'Validating…' : 'Re-run validation now'}
-          style={{
-            background: 'transparent',
-            color: 'var(--studio-fg)',
-            border: '1px solid var(--studio-muted)',
-            borderRadius: 'var(--radius-sm)',
-            padding: '4px 8px',
-            cursor: isValidating ? 'wait' : 'pointer',
-            opacity: isValidating ? 0.6 : 1,
-          }}
+          onClick={onValidate}
         >
           {isValidating ? 'Validating…' : 'Validate'}
-        </button>
+        </ToolButton>
       ) : null}
+
       <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
         <input
           type="checkbox"
@@ -312,7 +292,7 @@ export function Toolbar({
         />
         Grid
       </label>
-      {showThemePicker ? <ThemePicker /> : null}
+
       {onSave ? (
         <button
           type="button"
@@ -332,6 +312,7 @@ export function Toolbar({
           Save
         </button>
       ) : null}
+
       {marketplaceUrl ? (
         <a
           href={marketplaceUrl}

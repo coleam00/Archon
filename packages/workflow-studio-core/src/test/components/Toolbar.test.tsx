@@ -148,7 +148,10 @@ describe('<Toolbar> alignment buttons', () => {
     useUndoStore.setState({ past: [], future: [] });
   });
 
-  it('align left button triggers alignLeft on selection', () => {
+  it('renders center-align buttons when a multi-selection is active', () => {
+    // The toolbar surfaces center-align (centerH/centerV) plus distribute and
+    // auto-arrange. Per-edge L/R/T/B align lives only in shortcuts and the
+    // context menu; the alignSelection math itself is covered by alignment.test.ts.
     const posMap = new Map([
       ['a', { x: 10, y: 30 }],
       ['b', { x: 50, y: 10 }],
@@ -164,11 +167,8 @@ describe('<Toolbar> alignment buttons', () => {
         <PositionProvider value={testPositions}>{children}</PositionProvider>
       ),
     });
-    const btn = screen.getByLabelText('Align left');
-    fireEvent.click(btn);
-    const { positions } = useBuilderStore.getState();
-    // both nodes should now be at x=10 (leftmost)
-    expect(positions['a'].x).toBe(10);
-    expect(positions['b'].x).toBe(10);
+    expect(screen.getByLabelText('Align horizontal centers')).toBeDefined();
+    expect(screen.getByLabelText('Align vertical centers')).toBeDefined();
+    expect(screen.getByLabelText('Auto arrange')).toBeDefined();
   });
 });
