@@ -57,11 +57,6 @@ export function formatClock(iso: string): string {
 }
 
 /**
- * Compact project subtitle: `owner/repo` for typical git URLs, last two path
- * segments otherwise. Falls back to the input string when it can't extract
- * a sensible short form.
- */
-/**
  * Compact USD cost — under a dollar shows cents, over a dollar shows two
  * decimals. Sub-cent values still surface (rounded to 4 decimals) so cheap
  * runs don't look free.

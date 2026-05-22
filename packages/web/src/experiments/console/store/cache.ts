@@ -2,8 +2,8 @@
  * Reactive server-state cache. Map of keyed entities + subscription primitive.
  *
  * Contract:
- * - UI never writes directly — it calls skill verbs; server pushes truth back
- *   via SSE (M4) or refetch on miss.
+ * - UI never writes directly — it calls skill verbs; server pushes truth
+ *   back via SSE (lib/sse.ts) or refetch on miss.
  * - `useEntity(key, loader)` subscribes to a key. First subscriber triggers
  *   the loader; subsequent subscribers read from cache. After `invalidate()`
  *   or `refetch()`, any key with an active subscriber reloads automatically.

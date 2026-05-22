@@ -19,6 +19,9 @@ Mounted at `/console/*`. Not part of the shipped product. Validates the mental m
 - **Design tokens reused.** Uses the oklch semantic tokens from `packages/web/src/index.css` (`bg-surface`, `text-text-primary`, `bg-success`, `bg-warning`, `bg-error`, etc.).
 - **Vocabulary.** Only *Project, Run, Workflow, Worktree* appear in user-facing copy. No *Dashboard, Deployment, Infrastructure, Secrets, Activity, Pipeline, Stage*.
 
-## Plan
+## Status
 
-See `/Users/rasmus/.claude/plans/quiet-twirling-bentley.md` for the full E2E plan and milestones.
+Active experiment under `/console`. The original milestoned plan (`M1`–`M4`)
+that scaffolded this surface has been completed; ongoing work is driven by
+user feedback during dogfooding rather than a milestone roadmap. Issues and
+ideas land via the PR template's UX Journey section.

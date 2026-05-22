@@ -2,9 +2,11 @@
  * Archon Console — brand foundation port.
  *
  * Scoped to `.console-root` so the production app's existing palette is
- * untouched. Tailwind v4's @theme inline (in index.css) maps --color-* vars
- * to their --base vars; overriding the base vars inside .console-root
- * cascades through the whole Tailwind color system without redefining @theme.
+ * untouched. Tailwind v4's @theme inline (in index.css) defines --color-*
+ * theme tokens that reference plain CSS variables (--surface, --border,
+ * --text-primary, etc.); redefining those CSS variables inside .console-root
+ * cascades through every utility that reads them without needing a parallel
+ * @theme block.
  *
  * Source: Archon Brand · Standalone. The duotone magenta → violet → teal
  * gradient drawn from the shield logo is THE brand. Cool charcoal surfaces

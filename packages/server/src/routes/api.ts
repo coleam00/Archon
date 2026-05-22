@@ -997,12 +997,14 @@ export function registerApiRoutes(
 
   /**
    * Persist multipart-uploaded files to the conversation's upload directory.
-   * Shared by /api/conversations/:id/message and /api/workflows/:name/run.
-   * Returns the saved file metadata + the directory chosen so the caller can
-   * pass both to dispatchToOrchestrator for cleanup inside the lock handler.
+   * Called from /api/workflows/:name/run; /api/conversations/:id/message still
+   * inlines the same validate-write-rollback logic and could migrate to this
+   * helper as a separate hygiene pass.
    *
-   * Throws a Response-shaped error via the `errorResponse` callback when
-   * validation fails; the caller then short-circuits and returns it.
+   * Returns either { ok: true, savedFiles, uploadDir } or a structured error
+   * the caller forwards via apiError; on the success path the caller passes
+   * savedFiles + uploadDir to dispatchToOrchestrator so cleanup happens
+   * inside the lock handler.
    */
   async function persistUploadedFiles(
     conversationId: string,

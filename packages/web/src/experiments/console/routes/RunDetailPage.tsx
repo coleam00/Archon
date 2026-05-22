@@ -36,7 +36,8 @@ interface RunDetailView {
  * ApprovalContext + ApprovalPanel at the bottom of the stream so the user can
  * answer the gate in place.
  *
- * Polling every 3s until SSE lands in M4.
+ * Updates flow through SSE (lib/sse.ts) with a 30s safety-net refetch
+ * for runs that are still running/paused.
  */
 const TOGGLE_KEYS = {
   toolCalls: 'archon.console.showToolCalls',
