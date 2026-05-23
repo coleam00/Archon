@@ -167,7 +167,9 @@ export class JiraAdapter implements IPlatformAdapter {
         if (i > 0) {
           inlineContent.push({ type: 'hardBreak' });
         }
-        inlineContent.push({ type: 'text', text: lines[i] });
+        if (lines[i] !== '') {
+          inlineContent.push({ type: 'text', text: lines[i] });
+        }
       }
 
       return { type: 'paragraph', content: inlineContent };
@@ -229,7 +231,7 @@ export class JiraAdapter implements IPlatformAdapter {
     // 1. Verify secret
     if (!verifyWebhookSecret(secret, this.webhookSecret)) {
       log.error(
-        { secretPrefix: secret?.substring(0, 8) + '...', payloadSize: payload.length },
+        { secretPrefix: secret.substring(0, 8) + '...', payloadSize: payload.length },
         'jira.invalid_webhook_secret'
       );
       return;
@@ -266,6 +268,11 @@ export class JiraAdapter implements IPlatformAdapter {
 
     // 6. Check @mention in ADF
     if (!this.hasMention(commentEvent.comment.body, this.botAccountId)) return;
+
+    if (!commentEvent.issue?.key) {
+      log.warn({ webhookEvent: 'comment_created' }, 'jira.webhook_missing_issue_key');
+      return;
+    }
 
     const issueKey = commentEvent.issue.key;
     log.info({ issueKey }, 'jira.webhook_processing');
