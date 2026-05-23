@@ -69,7 +69,7 @@ describe('hydrateWorkflowOnce', () => {
     expect(captured[0]?.nodeCount).toBe(1);
   });
 
-  test('404 path: seeds empty meta with requested name; returns not-found', async () => {
+  test('404 path: seeds meta with requested name and placeholder description; returns not-found', async () => {
     const { client } = makeStubClient(async () => {
       throw makeErrorWithStatus('not found', 404);
     });
@@ -85,7 +85,10 @@ describe('hydrateWorkflowOnce', () => {
     expect(outcome).toEqual({ status: 'not-found', error: null });
     expect(captured).toHaveLength(1);
     expect(captured[0]?.meta.name).toBe('never-existed');
-    expect(captured[0]?.meta.description).toBe('');
+    // Seeded with a placeholder (not empty) because the server's parseWorkflow
+    // rejects empty descriptions, which would silently disable Save. See
+    // use-workflow-hydration.ts and commit 8009fbb1 (unblock new-workflow save).
+    expect(captured[0]?.meta.description).toBe('New workflow');
     expect(captured[0]?.nodes).toEqual([]);
   });
 

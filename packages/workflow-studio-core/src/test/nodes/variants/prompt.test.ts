@@ -2,9 +2,11 @@ import { describe, it, expect } from 'bun:test';
 import { promptVariant } from '../../../nodes/prompt';
 
 describe('prompt variant', () => {
-  it('createDefault returns valid empty PromptNodeData', () => {
+  it('createDefault returns a non-empty placeholder so the node passes server-tier validation', () => {
+    // dagNodeSchema.superRefine rejects empty `prompt`, so a freshly-dropped
+    // node must have something here — see createPromptDefault in nodes/prompt/data.ts.
     const d = promptVariant.createDefault();
-    expect(d.prompt).toBe('');
+    expect(d.prompt.length).toBeGreaterThan(0);
   });
 
   it('fromDag extracts the prompt body', () => {

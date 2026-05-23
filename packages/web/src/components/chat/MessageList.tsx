@@ -129,15 +129,15 @@ function WorkflowResultCard({
   });
 
   // Merge: prefer live state when available
-  const status = liveState?.status ?? runData?.run.status ?? 'completed';
+  const status = liveState?.status ?? runData?.run?.status ?? 'completed';
   const dagNodes = liveState?.dagNodes ?? [];
   const storeArtifacts = liveState?.artifacts ?? [];
   const startedAt =
     liveState?.startedAt ??
-    (runData?.run.started_at ? new Date(ensureUtc(runData.run.started_at)).getTime() : null);
+    (runData?.run?.started_at ? new Date(ensureUtc(runData.run.started_at)).getTime() : null);
   const completedAt =
     liveState?.completedAt ??
-    (runData?.run.completed_at ? new Date(ensureUtc(runData.run.completed_at)).getTime() : null);
+    (runData?.run?.completed_at ? new Date(ensureUtc(runData.run.completed_at)).getTime() : null);
   const duration = startedAt != null && completedAt != null ? completedAt - startedAt : null;
 
   // Node counts: prefer live dagNodes (exact), fall back to events (approximation —

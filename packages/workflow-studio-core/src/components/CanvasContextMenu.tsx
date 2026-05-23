@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 import { useBuilderStore } from '../store/builder-store';
 import { useUserLibraryStore } from '../store/user-library-store';
@@ -31,11 +31,29 @@ export function CanvasContextMenu({ x, y, onClose }: CanvasContextMenuProps): JS
   const ref = useRef<HTMLDivElement | null>(null);
   const [savePromptOpen, setSavePromptOpen] = useState(false);
   const [savePromptName, setSavePromptName] = useState('');
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const parent = (el.offsetParent as HTMLElement | null) ?? document.documentElement;
+    const parentRect = parent.getBoundingClientRect();
+    const { width, height } = el.getBoundingClientRect();
+    const margin = 4;
+    const maxLeft = Math.max(margin, parentRect.width - width - margin);
+    const maxTop = Math.max(margin, parentRect.height - height - margin);
+    const left = Math.min(Math.max(x, margin), maxLeft);
+    const top = Math.min(Math.max(y, margin), maxTop);
+    setPos(prev => (prev.left === left && prev.top === top ? prev : { left, top }));
+  }, [x, y, savePromptOpen]);
 
   const selectionCount = selectedNodeIds.length;
   const canAlign = selectionCount >= 2;
   const canDistribute = selectionCount >= 3;
-  const canSaveSnippet = selectionCount >= 1;
+  // Snippets package a connected sub-DAG; a single node is just a node and
+  // can already be re-dragged from the library / cloned via copy-paste, so
+  // requiring 2+ here matches the conceptual "subgraph" framing in the UAT.
+  const canSaveSnippet = selectionCount >= 2;
 
   useEffect(() => {
     // Capture phase + window covers cases where React Flow stops propagation
@@ -106,8 +124,8 @@ export function CanvasContextMenu({ x, y, onClose }: CanvasContextMenuProps): JS
       }}
       style={{
         position: 'absolute',
-        left: x,
-        top: y,
+        left: pos.left,
+        top: pos.top,
         zIndex: 50,
         minWidth: 220,
         background: 'var(--studio-surface)',
@@ -228,7 +246,7 @@ export function CanvasContextMenu({ x, y, onClose }: CanvasContextMenuProps): JS
           hint={
             canSaveSnippet
               ? 'Save the current selection to your snippets library'
-              : 'Select at least one node first'
+              : 'Select 2 or more nodes first'
           }
           disabled={!canSaveSnippet}
           onSelect={() => {

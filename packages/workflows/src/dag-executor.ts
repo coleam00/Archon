@@ -1381,6 +1381,14 @@ async function executeBashNode(
       );
     }
 
+    // Surface stdout to the platform so chat/forge users see node output inline,
+    // mirroring how AI nodes stream their content via platform.sendMessage. On web
+    // this lands in the worker conversation (shown in the run viewer); the terminal
+    // node's summary card is sent separately by the caller to the parent conversation.
+    if (output.trim()) {
+      await safeSendMessage(platform, conversationId, `\`\`\`\n${output}\n\`\`\``, nodeContext);
+    }
+
     const duration = Date.now() - nodeStartTime;
     getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
     await logNodeComplete(logDir, workflowRun.id, node.id, '<bash>', { durationMs: duration });
@@ -1648,6 +1656,14 @@ async function executeScriptNode(
         `Script node '${node.id}' stderr:\n\`\`\`\n${stderr.trim()}\n\`\`\``,
         nodeContext
       );
+    }
+
+    // Surface stdout to the platform so chat/forge users see node output inline,
+    // mirroring how AI nodes stream their content via platform.sendMessage. On web
+    // this lands in the worker conversation (shown in the run viewer); the terminal
+    // node's summary card is sent separately by the caller to the parent conversation.
+    if (output.trim()) {
+      await safeSendMessage(platform, conversationId, `\`\`\`\n${output}\n\`\`\``, nodeContext);
     }
 
     const duration = Date.now() - nodeStartTime;

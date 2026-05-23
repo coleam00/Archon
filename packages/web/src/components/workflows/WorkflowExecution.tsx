@@ -22,6 +22,7 @@ import {
 } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
+import { formatStepLogLines } from '@/lib/format-step-logs';
 import { tryFromWorkflowDefinition } from '@/lib/workflow-conversion';
 import type {
   WorkflowState,
@@ -231,7 +232,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       };
     },
     refetchInterval: (query): number | false => {
-      const status = query.state.data?.workflowState.status;
+      const status = query.state.data?.workflowState?.status;
       if (status && isTerminal(status)) return false;
       return 3000;
     },
@@ -497,37 +498,10 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   }, [queryData?.events, workflow?.status]);
 
   // Compute formatted log lines for the selected DAG node from DB events.
-  const stepLogLines = useMemo((): string[] => {
-    const events = queryData?.events ?? [];
-    const stepEvents =
-      selectedDagNode !== null ? events.filter(e => e.step_name === selectedDagNode) : [];
-    if (stepEvents.length === 0) return [];
-
-    return stepEvents.map(e => {
-      const ts = new Date(ensureUtc(e.created_at)).toLocaleTimeString();
-      switch (e.event_type) {
-        case 'loop_iteration_started':
-          return `[${ts}] Iteration ${String(e.data.iteration)}/${String((e.data.maxIterations as number | undefined) ?? '?')} started`;
-        case 'loop_iteration_completed': {
-          const dur = e.data.duration_ms as number | undefined;
-          const durStr = dur !== undefined ? ` (${String(Math.round(dur / 100) / 10)}s)` : '';
-          return `[${ts}] Iteration ${String(e.data.iteration)} completed${durStr}`;
-        }
-        case 'loop_iteration_failed':
-          return `[${ts}] Iteration ${String(e.data.iteration)} failed: ${(e.data.error as string | undefined) ?? 'Unknown error'}`;
-        case 'node_started':
-          return `[${ts}] Node started: ${e.step_name ?? 'node'}`;
-        case 'node_completed':
-          return `[${ts}] Node completed: ${e.step_name ?? 'node'}`;
-        case 'node_failed':
-          return `[${ts}] Node failed: ${e.step_name ?? 'node'}: ${(e.data.error as string | undefined) ?? 'Unknown error'}`;
-        case 'node_skipped':
-          return `[${ts}] Node skipped: ${e.step_name ?? 'node'}`;
-        default:
-          return `[${ts}] ${e.event_type}${e.step_name ? `: ${e.step_name}` : ''}`;
-      }
-    });
-  }, [queryData?.events, selectedDagNode]);
+  const stepLogLines = useMemo(
+    (): string[] => formatStepLogLines(queryData?.events ?? [], selectedDagNode),
+    [queryData?.events, selectedDagNode]
+  );
 
   // Detect whether the selected node has any DB events so we can show an empty-state
   // overlay when a node has no output. Guard with isRunning so we never hide the live stream

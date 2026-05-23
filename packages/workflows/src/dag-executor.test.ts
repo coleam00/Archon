@@ -1322,6 +1322,67 @@ describe('executeDagWorkflow -- bash nodes', () => {
     expect(prompt).toContain('42 files');
   });
 
+  it('bash node surfaces stdout to the platform so chat/forge users see it inline', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-send-run-id', {
+      workflow_name: 'bash-test',
+      conversation_id: 'conv-bash',
+      user_message: 'msg',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-bash',
+      testDir,
+      { name: 'bash-send-test', nodes: [{ id: 'echo', bash: 'echo "captured: paprika"' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    expect(messages.some(m => m.includes('captured: paprika'))).toBe(true);
+  });
+
+  it('bash node with empty stdout does not send an output message', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('bash-empty-run-id', {
+      workflow_name: 'bash-test',
+      conversation_id: 'conv-bash',
+      user_message: 'msg',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-bash',
+      testDir,
+      { name: 'bash-empty-test', nodes: [{ id: 'noop', bash: 'true' }] },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    // No stdout and no stderr → no code-block message is sent.
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    expect(messages.some(m => m.includes('```'))).toBe(false);
+  });
+
   it('non-zero exit code results in failed state', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -6808,6 +6869,39 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     // Script node should NOT invoke AI client
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('script node surfaces stdout to the platform so chat/forge users see it inline', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun('script-send-run-id', {
+      workflow_name: 'script-test',
+      conversation_id: 'conv-script',
+      user_message: 'msg',
+    });
+
+    await executeDagWorkflow(
+      mockDeps,
+      platform,
+      'conv-script',
+      testDir,
+      {
+        name: 'script-send-test',
+        nodes: [{ id: 'compute', script: 'console.log("script-output-xyz")', runtime: 'bun' }],
+      },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+
+    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
+    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
+    expect(messages.some(m => m.includes('script-output-xyz'))).toBe(true);
   });
 
   it('inline bun script output available for downstream substitution', async () => {

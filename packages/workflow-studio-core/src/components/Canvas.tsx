@@ -5,6 +5,7 @@ import {
   Controls,
   applyNodeChanges,
   useReactFlow,
+  useStoreApi,
   type NodeChange,
   type Node as RFNode,
   type NodeProps,
@@ -42,6 +43,7 @@ const MULTI_SELECTION_KEY_CODE: string[] = ['Meta', 'Shift', 'Control'];
 export function Canvas(): JSX.Element {
   const positions = usePositionContext();
   const reactFlow = useReactFlow();
+  const storeApi = useStoreApi();
 
   const storeNodes = useBuilderStore(s => s.nodes);
   const connect = useBuilderStore(s => s.connect);
@@ -262,6 +264,145 @@ export function Canvas(): JSX.Element {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  // Auto-pan during marquee selection. React Flow ships autoPanOnNodeDrag and
+  // autoPanOnConnect but has no equivalent for the selection marquee in v12,
+  // so we drive it ourselves. Triggered by React Flow's own onSelectionStart /
+  // onSelectionEnd callbacks so the gesture lifecycle is exact (no guessing
+  // from pointerdown targets). We use the store's `panBy` — the same primitive
+  // XYDrag uses for node-drag autopan — instead of setViewport, because panBy
+  // is the canonical way to nudge the viewport during an active gesture.
+  const autoPanRef = useRef<{
+    raf: number | null;
+    pointer: { x: number; y: number } | null;
+    onMove: ((e: PointerEvent) => void) | null;
+  }>({ raf: null, pointer: null, onMove: null });
+
+  const stopAutoPan = useCallback(() => {
+    const s = autoPanRef.current;
+    if (s.raf !== null) {
+      cancelAnimationFrame(s.raf);
+      s.raf = null;
+    }
+    if (s.onMove) {
+      window.removeEventListener('pointermove', s.onMove, true);
+      s.onMove = null;
+    }
+    s.pointer = null;
+  }, []);
+
+  const startAutoPan = useCallback(
+    (initial: { clientX: number; clientY: number }) => {
+      const container = containerRef.current;
+      if (!container) return;
+      const EDGE = 30;
+      const MAX_SPEED = 18;
+      const state = autoPanRef.current;
+      state.pointer = { x: initial.clientX, y: initial.clientY };
+
+      const onMove = (e: PointerEvent): void => {
+        state.pointer = { x: e.clientX, y: e.clientY };
+      };
+      state.onMove = onMove;
+      window.addEventListener('pointermove', onMove, true);
+
+      const tick = (): void => {
+        const p = state.pointer;
+        if (!p) {
+          state.raf = null;
+          return;
+        }
+        const rect = container.getBoundingClientRect();
+        const leftDist = p.x - rect.left;
+        const rightDist = rect.right - p.x;
+        const topDist = p.y - rect.top;
+        const bottomDist = rect.bottom - p.y;
+
+        // panBy adds delta to the viewport transform directly:
+        //   right edge → reveal content to the right → viewport.x decreases → dx < 0
+        //   left  edge → reveal content to the left  → viewport.x increases → dx > 0
+        //   bottom edge → reveal below → viewport.y decreases → dy < 0
+        //   top    edge → reveal above → viewport.y increases → dy > 0
+        let dx = 0;
+        let dy = 0;
+        if (leftDist < EDGE) dx = ((EDGE - Math.max(leftDist, 0)) / EDGE) * MAX_SPEED;
+        else if (rightDist < EDGE) dx = -((EDGE - Math.max(rightDist, 0)) / EDGE) * MAX_SPEED;
+        if (topDist < EDGE) dy = ((EDGE - Math.max(topDist, 0)) / EDGE) * MAX_SPEED;
+        else if (bottomDist < EDGE) dy = -((EDGE - Math.max(bottomDist, 0)) / EDGE) * MAX_SPEED;
+
+        if (dx !== 0 || dy !== 0) {
+          // CRITICAL: when the marquee starts, React Flow sets
+          // userSelectionActive=true which causes XYPanZoom.update() to call
+          // destroy() — that unbinds d3-zoom's 'zoom' event listener (see
+          // @xyflow/system index.js:2909). Any panBy / setViewport call still
+          // updates d3-zoom's internal __zoom, but the listener that would
+          // propagate it into store.transform is gone, so the viewport CSS
+          // never re-renders. We bypass that by writing transform directly
+          // into the store (Viewport reads transform[0..2] to build its CSS
+          // transform) and then calling syncViewport so __zoom stays in sync
+          // for the next real wheel/pan gesture after the marquee ends.
+          const s = storeApi.getState() as unknown as {
+            transform: [number, number, number];
+            userSelectionRect?: {
+              startX: number;
+              startY: number;
+              x: number;
+              y: number;
+              width: number;
+              height: number;
+            } | null;
+            panZoom?: { syncViewport: (v: { x: number; y: number; zoom: number }) => void };
+          };
+          const [tx, ty, tz] = s.transform;
+          const nx = tx + dx;
+          const ny = ty + dy;
+          // Shift the marquee's start anchor by the same delta so it stays
+          // pinned to the flow point the user originally clicked on, rather
+          // than to a fixed container pixel (which would slide across the
+          // canvas as we pan). The pane's onPointerMove will rebuild
+          // x/y/width/height from this new startX/startY + the synthetic
+          // pointermove we dispatch below.
+          const rect = s.userSelectionRect;
+          const nextPatch: Record<string, unknown> = { transform: [nx, ny, tz] };
+          if (rect) {
+            nextPatch.userSelectionRect = {
+              ...rect,
+              startX: rect.startX + dx,
+              startY: rect.startY + dy,
+            };
+          }
+          storeApi.setState(nextPatch as Parameters<typeof storeApi.setState>[0]);
+          s.panZoom?.syncViewport({ x: nx, y: ny, zoom: tz });
+
+          // The pane only recomputes which nodes fall inside the marquee on
+          // real pointermove events (Pane.onPointerMove in @xyflow/react). If
+          // the cursor sits still at the edge while we pan, the selection
+          // would freeze. Synthesize a pointermove at the cursor's current
+          // screen position to make React Flow re-run getNodesInside against
+          // the just-updated transform.
+          const pane = container.querySelector('.react-flow__pane');
+          if (pane) {
+            pane.dispatchEvent(
+              new PointerEvent('pointermove', {
+                clientX: p.x,
+                clientY: p.y,
+                bubbles: true,
+                cancelable: true,
+                pointerType: 'mouse',
+              })
+            );
+          }
+        }
+        state.raf = requestAnimationFrame(tick);
+      };
+
+      if (state.raf === null) state.raf = requestAnimationFrame(tick);
+    },
+    [storeApi]
+  );
+
+  // Make sure the loop is torn down if Canvas unmounts mid-drag.
+  useEffect(() => stopAutoPan, [stopAutoPan]);
+
   const openContextMenu = useCallback(
     (event: { clientX: number; clientY: number; preventDefault: () => void }, nodeId?: string) => {
       event.preventDefault();
@@ -315,7 +456,14 @@ export function Canvas(): JSX.Element {
         onSelectionContextMenu={event => {
           openContextMenu(event);
         }}
+        onSelectionStart={event => {
+          // Fires once the marquee actually begins (after paneClickDistance is
+          // exceeded). This is the precise lifecycle hook we need — not a
+          // pointerdown heuristic.
+          startAutoPan({ clientX: event.clientX, clientY: event.clientY });
+        }}
         onSelectionEnd={() => {
+          stopAutoPan();
           // Marquee released. Read RF's selected nodes once and mirror into
           // our store. Deferred via queueMicrotask so the store write happens
           // *after* RF finishes its current render commit — writing inside
