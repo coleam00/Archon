@@ -24,6 +24,9 @@ export class SlackAdapter implements IPlatformAdapter {
   private streamingMode: 'stream' | 'batch';
   private messageHandler: ((event: SlackMessageEvent) => Promise<void>) | null = null;
   private allowedUserIds: string[];
+  /** Tracks the "thinking" ack message per conversation so the first
+   * outgoing reply can morph it via chat.update instead of posting fresh. */
+  private pendingAcks: Map<string, string> = new Map();
 
   constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
     this.app = new App({
@@ -62,17 +65,56 @@ export class SlackAdapter implements IPlatformAdapter {
       ? channelId.split(':')
       : [channelId, undefined];
 
+    // If we have a pending "thinking" ack for this conversation, morph the
+    // first chunk into the ack via chat.update so users see a single message
+    // transition from "thinking…" to the reply with no flicker.
+    const pendingAckTs = this.pendingAcks.get(channelId);
+
     if (message.length <= MAX_MARKDOWN_BLOCK_LENGTH) {
-      // Use markdown block for proper formatting
-      await this.sendWithMarkdownBlock(channel, message, threadTs);
+      if (pendingAckTs) {
+        this.pendingAcks.delete(channelId);
+        await this.updateWithMarkdownBlock(channel, pendingAckTs, message, threadTs);
+      } else {
+        await this.sendWithMarkdownBlock(channel, message, threadTs);
+      }
     } else {
       // Long message: split by paragraphs
       getLog().debug({ messageLength: message.length }, 'slack.message_splitting');
       const chunks = splitIntoParagraphChunks(message, MAX_MARKDOWN_BLOCK_LENGTH - 500);
 
-      for (const chunk of chunks) {
-        await this.sendWithMarkdownBlock(channel, chunk, threadTs);
+      for (let i = 0; i < chunks.length; i++) {
+        if (i === 0 && pendingAckTs) {
+          this.pendingAcks.delete(channelId);
+          await this.updateWithMarkdownBlock(channel, pendingAckTs, chunks[i], threadTs);
+        } else {
+          await this.sendWithMarkdownBlock(channel, chunks[i], threadTs);
+        }
       }
+    }
+  }
+
+  /**
+   * Replace an existing message in-place via chat.update. Used to morph the
+   * "thinking" ack into the actual reply. Falls back to posting a new
+   * message if the update fails (e.g. message was deleted by user).
+   */
+  private async updateWithMarkdownBlock(
+    channel: string,
+    ts: string,
+    message: string,
+    threadTs?: string
+  ): Promise<void> {
+    try {
+      await this.app.client.chat.update({
+        channel,
+        ts,
+        blocks: [{ type: 'markdown', text: message }],
+        text: message.substring(0, 150) + (message.length > 150 ? '...' : ''),
+      });
+      getLog().debug({ ts, messageLength: message.length }, 'slack.ack_updated');
+    } catch (error) {
+      getLog().warn({ err: error, channel, ts }, 'slack.ack_update_failed');
+      await this.sendWithMarkdownBlock(channel, message, threadTs);
     }
   }
 
@@ -108,6 +150,55 @@ export class SlackAdapter implements IPlatformAdapter {
         thread_ts: threadTs,
         text: message,
       });
+    }
+  }
+
+  /**
+   * Post a transient "thinking" acknowledgment so users see the bot received
+   * their message while the workflow runs. Returns the channel:ts of the
+   * posted message so callers can delete or update it later if desired.
+   */
+  async sendThinkingAck(channelId: string): Promise<string | null> {
+    const [channel, threadTs] = channelId.includes(':')
+      ? channelId.split(':')
+      : [channelId, undefined];
+
+    try {
+      const result = await this.app.client.chat.postMessage({
+        channel,
+        thread_ts: threadTs,
+        text: ':hourglass_flowing_sand: _Archon is thinking…_',
+      });
+      if (result.ts) {
+        // Remember this ack so sendMessage can chat.update it instead of
+        // posting a new reply, giving a single seamless message.
+        this.pendingAcks.set(channelId, result.ts);
+        getLog().info({ channel, ts: result.ts }, 'slack.thinking_ack_sent');
+        return `${channel}:${result.ts}`;
+      }
+      getLog().warn({ channel, threadTs, result }, 'slack.thinking_ack_no_ts');
+      return null;
+    } catch (error) {
+      getLog().warn({ err: error, channel, threadTs }, 'slack.thinking_ack_failed');
+      return null;
+    }
+  }
+
+  /**
+   * Clear a still-pending "thinking" ack (workflow errored before replying).
+   * No-op if sendMessage already consumed the ack via chat.update — that's
+   * the happy path and the ack message IS now the reply, so we mustn't
+   * delete it.
+   */
+  async clearPendingAck(channelId: string): Promise<void> {
+    const ts = this.pendingAcks.get(channelId);
+    if (!ts) return;
+    this.pendingAcks.delete(channelId);
+    const [channel] = channelId.includes(':') ? channelId.split(':') : [channelId];
+    try {
+      await this.app.client.chat.delete({ channel, ts });
+    } catch (error) {
+      getLog().warn({ err: error, channel, ts }, 'slack.clear_pending_ack_failed');
     }
   }
 
