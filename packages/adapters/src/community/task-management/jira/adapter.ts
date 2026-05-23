@@ -25,13 +25,17 @@ function getLog(): ReturnType<typeof createLogger> {
 
 const MAX_COMMENT_LENGTH = 30000;
 
+// Appended to every outgoing comment. Presence in an incoming webhook payload
+// means this adapter authored it — used by the self-trigger guard in handleWebhook.
+const SELF_TRIGGER_MARKER = '​​​';
+
 export class JiraAdapter implements IPlatformAdapter {
   private readonly baseUrl: string;
   private readonly email: string;
   private readonly apiToken: string;
   private readonly webhookSecret: string;
   private readonly lockManager: ConversationLockManager;
-  private readonly botAccountId: string;
+  private readonly botMention: string;
   private readonly allowedAccountIds: string[];
 
   constructor(
@@ -40,11 +44,8 @@ export class JiraAdapter implements IPlatformAdapter {
     apiToken: string,
     webhookSecret: string,
     lockManager: ConversationLockManager,
-    botAccountId: string
+    botMention: string
   ) {
-    if (!botAccountId) {
-      throw new Error('JiraAdapter requires a non-empty botAccountId (JIRA_BOT_MENTION)');
-    }
     if (!baseUrl) throw new Error('JiraAdapter requires a non-empty baseUrl');
     if (!email) throw new Error('JiraAdapter requires a non-empty email');
     if (!apiToken) throw new Error('JiraAdapter requires a non-empty apiToken');
@@ -55,7 +56,7 @@ export class JiraAdapter implements IPlatformAdapter {
     this.apiToken = apiToken;
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
-    this.botAccountId = botAccountId;
+    this.botMention = botMention || 'Archon';
     this.allowedAccountIds = parseAllowedAccountIds(process.env.JIRA_ALLOWED_ACCOUNT_IDS);
 
     if (this.allowedAccountIds.length > 0) {
@@ -64,7 +65,10 @@ export class JiraAdapter implements IPlatformAdapter {
       getLog().info('jira.allowlist_disabled');
     }
 
-    getLog().info({ baseUrl: this.baseUrl }, 'jira.adapter_initialized');
+    getLog().info(
+      { baseUrl: this.baseUrl, botMention: this.botMention },
+      'jira.adapter_initialized'
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -179,15 +183,29 @@ export class JiraAdapter implements IPlatformAdapter {
   }
 
   private extractTextFromAdf(node: JiraAdfNode): string {
-    if (node.type === 'text') return node.text ?? '';
+    if (node.type === 'text') return (node.text ?? '').replaceAll(SELF_TRIGGER_MARKER, '');
     if (node.type === 'hardBreak') return '\n';
     if (node.type === 'mention') return '';
     return (node.content ?? []).map(child => this.extractTextFromAdf(child)).join('');
   }
 
-  private hasMention(node: JiraAdfNode, accountId: string): boolean {
-    if (node.type === 'mention' && node.attrs?.id === accountId) return true;
-    return (node.content ?? []).some(child => this.hasMention(child, accountId));
+  // Detects whether the bot is mentioned in an ADF node tree by display name (case-insensitive).
+  // Matches real Jira @mention nodes (attrs.text / attrs.displayName) and plain text "@name" patterns.
+  private hasMention(node: JiraAdfNode, botName: string): boolean {
+    const normalized = botName.toLowerCase();
+    if (node.type === 'mention') {
+      const attrText = ((node.attrs?.text as string | undefined) ?? '')
+        .replace(/^@/, '')
+        .toLowerCase();
+      const displayName = ((node.attrs?.displayName as string | undefined) ?? '')
+        .replace(/^@/, '')
+        .toLowerCase();
+      if (attrText === normalized || displayName === normalized) return true;
+    }
+    if (node.type === 'text' && (node.text ?? '').toLowerCase().includes(`@${normalized}`)) {
+      return true;
+    }
+    return (node.content ?? []).some(child => this.hasMention(child, botName));
   }
 
   // ---------------------------------------------------------------------------
@@ -216,7 +234,8 @@ export class JiraAdapter implements IPlatformAdapter {
   // ---------------------------------------------------------------------------
 
   private async postComment(issueKey: string, text: string): Promise<void> {
-    const adfDoc = this.buildAdfDocument(text);
+    // Append the self-trigger marker so handleWebhook can skip echoed webhooks.
+    const adfDoc = this.buildAdfDocument(text + SELF_TRIGGER_MARKER);
     await this.jiraApi('POST', `/issue/${issueKey}/comment`, { body: adfDoc });
     getLog().debug({ issueKey }, 'jira.comment_posted');
   }
@@ -237,7 +256,13 @@ export class JiraAdapter implements IPlatformAdapter {
       return;
     }
 
-    // 2. Parse event
+    // 2. Self-trigger guard — our own comments contain SELF_TRIGGER_MARKER
+    if (payload.includes(SELF_TRIGGER_MARKER)) {
+      log.debug('jira.ignoring_own_comment');
+      return;
+    }
+
+    // 3. Parse event
     let event: JiraWebhookEvent;
     try {
       event = JSON.parse(payload) as JiraWebhookEvent;
@@ -246,16 +271,10 @@ export class JiraAdapter implements IPlatformAdapter {
       return;
     }
 
-    // 3. Filter to comment_created only
+    // 4. Filter to comment_created only
     if (event.webhookEvent !== 'comment_created') return;
 
     const commentEvent = event as JiraCommentCreatedEvent;
-
-    // 4. Self-trigger guard
-    if (commentEvent.comment.author.accountId === this.botAccountId) {
-      log.debug({ authorAccountId: this.botAccountId }, 'jira.ignoring_own_comment');
-      return;
-    }
 
     // 5. Authorization check
     if (!isAccountIdAuthorized(commentEvent.comment.author.accountId, this.allowedAccountIds)) {
@@ -267,7 +286,7 @@ export class JiraAdapter implements IPlatformAdapter {
     }
 
     // 6. Check @mention in ADF
-    if (!this.hasMention(commentEvent.comment.body, this.botAccountId)) return;
+    if (!this.hasMention(commentEvent.comment.body, this.botMention)) return;
 
     if (!commentEvent.issue?.key) {
       log.warn({ webhookEvent: 'comment_created' }, 'jira.webhook_missing_issue_key');

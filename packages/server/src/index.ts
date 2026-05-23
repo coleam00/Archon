@@ -279,8 +279,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       process.env.JIRA_BASE_URL &&
       process.env.JIRA_EMAIL &&
       process.env.JIRA_API_TOKEN &&
-      process.env.JIRA_WEBHOOK_SECRET &&
-      process.env.JIRA_BOT_MENTION
+      process.env.JIRA_WEBHOOK_SECRET
     );
 
     if (!hasTelegram && !hasDiscord && !hasGitHub && !hasGitea && !hasGitLab && !hasJira) {
@@ -342,16 +341,16 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       process.env.JIRA_BASE_URL &&
       process.env.JIRA_EMAIL &&
       process.env.JIRA_API_TOKEN &&
-      process.env.JIRA_WEBHOOK_SECRET &&
-      process.env.JIRA_BOT_MENTION
+      process.env.JIRA_WEBHOOK_SECRET
     ) {
+      const jiraBotMention = process.env.JIRA_BOT_MENTION || 'Archon';
       jira = new JiraAdapter(
         process.env.JIRA_BASE_URL,
         process.env.JIRA_EMAIL,
         process.env.JIRA_API_TOKEN,
         process.env.JIRA_WEBHOOK_SECRET,
         lockManager,
-        process.env.JIRA_BOT_MENTION
+        jiraBotMention
       );
       await jira.start();
       activePlatforms.push('Jira');

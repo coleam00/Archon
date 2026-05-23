@@ -66,7 +66,10 @@ globalThis.fetch = mockFetch as typeof globalThis.fetch;
 const { JiraAdapter } = await import('./adapter');
 const { ConversationLockManager } = await import('@archon/core');
 
-const TEST_BOT_ACCOUNT_ID = '5b10a2844c20165700ede21g';
+// Matches SELF_TRIGGER_MARKER in adapter.ts
+const SELF_TRIGGER_MARKER = '​​​';
+
+const TEST_BOT_MENTION = 'Archon';
 const TEST_BASE_URL = 'https://test.atlassian.net';
 const TEST_EMAIL = 'bot@example.com';
 const TEST_API_TOKEN = 'test-api-token';
@@ -80,21 +83,37 @@ function createAdapter(): InstanceType<typeof JiraAdapter> {
     TEST_API_TOKEN,
     TEST_WEBHOOK_SECRET,
     lockManager as never,
-    TEST_BOT_ACCOUNT_ID
+    TEST_BOT_MENTION
   );
 }
 
-function adfWithMention(botId: string, extraText?: string): unknown {
+// ADF mention node using display name (as Jira sends for a real @mentioned user)
+function adfWithNameMention(botName: string, extraText?: string): unknown {
   const content: unknown[] = [
     {
       type: 'paragraph',
       content: [
-        { type: 'mention', attrs: { id: botId, text: '@bot' } },
+        { type: 'mention', attrs: { text: `@${botName}`, displayName: botName } },
         ...(extraText ? [{ type: 'text', text: ` ${extraText}` }] : []),
       ],
     },
   ];
   return { version: 1, type: 'doc', content };
+}
+
+// Plain text node containing @name (no real Jira user object)
+function adfWithTextMention(mention: string, extraText?: string): unknown {
+  const atMention = mention.startsWith('@') ? mention : `@${mention}`;
+  return {
+    version: 1,
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: extraText ? `${atMention} ${extraText}` : atMention }],
+      },
+    ],
+  };
 }
 
 function adfTextOnly(text: string): unknown {
@@ -120,7 +139,7 @@ function createCommentPayload(overrides?: {
         accountId: overrides?.authorAccountId ?? 'user-account-123',
         displayName: 'Test User',
       },
-      body: overrides?.commentBody ?? adfWithMention(TEST_BOT_ACCOUNT_ID, 'hello'),
+      body: overrides?.commentBody ?? adfWithNameMention(TEST_BOT_MENTION, 'hello'),
       created: '2024-01-01T00:00:00.000+0000',
       updated: '2024-01-01T00:00:00.000+0000',
     },
@@ -129,6 +148,43 @@ function createCommentPayload(overrides?: {
       key: overrides?.issueKey ?? 'DF-123',
       fields: {
         summary: overrides?.issueSummary ?? 'Test Issue Summary',
+        description: null,
+        status: { name: 'Open' },
+        priority: { name: 'Medium' },
+        labels: ['bug'],
+      },
+    },
+  });
+}
+
+// Payload that simulates Jira echoing back a comment the adapter posted
+function createMarkedCommentPayload(): string {
+  return JSON.stringify({
+    webhookEvent: 'comment_created',
+    comment: {
+      id: '10002',
+      author: {
+        accountId: 'bot-service-account',
+        displayName: 'Archon Bot',
+      },
+      body: {
+        version: 1,
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: `Here is my response${SELF_TRIGGER_MARKER}` }],
+          },
+        ],
+      },
+      created: '2024-01-01T00:00:00.000+0000',
+      updated: '2024-01-01T00:00:00.000+0000',
+    },
+    issue: {
+      id: '10000',
+      key: 'DF-123',
+      fields: {
+        summary: 'Test Issue Summary',
         description: null,
         status: { name: 'Open' },
         priority: { name: 'Medium' },
@@ -175,18 +231,21 @@ describe('JiraAdapter', () => {
   describe('constructor validation', () => {
     const lockManager = new ConversationLockManager();
 
-    test('throws if botAccountId is empty', () => {
-      expect(
-        () =>
-          new JiraAdapter(
-            TEST_BASE_URL,
-            TEST_EMAIL,
-            TEST_API_TOKEN,
-            TEST_WEBHOOK_SECRET,
-            lockManager as never,
-            ''
-          )
-      ).toThrow('botAccountId');
+    test('defaults botMention to Archon when empty string is passed', async () => {
+      const adapter = new JiraAdapter(
+        TEST_BASE_URL,
+        TEST_EMAIL,
+        TEST_API_TOKEN,
+        TEST_WEBHOOK_SECRET,
+        lockManager as never,
+        ''
+      );
+      // An @Archon ADF mention should be processed with the default name
+      const payload = createCommentPayload({
+        commentBody: adfWithNameMention('Archon', 'hello'),
+      });
+      await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
     });
 
     test('throws if baseUrl is empty', () => {
@@ -198,7 +257,7 @@ describe('JiraAdapter', () => {
             TEST_API_TOKEN,
             TEST_WEBHOOK_SECRET,
             lockManager as never,
-            TEST_BOT_ACCOUNT_ID
+            TEST_BOT_MENTION
           )
       ).toThrow('baseUrl');
     });
@@ -212,7 +271,7 @@ describe('JiraAdapter', () => {
             TEST_API_TOKEN,
             TEST_WEBHOOK_SECRET,
             lockManager as never,
-            TEST_BOT_ACCOUNT_ID
+            TEST_BOT_MENTION
           )
       ).toThrow('email');
     });
@@ -226,7 +285,7 @@ describe('JiraAdapter', () => {
             '',
             TEST_WEBHOOK_SECRET,
             lockManager as never,
-            TEST_BOT_ACCOUNT_ID
+            TEST_BOT_MENTION
           )
       ).toThrow('apiToken');
     });
@@ -240,7 +299,7 @@ describe('JiraAdapter', () => {
             TEST_API_TOKEN,
             '',
             lockManager as never,
-            TEST_BOT_ACCOUNT_ID
+            TEST_BOT_MENTION
           )
       ).toThrow('webhookSecret');
     });
@@ -285,10 +344,9 @@ describe('JiraAdapter', () => {
   });
 
   describe('self-trigger guard', () => {
-    test('ignores comments authored by botAccountId', async () => {
+    test('ignores comments containing the self-trigger marker', async () => {
       const adapter = createAdapter();
-      const payload = createCommentPayload({ authorAccountId: TEST_BOT_ACCOUNT_ID });
-      await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
+      await adapter.handleWebhook(createMarkedCommentPayload(), TEST_WEBHOOK_SECRET);
       expect(mockHandleMessage).not.toHaveBeenCalled();
     });
   });
@@ -319,25 +377,27 @@ describe('JiraAdapter', () => {
   });
 
   describe('ADF mention detection', () => {
-    test('ignores comment with no mention node', async () => {
+    test('ignores comment with no mention node and no @name text', async () => {
       const adapter = createAdapter();
       const payload = createCommentPayload({ commentBody: adfTextOnly('just text, no mention') });
       await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
       expect(mockHandleMessage).not.toHaveBeenCalled();
     });
 
-    test('ignores comment mentioning a different accountId', async () => {
+    test('ignores comment mentioning a different name', async () => {
       const adapter = createAdapter();
       const payload = createCommentPayload({
-        commentBody: adfWithMention('different-account-id', 'hello'),
+        commentBody: adfWithNameMention('SomeOtherBot', 'hello'),
       });
       await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
       expect(mockHandleMessage).not.toHaveBeenCalled();
     });
 
-    test('processes comment with ADF mention matching botAccountId', async () => {
+    test('processes ADF mention node matching bot name via attrs.text', async () => {
       const adapter = createAdapter();
-      const payload = createCommentPayload();
+      const payload = createCommentPayload({
+        commentBody: adfWithNameMention(TEST_BOT_MENTION, 'hello'),
+      });
       await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
       expect(mockHandleMessage).toHaveBeenCalledTimes(1);
       expect(mockHandleMessage).toHaveBeenCalledWith(
@@ -349,6 +409,33 @@ describe('JiraAdapter', () => {
           isolationHints: { workflowType: 'thread', workflowId: 'DF-123' },
         })
       );
+    });
+
+    test('processes ADF mention node case-insensitively (ARCHON)', async () => {
+      const adapter = createAdapter();
+      const payload = createCommentPayload({
+        commentBody: adfWithNameMention(TEST_BOT_MENTION.toUpperCase(), 'hello'),
+      });
+      await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    });
+
+    test('processes plain text @name mention', async () => {
+      const adapter = createAdapter();
+      const payload = createCommentPayload({
+        commentBody: adfWithTextMention(TEST_BOT_MENTION, 'help me fix this'),
+      });
+      await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+    });
+
+    test('processes plain text @name mention case-insensitively (@archon)', async () => {
+      const adapter = createAdapter();
+      const payload = createCommentPayload({
+        commentBody: adfWithTextMention(TEST_BOT_MENTION.toLowerCase(), 'help me fix this'),
+      });
+      await adapter.handleWebhook(payload, TEST_WEBHOOK_SECRET);
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
     });
   });
 
