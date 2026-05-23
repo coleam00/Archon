@@ -359,17 +359,6 @@ describe('registry', () => {
       expect(caps.sandbox).toBe(false);
     });
 
-    test('isModelCompatible accepts provider/model refs, rejects aliases', () => {
-      registerOpencodeProvider();
-      const reg = getRegistration('opencode');
-      expect(reg.isModelCompatible('anthropic/claude-3-5-sonnet')).toBe(true);
-      expect(reg.isModelCompatible('openai/gpt-4o')).toBe(true);
-      expect(reg.isModelCompatible('google/gemini-2.5-pro')).toBe(true);
-      expect(reg.isModelCompatible('sonnet')).toBe(false);
-      expect(reg.isModelCompatible('claude-3.5-sonnet')).toBe(false);
-      expect(reg.isModelCompatible('')).toBe(false);
-    });
-
     test('appears in getProviderInfoList with builtIn: false', () => {
       registerOpencodeProvider();
       const info = getProviderInfoList().find(p => p.id === 'opencode');

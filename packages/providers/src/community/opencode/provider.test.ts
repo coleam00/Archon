@@ -461,7 +461,7 @@ describe('OpencodeProvider', () => {
         },
       },
     ]);
-    expect(mockLogger.debug).toHaveBeenCalledTimes(1);
+    expect(mockLogger.warn).toHaveBeenCalledTimes(1);
   });
 
   test('rate limit errors are classified as retryable and retried', async () => {
@@ -516,8 +516,7 @@ describe('OpencodeProvider', () => {
     expect(mockLogger.info).not.toHaveBeenCalledWith(expect.any(Object), 'opencode.retrying_query');
   });
 
-  // TODO(#1400): Enable once abort handling is stable in embedded runtime
-  test.skip('abort propagates to the OpenCode session and surfaces aborted error', async () => {
+  test('abort propagates to the OpenCode session and surfaces aborted error', async () => {
     const runtime = makeRuntime({
       subscribe: mock(async () => ({
         stream: createPendingStream(),
@@ -526,14 +525,15 @@ describe('OpencodeProvider', () => {
     runtimeQueue.push(runtime);
     const abortController = new AbortController();
 
-    const consumption = consume(
-      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
-        assistantConfig: TEST_MODEL,
-        abortSignal: abortController.signal,
-      })
-    );
+    const gen = new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+      assistantConfig: TEST_MODEL,
+      abortSignal: abortController.signal,
+    });
+    const consumption = consume(gen);
 
-    queueMicrotask(() => abortController.abort());
+    // Let sendQuery reach the `for await` on the pending stream before aborting.
+    await new Promise(r => setTimeout(r, 10));
+    abortController.abort();
 
     const { chunks, error } = await consumption;
 

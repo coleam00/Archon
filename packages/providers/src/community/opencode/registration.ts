@@ -1,11 +1,7 @@
 import { isRegisteredProvider, registerProvider } from '../../registry';
 
 import { OPENCODE_CAPABILITIES } from './capabilities';
-import { OpencodeProvider, parseModelRef } from './provider';
-
-export function isOpencodeModelCompatible(model: string): boolean {
-  return parseModelRef(model) !== null;
-}
+import { OpencodeProvider } from './provider';
 
 /**
  * Register the OpenCode community provider.
@@ -19,7 +15,6 @@ export function registerOpencodeProvider(): void {
     displayName: 'OpenCode (community)',
     factory: () => new OpencodeProvider(),
     capabilities: OPENCODE_CAPABILITIES,
-    isModelCompatible: isOpencodeModelCompatible,
     builtIn: false,
   });
 }
